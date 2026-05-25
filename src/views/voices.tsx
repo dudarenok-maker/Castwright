@@ -124,9 +124,16 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   const [globalCastCache, setGlobalCastCache] = useState<Map<string, Character[]>>(() => new Map());
   const [globalCastFailed, setGlobalCastFailed] = useState<Set<string>>(() => new Set());
   const [globalCastFetching, setGlobalCastFetching] = useState<Set<string>>(() => new Set());
-  /* Plan 101 — DuplicateReviewModal state. `duplicatePair` is the pair
-     currently under review; null when the modal is closed. */
-  const [duplicatePair, setDuplicatePair] = useState<DuplicateReviewPair | null>(null);
+  /* Plan 101 — DuplicateReviewModal state. We hold the candidate's two
+     voice ids (stable) rather than a frozen pair snapshot, then derive
+     the live pair (+ hydration status) from `duplicateCandidates` below.
+     That way the modal's character fields fill in — and its buttons
+     enable — the moment a foreign cast lands in `globalCastCache`. null
+     when the modal is closed. */
+  const [duplicateReviewKey, setDuplicateReviewKey] = useState<{
+    aVoiceId: string;
+    bVoiceId: string;
+  } | null>(null);
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
@@ -401,14 +408,81 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     );
   }, [selectedVoices, badge, duplicateCandidates]);
 
-  /* Open the DuplicateReviewModal for the given candidate. Also clears
-     the selection pill so the user lands back on the families grid
-     after the modal closes (mirrors the post-merge UX). */
+  /* Derive the live pair + hydration status for the open review from the
+     reactive `duplicateCandidates` memo. The candidate's character fields
+     are null until its book's cast hydrates; this memo refills them the
+     moment `globalCastCache` lands the cast (its deps cover all the
+     sources). When the candidate later drops out of detection (e.g. it
+     just got linked → suppressed), we rebuild a fallback pair from the
+     library so the modal can still render its closing frame. */
+  const duplicateReviewState = useMemo<{
+    pair: DuplicateReviewPair | null;
+    loading: boolean;
+    hydrationError: string | null;
+  }>(() => {
+    if (!duplicateReviewKey) return { pair: null, loading: false, hydrationError: null };
+    const { aVoiceId, bVoiceId } = duplicateReviewKey;
+    const match = duplicateCandidates.find(
+      (c) =>
+        (c.a.voice.id === aVoiceId && c.b.voice.id === bVoiceId) ||
+        (c.a.voice.id === bVoiceId && c.b.voice.id === aVoiceId),
+    );
+    const resolveSide = (
+      voiceId: string,
+    ): { voice: Voice; character: Character | null } | null => {
+      if (match) {
+        if (match.a.voice.id === voiceId) return match.a;
+        if (match.b.voice.id === voiceId) return match.b;
+      }
+      const voice = library.find((v) => v.id === voiceId);
+      if (!voice) return null;
+      const source =
+        voice.bookId === currentBookId ? characters : (globalCastCache.get(voice.bookId) ?? null);
+      return { voice, character: source ? (findCharacterForVoice(voice, source) ?? null) : null };
+    };
+    const a = resolveSide(aVoiceId);
+    const b = resolveSide(bVoiceId);
+    if (!a || !b) return { pair: null, loading: false, hydrationError: null };
+
+    const sideBookIds = [a.voice.bookId, b.voice.bookId];
+    const anyFailed = sideBookIds.some((id) => globalCastFailed.has(id));
+    const anyFetching = sideBookIds.some((id) => globalCastFetching.has(id));
+    const allCastsPresent = sideBookIds.every(
+      (id) => id === currentBookId || globalCastCache.has(id),
+    );
+    const loading = !anyFailed && (anyFetching || !allCastsPresent);
+    const hydrationError = anyFailed
+      ? 'Couldn’t load one book’s cast — try again later, or use Cancel.'
+      : !loading && (!a.character || !b.character)
+        ? 'One of these voices is no longer linked to a character. Use Cancel.'
+        : null;
+    return { pair: { a, b }, loading, hydrationError };
+  }, [
+    duplicateReviewKey,
+    duplicateCandidates,
+    library,
+    currentBookId,
+    characters,
+    globalCastCache,
+    globalCastFetching,
+    globalCastFailed,
+  ]);
+
+  /* Open the DuplicateReviewModal for the given candidate. Stores the
+     candidate identity and kicks off a foreign-cast hydrate for each side
+     that isn't the open book — mirrors `openCompareModal`. No await: the
+     `duplicateReviewState` memo reacts to the cast landing and flips the
+     modal from its loading state to the enabled link/variant buttons. */
   function openDuplicateReview(candidate: DuplicateCandidate) {
-    setDuplicatePair({
-      a: { voice: candidate.a.voice, character: candidate.a.character },
-      b: { voice: candidate.b.voice, character: candidate.b.character },
-    });
+    setDuplicateReviewKey({ aVoiceId: candidate.a.voice.id, bVoiceId: candidate.b.voice.id });
+    const foreignBookIds = Array.from(
+      new Set(
+        [candidate.a.voice.bookId, candidate.b.voice.bookId].filter(
+          (id) => id !== currentBookId,
+        ),
+      ),
+    );
+    for (const bookId of foreignBookIds) void hydrateForeignCast(bookId);
   }
 
   /* Plan 60 + plan 96 — on-demand foreign-cast hydrate. Pure-fetch
@@ -922,10 +996,15 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       {/* Plan 101 — duplicate-review modal. Opens from family-card ⚠
           pill OR from the Review duplicate ↗ pill button. */}
       <DuplicateReviewModal
-        open={duplicatePair !== null}
-        pair={duplicatePair}
-        onClose={() => setDuplicatePair(null)}
-        onResolved={() => setSelectedVoiceIds([])}
+        open={duplicateReviewKey !== null}
+        pair={duplicateReviewState.pair}
+        loading={duplicateReviewState.loading}
+        hydrationError={duplicateReviewState.hydrationError}
+        onClose={() => setDuplicateReviewKey(null)}
+        onResolved={() => {
+          setSelectedVoiceIds([]);
+          setDuplicateReviewKey(null);
+        }}
       />
 
       {/* Plan 108 Wave 5 + follow-up — "Rebaseline the series" modal. The

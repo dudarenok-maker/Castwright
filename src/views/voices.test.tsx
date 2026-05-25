@@ -1,7 +1,7 @@
 // Pairs with docs/features/22-voice-library.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { act, render, screen, fireEvent, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
@@ -1082,11 +1082,26 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
         ],
       }),
     );
-    return render(
-      <Provider store={store}>
-        <LibraryView library={libraryWithDuplicate} />
-      </Provider>,
-    );
+    return {
+      store,
+      ...render(
+        <Provider store={store}>
+          <LibraryView library={libraryWithDuplicate} />
+        </Provider>,
+      ),
+    };
+  }
+
+  /* Casts for the two duplicate books — each resolves its Eliza voice so
+     `findCharacterForVoice` (voiceId/id match) lands a Character once the
+     book hydrates. Mirrors the on-disk cast.json shape. */
+  function elizaCasts(bookId: string): BookStateResponse | null {
+    const chars: Record<string, Character[]> = {
+      b1: [{ id: 'v_eliza', name: 'Eliza Gray', role: 'character', color: 'unset' } as Character],
+      b2: [{ id: 'v_eliza_sb', name: 'Eliza', role: 'character', color: 'unset' } as Character],
+    };
+    if (!chars[bookId]) return null;
+    return { cast: { characters: chars[bookId] } } as BookStateResponse;
   }
 
   it('surfaces a ⚠ pill on the family card with a cross-book candidate pair', async () => {
@@ -1097,7 +1112,12 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     expect(pill).toHaveTextContent(/⚠/);
   });
 
-  it('clicking the ⚠ pill opens the duplicate-review modal pre-populated', async () => {
+  it('clicking the ⚠ pill opens the modal and enables the link button once both casts hydrate', async () => {
+    /* Regression for the "all buttons dead" bug: opening the modal must
+       hydrate both foreign casts so the characters resolve and the
+       link/variant buttons enable. Before the fix openDuplicateReview
+       never hydrated, so the button stayed disabled forever. */
+    getBookState.mockImplementation((bookId: string) => Promise.resolve(elizaCasts(bookId)));
     renderWithLibrarySlice();
     await act(async () => {});
     const pill = screen.getByRole('button', { name: /1 duplicate candidate/i });
@@ -1105,10 +1125,29 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     /* The modal header says "Same person across books?" — unique on
        the page so we use it as the modal-mounted assertion. */
     expect(screen.getByText(/Same person across books\?/)).toBeInTheDocument();
-    /* And the modal CTA appears. */
-    expect(
-      screen.getByRole('button', { name: /Same character — link them/i }),
-    ).toBeInTheDocument();
+    /* Both books hydrate on demand → the link button flips from its
+       loading state to enabled. */
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeEnabled(),
+    );
+    expect(getBookState).toHaveBeenCalledWith('b1');
+    expect(getBookState).toHaveBeenCalledWith('b2');
+  });
+
+  it('shows a hydration error and keeps the link button disabled when a cast fails to load', async () => {
+    /* getBookState resolves null (the beforeEach default) → hydrateForeignCast
+       throws "book state has no cast", marks the book failed, and toasts. The
+       modal stays open in its failure state with the actions disabled. */
+    const { store } = renderWithLibrarySlice();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /1 duplicate candidate/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/try again later|load one book/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Different on purpose/i })).toBeDisabled();
+    /* hydrateForeignCast surfaces the failure as a toast. */
+    expect(store.getState().notifications.toasts.length).toBeGreaterThan(0);
   });
 
   it("selection pill swaps to 'Review duplicate ↗' button when the cross-book duplicate pair is hand-selected", async () => {
