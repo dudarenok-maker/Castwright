@@ -8,7 +8,7 @@
  *     still proposed + approvable) */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { RebaselineModalContainer } from './rebaseline-modal';
@@ -134,6 +134,12 @@ const VOICES = [voice('voice-biana', 'biana'), voice('voice-keefe', 'keefe')];
 
 beforeEach(() => {
   designQwenVoice.mockClear();
+  /* Restore the default resolve so a prior test's bespoke implementation
+     (e.g. the held-open or throwing variants) can't leak across the file. */
+  designQwenVoice.mockImplementation(async (_bookId: string, characterId: string) => ({
+    voiceId: `qwen-${characterId}`,
+    previewUrl: `blob:${characterId}`,
+  }));
   generateVoiceStyle.mockClear();
   generateAllVoiceStyles.mockClear();
   setVoiceOverride.mockClear();
@@ -247,6 +253,54 @@ describe('RebaselineModal — propose', () => {
     // The design call fired once per selected character.
     expect(designQwenVoice).toHaveBeenCalledTimes(2);
     expect(store.getState().rebaseline.proposals.biana.proposedVoiceId).toBe('qwen-biana');
+  });
+});
+
+describe('RebaselineModal — design progress indicators', () => {
+  it('shows queued + designing badges and a live progress count while voices design', async () => {
+    /* Hold biana's design open so we can observe the mid-flight state: the
+       sequential loop has biana 'designing' while keefe waits as 'pending'.
+       Without these indicators the queued rows render blank and the modal
+       looks frozen (the bug this guards). */
+    let releaseBiana: () => void = () => {};
+    designQwenVoice.mockImplementation((_bookId: string, characterId: string) =>
+      characterId === 'biana'
+        ? new Promise<{ voiceId: string; previewUrl: string }>((resolve) => {
+            releaseBiana = () => resolve({ voiceId: 'qwen-biana', previewUrl: 'blob:biana' });
+          })
+        : Promise.resolve({ voiceId: `qwen-${characterId}`, previewUrl: `blob:${characterId}` }),
+    );
+    const store = makeStore(CHARACTERS, VOICES);
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('rebaseline-propose'));
+    });
+    // biana is mid-design; keefe is queued behind it.
+    await waitFor(() => {
+      expect(store.getState().rebaseline.proposals.biana.status).toBe('designing');
+    });
+    expect(store.getState().rebaseline.proposals.keefe.status).toBe('pending');
+
+    // The active row reads "Designing voice…"; the queued row reads "Queued…".
+    const bianaRow = screen.getByTestId('rebaseline-proposal-biana');
+    const keefeRow = screen.getByTestId('rebaseline-proposal-keefe');
+    expect(within(bianaRow).getByText(/Designing voice…/)).toBeInTheDocument();
+    expect(within(keefeRow).getAllByText(/Queued…/).length).toBeGreaterThan(0);
+
+    // Footer progress count is live and reads 0 settled of 2 selected.
+    expect(screen.getByTestId('rebaseline-progress')).toHaveTextContent(
+      'Designing voices… (0 of 2)',
+    );
+
+    // Releasing biana drains the run; the modal leaves the busy state.
+    await act(async () => {
+      releaseBiana();
+    });
+    await waitFor(() => expect(store.getState().rebaseline.status).toBe('proposed'));
   });
 });
 
