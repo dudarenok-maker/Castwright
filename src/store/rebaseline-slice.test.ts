@@ -134,6 +134,19 @@ describe('rebaselineSlice — propose', () => {
     expect(s.proposals.Marlow.status).toBe('ready');
   });
 
+  it('proposalQueued re-queues a row to pending and clears a prior error', () => {
+    let s = freshOpen();
+    s = reducer(s, rebaselineActions.startProposing({}));
+    s = reducer(
+      s,
+      rebaselineActions.proposalFailed({ characterId: 'Maerin', error: 'sidecar down' }),
+    );
+    // A Re-design/Regenerate re-queues the failed row behind the serial worker.
+    s = reducer(s, rebaselineActions.proposalQueued({ characterId: 'Maerin' }));
+    expect(s.proposals.Maerin.status).toBe('pending');
+    expect(s.proposals.Maerin.error).toBeUndefined();
+  });
+
   it('setProposalPersona edits the textarea value', () => {
     let s = freshOpen();
     s = reducer(s, rebaselineActions.startProposing({}));
