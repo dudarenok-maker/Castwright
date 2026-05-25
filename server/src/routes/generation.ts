@@ -45,7 +45,7 @@ import {
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
-import { getCachedUserSettings, getResolvedGenerationWorkers } from '../workspace/user-settings.js';
+import { getCachedUserSettings } from '../workspace/user-settings.js';
 import {
   audioExtForFormat,
   encodePcmToAudio,
@@ -66,19 +66,25 @@ import { describeSynthesisError, newCascadeState, recordNonFatal } from './gener
 
 export const generationRouter = Router();
 
-/* Per-bookId job tracker. Each entry is a RunningJob: one AbortController +
+/* Per-chapter job tracker. Each entry is a RunningJob: one AbortController +
    a Set of currently-attached SSE subscribers. Designed so the server-side
    work outlives any single client connection — a browser reload closes the
    client's SSE but the job keeps generating, and the post-reload client
    re-subscribes to receive subsequent ticks. The audio that's already on
    disk shows up in the catch-up replay every new subscriber gets at attach
    time, so a user who reloads mid-run sees both the completed chapters
-   AND the live progression of the in-flight one.
+   AND the live progression of the in-flight one(s).
+
+   Concurrency model (queue-sole): the queue dispatcher fires one POST per
+   chapter, so jobs are keyed by `${bookId}::${chapterId}` and N concurrent
+   chapters run uniformly across all books — including sibling chapters of the
+   same book. A forced request for chapter X displaces only chapter X's prior
+   job, never sibling chapter Y.
 
    Pause semantics live on POST /pause now, not on SSE close. SSE close
-   only unsubscribes the closing observer; the job keeps running until
-   either (a) the queue drains, (b) /pause is called, or (c) a regen POST
-   (chapterIds + force) displaces the job. */
+   only unsubscribes the closing observer; a job keeps running until either
+   (a) it finishes, (b) /pause is called (aborts every job for the book), or
+   (c) a regen POST (chapterIds + force) displaces THIS chapter's job. */
 interface Subscriber {
   send: (ev: unknown) => void;
   res: Response;
@@ -88,6 +94,13 @@ interface RunningJob {
   controller: AbortController;
   subscribers: Set<Subscriber>;
   bookId: string;
+  /** The chapter this job renders. Under the queue-sole-concurrency model
+      (one queue worker = one chapter) every dispatcher POST carries exactly
+      one chapter, so a job's identity is `${bookId}::${chapterId}`. The
+      legacy/back-compat path (no chapterIds, or a multi-id caller) walks all
+      targets sequentially under a single job keyed `${bookId}::*` — its
+      chapterId is null. */
+  chapterId: number | null;
   /** Plan 102 — workspace queue entry id this job is processing. Carried
       back on every broadcast tick (including `resume_from`) so the
       frontend dispatcher can correlate ticks to the right queue row even
@@ -130,13 +143,54 @@ interface RunningJob {
   runInProgress: Set<number>;
 }
 
-const inFlightByBook: Map<string, RunningJob> = new Map();
+/* Primary registry — one entry per in-flight chapter, keyed
+   `${bookId}::${chapterId}` (or `${bookId}::*` for the back-compat
+   sequential job). The queue dispatcher fires one POST per chapter, so the
+   queue's N workers map directly onto N concurrent chapter jobs across all
+   books — including multiple chapters of the SAME book. A forced request for
+   chapter X displaces only chapter X's prior job, never a sibling chapter Y
+   of the same book. */
+const inFlightByChapter: Map<string, RunningJob> = new Map();
 
-/** True when a generation job is currently in flight for the book. Exposed
+/* Secondary index — every job for a book, used ONLY by (a)
+   `isGenerationActive(bookId)` and (b) the subscribe/reload path (a bare
+   resume subscribes to ALL of the book's in-flight jobs) and (c) /pause
+   (aborts EVERY job for the book). Kept in lock-step with inFlightByChapter
+   on register/deregister. */
+const inFlightByBook: Map<string, Set<RunningJob>> = new Map();
+
+function chapterKey(bookId: string, chapterId: number | null): string {
+  return `${bookId}::${chapterId == null ? '*' : chapterId}`;
+}
+
+function registerJob(key: string, job: RunningJob): void {
+  inFlightByChapter.set(key, job);
+  let set = inFlightByBook.get(job.bookId);
+  if (!set) {
+    set = new Set();
+    inFlightByBook.set(job.bookId, set);
+  }
+  set.add(job);
+}
+
+function deregisterJob(key: string, job: RunningJob): void {
+  /* Only drop the primary entry if it still points at THIS job — a newer
+     regen of the same chapter may have already displaced us. */
+  if (inFlightByChapter.get(key) === job) {
+    inFlightByChapter.delete(key);
+  }
+  const set = inFlightByBook.get(job.bookId);
+  if (set) {
+    set.delete(job);
+    if (set.size === 0) inFlightByBook.delete(job.bookId);
+  }
+}
+
+/** True when any generation job is currently in flight for the book. Exposed
     so sibling routes can refuse operations that would race the write path
     (chapter-audio reject restore would clobber a mid-render file). */
 export function isGenerationActive(bookId: string): boolean {
-  return inFlightByBook.has(bookId);
+  return (inFlightByBook.get(bookId)?.size ?? 0) > 0;
 }
 
 function broadcast(job: RunningJob, ev: unknown): void {
@@ -415,7 +469,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      the in-flight job's id is what represents reality. Always emitted, even
      for back-compat callers without a queueEntryId, so the frontend has a
      single canonical signal to gate the rest of its catch-up handling. */
-  const existingForResume = inFlightByBook.get(bookId);
+  /* For the resume_from queueEntryId: when an in-flight job already exists for
+     this book, its id represents reality. With per-chapter jobs there can be
+     several; the targeted chapter's job wins when this POST names one,
+     otherwise any of the book's jobs is as good a correlation anchor as
+     another (a bare resume re-subscribes to all of them anyway). */
+  const bookJobs = inFlightByBook.get(bookId);
+  const targetedChapterId = requestedIds && requestedIds.length === 1 ? requestedIds[0] : null;
+  const existingForResume =
+    (targetedChapterId != null
+      ? inFlightByChapter.get(chapterKey(bookId, targetedChapterId))
+      : undefined) ?? (bookJobs ? [...bookJobs][0] : undefined);
   const effectiveQueueEntryId = existingForResume?.queueEntryId ?? queueEntryId;
   const onDiskCompleted = state.chapters
     .filter((c) => !c.excluded && !targetIdSet.has(c.id) && chapterAudioExists(audioRoot, c.slug))
@@ -469,56 +533,73 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return res.end();
   }
 
+  /* This POST's chapter identity. Under the queue-sole-concurrency model the
+     dispatcher fires one chapter per POST (chapterIds:[id], force:true), so a
+     single target = the job's chapter. A no-ids / multi-id caller is the
+     back-compat path: one job keyed `${bookId}::*` walks all targets
+     sequentially (no within-book pool). */
+  const jobChapterId: number | null = targetChapters.length === 1 ? targetChapters[0].id : null;
+  const key = chapterKey(bookId, jobChapterId);
+
   /* Two dispatch modes for this POST:
-       - "Subscribe": no chapterIds + no force, AND a non-aborted job is
-         already running for this book. The connection joins the existing
-         job's subscriber set; the loop is NOT re-entered. The catch-up
-         replay above has already snapped this client to the current
-         on-disk state, so subsequent broadcast ticks bring it the rest.
-         Browser-reload survival lives here — the page-reload's new POST
-         lands in this branch and the original run keeps generating
-         untouched.
-       - "Start / displace": chapterIds + force (regen) OR no existing
-         job. We abort any existing job (regen explicitly wants a fresh
-         run with the new spec; a duplicate Resume against a still-live
-         job is benign because the existing branch handles that). The
-         loop runs in this request's lexical scope.
+       - "Subscribe": no chapterIds + no force (a bare resume / browser
+         reload). The connection joins EVERY in-flight job for this book's
+         subscriber set; no loop is re-entered and nothing is aborted. The
+         catch-up replay above has already snapped this client to the current
+         on-disk state; subsequent broadcast ticks bring the rest. This is
+         where browser-reload survival lives — a page-reload's bare POST lands
+         here and the original run(s) keep generating untouched.
+       - "Start / displace": chapterIds + force (regen) OR no existing job
+         for THIS chapter. We abort only the SAME chapter's prior job (regen
+         of chapter X wants a fresh run with the new spec; a sibling chapter Y
+         of the same book is never touched). The loop runs in this request's
+         lexical scope.
      Pause used to piggyback on SSE close; it doesn't any more — see the
      dedicated POST /pause endpoint below. SSE close ONLY unsubscribes
      this observer now; the job carries on for other observers (or for
      no observers at all). */
   const isDisplacing = (requestedIds !== null && requestedIds.length > 0) || force;
-  const existing = inFlightByBook.get(bookId);
-  if (existing && !existing.controller.signal.aborted && !isDisplacing) {
-    const subscriber: Subscriber = { send, res };
-    existing.subscribers.add(subscriber);
-    req.on('close', () => existing.subscribers.delete(subscriber));
-    /* Replay the in-flight chapter's last known tick so a post-reload UI
-       immediately flips that chapter to in_progress instead of staring at
-       a stale "queued" until the next group boundary lands (which on a
-       long narrator block can be 30+ s away). Without this the user sees
-       the in-progress chapter look "gone" for a beat after reload, which
-       was the visible symptom that prompted this fix. */
-    if (existing.lastProgressTick) {
-      send({ type: 'progress', ...existing.lastProgressTick });
-    } else if (existing.currentChapterId != null) {
-      /* Sub-second window where the loop just entered a chapter but hasn't
-         emitted a group-boundary tick yet. Send a minimal in-progress
-         marker so the row still flips out of "queued". */
-      send({
-        type: 'progress',
-        chapterId: existing.currentChapterId,
-        characterId: null,
-        progress: 0.01,
-        currentLine: 0,
-        totalLines: 0,
-      });
+  if (!isDisplacing) {
+    /* Bare resume — subscribe to every live job for this book (there may be
+       several concurrent chapters) and replay each one's last tick so a
+       post-reload UI flips each in-flight chapter out of "queued" without
+       waiting for the next group boundary. Never abort. */
+    const liveJobs = [...(inFlightByBook.get(bookId) ?? [])].filter(
+      (j) => !j.controller.signal.aborted,
+    );
+    if (liveJobs.length > 0) {
+      for (const existing of liveJobs) {
+        const subscriber: Subscriber = { send, res };
+        existing.subscribers.add(subscriber);
+        req.on('close', () => existing.subscribers.delete(subscriber));
+        if (existing.lastProgressTick) {
+          send({ type: 'progress', ...existing.lastProgressTick });
+        } else if (existing.currentChapterId != null) {
+          /* Sub-second window where the loop just entered a chapter but hasn't
+             emitted a group-boundary tick yet. Send a minimal in-progress
+             marker so the row still flips out of "queued". */
+          send({
+            type: 'progress',
+            chapterId: existing.currentChapterId,
+            characterId: null,
+            progress: 0.01,
+            currentLine: 0,
+            totalLines: 0,
+          });
+        }
+      }
+      /* Keep `res` open. Each subscribed job ends this response via
+         endAllSubscribers() when it drains or is paused; the FIRST job to
+         finish closes the socket, which is fine — the catch-up replay + the
+         remaining jobs' broadcasts already reached this client. */
+      return;
     }
-    /* Keep `res` open. The job's loop will end this response via
-       endAllSubscribers() when it drains or is paused. */
-    return;
+    /* No live job for this book — fall through to start a fresh run. */
   }
 
+  /* Displace ONLY this chapter's prior job (or the back-compat `*` job). A
+     forced request for chapter X must not abort sibling chapter Y. */
+  const existing = inFlightByChapter.get(key);
   if (existing) existing.controller.abort();
   const controller = new AbortController();
   /* Bug E — seed run-level aggregates from disk state. runTotal = all
@@ -535,6 +616,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     controller,
     subscribers: new Set([{ send, res }]),
     bookId,
+    chapterId: jobChapterId,
     queueEntryId,
     currentChapterId: null,
     lastProgressTick: null,
@@ -543,7 +625,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     completedThisRun: new Set(),
     runInProgress: new Set(),
   };
-  inFlightByBook.set(bookId, job);
+  registerJob(key, job);
 
   /* SSE close on the starter connection is just an unsubscribe — the job
      keeps running for any other observers. If the starter was the only
@@ -559,50 +641,35 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   });
 
   /* Cascade detector — if the same non-fatal reason fails two chapters in
-     a row, the failure is deterministic (e.g. sidecar mis-routing every
-     character to an invalid speaker_id) and the rest of the queue will hit
-     the same wall. Escalate to fatal on the second hit so the user gets one
-     clean banner instead of a long stream of identical chapter_failed
-     ticks. See screenshot 2026-05-13 181647 for the cascade we're killing.
-
-     Plan 87: the cascade state is shared across the worker pool. With K>1
-     the next-failure-classified-as-fatal still aborts the controller, which
-     short-circuits the remaining queued chapters and lets the in-flight
-     siblings finish (or be aborted via the same signal — synthesiseChapter
-     forwards it into the sidecar fetch). */
+     a row (only reachable on the back-compat `*` job that walks multiple
+     chapters sequentially), the failure is deterministic (e.g. sidecar
+     mis-routing every character to an invalid speaker_id). Escalate to fatal
+     on the second hit so the user gets one clean banner instead of a long
+     stream of identical chapter_failed ticks. See screenshot 2026-05-13
+     181647 for the cascade we're killing. Under the queue-sole-concurrency
+     model each dispatcher POST carries exactly one chapter, so the cascade
+     within a single job never spans chapters — cross-chapter escalation now
+     lives at the queue layer (out of scope; each chapter fails
+     independently). */
   const cascade = newCascadeState();
 
-  /* Plan 87 — fatal escalation flag. Workers check this between chapters so
-     a parallel cascade fires the abort exactly once and the remaining queue
-     drains cleanly. The signal-abort path handles in-flight siblings; this
-     flag stops a worker from picking up a fresh chapter after the cascade
-     has been detected. */
+  /* Fatal escalation flag — only meaningful on the back-compat sequential
+     loop, where it stops the loop from picking up a fresh chapter after the
+     cascade fired. */
   let cascadeFatal = false;
 
-  /* Plan 87 — process a single chapter end-to-end (the body that used to
-     live inline in the for…await loop). Kept identical to the serial
-     behaviour byte-for-byte; the only call-site change is that multiple
-     of these may now run concurrently inside the worker pool below.
-
-     Per-chapter watchdog: each invocation has its own independent
-     `synthesiseChapter` call with its own `onGroupStart` heartbeat, so a
-     stalled chapter no longer blocks siblings. The shared `controller.signal`
-     still threads through every call — pause or regen displacement aborts
-     all in-flight chapters at once, matching the K=1 contract. */
+  /* Process a single chapter end-to-end. Each job's loop runs exactly one of
+     these (the common single-chapter case) or walks the back-compat target
+     list sequentially. The job's own `synthesiseChapter` call carries its own
+     `onGroupStart` heartbeat; `controller.signal` threads through so pause or
+     same-chapter regen displacement aborts this chapter's in-flight synth. */
   const processOneChapter = async (chapter: (typeof targetChapters)[number]): Promise<void> => {
     if (controller.signal.aborted) return;
     if (cascadeFatal) return;
 
     /* Pin this chapter as in-flight on the job so the subscribe-side
        catch-up replay has something to emit for a post-reload client.
-       Cleared on chapter_complete / chapter_failed / abort.
-
-       Plan 87: with K>1, multiple chapters may be in flight concurrently.
-       `currentChapterId` / `lastProgressTick` track the most-recent
-       in-flight chapter — the catch-up replay only needs *something*
-       in-progress to render, and a tick from the most-recent chapter is
-       as good as any other. Per-chapter resume granularity comes from
-       the `runInProgress` set, which the broadcast() enricher reads. */
+       Cleared on chapter_complete / chapter_failed / abort. */
     job.currentChapterId = chapter.id;
     job.lastProgressTick = null;
     job.runInProgress.add(chapter.id);
@@ -670,9 +737,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            Without this, group-complete was the only tick and the SSE went
            silent for the entire duration of each call.
 
-           Plan 87: each chapter's onGroupStart fires independently — a
-           stalled sibling chapter doesn't suppress this chapter's
-           heartbeat because they're separate `synthesiseChapter` calls. */
+           This job owns its own `synthesiseChapter` call, so its heartbeat
+           is independent of any concurrent chapter's job. */
         onGroupStart: ({ group, totalGroups }) => {
           const firstSentenceId = group.sentenceIds[0];
           const positional = sentences.findIndex((s) => s.id === firstSentenceId);
@@ -763,8 +829,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* Atomic write: temp-then-rename so a crash mid-write doesn't leave a
          half-encoded file that scan.ts would mistake for a completed
          chapter. Per-chapter slug + pid + ts in the temp name means
-         concurrent chapter writes (plan 87) never collide on the same
-         temp path. */
+         concurrent chapter writes (sibling chapter jobs of the same book,
+         now separate dispatcher POSTs) never collide on the same temp
+         path. */
       const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
       await writeFile(tmpAudio, audioBuffer);
       /* Snapshot the cast character attributes for every character that
@@ -843,17 +910,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          can surface engine-drift badges without reading every segments
          file on chapter-list hydrate (see docs/features/35-engine-drift).
 
-         Plan 87: with K>1 chapters completing in parallel, two workers
-         can race to read-modify-write state.json. read+write are not
-         atomic — the second writer's read picks up the first writer's
-         on-disk record (the rename is atomic), so each chapter's
-         duration / audioModelKey lands eventually. The race window is
-         narrow (sub-second between read and writeJsonAtomic on local
-         SSD) and the only contested field is `chapters[i].duration` /
-         `audioModelKey` / `audioRenderedAt` — both keyed by chapter id,
-         so siblings cannot clobber each other's data. The risk is
-         `updatedAt` carrying a slightly stale timestamp when reads
-         interleave, which the scan layer tolerates. */
+         With sibling chapters of the same book completing in parallel
+         (separate dispatcher POSTs now), two handlers can race to
+         read-modify-write state.json. read+write are not atomic — the
+         second writer's read picks up the first writer's on-disk record
+         (the rename is atomic), so each chapter's duration / audioModelKey
+         lands eventually. The race window is narrow (sub-second between read
+         and writeJsonAtomic on local SSD) and the only contested field is
+         `chapters[i].duration` / `audioModelKey` / `audioRenderedAt` — both
+         keyed by chapter id, so siblings cannot clobber each other's data.
+         The risk is `updatedAt` carrying a slightly stale timestamp when
+         reads interleave, which the scan layer tolerates. */
       const statePath = stateJsonPath(bookDir);
       const prev = await readJson<BookStateJson>(statePath);
       if (prev) {
@@ -883,9 +950,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          an in-session engine switch wouldn't flag drift until the user
          navigates away and back).
 
-         Plan 87: only clear `currentChapterId` if it's still pointing at
-         THIS chapter. With K>1 a sibling chapter that started after us
-         may have written its own id into the slot — clearing
+         Only clear `currentChapterId` if it's still pointing at THIS
+         chapter. On the back-compat `*` job a later chapter in the same
+         sequential loop may have written its own id into the slot — clearing
          unconditionally would erase a still-valid in-progress marker. */
       if (job.currentChapterId === chapter.id) {
         job.currentChapterId = null;
@@ -906,7 +973,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* Belt-and-suspenders with the assembling tick (see line 616).
            The assembling tick is the primary carrier, but it can be missed
            when the page is hidden / the cross-book guard drops it / a
-           plan-87 parallel-chapter race coalesces ticks. Repeating
+           parallel-chapter race coalesces ticks. Repeating
            durationSec on chapter_complete guarantees the chapter row in
            the Listen view shows the real audio length by the time the
            Done pill flips, even if assembling was lost on the wire. */
@@ -941,65 +1008,35 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         errorReason,
       });
       if (fatal) {
-        /* Plan 87: with K>1, set the flag AND abort the shared signal so
-           in-flight siblings exit and pending workers short-circuit. K=1
-           behaviour stays byte-identical (signal abort is a no-op when
-           nothing else is in flight). */
+        /* Back-compat `*` job only: set the flag AND abort the signal so the
+           sequential loop stops at the next chapter. On a single-chapter job
+           (the common queue path) there are no further chapters, so this is
+           just a clean stop. Cross-chapter cascade no longer spans separate
+           dispatcher POSTs — each chapter fails independently. */
         cascadeFatal = true;
         if (!controller.signal.aborted) controller.abort();
       }
     }
   };
 
-  /* Plan 87 — bounded worker pool. Replaces the original `for…await
-     synthesiseChapter` loop at this site with K concurrent workers that
-     pull from a shared index. K=1 reproduces the serial loop byte-for-byte
-     (one worker, sequential pulls, same processOneChapter body), so
-     setting `GEN_WORKERS=1` is the safety valve.
+  /* One queue worker = one chapter. The dispatcher fires a separate POST per
+     chapter (chapterIds:[id], force:true), so the queue's N workers ARE the
+     concurrency authority — N chapters run concurrently across all books,
+     including sibling chapters of the same book. There is no within-book
+     pool here any more; this job renders exactly its target(s).
 
-     Why an index-pulling pool rather than `Promise.all(map(...))`:
-     - Bounds the concurrency without spinning up N pending promises.
-     - Each worker picks the next available chapter from a shared cursor,
-       so a fast chapter doesn't block on a slow sibling.
-     - Natural respect for the cascade-fatal flag: each worker checks the
-       flag at the top of its loop and bails out cleanly.
-
-     The sidecar `/synthesize` route is already concurrent (asyncio.to_thread
-     offload, GIL-releasing inference — pinned by
-     server/tts-sidecar/tests/test_concurrent_synthesis.py:214-244). Kokoro
-     v1 is ~1 GB resident and two concurrent inferences fit on an 8 GB GPU
-     without eviction; that's the documented default. */
-  /* Plan 111 — pool width is the resolved `generationWorkers` setting
-     (GEN_WORKERS env > generationWorkers setting > 2). The plan-87
-     `GEN_CHAPTER_CONCURRENCY` env is retired (wave 4). This drives within-book
-     fan-out; the queue dispatcher bounds cross-book concurrency with the same
-     setting. */
-  const concurrency = getResolvedGenerationWorkers();
-  const effectiveConcurrency = Math.min(concurrency, targetChapters.length || 1);
-
-  let nextIndex = 0;
-  const workers: Promise<void>[] = [];
-  for (let workerId = 0; workerId < effectiveConcurrency; workerId++) {
-    workers.push(
-      (async () => {
-        while (true) {
-          if (controller.signal.aborted || cascadeFatal) return;
-          const i = nextIndex++;
-          if (i >= targetChapters.length) return;
-          const chapter = targetChapters[i];
-          await processOneChapter(chapter);
-        }
-      })(),
-    );
+     The common case is a single chapter. The back-compat path (no chapterIds
+     or a multi-id caller) walks `targetChapters` sequentially under one job —
+     no pool, no cross-book impact — purely so legacy / direct callers still
+     get every requested chapter. Real GPU concurrency is bounded by the
+     `gpuSemaphore` each `synthesize` acquires; the queue bounds how many
+     chapter jobs exist at once. */
+  for (const chapter of targetChapters) {
+    if (controller.signal.aborted || cascadeFatal) break;
+    await processOneChapter(chapter);
   }
-  await Promise.all(workers);
 
-  /* Only deregister if we're still the current job — a newer regen may have
-     already displaced us, and removing its entry would defeat the dispatcher
-     for a third caller. */
-  if (inFlightByBook.get(bookId) === job) {
-    inFlightByBook.delete(bookId);
-  }
+  deregisterJob(key, job);
 
   /* Broadcast idle + end every attached response (the starter + any
      subscribers that joined via page reload / mid-run open). After this
@@ -1019,9 +1056,18 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
    no-op so a double-click on Pause doesn't 404). */
 generationRouter.post('/:bookId/generation/pause', (req: Request, res: Response) => {
   const { bookId } = req.params;
-  const job = inFlightByBook.get(bookId);
-  if (job && !job.controller.signal.aborted) {
-    job.controller.abort();
+  /* Abort EVERY in-flight job for the book — with per-chapter jobs a book may
+     have several concurrent chapters, and the local-analyzer halt needs the
+     GPU freed for ALL of them, not just one. */
+  const jobs = inFlightByBook.get(bookId);
+  let aborted = false;
+  if (jobs) {
+    for (const job of jobs) {
+      if (!job.controller.signal.aborted) {
+        job.controller.abort();
+        aborted = true;
+      }
+    }
   }
-  res.status(200).json({ ok: true, paused: job != null });
+  res.status(200).json({ ok: true, paused: (jobs?.size ?? 0) > 0 || aborted });
 });

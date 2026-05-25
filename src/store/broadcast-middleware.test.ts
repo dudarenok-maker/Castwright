@@ -120,7 +120,9 @@ const analysisSnap: AnalysisStreamSnapshot = {
 };
 
 const chaptersSnap: ActiveStreamSnapshot = {
+  streamKey: 'book-X::1',
   bookId: 'book-X',
+  chapterId: 1,
   modelKey: 'kokoro-v1',
   done: 0,
   total: 10,
@@ -472,7 +474,9 @@ describe('broadcastMiddleware — inbound', () => {
         snapshot: chaptersSnap,
       },
     );
-    expect(store.getState().chapters.activeStreams).toEqual({ [chaptersSnap.bookId]: chaptersSnap });
+    expect(store.getState().chapters.activeStreams).toEqual({
+      [chaptersSnap.streamKey]: chaptersSnap,
+    });
     expect(mock.sent).toHaveLength(0);
   });
 
