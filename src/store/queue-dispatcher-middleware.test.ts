@@ -54,6 +54,14 @@ beforeEach(() => {
     if (u.includes('/api/queue/enqueue')) {
       const incoming = init?.body ? (JSON.parse(init.body).entries as QueueEntry[]) : [];
       queueEntries = [...queueEntries, ...incoming];
+    } else if (init?.method === 'POST' && u.endsWith('/start')) {
+      /* Status-only mark to in_progress (no reorder). */
+      const id = u.split('/').slice(-2)[0];
+      queueEntries = queueEntries.map((e) => (e.id === id ? { ...e, status: 'in_progress' } : e));
+    } else if (init?.method === 'POST' && u.endsWith('/complete')) {
+      /* Done-prune a finished entry (status-agnostic). */
+      const id = u.split('/').slice(-2)[0];
+      queueEntries = queueEntries.filter((e) => e.id !== id);
     } else if (init?.method === 'DELETE') {
       const id = u.split('/').pop();
       queueEntries = queueEntries.filter((e) => e.id !== id);
@@ -107,9 +115,11 @@ function makeStore(generationWorkers = 2) {
 }
 
 async function flushMicro(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  /* The dispatcher fires its tick from a queueMicrotask, and the /start +
+     /complete thunks chain fetch → res.json() → setSnapshot (each an await),
+     which can re-trigger a tick. Flush generously so every cascade settles
+     before assertions read the slice. */
+  for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
 /* Find the open call for a (book, chapter) and drive its stream to completion
@@ -141,7 +151,7 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
         { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
       ] as never),
     );
-    store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: false }));
+    seed(store, [entry()]);
     await flushMicro();
 
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
@@ -158,17 +168,42 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     expect(store.getState().chapters.chapters[0].state).toBe('in_progress');
   });
 
+  it('flips the claimed entry to in_progress on claim (POST /start), so the modal reads "In flight"', async () => {
+    const store = makeStore(2);
+    seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+    await flushMicro();
+    /* The dispatcher POSTed /start the instant it claimed the entry. */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a3/start', { method: 'POST' });
+    /* The slice mirrors the server snapshot — the entry is now in_progress
+       (not "queued"), which is what the modal's per-row "In flight" label
+       keys off. */
+    const e = store.getState().queue.entries.find((x) => x.id === 'a3');
+    expect(e?.status).toBe('in_progress');
+  });
+
+  it('marks ALL N claimed entries in_progress when several run concurrently', async () => {
+    const store = makeStore(2);
+    seed(store, [
+      entry({ id: 'a3', bookId: 'book-A', chapterId: 3 }),
+      entry({ id: 'b1', bookId: 'book-B', chapterId: 1 }),
+    ]);
+    await flushMicro();
+    /* Two workers → two concurrent chapters → both entries in_progress. */
+    const statuses = store.getState().queue.entries.map((e) => [e.id, e.status]);
+    expect(statuses).toEqual(
+      expect.arrayContaining([
+        ['a3', 'in_progress'],
+        ['b1', 'in_progress'],
+      ]),
+    );
+  });
+
   it('opens ONE stream PER same-book chapter (no coalescing, no second-request abort)', async () => {
     const store = makeStore(2);
-    store.dispatch(
-      queueSlice.actions.setSnapshot({
-        entries: [
-          entry({ id: 'a3', bookId: 'book-A', chapterId: 3 }),
-          entry({ id: 'a4', bookId: 'book-A', chapterId: 4 }),
-        ],
-        paused: false,
-      }),
-    );
+    seed(store, [
+      entry({ id: 'a3', bookId: 'book-A', chapterId: 3 }),
+      entry({ id: 'a4', bookId: 'book-A', chapterId: 4 }),
+    ]);
     await flushMicro();
     /* Each same-book chapter rides its OWN forced request, keyed
        `${bookId}::${chapterId}` server-side — two streams, never one that
@@ -183,7 +218,7 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     ).toEqual([3, 4]);
   });
 
-  it('chapter-level DELETE: completing ch3’s stream removes its entry without waiting on ch4', async () => {
+  it('chapter-level completion: completing ch3’s stream removes its entry without waiting on ch4', async () => {
     const store = makeStore(2);
     seed(store, [
       entry({ id: 'a3', bookId: 'book-A', chapterId: 3 }),
@@ -195,14 +230,17 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     /* Close ONLY chapter 3's stream. */
     completeStream('book-A', 3);
     await flushMicro();
-    /* ch3's entry DELETEd; ch4 still in flight (no DELETE for it yet). */
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a3', { method: 'DELETE' });
-    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a4'))).toBe(false);
+    /* ch3's entry completed (done-prune via /complete, NOT DELETE — the entry
+       is in_progress by now); ch4 still in flight (not completed yet). */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a3/complete', { method: 'POST' });
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a4/complete'))).toBe(
+      false,
+    );
 
     /* Now close chapter 4. */
     completeStream('book-A', 4);
     await flushMicro();
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a4', { method: 'DELETE' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a4/complete', { method: 'POST' });
   });
 
   it('fills up to N workers across books and holds the rest', async () => {
@@ -220,10 +258,12 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     completeStream('book-A', 1);
     await flushMicro();
     expect(openedBookIds()).toContain('book-C');
-    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a'))).toBe(true);
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a/complete'))).toBe(
+      true,
+    );
   });
 
-  it('DELETEs an entry only after its chapter’s stream closes (no-loop)', async () => {
+  it('completes an entry only after its chapter’s stream closes (no-loop)', async () => {
     const store = makeStore(2);
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
     store.dispatch(
@@ -241,7 +281,9 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     seed(store, [entry()]);
     await flushMicro();
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
-    /* No DELETE while the stream is live. */
+    /* No completion-removal while the stream is live (the claim POSTed /start,
+       but never /complete and never DELETE). */
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/complete'))).toBe(false);
     expect(
       fetchMock.mock.calls.some((c) => (c[1] as { method?: string })?.method === 'DELETE'),
     ).toBe(false);
@@ -256,16 +298,21 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     completeStream('book-A', 3);
     await flushMicro();
 
-    /* Entry DELETEd exactly once, and no re-open of the done chapter. */
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1', { method: 'DELETE' });
+    /* Entry completed exactly once, and no re-open of the done chapter. */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/complete', { method: 'POST' });
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not double-claim across back-to-back snapshots', async () => {
     const store = makeStore(2);
-    const snap = { entries: [entry({ id: 'a', bookId: 'book-A', chapterId: 1 })], paused: false };
-    store.dispatch(queueSlice.actions.setSnapshot(snap));
-    store.dispatch(queueSlice.actions.setSnapshot(snap));
+    seed(store, [entry({ id: 'a', bookId: 'book-A', chapterId: 1 })]);
+    /* A second identical snapshot tick must not re-claim the same entry. */
+    store.dispatch(
+      queueSlice.actions.setSnapshot({
+        entries: [entry({ id: 'a', bookId: 'book-A', chapterId: 1 })],
+        paused: false,
+      }),
+    );
     await flushMicro();
     /* The single entry opens exactly one stream despite two snapshot ticks. */
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);

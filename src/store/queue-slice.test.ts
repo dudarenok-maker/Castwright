@@ -7,6 +7,7 @@ import {
   selectActiveGenerationView,
   selectGenerationActivityCount,
   selectInFlightEntry,
+  selectInFlightEntryIds,
   selectQueueByBook,
   selectQueueCount,
   selectQueueEntries,
@@ -133,12 +134,41 @@ describe('selectors', () => {
     expect(grouped[1].entries.map((e) => e.id)).toEqual(['b1']);
   });
 
-  it('selectInFlightEntry returns the in_progress entry or null', () => {
+  it('selectInFlightEntry returns the FIRST in_progress entry or null', () => {
     expect(selectInFlightEntry(populated)?.id).toBe('a1');
     const empty: { queue: QueueState } = {
       queue: { entries: [sampleEntry()], paused: false, loaded: true },
     };
     expect(selectInFlightEntry(empty)).toBeNull();
+  });
+
+  it('selectInFlightEntryIds returns EVERY in_progress entry id (multiple concurrent)', () => {
+    /* Queue-sole concurrency runs one chapter per worker, so several entries
+       can be in_progress at once — the set must hold all of them. */
+    const multi: { queue: QueueState } = {
+      queue: {
+        entries: [
+          sampleEntry({ id: 'a1', bookId: 'book-A', chapterId: 1, status: 'in_progress' }),
+          sampleEntry({ id: 'a2', bookId: 'book-A', chapterId: 2, status: 'in_progress' }),
+          sampleEntry({ id: 'b1', bookId: 'book-B', chapterId: 5, status: 'queued' }),
+          sampleEntry({ id: 'b2', bookId: 'book-B', chapterId: 6, status: 'failed' }),
+        ],
+        paused: false,
+        loaded: true,
+      },
+    };
+    const ids = selectInFlightEntryIds(multi);
+    expect(ids).toBeInstanceOf(Set);
+    expect([...ids].sort()).toEqual(['a1', 'a2']);
+    expect(ids.has('b1')).toBe(false);
+    expect(ids.has('b2')).toBe(false);
+  });
+
+  it('selectInFlightEntryIds is empty when nothing is in flight', () => {
+    const none: { queue: QueueState } = {
+      queue: { entries: [sampleEntry()], paused: false, loaded: true },
+    };
+    expect(selectInFlightEntryIds(none).size).toBe(0);
   });
 });
 

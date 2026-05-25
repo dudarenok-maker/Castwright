@@ -8,22 +8,30 @@
  * to decide when to pop the next entry.
  *
  * Routes:
- *   GET    /api/queue                — read full queue + paused flag
- *   POST   /api/queue/enqueue        — append entries (forward expanded by client)
- *   POST   /api/queue/reorder        — set the order of non-pinned entries
- *   POST   /api/queue/pause          — toggle queue-global paused flag
- *   DELETE /api/queue/:entryId       — cancel a queued entry
+ *   GET    /api/queue                  — read full queue + paused flag
+ *   POST   /api/queue/enqueue          — append entries (forward expanded by client)
+ *   POST   /api/queue/reorder          — set the order of non-pinned entries
+ *   POST   /api/queue/pause            — toggle queue-global paused flag
+ *   POST   /api/queue/:entryId/start   — mark an entry in_progress (no reorder)
+ *   POST   /api/queue/:entryId/complete — drop a finished entry (done-prune)
+ *   DELETE /api/queue/:entryId         — cancel a QUEUED entry (409 if in_progress)
  *
- * Two additional mutators (startEntry, completeEntry, updateProgress) live
- * on the queue-io helpers but are not exposed as routes — they're called
- * by the generation route directly as it advances the queue. */
+ * Queue-sole concurrency (plan-111 refactor): the dispatcher claims one entry
+ * per worker and POSTs `/start` to flip it to in_progress, then POSTs
+ * `/complete` once that chapter's stream closes — multiple entries are
+ * in_progress at once, so removal-on-completion can't go through the
+ * user-facing DELETE (which still 409s on an in_progress entry so the modal's
+ * cancel button keeps its "pause first" guard). updateProgress remains a
+ * queue-io helper without a route. */
 
 import { Router, type Request, type Response } from 'express';
 import { queueJsonPath } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import {
   cancel,
+  completeEntry,
   enqueue,
+  markInProgress,
   reorder,
   setPaused,
   type EnqueueInput,
@@ -155,6 +163,41 @@ queueRouter.post('/pause', async (req: Request, res: Response) => {
   try {
     const before = await readQueueFile(queueJsonPath());
     const after = setPaused(before, body.paused);
+    await writeQueueFile(queueJsonPath(), after);
+    res.json({ entries: after.entries, paused: after.paused });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/* Mark an entry in_progress — the dispatcher fires this the instant it claims
+   an entry and opens that chapter's stream (one entry = one chapter actively
+   starting). Status-only, no reorder: with N concurrent workers multiple
+   entries are in_progress at once, so pinning to order 0 would be wrong.
+   Idempotent (already-in_progress / missing id both succeed) so a retried
+   claim or a stale snapshot can't 4xx. */
+queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
+  const { entryId } = req.params;
+  try {
+    const before = await readQueueFile(queueJsonPath());
+    const after = markInProgress(before, entryId);
+    await writeQueueFile(queueJsonPath(), after);
+    res.json({ entries: after.entries, paused: after.paused });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/* Drop a finished entry from the queue — the dispatcher's reconcile fires this
+   once a chapter's stream closes. Unlike DELETE (user cancel, refuses an
+   in_progress entry), completion removal is status-agnostic: the entry IS
+   in_progress at this point. Done-prune so the modal shows only pending work.
+   Idempotent for a missing id (the snapshot already caught up). */
+queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
+  const { entryId } = req.params;
+  try {
+    const before = await readQueueFile(queueJsonPath());
+    const after = completeEntry(before, entryId, 'done');
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
   } catch (e) {
