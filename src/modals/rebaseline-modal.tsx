@@ -261,10 +261,16 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   }
 
   /* Propose step — flip to the proposing phase immediately (so the queued rows
-     + footer progress show the instant Propose is clicked), then enqueue every
-     selected character TOP-TO-BOTTOM. designOne reuses an existing persona and
-     generates one only when missing, so re-proposing never rebuilds a persona
-     that already exists. Per-character failures don't abort the run. */
+     + footer progress show the instant Propose is clicked), then handle each
+     selected character TOP-TO-BOTTOM:
+       - already on its bespoke Qwen voice HERE → 'unchanged' (skip entirely);
+       - has an approved Qwen voice but the wrong engine in this book → reuse
+         that voice with NO re-design, marked ready so approve re-applies it
+         (the series write also fixes the engine — see server applyOverride);
+       - otherwise → enqueue a fresh design.
+     designOne reuses an existing persona and generates one only when missing,
+     so we never rebuild a persona OR a voice that already exists. Per-character
+     failures don't abort the run. */
   function runPropose() {
     if (status !== 'setup' || drainingRef.current) return;
     const seeds: Record<string, string> = {};
@@ -276,7 +282,29 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     settleAfterDrainRef.current = true;
     const ordered = [...selectedCharacterIds].sort(orderByLineDesc);
     for (const id of ordered) {
-      designQueueRef.current.push({ characterId: id, persona: seeds[id] ?? '' });
+      const c = charById.get(id);
+      const existingQwenVoice = c?.overrideTtsVoices?.qwen?.name;
+      if (existingQwenVoice && c?.ttsEngine === 'qwen') {
+        // Already on its bespoke Qwen voice in this book — nothing to do.
+        dispatch(
+          rebaselineActions.proposalUnchanged({
+            characterId: id,
+            proposedVoiceId: existingQwenVoice,
+          }),
+        );
+      } else if (existingQwenVoice) {
+        // Approved Qwen voice exists (likely from another book in the series)
+        // but this book is on the wrong engine — reuse it, no re-design.
+        dispatch(
+          rebaselineActions.proposalReady({
+            characterId: id,
+            persona: seeds[id] ?? c?.voiceStyle ?? '',
+            proposedVoiceId: existingQwenVoice,
+          }),
+        );
+      } else {
+        designQueueRef.current.push({ characterId: id, persona: seeds[id] ?? '' });
+      }
     }
     void drainDesignQueue();
   }
@@ -724,7 +752,7 @@ function ProposeStep({
             }`}
           >
             <div className="flex items-start gap-3">
-              {!done && p.status !== 'failed' && (
+              {!done && p.status !== 'failed' && p.status !== 'unchanged' && (
                 <input
                   type="checkbox"
                   checked={p.include}
@@ -751,6 +779,11 @@ function ProposeStep({
                   {p.status === 'ready' && (
                     <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700">
                       <IconCheck className="w-3 h-3" /> Ready
+                    </span>
+                  )}
+                  {p.status === 'unchanged' && (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-ink/45">
+                      <IconCheck className="w-3 h-3" /> Already on Qwen — kept
                     </span>
                   )}
                   {p.status === 'applied' && (

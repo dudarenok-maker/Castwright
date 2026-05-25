@@ -147,6 +147,22 @@ describe('rebaselineSlice — propose', () => {
     expect(s.proposals.Maerin.error).toBeUndefined();
   });
 
+  it('proposalUnchanged marks a row as kept with its existing voiceId (excluded from the write)', () => {
+    let s = freshOpen();
+    s = reducer(s, rebaselineActions.startProposing({}));
+    s = reducer(
+      s,
+      rebaselineActions.proposalUnchanged({
+        characterId: 'Maerin',
+        proposedVoiceId: 'qwen-existing',
+      }),
+    );
+    expect(s.proposals.Maerin.status).toBe('unchanged');
+    expect(s.proposals.Maerin.proposedVoiceId).toBe('qwen-existing');
+    // 'unchanged' is not 'ready', so includedProposals never writes it.
+    expect(includedProposals(s)).toHaveLength(0);
+  });
+
   it('setProposalPersona edits the textarea value', () => {
     let s = freshOpen();
     s = reducer(s, rebaselineActions.startProposing({}));
