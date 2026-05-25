@@ -51,19 +51,20 @@ const entry = (overrides: Partial<QueueEntry> = {}): QueueEntry => ({
   ...overrides,
 });
 
-const libraryBook = (bookId: string, title: string): LibraryBook => ({
-  bookId,
-  title,
-  author: 'Test Author',
-  status: 'complete',
-  thumbnail: null,
-  manuscriptId: 'm_test',
-  chapters: [],
-  characters: [],
-  updatedAt: '2026-05-23T00:00:00.000Z',
-  series: 'Standalones',
-  audioFormat: 'mp3',
-} as unknown as LibraryBook);
+const libraryBook = (bookId: string, title: string): LibraryBook =>
+  ({
+    bookId,
+    title,
+    author: 'Test Author',
+    status: 'complete',
+    thumbnail: null,
+    manuscriptId: 'm_test',
+    chapters: [],
+    characters: [],
+    updatedAt: '2026-05-23T00:00:00.000Z',
+    series: 'Standalones',
+    audioFormat: 'mp3',
+  }) as unknown as LibraryBook;
 
 function renderModal(
   entries: QueueEntry[],
@@ -100,8 +101,9 @@ function renderModal(
                 [opts.activeGeneration.activeStream.bookId]: opts.activeGeneration.activeStream,
               },
               currentBookId: opts.activeGeneration.currentBookId,
-              chapters: (opts.activeGeneration.chapters ??
-                []) as ReturnType<typeof chaptersSlice.reducer>['chapters'],
+              chapters: (opts.activeGeneration.chapters ?? []) as ReturnType<
+                typeof chaptersSlice.reducer
+              >['chapters'],
             }
           : {}),
       },
@@ -203,7 +205,7 @@ describe('QueueModal', () => {
     expect(screen.getByTestId('queue-entry-b1')).toBeInTheDocument();
   });
 
-  it('falls back to bookId when the library doesn\'t know the book', () => {
+  it("falls back to bookId when the library doesn't know the book", () => {
     renderModal([entry({ id: 'a1', bookId: 'unknown-book' })]);
     expect(screen.getByText('unknown-book')).toBeInTheDocument();
   });
@@ -214,10 +216,7 @@ describe('QueueModal', () => {
   });
 
   it('pluralizes correctly when count > 1', () => {
-    renderModal([
-      entry({ id: 'a1', order: 0 }),
-      entry({ id: 'a2', chapterId: 2, order: 1 }),
-    ]);
+    renderModal([entry({ id: 'a1', order: 0 }), entry({ id: 'a2', chapterId: 2, order: 1 })]);
     expect(screen.getByText('2 entries pending')).toBeInTheDocument();
   });
 
@@ -236,6 +235,62 @@ describe('QueueModal', () => {
     expect(screen.getByTestId('queue-entry-a2-cancel')).toBeInTheDocument();
     /* In-flight status line shows progress. */
     expect(screen.getByText(/In flight · 42%/)).toBeInTheDocument();
+  });
+
+  it('renders EVERY in_progress entry as "In flight" (multiple concurrent under queue-sole concurrency)', () => {
+    renderModal([
+      entry({
+        id: 'a1',
+        bookId: 'book-A',
+        chapterId: 1,
+        status: 'in_progress',
+        order: 0,
+        progress: 0.4,
+      }),
+      entry({
+        id: 'a2',
+        bookId: 'book-A',
+        chapterId: 2,
+        status: 'in_progress',
+        order: 1,
+        progress: 0.1,
+      }),
+      entry({ id: 'a3', bookId: 'book-A', chapterId: 3, status: 'queued', order: 2 }),
+    ]);
+    /* Two rows read "In flight" (with their own progress %); the queued row
+       reads "Queued". */
+    expect(screen.getByText(/In flight · 40%/)).toBeInTheDocument();
+    expect(screen.getByText(/In flight · 10%/)).toBeInTheDocument();
+    expect(screen.getByText('Queued')).toBeInTheDocument();
+    /* BOTH in-flight rows are pinned: no reorder/cancel controls. */
+    expect(screen.queryByTestId('queue-entry-a1-cancel')).toBeNull();
+    expect(screen.queryByTestId('queue-entry-a2-cancel')).toBeNull();
+    expect(screen.queryByTestId('queue-entry-a1-drag')).toBeNull();
+    expect(screen.queryByTestId('queue-entry-a2-drag')).toBeNull();
+    /* The queued row keeps its controls. */
+    expect(screen.getByTestId('queue-entry-a3-cancel')).toBeInTheDocument();
+    expect(screen.getByTestId('queue-entry-a3-drag')).toBeInTheDocument();
+  });
+
+  it('reorder excludes ALL in-flight entries from the order array (server reorder() drops every in_progress row)', async () => {
+    renderModal([
+      entry({ id: 'a1', bookId: 'book-A', chapterId: 1, status: 'in_progress', order: 0 }),
+      entry({ id: 'a2', bookId: 'book-A', chapterId: 2, status: 'in_progress', order: 1 }),
+      entry({ id: 'a3', bookId: 'book-A', chapterId: 3, status: 'queued', order: 2 }),
+      entry({ id: 'a4', bookId: 'book-A', chapterId: 4, status: 'queued', order: 3 }),
+    ]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('queue-entry-a4-up'));
+    });
+    const reorderCall = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/reorder');
+    expect(reorderCall).toBeDefined();
+    /* Both in-flight a1 + a2 excluded; a4 moves before a3. */
+    expect(reorderCall![1].body).toContain('"order":["a4","a3"]');
   });
 
   it('Move-down dispatches reorder thunk excluding the in-flight pinned entry', async () => {

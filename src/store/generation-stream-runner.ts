@@ -44,6 +44,19 @@ export interface StreamOpenOpts {
       ticks correlate to the right queue row when entries from different
       books interleave. */
   queueEntryId?: string;
+  /** The single chapter this stream renders (queue-sole concurrency: one
+      queue worker = one chapter). Used to key the handle map so two
+      same-book chapters open independent concurrent streams instead of one
+      aborting the other. Absent only on the legacy/back-compat open path
+      (no specific chapter), which keys by `${bookId}::*`. */
+  chapterId?: number;
+}
+
+/** Composite handle key — `${bookId}::${chapterId}` (or `${bookId}::*` when
+    no chapter is named). The singleton guard now guards the CHAPTER, so two
+    chapters of the same book stream concurrently. */
+function streamKey(bookId: string, chapterId: number | undefined): string {
+  return `${bookId}::${chapterId == null ? '*' : chapterId}`;
 }
 
 /** Minimal store surface the runner needs. Satisfied by the configured RTK
@@ -57,6 +70,13 @@ export interface StreamRunnerStore {
 interface OpenHandle {
   cancel: () => void;
   bookId: string;
+  /** The composite key this handle is stored under (`${bookId}::${chapterId}`
+      or `${bookId}::*`). Carried so close() can clear the right
+      activeStreams entry. */
+  key: string;
+  /** The single chapter this stream renders, when known. Null on the
+      back-compat `*` open. */
+  chapterId: number | null;
   modelKey: TtsModelKey;
   /** Chapter ids this stream is rendering (the spec's chapterIds). Lets the
       dispatcher answer "is chapter X already being generated?" so two workers
@@ -71,26 +91,28 @@ interface OpenHandle {
 
 export interface StreamRunner {
   /** Open an SSE for `bookId` with the given spec. No-ops if a stream is
-      already open FOR THAT BOOK (the per-book singleton — two concurrent
-      streams for one book would abort each other server-side, see
-      server/src/routes/generation.ts `inFlightByBook`). Different books open
-      independent concurrent streams (plan 111 worker pool). */
-  open(
-    bookId: string,
-    modelKey: TtsModelKey,
-    spec: StreamSpec | null,
-    opts?: StreamOpenOpts,
-  ): void;
-  /** Tear down the stream for `bookId` (flushing its run rollup) and clear
-      that book's snapshot. No-op when nothing is open for the book. */
-  close(bookId: string): void;
+      already open FOR THE SAME CHAPTER (the per-chapter singleton). Under
+      queue-sole concurrency the server keys jobs by `${bookId}::${chapterId}`,
+      so two chapters of the SAME book open independent concurrent streams —
+      they no longer abort each other. Pass `opts.chapterId` so the handle is
+      keyed per chapter; absent → the back-compat `${bookId}::*` key. */
+  open(bookId: string, modelKey: TtsModelKey, spec: StreamSpec | null, opts?: StreamOpenOpts): void;
+  /** Tear down ONE stream by its composite key (`${bookId}::${chapterId}`),
+      flushing its run rollup and clearing that stream's snapshot. No-op when
+      nothing is open for the key. */
+  close(key: string): void;
   /** Tear down every open stream — store teardown / hard reset. */
   closeAll(): void;
-  /** Number of books currently streaming (the dispatcher's N-slot gate). */
+  /** Number of streams currently open (the dispatcher's N-slot gate is now
+      chapter-level, so this counts chapters). */
   openBookCount(): number;
-  /** Book ids of every open stream — used by the halt path to pause each. */
+  /** DISTINCT book ids across all open streams — used by the halt path to
+      pause each book once. */
   openBookIds(): string[];
-  /** Is a stream open for this specific book? (per-book singleton check) */
+  /** Is a stream open for this specific (book, chapter)? — the per-chapter
+      singleton check the dispatcher uses to fill + reconcile per chapter. */
+  hasOpenStreamForChapter(bookId: string, chapterId: number): boolean;
+  /** Is ANY stream open for this book? — kept for the halt path. */
   hasOpenStreamForBook(bookId: string): boolean;
   /** Union of chapter ids across all open streams — so the dispatcher never
       claims a chapter that's already rendering. */
@@ -98,7 +120,9 @@ export interface StreamRunner {
 }
 
 function snapshotFromChapters(
+  streamKey: string,
   bookId: string,
+  chapterId: number | null,
   modelKey: TtsModelKey,
   state: ChaptersState,
 ): ActiveStreamSnapshot {
@@ -108,7 +132,9 @@ function snapshotFromChapters(
      stall the cross-book top-bar pill's done/total readout. */
   const active = state.chapters.filter((c) => !c.excluded);
   return {
+    streamKey,
     bookId,
+    chapterId,
     modelKey,
     done: active.filter((c) => c.state === 'done').length,
     total: active.length,
@@ -119,15 +145,15 @@ function snapshotFromChapters(
 }
 
 export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
-  /* Plan 111 worker pool — one handle per book. The per-book singleton is
-     structural (the server aborts a book's prior job on a new forced request,
-     so two streams for one book can't coexist); different books stream
-     concurrently up to the dispatcher's N-worker cap. */
+  /* Queue-sole concurrency — one handle per CHAPTER, keyed
+     `${bookId}::${chapterId}`. The server keys jobs by the same composite, so
+     two chapters of the same book stream concurrently without aborting each
+     other; the dispatcher's N-slot gate counts chapters. */
   const handles = new Map<string, OpenHandle>();
   const dispatch = store.dispatch;
 
-  const close = (bookId: string): void => {
-    const handle = handles.get(bookId);
+  const close = (key: string): void => {
+    const handle = handles.get(key);
     if (!handle) return;
     /* Flush the per-run rollup before tearing down. Empty runs (pause before
        any chapter finished, queue drained immediately) write nothing — there
@@ -140,12 +166,15 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       );
     }
     handle.cancel();
-    handles.delete(bookId);
-    dispatch(chaptersActions.clearActiveStream(bookId));
+    handles.delete(key);
+    /* Per-stream snapshot key — each chapter stream owns its own
+       activeStreams entry, so clearing one leaves a sibling chapter's pill
+       alive. */
+    dispatch(chaptersActions.clearActiveStream(key));
   };
 
   const closeAll = (): void => {
-    for (const bookId of [...handles.keys()]) close(bookId);
+    for (const key of [...handles.keys()]) close(key);
   };
 
   const open = (
@@ -154,9 +183,11 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     spec: StreamSpec | null,
     opts: StreamOpenOpts = {},
   ): void => {
-    /* Per-book singleton — never stack a second stream for the SAME book (the
-       server would abort the first). Different books open concurrently. */
-    if (handles.has(bookId)) return;
+    const key = streamKey(bookId, opts.chapterId);
+    /* Per-chapter singleton — never stack a second stream for the SAME
+       chapter (the server would abort its prior run). Sibling chapters of the
+       same book, and different books, open concurrently. */
+    if (handles.has(key)) return;
 
     const after = store.getState();
 
@@ -177,14 +208,19 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           : [];
     dispatch(changeLogActions.appendLogEvent(buildGenerationStartedEvent({ chapterIds: ids })));
 
-    /* Seed this book's snapshot. Same-book: derive from the slice's rows
-       (it IS this book's data right now). Cross-book: the slice holds the
-       wrong book, so seed a minimal placeholder; the first tick's run*
-       aggregates refresh it via updateActiveStreamProgress. */
+    const chapterId = opts.chapterId ?? null;
+
+    /* Seed this stream's snapshot, keyed by the composite stream key so two
+       same-book chapters get independent entries. Same-book: derive from the
+       slice's rows (it IS this book's data right now). Cross-book: the slice
+       holds the wrong book, so seed a minimal placeholder; the first tick's
+       run* aggregates refresh it via updateActiveStreamProgress. */
     const seed: ActiveStreamSnapshot = sliceOnThisBook
-      ? snapshotFromChapters(bookId, modelKey, after.chapters)
+      ? snapshotFromChapters(key, bookId, chapterId, modelKey, after.chapters)
       : {
+          streamKey: key,
           bookId,
+          chapterId,
           modelKey,
           done: 0,
           total: spec?.chapterIds?.length ?? 1,
@@ -205,28 +241,41 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
          store, not over any view's props, so generation continues after the
          Generate view unmounts. */
       getChapters: () => store.getState().chapters.chapters,
-      /* Each stream binds its own bookId so a tick is always attributable to
-         the right book even with several streams running. */
-      onTick: (ev: GenerationTick) => onStreamTick(bookId, ev),
+      /* Each stream binds its own composite key so a tick is always
+         attributable to the right (book, chapter) even with several streams
+         running. */
+      onTick: (ev: GenerationTick) => onStreamTick(key, ev),
     });
-    handles.set(bookId, { cancel, bookId, modelKey, chapterIds: ids, completedChapterIds: [] });
+    handles.set(key, {
+      cancel,
+      bookId,
+      key,
+      chapterId,
+      modelKey,
+      chapterIds: ids,
+      completedChapterIds: [],
+    });
   };
 
-  /* Per-stream tick entry point. Row mutation (applyGenerationTick) only fires
-     for the VIEWED book — a foreign-book tick would corrupt the viewed book's
-     rows (chapter ids collide across books). Side-effects + snapshot refresh
-     run for every stream via handleTickFor. */
-  const onStreamTick = (bookId: string, ev: GenerationTick | undefined): void => {
+  /* Per-stream tick entry point. Keyed by the composite stream key. Row
+     mutation (applyGenerationTick) only fires for the VIEWED book — a
+     foreign-book tick would corrupt the viewed book's rows (chapter ids
+     collide across books). Side-effects + snapshot refresh run for every
+     stream via handleTickFor. */
+  const onStreamTick = (key: string, ev: GenerationTick | undefined): void => {
     if (!ev) return;
-    if (store.getState().chapters.currentBookId === bookId) {
+    const handle = handles.get(key);
+    if (!handle) return;
+    if (store.getState().chapters.currentBookId === handle.bookId) {
       dispatch(chaptersActions.applyGenerationTick(ev));
     }
-    handleTickFor(bookId, ev);
+    handleTickFor(key, ev);
   };
 
-  const handleTickFor = (bookId: string, ev: GenerationTick): void => {
-    const handle = handles.get(bookId);
+  const handleTickFor = (key: string, ev: GenerationTick): void => {
+    const handle = handles.get(key);
     if (!handle) return;
+    const bookId = handle.bookId;
     const after = store.getState();
     const sliceMatchesHandle = after.chapters.currentBookId === bookId;
     if (sliceMatchesHandle) {
@@ -234,7 +283,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
          pick up any user-side mutations (excluded toggles etc.). */
       dispatch(
         chaptersActions.setActiveStream(
-          snapshotFromChapters(bookId, handle.modelKey, after.chapters),
+          snapshotFromChapters(key, bookId, handle.chapterId, handle.modelKey, after.chapters),
         ),
       );
     } else if (ev.type !== 'idle') {
@@ -251,7 +300,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         typeof evRecord.runInProgress === 'number' ? evRecord.runInProgress : undefined;
       dispatch(
         chaptersActions.updateActiveStreamProgress({
-          bookId,
+          streamKey: key,
           done: runDone,
           total: runTotal,
           inProgress: runInProgress,
@@ -290,8 +339,9 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       );
     } else if (ev.type === 'idle') {
       /* Server's idle tick is the unambiguous "no more work" signal for this
-         book's stream — tear it down (per-book, leaving other streams alive). */
-      close(bookId);
+         chapter's stream — tear it down by its composite key, leaving sibling
+         chapter streams (same book or other books) alive. */
+      close(key);
     }
   };
 
@@ -299,9 +349,14 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     open,
     close,
     closeAll,
+    /* Counts STREAMS (one per chapter now) — the dispatcher's N-slot gate is
+       chapter-level. */
     openBookCount: () => handles.size,
-    openBookIds: () => [...handles.keys()],
-    hasOpenStreamForBook: (bookId) => handles.has(bookId),
+    /* DISTINCT books across open streams — the halt path pauses each book
+       once even when several of its chapters are streaming. */
+    openBookIds: () => [...new Set([...handles.values()].map((h) => h.bookId))],
+    hasOpenStreamForChapter: (bookId, chapterId) => handles.has(streamKey(bookId, chapterId)),
+    hasOpenStreamForBook: (bookId) => [...handles.values()].some((h) => h.bookId === bookId),
     openChapterIds: () => [...handles.values()].flatMap((h) => h.chapterIds),
   };
 }

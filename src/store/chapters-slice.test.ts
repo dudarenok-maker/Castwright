@@ -943,9 +943,11 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
      stay untouched (broadcasting them would fan out regen side-
      effects across tabs, which is the racing-writes case parked
      as backlog `fe-11`). */
-  it('mirrors the inbound snapshot as the per-book stream map', () => {
-    const sibling = {
+  it('mirrors the inbound snapshot as the per-stream map (keyed by streamKey)', () => {
+    const sibling: ActiveStreamSnapshot = {
+      streamKey: 'book-sibling::4',
       bookId: 'book-sibling',
+      chapterId: 4,
       modelKey: 'kokoro-v1' as const,
       done: 3,
       total: 10,
@@ -958,7 +960,7 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
       start,
       chaptersActions.applyExternalChaptersSnapshot(sibling),
     );
-    expect(next.activeStreams).toEqual({ 'book-sibling': sibling });
+    expect(next.activeStreams).toEqual({ 'book-sibling::4': sibling });
     /* Per-chapter rows / pendingRegen / regenEpoch UNCHANGED — proves
        the cross-tab message doesn't contaminate per-tab UI state.
        This is the cross-bookId-isolation invariant the plan locks in. */
@@ -970,8 +972,10 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
     const start: ChaptersState = {
       ...baseState([]),
       activeStreams: {
-        'book-x': {
+        'book-x::2': {
+          streamKey: 'book-x::2',
           bookId: 'book-x',
+          chapterId: 2,
           modelKey: 'kokoro-v1',
           done: 5,
           total: 10,
@@ -981,17 +985,20 @@ describe('chaptersSlice — applyExternalChaptersSnapshot (cross-tab inbound, pl
         },
       },
     };
-    const next = chaptersSlice.reducer(
-      start,
-      chaptersActions.applyExternalChaptersSnapshot(null),
-    );
+    const next = chaptersSlice.reducer(start, chaptersActions.applyExternalChaptersSnapshot(null));
     expect(next.activeStreams).toEqual({});
   });
 });
 
-describe('chaptersSlice — activeStreams per-book map (plan 111 Wave 2)', () => {
-  const snap = (bookId: string, over: Partial<ActiveStreamSnapshot> = {}): ActiveStreamSnapshot => ({
+describe('chaptersSlice — activeStreams per-stream map (queue-sole concurrency)', () => {
+  const snap = (
+    bookId: string,
+    chapterId: number,
+    over: Partial<ActiveStreamSnapshot> = {},
+  ): ActiveStreamSnapshot => ({
+    streamKey: `${bookId}::${chapterId}`,
     bookId,
+    chapterId,
     modelKey: 'kokoro-v1',
     done: 0,
     total: 5,
@@ -1001,37 +1008,77 @@ describe('chaptersSlice — activeStreams per-book map (plan 111 Wave 2)', () =>
     ...over,
   });
 
-  it('setActiveStream keys by bookId so concurrent streams coexist', () => {
-    let s = chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A')));
-    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B', { done: 2 })));
-    expect(Object.keys(s.activeStreams).sort()).toEqual(['book-A', 'book-B']);
-    expect(s.activeStreams['book-B'].done).toBe(2);
+  it('setActiveStream keys by streamKey so two same-book chapters coexist', () => {
+    /* Two chapters of the SAME book open independent streams under
+       queue-sole concurrency; they must not collide under a shared bookId
+       key. */
+    let s = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.setActiveStream(snap('book-A', 1)),
+    );
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-A', 2, { done: 2 })));
+    expect(Object.keys(s.activeStreams).sort()).toEqual(['book-A::1', 'book-A::2']);
+    expect(s.activeStreams['book-A::2'].done).toBe(2);
+    /* Both belong to book-A → the pill aggregates them as one book's run. */
+    expect(
+      selectActiveStreams({ chapters: s }).filter((st) => st.bookId === 'book-A'),
+    ).toHaveLength(2);
   });
 
-  it('clearActiveStream(bookId) removes only that book’s stream', () => {
-    let s = chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A')));
-    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B')));
-    s = chaptersSlice.reducer(s, chaptersActions.clearActiveStream('book-A'));
-    expect(Object.keys(s.activeStreams)).toEqual(['book-B']);
+  it('clearActiveStream(streamKey) removes only that chapter’s stream and leaves the sibling’s pill alive', () => {
+    let s = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.setActiveStream(snap('book-A', 1)),
+    );
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-A', 2)));
+    s = chaptersSlice.reducer(s, chaptersActions.clearActiveStream('book-A::1'));
+    expect(Object.keys(s.activeStreams)).toEqual(['book-A::2']);
+    /* The remaining same-book stream keeps the pill alive. */
+    expect(selectAnyActiveStream({ chapters: s })).toBe(true);
   });
 
-  it('updateActiveStreamProgress targets the named book and bumps lastTickAt', () => {
-    let s = chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A')));
-    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B')));
+  it('updateActiveStreamProgress targets the named streamKey and bumps lastTickAt', () => {
+    let s = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.setActiveStream(snap('book-A', 1)),
+    );
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-A', 2)));
     s = chaptersSlice.reducer(
       s,
-      chaptersActions.updateActiveStreamProgress({ bookId: 'book-B', done: 4, inProgress: 2 }),
+      chaptersActions.updateActiveStreamProgress({
+        streamKey: 'book-A::2',
+        done: 4,
+        inProgress: 2,
+      }),
     );
-    expect(s.activeStreams['book-B'].done).toBe(4);
-    expect(s.activeStreams['book-B'].inProgress).toBe(2);
-    /* book-A untouched. */
-    expect(s.activeStreams['book-A'].done).toBe(0);
-    /* No-op when the book has no open stream. */
+    expect(s.activeStreams['book-A::2'].done).toBe(4);
+    expect(s.activeStreams['book-A::2'].inProgress).toBe(2);
+    /* Sibling chapter untouched. */
+    expect(s.activeStreams['book-A::1'].done).toBe(0);
+    /* No-op when the streamKey has no open stream. */
     const after = chaptersSlice.reducer(
       s,
-      chaptersActions.updateActiveStreamProgress({ bookId: 'book-Z', done: 9 }),
+      chaptersActions.updateActiveStreamProgress({ streamKey: 'book-Z::9', done: 9 }),
     );
-    expect(after.activeStreams['book-Z']).toBeUndefined();
+    expect(after.activeStreams['book-Z::9']).toBeUndefined();
+  });
+
+  it('the layout pill aggregates two same-book chapter streams', () => {
+    /* The pill selectors aggregate across Object.values, so two same-book
+       chapter streams sum into one book's done/total readout. */
+    let s = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.setActiveStream(snap('book-A', 1, { done: 1, total: 5, inProgress: 1 })),
+    );
+    s = chaptersSlice.reducer(
+      s,
+      chaptersActions.setActiveStream(snap('book-A', 2, { done: 1, total: 5, inProgress: 1 })),
+    );
+    const streams = selectActiveStreams({ chapters: s });
+    const done = streams.reduce((a, st) => a + st.done, 0);
+    const inProgress = streams.reduce((a, st) => a + st.inProgress, 0);
+    expect(done).toBe(2);
+    expect(inProgress).toBe(2);
   });
 
   it('selectActiveStreams / selectAnyActiveStream read the map', () => {
@@ -1039,27 +1086,57 @@ describe('chaptersSlice — activeStreams per-book map (plan 111 Wave 2)', () =>
     expect(selectActiveStreams(empty)).toEqual([]);
     expect(selectAnyActiveStream(empty)).toBe(false);
     const live = {
-      chapters: chaptersSlice.reducer(baseState([]), chaptersActions.setActiveStream(snap('book-A'))),
+      chapters: chaptersSlice.reducer(
+        baseState([]),
+        chaptersActions.setActiveStream(snap('book-A', 1)),
+      ),
     };
     expect(selectActiveStreams(live).map((x) => x.bookId)).toEqual(['book-A']);
     expect(selectAnyActiveStream(live)).toBe(true);
   });
 
-  it('cross-book guard: a tick is dropped when a stream is open but not for the viewed book', () => {
+  it('cross-book guard: a tick is dropped when streams are open but none is for the viewed book', () => {
     /* Slice holds book-A rows; a stream is open for book-B only. A progress
        tick for chapter 1 (which exists in book-A's rows) must NOT mutate them
-       — it belongs to book-B (chapter ids collide across books). */
+       — it belongs to book-B (chapter ids collide across books). The guard
+       now checks "some stream whose bookId === currentBookId". */
     let s: ChaptersState = {
       ...baseState([makeChapter(1, { state: 'queued' })]),
       currentBookId: 'book-A',
     };
-    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B')));
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B', 1)));
     const after = chaptersSlice.reducer(
       s,
-      chaptersActions.applyGenerationTick({ type: 'progress', chapterId: 1, progress: 0.9 } as GenerationTick),
+      chaptersActions.applyGenerationTick({
+        type: 'progress',
+        chapterId: 1,
+        progress: 0.9,
+      } as GenerationTick),
     );
     expect(after.chapters[0].state).toBe('queued');
     expect(after.chapters[0].progress).toBe(0);
+  });
+
+  it('cross-book guard: a tick is APPLIED when some open stream IS for the viewed book', () => {
+    /* book-A is the viewed book and has a stream open (chapter 2), while
+       book-B also streams. A book-A progress tick for chapter 1 must apply —
+       the guard sees a book-A stream and lets it through. */
+    let s: ChaptersState = {
+      ...baseState([makeChapter(1, { state: 'queued' })]),
+      currentBookId: 'book-A',
+    };
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-A', 2)));
+    s = chaptersSlice.reducer(s, chaptersActions.setActiveStream(snap('book-B', 1)));
+    const after = chaptersSlice.reducer(
+      s,
+      chaptersActions.applyGenerationTick({
+        type: 'progress',
+        chapterId: 1,
+        progress: 0.9,
+      } as GenerationTick),
+    );
+    expect(after.chapters[0].state).toBe('in_progress');
+    expect(after.chapters[0].progress).toBe(0.9);
   });
 });
 
@@ -1132,10 +1209,7 @@ describe('chaptersSlice — clearOverrides (plan 84)', () => {
 
   it('is a no-op when the id list is empty', () => {
     const start = baseState([makeChapter(1, { title: 'One', titleOverridden: true })]);
-    const next = chaptersSlice.reducer(
-      start,
-      chaptersActions.clearOverrides({ chapterIds: [] }),
-    );
+    const next = chaptersSlice.reducer(start, chaptersActions.clearOverrides({ chapterIds: [] }));
     expect(next.chapters[0].titleOverridden).toBe(true);
   });
 
@@ -1149,13 +1223,8 @@ describe('chaptersSlice — clearOverrides (plan 84)', () => {
   });
 
   it('preserves the chapter title (the new manuscript parse will overwrite it on the next state.json round-trip)', () => {
-    const start = baseState([
-      makeChapter(1, { title: 'My User Rename', titleOverridden: true }),
-    ]);
-    const next = chaptersSlice.reducer(
-      start,
-      chaptersActions.clearOverrides({ chapterIds: [1] }),
-    );
+    const start = baseState([makeChapter(1, { title: 'My User Rename', titleOverridden: true })]);
+    const next = chaptersSlice.reducer(start, chaptersActions.clearOverrides({ chapterIds: [1] }));
     // Title stays put for the moment — only the flag flips. The PUT-state
     // round-trip + re-parse refreshes the title.
     expect(next.chapters[0].title).toBe('My User Rename');

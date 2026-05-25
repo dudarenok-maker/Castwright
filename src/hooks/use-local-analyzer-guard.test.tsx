@@ -44,7 +44,9 @@ function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnap
 }
 
 const liveSnapshot: ActiveStreamSnapshot = {
+  streamKey: 'keefe_book::1',
   bookId: 'keefe_book',
+  chapterId: 1,
   modelKey: 'coqui-xtts-v2',
   done: 2,
   total: 5,
