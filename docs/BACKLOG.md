@@ -258,16 +258,6 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 - _Depends on:_ plan 108 (series-scoped write) shipped.
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 
-#### `fe-16` — Change-log entry for character rename / alias promotion
-
-Source: [`10-profile-drawer.md`](features/10-profile-drawer.md) follow-up — net-new (2026-05-27). Deferred from PR #270 (rename + promote-alias).
-
-- _What:_ The profile-drawer rename + alias-promote (`castActions.renameCharacter`, PR #270) dispatch silently — no change-log / activity entry, unlike `voice_tune` / `voice_lock`. Add a `name_change` event so a rename (or alias promotion) shows in the activity timeline. Needs a new event-type literal in the change-log union (OpenAPI + regenerated types), a builder mirroring `buildVoiceTuneEvent`, and a dispatch from the layout's `onRename` handler capturing old → new name. Persisted by the existing `changeLog/appendLogEvent` rule.
-- _Acceptance:_ Renaming a character or promoting an alias appends exactly one activity entry showing the old → new name; it survives a reload (persisted to the change-log). Existing change-log tests stay green; a new slice/builder test covers the event shape.
-- _Key files:_ `openapi.yaml` + `src/lib/api-types.ts` (regenerated — `ChangeLogEvent` type literal); `src/lib/change-log.ts` (new builder, mirror `buildVoiceTuneEvent`); `src/store/change-log-slice.ts` (union); `src/components/layout.tsx` (dispatch from the `onRename` wiring).
-- _Depends on:_ none (PR #270 shipped the rename + promote affordances).
-- _Benefit (user):_ the activity timeline records identity edits the same way it records voice tuning — an audit trail for who/when a character was renamed, which matters when the rename is the recovery step after a wrong merge.
-
 ### Engine, sidecar & analyzer
 
 #### `srv-13` — EPUB raw-zip fallback: NCX/nav-doc title parity

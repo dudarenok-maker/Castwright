@@ -12,6 +12,7 @@ import {
   IconUpload,
   IconLayers,
   IconWarning,
+  IconPencil,
 } from '../lib/icons';
 import type { ChangeLogType } from '../lib/types';
 
@@ -71,6 +72,11 @@ export const LOG_TYPES: Record<ChangeLogType, LogTypeMeta> = {
     icon: <IconCheckCircle className="w-3.5 h-3.5" />,
     color: '#2F7A57',
     label: 'Cast confirmed',
+  },
+  name_change: {
+    icon: <IconPencil className="w-3.5 h-3.5" />,
+    color: '#A43C6C',
+    label: 'Renamed',
   },
   analysis_complete: {
     icon: <IconSparkle className="w-3.5 h-3.5" />,
