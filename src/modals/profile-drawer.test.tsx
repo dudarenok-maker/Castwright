@@ -80,6 +80,7 @@ function renderDrawer(
     ) => Promise<void>;
     onUnlinkAlias?: (sourceCharacterId: string, aliasName: string) => Promise<void>;
     onAddAlias?: (characterId: string, aliasName: string) => Promise<void>;
+    onRename?: (characterId: string, name: string) => void;
     voice?: Voice;
     baseVoices?: BaseVoice[];
     voices?: Voice[];
@@ -102,6 +103,7 @@ function renderDrawer(
           onLinkPrior={extra.onLinkPrior}
           onUnlinkAlias={extra.onUnlinkAlias}
           onAddAlias={extra.onAddAlias}
+          onRename={extra.onRename}
         />
       </Provider>,
     ),
@@ -384,6 +386,52 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     await waitFor(() => {
       expect(screen.getByText(/Cross-series link refused\./)).toBeTruthy();
     });
+  });
+});
+
+describe('ProfileDrawer rename + promote alias', () => {
+  it('reveals the name input on Rename and fires onRename on Enter', () => {
+    const onRename = vi.fn();
+    renderDrawer({ ...baseChar }, { onRename });
+    fireEvent.click(screen.getByRole('button', { name: /Rename character/i }));
+    const input = screen.getByLabelText('Character name') as HTMLInputElement;
+    expect(input.value).toBe('Captain Halloran');
+    fireEvent.change(input, { target: { value: 'Admiral Halloran' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onRename).toHaveBeenCalledWith('halloran', 'Admiral Halloran');
+  });
+
+  it('rejects an empty name without calling onRename', () => {
+    const onRename = vi.fn();
+    renderDrawer({ ...baseChar }, { onRename });
+    fireEvent.click(screen.getByRole('button', { name: /Rename character/i }));
+    const input = screen.getByLabelText('Character name');
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByText(/Name cannot be empty/i)).toBeTruthy();
+  });
+
+  it('promotes an alias to the primary name via the chip star', () => {
+    const onRename = vi.fn();
+    renderDrawer({ ...baseChar, aliases: ['Cap'] }, { onRename });
+    fireEvent.click(screen.getByRole('button', { name: /Make Cap the primary name/i }));
+    expect(onRename).toHaveBeenCalledWith('halloran', 'Cap');
+  });
+
+  it('hides both affordances when onRename is not provided', () => {
+    renderDrawer({ ...baseChar, aliases: ['Cap'] });
+    expect(screen.queryByRole('button', { name: /Rename character/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Make Cap the primary name/i })).toBeNull();
+  });
+
+  it('hides rename for a background bucket character', () => {
+    renderDrawer(
+      { ...baseChar, id: 'unknown-male', name: 'Unknown male', aliases: ['Cap'] },
+      { onRename: vi.fn() },
+    );
+    expect(screen.queryByRole('button', { name: /Rename character/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Make Cap the primary name/i })).toBeNull();
   });
 });
 
