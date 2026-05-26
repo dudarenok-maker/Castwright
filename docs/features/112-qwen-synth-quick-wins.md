@@ -62,7 +62,7 @@ Record the RTF numbers in Ship notes when captured.
 ## Out of scope
 
 - `x_vector_only_mode` / any change to voice fidelity → backlog `side-4`.
-- Batching multiple sentences into one `generate_voice_clone` call → backlog `side-3` (the real throughput lever).
+- Batching multiple sentences into one `generate_voice_clone` call → backlog `side-3` (the real throughput lever; in flight on a separate branch as of 2026-05-26).
 - flash-attn install (left as a documented `QWEN_ATTN_IMPL=flash_attention_2` opt-in; not pursued — Windows build cost).
 - Deployer-warning cleanup (SoX, HF-symlink) → backlog `side-2`.
 

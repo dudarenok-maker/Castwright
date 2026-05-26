@@ -272,6 +272,8 @@ Source: net-new (2026-05-24). Spun off from [plan 108](features/108-qwen-coexist
 
 #### `side-3` — Batch multiple sentences into one Qwen `generate_voice_clone` call
 
+**In flight (parallel agent, 2026-05-26)** — being implemented on a separate branch; don't double-up. Remove this entry when that work merges.
+
 Source: net-new (2026-05-26). Surfaced answering "why is Qwen 5–10× slower than Kokoro, and does more concurrency help?" during plan 112. The honest answer: most of the gap is the autoregressive model class, and firing N concurrent `/synthesize` calls at one GPU + one model does NOT scale — concurrent decode loops time-slice the same SMs and contend on the GIL during sampling, plus each holds its own KV cache (VRAM pressure → spill-to-RAM risk on the 8 GB card). The one lever that genuinely scales throughput on a single GPU is **true batching**: `generate_voice_clone` already accepts `text=[s1, s2, …]` and runs a single batched forward per decode step instead of N separate ones.
 
 - _What:_ Assemble same-voice (and same-engine) sentence groups in `synthesise-chapter.ts` into a single batched `/synthesize`-equivalent call, demux the returned `List[np.ndarray]` back to per-sentence PCM, and preserve the plan-107 ordering + sample-rate-anchor contract. Needs a batched sidecar route (or a `texts[]` body on `/synthesize`) and careful handling of ragged batch lengths.
