@@ -112,23 +112,36 @@ export function detectDuplicateCandidates(
         const charA = resolveCharacter(a, ctx.charactersByBookId.get(a.bookId));
         const charB = resolveCharacter(b, ctx.charactersByBookId.get(b.bookId));
 
-        if (charA && UNMERGEABLE_IDS.has(charA.id)) continue;
-        if (charB && UNMERGEABLE_IDS.has(charB.id)) continue;
+        /* Suppression reads from a "resolved view" that prefers the hydrated
+           Character (fresher — reflects in-session optimistic patches) and
+           falls back to the library Voice's own aliases / notLinkedTo when
+           no cast is loaded. The fallback is the fix for the global
+           `#/voices` tab + any fresh load: foreign casts aren't hydrated
+           there, so charA/charB are null and these filters used to be
+           skipped entirely — re-flagging an already-linked pair on every
+           reload (plan 101 bug fix 2026-05-26). The Voice carries the
+           fields from the server (routes/voices.ts). NOTE: `candidate.*.character`
+           below stays the resolved Character (or null) — the modal still
+           gates its link/variant buttons on a genuinely-hydrated cast. */
+        const supA = suppressionView(a, charA);
+        const supB = suppressionView(b, charB);
+
+        if (UNMERGEABLE_IDS.has(supA.id)) continue;
+        if (UNMERGEABLE_IDS.has(supB.id)) continue;
 
         /* Alias filter: if either side already lists the other's name as
            an alias, the link is already in place — suppress. */
-        if (charA && hasAliasMatching(charA, b.character)) continue;
-        if (charB && hasAliasMatching(charB, a.character)) continue;
+        if (hasAliasMatching(supA, b.character)) continue;
+        if (hasAliasMatching(supB, a.character)) continue;
 
         /* notLinkedTo filter: if either side has marked the pair as
-           intentional variant, suppress. When the other side's Character
-           isn't loaded yet we fall back to its voice id — for cast
-           members linked via `Character.voiceId === Voice.id` (or where
-           `id` is identical), the on-disk `notLinkedTo.characterId`
-           equals one of those two, so the fallback catches typical
-           cases without requiring both casts to be loaded. */
-        if (charA && hasNotLinkedTo(charA, b.bookId, charB?.id ?? b.id)) continue;
-        if (charB && hasNotLinkedTo(charB, a.bookId, charA?.id ?? a.id)) continue;
+           intentional variant, suppress. The id fallback (resolved
+           character id, else the voice id) catches cast members linked
+           via `Character.voiceId === Voice.id` or where the two ids are
+           identical — the typical case — without requiring both casts to
+           be loaded. */
+        if (hasNotLinkedTo(supA, b.bookId, supB.id)) continue;
+        if (hasNotLinkedTo(supB, a.bookId, supA.id)) continue;
 
         out.push({
           voiceKey,
@@ -149,7 +162,23 @@ function resolveCharacter(v: Voice, characters: Character[] | undefined): Charac
   return characters.find((c) => c.id === v.id) ?? null;
 }
 
-function hasAliasMatching(c: Character, otherName: string | undefined): boolean {
+/* The minimal shape the suppression filters read. A resolved Character
+   satisfies it directly; so does a library Voice via `suppressionView`. */
+interface ResolvedView {
+  id: string;
+  name: string;
+  aliases?: string[];
+  notLinkedTo?: Array<{ bookId: string; characterId: string }>;
+}
+
+/* Prefer the hydrated Character (fresher); fall back to the Voice's own
+   carried fields (correct on a fresh load where casts aren't hydrated). */
+function suppressionView(v: Voice, c: Character | null): ResolvedView {
+  if (c) return { id: c.id, name: c.name, aliases: c.aliases, notLinkedTo: c.notLinkedTo };
+  return { id: v.id, name: v.character, aliases: v.aliases, notLinkedTo: v.notLinkedTo };
+}
+
+function hasAliasMatching(c: ResolvedView, otherName: string | undefined): boolean {
   if (!otherName) return false;
   const target = otherName.trim().toLowerCase();
   if (!target) return false;
@@ -157,7 +186,7 @@ function hasAliasMatching(c: Character, otherName: string | undefined): boolean 
   return (c.aliases ?? []).some((a) => a.trim().toLowerCase() === target);
 }
 
-function hasNotLinkedTo(c: Character, otherBookId: string, otherCharacterId: string): boolean {
+function hasNotLinkedTo(c: ResolvedView, otherBookId: string, otherCharacterId: string): boolean {
   if (!otherBookId || !otherCharacterId) return false;
   return (c.notLinkedTo ?? []).some(
     (p) => p.bookId === otherBookId && p.characterId === otherCharacterId,

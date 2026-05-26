@@ -2796,6 +2796,31 @@ components:
             Series name from the book directory (`books/<Author>/<Series>/<Book>`),
             or null/empty for standalones. Lets the voice-family-grouped Voices
             view nest cast members under their book series before the book.
+        aliases:
+          type: array
+          items: { type: string }
+          description: |
+            The underlying character's alternate names (copied from its
+            cast.json entry). Carried on the Voice so the voices-view
+            cross-book duplicate detector can apply its "already-linked"
+            suppression filter WITHOUT hydrating every foreign book's cast
+            — on the global `#/voices` tab no casts are loaded, so without
+            this an already-aliased pair re-surfaces on every reload
+            (plan 101 bug fix 2026-05-26). First-seen character wins when a
+            voiceId spans multiple books.
+        notLinkedTo:
+          type: array
+          items:
+            type: object
+            required: [bookId, characterId]
+            properties:
+              bookId: { type: string }
+              characterId: { type: string }
+          description: |
+            The underlying character's `notLinkedTo` pairs (copied from its
+            cast.json entry). Same rationale as `aliases`: lets the
+            duplicate detector suppress intentional-variant pairs on the
+            global tab without a cast hydrate.
 
     VoiceLibraryResponse:
       type: object
