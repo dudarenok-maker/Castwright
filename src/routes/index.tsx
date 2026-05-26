@@ -36,6 +36,7 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
    sub-routes (ReadyRoute's switch, UploadRoute's conditional) where the
    eager cost is negligible OR they are the landing route and lazy-loading
    them would only slow first paint. */
+import { importGenerationView } from './prefetch';
 const UploadView = lazy(() => import('../views/upload').then((m) => ({ default: m.UploadView })));
 const AnalysingView = lazy(() =>
   import('../views/analysing').then((m) => ({ default: m.AnalysingView })),
@@ -47,7 +48,7 @@ const ManuscriptView = lazy(() =>
 const CastView = lazy(() => import('../views/cast').then((m) => ({ default: m.CastView })));
 const LibraryView = lazy(() => import('../views/voices').then((m) => ({ default: m.LibraryView })));
 const GenerationView = lazy(() =>
-  import('../views/generation').then((m) => ({ default: m.GenerationView })),
+  importGenerationView().then((m) => ({ default: m.GenerationView })),
 );
 const ListenView = lazy(() => import('../views/listen').then((m) => ({ default: m.ListenView })));
 import { BookLibraryView } from '../views/book-library';

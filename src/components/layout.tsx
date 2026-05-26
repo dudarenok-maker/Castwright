@@ -51,6 +51,7 @@ import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
+import { importGenerationView } from '../routes/prefetch';
 import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
@@ -130,6 +131,21 @@ export function Layout() {
      it from either stage variant. */
   const openProfileId =
     stage.kind === 'ready' || stage.kind === 'confirm' ? stage.openProfileId : null;
+
+  /* Prefetch the lazy GenerationView chunk (routes/index.tsx loads it via
+     React.lazy) once the user is inside a book OR any generation run is live,
+     so opening the Generate view paints from cache instead of showing the
+     route Suspense fallback while a cold chunk downloads — which reads as
+     "stuck on Loading…" worst when the main thread is busy mid-generation.
+     import() is idempotent (Vite dedupes to the same chunk the lazy awaits);
+     the ref keeps it to a single fire. */
+  const generationChunkWarmed = useRef(false);
+  useEffect(() => {
+    if (generationChunkWarmed.current) return;
+    if (stageKind !== 'ready' && activeStreams.length === 0) return;
+    generationChunkWarmed.current = true;
+    void importGenerationView();
+  }, [stageKind, activeStreams.length]);
 
   const matchCharacter = ui.matchDetailFor
     ? (characters.find((c) => c.id === ui.matchDetailFor) ?? null)
