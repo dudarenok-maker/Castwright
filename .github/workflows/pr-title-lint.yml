@@ -15,6 +15,9 @@ jobs:
   lint:
     name: Validate PR title against commit convention
     runs-on: ubuntu-latest
+    # Tiny validator; cap explicitly so a hung run can't bill the 360-min
+    # default. (CI cost round 2 — docs/features/118-ci-cost-round-2.md.)
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
