@@ -40,6 +40,14 @@ export interface CastCharacter {
   role?: string;
   voiceId?: string;
   attributes?: string[];
+  /** Alternate names from cast.json. Not used by synthesis, but the voice
+      library (routes/voices.ts) copies it onto each derived Voice so the
+      cross-book duplicate detector can apply its already-linked suppression
+      without hydrating every foreign cast (plan 101 bug fix 2026-05-26). */
+  aliases?: string[];
+  /** Cross-book "intentionally separate" pairs from cast.json. Surfaced on
+      the derived Voice for the same reason as `aliases`. */
+  notLinkedTo?: Array<{ bookId: string; characterId: string }>;
   description?: string;
   gender?: 'male' | 'female' | 'neutral';
   ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
