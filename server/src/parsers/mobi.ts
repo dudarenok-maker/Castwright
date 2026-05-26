@@ -23,12 +23,13 @@ import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
 import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
+import { UnusableMediaError } from './errors.js';
 
-/* Thrown when the MOBI / AZW3 file is DRM-protected. The route layer maps
-   this to HTTP 415 with `{ error: 'drm_protected', message }` body so the
-   frontend can surface a specific "Convert with Calibre first" prompt
-   instead of a generic parse failure. */
-export class DrmProtectedError extends Error {
+/* Thrown when the MOBI / AZW3 file is DRM-protected. Both upload routes map
+   this to HTTP 415: `/api/import` with a `{ error: 'drm_protected', message }`
+   body (so the frontend can surface a specific "Convert with Calibre first"
+   prompt), `/api/manuscripts` via the shared UnusableMediaError base. */
+export class DrmProtectedError extends UnusableMediaError {
   constructor(message: string) {
     super(message);
     this.name = 'DrmProtectedError';
