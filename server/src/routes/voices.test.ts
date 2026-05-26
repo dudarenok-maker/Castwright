@@ -168,6 +168,46 @@ describe('GET /api/voices — aggregation', () => {
     expect(v_fitz.usedIn).toBe(3);
   });
 
+  it('surfaces the character aliases + notLinkedTo on the derived voice (duplicate-detector reload fix)', async () => {
+    /* The voices-view cross-book duplicate detector reads these straight
+       off the library payload so it can suppress already-resolved pairs on
+       the global #/voices tab WITHOUT hydrating any cast (plan 101 fix
+       2026-05-26). Mutate the first-seen cast.json for v_fitz, assert the
+       payload carries both, then restore. */
+    const castPath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK_ONE,
+      '.audiobook',
+      'cast.json',
+    );
+    const cast = JSON.parse(readFileSync(castPath, 'utf8')) as {
+      characters: Array<Record<string, unknown>>;
+    };
+    cast.characters[0].aliases = ['Wonderboy'];
+    cast.characters[0].notLinkedTo = [{ bookId: bookTwoId, characterId: 'char-fitz' }];
+    writeFileSync(castPath, JSON.stringify(cast));
+
+    const res = await request(app).get('/api/voices');
+    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    expect(v_fitz.aliases).toEqual(['Wonderboy']);
+    expect(v_fitz.notLinkedTo).toEqual([{ bookId: bookTwoId, characterId: 'char-fitz' }]);
+
+    /* Restore. */
+    delete cast.characters[0].aliases;
+    delete cast.characters[0].notLinkedTo;
+    writeFileSync(castPath, JSON.stringify(cast));
+  });
+
+  it('omits aliases/notLinkedTo when the character has none', async () => {
+    const res = await request(app).get('/api/voices');
+    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    expect(v_fitz.aliases).toBeUndefined();
+    expect(v_fitz.notLinkedTo).toBeUndefined();
+  });
+
   it('exposes overrideTtsVoices map when cast.json carries one', async () => {
     /* Quick targeted write — bypass the PUT endpoint to isolate the read side. */
     const castPath = join(

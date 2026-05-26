@@ -61,6 +61,13 @@ interface DerivedVoice {
       to nest cast members under their book series. */
   bookSeries: string | null;
   attributes: string[];
+  /** The underlying character's alternate names + cross-book
+      "not-linked-to" pairs, copied straight off cast.json. Synthesis
+      ignores both; they ride along so the voices-view duplicate detector
+      can suppress already-resolved pairs on the global `#/voices` tab,
+      where no book cast is hydrated (plan 101 bug fix 2026-05-26). */
+  aliases?: string[];
+  notLinkedTo?: Array<{ bookId: string; characterId: string }>;
   gradient: [string, string];
   usedIn: number;
   source: 'current' | 'library';
@@ -230,6 +237,14 @@ async function aggregateVoices(
             bookId: state.bookId,
             bookSeries: normaliseSeries(seriesName),
             attributes: c.attributes ?? [],
+            /* First-seen character's alias / not-linked-to sets win — same
+               "identity fields freeze on first occurrence" rule the rest of
+               this object follows. Duplicate-candidate voices have distinct
+               voiceIds (one per book), so each candidate row carries its own
+               character's sets; a voiceId that legitimately spans books is
+               already linked and never forms a candidate pair. */
+            aliases: c.aliases?.length ? c.aliases : undefined,
+            notLinkedTo: c.notLinkedTo?.length ? c.notLinkedTo : undefined,
             gradient: gradientForTtsVoice(ttsVoice.name, id),
             usedIn: 1,
             source: isCurrent ? 'current' : 'library',
