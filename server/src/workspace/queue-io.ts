@@ -223,6 +223,23 @@ export function pruneByBook(file: QueueFile, bookId: string): QueueFile {
   });
 }
 
+/** Reset every `in_progress` entry back to `queued` — the server-boot orphan
+ *  sweep. A server restart kills all in-flight synthesis (the server owns the
+ *  generation SSE), so any entry left `in_progress` on disk is an orphan with
+ *  no live stream behind it. Left as-is the frontend dispatcher would neither
+ *  re-run it (FILL claims only `queued` entries) nor reconcile it (its
+ *  in-memory inFlight map is empty on a fresh boot), wedging that chapter
+ *  forever. Other statuses (queued / failed / done / paused) are untouched.
+ *  Order is preserved (renumber keeps the contiguous-order invariant). */
+export function resetInProgressToQueued(file: QueueFile): QueueFile {
+  return renumber({
+    ...file,
+    entries: file.entries.map(
+      (e): QueueEntry => (e.status === 'in_progress' ? { ...e, status: 'queued' } : e),
+    ),
+  });
+}
+
 /** Recompute `order` to be contiguous 0..N-1 after any mutation. The
  *  in_progress entry (if present) stays at order=0; the rest follow in
  *  their current array order. */

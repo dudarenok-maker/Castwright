@@ -63,6 +63,7 @@ import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
+import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
 import {
   readUserSettings,
   getResolvedSidecarUrl,
@@ -284,6 +285,28 @@ const listenerCallback = () => {
     });
   })();
 };
+
+/* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
+   / crash / browser reload can strand entries `in_progress` on disk with no
+   live stream behind them; the frontend dispatcher then neither re-runs them
+   (FILL claims only `queued`) nor reconciles them (its in-memory inFlight map
+   is empty on a fresh boot), so the chapter wedges and the GPU sits idle.
+   Flipping them back to `queued` lets the dispatcher re-claim and finish them.
+   Safe because a server restart kills all in-flight synthesis (the server owns
+   the generation SSE). AWAITED before listen — not fire-and-forget — so no
+   freshly-connecting frontend can /start a queued entry in the gap between the
+   sweep's read and write and have it clobbered. The inner .catch keeps a queue
+   read error from blocking startup. See workspace/queue-boot.ts. */
+await resetOrphanedQueueEntries()
+  .then((r) => {
+    if (r.reset > 0) {
+      console.log(
+        `[queue] reset ${r.reset} orphaned in_progress entr${r.reset === 1 ? 'y' : 'ies'} ` +
+          `to queued on boot (workspace/queue-boot.ts).`,
+      );
+    }
+  })
+  .catch((err) => console.warn('[queue] orphan reset skipped:', err));
 
 if (lanHttps) {
   if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {
