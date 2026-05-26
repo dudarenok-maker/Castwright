@@ -395,14 +395,11 @@ export function PhaseCard({
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="min-w-0 flex-1">
-            <p className={`font-semibold ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}>
-              {p.label}
-            </p>
-            <p className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}>
-              {p.detail}
-            </p>
-          </div>
+          <p
+            className={`font-semibold min-w-0 flex-1 ${isDone || isActive ? 'text-ink' : 'text-ink/40'}`}
+          >
+            {p.label}
+          </p>
           {hasModelControls && (
             <div className="flex items-center gap-2 flex-wrap shrink-0">
               <PhaseModelChip phaseId={p.id as 0 | 1} state={chipState} />
@@ -410,6 +407,12 @@ export function PhaseCard({
             </div>
           )}
         </div>
+        {/* Detail spans the full card width rather than the narrow column
+            beneath the label — keeping the model chip/dropdown out of its
+            flow so it never wraps into a cramped two- or three-line block. */}
+        <p className={`text-sm mt-0.5 ${isDone || isActive ? 'text-ink/60' : 'text-ink/30'}`}>
+          {p.detail}
+        </p>
         {isActive && (
           <>
             <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
