@@ -20,6 +20,8 @@ RTF = generation wall time ÷ produced audio seconds. **< 1 is faster than real-
 - **Batch path (Qwen production path):** `POST /synthesize-batch` with N `{voice,text}` items in one call.
 - **Full pipeline (truest):** `POST /api/books/:bookId/generation {modelKey, chapterIds:[id], force:true}` (SSE) — real per-character chapter. Effective RTF = wall ÷ chapter audio seconds; **ffprobe the produced MP3** for ground-truth duration rather than trusting the tick.
 
+> **Benchmarking gotchas (cost hours once):** (1) the server resolves the sidecar URL from **`user-settings.json`** (→ `localhost:9000`), **not** the `LOCAL_TTS_URL` env — so to point the full pipeline at a custom/fixed sidecar you must **replace the `:9000` sidecar process itself**, not set `LOCAL_TTS_URL`. (2) `QWEN_BATCH_SIZE` *does* read straight from `process.env` (a shell value wins over `server/.env`), while most other server knobs come from `.env` via `loadEnvFile`. Verify which path each knob takes before trusting a run. (3) VRAM contention silently inflates RTF 3–5× — free the GPU first (the original 4.12 figure was a contention artifact).
+
 ## Settings & env vars that affect performance
 
 These are the knobs that change the numbers. **Record any non-default value in the run's row/notes** — a row without its settings isn't reproducible. Defaults below are what the code + `server/.env.example` ship.
