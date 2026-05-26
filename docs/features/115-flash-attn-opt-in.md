@@ -54,7 +54,18 @@ Fully reversible: the flag is opt-in, the wheel is a single pip package (`pip un
 3. **Skip path:** on macOS/Linux (or a non-cp311 venv) the same command prints `FlashAttention-2: skipped — …` and the installer still exits 0.
 4. **Benchmark (the deciding gate):** `python scripts\bench-tts.py --engine qwen --voice <designedVoiceId>` once with `QWEN_ATTN_IMPL=sdpa` and once with `flash_attention_2` (serial + `--concurrency` sweep). Reboot first for a clean VRAM baseline. Baselines to beat on the 4070: serial RTF ~6.6–8.3, batch ~2.6. **Record the numbers here regardless of outcome.**
 
-> **Benchmark result:** _pending — being measured; results will be persisted here when in._
+**Benchmark results (RTX 4070, 2026-05-26):**
+
+SDPA default — baseline:
+
+| Run | RTF | Note |
+|---|---|---|
+| Serial `/synthesize`, cold | 8.52 | first call |
+| Serial `/synthesize`, warm | 6.6–8.3 | warm barely helps |
+| Batch `/synthesize-batch`, 8 same-voice | 2.61 | clean best case |
+| Full pipeline, real mixed-cast chapter | 4.12 | the number that actually matters |
+
+The `flash_attention_2` comparison is **still pending** — `side-5` (the default-flip decision) stays open until those numbers land here. Note the dominant lever in this data is **batching** (2.61 batched vs 6.6–8.3 serial ≈ 3×), NOT the attention backend — that's `side-3` (true batching, in flight), and these numbers reinforce it. FA2's expected ceiling for single-token autoregressive decode is modest, so it's unlikely to move the 4.12 full-pipeline figure much regardless.
 
 ## Out of scope
 
