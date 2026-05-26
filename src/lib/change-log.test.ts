@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest';
 import {
   buildChapterRegenEvent,
   buildCharacterRegenEvent,
-  buildBatchCharacterRegenEvent,
   buildGenerationStartedEvent,
   buildChapterCompleteEvent,
   buildChapterFailedEvent,
@@ -109,21 +108,6 @@ describe('buildCharacterRegenEvent', () => {
     });
     expect(ev.chapterId).toBe(3);
     expect(ev.note).toContain('in Chapter 3');
-  });
-});
-
-describe('buildBatchCharacterRegenEvent', () => {
-  it('lists every character name and the chapter span', () => {
-    const ev = buildBatchCharacterRegenEvent({
-      characters: [makeChar('a', 'Anna'), makeChar('b', 'Ben')],
-      chapterIds: [1, 2, 3],
-      reason: 'voice',
-      note: '',
-      now: NOW,
-    });
-    expect(ev.title).toBe('Batch regenerated 2 characters');
-    expect(ev.note).toContain('Anna, Ben');
-    expect(ev.note).toContain('across 3 chapters');
   });
 });
 

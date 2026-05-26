@@ -1,9 +1,20 @@
 # Batch character regenerate
 
-> Status: stable
-> Key files: `src/modals/batch-character-regenerate.tsx`, `src/store/chapters-slice.ts` (`batchRegenerateCharacters`), `src/store/ui-slice.ts` (`setBatchRegenIds`)
-> URL surface: modal overlay, no URL component
-> OpenAPI ops: indirect — drives `POST /api/books/:bookId/generation` with a character subset
+> Status: removed (2026-05-26) — superseded by
+> [114-profile-regen-preview.md](114-profile-regen-preview.md).
+> Key files (deleted): `src/modals/batch-character-regenerate.tsx`,
+> `src/store/chapters-slice.ts` (`batchRegenerateCharacters`),
+> `src/store/ui-slice.ts` (`setBatchRegenIds`)
+
+**Removed.** The multi-character batch modal was deleted: there is no
+per-character synthesis (`synthesiseChapter` always re-renders the whole
+chapter), and "regenerate selected characters" implied a partial render that
+never existed. Profile-change regeneration is now single-character with an
+opt-in one-chapter A/B preview — see
+[114-profile-regen-preview.md](114-profile-regen-preview.md). The historical
+spec below is retained for context only.
+
+---
 
 ## What this covers
 

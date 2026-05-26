@@ -33,10 +33,10 @@ interface Props {
   onRegenerateChapter: (bookId: string, characterId: string, chapterId: number) => void;
   /** Optional one-click shortcut for events flagged `autoQueueable` by
       the server (severe drift). When provided, the per-event button on
-      autoQueueable rows switches from "Regenerate this chapter" (which
-      opens the regen-modal confirmation) to "Auto-regen now" (which
-      dispatches regenerateCharacter directly with sensible defaults).
-      Plan 20 C1+C2. */
+      autoQueueable rows switches from "Regenerate this chapter" to
+      "Auto-regen now". Both trigger an immediate whole-chapter regen
+      (plan 114 — the per-character scope was removed); auto-regen just
+      skips the extra click. Plan 20 C1+C2. */
   onAutoQueueRegenerate?: (bookId: string, characterId: string, chapterId: number) => void;
   onDismiss: (eventId: string) => void;
   voices?: Voice[];

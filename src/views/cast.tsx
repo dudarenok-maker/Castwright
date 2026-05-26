@@ -6,7 +6,6 @@ import {
   IconSearch,
   IconFilter,
   IconCheck,
-  IconRefresh,
   IconPlay,
   IconPause,
   IconSpinner,
@@ -34,7 +33,6 @@ interface Props {
   title?: string | null;
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
-  onBatchRegenerate: (ids: string[]) => void;
   driftEvents: DriftEvent[];
   /* When called with no argument, opens the modal on the full list
      (top-banner entry). When called with a characterId, scopes the
@@ -49,7 +47,6 @@ export function CastView({
   title,
   onOpenProfile,
   onShowMatchDetail,
-  onBatchRegenerate,
   driftEvents,
   onShowDrift,
 }: Props) {
@@ -790,13 +787,6 @@ export function CastView({
                 className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Compare
-              </button>
-              <button
-                onClick={() => onBatchRegenerate(selectedCharIds)}
-                className="min-h-[44px] inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-peach text-ink text-xs font-bold hover:bg-peach/90"
-              >
-                <IconRefresh className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Regenerate</span>
               </button>
               <button
                 onClick={() => setSelectedCharIds([])}
