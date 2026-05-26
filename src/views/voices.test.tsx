@@ -1065,7 +1065,10 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
 
   /* Plan 101 requires the library slice for series metadata, so this
      test suite uses a custom store that registers the slice. */
-  function renderWithLibrarySlice(extraCharacters: Character[] = []) {
+  function renderWithLibrarySlice(
+    extraCharacters: Character[] = [],
+    libraryOverride: Voice[] = libraryWithDuplicate,
+  ) {
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -1129,7 +1132,7 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
       store,
       ...render(
         <Provider store={store}>
-          <LibraryView library={libraryWithDuplicate} />
+          <LibraryView library={libraryOverride} />
         </Provider>,
       ),
     };
@@ -1153,6 +1156,28 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     const pill = screen.getByRole('button', { name: /1 duplicate candidate/i });
     expect(pill).toBeInTheDocument();
     expect(pill).toHaveTextContent(/⚠/);
+  });
+
+  it('does NOT surface the pill when the winner voice already carries the alias, with no cast hydrated (reload regression)', async () => {
+    /* The exact "duplicate pill reappears on reload" condition (plan 101 fix
+       2026-05-26): fresh mount on the global tab, globalCastCache empty
+       (getBookState left at its null default — never resolves a cast), but
+       the library payload carries the persisted alias. Detection must read
+       the Voice's own aliases and suppress. Before the fix the alias filter
+       only ran against a hydrated Character, so the pair re-flagged on every
+       load even though the link was on disk. */
+    const elizaNsAliased = makeVoice({
+      id: 'v_eliza',
+      character: 'Eliza Gray',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
+      aliases: ['Eliza'],
+    });
+    renderWithLibrarySlice([], [elizaNsAliased, elizaSb]);
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
   });
 
   it('clicking the ⚠ pill opens the modal and enables the link button once both casts hydrate', async () => {

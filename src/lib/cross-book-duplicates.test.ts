@@ -22,6 +22,8 @@ function makeVoice(opts: {
   bookId: string;
   bookTitle: string;
   voiceName: string;
+  aliases?: string[];
+  notLinkedTo?: Array<{ bookId: string; characterId: string }>;
 }): Voice {
   return {
     id: opts.id,
@@ -33,6 +35,8 @@ function makeVoice(opts: {
     source: 'current',
     gradient: ['#000', '#fff'],
     ttsVoice: { provider: 'gemini', name: opts.voiceName, description: '' },
+    aliases: opts.aliases,
+    notLinkedTo: opts.notLinkedTo,
   } as Voice;
 }
 
@@ -242,6 +246,97 @@ describe('detectDuplicateCandidates', () => {
       charactersByBookId: new Map(),
     });
     expect(result).toHaveLength(0);
+  });
+});
+
+/* Regression for the "duplicate pill reappears on reload" bug (plan 101
+   fix 2026-05-26). On the global `#/voices` tab no book cast is hydrated,
+   so `charactersByBookId` is empty and the resolved-Character suppression
+   filters never ran — an already-linked / variant-marked pair re-surfaced
+   on every load. The detector now falls back to the library Voice's own
+   `aliases` / `notLinkedTo` (carried by the server) so suppression works
+   WITHOUT a cast hydrate. */
+describe('detectDuplicateCandidates — voice-carried suppression (no cast hydrated)', () => {
+  const seriesByBookId = new Map<string, BookSeriesInfo>([
+    ['ns', SERIES_NCT],
+    ['sb', SERIES_NCT],
+  ]);
+  const elizaSb = makeVoice({
+    id: 'v_eliza_sb',
+    character: 'Eliza',
+    bookId: 'sb',
+    bookTitle: 'Solway Bay',
+    voiceName: 'Kore',
+  });
+
+  it('flags the pair when neither voice carries the alias (the case the pill exists for)', () => {
+    const elizaNs = makeVoice({
+      id: 'v_eliza',
+      character: 'Eliza Gray',
+      bookId: 'ns',
+      bookTitle: 'The Northern Star',
+      voiceName: 'Kore',
+    });
+    const result = detectDuplicateCandidates({
+      library: [elizaNs, elizaSb],
+      seriesByBookId,
+      charactersByBookId: new Map(), // nothing hydrated — mirrors the global tab
+    });
+    expect(result).toHaveLength(1);
+  });
+
+  it('suppresses via the winner voice.aliases even with no cast hydrated (reload case)', () => {
+    const elizaNsAliased = makeVoice({
+      id: 'v_eliza',
+      character: 'Eliza Gray',
+      bookId: 'ns',
+      bookTitle: 'The Northern Star',
+      voiceName: 'Kore',
+      aliases: ['Eliza'], // the loser's name, persisted on disk
+    });
+    const result = detectDuplicateCandidates({
+      library: [elizaNsAliased, elizaSb],
+      seriesByBookId,
+      charactersByBookId: new Map(), // empty — the bug's exact condition
+    });
+    expect(result).toHaveLength(0);
+  });
+
+  it('suppresses via voice.notLinkedTo even with no cast hydrated', () => {
+    const elizaNsVariant = makeVoice({
+      id: 'v_eliza',
+      character: 'Eliza Gray',
+      bookId: 'ns',
+      bookTitle: 'The Northern Star',
+      voiceName: 'Kore',
+      notLinkedTo: [{ bookId: 'sb', characterId: 'v_eliza_sb' }],
+    });
+    const result = detectDuplicateCandidates({
+      library: [elizaNsVariant, elizaSb],
+      seriesByBookId,
+      charactersByBookId: new Map(),
+    });
+    expect(result).toHaveLength(0);
+  });
+
+  it('prefers the hydrated Character over a stale voice (resolved-empty wins → still flagged)', () => {
+    /* In-session a freshly-hydrated cast is authoritative: if its character
+       carries no alias the pair stays flagged, even if a stale library
+       Voice happened to carry one. */
+    const elizaNsStaleAlias = makeVoice({
+      id: 'v_eliza',
+      character: 'Eliza Gray',
+      bookId: 'ns',
+      bookTitle: 'The Northern Star',
+      voiceName: 'Kore',
+      aliases: ['Eliza'],
+    });
+    const result = detectDuplicateCandidates({
+      library: [elizaNsStaleAlias, elizaSb],
+      seriesByBookId,
+      charactersByBookId: new Map([['ns', [makeCharacter('v_eliza', 'Eliza Gray')]]]),
+    });
+    expect(result).toHaveLength(1);
   });
 });
 
