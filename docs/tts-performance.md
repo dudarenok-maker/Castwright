@@ -20,9 +20,46 @@ RTF = generation wall time ÷ produced audio seconds. **< 1 is faster than real-
 - **Batch path (Qwen production path):** `POST /synthesize-batch` with N `{voice,text}` items in one call.
 - **Full pipeline (truest):** `POST /api/books/:bookId/generation {modelKey, chapterIds:[id], force:true}` (SSE) — real per-character chapter. Effective RTF = wall ÷ chapter audio seconds; **ffprobe the produced MP3** for ground-truth duration rather than trusting the tick.
 
+## Settings & env vars that affect performance
+
+These are the knobs that change the numbers. **Record any non-default value in the run's row/notes** — a row without its settings isn't reproducible. Defaults below are what the code + `server/.env.example` ship.
+
+**Synthesis path — the biggest levers:**
+
+| Var | Default | Effect |
+|---|---|---|
+| `QWEN_BATCH_SIZE` | `4` | Qwen sentences packed into one batched `generate_voice_clone` forward (plan 113). Larger = more throughput but more VRAM; **`1` disables batching** (the per-call kill-switch). Qwen-only — Coqui/Kokoro/Gemini are always one-per-call. |
+| `QWEN_ATTN_IMPL` | `sdpa` | Attention impl: `sdpa` (PyTorch-native, default), `eager` (slow baseline), `flash_attention_2` (needs the flash-attn wheel — installed via `install-qwen3.mjs --flash-attn` / `QWEN_INSTALL_FLASH_ATTN=1`, plan 115). **The model-load log prints the impl that actually engaged** — check it didn't silently fall back to sdpa. |
+
+**Concurrency — server-side:**
+
+| Var | Default | Effect |
+|---|---|---|
+| `GPU_VRAM_BUDGET` | `1` | GPU semaphore width = max concurrent synths across analyzer + sidecar; also the `poolWidth`/`sentenceConcurrency` default. **Deploy box: `2`.** Raising risks VRAM OOM on the 8 GB card. |
+| `GPU_CONCURRENCY` | `1` | Legacy fallback used when `GPU_VRAM_BUDGET` is unset. |
+| `GEN_WORKERS` (`generationWorkers` account setting) | `2` | Queue workers processing chapters across books (plan 111). Queue concurrency only — GPU work is still bounded by the semaphore, so raising it never risks OOM. |
+
+**Qwen model / device:**
+
+| Var | Default | Effect |
+|---|---|---|
+| `QWEN_DEVICE` | `cuda:0` | Device the base + design models load onto. |
+| `QWEN_BASE_MODEL` | `Qwen/Qwen3-TTS-12Hz-0.6B-Base` | Resident synth/clone model. |
+| `QWEN_VOICEDESIGN_MODEL` | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` | Transient voice-design model (design-time only). |
+| `QWEN_LANGUAGE` | `English` | Default synth language; per-voice manifest overrides. |
+| `QWEN_VOICES_DIR` | `<workspace>/voices/qwen` | Designed-voice embedding cache. |
+
+Load-time (code, not env): `dtype=bfloat16` + `low_cpu_mem_usage=False` (real-tensor load — see [plan 112 post-ship fix #2](features/archive/112-qwen-synth-quick-wins.md)).
+
+**Preload — cold-start vs. resident VRAM:** `PRELOAD_KOKORO` (on; ~1 GB eager), `PRELOAD_QWEN` (off; warms on first `/load`/synth), `PRELOAD_COQUI` / `PRELOAD_COQUI_MODEL` (off / `xtts_v2`).
+
+**Other engines:** Coqui — `COQUI_DEVICE` (`auto`), `COQUI_HALF` / `COQUI_DEEPSPEED` (on for cuda, off for cpu), `COQUI_LANGUAGE` (`en`); Kokoro — `KOKORO_MODEL_PATH` / `KOKORO_VOICES_PATH`, `KOKORO_LANGUAGE` (`en-us`).
+
 ## Records
 
 ### Qwen3-TTS 0.6B — sdpa, bf16, 4070 — 2026-05-26
+
+_Settings:_ `QWEN_ATTN_IMPL=sdpa` (**confirmed** from the model-load log), `dtype=bfloat16`, `low_cpu_mem_usage=False`. The full-pipeline row used the running `server/.env` values for `QWEN_BATCH_SIZE` and `GPU_VRAM_BUDGET` (deploy defaults are `4` and `2`) — not independently re-verified for this run. The serial and batch micro-bench rows hit the sidecar's `/synthesize` and `/synthesize-batch` **directly**, bypassing the server-side `QWEN_BATCH_SIZE`/semaphore — the batch row was one explicit 8-item call.
 
 | Path | Sample | Audio s | Wall s | RTF | Notes |
 |---|---|---|---|---|---|
