@@ -8,7 +8,8 @@ owner: null
 
 > Status: stable
 > Key files: `server/src/parsers/epub.ts`, `server/src/parsers/html-utils.ts`,
-> `server/src/parsers/index.ts`, `server/src/routes/manuscripts.ts`,
+> `server/src/parsers/errors.ts`, `server/src/parsers/index.ts`,
+> `server/src/parsers/mobi.ts`, `server/src/routes/manuscripts.ts`,
 > `scripts/gen-parser-fixtures.mjs`
 > URL surface: `#/new` (no new routes) — owns the EPUB parser internals that
 > [02 — Upload (paste or file)](02-upload-paste-or-file.md) delegates.
@@ -78,7 +79,7 @@ owner: null
 
 ### Automated coverage
 
-- **Vitest server (`server/src/parsers/epub.test.ts`) — 21 cases.** The
+- **Vitest server (`server/src/parsers/epub.test.ts`) — 25 cases.** The
   pre-existing epub2-path cases (metadata, Calibre series, series-from-title,
   title-fallback, audio tags, `sourcePath` re-parse) are unchanged and lock the
   refactor. New cases:
@@ -91,6 +92,18 @@ owner: null
   - *Diagnostics*: `sample-epub-drm.epub` (has `META-INF/encryption.xml`)
     rejects with `UnusableEpubError` matching `/DRM/i`; `sample-epub-image-only.epub`
     rejects with `UnusableEpubError` matching `/image-only/i`.
+  - *NCX titles through the fallback (srv-13)* (`sample-opf-prefixed-titles.epub`):
+    a prefixed OPF carrying the three NCX-vs-body title scenarios. Asserts the
+    merge (`Chapter 1 — The Berth at Liverpool`), the empty-NCX body-heading
+    fall-through, the descriptive-NCX keep, and that the title list equals what
+    the epub2 path produces for the unprefixed `sample-title-fallback.epub`.
+    **Fails before the fix** — body-heading-only titles can't reach the merged
+    `Chapter 1 — …` string.
+- **Vitest server (`server/src/routes/manuscripts.test.ts`) — 2 cases (new,
+  srv-14).** A hand-crafted DRM MOBI buffer → `POST /api/manuscripts` returns
+  **415** with a `/DRM-protected/i` message (**fails before the fix** — the
+  route returned 500); a valid plaintext upload still returns 200 (415 is not a
+  blanket response).
 - **Fixtures** are committed binaries built by `scripts/gen-parser-fixtures.mjs`
   (adm-zip, dev-time only). Regenerate with `node scripts/gen-parser-fixtures.mjs`
   from the repo root.
@@ -111,17 +124,21 @@ Run with the real server (`cd server && npm run dev`) — mocks bypass the parse
 
 ## Out of scope
 
-- **NCX/nav-doc title parity in the fallback.** The fallback titles chapters
-  from the body `<h1>` (else `Chapter N`); it does not parse `toc.ncx` /
-  `nav.xhtml` navLabels the way the epub2 path does. Deferred — tracked on
-  [BACKLOG](BACKLOG.md). Body-heading titles are sufficient for v1.
+- **NCX title parity in the fallback — SHIPPED (srv-13, follow-up).** The
+  fallback now parses the `toc.ncx` navMap and merges navLabels with the body
+  `<h1>` via the shared `mergeChapterTitle` helper, identical to the epub2
+  path. EPUB3-only `nav.xhtml` nav docs remain out of scope: epub2's own
+  `flow[].title` doesn't read them either, so NCX parity is what "matches what
+  epub2 produces" means here. Covered by `sample-opf-prefixed-titles.epub`.
 - **Front-matter trimming.** Title/dedication pages that carry text become
   chapters (same as the epub2 path). Front-matter detection is separate
   (`server/src/parsers/front-matter.ts`) and unchanged here.
-- **MOBI DRM status alignment.** MOBI's `DrmProtectedError` still maps to 500 in
-  `POST /api/manuscripts` (it predates this fix). Aligning it to 415 is a
-  separate follow-up on [BACKLOG](BACKLOG.md) — not changed here to avoid
-  coupling MOBI behaviour into an EPUB fix.
+- **MOBI DRM status alignment — SHIPPED (srv-14, follow-up).** MOBI's
+  `DrmProtectedError` now maps to 415 in `POST /api/manuscripts` too.
+  `DrmProtectedError` and `UnusableEpubError` share a new
+  `server/src/parsers/errors.ts` `UnusableMediaError` base that the route
+  catches with one `instanceof`. `/api/import`'s `{ error: 'drm_protected',
+  message }` response is unchanged. Covered by `server/src/routes/manuscripts.test.ts`.
 
 ## Ship notes
 
