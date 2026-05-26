@@ -381,6 +381,39 @@ $resp.Headers['X-Sample-Rate']
 - `KOKORO_LANGUAGE` (default `en-us`) — espeak-ng language code passed to
   Kokoro's phonemiser. The voice IDs encode accent (`af_` American,
   `bf_` British), so this is mainly a phonemiser hint.
+- `QWEN_ATTN_IMPL` (default `sdpa`) — attention implementation passed to the
+  Qwen `from_pretrained` load. `sdpa` (PyTorch-native, no extra dependency)
+  is the right default for the autoregressive decode loop. Set `eager` to
+  measure the slow baseline, or `flash_attention_2` if a flash-attn wheel is
+  installed. A build that rejects the kwarg falls back to the library default
+  with a warning. The impl that actually took effect is logged at model load
+  (`Qwen model=… attn_implementation=…`).
+
+## Benchmarking
+
+`scripts/bench-tts.py` measures per-call wall time and real-time factor
+(RTF = synth-time ÷ audio-seconds; <1 is faster than realtime) against a
+running sidecar — so the Kokoro-vs-Qwen speed gap is a measured number, not a
+felt one. Stdlib only; run it by hand (it needs the weights resident, so it's
+not in CI).
+
+```powershell
+# Kokoro reference point:
+python scripts\bench-tts.py --engine kokoro --voice af_heart
+
+# Qwen, a designed voice (design it first via the app / POST /qwen/design-voice):
+python scripts\bench-tts.py --engine qwen --voice <designedVoiceId>
+
+# Does more concurrency help? Sweep it — aggregate throughput should rise only
+# until the single GPU saturates (raise GPU_VRAM_BUDGET on the Node side first,
+# else the global semaphore pins real concurrency to 1):
+python scripts\bench-tts.py --engine qwen --voice <id> --concurrency 2
+python scripts\bench-tts.py --engine qwen --voice <id> --concurrency 4
+```
+
+To compare the SDPA default against the eager baseline, set
+`QWEN_ATTN_IMPL=eager` in the sidecar env, restart it, run the bench, then
+unset it and re-run.
 
 ## License note
 

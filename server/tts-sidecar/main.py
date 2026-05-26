@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from typing import Any, Optional
 
 import numpy as np
@@ -574,17 +575,25 @@ class KokoroEngine(Engine):
         # a numpy float32 array in [-1, 1]; sample_rate is the model's
         # native rate (24 kHz for v1). Wrap defensively in case a future
         # release changes the return shape.
+        gen_start = time.perf_counter()
         result = self._kokoro.create(
             text,
             voice=actual_voice,
             speed=1.0,
             lang=self._language,
         )
+        gen_ms = (time.perf_counter() - gen_start) * 1000.0
         if isinstance(result, tuple) and len(result) == 2:
             audio, sample_rate = result
         else:
             audio = result
             sample_rate = self.NATIVE_SAMPLE_RATE
+        audio_ms = _audio_duration_ms(audio, int(sample_rate))
+        log.info(
+            "kokoro synth: voice=%s text_len=%d gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
+            actual_voice, len(text), gen_ms, audio_ms,
+            (gen_ms / audio_ms if audio_ms > 0 else 0.0),
+        )
         pcm = _float_audio_to_int16_le(audio)
         return SynthResult(
             pcm=pcm,
@@ -603,6 +612,16 @@ def _float_audio_to_int16_le(audio: Any) -> bytes:
     arr = np.clip(arr, -1.0, 1.0)
     scaled = (arr * 32767.0).astype("<i2")  # int16 little-endian
     return scaled.tobytes()
+
+
+def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
+    """Duration in ms of an audio array at the given sample rate. Drives the
+    real-time-factor (rtf) perf logs; rtf = gen_ms / audio_ms, so <1 is
+    faster-than-realtime synthesis. Frame count is the leading axis (mono
+    (n,) or (n, channels))."""
+    arr = np.asarray(audio)
+    n = arr.shape[0] if arr.ndim >= 1 else 0
+    return (n / sample_rate * 1000.0) if sample_rate > 0 else 0.0
 
 
 class QwenEngine(Engine):
@@ -673,6 +692,14 @@ class QwenEngine(Engine):
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
         self._device = os.environ.get("QWEN_DEVICE", "cuda:0")
+        # In-memory designed-voice cache: voiceId -> (clone_prompt, language).
+        # Without it every /synthesize re-reads <voiceId>.pt + <voiceId>.json
+        # off disk; across a book that's the same two files re-loaded hundreds
+        # of times for the same voice. Guarded by a lock because synth runs on
+        # asyncio.to_thread worker threads — a double-load on a cold-cache race
+        # is harmless, but the lock is cheap and keeps hit/miss accounting honest.
+        self._prompt_cache: dict[str, tuple[Any, str]] = {}
+        self._cache_lock = threading.Lock()
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
         # The Node server points QWEN_VOICES_DIR at the per-workspace tree
@@ -687,7 +714,16 @@ class QwenEngine(Engine):
 
     def _load_qwen_model(self, model_id: str) -> Any:
         """Load a Qwen3TTSModel. Isolated so the import + from_pretrained
-        signature lives in exactly one place."""
+        signature lives in exactly one place.
+
+        Attention impl: the model supports both SDPA and flash-attn but our
+        load passed neither, so it resolved to whatever transformers picked
+        (often the slow eager path — qwen_tts even warns "Will only run the
+        manual PyTorch version" on import when flash-attn is absent). SDPA
+        ships inside PyTorch (no extra dependency, builds on Windows) and is
+        the right default for the autoregressive decode loop. QWEN_ATTN_IMPL
+        overrides it (e.g. "eager" to benchmark the baseline, or
+        "flash_attention_2" if a flash-attn wheel is installed)."""
         try:
             import torch  # type: ignore
             from qwen_tts import Qwen3TTSModel  # type: ignore
@@ -697,11 +733,34 @@ class QwenEngine(Engine):
                 "`.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` in "
                 "server/tts-sidecar."
             ) from e
-        return Qwen3TTSModel.from_pretrained(
-            model_id,
-            device_map=self._device,
-            dtype=torch.bfloat16,
-        )
+        attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
+        try:
+            model = Qwen3TTSModel.from_pretrained(
+                model_id,
+                device_map=self._device,
+                dtype=torch.bfloat16,
+                attn_implementation=attn_impl,
+            )
+        except (ValueError, TypeError) as e:
+            # A transformers build (or qwen_tts wrapper) that rejects the
+            # attn_implementation kwarg must not harden into a load failure —
+            # fall back to the library default and carry on.
+            log.warning(
+                "Qwen load: attn_implementation=%r rejected (%s); "
+                "retrying with the library default.",
+                attn_impl, e,
+            )
+            model = Qwen3TTSModel.from_pretrained(
+                model_id,
+                device_map=self._device,
+                dtype=torch.bfloat16,
+            )
+        # Surface the impl that actually took effect (getattr-guarded — the
+        # nested attribute path can drift across qwen_tts/transformers versions).
+        resolved = getattr(getattr(model, "model", None), "config", None)
+        resolved_impl = getattr(resolved, "_attn_implementation", "unknown")
+        log.info("Qwen model=%s attn_implementation=%s", model_id, resolved_impl)
+        return model
 
     def _ensure_base_loaded(self) -> None:
         if self._base is None:
@@ -771,6 +830,10 @@ class QwenEngine(Engine):
         had = self._base is not None or self._design is not None
         self._base = None
         self._design = None
+        # Drop cached clone-prompt tensors too: they hold GPU memory and would
+        # otherwise survive empty_cache() below, defeating the point of unload.
+        with self._cache_lock:
+            self._prompt_cache.clear()
         if had:
             try:
                 import torch  # type: ignore
@@ -854,17 +917,35 @@ class QwenEngine(Engine):
             )
         log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
 
+        # Evict any stale in-memory entry so a RE-designed voice can't keep
+        # serving the previous embedding — the next synth reloads the fresh
+        # .pt we just wrote. (We don't warm it here: the audition preview
+        # below uses `prompt` directly, and the first real synth's single
+        # disk load is negligible.)
+        with self._cache_lock:
+            self._prompt_cache.pop(voice_id, None)
+
         # 4. audition preview — speak the calibration line in the new voice.
         wavs, sr = self._base.generate_voice_clone(
             text=[ref_text], language=[lang], voice_clone_prompt=prompt
         )
         return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 
-    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
-        """`voice` is a designed voiceId. Loads its cached clone prompt and
-        reuses it — identical identity across the book. Fails fast (no
-        catalog fallback) if the voice hasn't been designed."""
+    def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
+        """Return (clone_prompt, language, cache_hit) for a designed voice.
+
+        Reads <voiceId>.pt + <voiceId>.json off disk only on a cache MISS;
+        a hit skips both. Fails fast (no catalog fallback) if the voice
+        hasn't been designed. The cache lock is released across the
+        torch.load so a slow disk read can't block other threads' lookups —
+        a concurrent double-miss just loads twice (benign, same content)."""
         import torch  # type: ignore
+
+        with self._cache_lock:
+            cached = self._prompt_cache.get(voice)
+        if cached is not None:
+            prompt, lang = cached
+            return prompt, lang, True
 
         pt_path, json_path = self._voice_paths(voice)
         if not os.path.isfile(pt_path):
@@ -882,17 +963,41 @@ class QwenEngine(Engine):
                     lang = _json.load(fh).get("language", lang) or lang
             except Exception:
                 pass
-
-        self._ensure_base_loaded()
         # weights_only=False: the cached prompt is a qwen_tts VoiceClonePromptItem
         # (not a plain tensor), which PyTorch 2.6+'s default safe-unpickler
         # rejects. Safe here — WE wrote this file in design_voice (trusted),
         # it's not untrusted input.
         prompt = torch.load(pt_path, weights_only=False)
+        with self._cache_lock:
+            self._prompt_cache[voice] = (prompt, lang)
+        return prompt, lang, False
+
+    def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
+        """`voice` is a designed voiceId. Loads its cached clone prompt and
+        reuses it — identical identity across the book. Fails fast (no
+        catalog fallback) if the voice hasn't been designed."""
+        # Resolve the voice prompt first so an undesigned voice still fails
+        # fast WITHOUT paying the (heavy) Base-model load.
+        load_start = time.perf_counter()
+        prompt, lang, cache_hit = self._load_voice_prompt(voice)
+        load_ms = (time.perf_counter() - load_start) * 1000.0
+
+        self._ensure_base_loaded()
+        gen_start = time.perf_counter()
         wavs, sr = self._base.generate_voice_clone(
             text=[text], language=[lang], voice_clone_prompt=prompt
         )
-        return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
+        gen_ms = (time.perf_counter() - gen_start) * 1000.0
+
+        audio = wavs[0]
+        audio_ms = _audio_duration_ms(audio, int(sr))
+        log.info(
+            "qwen synth: voice=%s text_len=%d cache=%s load_ms=%.1f "
+            "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
+            voice, len(text), "hit" if cache_hit else "miss", load_ms,
+            gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
+        )
+        return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
 
 
 ENGINES: dict[str, Engine] = {
