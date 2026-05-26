@@ -29,6 +29,8 @@ jobs:
   verify:
     name: Verify (ubuntu-latest)
     runs-on: ubuntu-latest
+    # Explicit cap (default is 360 min). (CI cost round 2.)
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,6 +76,8 @@ jobs:
     name: Publish release zip
     needs: verify
     runs-on: ubuntu-latest
+    # Explicit cap (default is 360 min). (CI cost round 2.)
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
