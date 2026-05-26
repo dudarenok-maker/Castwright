@@ -953,6 +953,11 @@ function TtsVoiceLine({ ttsVoice }: TtsVoiceLineProps) {
       {isQwen ? (
         <>
           <span className="font-semibold text-ink/70">Qwen</span>
+          {/* Surface the designed voiceId (e.g. "qwen-Wren") so the row is
+              self-explanatory without opening the profile drawer. Omit the
+              segment when no voice has been designed yet — keeps the line
+              reading "Qwen · No voice designed yet". */}
+          {ttsVoice.name && <span className="text-ink/40"> · {ttsVoice.name}</span>}
           <span className="text-ink/40"> · {ttsVoice.description}</span>
         </>
       ) : (
