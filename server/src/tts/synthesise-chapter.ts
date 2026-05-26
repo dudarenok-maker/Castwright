@@ -8,13 +8,24 @@
 
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from './voice-mapping.js';
-import type { TtsEngine, TtsModelKey, TtsProvider } from './index.js';
+import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from './index.js';
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry } from './retry.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
+
+/* How many Qwen sentences to pack into one batched `generate_voice_clone`
+   call (plan 112 — true batching). Read once at module load; `=1` is an
+   instant per-call kill-switch (every Qwen sentence becomes a single synth,
+   byte-identical to pre-112). Default is conservative (we ship without a VRAM
+   spike) — raise it once you've observed headroom on the box. Only Qwen
+   batches; Coqui/Kokoro/Gemini sentences always synth one-per-call. */
+const QWEN_BATCH_SIZE = (() => {
+  const raw = Number(process.env.QWEN_BATCH_SIZE);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 4;
+})();
 
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
@@ -211,6 +222,13 @@ export interface SynthesiseChapterOpts {
       non-positive value to disable (tests that assert exact onGroupStart
       counts). Clamped pure — never reads process.env. */
   groupHeartbeatMs?: number;
+  /** How many Qwen sentences to pack per batched synth call (plan 112).
+      Defaults to the module-level `QWEN_BATCH_SIZE` (env `QWEN_BATCH_SIZE`,
+      default 4). `=1` disables batching (every Qwen sentence is its own
+      call). Mainly an explicit value for tests, which exercise packing /
+      splitting without touching process env. Clamped to >= 1. Only Qwen
+      sentences are ever batched — see the dispatch partition below. */
+  qwenBatchSize?: number;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -293,6 +311,7 @@ export async function synthesiseChapter(
     onTitleComplete,
     sentenceConcurrency = gpuSemaphore.maxConcurrency,
     groupHeartbeatMs = 10_000,
+    qwenBatchSize = QWEN_BATCH_SIZE,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -393,78 +412,80 @@ export async function synthesiseChapter(
     onTitleComplete?.({ accumulatedSec: titleEndSec });
   }
 
-  /* Per-group synth: pick the voice, fire the stall-resetting `onGroupStart`
-     tick, then run the (auto-retrying) provider call. Factored out of the
-     dispatch loop so the up-front anchor synth (groups[0]) and the worker
-     pool share one code path — and so a future engine-specific tweak lands
-     in exactly one place. Returns the RAW provider result; the caller stores
-     it by index and concatenates later, so this never touches `chunks`,
-     `runningBytes`, or `segments` (which would race under parallel workers). */
-  async function synthGroup(group: SentenceGroup): Promise<{ pcm: Buffer; sampleRate: number }> {
+  type GroupResult = { pcm: Buffer; sampleRate: number };
+
+  /* Resolve a group's engine route + voice ONCE (plan 108 routing), cached by
+     group index. Used by the batchability partition AND by the synth calls, so
+     `pickVoiceForEngine` runs at most once per group even though both consult
+     it. Mixed engines reassemble cleanly because the index-order concat below
+     resamples any per-engine sample-rate mismatch to the chapter anchor. */
+  type GroupRoute = { route: ReturnType<typeof routeFor>; voiceName: string };
+  const resolvedByIndex = new Map<number, GroupRoute>();
+  const resolveGroup = (group: SentenceGroup): GroupRoute => {
+    const cached = resolvedByIndex.get(group.index);
+    if (cached) return cached;
     const character = castById.get(group.characterId) ?? { id: group.characterId };
-    /* Per-character engine routing (plan 108): resolve this character's engine
-       + its provider + modelKey, then pick a voice from THAT engine. A
-       narrator-on-Kokoro + hero-on-Qwen chapter routes each group correctly;
-       the index-order concat below resamples any per-engine sample-rate
-       mismatch to the chapter anchor, so mixed engines reassemble cleanly. */
     const route = routeFor(character);
     const voiceName = pickVoiceForEngine(
       route.engine,
       toVoiceLike(character),
       buildHintFromCast(character),
     );
+    const r = { route, voiceName };
+    resolvedByIndex.set(group.index, r);
+    return r;
+  };
 
-    /* Tick BEFORE the synth call. Each TTS call can be minutes on CPU, and
-       the client's stall detector only sees inactivity, not "active work on
-       a long call" — so without this beat the user sees "Worker has gone
-       quiet" for what is actually a healthy in-flight synth. The accumulated
-       time is a running estimate; the authoritative per-segment timing is
-       computed in the deterministic index-order pass after all groups
-       settle. */
+  /* Run `fn` while a stall-resetting `onGroupStart` tick fires for `tickGroup`
+     — once up front, then every `groupHeartbeatMs` until `fn` settles.
+
+     Each TTS call (single OR batched) can run for many seconds, and the
+     client's stall detector only sees inactivity, not "active work on a long
+     call" — without this beat the user sees "Worker has gone quiet" for what is
+     actually a healthy in-flight synth. The GPU token is also acquired INSIDE
+     the provider call, so a call blocked behind a sibling chapter in the
+     semaphore FIFO would otherwise go silent until the token frees. A BATCHED
+     call covers N sentences in one shot and can run longer than a single one,
+     so the heartbeat matters more, not less, here (plan 112). Re-uses the
+     existing onGroupStart→progress plumbing — no new tick type. The accumulated
+     time is a running estimate; authoritative per-segment timing is computed in
+     the deterministic index-order pass after all work settles. Disabled when
+     `groupHeartbeatMs <= 0` or no callback. */
+  async function withHeartbeat<T>(tickGroup: SentenceGroup, fn: () => Promise<T>): Promise<T> {
     const fireGroupStart = (): void =>
       onGroupStart?.({
-        group,
+        group: tickGroup,
         totalGroups: groups.length,
         accumulatedSec: pcmDurationSec(runningBytes, sampleRate),
       });
     fireGroupStart();
-
-    /* GPU-FIFO false-stall guard (queue-sole). The GPU token is acquired
-       INSIDE `provider.synthesize`, so a group blocked behind a sibling
-       chapter in the semaphore FIFO would emit the start tick above and then
-       go silent until the token frees — potentially past the 30 s client
-       watchdog. Re-fire the SAME start tick on `groupHeartbeatMs` while the
-       call is in flight (covering both the FIFO wait and a genuinely long
-       synth) so `lastTickAt` stays fresh; clear it the moment the call
-       settles. No new tick type — reuses the existing onGroupStart→progress
-       plumbing. Disabled when `groupHeartbeatMs <= 0` or no callback. */
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     if (onGroupStart && groupHeartbeatMs > 0) {
       heartbeat = setInterval(fireGroupStart, groupHeartbeatMs);
       /* Don't keep the event loop alive for the heartbeat alone. */
       heartbeat.unref?.();
     }
-    const stopHeartbeat = (): void => {
-      if (heartbeat) {
-        clearInterval(heartbeat);
-        heartbeat = undefined;
-      }
-    };
-
-    /* Scrub all-caps runs and em/en-dashes immediately before the synth.
-       XTTS otherwise spells multi-word all-caps openers letter-by-letter
-       (chapter 1's "ONE" → "oh-en-ee" in 1.15s) and loops on em-dashes,
-       which together produced ~60s of garbled audio at the top of
-       chapter 2 of the canonical Keeper manuscript. The transform is
-       idempotent; segment metadata still references the original
-       SentenceOutput so UI captions and quote audits are unaffected.
-
-       Wrapped in `withTtsRetry` so the queue absorbs flaky transients
-       (sidecar 5xx mid-load, brief connection refused while the user
-       toggled Stop, network blip). Non-transient throws (4xx, poisoned
-       CUDA state, retry-exhausted) bubble out of the wrapper unchanged
-       and surface as today's per-chapter `chapter_failed`. */
     try {
+      return await fn();
+    } finally {
+      if (heartbeat) clearInterval(heartbeat);
+    }
+  }
+
+  /* Single-sentence synth. Returns the RAW provider result; the caller stores
+     it by index and concatenates later, so this never touches `chunks`,
+     `runningBytes`, or `segments` (which would race under parallel workers).
+
+     `normaliseForTts` scrubs all-caps runs and em/en-dashes immediately before
+     the synth — XTTS otherwise spells multi-word all-caps openers letter-by-
+     letter ("ONE" → "oh-en-ee") and loops on em-dashes. Idempotent; segment
+     metadata still references the original SentenceOutput so UI captions and
+     quote audits are unaffected. Wrapped in `withTtsRetry` so the queue absorbs
+     flaky transients; non-transient throws bubble out as today's
+     `chapter_failed`. */
+  async function synthGroup(group: SentenceGroup): Promise<GroupResult> {
+    const { route, voiceName } = resolveGroup(group);
+    return withHeartbeat(group, async () => {
       const result = await withTtsRetry(
         () =>
           route.provider.synthesize({
@@ -486,47 +507,88 @@ export async function synthesiseChapter(
         },
       );
       return { pcm: result.pcm, sampleRate: result.sampleRate };
-    } finally {
-      stopHeartbeat();
-    }
+    });
   }
 
-  /* Body groups — bounded-concurrency dispatch (plan 107). Replaces the old
-     serial `for (const group of groups)` loop with `poolWidth` workers that
-     pull from a shared cursor (mirrors plan 87's chapter worker pool in
-     `server/src/routes/generation.ts`). The semaphore inside every
-     `provider.synthesize` is the real GPU governor; this pool only governs
-     how many groups are *in flight* at the Node layer.
+  /* TRUE batching (plan 112): synth N Qwen sentences in ONE batched forward.
+     All groups in `batchGroups` route to the same Qwen provider + modelKey
+     (qwen resolves to a single cached provider), but each carries its OWN voice
+     — `synthesizeBatch` sends a per-element prompt list, so a batch may MIX the
+     narrator + dialogue voices. Returns the N PCM chunks in input order; the
+     caller scatters each back to its group's own `results[index]` slot, so the
+     downstream index-order concat is identical to the single-call path. The
+     heartbeat ticks for the batch's lead group while the (longer) call runs.
+     Retry wraps the WHOLE batch — a batch is atomic at the model layer, so a
+     transient replays it and a permanent failure fails the chapter as today. */
+  async function synthBatch(batchGroups: SentenceGroup[]): Promise<SynthesizeBatchOutput> {
+    const lead = batchGroups[0];
+    const { route } = resolveGroup(lead);
+    const batchFn = route.provider.synthesizeBatch;
+    /* Partition only ever puts groups here when the provider advertises batch,
+       but guard so a future routing change degrades safely rather than throws. */
+    if (!batchFn) {
+      throw new Error('synthBatch called for a provider without synthesizeBatch.');
+    }
+    const items = batchGroups.map((g) => {
+      const { voiceName } = resolveGroup(g);
+      return { text: normaliseForTts(g.text), voiceName };
+    });
+    return withHeartbeat(lead, () =>
+      withTtsRetry(() => batchFn.call(route.provider, { items, modelKey: route.modelKey, signal }), {
+        signal,
+        onRetry: (info) =>
+          onGroupRetry?.({
+            group: lead,
+            totalGroups: groups.length,
+            attempt: info.attempt,
+            backoffMs: info.backoffMs,
+            reason: info.reason,
+          }),
+      }),
+    );
+  }
 
-     Determinism under parallelism rests on three rules, all paired with
-     tests in `synthesise-chapter.test.ts`:
+  /* Body dispatch — bounded-concurrency worker pool over WORK ITEMS (plan 107
+     parallelised sentence groups; plan 112 lets a work item be a BATCH of Qwen
+     sentences synthesised in one call). `poolWidth` workers pull from a shared
+     cursor (mirrors plan 87's chapter pool in `server/src/routes/generation.ts`).
+     The semaphore inside every provider call is the real GPU governor; this
+     pool only governs how many items are *in flight* at the Node layer.
 
-       1. PCM ORDER — each worker writes its raw `synthesize` result into a
-          pre-sized `results[group.index]` slot. We never push to `chunks`
-          from a worker; concat happens in a single index-order pass AFTER
-          all workers settle, so completion order can't reorder the audio.
-       2. SAMPLE-RATE ANCHOR — the anchor is fixed BEFORE dispatch: the title
-          rate when a title beat ran, else `groups[0]`'s rate (lowest index),
-          NOT the first group to complete. The old `chunks.length === 0`
-          "first to finish" rule was non-deterministic the moment two groups
-          could finish in either order, so we synth `groups[0]` first to read
-          its rate, then fan the rest out.
-       3. STALL WATCHDOG — `onGroupStart` fires as each group BEGINS its synth
-          (inside the worker, before the `synthesize` call) so the 30 s client
-          watchdog (`STALL_THRESHOLD_MS`, `src/store/chapters-slice.ts`) keeps
-          resetting. `onGroupComplete` fires per group as it finishes. The
-          final per-segment `startSec`/`endSec` are computed in the index-order
-          pass below — only there is the cumulative offset deterministic. */
+     Determinism under parallelism rests on three rules, all paired with tests
+     in `synthesise-chapter.test.ts`:
 
-  type GroupResult = { pcm: Buffer; sampleRate: number };
+       1. PCM ORDER — each worker writes its result(s) into pre-sized
+          `results[group.index]` slot(s) (a batch scatters one chunk per
+          covered group). We never push to `chunks` from a worker; concat
+          happens in a single index-order pass AFTER all work settles, so
+          neither completion order nor batch packing can reorder the audio.
+       2. SAMPLE-RATE ANCHOR — fixed BEFORE dispatch: the title rate when a
+          title beat ran, else `groups[0]`'s rate, synthed up front as a SINGLE
+          call (never inside a batch), NOT the first item to complete.
+       3. STALL WATCHDOG — `onGroupStart` fires (and re-fires on the heartbeat)
+          as each item begins, so the 30 s client watchdog (`STALL_THRESHOLD_MS`,
+          `src/store/chapters-slice.ts`) keeps resetting even across a long
+          batched call. `onGroupComplete` fires per covered group. Final
+          per-segment `startSec`/`endSec` are computed in the index-order pass
+          below — only there is the cumulative offset deterministic. */
+
   const results: (GroupResult | undefined)[] = new Array(groups.length);
   let completedCount = 0;
+  const fireComplete = (group: SentenceGroup): void => {
+    completedCount += 1;
+    onGroupComplete?.({
+      group,
+      totalGroups: groups.length,
+      accumulatedSec: 0, // recomputed deterministically in the index-order pass.
+    });
+  };
 
   /* Anchor the chapter's output rate before dispatch. If a title beat ran,
      `chunks` already holds the title PCM and `sampleRate` is its rate — keep
-     it (same rule as before this feature). Otherwise synth the lowest-index
-     body group up front so its rate becomes the deterministic anchor,
-     regardless of which group the pool finishes first. */
+     it. Otherwise synth the lowest-index body group up front (as a SINGLE call,
+     even if it's Qwen-batchable) so its rate is the deterministic anchor
+     regardless of which item the pool finishes first. */
   let bodyStartIndex = 0;
   if (chunks.length === 0 && groups.length > 0) {
     if (signal?.aborted) {
@@ -536,46 +598,77 @@ export async function synthesiseChapter(
     const result = await synthGroup(anchorGroup);
     results[anchorGroup.index] = { pcm: result.pcm, sampleRate: result.sampleRate };
     sampleRate = result.sampleRate;
-    completedCount += 1;
-    onGroupComplete?.({
-      group: anchorGroup,
-      totalGroups: groups.length,
-      accumulatedSec: 0, // recomputed deterministically in the index-order pass.
-    });
+    fireComplete(anchorGroup);
     bodyStartIndex = 1;
   }
 
-  /* Index-pulling worker pool over the remaining groups. `poolWidth` workers
-     share `nextIndex`; each pulls the next group, synths it, and stores the
-     raw result by `group.index`. At `poolWidth === 1` this is a plain serial
-     walk — byte-identical to the old loop. */
-  let nextIndex = bodyStartIndex;
-  const effectiveWidth = Math.min(poolWidth, Math.max(1, groups.length - bodyStartIndex));
+  /* Partition the remaining body groups into work items: every Qwen group whose
+     provider advertises `synthesizeBatch` is collected (regardless of narrative
+     adjacency — a non-Qwen group interleaving doesn't break a batch) and sliced
+     into `batchSize`-capped batches; everything else stays a singleton. Items
+     are ordered by their first group's index so dispatch is deterministic;
+     scatter-back is by `group.index`, so the final concat order is unaffected
+     either way. `batchSize === 1` makes every batch a singleton — the per-call
+     kill-switch. */
+  const batchSize = Math.max(1, Math.floor(qwenBatchSize));
+  type WorkItem =
+    | { kind: 'single'; group: SentenceGroup }
+    | { kind: 'batch'; groups: SentenceGroup[] };
+  const isBatchable = (group: SentenceGroup): boolean => {
+    const { route } = resolveGroup(group);
+    return route.engine === 'qwen' && typeof route.provider.synthesizeBatch === 'function';
+  };
+  const workItems: WorkItem[] = [];
+  const batchable: SentenceGroup[] = [];
+  for (let i = bodyStartIndex; i < groups.length; i++) {
+    const group = groups[i];
+    if (batchSize > 1 && isBatchable(group)) batchable.push(group);
+    else workItems.push({ kind: 'single', group });
+  }
+  for (let i = 0; i < batchable.length; i += batchSize) {
+    const slice = batchable.slice(i, i + batchSize);
+    workItems.push(
+      slice.length === 1 ? { kind: 'single', group: slice[0] } : { kind: 'batch', groups: slice },
+    );
+  }
+  const firstIndexOf = (item: WorkItem): number =>
+    item.kind === 'single' ? item.group.index : item.groups[0].index;
+  workItems.sort((a, b) => firstIndexOf(a) - firstIndexOf(b));
+
+  /* Index-pulling worker pool over the work items. `poolWidth` workers share
+     `nextItem`; each runs its item, stores result(s) by `group.index`, and
+     fires a per-group complete. At `poolWidth === 1` this is a serial walk. */
+  let nextItem = 0;
+  const effectiveWidth = Math.min(poolWidth, Math.max(1, workItems.length));
   const workers: Promise<void>[] = [];
   for (let w = 0; w < effectiveWidth; w++) {
     workers.push(
       (async () => {
         for (;;) {
-          /* Cheap abort check before claiming the next group — covers the
-             common case where the outer handler decides to stop (per-bookId
-             mutex, request close, etc.) and the next TTS call would otherwise
-             burn another minute or two of sidecar time. The provider also
-             receives the signal so a mid-call abort is honoured. */
+          /* Cheap abort check before claiming the next item — covers the common
+             case where the outer handler decides to stop (per-bookId mutex,
+             request close, etc.) and the next call would otherwise burn another
+             minute or two of sidecar time. The provider also receives the
+             signal so a mid-call abort is honoured. */
           if (signal?.aborted) {
             throw new DOMException('synthesiseChapter aborted', 'AbortError');
           }
-          const i = nextIndex++;
-          if (i >= groups.length) return;
-          const group = groups[i];
-          const result = await synthGroup(group);
-          results[group.index] = { pcm: result.pcm, sampleRate: result.sampleRate };
-          completedCount += 1;
-          onGroupComplete?.({
-            group,
-            totalGroups: groups.length,
-            // recomputed deterministically in the index-order pass below.
-            accumulatedSec: 0,
-          });
+          const i = nextItem++;
+          if (i >= workItems.length) return;
+          const item = workItems[i];
+          if (item.kind === 'single') {
+            results[item.group.index] = await synthGroup(item.group);
+            fireComplete(item.group);
+          } else {
+            const out = await synthBatch(item.groups);
+            /* Scatter each batched chunk back to ITS OWN group index — this is
+               what keeps the index-order concat below identical to the per-call
+               path. */
+            item.groups.forEach((g, k) => {
+              results[g.index] = { pcm: out.pcms[k], sampleRate: out.sampleRate };
+              fireComplete(g);
+            });
+          }
         }
       })(),
     );

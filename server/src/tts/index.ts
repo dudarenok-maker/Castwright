@@ -28,8 +28,37 @@ export interface SynthesizeOutput {
   mimeType: string;
 }
 
+/** One sentence in a batched synth request (plan 112). Mirrors the per-call
+    `{ text, voiceName }` pair; a batch may mix voices because the underlying
+    Qwen `generate_voice_clone` takes a per-element prompt. */
+export interface SynthesizeBatchItem {
+  text: string;
+  voiceName: string;
+}
+
+export interface SynthesizeBatchInput {
+  items: SynthesizeBatchItem[];
+  modelKey: TtsModelKey;
+  signal?: AbortSignal;
+}
+
+export interface SynthesizeBatchOutput {
+  /** One PCM blob per input item, SAME order. */
+  pcms: Buffer[];
+  /** Single sample rate shared by the whole batch (one batched forward). */
+  sampleRate: number;
+}
+
 export interface TtsProvider {
   synthesize(input: SynthesizeInput): Promise<SynthesizeOutput>;
+  /** TRUE batching (plan 112) — OPTIONAL. Synthesises N sentences in one
+      batched model forward and returns one PCM blob per item, in order. Only
+      providers backed by a list-capable engine (Qwen via the sidecar)
+      implement it; callers MUST feature-detect (`provider.synthesizeBatch`)
+      and fall back to per-call `synthesize` when it's absent (Gemini, or
+      batching disabled). Keeping it optional preserves the engine-agnostic
+      single-call contract every other consumer relies on. */
+  synthesizeBatch?(input: SynthesizeBatchInput): Promise<SynthesizeBatchOutput>;
 }
 
 /* Engine groupings. Local engines all share the sidecar provider; only the
