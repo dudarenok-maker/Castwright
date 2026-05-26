@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, Voice } from '../lib/types';
@@ -172,6 +172,10 @@ interface VoiceCardProps {
      reuse voices. isAssigningTarget surfaces the active state. */
   onTapAssign?: (voice: Voice) => void;
   isAssigningTarget?: boolean;
+  /* Optional status pill rendered beside the character name (plan 117).
+     The Qwen "Designed voices" section passes a Designed / Generated badge
+     here; preset cards leave it unset. */
+  badge?: ReactNode;
 }
 
 export function VoiceCard({
@@ -190,6 +194,7 @@ export function VoiceCard({
   onToggleSelect,
   onTapAssign,
   isAssigningTarget = false,
+  badge,
 }: VoiceCardProps) {
   const isDragging = draggingVoiceId === voice.id;
   const canOpenProfile = !!(character && onOpenProfile);
@@ -252,6 +257,7 @@ export function VoiceCard({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <p className="text-sm font-bold text-ink truncate">{voice.character}</p>
+          {badge}
           {voice.source === 'library' && voice.usedIn > 1 && (
             <Pill color="library">
               <IconStar className="w-2.5 h-2.5 mr-0.5" />×{voice.usedIn}
