@@ -81,6 +81,24 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await expect(page.getByText(/Empty/i).first()).toBeVisible({ timeout: 5_000 });
   });
 
+  test('force-remove clears a stuck in_progress entry that normal cancel can’t reach', async ({
+    page,
+  }) => {
+    /* A seeded in_progress entry with the dispatcher's in-memory inFlight map
+       empty (fresh load) is the stuck/orphaned case: it's never reconciled or
+       re-claimed, and the normal cancel button is hidden + the route 409s. The
+       force-remove control is the only way out. */
+    await seedQueue(page, [e({ id: 'e-stuck', bookId: 'sb', chapterId: 7, status: 'in_progress' })]);
+    await page.goto('/#/books/sb/listen');
+    await page.getByTestId('topbar-queue-chip').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByTestId('topbar-queue-chip').click();
+    await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible();
+    /* In-flight row: no normal cancel, but a force-remove control. */
+    await expect(page.getByTestId('queue-entry-e-stuck-cancel')).toHaveCount(0);
+    await page.getByTestId('queue-entry-e-stuck-force-remove').click();
+    await expect(page.getByText(/Empty/i).first()).toBeVisible({ timeout: 5_000 });
+  });
+
   test('cross-book entries render grouped and the other book’s entry cancels while viewing one book', async ({
     page,
   }) => {
