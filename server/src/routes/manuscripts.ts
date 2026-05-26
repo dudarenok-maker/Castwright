@@ -6,7 +6,7 @@
 import { Router, type Request, type Response } from 'express';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
-import { parseManuscript, UnsupportedFormatError, UnusableEpubError } from '../parsers/index.js';
+import { parseManuscript, UnsupportedFormatError, UnusableMediaError } from '../parsers/index.js';
 import { putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -57,10 +57,11 @@ manuscriptsRouter.post('/', upload.single('file'), async (req: Request, res: Res
       sourceText: record.sourceText,
     });
   } catch (e) {
-    if (e instanceof UnsupportedFormatError || e instanceof UnusableEpubError) {
-      /* 415: we recognised the format but can't use this particular file
-         (unsupported type, or an EPUB that's DRM-protected / image-only /
-         has no readable spine). */
+    if (e instanceof UnsupportedFormatError || e instanceof UnusableMediaError) {
+      /* 415: we recognised the format but can't use this particular file —
+         an unsupported type, an EPUB that's DRM-protected / image-only / has
+         no readable spine (UnusableEpubError), or a DRM-protected MOBI/AZW3
+         (DrmProtectedError). The latter two share the UnusableMediaError base. */
       return res.status(415).json({ error: e.message });
     }
     console.error('[manuscripts] upload failed', e);

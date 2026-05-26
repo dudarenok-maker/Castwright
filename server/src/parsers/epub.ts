@@ -18,6 +18,7 @@ import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
 import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
+import { UnusableMediaError } from './errors.js';
 
 type EpubOpts = { fileName?: string; sourcePath?: string };
 
@@ -34,8 +35,9 @@ interface RawMeta {
     any text. Carries a classified, actionable message (DRM / image-only /
     no-spine) so the route can surface it instead of the cryptic generic.
     The route maps it to HTTP 415 ("we understood the EPUB format but can't
-    use this particular file"). Mirrors `DrmProtectedError` in `mobi.ts`. */
-export class UnusableEpubError extends Error {
+    use this particular file") via the shared UnusableMediaError base.
+    Mirrors `DrmProtectedError` in `mobi.ts`. */
+export class UnusableEpubError extends UnusableMediaError {
   constructor(message: string) {
     super(message);
     this.name = 'UnusableEpubError';
