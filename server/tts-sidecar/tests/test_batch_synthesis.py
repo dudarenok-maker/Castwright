@@ -412,3 +412,64 @@ def test_frame_splits_on_first_newline_only(qwen_batch_runtime, monkeypatch) -> 
     assert header["lengths"] == [4, 2]
     assert chunks[0] == pcm_a
     assert chunks[1] == pcm_b
+
+
+# ── concurrency: the Base forward is serialised (sidecar-qwen-concurrent-batch-race) ──
+
+def test_synthesize_batch_serialises_concurrent_forwards(qwen_batch_runtime, monkeypatch) -> None:
+    """Regression: the Qwen Base `generate_voice_clone` forward is NOT thread-safe.
+    When GPU_VRAM_BUDGET>1 runs N workers, two batched forwards of DIFFERENT sizes
+    (e.g. a full 8 overlapping a chapter's 7-item remainder) overlap and collide on
+    shared model state — reproducibly raising "size of tensor a (8) must match
+    tensor b (7) at non-singleton dimension 0" (confirmed 6/6 on the real model).
+    `QwenEngine._synth_lock` must serialise same-engine forwards. This instruments
+    the fake model's forward to flag any concurrent entry; with the lock it must
+    never observe overlap (and no call must fail)."""
+    import threading
+    import time
+
+    engine = qwen_batch_runtime["engine"]
+    for v in ("a", "b", "c", "d"):
+        _design(engine, v)
+    base = engine._base  # the loaded _BatchFakeQwen
+
+    state = {"inside": 0, "max_concurrent": 0}
+    guard = threading.Lock()
+    real = base.generate_voice_clone
+
+    def instrumented(text, language, voice_clone_prompt):
+        with guard:
+            state["inside"] += 1
+            state["max_concurrent"] = max(state["max_concurrent"], state["inside"])
+        try:
+            time.sleep(0.05)  # widen the overlap window so a missing lock is caught
+            return real(text, language, voice_clone_prompt)
+        finally:
+            with guard:
+                state["inside"] -= 1
+
+    monkeypatch.setattr(base, "generate_voice_clone", instrumented)
+
+    # Two concurrent batches of DIFFERENT sizes — the exact real-world trigger.
+    items8 = [{"voice": v, "text": f"s{i}"} for i, v in enumerate(["a", "b", "c", "d", "a", "b", "c", "d"])]
+    items7 = [{"voice": v, "text": f"t{i}"} for i, v in enumerate(["a", "b", "c", "d", "a", "b", "c"])]
+    errors: list[Exception] = []
+
+    def worker(items):
+        try:
+            engine.synthesize_batch("0.6b", items)
+        except Exception as e:  # pragma: no cover - only on regression
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(items8,)),
+               threading.Thread(target=worker, args=(items7,))]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"concurrent batches errored: {errors}"
+    assert state["max_concurrent"] == 1, (
+        f"Base forwards overlapped (max_concurrent={state['max_concurrent']}) — "
+        "_synth_lock is not serialising same-engine synthesis"
+    )
