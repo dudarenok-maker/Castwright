@@ -18,6 +18,7 @@ import type { ParsedManuscript } from './text.js';
 import { parseFilenameMetadata, parseSeriesFromTitle } from './text.js';
 import { tagExcitedDialog, tagHesitantDialog, tagShoutingDialog } from './audio-tags.js';
 import { stripHtml, extractFirstHeading, GENERIC_NCX_RE } from './html-utils.js';
+import { UnusableMediaError } from './errors.js';
 
 type EpubOpts = { fileName?: string; sourcePath?: string };
 
@@ -34,8 +35,9 @@ interface RawMeta {
     any text. Carries a classified, actionable message (DRM / image-only /
     no-spine) so the route can surface it instead of the cryptic generic.
     The route maps it to HTTP 415 ("we understood the EPUB format but can't
-    use this particular file"). Mirrors `DrmProtectedError` in `mobi.ts`. */
-export class UnusableEpubError extends Error {
+    use this particular file") via the shared UnusableMediaError base.
+    Mirrors `DrmProtectedError` in `mobi.ts`. */
+export class UnusableEpubError extends UnusableMediaError {
   constructor(message: string) {
     super(message);
     this.name = 'UnusableEpubError';
@@ -76,6 +78,32 @@ export async function parseEpub(buffer: Buffer, opts: EpubOpts): Promise<ParsedM
   }
 }
 
+/** Resolve a chapter title from its NCX/spine label and the body's first
+    heading. NCX/spine entry.title is the primary source, but many EPUBs ship
+    generic labels ("Chapter 1") even when the chapter HTML body has a
+    descriptive <h1> ("The Berth at Liverpool"):
+
+    - NCX missing → use the body heading if any, else "Chapter N".
+    - NCX descriptive → keep NCX (don't override authored metadata).
+    - NCX generic ("Chapter 1") + body heading also generic → keep NCX
+        (no information gained from merging two generics).
+    - NCX generic + body heading descriptive → merge as
+        "Chapter 1 — The Berth at Liverpool".
+
+    Shared by the epub2 primary path and the raw-zip fallback so both title
+    chapters identically. */
+function mergeChapterTitle(
+  ncxTitle: string,
+  bodyHeading: string | null,
+  oneBasedIndex: number,
+): string {
+  if (!ncxTitle) return bodyHeading || `Chapter ${oneBasedIndex}`;
+  if (GENERIC_NCX_RE.test(ncxTitle) && bodyHeading && !GENERIC_NCX_RE.test(bodyHeading)) {
+    return `${ncxTitle} — ${bodyHeading}`;
+  }
+  return ncxTitle;
+}
+
 /** epub2 primary path. Returns null (rather than throwing) when epub2 can't
     open the file or yields zero chapters, so the caller falls back to the
     raw-zip parser instead of failing. */
@@ -111,27 +139,13 @@ async function tryEpub2Parse(filePath: string, opts: EpubOpts): Promise<ParsedMa
       const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(html))));
       if (!body) continue;
 
-      /* Title resolution — NCX/spine entry.title is the primary source,
-         but many EPUBs ship generic labels ("Chapter 1") even when the
-         chapter HTML body has a descriptive <h1> ("The Berth at
-         Liverpool"). Pull the first h1/h2/h3 as a fallback or merge.
-
-         - NCX missing → use body heading if any, else "Chapter N".
-         - NCX descriptive → keep NCX (don't override authored metadata).
-         - NCX generic ("Chapter 1") + body heading is also generic →
-             keep NCX (no information gained from merging two generics).
-         - NCX generic + body heading is descriptive → merge as
-             "Chapter 1 — The Berth at Liverpool". */
-      const ncxTitle = entry.title?.trim() ?? '';
-      const bodyHeading = extractFirstHeading(html);
-      let chTitle: string;
-      if (!ncxTitle) {
-        chTitle = bodyHeading || `Chapter ${chapters.length + 1}`;
-      } else if (GENERIC_NCX_RE.test(ncxTitle) && bodyHeading && !GENERIC_NCX_RE.test(bodyHeading)) {
-        chTitle = `${ncxTitle} — ${bodyHeading}`;
-      } else {
-        chTitle = ncxTitle;
-      }
+      // Title from the epub2-supplied NCX/spine label, merged with the body
+      // heading via the shared resolver (see {@link mergeChapterTitle}).
+      const chTitle = mergeChapterTitle(
+        entry.title?.trim() ?? '',
+        extractFirstHeading(html),
+        chapters.length + 1,
+      );
       chapters.push({ id: chapters.length + 1, title: chTitle, body });
     }
 
@@ -195,6 +209,11 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
     })(),
   };
 
+  /* 4b. NCX navMap titles, keyed by the content doc's zip path. Empty when no
+        NCX is present — chapters then fall back to body headings, identical to
+        the prior behaviour (srv-13: NCX parity with the epub2 path). */
+  const ncxTitleByPath = parseNcxTitles(opf, manifest, opfDir, entries);
+
   /* 5. Resolve spine → chapters. Only XHTML/HTML/SVG docs carry prose; skip
         cover images, CSS, the NCX, etc. `linear="no"` is NOT filtered (the
         epub2 path doesn't either, and front matter holds real prose). */
@@ -213,9 +232,22 @@ async function parseEpubRawZip(bytes: Buffer, opts: EpubOpts): Promise<ParsedMan
     const bodyHtml = htmlBodyOnly(buf.toString('utf8'));
     const body = tagHesitantDialog(tagExcitedDialog(tagShoutingDialog(stripHtml(bodyHtml))));
     if (!body) continue;
-    /* No NCX walk here — fall back to the body heading, else a numbered
-       label. (NCX navLabel parity is a deferred follow-up.) */
-    const chTitle = extractFirstHeading(bodyHtml) || `Chapter ${chapters.length + 1}`;
+    /* Title from the NCX navLabel (parity with the epub2 path), merged with
+       the body heading. Try the raw and URL-decoded chapter paths — mirrors
+       resolveEntry, since the NCX src and the manifest href may differ in
+       %-encoding. Empty NCX → body heading, else a numbered label. */
+    const chapterPath = normalizeZipPath(
+      opfDir ? `${opfDir}/${item.href.split('#')[0]}` : item.href.split('#')[0],
+    );
+    let ncxTitle = ncxTitleByPath.get(chapterPath) ?? '';
+    if (!ncxTitle) {
+      try {
+        ncxTitle = ncxTitleByPath.get(decodeURIComponent(chapterPath)) ?? '';
+      } catch {
+        /* malformed %-escape — keep the empty NCX title */
+      }
+    }
+    const chTitle = mergeChapterTitle(ncxTitle, extractFirstHeading(bodyHtml), chapters.length + 1);
     chapters.push({ id: chapters.length + 1, title: chTitle, body });
   }
 
@@ -322,6 +354,78 @@ function htmlBodyOnly(html: string): string {
   const m = /<body\b[^>]*>([\s\S]*?)<\/body>/i.exec(html);
   const body = m ? m[1] : html;
   return body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+}
+
+/** Parse the NCX navMap into a map of (normalised zip path of the content
+    doc) → navLabel text, so the raw-zip fallback can title chapters from the
+    authored navLabels the way the epub2 path does (srv-13). Namespace-prefix
+    tolerant and entity-decoded. Returns an empty map when no NCX is found —
+    callers then fall back to body headings. EPUB3-only nav docs (nav.xhtml)
+    are out of scope: epub2's own flow titles don't read them either. */
+function parseNcxTitles(
+  opf: string,
+  manifest: Map<string, { href: string; mediaType: string }>,
+  opfDir: string,
+  entries: Map<string, Buffer>,
+): Map<string, string> {
+  const titles = new Map<string, string>();
+
+  /* Locate the NCX: spine toc="<id>" → manifest href, else the manifest item
+     whose media-type is the NCX type, else any *.ncx entry. */
+  let ncxHref: string | undefined;
+  const tocId = /<(?:\w+:)?spine\b[^>]*\btoc="([^"]+)"/i.exec(opf)?.[1];
+  if (tocId) ncxHref = manifest.get(tocId)?.href;
+  if (!ncxHref) {
+    for (const item of manifest.values()) {
+      if (item.mediaType === 'application/x-dtbncx+xml') {
+        ncxHref = item.href;
+        break;
+      }
+    }
+  }
+
+  let ncxBuf: Buffer | undefined;
+  let ncxPath: string | undefined;
+  if (ncxHref) {
+    const clean = ncxHref.split('#')[0];
+    ncxBuf = resolveEntry(entries, opfDir, ncxHref);
+    ncxPath = normalizeZipPath(opfDir ? `${opfDir}/${clean}` : clean);
+  }
+  if (!ncxBuf) {
+    const key = [...entries.keys()].find((k) => /\.ncx$/i.test(k));
+    if (key) {
+      ncxBuf = entries.get(key);
+      ncxPath = key;
+    }
+  }
+  if (!ncxBuf || !ncxPath) return titles;
+
+  /* NCX `content src` is relative to the NCX file's own directory, not the
+     OPF's (they often differ). */
+  const ncxDir = ncxPath.includes('/') ? ncxPath.slice(0, ncxPath.lastIndexOf('/')) : '';
+  const ncx = ncxBuf.toString('utf8');
+
+  /* Each navPoint pairs a <navLabel><text> with a <content src>. navLabel
+     precedes content within a navPoint (standard NCX ordering), so a
+     non-greedy text-then-src match pairs them even for nested navMaps. Store
+     both raw and URL-decoded keys so a chapter lookup hits regardless of which
+     side carries the %-encoding (mirrors resolveEntry). First entry wins. */
+  for (const m of ncx.matchAll(
+    /<(?:\w+:)?navPoint\b[\s\S]*?<(?:\w+:)?text>([\s\S]*?)<\/(?:\w+:)?text>[\s\S]*?<(?:\w+:)?content\b[^>]*\bsrc="([^"]+)"/gi,
+  )) {
+    const label = decodeEntities(m[1]);
+    const src = m[2].split('#')[0];
+    if (!label || !src) continue;
+    const key = normalizeZipPath(ncxDir ? `${ncxDir}/${src}` : src);
+    if (!titles.has(key)) titles.set(key, label);
+    try {
+      const decoded = decodeURIComponent(key);
+      if (decoded !== key && !titles.has(decoded)) titles.set(decoded, label);
+    } catch {
+      /* malformed %-escape — the raw key still got stored above */
+    }
+  }
+  return titles;
 }
 
 /** Case-insensitive zip-key lookup (META-INF casing can drift). */

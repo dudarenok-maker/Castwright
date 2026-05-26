@@ -11,6 +11,7 @@ const fixturePath = resolve(here, '__fixtures__/sample.epub');
 const titleFallbackFixturePath = resolve(here, '__fixtures__/sample-title-fallback.epub');
 const seriesFromTitleFixturePath = resolve(here, '__fixtures__/sample-title-no-calibre.epub');
 const opfPrefixedFixturePath = resolve(here, '__fixtures__/sample-opf-prefixed.epub');
+const opfPrefixedTitlesFixturePath = resolve(here, '__fixtures__/sample-opf-prefixed-titles.epub');
 const drmFixturePath = resolve(here, '__fixtures__/sample-epub-drm.epub');
 const imageOnlyFixturePath = resolve(here, '__fixtures__/sample-epub-image-only.epub');
 
@@ -199,6 +200,46 @@ describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () =>
     const after = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
     expect(out.chapters.length).toBe(2);
     expect(after).toBe(before);
+  });
+});
+
+/* srv-13: the raw-zip fallback now reads chapter titles from the NCX navMap
+   (parity with the epub2 path), not just the body <h1>. This prefixed-OPF
+   fixture carries the same three NCX-vs-body scenarios as the unprefixed
+   sample-title-fallback.epub, so the fallback must produce identical titles.
+   The merged "Chapter 1 — …" title is only reachable if the NCX was parsed —
+   body headings alone would yield "The Berth at Liverpool". */
+describe('parseEpub — NCX titles through the raw-zip fallback (srv-13)', () => {
+  it('merges generic NCX label with descriptive body <h1>', async () => {
+    const buf = await readFile(opfPrefixedTitlesFixturePath);
+    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed-titles.epub' });
+    expect(out.chapters[0].title).toBe('Chapter 1 — The Berth at Liverpool');
+  });
+
+  it('uses body <h2> as title when the NCX label is empty', async () => {
+    const buf = await readFile(opfPrefixedTitlesFixturePath);
+    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed-titles.epub' });
+    expect(out.chapters[1].title).toBe('A Manifest Two Names Short');
+  });
+
+  it('keeps a descriptive NCX label as-is', async () => {
+    const buf = await readFile(opfPrefixedTitlesFixturePath);
+    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed-titles.epub' });
+    expect(out.chapters[2].title).toBe('What the Captain Knew');
+  });
+
+  it('matches the titles the epub2 path produces for the unprefixed equivalent', async () => {
+    const [prefixed, plain] = await Promise.all([
+      readFile(opfPrefixedTitlesFixturePath),
+      readFile(titleFallbackFixturePath),
+    ]);
+    const fromFallback = await parseEpub(prefixed, {
+      fileName: 'sample-opf-prefixed-titles.epub',
+    });
+    const fromEpub2 = await parseEpub(plain, { fileName: 'sample-title-fallback.epub' });
+    expect(fromFallback.chapters.map((c) => c.title)).toEqual(
+      fromEpub2.chapters.map((c) => c.title),
+    );
   });
 });
 

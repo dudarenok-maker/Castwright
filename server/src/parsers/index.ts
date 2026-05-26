@@ -8,6 +8,7 @@ import { parseEpub } from './epub.js';
 import { parseMobi } from './mobi.js';
 
 export type { ParsedManuscript };
+export { UnusableMediaError } from './errors.js';
 export { DrmProtectedError } from './mobi.js';
 export { UnusableEpubError } from './epub.js';
 
