@@ -101,18 +101,29 @@ _Settings:_ dedicated benchmark sidecar on `:9001`, `PRELOAD_QWEN=1`, **Kokoro/C
 | Parallel streams | Aggregate throughput |
 |---|---|
 | 1 | 0.96× realtime |
-| 2 | **1.22× realtime** (+27%) |
+| 2 | 1.22× realtime (+27%) |
 | 4 | 1.20× realtime (plateau) |
+
+> ⚠️ **This +27% is unsafe — disregard it.** These parallel streams were *identical-size* batches, so they didn't crash, but the Qwen forward is **not thread-safe**: *different-size* concurrent batches corrupt each other (the `8 vs 7` chapter-generation bug — see the end-to-end record below + plan 113). The fix serialises same-engine forwards, so `GPU_VRAM_BUDGET>1` yields **no** safe same-engine Qwen parallelism; it only helps cross-engine coexistence (Kokoro + Qwen).
 
 **Findings:**
 
-- **Batching is the dominant lever** — serial ~3.3 → batch-8 ~1.0–1.3 RTF; bigger batch = better, B=6–8 the sweet spot.
-- **FA2 ≈ SDPA.** FA2 is modestly faster at B=4 and posts the single fastest result (B=8 0.83), but is **noisier** (the 1.81 stall) while SDPA is rock-stable. Consistent with the prefill-vs-decode theory: TTS is token-by-token decode, so FA2's optimization yields only a small, inconsistent edge. **SDPA stays the sensible default; FA2 is a legit opt-in.** (Resolves `side-5`; see plan 115 Ship notes.)
-- **Concurrency 2 adds ~27%; 4 plateaus** → `GPU_VRAM_BUDGET=2` is optimal. 4-wide wastes VRAM (and risks OOM on 8 GB) for no throughput gain — confirms `side-3`'s "batching scales, concurrency plateaus".
+- **Batching is the dominant — and only safe — lever** — serial ~3.3 → batch-8 ~1.0–1.3 RTF; bigger batch = better, B=6–8 the sweet spot.
+- **FA2 ≈ SDPA.** FA2 is modestly faster at B=4 and posts the single fastest micro result (B=8 0.83) but is noisier; SDPA is rock-stable. End-to-end (below) they tie, SDPA marginally ahead. TTS is decode-bound, so FA2's prefill optimization is a small, inconsistent edge. **SDPA stays the default; FA2 is a legit opt-in.** (Resolves `side-5`; see plan 115 Ship notes.)
+- **Concurrency is not a safe Qwen lever** — see the warning above; same-engine Qwen runs effectively serial after the fix.
 
-**Optimal config on the 4070:** `QWEN_BATCH_SIZE=8`, `GPU_VRAM_BUDGET=2`, `QWEN_ATTN_IMPL=sdpa` (FA2 optional), no other models co-resident.
+**Optimal config on the 4070:** `QWEN_BATCH_SIZE=8` (the throughput lever — **safe** now that the concurrent-batch race is fixed, plan 113), `QWEN_ATTN_IMPL=sdpa` (FA2 ≈ SDPA, not worth flipping). `GPU_VRAM_BUDGET=2` is fine for cross-engine coexistence but adds no same-engine Qwen throughput. No other models co-resident.
 
-**Corrected full-book reality:** a ~10 h-audio novel ≈ **~8–10 h** (overnight), **not** the ~40 h the contended run implied. Caveat: these are **micro-bench** (raw model). The real per-character pipeline adds per-voice batch fragmentation + MP3 assembly, so end-to-end chapters run somewhat slower than the micro RTF — but far better than the contended 4.12. A clean full-pipeline re-measure is still owed for the true end-to-end number.
+### Qwen3-TTS 0.6B — end-to-end (real pipeline) — 2026-05-26
+
+The true per-chapter number through the full server pipeline (per-character voice routing + `QWEN_BATCH_SIZE=8` batching + MP3 assembly), generating "Bonus Keefe Story" ch.2 "DAY ONE" (87 sentences, 4 voices, ~290 s audio) on a freed GPU, **after the concurrent-batch race fix** (plan 113):
+
+| Engine | RTF (3 runs) | Mean | Failures |
+|---|---|---|---|
+| **SDPA** | 1.23 / 1.14 / 1.08 | **1.15** | 0/3 |
+| **FA2** | 1.23 / 1.18 / 1.15 | **1.19** | 0/3 |
+
+**Before the fix, ~2 of 3 runs 500'd** with `size of tensor a (8) must match tensor b (7)` (concurrent different-size batches racing the non-thread-safe forward). After the fix: **3/3 clean** for both backends, SDPA marginally faster, both stable. So end-to-end batch-8 is **~RTF 1.15–1.2** — a ~10 h-audio novel ≈ **~11–12 h** (overnight), not the ~40 h the original contention-confounded run implied.
 
 ### Kokoro v1 — 4070 — _TODO_
 
@@ -125,4 +136,4 @@ Not yet benchmarked here. Expected sub-1 RTF on GPU. Run `bench-tts.py --engine 
 3. **`x_vector_only_mode=True`** ([`side-4`](BACKLOG.md)) — drop the ICL prefix; speed vs. fidelity A/B.
 4. ~~**flash-attn** wheel on Windows~~ — **measured 2026-05-26: FA2 ≈ SDPA (modest + noisy); SDPA stays default, FA2 opt-in** (plan 115 / `side-5` resolved).
 5. **Quantization** (int8/fp8) of the 0.6B base.
-6. **Clean full-pipeline re-measure** — real per-character chapter under freed VRAM, for the true end-to-end RTF (the micro-bench is raw-model only).
+6. ~~**Clean full-pipeline re-measure**~~ — **done 2026-05-26** (end-to-end record above: batch-8 ~RTF 1.15–1.2; surfaced + fixed the concurrent-batch race, plan 113).
