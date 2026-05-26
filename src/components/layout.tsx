@@ -25,6 +25,7 @@ import {
   buildCharacterRegenEvent,
   buildVoiceTuneEvent,
   buildVoiceLockEvent,
+  buildNameChangeEvent,
 } from '../lib/change-log';
 import { api, type SeriesRosterEntry } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
@@ -1300,11 +1301,24 @@ export function Layout() {
               /* Dispatch-only — unlike onAddAlias (whose dedicated server
                  endpoint predates the persist-rule approach), the
                  cast/renameCharacter persistence rule round-trips the new
-                 name + demoted alias to cast.json on its own. */
+                 name + demoted alias to cast.json on its own. The matching
+                 name_change activity event is appended here (the change-log
+                 persist rule fans it to change-log.json). */
               onRename={
                 bookId
-                  ? (characterId, name) =>
-                      dispatch(castActions.renameCharacter({ characterId, name }))
+                  ? (characterId, name) => {
+                      const oldName = profileCharacter?.name ?? '';
+                      dispatch(castActions.renameCharacter({ characterId, name }));
+                      /* Mirror the reducer's no-op guard so a name unchanged
+                         apart from case/whitespace doesn't spam the log. */
+                      if (oldName && oldName.trim().toLowerCase() !== name.trim().toLowerCase()) {
+                        dispatch(
+                          changeLogActions.appendLogEvent(
+                            buildNameChangeEvent({ oldName, newName: name.trim() }),
+                          ),
+                        );
+                      }
+                    }
                   : undefined
               }
               onClose={() => dispatch(uiActions.setOpenProfileId(null))}

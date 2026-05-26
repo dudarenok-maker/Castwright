@@ -17,7 +17,7 @@ const FILTER_MAP: Record<Exclude<FilterKey, 'all'>, ChangeLogType[]> = {
     'generation_started',
   ],
   manuscript: ['boundary_move', 'import', 'reparse'],
-  cast: ['cast_confirm', 'analysis_complete'],
+  cast: ['cast_confirm', 'name_change', 'analysis_complete'],
 };
 
 const DATE_LABEL: Record<ChangeLogEvent['date'], string> = {
