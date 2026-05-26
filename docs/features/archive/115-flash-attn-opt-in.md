@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -56,16 +56,16 @@ Fully reversible: the flag is opt-in, the wheel is a single pip package (`pip un
 
 **Benchmark results (RTX 4070, 2026-05-26):**
 
-SDPA default — baseline:
+SDPA — initial baseline (⚠️ later found **contention-confounded**: VRAM was ~97% full; the clean re-measure below is 3–5× faster):
 
 | Run | RTF | Note |
 |---|---|---|
 | Serial `/synthesize`, cold | 8.52 | first call |
-| Serial `/synthesize`, warm | 6.6–8.3 | warm barely helps |
-| Batch `/synthesize-batch`, 8 same-voice | 2.61 | clean best case |
-| Full pipeline, real mixed-cast chapter | 4.12 | the number that actually matters |
+| Serial `/synthesize`, warm | 6.6–8.3 | contended |
+| Batch `/synthesize-batch`, 8 same-voice | 2.61 | contended |
+| Full pipeline, real mixed-cast chapter | 4.12 | contended |
 
-The `flash_attention_2` comparison is **still pending** — `side-5` (the default-flip decision) stays open until those numbers land here. Note the dominant lever in this data is **batching** (2.61 batched vs 6.6–8.3 serial ≈ 3×), NOT the attention backend — that's `side-3` (true batching, in flight), and these numbers reinforce it. FA2's expected ceiling for single-token autoregressive decode is modest, so it's unlikely to move the 4.12 full-pipeline figure much regardless.
+**FA2 vs SDPA — clean-VRAM re-measure (RTX 4070, 2026-05-26).** With the GPU freed, SDPA batch-8 is ~1.0–1.3 RTF (not 2.6), and **FA2 ≈ SDPA**: FA2 modestly faster at B=4 (~1.45 vs ~1.85) and posts the single fastest result (B=8 0.83) but is **noisier** (a 1.81 stall), while SDPA is rock-stable (B=8 1.28). Concurrency 2 adds ~27% throughput; 4 plateaus. TTS is token-by-token **decode**, so FA2's prefill optimization is a small, inconsistent edge. **Decision: SDPA stays the default; FA2 stays opt-in** — `side-5` resolved (see Ship notes). Full data + tables: [docs/tts-performance.md](../../tts-performance.md). The dominant lever is **batching** (`QWEN_BATCH_SIZE`, plan 113) + VRAM headroom, not the attention backend.
 
 ## Out of scope
 
@@ -76,4 +76,8 @@ The `flash_attention_2` comparison is **still pending** — `side-5` (the defaul
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Pending: the FA2-vs-SDPA benchmark outcome and the default-flip decision.)
+Shipped 2026-05-26. The opt-in installer (`install-qwen3.mjs --flash-attn` / `QWEN_INSTALL_FLASH_ATTN=1`; pinned `flash_attn-2.7.4+cu124torch2.6.0cxx11abiFALSE-cp311-cp311-win_amd64.whl`) merged via **PR #260**; SDPA stays the default, no `main.py` change.
+
+FA2-vs-SDPA was benchmarked on the RTX 4070 (clean VRAM) on 2026-05-26 — full data in [docs/tts-performance.md](../../tts-performance.md). **FA2 ≈ SDPA**: modestly faster at small batch and the single fastest result (batch-8 0.83 RTF) but with high run-to-run variance (a 1.81 stall), versus rock-stable SDPA (batch-8 1.28). TTS is decode-bound, so FA2's prefill optimization yields only a small, noisy edge — not enough to justify flipping the default.
+
+**Decision: SDPA stays the Qwen default; FA2 remains opt-in for the keen.** `side-5` (the default-flip) is resolved as "measured — SDPA stays" and removed from the backlog. A side benefit confirmed during the run: clearing VRAM matters far more than the attention backend — the earlier 6.6–8.3 serial / 4.12 pipeline figures were contention artifacts (VRAM at 97%); clean batch-8 is ~1.0–1.3 RTF, so a full novel is an ~8–10 h overnight job, not the ~40 h first implied.
