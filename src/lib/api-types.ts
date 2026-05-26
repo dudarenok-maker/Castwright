@@ -2238,7 +2238,7 @@ export interface components {
             /** @enum {string} */
             date: "today" | "yesterday" | "earlier";
             /** @enum {string} */
-            type: "regenerate" | "voice_tune" | "voice_reuse" | "voice_lock" | "boundary_move" | "chapter_complete" | "generation_run_complete" | "chapter_failed" | "generation_started" | "cast_confirm" | "analysis_complete" | "import" | "library_add" | "reparse";
+            type: "regenerate" | "voice_tune" | "voice_reuse" | "voice_lock" | "boundary_move" | "chapter_complete" | "generation_run_complete" | "chapter_failed" | "generation_started" | "cast_confirm" | "name_change" | "analysis_complete" | "import" | "library_add" | "reparse";
             title: string;
             note: string;
             /** @enum {string} */
