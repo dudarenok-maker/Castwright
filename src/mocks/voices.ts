@@ -16,8 +16,16 @@ const tts = (name: string, description: string) => ({
   description,
 });
 
+/* Bespoke Qwen voice assignment (plan 117). `name` is the designed voiceId
+   (empty string when no voice has been designed yet). */
+const qwenTts = (name: string, description: string) => ({
+  provider: 'qwen' as const,
+  name,
+  description,
+});
+
 type MockVoice = Omit<Voice, 'gradient'> & {
-  ttsVoice: { provider: 'gemini'; name: string; description: string };
+  ttsVoice: { provider: 'gemini' | 'qwen'; name: string; description: string };
 };
 
 function withGradient(v: MockVoice): Voice {
@@ -145,6 +153,51 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       usedIn: 2,
       source: 'library',
       ttsVoice: tts('Leda', 'Youthful'),
+    }),
+    /* Plan 117 — bespoke Qwen voices in all three lifecycle states. These
+       drive the status-first Qwen sections ("Needs a voice" / "Designed
+       voices") that replace the degenerate 1-member voice families. Kept in
+       the existing Northern Coast Trilogy series so the per-series Rebaseline
+       button + series → book nesting resolve. Deliberately NOT on `cc` (see
+       the v_eliza_cc note above re: rebaseline representative selection). */
+    withGradient({
+      id: 'v_bramble',
+      character: 'Bramble',
+      bookTitle: 'The Northern Star',
+      bookId: 'ns',
+      bookSeries: 'Northern Coast Trilogy',
+      attributes: ['Male', 'Gruff', 'Older'],
+      usedIn: 1,
+      source: 'current',
+      // none — no designed voiceId yet → "Qwen · Needs a voice"
+      ttsVoice: qwenTts('', 'No voice designed yet'),
+    }),
+    withGradient({
+      id: 'v_thistle',
+      character: 'Thistle',
+      bookTitle: 'The Northern Star',
+      bookId: 'ns',
+      bookSeries: 'Northern Coast Trilogy',
+      attributes: ['Female', 'Sharp', 'Wry'],
+      usedIn: 1,
+      source: 'current',
+      overrideTtsVoices: { qwen: { name: 'qwen-thistle' } },
+      // designed but not yet generated → "Designed voices" with a Designed badge
+      ttsVoice: qwenTts('qwen-thistle', 'Designed voice'),
+    }),
+    withGradient({
+      id: 'v_finch',
+      character: 'Finch',
+      bookTitle: 'Solway Bay',
+      bookId: 'sb',
+      bookSeries: 'Northern Coast Trilogy',
+      attributes: ['Male', 'Bright', 'Young'],
+      usedIn: 1,
+      source: 'library',
+      overrideTtsVoices: { qwen: { name: 'qwen-finch' } },
+      generated: true,
+      // designed AND rendered → "Designed voices" with a Generated badge
+      ttsVoice: qwenTts('qwen-finch', 'Designed voice'),
     }),
   ],
 };

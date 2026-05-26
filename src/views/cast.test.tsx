@@ -359,6 +359,76 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
   });
 });
 
+describe('CastView Qwen status pill (plan 117)', () => {
+  /* The Status column resolves engine-aware pills: a Qwen row follows the
+     design → generate lifecycle (Needs voice / Designed / Generated), driven
+     by its designed voiceId + the matched library voice's `generated` flag —
+     NOT the provenance `voiceState` enum (whose 'generated' default would
+     otherwise show a false green pill for an undesigned Qwen character).
+     Preset rows keep their `voiceState` pills. */
+  function renderWithLibrary(characters: Character[], lib: Voice[]) {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    return render(
+      <Provider store={store}>
+        <CastView
+          characters={characters}
+          setCharacters={() => {}}
+          library={lib}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  const MarrowQwen: Character = {
+    ...Marrow,
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-Marrow' } },
+  };
+
+  it('shows "Needs voice" — not a green "Generated" — for a Qwen row with no designed voice', () => {
+    renderWithLibrary([{ ...Marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }], library);
+    const row = rowFor('Mr. Marrow');
+    expect(within(row).getByText('Needs voice')).toBeInTheDocument();
+    expect(within(row).queryByText('Generated')).toBeNull();
+  });
+
+  it('shows "Designed" for a designed Qwen voice that has not rendered audio', () => {
+    /* The matched library voice (v_Marrow) carries no `generated` flag. */
+    renderWithLibrary([MarrowQwen], library);
+    const row = rowFor('Mr. Marrow');
+    expect(within(row).getByText('Designed')).toBeInTheDocument();
+    expect(within(row).queryByText('Generated')).toBeNull();
+  });
+
+  it('shows "Generated" once the matched library voice is flagged generated', () => {
+    const generatedLib = library.map((v) =>
+      v.id === 'v_Marrow' ? { ...v, generated: true } : v,
+    );
+    renderWithLibrary([MarrowQwen], generatedLib);
+    const row = rowFor('Mr. Marrow');
+    expect(within(row).getByText('Generated')).toBeInTheDocument();
+  });
+
+  it('keeps the preset provenance pills (Generated / Reused) for non-Qwen rows', () => {
+    renderView();
+    /* Marrow: coqui, voiceState 'generated'; narrator: voiceState 'reused'. */
+    expect(within(rowFor('Mr. Marrow')).getByText('Generated')).toBeInTheDocument();
+    expect(within(rowFor('Narrator')).getByText('Reused')).toBeInTheDocument();
+  });
+
+  it('renders a Qwen row without throwing when the library is empty (defensive)', () => {
+    renderWithLibrary([MarrowQwen], []);
+    const row = rowFor('Mr. Marrow');
+    /* No matched voice ⇒ generated unknown ⇒ conservative "Designed". */
+    expect(within(row).getByText('Designed')).toBeInTheDocument();
+  });
+});
+
 /* Plan 81 wave 3 — responsive layout coverage.
 
    The cast view collapses to a single-column card list under `md:` and

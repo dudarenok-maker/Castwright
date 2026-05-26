@@ -66,9 +66,9 @@ empty-name `qwen|` family.
 
 - Vitest server (`server/src/routes/voices.test.ts`, `describe('GET /api/voices?engine=qwen — generated flag')`) — a designed Qwen voice appearing in a rendered snapshot gets `generated:true`; a designed-but-unrendered voice does not; an undesigned voice (`ttsVoice.name===''`) never does; the `engine=coqui` query emits no `generated` (preset path untouched). **[landed — server PR]**
 - Vitest server (`server/src/routes/revisions.test.ts`) — drift detector stays green after the `loadSegmentsFiles` extraction (31 tests). **[landed — server PR]**
-- Vitest unit (`src/views/voices.test.tsx`) — two Qwen regions by `aria-label`; no per-voice cascade; Designed/Generated badge; no ⚠ pill / no "Audition base voice" on Qwen sections; per-series Rebaseline present; preset family tests unchanged. **[frontend PR]**
-- Vitest unit (`src/views/cast.test.tsx`) — Qwen no-voice → "Needs voice" (not green "Generated"); designed → "Designed"; library voice `generated:true` → "Generated"; preset provenance pills unchanged; defensive when `library` empty. **[frontend PR]**
-- Playwright e2e (`e2e/voices-qwen-status.spec.ts`) — the two Qwen sections render alongside a preset family; per-series Rebaseline opens. **[frontend PR]**
+- Vitest unit (`src/views/voices.test.tsx`, `describe('LibraryView Qwen status sections (plan 117)')`) — exactly two Qwen regions by `aria-label` (not one per voice); none → "Needs a voice", designed → "Designed voices"; Designed/Generated badge; no "Audition base voice" on Qwen headers; per-series Rebaseline present; Qwen-only library doesn't show the empty state; preset family tests unchanged. **[landed — frontend PR]**
+- Vitest unit (`src/views/cast.test.tsx`, `describe('CastView Qwen status pill (plan 117)')`) — Qwen no-voice → "Needs voice" (not green "Generated"); designed → "Designed"; matched library voice `generated:true` → "Generated"; preset provenance pills (Generated/Reused) unchanged; defensive when `library` is empty. The existing `cast-slice.test.ts` "defaults missing voiceState to 'generated'" test pins that the provenance enum default is untouched. **[landed — frontend PR]**
+- Playwright e2e (`e2e/voices-qwen-status.spec.ts`) — the two Qwen sections + Designed/Generated badges render alongside a preset family on `#/voices`; no "Audition base voice" on a Qwen section. **[landed — frontend PR]**
 
 ### Manual acceptance walkthrough
 

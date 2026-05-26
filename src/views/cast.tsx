@@ -496,10 +496,7 @@ export function CastView({
                   ))}
                 </span>
                 <span>
-                  {c.voiceState === 'generated' && <Pill color="success">Generated</Pill>}
-                  {c.voiceState === 'tuned' && <Pill color="warning">Tuned</Pill>}
-                  {c.voiceState === 'reused' && <Pill color="library">Reused</Pill>}
-                  {c.voiceState === 'locked' && <Pill>Locked</Pill>}
+                  <StatusPill c={c} voice={voice} />
                 </span>
                 <span
                   onClick={(e) => e.stopPropagation()}
@@ -697,10 +694,7 @@ export function CastView({
                 )}
                 <div className="flex items-center justify-between gap-3">
                   <span>
-                    {c.voiceState === 'generated' && <Pill color="success">Generated</Pill>}
-                    {c.voiceState === 'tuned' && <Pill color="warning">Tuned</Pill>}
-                    {c.voiceState === 'reused' && <Pill color="library">Reused</Pill>}
-                    {c.voiceState === 'locked' && <Pill>Locked</Pill>}
+                    <StatusPill c={c} voice={voice} />
                   </span>
                   <button
                     type="button"
@@ -931,6 +925,46 @@ function resolveDisplayTtsVoice(
 ): TtsVoiceAssignment {
   if (c.ttsEngine === 'qwen') return resolveTtsVoiceForCharacter(c, 'qwen');
   return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
+}
+
+type StatusPillColor = 'success' | 'warning' | 'library' | 'neutral';
+
+/* Engine-aware Status pill (plan 117). A Qwen character follows the bespoke
+   design → generate lifecycle (Needs voice → Designed → Generated), driven
+   by its designed voiceId + the matched library voice's `generated` flag —
+   NOT the provenance `voiceState` enum (whose "generated" means "auto-
+   assigned during analysis", which would falsely flag an undesigned Qwen
+   character green). Preset characters keep their existing `voiceState`
+   pills unchanged. `generated` is only populated when the library was
+   fetched with engine=qwen (i.e. the project is on Qwen — the case that
+   matters); otherwise it reads "Designed", a safe conservative default. */
+function resolveStatusPill(
+  c: Character,
+  voice: Voice | undefined,
+): { label: string; color: StatusPillColor } | null {
+  if (c.ttsEngine === 'qwen') {
+    if (!c.overrideTtsVoices?.qwen?.name) return { label: 'Needs voice', color: 'warning' };
+    if (voice?.generated) return { label: 'Generated', color: 'success' };
+    return { label: 'Designed', color: 'library' };
+  }
+  switch (c.voiceState) {
+    case 'generated':
+      return { label: 'Generated', color: 'success' };
+    case 'tuned':
+      return { label: 'Tuned', color: 'warning' };
+    case 'reused':
+      return { label: 'Reused', color: 'library' };
+    case 'locked':
+      return { label: 'Locked', color: 'neutral' };
+    default:
+      return null;
+  }
+}
+
+function StatusPill({ c, voice }: { c: Character; voice: Voice | undefined }) {
+  const pill = resolveStatusPill(c, voice);
+  if (!pill) return null;
+  return <Pill color={pill.color}>{pill.label}</Pill>;
 }
 
 interface TtsVoiceLineProps {
