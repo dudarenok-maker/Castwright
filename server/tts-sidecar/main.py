@@ -1064,7 +1064,16 @@ class QwenEngine(Engine):
                 raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
             texts.append(text)
             langs.append(lang)
-            prompts.append(prompt)
+            # A designed voice's cached prompt is a LIST of VoiceClonePromptItem
+            # (qwen_tts create_voice_clone_prompt's return shape), normally
+            # length 1. generate_voice_clone wants a FLAT prompt-item list with
+            # one item per text — it does `[it.ref_code for it in items]`
+            # internally. Appending the per-voice list verbatim builds a
+            # list-of-LISTS, so `it` is a list → "'list' object has no attribute
+            # 'ref_code'". Flatten so prompt item i lines up with text i. (The
+            # single /synthesize path passes the whole length-1 list for its one
+            # text, which is why it never tripped this.)
+            prompts.extend(prompt if isinstance(prompt, list) else [prompt])
 
         self._ensure_base_loaded()
         wavs, sr = self._base.generate_voice_clone(
