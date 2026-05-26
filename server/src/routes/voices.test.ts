@@ -314,6 +314,136 @@ describe('GET /api/voices — aggregation', () => {
   });
 });
 
+describe('GET /api/voices?engine=qwen — generated flag', () => {
+  /* A self-contained Qwen book: three designed-Qwen characters (one with
+     rendered audio, one designed-but-unrendered, one with no designed
+     voice at all) plus a Coqui-only character. The aggregator should stamp
+     `generated:true` ONLY on the voice whose designed voiceId appears in a
+     rendered segments snapshot. Lives in its own series so it can't disturb
+     the v_Brann aggregation/override tests above. */
+  const Q_AUTHOR = 'Qwen Author';
+  const Q_SERIES = 'Qwen Series';
+  const Q_TITLE = 'Qwen Book';
+
+  beforeAll(() => {
+    const bookDir = join(workspaceRoot, 'books', Q_AUTHOR, Q_SERIES, Q_TITLE);
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    mkdirSync(join(bookDir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'qbook',
+        manuscriptId: 'm_qbook',
+        title: Q_TITLE,
+        author: Q_AUTHOR,
+        series: Q_SERIES,
+        seriesPosition: null,
+        isStandalone: false,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, slug: '01-one', title: 'One' },
+          { id: 2, slug: '02-two', title: 'Two' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'c-Oduvan',
+            name: 'Oduvan',
+            voiceId: 'v_Oduvan',
+            ttsEngine: 'qwen',
+            overrideTtsVoices: { qwen: { name: 'qwen-Oduvan' } },
+            attributes: [],
+            lines: 10,
+            scenes: 1,
+          },
+          {
+            id: 'c-Marlow',
+            name: 'Marlow',
+            voiceId: 'v_Marlow',
+            ttsEngine: 'qwen',
+            overrideTtsVoices: { qwen: { name: 'qwen-Marlow' } },
+            attributes: [],
+            lines: 10,
+            scenes: 1,
+          },
+          {
+            id: 'c-bo',
+            name: 'Bo',
+            voiceId: 'v_bo',
+            ttsEngine: 'qwen',
+            attributes: [],
+            lines: 5,
+            scenes: 1,
+          },
+          {
+            id: 'c-marcus',
+            name: 'Marcus',
+            voiceId: 'v_marcus',
+            overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
+            attributes: [],
+            lines: 5,
+            scenes: 1,
+          },
+        ],
+      }),
+    );
+    /* Only chapter 1 rendered, and only Oduvan's bespoke voice appears in
+       its snapshot. Marlow is designed but never rendered. */
+    writeFileSync(
+      join(bookDir, 'audio', '01-one.segments.json'),
+      JSON.stringify({
+        bookId: 'qbook',
+        chapterId: 1,
+        chapterTitle: 'One',
+        synthesizedAt: new Date().toISOString(),
+        segments: [],
+        characterSnapshots: {
+          'c-Oduvan': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-Oduvan' },
+        },
+      }),
+    );
+  });
+
+  it('marks a designed Qwen voice generated when it appears in a rendered snapshot', async () => {
+    const res = await request(app).get('/api/voices?engine=qwen');
+    expect(res.status).toBe(200);
+    const Oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_Oduvan');
+    expect(Oduvan.ttsVoice.name).toBe('qwen-Oduvan');
+    expect(Oduvan.generated).toBe(true);
+  });
+
+  it('leaves a designed-but-unrendered Qwen voice without the generated flag', async () => {
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const Marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_Marlow');
+    expect(Marlow.ttsVoice.name).toBe('qwen-Marlow');
+    expect(Marlow.generated).toBeFalsy();
+  });
+
+  it('never stamps generated on a voice with no designed Qwen voiceId', async () => {
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const bo = res.body.voices.find((v: { id: string }) => v.id === 'v_bo');
+    expect(bo.ttsVoice.name).toBe(''); // no qwen override → undesigned
+    expect(bo.generated).toBeFalsy();
+  });
+
+  it('does not scan segments (no generated flag) when the engine is not Qwen', async () => {
+    /* Preset path must stay untouched — the segments scan only runs for the
+       Qwen engine query, so even the rendered Oduvan voice carries no flag. */
+    const res = await request(app).get('/api/voices?engine=coqui');
+    const Oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_Oduvan');
+    expect(Oduvan.generated).toBeUndefined();
+  });
+});
+
 describe('PUT /api/voices/:voiceId/override', () => {
   it('writes the override into overrideTtsVoices[engine] across every cast.json sharing the voiceId', async () => {
     const res = await request(app)
