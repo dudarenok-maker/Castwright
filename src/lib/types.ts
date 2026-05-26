@@ -430,6 +430,7 @@ export type ChangeLogType =
   | 'chapter_failed'
   | 'generation_started'
   | 'cast_confirm'
+  | 'name_change'
   | 'analysis_complete'
   | 'import'
   | 'library_add'

@@ -56,7 +56,7 @@ const CATEGORY_MAP = {
     'generation_started',
   ]),
   manuscript: new Set(['boundary_move', 'import', 'reparse']),
-  cast: new Set(['cast_confirm', 'analysis_complete']),
+  cast: new Set(['cast_confirm', 'name_change', 'analysis_complete']),
 } as const;
 
 const DEFAULT_LIMIT = 50;
