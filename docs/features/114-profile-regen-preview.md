@@ -133,7 +133,7 @@ manuscript: `C:\Users\dudar\Downloads\the Coalfall Commission.txt`.
 
 ## Ship notes
 
-Shipped 2026-05-26 on `feat/frontend-profile-regen-preview`. Commit SHA: _(filled
-on merge)_. Replaces plan 11 (batch character regenerate, removed) and the
+Shipped 2026-05-26 on `feat/frontend-profile-regen-preview` via PR #257 (merge
+commit `12f4152`). Replaces plan 11 (batch character regenerate, removed) and the
 per-character half of plan 17; repurposes the plan 20 revisions A/B as the
 preview gate (drift-triggered regen now applies immediately).
