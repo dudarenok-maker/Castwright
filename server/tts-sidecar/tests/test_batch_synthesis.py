@@ -1,0 +1,348 @@
+"""test_batch_synthesis.py — TRUE batching for Qwen (plan 112).
+
+QwenEngine.synthesize_batch runs N sentences in ONE generate_voice_clone
+batched forward, and the /synthesize-batch route frames the N PCM chunks as a
+single length-prefixed binary body:
+
+    {"sampleRate":24000,"lengths":[l0,l1,…]}\\n<pcm0><pcm1>…
+
+These tests pin the contract that makes batching safe to ship without
+re-measuring voice drift:
+
+  - exactly ONE generate_voice_clone call with matching-length LIST args (the
+    list-form invariant — independent sequences, never a concatenated string,
+    so there's no shared decode context and no mid-chunk voice drift);
+  - N items -> N PCM chunks in input order (no reordering);
+  - each chunk carries ITS OWN text + voice prompt (no cross-item bleed / demux
+    swap);
+  - a single sample rate shared by the batch, echoed in X-Sample-Rate;
+  - batch-of-1 == single /synthesize byte parity;
+  - an undesigned voice fails the WHOLE batch, naming the item index;
+  - the binary frame is well-formed and splits on the FIRST newline only, so
+    PCM bytes that happen to equal 0x0A are never mis-parsed.
+
+Uses fakes (stubs qwen_tts + torch) — no real model/weights, same approach as
+test_qwen3.py.
+"""
+from __future__ import annotations
+
+import json
+import sys
+import types
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pytest
+from fastapi.testclient import TestClient
+
+SIDECAR_ROOT = Path(__file__).resolve().parent.parent
+if str(SIDECAR_ROOT) not in sys.path:
+    sys.path.insert(0, str(SIDECAR_ROOT))
+
+import main  # noqa: E402
+
+
+# ── encode / recover through the real float -> int16 conversion ──────────
+#
+# main._float_audio_to_int16_le clips to [-1, 1], scales by 32767, truncates to
+# int16 LE. (m + 0.5)/32767 therefore round-trips to exactly `m` for any small
+# m, which lets us stamp a recoverable marker into a fake wav and read it back
+# off the emitted PCM.
+
+def _ref_marker(ref_text: str) -> int:
+    """Stable small int identifying a voice's clone prompt (its ref_text)."""
+    return sum(ord(c) for c in ref_text) & 0x7FFF
+
+
+def _wav_for(text: str, ref_text: str) -> np.ndarray:
+    """Float wav encoding, after the int16 conversion:
+      sample[0] = ord(text[0])          -> proves the chunk carries THIS text
+      sample[1] = _ref_marker(ref_text) -> proves the chunk used THIS prompt
+    and whose sample count == max(2, len(text)) so the frame's per-item
+    `lengths` independently distinguishes differently-sized items."""
+    n = max(2, len(text))
+    arr = np.zeros(n, dtype=np.float32)
+    arr[0] = ((ord(text[0]) & 0x7FFF) + 0.5) / 32767.0
+    arr[1] = (_ref_marker(ref_text) + 0.5) / 32767.0
+    return arr
+
+
+def _read_sample(pcm: bytes, i: int) -> int:
+    """Read the i-th int16 LE sample (values are positive < 0x7FFF here)."""
+    lo, hi = pcm[2 * i], pcm[2 * i + 1]
+    return (hi << 8) | lo
+
+
+class _BatchFakeQwen:
+    """Stand-in for qwen_tts.Qwen3TTSModel that honours LIST inputs: returns one
+    wav per text element, each stamped with its text + prompt so demux swaps and
+    cross-item bleed are detectable. Records every generate_voice_clone call so
+    the list-form invariant can be asserted."""
+
+    def __init__(self, model_id: str) -> None:
+        self.model_id = model_id
+        self.clone_calls: list[dict[str, Any]] = []
+
+    @classmethod
+    def from_pretrained(cls, model_id: str, **_kwargs: Any) -> "_BatchFakeQwen":
+        return cls(model_id)
+
+    def generate_voice_design(self, text: str, language: str, instruct: str):
+        return [np.zeros(24000, dtype=np.float32)], 24000
+
+    def create_voice_clone_prompt(self, ref_audio: Any, ref_text: str, **_kwargs: Any):
+        # Carry ref_text so the synth output can prove which voice's prompt was
+        # used for which item.
+        return {"_prompt": True, "ref_text": ref_text}
+
+    def generate_voice_clone(self, text: Any, language: Any, voice_clone_prompt: Any):
+        texts = text if isinstance(text, list) else [text]
+        langs = language if isinstance(language, list) else [language]
+        prompts = (
+            voice_clone_prompt
+            if isinstance(voice_clone_prompt, list)
+            else [voice_clone_prompt]
+        )
+        self.clone_calls.append({"text": texts, "language": langs, "prompt": prompts})
+        # The model contract: in batch mode the list args must match length.
+        assert len(texts) == len(prompts) == len(langs)
+        wavs = [_wav_for(t, p.get("ref_text", "")) for t, p in zip(texts, prompts)]
+        return wavs, 24000
+
+
+@pytest.fixture
+def qwen_batch_runtime(monkeypatch, tmp_path):
+    """Stub qwen_tts + torch and point the global Qwen engine's voices dir at a
+    tmp dir, so design/synth run without the real package or weights."""
+    fake_qwen = types.ModuleType("qwen_tts")
+    fake_qwen.Qwen3TTSModel = _BatchFakeQwen  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "qwen_tts", fake_qwen)
+
+    fake_torch = types.ModuleType("torch")
+    _store: dict[str, Any] = {}
+
+    def _save(obj: Any, path: str) -> None:
+        _store[str(path)] = obj
+        with open(path, "wb") as fh:
+            fh.write(b"\x00")  # presence marker for isfile()
+
+    def _load(path: str, **_kwargs: Any) -> Any:
+        return _store.get(str(path), {"_prompt": True, "ref_text": ""})
+
+    fake_torch.save = _save  # type: ignore[attr-defined]
+    fake_torch.load = _load  # type: ignore[attr-defined]
+    fake_torch.bfloat16 = "bfloat16"  # type: ignore[attr-defined]
+    fake_torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
+        is_available=lambda: False, empty_cache=lambda: None
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    engine = main.ENGINES["qwen"]
+    assert isinstance(engine, main.QwenEngine)
+    monkeypatch.setattr(engine, "_voices_dir", str(tmp_path / "qwen"))
+    engine._base = None
+    engine._design = None
+    engine._loading = False
+    yield {"dir": tmp_path / "qwen", "engine": engine}
+    engine._base = None
+    engine._design = None
+
+
+def _design(engine, voice_id: str) -> str:
+    """Design a voice with a per-voice calibration line, so each voice's clone
+    prompt carries a distinct ref_text marker. Returns that ref_text."""
+    ref_text = f"cal-{voice_id}"
+    engine.design_voice(voice_id, f"persona {voice_id}", "English", ref_text)
+    return ref_text
+
+
+# ── engine-level: list-form invariant + demux correctness ────────────────
+
+def test_synthesize_batch_is_one_call_with_matching_lists(qwen_batch_runtime) -> None:
+    engine = qwen_batch_runtime["engine"]
+    for v in ("a", "b", "c"):
+        _design(engine, v)
+    engine._base.clone_calls.clear()  # drop the per-voice audition calls
+
+    items = [
+        {"voice": "a", "text": "Apple."},
+        {"voice": "b", "text": "Banana!!"},
+        {"voice": "c", "text": "Cat"},
+    ]
+    res = engine.synthesize_batch("0.6b", items)
+
+    # Exactly ONE batched forward — not three separate calls.
+    assert len(engine._base.clone_calls) == 1
+    call = engine._base.clone_calls[0]
+    # All three list args present and equal-length (the list-form invariant —
+    # independent sequences, never a concatenated string).
+    assert call["text"] == ["Apple.", "Banana!!", "Cat"]
+    assert len(call["text"]) == len(call["language"]) == len(call["prompt"]) == 3
+    assert all(isinstance(p, dict) for p in call["prompt"])
+    assert res.sample_rate == 24000
+    assert len(res.pcms) == 3
+
+
+def test_synthesize_batch_preserves_order_text_and_voice(qwen_batch_runtime) -> None:
+    engine = qwen_batch_runtime["engine"]
+    refs = {v: _design(engine, v) for v in ("a", "b", "c")}
+
+    items = [
+        {"voice": "a", "text": "Apple."},
+        {"voice": "b", "text": "Banana!!"},
+        {"voice": "c", "text": "Cat"},
+    ]
+    res = engine.synthesize_batch("0.6b", items)
+
+    for pcm, item in zip(res.pcms, items):
+        # chunk carries THIS item's text (first char) ...
+        assert _read_sample(pcm, 0) == ord(item["text"][0])
+        # ... and THIS item's voice prompt (no demux swap).
+        assert _read_sample(pcm, 1) == _ref_marker(refs[item["voice"]])
+        # byte length tracks text length (independent ordering signal).
+        assert len(pcm) == 2 * max(2, len(item["text"]))
+
+
+def test_batch_of_one_matches_single_call(qwen_batch_runtime) -> None:
+    """Batch-of-1 must be byte-identical to the single /synthesize path — the
+    parity that lets QWEN_BATCH_SIZE=1 act as a safe kill-switch."""
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    single = engine.synthesize("0.6b", "a", "Hello there.")
+    batched = engine.synthesize_batch("0.6b", [{"voice": "a", "text": "Hello there."}])
+
+    assert batched.sample_rate == single.sample_rate
+    assert batched.pcms[0] == single.pcm
+
+
+def test_undesigned_voice_fails_whole_batch_with_index(qwen_batch_runtime) -> None:
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        engine.synthesize_batch(
+            "0.6b",
+            [{"voice": "a", "text": "ok"}, {"voice": "ghost", "text": "boom"}],
+        )
+    msg = str(excinfo.value)
+    assert "1" in msg          # the offending item index
+    assert "ghost" in msg      # the offending voice
+    assert "design" in msg.lower()
+
+
+def test_empty_batch_raises(qwen_batch_runtime) -> None:
+    engine = qwen_batch_runtime["engine"]
+    with pytest.raises(RuntimeError):
+        engine.synthesize_batch("0.6b", [])
+
+
+# ── HTTP surface: the length-prefixed binary frame ───────────────────────
+
+def _parse_frame(raw: bytes) -> tuple[dict[str, Any], list[bytes]]:
+    """Mirror the Node client's parse: split on the FIRST newline, JSON-decode
+    the header, slice the body by `lengths`."""
+    nl = raw.index(b"\n")
+    header = json.loads(raw[:nl].decode("utf-8"))
+    body = raw[nl + 1 :]
+    chunks, off = [], 0
+    for length in header["lengths"]:
+        chunks.append(body[off : off + length])
+        off += length
+    assert off == len(body)  # body fully consumed by the declared lengths
+    return header, chunks
+
+
+def test_route_frames_length_prefixed_binary(qwen_batch_runtime) -> None:
+    engine = qwen_batch_runtime["engine"]
+    refs = {v: _design(engine, v) for v in ("a", "b")}
+    client = TestClient(main.app)
+
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "0.6b",
+            "items": [
+                {"voice": "a", "text": "Apple."},
+                {"voice": "b", "text": "Banana!!"},
+            ],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["x-sample-rate"] == "24000"
+
+    header, chunks = _parse_frame(resp.content)
+    assert header["sampleRate"] == 24000
+    assert len(chunks) == 2
+    assert _read_sample(chunks[0], 0) == ord("A")
+    assert _read_sample(chunks[0], 1) == _ref_marker(refs["a"])
+    assert _read_sample(chunks[1], 0) == ord("B")
+    assert _read_sample(chunks[1], 1) == _ref_marker(refs["b"])
+
+
+def test_route_rejects_non_qwen_engine(qwen_batch_runtime) -> None:
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={"engine": "kokoro", "model": "v1", "items": [{"voice": "x", "text": "hi"}]},
+    )
+    assert resp.status_code == 400
+    assert "qwen-only" in resp.json()["detail"]
+
+
+def test_route_validates_items(qwen_batch_runtime) -> None:
+    client = TestClient(main.app)
+    base = {"engine": "qwen", "model": "0.6b"}
+    assert client.post("/synthesize-batch", json={**base, "items": []}).status_code == 400
+    assert (
+        client.post(
+            "/synthesize-batch", json={**base, "items": [{"text": "hi"}]}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post(
+            "/synthesize-batch", json={**base, "items": [{"voice": "a", "text": "  "}]}
+        ).status_code
+        == 400
+    )
+
+
+def test_route_500s_on_undesigned_voice(qwen_batch_runtime) -> None:
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={"engine": "qwen", "model": "0.6b", "items": [{"voice": "ghost", "text": "x"}]},
+    )
+    assert resp.status_code == 500
+
+
+def test_frame_splits_on_first_newline_only(qwen_batch_runtime, monkeypatch) -> None:
+    """PCM that happens to contain 0x0A (newline) bytes must not break framing:
+    the header is newline-free and terminated by the FIRST newline, so the body
+    — 0x0A bytes and all — is recovered intact by slicing on `lengths`."""
+    engine = qwen_batch_runtime["engine"]
+    pcm_a = b"\x0a\x00\x0a\x00"  # four bytes, two of them 0x0A
+    pcm_b = b"\x01\x02"
+
+    monkeypatch.setattr(
+        engine,
+        "synthesize_batch",
+        lambda model, items: main.SynthBatchResult(pcms=[pcm_a, pcm_b], sample_rate=24000),
+    )
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={
+            "engine": "qwen",
+            "model": "0.6b",
+            "items": [{"voice": "a", "text": "x"}, {"voice": "b", "text": "y"}],
+        },
+    )
+    assert resp.status_code == 200
+    header, chunks = _parse_frame(resp.content)
+    assert header["lengths"] == [4, 2]
+    assert chunks[0] == pcm_a
+    assert chunks[1] == pcm_b

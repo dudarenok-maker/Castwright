@@ -18,7 +18,13 @@ import {
   type CastCharacter,
 } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
-import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
+import type {
+  SynthesizeInput,
+  SynthesizeOutput,
+  SynthesizeBatchInput,
+  SynthesizeBatchOutput,
+  TtsProvider,
+} from './index.js';
 
 const GEMINI_MALE_VOICES = new Set(['Charon', 'Algieba', 'Puck', 'Orus', 'Iapetus', 'Sadachbia']);
 const GEMINI_FEMALE_VOICES = new Set([
@@ -1260,6 +1266,306 @@ describe('synthesiseChapter GPU-FIFO false-stall guard (queue-sole)', () => {
       /* No heartbeat fired despite a long block. */
       expect(starts).toHaveLength(1);
       releaseSynth({ pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' });
+      await vi.runAllTimersAsync();
+      await promise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/* ── plan 112 — Qwen true batching (scatter/gather) ──────────────────────
+   Qwen sentences across a chapter are packed into size-capped batches sent as
+   ONE `synthesizeBatch` call, then each returned PCM chunk is scattered back to
+   its own sentence index. The dispatch change must NOT alter the reassembly:
+   batched output is byte-identical to the per-call (kill-switch) baseline, and
+   the index-order concat keeps narrative order + timing. Non-Qwen sentences,
+   and Qwen providers without `synthesizeBatch`, stay one-per-call. */
+describe('synthesiseChapter Qwen true batching (plan 112)', () => {
+  /* Fake provider implementing BOTH paths with the SAME text-derived PCM, so a
+     batched run can be compared byte-for-byte against a per-call run. Records
+     single vs batch calls (with per-item voices + the forwarded signal) so the
+     packing + scatter contract is assertable. */
+  function makeBatchProvider(opts?: { sampleRate?: number }): TtsProvider & {
+    singleCalls: SynthesizeInput[];
+    batchCalls: { items: SynthesizeBatchInput['items']; signal?: AbortSignal }[];
+  } {
+    const sampleRate = opts?.sampleRate ?? 24000;
+    const singleCalls: SynthesizeInput[] = [];
+    const batchCalls: { items: SynthesizeBatchInput['items']; signal?: AbortSignal }[] = [];
+    const pcmFor = (text: string): Buffer => {
+      const pcm = Buffer.alloc(text.length * 2);
+      for (let i = 0; i < text.length; i++) pcm.writeInt16LE(text.charCodeAt(i) & 0x7fff, i * 2);
+      return pcm;
+    };
+    return {
+      singleCalls,
+      batchCalls,
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        singleCalls.push(input);
+        return { pcm: pcmFor(input.text), sampleRate, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch({
+        items,
+        signal,
+      }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        batchCalls.push({ items, signal });
+        return { pcms: items.map((it) => pcmFor(it.text)), sampleRate };
+      },
+    };
+  }
+
+  const QWEN_CAST: CastCharacter[] = [
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'narr-q' } },
+    },
+    {
+      id: 'biana',
+      name: 'Biana',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'biana-q' } },
+    },
+  ];
+
+  const MIXED_SENTENCES = [
+    sentence(1, 'narrator', 'First sentence here.'),
+    sentence(2, 'biana', 'Two.'),
+    sentence(3, 'narrator', 'A noticeably longer third sentence to vary the byte length.'),
+    sentence(4, 'biana', 'Fourth!'),
+    sentence(5, 'narrator', 'Fifth and final sentence.'),
+  ];
+
+  it('is byte-identical batched (size 8) vs per-call (size 1), and mixes voices in one batch', async () => {
+    const serialP = makeBatchProvider();
+    const serial = await synthesiseChapter({
+      sentences: MIXED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: serialP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 1,
+    });
+
+    const batchP = makeBatchProvider();
+    const batched = await synthesiseChapter({
+      sentences: MIXED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: batchP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+    });
+
+    /* The headline guarantee: batching changes throughput, not output. */
+    expect(batched.pcm.equals(serial.pcm)).toBe(true);
+    expect(batched.sampleRate).toBe(serial.sampleRate);
+    expect(batched.durationSec).toBe(serial.durationSec);
+    expect(batched.segments).toEqual(serial.segments);
+
+    /* size 1 is the kill-switch: every Qwen sentence is its own synth call. */
+    expect(serialP.batchCalls).toHaveLength(0);
+    expect(serialP.singleCalls).toHaveLength(5);
+
+    /* size 8: groups[0] is the up-front anchor (single); groups[1..4] batch in
+       one call, MIXING narrator + dialogue voices via the per-element list. */
+    expect(batchP.singleCalls).toHaveLength(1);
+    expect(batchP.batchCalls).toHaveLength(1);
+    expect(batchP.batchCalls[0].items.map((i) => i.voiceName)).toEqual([
+      'biana-q',
+      'narr-q',
+      'biana-q',
+      'narr-q',
+    ]);
+  });
+
+  it('scatters each batched chunk back to its own sentence index (narrative order preserved)', async () => {
+    const provider = makeBatchProvider();
+    const result = await synthesiseChapter({
+      sentences: MIXED_SENTENCES,
+      cast: QWEN_CAST,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+    });
+    expect(result.segments.map((s) => s.groupIndex)).toEqual([0, 1, 2, 3, 4]);
+    expect(result.segments.map((s) => s.sentenceIds)).toEqual([[1], [2], [3], [4], [5]]);
+    /* Segment timing is monotonic + contiguous despite the batch landing as one
+       call — the index-order concat owns timing, not completion order. */
+    for (let i = 1; i < result.segments.length; i++) {
+      expect(result.segments[i].startSec).toBe(result.segments[i - 1].endSec);
+    }
+  });
+
+  it('keeps non-Qwen sentences one-per-call while batching the Qwen ones (mixed-engine chapter)', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator' }, // default engine (qwen)
+      {
+        id: 'kobo',
+        name: 'Kobo',
+        ttsEngine: 'kokoro',
+        overrideTtsVoices: { kokoro: { name: 'af_heart' } },
+      },
+    ];
+    const qwenP = makeBatchProvider();
+    const kokoroP = makeBatchProvider();
+
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'Body one.'),
+        sentence(2, 'kobo', 'Kokoro line.'),
+        sentence(3, 'narrator', 'Body three.'),
+        sentence(4, 'narrator', 'Body four.'),
+      ],
+      cast,
+      provider: qwenP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      resolveForEngine: (e) =>
+        e === 'kokoro'
+          ? { provider: kokoroP, modelKey: 'kokoro-v1' }
+          : { provider: qwenP, modelKey: 'qwen3-tts-0.6b' },
+    });
+
+    /* Kobo (Kokoro) never batched — one single call, no batch on that engine. */
+    expect(kokoroP.batchCalls).toHaveLength(0);
+    expect(kokoroP.singleCalls).toHaveLength(1);
+    /* Qwen: groups[0] anchor (single) + the two later narrator groups batched. */
+    expect(qwenP.singleCalls).toHaveLength(1);
+    expect(qwenP.batchCalls).toHaveLength(1);
+    expect(qwenP.batchCalls[0].items).toHaveLength(2);
+    /* Narrative order intact across engines. */
+    expect(result.segments.map((s) => s.characterId)).toEqual([
+      'narrator',
+      'kobo',
+      'narrator',
+      'narrator',
+    ]);
+  });
+
+  it('splits a long Qwen run into batchSize-capped batches', async () => {
+    /* With a title beat, all body groups partition (no up-front anchor consumes
+       group 0). 5 Qwen body groups at batchSize 2 → [2, 2] full batches + a
+       trailing single (a size-1 slice is sent as a plain synth, not a batch). */
+    const cast: CastCharacter[] = [{ id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' }];
+    const provider = makeBatchProvider();
+    const result = await synthesiseChapter({
+      sentences: Array.from({ length: 5 }, (_, i) => sentence(i + 1, 'narrator', `Sentence ${i + 1}.`)),
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      chapterTitleNarration: 'Chapter 1.',
+      qwenBatchSize: 2,
+    });
+
+    expect(provider.batchCalls.map((b) => b.items.length)).toEqual([2, 2]);
+    /* All 5 body sentences accounted for: 2 batches (4) + 1 trailing single. */
+    const batched = provider.batchCalls.reduce((n, b) => n + b.items.length, 0);
+    expect(batched).toBe(4);
+    /* Title segment + 5 body segments, in order. */
+    expect(result.segments).toHaveLength(6);
+    expect(result.segments[0].kind).toBe('title');
+    expect(result.segments.slice(1).map((s) => s.groupIndex)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('falls back to per-call when a Qwen provider lacks synthesizeBatch (back-compat)', async () => {
+    /* A provider that only implements `synthesize` (Gemini, or a future
+       non-batch backend) must never be routed through the batch path — the
+       dispatcher feature-detects the optional method. */
+    const provider = makeProvider();
+    const cast: CastCharacter[] = [{ id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' }];
+    await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'A.'),
+        sentence(2, 'narrator', 'B.'),
+        sentence(3, 'narrator', 'C.'),
+      ],
+      cast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+    });
+    expect(provider.calls).toHaveLength(3);
+  });
+
+  it('forwards the abort signal into the batch call and propagates a mid-batch AbortError', async () => {
+    const controller = new AbortController();
+    const provider = makeBatchProvider();
+    const recordBatch = provider.synthesizeBatch!.bind(provider);
+    provider.synthesizeBatch = async (input: SynthesizeBatchInput) => {
+      await recordBatch(input); // record the call (incl. the forwarded signal)
+      throw Object.assign(new Error('batch aborted mid-flight'), { name: 'AbortError' });
+    };
+
+    await expect(
+      synthesiseChapter({
+        sentences: [
+          sentence(1, 'narrator', 'Anchor.'),
+          sentence(2, 'biana', 'Batched one.'),
+          sentence(3, 'biana', 'Batched two.'),
+        ],
+        cast: QWEN_CAST,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        qwenBatchSize: 8,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+
+    /* The batch call received the SAME signal the chapter was given, so a real
+       fetch would cancel mid-flight. */
+    expect(provider.batchCalls[0].signal).toBe(controller.signal);
+  });
+
+  it('re-fires onGroupStart on the heartbeat while a batch call is pending (stall watchdog)', async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseBatch: (out: SynthesizeBatchOutput) => void = () => {};
+      const provider: TtsProvider = {
+        async synthesize(): Promise<SynthesizeOutput> {
+          return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+        },
+        synthesizeBatch(): Promise<SynthesizeBatchOutput> {
+          return new Promise<SynthesizeBatchOutput>((resolve) => {
+            releaseBatch = resolve;
+          });
+        },
+      };
+      const cast: CastCharacter[] = [{ id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' }];
+      const startsByGroup: number[] = [];
+      const promise = synthesiseChapter({
+        sentences: [
+          sentence(1, 'narrator', 'Anchor.'),
+          sentence(2, 'narrator', 'Batched A.'),
+          sentence(3, 'narrator', 'Batched B.'),
+        ],
+        cast,
+        provider,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        qwenBatchSize: 8,
+        groupHeartbeatMs: 1_000,
+        onGroupStart: ({ group }) => startsByGroup.push(group.index),
+      });
+
+      /* Let the anchor (group 0) settle and the batch (lead = group 1) dispatch:
+         one immediate start tick for the batch's lead group. */
+      await vi.advanceTimersByTimeAsync(0);
+      expect(startsByGroup.filter((i) => i === 1).length).toBeGreaterThanOrEqual(1);
+
+      /* The batch stays pending across heartbeat intervals → repeated ticks keep
+         the 30 s client watchdog from tripping on a long batched call. */
+      await vi.advanceTimersByTimeAsync(3_500);
+      expect(startsByGroup.filter((i) => i === 1).length).toBeGreaterThan(1);
+
+      releaseBatch({ pcms: [Buffer.alloc(2), Buffer.alloc(2)], sampleRate: 24000 });
       await vi.runAllTimersAsync();
       await promise;
     } finally {
