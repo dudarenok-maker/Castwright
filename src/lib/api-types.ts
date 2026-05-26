@@ -2134,6 +2134,27 @@ export interface components {
              *     view nest cast members under their book series before the book.
              */
             bookSeries?: string | null;
+            /**
+             * @description The underlying character's alternate names (copied from its
+             *     cast.json entry). Carried on the Voice so the voices-view
+             *     cross-book duplicate detector can apply its "already-linked"
+             *     suppression filter WITHOUT hydrating every foreign book's cast
+             *     — on the global `#/voices` tab no casts are loaded, so without
+             *     this an already-aliased pair re-surfaces on every reload
+             *     (plan 101 bug fix 2026-05-26). First-seen character wins when a
+             *     voiceId spans multiple books.
+             */
+            aliases?: string[];
+            /**
+             * @description The underlying character's `notLinkedTo` pairs (copied from its
+             *     cast.json entry). Same rationale as `aliases`: lets the
+             *     duplicate detector suppress intentional-variant pairs on the
+             *     global tab without a cast hydrate.
+             */
+            notLinkedTo?: {
+                bookId: string;
+                characterId: string;
+            }[];
         };
         VoiceLibraryResponse: {
             voices: components["schemas"]["Voice"][];
