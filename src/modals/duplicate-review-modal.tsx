@@ -41,13 +41,28 @@ export interface DuplicateReviewPair {
   b: { voice: Voice; character: Character | null };
 }
 
+/* What the server just wrote, so the caller can reflect it into whichever
+   cast source its duplicate-detection reads (redux for the open book,
+   foreign-cast cache otherwise). The link/variant responses don't echo the
+   updated character, so we describe the write from local state instead:
+   - link: the loser's name was appended to the WINNER's aliases.
+   - variant: a symmetric notLinkedTo pair was written to BOTH books. */
+export type DuplicateResolution =
+  | { kind: 'link'; winnerBookId: string; winnerCharacterId: string; addedAlias: string }
+  | {
+      kind: 'variant';
+      a: { bookId: string; characterId: string };
+      b: { bookId: string; characterId: string };
+    };
+
 interface DuplicateReviewModalProps {
   open: boolean;
   pair: DuplicateReviewPair | null;
   onClose: () => void;
-  /* Optional callback after a successful action so the caller can
-     refresh local state (e.g. clear selection on the voices pill). */
-  onResolved?: () => void;
+  /* Optional callback after a successful action so the caller can refresh
+     local state (e.g. clear selection on the voices pill) AND reflect the
+     server's cross-book cast write into its detection sources. */
+  onResolved?: (resolution: DuplicateResolution) => void;
   /* True while the caller is still hydrating one (or both) books' casts.
      The action buttons stay disabled and show a neutral loading hint
      instead of the misleading "open both books" copy. */
@@ -130,7 +145,12 @@ export function DuplicateReviewModal({
           message: `Linked "${loserChar.name}" to "${winnerChar.name}" (${winnerBookTitle}).`,
         }),
       );
-      onResolved?.();
+      onResolved?.({
+        kind: 'link',
+        winnerBookId,
+        winnerCharacterId: winnerChar.id,
+        addedAlias: loserChar.name,
+      });
       onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -169,7 +189,11 @@ export function DuplicateReviewModal({
           message: `Marked "${sideA.character.name}" and "${sideB.character.name}" as separate characters.`,
         }),
       );
-      onResolved?.();
+      onResolved?.({
+        kind: 'variant',
+        a: { bookId: sideA.voice.bookId, characterId: sideA.character.id },
+        b: { bookId: sideB.voice.bookId, characterId: sideB.character.id },
+      });
       onClose();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
