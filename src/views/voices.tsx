@@ -29,9 +29,15 @@ import { gradientForTtsVoice } from '../lib/voice-palette';
 import { findCharacterForVoice, pickMergeSurvivor } from '../lib/voice-character-link';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { RebaselineModalContainer } from '../modals/rebaseline-modal';
-import { DuplicateReviewModal, type DuplicateReviewPair } from '../modals/duplicate-review-modal';
+import {
+  DuplicateReviewModal,
+  type DuplicateReviewPair,
+  type DuplicateResolution,
+} from '../modals/duplicate-review-modal';
 import {
   detectDuplicateCandidates,
+  appendAliasToCachedCharacter,
+  appendNotLinkedToCachedCharacter,
   type BookSeriesInfo,
   type DuplicateCandidate,
 } from '../lib/cross-book-duplicates';
@@ -483,6 +489,57 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       ),
     );
     for (const bookId of foreignBookIds) void hydrateForeignCast(bookId);
+  }
+
+  /* Reflect a resolved duplicate (link / variant) into whichever cast
+     source the duplicate-detection memo reads, so the candidate is
+     suppressed immediately instead of re-flagging on the next render.
+     Open-book side → redux (the modal already dispatched the matching
+     reducer for its own continuity needs; these dispatches are idempotent).
+     Foreign side → patch `globalCastCache` in place. Without this the
+     server's cross-book alias / notLinkedTo write only reaches the UI on a
+     later fresh hydrate — the "merge fails silently then reappears" bug. */
+  function reconcileDuplicateResolution(resolution: DuplicateResolution) {
+    if (resolution.kind === 'link') {
+      const { winnerBookId, winnerCharacterId, addedAlias } = resolution;
+      if (winnerBookId === currentBookId) {
+        dispatch(
+          castActions.applyAddAlias({ characterId: winnerCharacterId, aliasName: addedAlias }),
+        );
+      } else {
+        setGlobalCastCache((prev) =>
+          appendAliasToCachedCharacter(prev, winnerBookId, winnerCharacterId, addedAlias),
+        );
+      }
+      return;
+    }
+    /* variant: write the symmetric notLinkedTo pair to BOTH sides, routing
+       each to redux or the cache by whether it's the open book. */
+    const sides = [
+      { self: resolution.a, other: resolution.b },
+      { self: resolution.b, other: resolution.a },
+    ];
+    for (const { self, other } of sides) {
+      if (self.bookId === currentBookId) {
+        dispatch(
+          castActions.applyNotLinked({
+            characterId: self.characterId,
+            otherBookId: other.bookId,
+            otherCharacterId: other.characterId,
+          }),
+        );
+      } else {
+        setGlobalCastCache((prev) =>
+          appendNotLinkedToCachedCharacter(
+            prev,
+            self.bookId,
+            self.characterId,
+            other.bookId,
+            other.characterId,
+          ),
+        );
+      }
+    }
   }
 
   /* Plan 60 + plan 96 — on-demand foreign-cast hydrate. Pure-fetch
@@ -1001,7 +1058,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         loading={duplicateReviewState.loading}
         hydrationError={duplicateReviewState.hydrationError}
         onClose={() => setDuplicateReviewKey(null)}
-        onResolved={() => {
+        onResolved={(resolution) => {
+          reconcileDuplicateResolution(resolution);
           setSelectedVoiceIds([]);
           setDuplicateReviewKey(null);
         }}

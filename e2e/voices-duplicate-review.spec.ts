@@ -52,6 +52,46 @@ test.describe('cross-book duplicate review (plan 101)', () => {
     await linkBtn.click();
     await expect(page.getByText(/^Linked /)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/Same person across books\?/)).toBeHidden({ timeout: 5_000 });
+
+    /* Regression for "merge fails silently then reappears": the ⚠ pill must
+       vanish once the loser's name is reflected onto the winner's cached
+       aliases — and STAY gone (the bug was that detection re-flagged the
+       pair on the next render because the foreign-cast cache was stale). */
+    await expect(page.getByRole('button', { name: /duplicate candidate/i })).toBeHidden({
+      timeout: 5_000,
+    });
+    /* Let the toast auto-dismiss and the view re-settle, then re-check. */
+    await page.waitForTimeout(1_000);
+    await expect(page.getByRole('button', { name: /duplicate candidate/i })).toBeHidden();
+  });
+
+  test('"Different on purpose" marks the pair as variants and clears the pill', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.goto('/#/voices');
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+
+    await page
+      .getByRole('button', { name: /duplicate candidate/i })
+      .first()
+      .click();
+    await expect(page.getByText(/Same person across books\?/)).toBeVisible({ timeout: 5_000 });
+
+    const variantBtn = page.getByRole('button', { name: /Different on purpose/i });
+    await expect(variantBtn).toBeEnabled({ timeout: 5_000 });
+    await variantBtn.click();
+    await expect(page.getByText(/separate characters/)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText(/Same person across books\?/)).toBeHidden({ timeout: 5_000 });
+
+    /* The notLinkedTo pair is reflected into the cached casts → pill gone
+       and does not reappear. */
+    await expect(page.getByRole('button', { name: /duplicate candidate/i })).toBeHidden({
+      timeout: 5_000,
+    });
+    await page.waitForTimeout(1_000);
+    await expect(page.getByRole('button', { name: /duplicate candidate/i })).toBeHidden();
   });
 
   test('Cancel closes the modal cleanly', async ({ page }) => {
