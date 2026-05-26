@@ -418,10 +418,13 @@ model-load line: `Qwen model=… attn_implementation=flash_attention_2`.
 > banner — though that line is benign (transformers prints it whenever FA2 isn't
 > present) and SDPA is unaffected either way.
 
-> **Worth it?** Benchmark before adopting. FA2's win is largest on long-sequence
-> *prefill*; for single-token TTS decode the gain over SDPA is often modest. Use
-> `scripts/bench-tts.py` (below) to compare RTF, and only flip the default if FA2
-> measurably wins on your GPU.
+> **Worth it? Measured 2026-05-26 (RTX 4070): no — FA2 ≈ SDPA.** FA2's win is
+> largest on long-sequence *prefill*; TTS is single-token *decode*, so the gain is
+> small and inconsistent. End-to-end chapter generation at `QWEN_BATCH_SIZE=8` was
+> RTF ~1.19 (FA2) vs ~1.15 (SDPA) — SDPA marginally ahead and more stable. **SDPA
+> stays the default; FA2 is a legit opt-in but not worth flipping.** Full data:
+> [docs/tts-performance.md](../../docs/tts-performance.md). Re-measure on your GPU
+> with `scripts/bench-tts.py` (below) if you want to confirm.
 
 ## Benchmarking
 

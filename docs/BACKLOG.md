@@ -283,29 +283,7 @@ Source: net-new (2026-05-24). Spun off from [plan 108](features/108-qwen-coexist
 - _Key files:_ `server/src/tts/engine-vram-cost.ts`; `server/.env.example` (`GPU_VRAM_BUDGET` doc); plan 108 Ship notes.
 - _Depends on:_ plan 108 Wave 1 (the weighted semaphore) shipped.
 - _Benefit (technical):_ correct VRAM accounting is the difference between two engines coexisting smoothly and thrashing the GPU. Estimates unblock the feature; measured values make it reliable.
-
-#### `side-3` — Batch multiple sentences into one Qwen `generate_voice_clone` call
-
-**In flight (parallel agent, 2026-05-26)** — being implemented on a separate branch; don't double-up. Remove this entry when that work merges.
-
-Source: net-new (2026-05-26). Surfaced answering "why is Qwen 5–10× slower than Kokoro, and does more concurrency help?" during plan 112. The honest answer: most of the gap is the autoregressive model class, and firing N concurrent `/synthesize` calls at one GPU + one model does NOT scale — concurrent decode loops time-slice the same SMs and contend on the GIL during sampling, plus each holds its own KV cache (VRAM pressure → spill-to-RAM risk on the 8 GB card). The one lever that genuinely scales throughput on a single GPU is **true batching**: `generate_voice_clone` already accepts `text=[s1, s2, …]` and runs a single batched forward per decode step instead of N separate ones.
-
-- _What:_ Assemble same-voice (and same-engine) sentence groups in `synthesise-chapter.ts` into a single batched `/synthesize`-equivalent call, demux the returned `List[np.ndarray]` back to per-sentence PCM, and preserve the plan-107 ordering + sample-rate-anchor contract. Needs a batched sidecar route (or a `texts[]` body on `/synthesize`) and careful handling of ragged batch lengths.
-- _Acceptance:_ A chapter of N same-voice sentences synthesises in materially less wall time than N serial calls at equal quality; per-sentence PCM is byte-identical to the unbatched path (determinism); ordering + sample rate unchanged. Bench (`bench-tts.py`) shows aggregate throughput rising with batch size where concurrency did not.
-- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine.synthesize` → a batch entry); `server/src/tts/synthesise-chapter.ts` (group assembly + demux); `server/src/tts/sidecar.ts` (wire a batched request).
-- _Depends on:_ plan 112 shipped (the prompt cache + RTF logs land first; the bench harness measures the win).
-- _Benefit (technical):_ the only real throughput multiplier for an autoregressive TTS model on a single GPU — concurrency knobs (`generationWorkers`, `sentenceConcurrency`) plateau once the GPU saturates, batching does not.
-- _Measured baseline + ongoing runs:_ [docs/tts-performance.md](tts-performance.md). Same-voice batching already lands ~RTF 2.6 (vs ~8.3 serial) on the 4070, but a **real mixed-cast chapter still runs ~RTF 4.1** because the pipeline batches per-voice only — **cross-voice batching** (one forward across mixed dialogue voices) is the open lever this item should close. Append new runs there as settings change.
-
-#### `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity)
-
-Source: net-new (2026-05-26). Surfaced in plan 112. Our designed voices use ICL mode (`x_vector_only_mode=False`): the cached clone prompt drags the reference clip's audio-codec tokens through the context on every decode step, and the vocoder even decodes that reference span before slicing it off (`qwen_tts/.../qwen3_tts_model.py:614-629` — wasted work). `x_vector_only_mode=True` drops the ICL prefix and conditions on the speaker embedding alone → shorter context, faster steps, no wasted ref decode. The cost is voice fidelity/consistency, so this is a deliberate listen-test, not a blind flip.
-
-- _What:_ Add an env/per-voice toggle for `x_vector_only_mode` plumbed through `design_voice` (the prompt is built x-vector-only) and `synthesize`; design one voice both ways and A/B the audition + a full chapter for identity drift vs. speed.
-- _Acceptance:_ Documented RTF delta (ICL vs x-vector-only) on the target 4070 and a subjective fidelity verdict; ship the faster mode as default only if the quality cost is acceptable, else leave ICL default with the toggle available.
-- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine.design_voice` / `synthesize`); a per-voice manifest field.
-- _Depends on:_ plan 112 shipped (bench harness measures the delta).
-- _Benefit (technical):_ potentially the largest single per-call speedup short of batching — but it trades the very thing the bespoke-voice design exists to guarantee (consistent identity), so it must be measured, not assumed.
+- _Update (2026-05-26):_ the plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so budget>1 gives **no same-engine Qwen parallelism** — the cost map matters only for **cross-engine** packing (Kokoro 1 + Qwen 1 coexisting, vs Coqui 3 / analyzer 4). Empirically `GPU_VRAM_BUDGET=2` + `QWEN_BATCH_SIZE=8` ran an end-to-end Qwen chapter without VRAM trouble on the 4070; what's still unmeasured is true per-engine *peak* VRAM for the cross-engine packing case.
 
 #### `srv-3` — Per-call local→Gemini analyzer overflow
 
@@ -450,6 +428,13 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 ## Won't (this round) — explicitly parked
 
 Specific items someone might reasonably re-propose. Each carries a _Why parked_ (the v1 design or operational constraint) and a _Wake when_ (the trigger that makes us reopen). The broad "v1 scope freeze" and "no visual redesign" are covered by CLAUDE.md "Out of scope" and don't need restating here — this list is for tracked-specific decisions only.
+
+### `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity)
+
+Source: net-new (2026-05-26), plan 112. ICL mode drags the reference clip's codec tokens through context every decode step; `x_vector_only_mode=True` drops that for shorter/faster steps, at a fidelity/consistency cost.
+
+- _Why parked (2026-05-26):_ the perf problem that motivated it is solved — after the plan-113 batching + the concurrent-batch race fix, end-to-end Qwen chapters run at **~RTF 1.15** (a ~10 h novel ≈ overnight). That's acceptable, so trading the bespoke-voice identity-consistency this feature exists to guarantee for a marginal further speedup isn't worth it this round.
+- _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost) AND a listen-test shows x-vector-only holds identity acceptably.
 
 ### `ops-4` — Auto-install Ollama / auto-pull models
 
