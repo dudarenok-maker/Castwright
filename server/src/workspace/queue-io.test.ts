@@ -127,6 +127,13 @@ describe('queue-io.cancel', () => {
     f = startEntry(f, 'e1');
     expect(() => cancel(f, 'e1')).toThrowError(/in_progress/);
   });
+
+  it('force-drops an in_progress entry (escape hatch for a stuck row)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    f = startEntry(f, 'e1'); // e1 in_progress
+    f = cancel(f, 'e1', { force: true });
+    expect(f.entries.map((e) => [e.id, e.order])).toEqual([['e2', 0]]);
+  });
 });
 
 describe('queue-io.setPaused', () => {

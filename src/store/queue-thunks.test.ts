@@ -210,6 +210,13 @@ describe('cancelQueueEntry', () => {
     expect(toasts[0].kind).toBe('warn');
     expect(toasts[0].message).toContain('Pause the queue');
   });
+
+  it('force=true appends ?force=true so the server drops a stuck in_progress entry', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const store = makeStore();
+    await store.dispatch(cancelQueueEntry('stuck', { force: true }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/stuck?force=true', { method: 'DELETE' });
+  });
 });
 
 describe('haltActiveGeneration (plan 102 Should #5 — local-analyzer GPU halt)', () => {
