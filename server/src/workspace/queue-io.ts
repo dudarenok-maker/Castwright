@@ -121,15 +121,18 @@ export function reorder(file: QueueFile, desiredOrder: string[]): QueueFile {
   return renumber({ ...file, entries: nextEntries });
 }
 
-/** Cancel (remove) an entry. Refuses to drop an in_progress entry —
- *  callers must Pause first. Returns the new file. */
-export function cancel(file: QueueFile, entryId: string): QueueFile {
+/** Cancel (remove) an entry. Refuses to drop an in_progress entry unless
+ *  `force` is set — normally callers must Pause first, but a stuck entry
+ *  (e.g. orphaned in_progress after a reload, so the dispatcher neither
+ *  reconciles nor re-claims it) can only be cleared with force. Returns the
+ *  new file. */
+export function cancel(file: QueueFile, entryId: string, opts?: { force?: boolean }): QueueFile {
   const target = file.entries.find((e) => e.id === entryId);
   if (!target) {
     /* Already gone — idempotent success rather than 404. */
     return file;
   }
-  if (target.status === 'in_progress') {
+  if (target.status === 'in_progress' && !opts?.force) {
     throw new Error(`queue.cancel: entry "${entryId}" is in_progress; pause the queue first`);
   }
   return renumber({ ...file, entries: file.entries.filter((e) => e.id !== entryId) });
