@@ -31,7 +31,7 @@ Generation with the Qwen engine is 5–10× slower than Kokoro. Investigation ag
 - `QwenEngine.synthesize` resolves the voice prompt (`_load_voice_prompt`) **before** `_ensure_base_loaded()`, so an undesigned voice raises without paying the model load (`main.py`).
 - `_load_voice_prompt` releases `_cache_lock` across `torch.load` — a concurrent double-miss double-loads (benign, same content); it never holds the lock during I/O.
 - `design_voice` calls `self._prompt_cache.pop(voice_id, None)` (evict, **not** warm) after writing the `.pt`/`.json`, so the next synth reloads the fresh embedding.
-- `_load_qwen_model` is two-tier: the sdpa fast-path passes `attn_implementation` **without** `device_map` then `model.to(device)`; on **any** exception it retries the proven-good `device_map` + library-default (eager) config — a load must never harden into a failure over the attention knob. (Broadened from the original `(ValueError, TypeError)`-only catch — see Post-ship fix below.)
+- `_load_qwen_model` does a **single** load with **no `device_map`** and `low_cpu_mem_usage=False` (real tensors, no meta-device skeleton), then moves the **inner** module `model.model` to the device and resyncs `model.device` — `Qwen3TTSModel` is a wrapper with no `.to()`, and `device_map` 500s with a meta-tensor `NotImplementedError` on this stack. A `(ValueError, TypeError)` retry drops only `attn_implementation` (still no `device_map`, still `low_cpu_mem_usage=False`) so a build that rejects the kwarg can't harden into a load failure. (See Post-ship fix #2 below — supersedes the original two-tier `device_map`-fallback shape.)
 
 ## Test plan
 
@@ -43,9 +43,9 @@ Pytest sidecar (`server/tts-sidecar/tests/test_qwen3.py`):
 - `test_redesign_evicts_cached_prompt` — re-design drops the cache entry; next synth reloads.
 - `test_unload_clears_prompt_cache` — `unload()` empties `_prompt_cache`.
 - `test_load_passes_sdpa_attn_by_default` / `test_load_honours_qwen_attn_impl_env` — loader passes `attn_implementation="sdpa"` by default, honours `QWEN_ATTN_IMPL`.
-- `test_load_falls_back_when_attn_kwarg_rejected` — kwarg rejection (ValueError) → retry without it, load still succeeds.
-- `test_load_falls_back_when_sdpa_dispatch_fails` — sdpa **accepted then breaks** dispatch (meta-tensor `NotImplementedError`) → fast-path drops `device_map`, fallback restores it; load still succeeds (Post-ship fix regression test).
-- `test_load_passes_sdpa_attn_by_default` also asserts the fast-path passes **no** `device_map`.
+- `test_load_falls_back_when_attn_kwarg_rejected` — kwarg rejection (ValueError) → retry without it; load still succeeds, and **neither** attempt uses `device_map` (the retry keeps `low_cpu_mem_usage=False`).
+- `test_load_moves_inner_model_and_resyncs_device` — Post-ship fix #2 regression: the loader passes **no** `device_map`, forces `low_cpu_mem_usage=False`, moves the inner `model.model` to the device, and resyncs `model.device` (never calls the nonexistent `wrapper.to()`). Fails against the old `device_map`-fallback loader.
+- `test_load_passes_sdpa_attn_by_default` also asserts the load passes **no** `device_map` and `low_cpu_mem_usage=False`.
 - Existing `test_synthesize_reuses_cached_voice` (asserts `weights_only=False` on the disk load) stays green — design evicts, so the first synth still loads from disk.
 
 Whole sidecar suite green via `npm run test:sidecar` (≈141 cases, exit 0).
@@ -83,3 +83,14 @@ Open (non-blocking) manual acceptance: the baseline-vs-SDPA RTF delta and the co
 The shipped `_load_qwen_model` passed `attn_implementation="sdpa"` **alongside** `device_map="cuda:0"`. The kwarg is accepted (sdpa is valid), but `device_map` routes the load through accelerate's `dispatch_model`, which leaves attention params on the `meta` device and then raises `NotImplementedError: Cannot copy out of meta tensor` when it tries to move them. The original fallback only caught `(ValueError, TypeError)` (a kwarg *rejection*), so this dispatch-time failure escaped: `POST /load` 500'd, the Qwen pill spun ~5s and reverted to "Qwen idle" — the model never loaded. (Ground truth: `logs/tts.err.log` traceback at `main.py` `_load_qwen_model` → `accelerate/big_modeling.py:dispatch_model` → `model.to(device)`.)
 
 Fix: the loader is now two-tier — the sdpa fast-path loads **without** `device_map` then calls `model.to(self._device)` (real tensors, no meta dispatch, sdpa still honoured), and the `except` is broadened to `Exception` so any fast-path failure retries the pre-sdpa `device_map` + default-attention config that always worked. Regression test `test_load_falls_back_when_sdpa_dispatch_fails` reproduces the meta-tensor `NotImplementedError` and asserts the fallback. Shipped via the `fix/sidecar-qwen-sdpa-meta-tensor-load` branch.
+
+### Post-ship fix #2 (2026-05-26) — meta-tensor crash, real root cause
+
+Post-ship fix #1 above was wrong about the cause, and **both** of its tiers actually failed (confirmed against `logs/tts.err.log`, 30 fast-path + 40 fallback failures in one session):
+
+1. **Fast-path** — `Qwen3TTSModel` is a thin **wrapper**, not an `nn.Module`: it holds the real module at `.model` and caches the device at `.device`, and has **no `.to()`**. So `model.to(self._device)` raised `AttributeError: 'Qwen3TTSModel' object has no attribute 'to'` (not a meta error at all) and was swallowed by the broad `except`.
+2. **Fallback** — `device_map=self._device` routes through accelerate's `dispatch_model`, which on this composite model (talker / code_predictor / encoder sub-modules built from default configs, so not every param is in the checkpoint) leaves params on the `meta` device and then `.to()`s them → the meta-tensor `NotImplementedError`. This tier had no `try`/`except`, so it **propagated** — the error the user saw. (Premise of fix #1 — "`attn_implementation` leaves attn params on meta" — is false: the fallback passes no `attn_implementation` and still hit meta.) Fix #1's regression test passed only because the test fake had a `.to()` the real wrapper lacks.
+
+Stack: torch 2.6.0+cu124, transformers 4.57.3, accelerate 1.12.0.
+
+Fix: `_load_qwen_model` now does a **single** `from_pretrained` with **no `device_map`** and `low_cpu_mem_usage=False` (full real-tensor materialisation, no meta-device skeleton), then moves the **inner** `model.model` to the device and resyncs `model.device` (load-bearing — the wrapper sends generate-time inputs to `self.device`, so a stale CPU value would mismatch GPU weights mid-synth). The only retry is the narrow `(ValueError, TypeError)` kwarg-rejection case (drops `attn_implementation`, keeps the real-tensor shape; **never** uses `device_map`). The test fake (`_FakeQwenModel`) was corrected to match the real API — no wrapper `.to()`, an inner `.model` with the `.to()` — and `test_load_falls_back_when_sdpa_dispatch_fails` was replaced by `test_load_moves_inner_model_and_resyncs_device`. Shipped via the `fix/sidecar-qwen-meta-tensor-load` branch.
