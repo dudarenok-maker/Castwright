@@ -76,6 +76,20 @@ Part A is read-side only:
   `reduce` sum across streams, which double-counts (`5/7` + `5/7` → `10/14`).
   The queue-overlay selector (`selectActiveGenerationView`) already picks a
   single representative stream, so only the pill needed this.
+- **No orphaned `in_progress` entries survive a restart.** The frontend
+  dispatcher is the sole entry-lifecycle owner (POST `/start` on claim, POST
+  `/complete` on chapter-stream close) and reconciles only its in-memory
+  `inFlight` map; a server restart / crash / browser reload empties that map
+  while `.queue.json` still lists the entry as `in_progress`, so it would be
+  neither re-run (FILL claims only `queued`) nor reconciled — wedging the
+  chapter forever with an idle GPU. The server therefore sweeps
+  `in_progress` → `queued` on boot (`server/src/workspace/queue-boot.ts`,
+  `resetInProgressToQueued` in `queue-io.ts`), AWAITED before `listen()` so no
+  freshly-connecting client can have a just-claimed entry clobbered. This is
+  server-side + once because two browser tabs each run the dispatcher with
+  independent in-memory maps and a frontend reclaim would double-claim. The
+  narrower browser-refresh-while-server-stays-up orphan is left to Part B
+  (the server owning the entry lifecycle).
 
 ## Test plan
 
@@ -96,6 +110,13 @@ Part A is read-side only:
 - Playwright e2e (`e2e/queue-modal.spec.ts`) — drives a real mock generation
   (queue stubbed empty) and asserts the modal renders
   `queue-modal-active-generation` + "Generating…" instead of "No chapters queued".
+- Vitest unit (`server/src/workspace/queue-io.test.ts`) — `resetInProgressToQueued`:
+  flips every `in_progress` → `queued`, leaves `queued`/`failed` untouched,
+  preserves contiguous order, no-ops on an empty queue.
+- Vitest integration (`server/src/workspace/queue-boot.test.ts`) —
+  `resetOrphanedQueueEntries` against a real `.queue.json`: 3 orphaned
+  `in_progress` entries reset to `queued` (reports `{reset:3}`, order stays
+  contiguous), no-op when nothing is `in_progress`, `paused` flag preserved.
 
 ### Manual acceptance walkthrough
 
