@@ -101,13 +101,17 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
     engine = main.ENGINES["qwen"]
     assert isinstance(engine, main.QwenEngine)
     monkeypatch.setattr(engine, "_voices_dir", str(tmp_path / "qwen"))
-    # Reset any resident model state from a prior test.
+    # Reset any resident model state from a prior test. The engine is a global
+    # singleton, so the in-memory prompt cache must be cleared too — a stale
+    # entry from another test would mask a cache miss here.
     engine._base = None
     engine._design = None
     engine._loading = False
+    engine._prompt_cache.clear()
     yield {"dir": tmp_path / "qwen", "engine": engine}
     engine._base = None
     engine._design = None
+    engine._prompt_cache.clear()
 
 
 # ── registration + health/speakers wiring ───────────────────────────────
@@ -183,6 +187,128 @@ def test_synthesize_fails_fast_on_undesigned_voice(fake_qwen_runtime) -> None:
     with pytest.raises(RuntimeError) as excinfo:
         engine.synthesize("qwen3-tts-0.6b", "never-designed", "Hello.")
     assert "design" in str(excinfo.value).lower()
+
+
+# ── in-memory prompt cache + attn implementation (plan 112) ──────────────
+
+def _count_torch_loads(monkeypatch) -> dict[str, int]:
+    """Wrap the fixture's fake torch.load so a test can assert how many disk
+    reads happened. Returns a mutable counter dict."""
+    import torch as _t  # the stubbed module from fake_qwen_runtime
+
+    calls = {"load": 0}
+    orig = _t.load
+
+    def counting(path, **kwargs):
+        calls["load"] += 1
+        return orig(path, **kwargs)
+
+    monkeypatch.setattr(_t, "load", counting)
+    return calls
+
+
+def test_synthesize_caches_prompt_across_calls(fake_qwen_runtime, monkeypatch) -> None:
+    """The designed voice's .pt is read from disk on the first synth only;
+    subsequent synths of the same voice hit the in-memory cache. Without the
+    cache this was a torch.load per sentence (hundreds per book)."""
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("Maerin", "a bright, confident teenage girl", "English", None)
+    calls = _count_torch_loads(monkeypatch)
+
+    engine.synthesize("qwen3-tts-0.6b", "Maerin", "First sentence.")
+    engine.synthesize("qwen3-tts-0.6b", "Maerin", "Second sentence.")
+    engine.synthesize("qwen3-tts-0.6b", "Maerin", "Third sentence.")
+
+    assert calls["load"] == 1  # one miss, two hits
+    assert "Maerin" in engine._prompt_cache
+
+
+def test_redesign_evicts_cached_prompt(fake_qwen_runtime, monkeypatch) -> None:
+    """Re-designing a voiceId must drop its cached embedding so the next
+    synth reloads the freshly-written .pt — never serves the stale one."""
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("Hart", "a witty teenage boy", "English", None)
+    engine.synthesize("qwen3-tts-0.6b", "Hart", "One.")
+    assert "Hart" in engine._prompt_cache  # warmed by the miss
+
+    engine.design_voice("Hart", "now a gruff old sailor", "English", None)
+    assert "Hart" not in engine._prompt_cache  # evicted on re-design
+
+    calls = _count_torch_loads(monkeypatch)
+    engine.synthesize("qwen3-tts-0.6b", "Hart", "Two.")
+    assert calls["load"] == 1  # reloaded from disk, not served stale
+
+
+def test_unload_clears_prompt_cache(fake_qwen_runtime) -> None:
+    """unload() drops cached prompt tensors too — they hold GPU memory that
+    would otherwise survive empty_cache()."""
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("Wren", "a curious teenage girl", "English", None)
+    engine.synthesize("qwen3-tts-0.6b", "Wren", "Hi.")
+    assert engine._prompt_cache
+    engine.unload()
+    assert engine._prompt_cache == {}
+
+
+def _patch_from_pretrained(fake_qwen_runtime, monkeypatch) -> dict[str, Any]:
+    """Replace the fake Qwen3TTSModel.from_pretrained with a recorder so a
+    test can inspect the kwargs the loader passed. Returns the capture dict."""
+    import qwen_tts  # the stubbed module from fake_qwen_runtime
+
+    captured: dict[str, Any] = {}
+
+    def recorder(model_id, **kwargs):
+        captured["model_id"] = model_id
+        captured["kwargs"] = kwargs
+        return _FakeQwenModel(model_id)
+
+    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", recorder)
+    return captured
+
+
+def test_load_passes_sdpa_attn_by_default(fake_qwen_runtime, monkeypatch) -> None:
+    """The loader requests attn_implementation=sdpa (PyTorch-native, the right
+    default for the autoregressive decode loop) when QWEN_ATTN_IMPL is unset."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.delenv("QWEN_ATTN_IMPL", raising=False)
+    captured = _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    engine._load_qwen_model(engine.BASE_MODEL)
+    assert captured["kwargs"].get("attn_implementation") == "sdpa"
+
+
+def test_load_honours_qwen_attn_impl_env(fake_qwen_runtime, monkeypatch) -> None:
+    """QWEN_ATTN_IMPL overrides the default — e.g. 'eager' to bench the slow
+    baseline, or 'flash_attention_2' when a flash-attn wheel is installed."""
+    engine = fake_qwen_runtime["engine"]
+    monkeypatch.setenv("QWEN_ATTN_IMPL", "eager")
+    captured = _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
+
+    engine._load_qwen_model(engine.BASE_MODEL)
+    assert captured["kwargs"].get("attn_implementation") == "eager"
+
+
+def test_load_falls_back_when_attn_kwarg_rejected(fake_qwen_runtime, monkeypatch) -> None:
+    """A transformers/qwen_tts build that rejects attn_implementation must not
+    harden into a load failure — retry without the kwarg and carry on."""
+    engine = fake_qwen_runtime["engine"]
+    import qwen_tts
+
+    calls: list[dict[str, Any]] = []
+
+    def picky(model_id, **kwargs):
+        calls.append(kwargs)
+        if "attn_implementation" in kwargs:
+            raise ValueError("unexpected keyword argument 'attn_implementation'")
+        return _FakeQwenModel(model_id)
+
+    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", picky)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+    assert model is not None
+    assert len(calls) == 2  # first attempt + retry
+    assert "attn_implementation" in calls[0]
+    assert "attn_implementation" not in calls[1]
 
 
 # ── QWEN_VOICES_DIR relocation + legacy migration (sidecar-qwen-voice-dir) ──
