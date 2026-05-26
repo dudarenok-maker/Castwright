@@ -651,7 +651,8 @@ export function GenerationView({
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-900">Worker has gone quiet</p>
             <p className="text-sm text-amber-800/90 mt-0.5">
-              No progress for {stalledSec}s. The TTS engine may be retrying — give it a moment, or
+              No progress for {stalledSec}s. The TTS engine may be synthesising a batch of lines or
+              retrying — batched synthesis can run a while between updates — so give it a moment, or
               pause and resume to reset the stream.
             </p>
           </div>

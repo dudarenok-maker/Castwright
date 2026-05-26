@@ -7,9 +7,22 @@
    Wire protocol — POST {url}/synthesize:
      request:  application/json  { engine, model, voice, text }
      response: audio/L16;codec=pcm;rate=<sr>  raw 16-bit signed LE mono PCM,
-               sample rate in the X-Sample-Rate header (or rate= in mimetype). */
+               sample rate in the X-Sample-Rate header (or rate= in mimetype).
 
-import type { SynthesizeInput, SynthesizeOutput, TtsProvider, TtsEngine } from './index.js';
+   TRUE batching (plan 112) — POST {url}/synthesize-batch (Qwen-only):
+     request:  application/json  { engine, model, items: [{ voice, text }] }
+     response: application/octet-stream  length-prefixed binary frame —
+               `{"sampleRate":N,"lengths":[…]}\n<pcm0><pcm1>…` — one 16-bit LE
+               mono PCM blob per item, sliced by `lengths`. */
+
+import type {
+  SynthesizeInput,
+  SynthesizeOutput,
+  SynthesizeBatchInput,
+  SynthesizeBatchOutput,
+  TtsProvider,
+  TtsEngine,
+} from './index.js';
 import { sidecarModelId } from './index.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
@@ -51,59 +64,8 @@ export class SidecarTtsProvider implements TtsProvider {
     const releaseGpu = await gpuSemaphore.acquire(costForEngine(this.engine));
 
     try {
-      let response: Response;
-      try {
-        response = await fetch(`${this.url}/synthesize`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body,
-          signal,
-        });
-      } catch (e) {
-        /* AbortError is the caller cancelling on purpose — let it propagate so
-           the outer handler can shut down cleanly instead of mistaking it for
-           a sidecar-down failure. */
-        if ((e as { name?: string })?.name === 'AbortError') throw e;
-        const msg = (e as Error).message || String(e);
-        /* Node's fetch surfaces ECONNREFUSED as `fetch failed` with a cause.
-           Give the user the one piece of info that actually unblocks them.
-           Annotated `transient: true` so the auto-retry wrapper in
-           `synthesise-chapter.ts` can absorb a brief network blip (e.g. the
-           sidecar restarting after a CUDA poison) without wedging the queue.
-           Genuine "sidecar isn't running" → all retries also fail with the
-           same message, so the user-facing error text is unchanged. */
-        throw Object.assign(
-          new Error(
-            `Local TTS sidecar not reachable at ${this.url}. Start it with \`npm run tts:sidecar\`. (${msg})`,
-          ),
-          { transient: true as const, cause: 'network' as const },
-        );
-      }
-
-      if (!response.ok) {
-        const bodyText = await safeReadText(response);
-        const trimmed = bodyText.length > 240 ? `${bodyText.slice(0, 240)}…` : bodyText;
-        /* Classify for the retry wrapper.
-           - `poisoned: true` body → the sidecar's CUDA context is corrupted
-             for the lifetime of that process; only a restart fixes it. Retry
-             would just replay the fast-fail 503 — surface immediately so the
-             UI can render the "needs restart" banner.
-           - Other 5xx → transient. The most common shape (503 during model
-             load on first call, 502 from a reverse proxy mid-restart, 504
-             from a hung connection) recovers in ≤ 2.5 s of backoff.
-           - 408 Request Timeout → transient.
-           - 4xx other than 408 → client-side; retry won't help. */
-        const poisoned = isPoisonedBody(bodyText);
-        const transient =
-          !poisoned &&
-          (response.status === 408 || (response.status >= 500 && response.status < 600));
-        throw Object.assign(
-          new Error(
-            `Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`,
-          ),
-          { transient, status: response.status, poisoned },
-        );
-      }
+      const response = await this.post('/synthesize', body, signal);
+      if (!response.ok) await throwForResponse(response);
 
       const buf = Buffer.from(await response.arrayBuffer());
       if (buf.length === 0) {
@@ -135,6 +97,137 @@ export class SidecarTtsProvider implements TtsProvider {
       releaseGpu();
     }
   }
+
+  /* TRUE batching (plan 112) — synth N sentences in ONE sidecar call. Only
+     reached for engines whose sidecar exposes /synthesize-batch (Qwen today);
+     the dispatcher feature-detects this method and falls back to per-call
+     `synthesize` otherwise. Acquires ONE GPU token for the whole batch (it's a
+     single model forward, same VRAM lifetime as a single call) and forwards
+     the abort signal so an in-flight batch cancels mid-call. */
+  async synthesizeBatch({
+    items,
+    modelKey,
+    signal,
+  }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+    const body = JSON.stringify({
+      engine: this.engine,
+      model: sidecarModelId(modelKey),
+      items: items.map((it) => ({ voice: it.voiceName, text: it.text })),
+    });
+
+    const releaseGpu = await gpuSemaphore.acquire(costForEngine(this.engine));
+    try {
+      const response = await this.post('/synthesize-batch', body, signal);
+      if (!response.ok) await throwForResponse(response);
+
+      const buf = Buffer.from(await response.arrayBuffer());
+      if (buf.length === 0) {
+        throw new Error('Local TTS sidecar returned an empty batch body.');
+      }
+
+      const { sampleRate, pcms } = parseBatchFrame(buf);
+      /* Hard invariant — one PCM chunk per requested item. A mismatch means the
+         sidecar demux drifted; fail loudly rather than scatter misaligned audio
+         back onto the wrong sentences. */
+      if (pcms.length !== items.length) {
+        throw new Error(
+          `Local TTS sidecar batch returned ${pcms.length} chunks for ${items.length} items.`,
+        );
+      }
+      return { pcms, sampleRate };
+    } finally {
+      releaseGpu();
+    }
+  }
+
+  /* Shared POST: fetch + the network-error annotation both routes need.
+     AbortError propagates unchanged (caller-driven stop); a connection failure
+     becomes a transient "sidecar not reachable" the retry wrapper can absorb. */
+  private async post(path: string, body: string, signal?: AbortSignal): Promise<Response> {
+    try {
+      return await fetch(`${this.url}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+        signal,
+      });
+    } catch (e) {
+      /* AbortError is the caller cancelling on purpose — let it propagate so
+         the outer handler can shut down cleanly instead of mistaking it for a
+         sidecar-down failure. */
+      if ((e as { name?: string })?.name === 'AbortError') throw e;
+      const msg = (e as Error).message || String(e);
+      /* Node's fetch surfaces ECONNREFUSED as `fetch failed` with a cause.
+         Give the user the one piece of info that actually unblocks them.
+         Annotated `transient: true` so the auto-retry wrapper in
+         `synthesise-chapter.ts` can absorb a brief network blip (e.g. the
+         sidecar restarting after a CUDA poison) without wedging the queue. */
+      throw Object.assign(
+        new Error(
+          `Local TTS sidecar not reachable at ${this.url}. Start it with \`npm run tts:sidecar\`. (${msg})`,
+        ),
+        { transient: true as const, cause: 'network' as const },
+      );
+    }
+  }
+}
+
+/* Classify a non-ok sidecar response for the retry wrapper and throw.
+   - `poisoned: true` body → the sidecar's CUDA context is corrupted for the
+     lifetime of that process; only a restart fixes it. Retry would just replay
+     the fast-fail 503 — surface immediately so the UI can render the "needs
+     restart" banner.
+   - Other 5xx → transient (503 during model load, 502 from a proxy mid-restart,
+     504 from a hung connection) — recovers in ≤ 2.5 s of backoff.
+   - 408 Request Timeout → transient.
+   - 4xx other than 408 → client-side; retry won't help. */
+async function throwForResponse(response: Response): Promise<never> {
+  const bodyText = await safeReadText(response);
+  const trimmed = bodyText.length > 240 ? `${bodyText.slice(0, 240)}…` : bodyText;
+  const poisoned = isPoisonedBody(bodyText);
+  const transient =
+    !poisoned && (response.status === 408 || (response.status >= 500 && response.status < 600));
+  throw Object.assign(
+    new Error(`Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`),
+    { transient, status: response.status, poisoned },
+  );
+}
+
+/* Parse the /synthesize-batch length-prefixed binary frame:
+     {"sampleRate":N,"lengths":[…]}\n<pcm0><pcm1>…
+   Split on the FIRST newline only — the JSON header is newline-free, so PCM
+   payload bytes that happen to equal 0x0A (a valid 16-bit sample byte) are
+   never mis-parsed. */
+function parseBatchFrame(buf: Buffer): { sampleRate: number; pcms: Buffer[] } {
+  const nl = buf.indexOf(0x0a);
+  if (nl < 0) {
+    throw new Error('Local TTS sidecar batch frame is missing its header terminator.');
+  }
+  let header: { sampleRate?: unknown; lengths?: unknown };
+  try {
+    header = JSON.parse(buf.subarray(0, nl).toString('utf8'));
+  } catch {
+    throw new Error('Local TTS sidecar batch frame had an unparseable header.');
+  }
+  const lengths = header.lengths;
+  const sampleRate = Number(header.sampleRate);
+  if (!Array.isArray(lengths) || !Number.isFinite(sampleRate)) {
+    throw new Error('Local TTS sidecar batch frame header is missing sampleRate/lengths.');
+  }
+
+  const pcms: Buffer[] = [];
+  let off = nl + 1;
+  for (const len of lengths as number[]) {
+    pcms.push(buf.subarray(off, off + len));
+    off += len;
+  }
+  if (off !== buf.length) {
+    throw new Error(
+      `Local TTS sidecar batch frame body length mismatch (declared ${off - (nl + 1)} bytes, ` +
+        `got ${buf.length - (nl + 1)}).`,
+    );
+  }
+  return { sampleRate, pcms };
 }
 
 function parseRateFromMime(mime: string): number {
