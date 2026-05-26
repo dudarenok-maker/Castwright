@@ -207,14 +207,19 @@ queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
 
 queueRouter.delete('/:entryId', async (req: Request, res: Response) => {
   const { entryId } = req.params;
+  /* `?force=true` drops even an in_progress entry — the escape hatch for a
+     stuck/orphaned in_progress row that the dispatcher won't reconcile or
+     re-claim (so Pause-then-cancel can't reach it). Any still-live stream for
+     the chapter just idles into a no-op reconcile against the now-gone id. */
+  const force = req.query.force === 'true';
   try {
     const before = await readQueueFile(queueJsonPath());
-    const after = cancel(before, entryId);
+    const after = cancel(before, entryId, { force });
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
   } catch (e) {
-    /* in_progress rejection from cancel() — 409 because the user must
-       Pause first. */
+    /* in_progress rejection from cancel() (force not set) — 409 because the
+       user must Pause first for a normally-cancellable in-flight entry. */
     res.status(409).json({ error: (e as Error).message });
   }
 });

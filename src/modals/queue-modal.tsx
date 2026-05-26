@@ -196,6 +196,12 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                         /* Toast surfaced inside the thunk's 409 handler. */
                       });
                     }}
+                    onForceRemove={(entryId) => {
+                      /* Force-drop a stuck in_progress entry (orphaned after a
+                         reload — the dispatcher won't reconcile or re-claim it).
+                         No 409 path: force bypasses the in_progress guard. */
+                      dispatch(cancelQueueEntry(entryId, { force: true })).catch(() => {});
+                    }}
                   />
                 ))}
               </div>
@@ -258,6 +264,7 @@ interface BookGroupProps {
   dualModelEnabled: boolean;
   onReorder: (entries: QueueEntry[]) => void;
   onCancel: (entryId: string) => void;
+  onForceRemove: (entryId: string) => void;
 }
 
 function BookGroup({
@@ -267,6 +274,7 @@ function BookGroup({
   dualModelEnabled,
   onReorder,
   onCancel,
+  onForceRemove,
 }: BookGroupProps) {
   const moveUp = (idx: number): void => {
     if (idx <= 0) return;
@@ -456,6 +464,22 @@ function BookGroup({
                     <IconTrash className="w-4 h-4" />
                   </button>
                 </>
+              )}
+              {isInFlight && (
+                /* In-flight rows normally carry no controls (you Pause then
+                   cancel). But a stuck in_progress entry — orphaned after a
+                   reload, so the dispatcher neither reconciles nor re-claims it
+                   — can ONLY be cleared with a force-remove. Always offer it so
+                   the queue can't wedge. */
+                <button
+                  onClick={() => onForceRemove(entry.id)}
+                  aria-label="Remove stuck entry"
+                  title="Remove stuck entry"
+                  className="p-2 rounded-full hover:bg-red-50 text-ink/60 hover:text-red-700 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                  data-testid={`queue-entry-${entry.id}-force-remove`}
+                >
+                  <IconTrash className="w-4 h-4" />
+                </button>
               )}
             </li>
           );
