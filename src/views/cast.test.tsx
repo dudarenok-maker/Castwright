@@ -338,6 +338,25 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     expect(args.modelKey).toBe(store.getState().ui.ttsModelKey);
     expect(args.voice.overrideTtsVoices?.qwen).toBeUndefined();
   });
+
+  it('surfaces the designed voiceId in the VOICE cell so the row is self-explanatory', () => {
+    /* The id is what tells the user *which* designed voice is assigned —
+       previously the row only read "Qwen · Designed voice", forcing a
+       drawer open to find it. */
+    renderChars([sweeneyQwen]);
+    const row = rowFor('Mr. Sweeney');
+    expect(row.textContent).toContain('Qwen');
+    expect(row.textContent).toContain('qwen-sweeney');
+    expect(row.textContent).toContain('Designed voice');
+  });
+
+  it('omits the voiceId segment for a Qwen row with no designed voice', () => {
+    renderChars([{ ...sweeney, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
+    const row = rowFor('Mr. Sweeney');
+    expect(row.textContent).toContain('No voice designed yet');
+    /* No designed id ⇒ no "qwen-…" segment (guards the `name &&` gate). */
+    expect(row.textContent).not.toContain('qwen-');
+  });
 });
 
 /* Plan 81 wave 3 — responsive layout coverage.
