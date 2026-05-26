@@ -48,6 +48,7 @@ import {
 } from '../tts/base-voices.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
+import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
 
 export const voicesRouter = Router();
 
@@ -73,6 +74,14 @@ interface DerivedVoice {
   source: 'current' | 'library';
   reusable?: boolean;
   pinned?: boolean;
+  /** True when this voice has rendered chapter audio at least once.
+      Populated only for bespoke Qwen voices (the engine query is 'qwen')
+      by scanning rendered segments for the resolved voiceId; preset voices
+      omit it. Drives the Voices view's "Designed" vs "Generated" split and
+      the cast Status column. Cross-book: true if rendered in ANY book that
+      carries this voiceId — for the dominant single-book character that
+      equals "rendered in this book". */
+  generated?: boolean;
   ttsVoice: TtsVoiceAssignment;
   /** Per-engine user-set voice overrides. The `ttsVoice` field above
       resolves to the slot matching the query's `engine`; this map is
@@ -179,6 +188,15 @@ async function aggregateVoices(
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
 
+        /* For the Qwen engine, collect which designed voiceIds actually
+           rendered audio in this book (scanning the per-chapter segments).
+           Empty for preset engines — the scan only runs for 'qwen', so the
+           extra disk reads never touch the Coqui/Kokoro/Gemini path. */
+        const renderedQwenNames =
+          engine === 'qwen'
+            ? await collectRenderedQwenVoiceNames(bookDir, state.chapters)
+            : new Set<string>();
+
         for (const rawC of cast.characters) {
           /* Apply read-time migration so the rest of this loop never
              sees the legacy singular field. */
@@ -192,6 +210,15 @@ async function aggregateVoices(
           if (existing) {
             existing.books.add(state.bookId);
             existing.usedIn = existing.books.size;
+            /* Promote to generated if this book rendered the voice, even
+               when the identity fields froze on an earlier (unrendered) book. */
+            if (
+              !existing.generated &&
+              existing.ttsVoice.name &&
+              renderedQwenNames.has(existing.ttsVoice.name)
+            ) {
+              existing.generated = true;
+            }
             /* Promote to 'current' if any book containing this voice is the
                currently-open one. */
             if (currentBookId && state.bookId === currentBookId) {
@@ -250,6 +277,7 @@ async function aggregateVoices(
             source: isCurrent ? 'current' : 'library',
             reusable: isNarratorId(id, c.name) || undefined,
             pinned: pinned.has(id) || undefined,
+            generated: renderedQwenNames.has(ttsVoice.name) || undefined,
             ttsVoice,
             overrideTtsVoices: overrideMap,
             overrideTtsVoice: legacyShape,

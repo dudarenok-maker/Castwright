@@ -2090,6 +2090,8 @@ export interface components {
             reusable?: boolean;
             /** @description Workspace-level pin flag from audiobook-workspace/voices.json. */
             pinned?: boolean;
+            /** @description True when this voiceId has rendered chapter audio at least once. Populated only for bespoke Qwen voices (the server scans rendered segments for the resolved voiceId when the engine query is 'qwen'); preset voices omit it. Drives the Voices view's "Designed" vs "Generated" split and the cast Status column. Cross-book: true if rendered in any book carrying this voiceId. Absent ⇒ not generated / not applicable. */
+            generated?: boolean;
             ttsVoice: components["schemas"]["TtsVoiceAssignment"];
             /**
              * @description User-set TTS voice overrides per engine. Each entry pins a
