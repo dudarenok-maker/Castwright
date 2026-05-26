@@ -16,7 +16,7 @@ owner: null
 A book mid-generation showed three contradictory "queue" readouts: the Generate
 header said `IN PROGRESS 2 / QUEUED 42` (live), the "Generation Queue" modal said
 `Empty — No chapters queued`, and the top bar said `Queued (3 ahead)`. Three
-*independent* subsystems share the word "queue".
+_independent_ subsystems share the word "queue".
 
 - **User:** the queue modal + "Queue · N" chip no longer claim "Empty"/0 while a
   book is visibly generating; the top-bar GPU-contention badge no longer reads
@@ -67,6 +67,15 @@ Part A is read-side only:
   different book) shows only the done/total summary (`view.chapters === null`).
 - Excluded chapters are filtered out of the rows + count, mirroring
   `snapshotFromChapters` (runner) and `hasWork` (middleware).
+- The top-bar generation pill's `done/total` is computed per BOOK, not per
+  stream. Each `activeStreams` snapshot is book-wide (`snapshotFromChapters`
+  counts every active chapter of its book), so two concurrent same-book
+  chapter streams each report the book's full `done/total`. `layout.tsx` MUST
+  aggregate via `aggregateStreamsByBook` (`chapters-slice.ts`) — dedupe per
+  `bookId` (per-book max), then sum across DISTINCT books — never a naive
+  `reduce` sum across streams, which double-counts (`5/7` + `5/7` → `10/14`).
+  The queue-overlay selector (`selectActiveGenerationView`) already picks a
+  single representative stream, so only the pill needed this.
 
 ## Test plan
 
@@ -80,6 +89,10 @@ Part A is read-side only:
 - Vitest RTL (`src/modals/queue-modal.test.tsx`) — modal shows the
   active-generation section + "Generating…" header (not "Empty") when the queue
   is empty but a stream is live; real entries suppress the overlay.
+- Vitest unit (`src/store/chapters-slice.test.ts`) — `aggregateStreamsByBook`:
+  two same-book streams reporting `5/7` each collapse to `5/7` (not `10/14`);
+  per-book max absorbs tick skew; distinct books sum (`book-A 1/5` + `book-B
+2/7` → `3/12`); empty → zeros.
 - Playwright e2e (`e2e/queue-modal.spec.ts`) — drives a real mock generation
   (queue stubbed empty) and asserts the modal renders
   `queue-modal-active-generation` + "Generating…" instead of "No chapters queued".
