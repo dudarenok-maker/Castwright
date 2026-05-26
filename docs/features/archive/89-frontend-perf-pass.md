@@ -87,3 +87,12 @@ C5's lazy boundary meant the Generate view's chunk only began downloading on fir
 - **`src/components/layout.tsx`:** a one-shot `useEffect` (ref-guarded) fires `importGenerationView()` once the user is inside a book (`stageKind === 'ready'`) OR any generation stream is live (`activeStreams.length > 0`). `import()` is idempotent, so warming is free if the chunk already loaded.
 - **C5 invariant preserved:** the view stays lazy (no eager-import bloat on the library landing route); only the _download timing_ moves earlier. Behaviourally invisible — the view renders identically.
 - **Tests:** `src/routes/prefetch.test.ts` locks that the shared thunk resolves the `GenerationView` module (a path typo would silently no-op the prefetch). No new e2e — the Generate view's load/render seam is already covered (`e2e/responsive/coverage.spec.ts`, `e2e/generation-parallel.spec.ts`, `e2e/queue-modal.spec.ts`), and the optimization is load-timing, which CI (warm chunks) can't observe deterministically.
+
+### Follow-up — UploadView chunk prefetch (2026-05-27)
+
+Same C5 cold-chunk symptom reported on the `#/new` route: the first navigation to the upload view sat on the route Suspense fallback ("Loading…") for several seconds while the dev server transformed/downloaded the upload chunk graph. That graph is heavy — `upload.tsx` plus its `manuscript-diff.tsx` dependency are the two largest modules in it — so the cold first hit is the worst case. (Production serves pre-built chunks, so the delay is dominated by the dev-server on-demand transform; the fix still warms the prod cold-cache case.) Fix mirrors the GenerationView prefetch above.
+
+- **`src/routes/prefetch.ts`:** add `importUploadView = () => import('../views/upload')` alongside `importGenerationView`, again the single shared specifier behind both the `React.lazy` def and the prefetch.
+- **`src/components/layout.tsx`:** a second ref-guarded one-shot `useEffect` fires `importUploadView()` while the user sits on the library landing page (`stageKind === 'books'`) — the page hosting the "New project" entry, i.e. the most likely next click. Gated on the books stage so it doesn't compete with first paint of any in-book view.
+- **C5 invariant preserved:** the view stays lazy; only the download timing moves earlier. Behaviourally invisible.
+- **Tests:** extended `src/routes/prefetch.test.ts` with a sibling case asserting the thunk resolves the `UploadView` module. No new e2e — same load-timing rationale as above; the upload view's render seam is already covered by `e2e/responsive/coverage.spec.ts`.
