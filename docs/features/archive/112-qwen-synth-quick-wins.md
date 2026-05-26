@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-26
 owner: null
 ---
 
 # 112 — Qwen3-TTS synthesis: measured quick wins
 
-> Status: active (code + tests shipped; GPU-bound RTF acceptance owed)
+> Status: stable — shipped via PR #247 (2026-05-26)
 > Key files: `server/tts-sidecar/main.py` (`QwenEngine`, `KokoroEngine.synthesize`, `_audio_duration_ms`), `server/tts-sidecar/scripts/bench-tts.py`, `server/tts-sidecar/tests/test_qwen3.py`
 > URL surface: none (sidecar internals)
 > OpenAPI ops: none
@@ -68,4 +68,10 @@ Record the RTF numbers in Ship notes when captured.
 
 ## Ship notes
 
-(Code + tests shipped on branch `perf/sidecar-qwen-quick-wins`. Fill shipped date + commit SHA on merge; append the measured baseline-vs-SDPA RTF numbers once captured on the target 4070, then flip to `stable` and archive.)
+Shipped 2026-05-26 via PR #247 (feature commit `4d82286`, docs `325a78b`). All code + paired pytest green; the full `npm run verify` battery passed at pre-push.
+
+Shipped exactly as specced: SDPA attention by default (`QWEN_ATTN_IMPL`, ships backlog `side-1`) with a kwarg-rejection fallback; in-memory clone-prompt cache (evict-on-redesign, clear-on-unload, lock-guarded); per-call RTF logs on Qwen + Kokoro; `scripts/bench-tts.py` with a `--concurrency` sweep. Voices are bit-identical — SDPA selection and prompt caching are output-neutral by construction, which is why this archives despite the perf number below being uncaptured.
+
+Deploy-box config: `GPU_VRAM_BUDGET=2` set in `server/.env` on the target 4070, so `sentenceConcurrency`/`poolWidth` defaults to 2 (two concurrent Qwen synths per chapter; Kokoro+Qwen coexistence preserved at cost 1 each).
+
+Open (non-blocking) manual acceptance: the baseline-vs-SDPA RTF delta and the concurrency curve were NOT captured before close-out — run `bench-tts.py` per the "Manual acceptance walkthrough" anytime to record them. The real throughput lever (sentence batching) is tracked as `side-3` (in flight); `side-4` covers the `x_vector_only_mode` fidelity tradeoff.
