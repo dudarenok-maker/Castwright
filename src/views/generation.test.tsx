@@ -579,8 +579,11 @@ describe('GenerationView — heartbeat / stalled state', () => {
     );
 
     /* The stalled banner copy is the load-bearing assertion — it's what
-       answers "is it failed miserably or doing something?". */
+       answers "is it failed miserably or doing something?". The body now sets
+       the expectation that batched synthesis (plan 112) can run a while between
+       updates, so the user doesn't read a long batch as a hang. */
     expect(screen.getByText(/Worker has gone quiet/)).toBeInTheDocument();
+    expect(screen.getByText(/synthesising a batch of lines/)).toBeInTheDocument();
     /* And the in-progress chapter row swaps its peach "Generating" pill for
        a warning "Stalled" pill. */
     expect(screen.getAllByText('Stalled').length).toBeGreaterThan(0);
