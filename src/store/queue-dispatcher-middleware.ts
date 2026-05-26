@@ -23,8 +23,8 @@
  *      in_progress so the modal renders it "In flight" (multiple can be in
  *      flight at once) and the persisted .queue.json survives a mid-run reload.
  *      Skip chapters already streaming. For the VIEWED book, flip its rows
- *      (regenerateChapterIds / regenerateCharacter) so the Generate view
- *      reflects the run; cross-book opens are direct.
+ *      (regenerateChapterIds — every entry is a whole-chapter regen) so the
+ *      Generate view reflects the run; cross-book opens are direct.
  *
  * Correctness:
  *   - No double-claim: middleware + queueMicrotask run single-threaded; we add
@@ -156,21 +156,15 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
           /* Status label only — the stream still runs. */
         });
 
-        /* VIEWED book — flip rows so the Generate view shows the run. These
-           dispatches no longer trigger an open (the override is gone); they
-           only update slice rows + (for character scope) enqueue the
-           pending-revision stub via the generation-stream-middleware. */
+        /* VIEWED book — flip rows so the Generate view shows the run. This
+           dispatch no longer triggers an open (the override is gone); it only
+           updates slice rows. Every entry is a whole-chapter regen now (the
+           per-character scope path was removed — see plan
+           docs/features/114-profile-regen-preview.md), so a tolerated-but-
+           unused `scope:'character'` on an old .queue.json row maps to the
+           same chapter regen. */
         if (chapters.currentBookId === e.bookId) {
-          if (e.scope === 'character' && e.characterId) {
-            dispatch(
-              chaptersActions.regenerateCharacter({
-                characterId: e.characterId,
-                chapterIds: [e.chapterId],
-              }),
-            );
-          } else {
-            dispatch(chaptersActions.regenerateChapterIds({ chapterIds: [e.chapterId] }));
-          }
+          dispatch(chaptersActions.regenerateChapterIds({ chapterIds: [e.chapterId] }));
         }
 
         /* Open ONE stream for this chapter, keyed `${bookId}::${chapterId}`

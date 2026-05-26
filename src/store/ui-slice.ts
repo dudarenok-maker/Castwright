@@ -19,6 +19,19 @@ export interface RegenCharacterCtx {
   defaultChapterId?: number;
 }
 
+/** Opt-in A/B preview for a profile-change regeneration. Set when the user
+    picks "Preview first" in the CharacterRegenerateModal: the first affected
+    chapter renders alone, the A/B player auto-opens on completion, and on
+    Approve the `remainingChapterIds` fan out as straight chapter regens.
+    Cleared on Approve / Reject. Transient — never persisted. */
+export interface PreviewRegenCtx {
+  characterId: string;
+  previewChapterId: number;
+  remainingChapterIds: number[];
+  reason: string;
+  note: string;
+}
+
 export interface UiState {
   stage: Stage;
   currentTrack: number | null;
@@ -31,7 +44,7 @@ export interface UiState {
       "this and all subsequent" — i.e. the whole book — is pre-selected. */
   regenInitialScope: RegenScope | null;
   regenCharacterCtx: RegenCharacterCtx | null;
-  batchRegenIds: string[] | null;
+  previewRegen: PreviewRegenCtx | null;
   /** Session-only banner shown on the Cast view after a voice-edit Save
       reveals that one or more done chapters now hold audio that no longer
       matches the character's current voice/identity. Click "Regenerate
@@ -102,7 +115,7 @@ const initialState: UiState = {
   regenChapter: null,
   regenInitialScope: null,
   regenCharacterCtx: null,
-  batchRegenIds: null,
+  previewRegen: null,
   staleAudio: null,
   showRevisionPlayer: false,
   revisionHistoryFor: null,
@@ -234,8 +247,8 @@ export const uiSlice = createSlice({
     setRegenCharacterCtx: (s, a: PayloadAction<RegenCharacterCtx | null>) => {
       s.regenCharacterCtx = a.payload;
     },
-    setBatchRegenIds: (s, a: PayloadAction<string[] | null>) => {
-      s.batchRegenIds = a.payload;
+    setPreviewRegen: (s, a: PayloadAction<PreviewRegenCtx | null>) => {
+      s.previewRegen = a.payload;
     },
     setStaleAudio: (s, a: PayloadAction<UiState['staleAudio']>) => {
       s.staleAudio = a.payload;
