@@ -307,15 +307,7 @@ Source: net-new (2026-05-26). Surfaced in plan 112. Our designed voices use ICL 
 - _Depends on:_ plan 112 shipped (bench harness measures the delta).
 - _Benefit (technical):_ potentially the largest single per-call speedup short of batching — but it trades the very thing the bespoke-voice design exists to guarantee (consistent identity), so it must be measured, not assumed.
 
-#### `side-5` — Make FlashAttention-2 the Qwen default if it benchmarks faster than SDPA
-
-Source: net-new (2026-05-26). Spun off from plan 115, which shipped the opt-in `--flash-attn` wheel install but deliberately kept SDPA the default (plan-112 decision) pending a measurement. FA2's win is largest on long-sequence prefill; for single-token autoregressive TTS decode the gain over SDPA is often modest, so the flip must be earned by numbers, not assumed.
-
-- _What:_ Once the FA2-vs-SDPA RTF benchmark is recorded in plan 115, if `flash_attention_2` measurably beats `sdpa` on the target GPU (serial AND the plan-113 batch path), flip the `QWEN_ATTN_IMPL` default in `server/tts-sidecar/main.py` from `sdpa` to `flash_attention_2`. Keep the existing graceful fallback so a box without the wheel still loads on the library default.
-- _Acceptance:_ Plan 115 carries the recorded RTF numbers; if they favour FA2, `main.py` defaults to `flash_attention_2`, a box WITHOUT the wheel still loads (fallback verified), and `install-qwen3.mjs --flash-attn` is referenced from the default-flip so deployers know to install the wheel. If the numbers DON'T favour FA2, close this item as "measured, SDPA stays" and record why.
-- _Key files:_ `server/tts-sidecar/main.py` (`_load_qwen_model` attn default); `server/tts-sidecar/README.md` (`QWEN_ATTN_IMPL` doc); plan 115 Ship notes + plan 108 install docs.
-- _Depends on:_ plan 115 shipped (the opt-in wheel + bench procedure) and the FA2-vs-SDPA benchmark recorded.
-- _Benefit (technical):_ if FA2 wins, every Qwen synth gets faster for free on a wheel deployers already have an opt-in path to; if it doesn't, the measurement retires a recurring "should we use flash-attn?" question with a number.
+#### `srv-3` — Per-call local→Gemini analyzer overflow
 
 Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
 

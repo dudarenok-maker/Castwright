@@ -87,8 +87,6 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [113 — Qwen3-TTS true batching](113-qwen-true-batching.md) — `active`. Packs every Qwen sentence in a chapter into `QWEN_BATCH_SIZE`-capped batches synthesised in ONE `generate_voice_clone(text=[…])` call (one batched forward per decode step instead of N), via a new Qwen-only sidecar `POST /synthesize-batch` (length-prefixed binary frame) and an OPTIONAL `TtsProvider.synthesizeBatch` seam. Whole-chapter scatter/gather: batches mix narrator + dialogue voices (per-element prompts) and scatter each chunk back to its own sentence index, so the index-order reassembly + plan-107 determinism are reused verbatim. Independent-sequence batching (not plan-70d string folding) means no shared decode context → no voice drift; the stall heartbeat now covers long batches; `=1` is the per-call kill-switch. Coqui/Kokoro/Gemini untouched. Code + automated tests landed; real-GPU speedup/drift acceptance pending.
 
-- [115 — Opt-in FlashAttention-2 install (Windows)](115-flash-attn-opt-in.md) — `active`. `install-qwen3.mjs --flash-attn` (or `QWEN_INSTALL_FLASH_ATTN=1`) pip-installs a pinned community prebuilt wheel (`flash_attn 2.7.4` / `cu124` / `torch2.6.0` / `cp311` / `win_amd64`) matching the sidecar venv exactly — the backend `qwen_tts` is built for but PyPI ships no Windows wheel of. Platform/version-gated + non-fatal via the pure `resolveFlashAttnInstall()`; SDPA stays the default (plan 112) and activation is manual via `QWEN_ATTN_IMPL=flash_attention_2`. Installer + node:test gate + docs landed; FA2-vs-SDPA benchmark and the default-flip decision pending.
-
 ### G. Generation
 
 - [16 — Generation stream](16-generation-stream.md) — Chapter audio SSE stream. Cross-links to plan 28 for the on-disk format.
@@ -169,6 +167,7 @@ Plans that shipped and are no longer load-bearing for in-flight work live in
 [`archive/`](archive/README.md). The git log is the changelog; this section is a
 breadcrumb so cross-references still resolve.
 
+- [115 — Opt-in FlashAttention-2 install (Windows)](archive/115-flash-attn-opt-in.md) — `install-qwen3.mjs --flash-attn` / `QWEN_INSTALL_FLASH_ATTN=1` pip-installs a pinned community prebuilt wheel (`flash_attn 2.7.4` / `cu124` / `torch2.6.0` / `cp311` / `win_amd64`); platform/version-gated + non-fatal via the pure `resolveFlashAttnInstall()`. SDPA stays the default — benchmarked 2026-05-26: FA2 ≈ SDPA (modest, noisy edge; TTS is decode-bound), so `side-5` resolved "SDPA stays". Full data in [tts-performance.md](../tts-performance.md). Shipped 2026-05-26 (PR #260).
 - [22a — Voice library compare](archive/22a-voice-library-compare.md) — Two-cast-member compare entry point on the Voices tab; reuses `CompareCastModal`; same-/different-base-voice badge on the selection pill. Shipped 2026-05-17.
 - [39 — Purge WAV (MP3 is the only format)](archive/39-purge-wav.md) — Dropped the legacy-WAV fallback once documented in plan 28; locator + routes + types now MP3-only. Shipped 2026-05-17.
 - [40 — Cover framing + local-disk upload](archive/40-cover-framing-and-upload.md) — Three-tab CoverPicker (Search / Upload / Frame), PNG → JPEG transcode server-side, render-time pan + zoom via `object-position` + `transform`, account-level default for the initial tab. Shipped 2026-05-17.
