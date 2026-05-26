@@ -16,6 +16,7 @@ import {
   haltActiveGeneration,
   loadQueue,
   reorderQueue,
+  retryQueueEntry,
   setQueuePaused,
   startQueueEntry,
 } from './queue-thunks';
@@ -184,12 +185,36 @@ describe('startQueueEntry', () => {
 });
 
 describe('completeQueueEntry', () => {
-  it('POSTs /complete and dispatches the snapshot (entry dropped)', async () => {
+  it('POSTs /complete with outcome:done by default and dispatches the snapshot', async () => {
     fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
     const store = makeStore();
     await store.dispatch(completeQueueEntry('e1'));
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/complete', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: 'done' }),
+    });
     expect(store.getState().queue.entries).toEqual([]);
+  });
+
+  it('sends outcome:failed + errorReason so the entry lingers as failed', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const store = makeStore();
+    await store.dispatch(completeQueueEntry('e1', { outcome: 'failed', errorReason: 'boom' }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: 'failed', errorReason: 'boom' }),
+    });
+  });
+});
+
+describe('retryQueueEntry', () => {
+  it('POSTs /retry and dispatches the snapshot', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const store = makeStore();
+    await store.dispatch(retryQueueEntry('e1'));
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/retry', { method: 'POST' });
   });
 });
 

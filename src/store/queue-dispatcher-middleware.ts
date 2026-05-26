@@ -97,14 +97,29 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
       for (const [entryId, { bookId, chapterId }] of [...inFlight.entries()]) {
         if (!runner.hasOpenStreamForChapter(bookId, chapterId)) {
           inFlight.delete(entryId);
-          completed.add(entryId);
-          /* Completion removal, NOT a user cancel: the entry is in_progress
-             by now (we POSTed /start on claim), so DELETE would 409. /complete
-             drops it status-agnostically. Idempotent for an already-gone id;
-             the next /api/queue snapshot reconciles either way. */
-          void dispatch(completeQueueEntry(entryId)).catch(() => {
-            /* Best-effort — the next snapshot reconciles. */
-          });
+          /* Did this chapter FAIL? If so, complete it as `failed` so the entry
+             LINGERS in the queue (rendered "Failed · <reason>" with a Retry
+             control) instead of being done-pruned. Crucially we do NOT add a
+             failed entry to `completed` — a later Retry flips it back to
+             `queued`, and STEP 2 must be free to re-claim it then. */
+          const failure = runner.takeChapterFailure(bookId, chapterId);
+          if (failure != null) {
+            void dispatch(
+              completeQueueEntry(entryId, { outcome: 'failed', errorReason: failure }),
+            ).catch(() => {
+              /* Best-effort — the next snapshot reconciles. */
+            });
+          } else {
+            /* Completion removal, NOT a user cancel: the entry is in_progress
+               by now (we POSTed /start on claim), so DELETE would 409.
+               /complete done-prunes it. Remember it as pending so STEP 2 can't
+               re-claim it before the snapshot catches up. Idempotent for an
+               already-gone id; the next /api/queue snapshot reconciles. */
+            completed.add(entryId);
+            void dispatch(completeQueueEntry(entryId)).catch(() => {
+              /* Best-effort — the next snapshot reconciles. */
+            });
+          }
         }
       }
 

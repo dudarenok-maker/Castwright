@@ -167,6 +167,34 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(after).toHaveLength(1);
   });
 
+  it('records a chapter_failed reason; takeChapterFailure returns it ONCE then null, surviving the idle close', () => {
+    const { runner } = makeRunner();
+    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    const tick = onTickFor('b1', 2);
+    tick({ type: 'chapter_failed', chapterId: 2, errorReason: 'sidecar 500' } as GenerationTick);
+    /* The stream then idles + closes, but the failure record outlives it — the
+       dispatcher reads it on the post-close reconcile. */
+    tick({ type: 'idle' } as GenerationTick);
+    expect(runner.hasOpenStreamForChapter('b1', 2)).toBe(false);
+    expect(runner.takeChapterFailure('b1', 2)).toBe('sidecar 500');
+    /* One-shot — a re-run that succeeds can't read a stale failure. */
+    expect(runner.takeChapterFailure('b1', 2)).toBeNull();
+  });
+
+  it('records a CROSS-BOOK chapter_failed even when the slice is on another book', () => {
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));
+    runner.open('b1', 'kokoro-v1', { chapterIds: [3], force: true }, { chapterId: 3 });
+    onTickFor('b1', 3)({ type: 'chapter_failed', chapterId: 3, errorReason: 'boom' } as GenerationTick);
+    expect(runner.takeChapterFailure('b1', 3)).toBe('boom');
+  });
+
+  it('takeChapterFailure is null for a chapter that did not fail', () => {
+    const { runner } = makeRunner();
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    expect(runner.takeChapterFailure('b1', 1)).toBeNull();
+  });
+
   it('refreshes the viewed book’s snapshot from rows on a progress tick', () => {
     const { store, runner } = makeRunner();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
