@@ -394,6 +394,13 @@ Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
 
 Specific items someone might reasonably re-propose. Each carries a _Why parked_ (the v1 design or operational constraint) and a _Wake when_ (the trigger that makes us reopen). The broad "v1 scope freeze" and "no visual redesign" are covered by CLAUDE.md "Out of scope" and don't need restating here — this list is for tracked-specific decisions only.
 
+### `ops-5` — Trim `build` / `e2e` out of the per-PR `verify.yml`
+
+Source: net-new (2026-05-27), considered and declined during CI cost round 2 ([`118-ci-cost-round-2.md`](features/118-ci-cost-round-2.md)).
+
+- _Why parked (2026-05-27):_ would shave ~1–3 min off each frontend/server PR run, but the dev box is Windows (case-insensitive FS) and CI is Linux (case-sensitive) — a build break like a wrong-case import would slip past PR CI and only surface in `release.yml` / `cross-os.yml`. Round 2 chose the safer cost levers (draft-by-default, integration-PR batching, `vitest --changed`, timeout caps) that don't reduce what a green PR has actually proven. e2e is also the suite most likely to catch a router/redux/layout regression a unit test misses, so dropping it from the merge gate trades real safety for a small saving.
+- _Wake when:_ the safer round-2 levers prove insufficient AND a Linux-build / e2e signal moves earlier in the pipeline (e.g. a fast pre-merge Linux build smoke, or merge-queue checks) so dropping it from per-PR no longer leaves a coverage hole.
+
 ### `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity)
 
 Source: net-new (2026-05-26), plan 112. ICL mode drags the reference clip's codec tokens through context every decode step; `x_vector_only_mode=True` drops that for shorter/faster steps, at a fidelity/consistency cost.

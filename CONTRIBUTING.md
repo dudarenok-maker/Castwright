@@ -87,8 +87,16 @@ When N parallel agent branches finish:
    This narrows the blame window for any failure to the branch you just merged.
 3. Resolve any conflicts on the integration branch — never on the original agent
    branches.
-4. When all merges are green, fast-forward `main` to `integration/2026-05-17` and
-   delete the agent branches.
+4. When all merges are green, open **one** PR from `integration/2026-05-17` (the
+   default disposition for a round — not one PR per agent branch), then delete
+   the agent branches once it merges.
+
+Open that integration PR as a **draft** and `gh pr ready` only when the final
+`npm run verify` on the integration branch is green (see
+[§ Draft until verified](#draft-until-verified-ci-cost-default)). The whole round
+then bills a **single** CI verify run rather than one (or several) per agent
+branch — the largest CI-cost lever. See
+[docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
 
 If a merge breaks `verify` and the fix isn't obvious, drop the offending branch
 from the batch and ship the rest — re-cut the branch later off the new `main`.
@@ -295,6 +303,27 @@ Two required sections:
 The template's HTML comments are guidance — strip them before submitting, or
 leave them; they don't render. The Summary and Test plan headings are the
 load-bearing structure that reviewers (and future-me) skim first.
+
+### Draft until verified (CI-cost default)
+
+`verify.yml` skips draft PRs entirely (`if: github.event.pull_request.draft ==
+false`) and re-fires the instant a draft is promoted (the workflow listens for
+`ready_for_review`). That makes the cost-minimising lifecycle:
+
+1. `gh pr create --draft` (or open the PR and mark it draft).
+2. Push freely while developing — draft pushes queue **no** `verify` run, so
+   they bill **0 CI minutes**.
+3. Run `npm run verify` locally until green (the pre-push hook runs the full
+   battery anyway).
+4. `gh pr ready <n>` → fires **exactly one** billed `verify` run, right before
+   merge.
+
+A PR opened ready-from-the-start bills a `verify` run on **every** push instead
+(only `cancel-in-progress` claws back the overlapping ones). Reserve
+ready-from-the-start for a trivial change you intend to merge immediately.
+Because GitHub's free Actions tier is exhausted on a heavy PR cadence, this is
+the single highest-leverage cost control. Rationale + measurements:
+[docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
 
 ### Merge policy
 

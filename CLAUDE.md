@@ -350,6 +350,16 @@ repo level) and the head branch is auto-deleted on merge. Full spec:
 [CONTRIBUTING.md "Pull requests"](CONTRIBUTING.md#pull-requests). Regression
 plan: [docs/features/44-pr-hygiene.md](docs/features/44-pr-hygiene.md).
 
+**Open PRs as draft and verify once (CI-cost default).** `verify.yml` skips
+draft PRs entirely (`if: draft == false`) and re-fires the moment a draft is
+promoted (`ready_for_review`). The cost-minimising flow is therefore:
+`gh pr create --draft` → push freely while developing (**0 CI minutes**) → run
+`npm run verify` locally until green → `gh pr ready <n>`, which fires **exactly
+one** billed verify run right before merge. Opening a PR ready-from-the-start
+bills a run on every push instead. Only skip the draft for a trivial change you
+intend to merge immediately. Rationale + measurements:
+[docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
+
 ### Parallel agents
 
 When spawning implementation agents via the Agent tool for work that can run
@@ -365,10 +375,15 @@ in parallel:
   shape before merge — or pre-create the branch with `git switch -c
 feat/server-foo` and tell the agent in its prompt to check it out as its
   first step.
-- Reconcile multiple parallel branches via the
-  [`integration/<date>` pattern](CONTRIBUTING.md#reconciliation-pattern):
-  fresh branch off `main`, merge each agent branch one at a time, run
-  `npm run verify` between merges.
+- **Default disposition for a round of parallel agent work: one integration PR,
+  verified once — not N separate PRs.** Reconcile the branches via the
+  [`integration/<date>` pattern](CONTRIBUTING.md#reconciliation-pattern): fresh
+  branch off `main`, merge each agent branch one at a time, run `npm run verify`
+  between merges. Open that integration branch as a **draft** PR and only
+  `gh pr ready` once the whole reconciliation is locally green — so the round
+  bills ONE verify run instead of one (or several) per agent branch. This is the
+  largest CI-cost lever alongside draft-by-default; see
+  [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
 
 ### Planning agents
 
