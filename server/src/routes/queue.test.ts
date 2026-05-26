@@ -328,6 +328,44 @@ describe('POST /api/queue/:entryId/complete', () => {
     expect(res.status).toBe(200);
     expect(res.body.entries).toEqual([]);
   });
+
+  it('outcome:failed keeps the entry as failed with the errorReason (lingers)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    await request(app).post('/api/queue/e1/start');
+    const res = await request(app)
+      .post('/api/queue/e1/complete')
+      .send({ outcome: 'failed', errorReason: 'sidecar 500' });
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0]).toMatchObject({
+      id: 'e1',
+      status: 'failed',
+      errorReason: 'sidecar 500',
+    });
+  });
+});
+
+describe('POST /api/queue/:entryId/retry', () => {
+  it('re-queues a failed entry (status → queued, clears errorReason)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    await request(app).post('/api/queue/e1/start');
+    await request(app).post('/api/queue/e1/complete').send({ outcome: 'failed', errorReason: 'x' });
+    const res = await request(app).post('/api/queue/e1/retry');
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0]).toMatchObject({ id: 'e1', status: 'queued', errorReason: null });
+  });
+
+  it('is a no-op for a non-failed entry', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    const res = await request(app).post('/api/queue/e1/retry');
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0]).toMatchObject({ id: 'e1', status: 'queued' });
+  });
 });
 
 describe('DELETE /api/queue/:entryId', () => {

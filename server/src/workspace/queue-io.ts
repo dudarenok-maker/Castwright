@@ -209,6 +209,20 @@ export function completeEntry(
   return renumber({ ...file, entries: next });
 }
 
+/** Retry a failed entry — flip it back to `queued` and clear its
+ *  `errorReason`/`progress` so the dispatcher re-claims it. No-op (returns the
+ *  file unchanged) for a missing entry or one that isn't `failed`, so a
+ *  double-click or a stale id can't disturb a running/queued entry. */
+export function retry(file: QueueFile, entryId: string): QueueFile {
+  const target = file.entries.find((e) => e.id === entryId);
+  if (!target || target.status !== 'failed') return file;
+  const next = file.entries.map(
+    (e): QueueEntry =>
+      e.id === entryId ? { ...e, status: 'queued', errorReason: null, progress: undefined } : e,
+  );
+  return renumber({ ...file, entries: next });
+}
+
 /** Update progress on the in-flight entry. Cheap mutator the frontend
  *  calls (via the queue route) on every progress tick. */
 export function updateProgress(file: QueueFile, entryId: string, progress: number): QueueFile {

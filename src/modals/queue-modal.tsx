@@ -28,9 +28,15 @@ import {
   type QueueEntry,
   type TtsEngine,
 } from '../store/queue-slice';
-import { cancelQueueEntry, loadQueue, reorderQueue, setQueuePaused } from '../store/queue-thunks';
+import {
+  cancelQueueEntry,
+  loadQueue,
+  reorderQueue,
+  retryQueueEntry,
+  setQueuePaused,
+} from '../store/queue-thunks';
 import { uiActions } from '../store/ui-slice';
-import { IconClose, IconDrag, IconPause, IconPlay, IconTrash } from '../lib/icons';
+import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 
 interface QueueModalProps {
@@ -202,6 +208,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                          No 409 path: force bypasses the in_progress guard. */
                       dispatch(cancelQueueEntry(entryId, { force: true })).catch(() => {});
                     }}
+                    onRetry={(entryId) => {
+                      /* Re-queue a FAILED entry — status → queued, so the
+                         dispatcher re-claims it and re-runs the chapter. */
+                      dispatch(retryQueueEntry(entryId)).catch(() => {});
+                    }}
                   />
                 ))}
               </div>
@@ -265,6 +276,7 @@ interface BookGroupProps {
   onReorder: (entries: QueueEntry[]) => void;
   onCancel: (entryId: string) => void;
   onForceRemove: (entryId: string) => void;
+  onRetry: (entryId: string) => void;
 }
 
 function BookGroup({
@@ -275,6 +287,7 @@ function BookGroup({
   onReorder,
   onCancel,
   onForceRemove,
+  onRetry,
 }: BookGroupProps) {
   const moveUp = (idx: number): void => {
     if (idx <= 0) return;
@@ -435,6 +448,21 @@ function BookGroup({
                   </p>
                 )}
               </div>
+              {!isInFlight && entry.status === 'failed' && (
+                /* Failed entries linger in the queue (not done-pruned) so the
+                   user can re-run the chapter without re-navigating. Retry
+                   flips the entry back to `queued`; the dispatcher re-claims
+                   it. The cancel/trash control below still removes it. */
+                <button
+                  onClick={() => onRetry(entry.id)}
+                  aria-label="Retry entry"
+                  title="Retry"
+                  className="p-2 rounded-full hover:bg-magenta/10 text-ink/60 hover:text-magenta min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0"
+                  data-testid={`queue-entry-${entry.id}-retry`}
+                >
+                  <IconRefresh className="w-4 h-4" />
+                </button>
+              )}
               {!isInFlight && (
                 <>
                   <button

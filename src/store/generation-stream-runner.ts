@@ -117,6 +117,12 @@ export interface StreamRunner {
   /** Union of chapter ids across all open streams — so the dispatcher never
       claims a chapter that's already rendering. */
   openChapterIds(): number[];
+  /** Return + CLEAR the recorded synthesis-failure reason for a (book,
+      chapter), or null if it didn't fail. The dispatcher calls this during
+      reconcile to decide whether the entry is marked `failed` (lingers for
+      retry) or done-pruned. One-shot so a later success can't read a stale
+      failure. */
+  takeChapterFailure(bookId: string, chapterId: number): string | null;
 }
 
 function snapshotFromChapters(
@@ -150,6 +156,12 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
      two chapters of the same book stream concurrently without aborting each
      other; the dispatcher's N-slot gate counts chapters. */
   const handles = new Map<string, OpenHandle>();
+  /* Per-chapter synthesis failures, keyed `${bookId}::${chapterId}`, recorded
+     on a `chapter_failed` tick and read+cleared by the dispatcher during
+     reconcile (`takeChapterFailure`) so the queue entry is marked `failed`
+     (lingers for retry) instead of done-pruned. Outlives the stream close that
+     `idle` triggers — close() removes the handle, not this map. */
+  const chapterFailures = new Map<string, string>();
   const dispatch = store.dispatch;
 
   const close = (key: string): void => {
@@ -316,17 +328,27 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       }
       /* Flip any pending revisions for this chapter to playable. */
       dispatch(revisionsActions.markRevisionPlayable({ chapterId: ev.chapterId }));
-    } else if (ev.type === 'chapter_failed' && ev.chapterId != null && sliceMatchesHandle) {
-      const ch = after.chapters.chapters.find((c) => c.id === ev.chapterId);
-      if (ch) {
-        dispatch(
-          changeLogActions.appendLogEvent(
-            buildChapterFailedEvent({
-              chapter: ch,
-              errorReason: ev.errorReason ?? ch.errorReason ?? 'Synthesis failed.',
-            }),
-          ),
-        );
+    } else if (ev.type === 'chapter_failed' && ev.chapterId != null) {
+      /* Record the failure UNCONDITIONALLY (not gated on sliceMatchesHandle) —
+         a cross-book chapter's queue entry must still be marked `failed` even
+         though its rows aren't in the viewed slice. The dispatcher reads this
+         on the reconcile that follows the `idle` close. */
+      chapterFailures.set(
+        streamKey(bookId, ev.chapterId),
+        ev.errorReason ?? 'Synthesis failed.',
+      );
+      if (sliceMatchesHandle) {
+        const ch = after.chapters.chapters.find((c) => c.id === ev.chapterId);
+        if (ch) {
+          dispatch(
+            changeLogActions.appendLogEvent(
+              buildChapterFailedEvent({
+                chapter: ch,
+                errorReason: ev.errorReason ?? ch.errorReason ?? 'Synthesis failed.',
+              }),
+            ),
+          );
+        }
       }
     } else if (ev.type === 'chapter_failed' && ev.chapterId == null && sliceMatchesHandle) {
       /* Stream-level halt (setup / sidecar / cast issue — chapter id absent). */
@@ -358,5 +380,12 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     hasOpenStreamForChapter: (bookId, chapterId) => handles.has(streamKey(bookId, chapterId)),
     hasOpenStreamForBook: (bookId) => [...handles.values()].some((h) => h.bookId === bookId),
     openChapterIds: () => [...handles.values()].flatMap((h) => h.chapterIds),
+    takeChapterFailure: (bookId, chapterId) => {
+      const key = streamKey(bookId, chapterId);
+      const reason = chapterFailures.get(key);
+      if (reason === undefined) return null;
+      chapterFailures.delete(key);
+      return reason;
+    },
   };
 }
