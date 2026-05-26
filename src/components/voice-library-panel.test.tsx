@@ -298,3 +298,81 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(scroller.className).toMatch(/scrollbar-thin/);
   });
 });
+
+describe('VoiceLibraryPanel — search', () => {
+  const lib: Voice[] = [
+    makeVoice('v_keefe', 'Keefe Sencen', { bookTitle: 'Keeper of the Lost Cities' }),
+    makeVoice('v_elwin', 'Elwin', { bookTitle: 'Keeper of the Lost Cities' }),
+    makeVoice('v_ro', 'Ro', { bookTitle: 'Flashback' }),
+  ];
+
+  it('filters cards by character name as the user types', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    expect(screen.getByText('Keefe Sencen')).toBeInTheDocument();
+    expect(screen.getByText('Elwin')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'keefe' },
+    });
+    expect(screen.getByText('Keefe Sencen')).toBeInTheDocument();
+    expect(screen.queryByText('Elwin')).toBeNull();
+    expect(screen.queryByText('Ro')).toBeNull();
+  });
+
+  it('also matches on book title', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'flashback' },
+    });
+    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+  });
+
+  it('applies the tab filter before the query (tab wins first)', () => {
+    /* Keefe is "current", Ro is a "library"/series voice. On the Series tab
+       only Ro is eligible, so searching "keefe" finds nothing even though
+       the name matches — the tab filter runs before the query. */
+    const mixed: Voice[] = [
+      makeVoice('v_keefe', 'Keefe Sencen', { source: 'current' }),
+      makeVoice('v_ro', 'Ro', { source: 'library', bookTitle: 'Flashback', bookId: 'fb' }),
+    ];
+    render(
+      <VoiceLibraryPanel library={mixed} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Series' }));
+    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'keefe' },
+    });
+    expect(screen.getByText(/No voices match/)).toBeInTheDocument();
+    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+  });
+
+  it('restores the full tab-filtered list when the query is cleared', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    const input = screen.getByPlaceholderText('Search voices');
+    fireEvent.change(input, { target: { value: 'keefe' } });
+    expect(screen.queryByText('Elwin')).toBeNull();
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.getByText('Keefe Sencen')).toBeInTheDocument();
+    expect(screen.getByText('Elwin')).toBeInTheDocument();
+    expect(screen.getByText('Ro')).toBeInTheDocument();
+  });
+
+  it('shows an empty-state line when no voice matches the query', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'zzzznope' },
+    });
+    expect(screen.getByText(/No voices match/)).toBeInTheDocument();
+    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+  });
+});
