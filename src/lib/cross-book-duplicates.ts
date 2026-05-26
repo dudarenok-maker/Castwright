@@ -163,3 +163,73 @@ function hasNotLinkedTo(c: Character, otherBookId: string, otherCharacterId: str
     (p) => p.bookId === otherBookId && p.characterId === otherCharacterId,
   );
 }
+
+/* Optimistic foreign-cast cache reconciliation (bug fix on plan 101).
+
+   The voices view reads cross-book casts from two sources: the redux cast
+   slice (the open book) and a `globalCastCache` Map (foreign books,
+   hydrated on demand). After a link / variant action the SERVER mutates a
+   foreign book's cast.json, but the response doesn't carry the updated
+   character — so the in-memory cache goes stale and `detectDuplicateCandidates`
+   re-flags the pair the moment its memo re-runs. These two helpers reflect
+   the server's write into the cache immediately, with guards byte-identical
+   to the redux reducers (`applyAddAlias`, `applyNotLinked`) so the open-book
+   and foreign-book branches can never diverge.
+
+   Both return the SAME Map reference when nothing changes (book not cached,
+   dedup hit, self-alias) so callers' `setGlobalCastCache(prev => fn(prev))`
+   is a no-op render when there's nothing to do. */
+export function appendAliasToCachedCharacter(
+  cache: Map<string, Character[]>,
+  bookId: string,
+  characterId: string,
+  aliasName: string,
+): Map<string, Character[]> {
+  const cached = cache.get(bookId);
+  if (!cached) return cache;
+  const trimmed = aliasName.trim();
+  if (!trimmed) return cache;
+  const key = trimmed.toLowerCase();
+  let changed = false;
+  const next = cached.map((c) => {
+    if (c.id !== characterId) return c;
+    if (c.name.trim().toLowerCase() === key) return c; // self-alias guard
+    const existing = c.aliases ?? [];
+    if (existing.some((a) => a.trim().toLowerCase() === key)) return c; // case-insensitive dedup
+    changed = true;
+    return { ...c, aliases: [...existing, trimmed] };
+  });
+  if (!changed) return cache;
+  const map = new Map(cache);
+  map.set(bookId, next);
+  return map;
+}
+
+export function appendNotLinkedToCachedCharacter(
+  cache: Map<string, Character[]>,
+  bookId: string,
+  characterId: string,
+  otherBookId: string,
+  otherCharacterId: string,
+): Map<string, Character[]> {
+  const cached = cache.get(bookId);
+  if (!cached) return cache;
+  if (!otherBookId || !otherCharacterId) return cache;
+  let changed = false;
+  const next = cached.map((c) => {
+    if (c.id !== characterId) return c;
+    const existing = c.notLinkedTo ?? [];
+    if (existing.some((p) => p.bookId === otherBookId && p.characterId === otherCharacterId)) {
+      return c; // pair already recorded
+    }
+    changed = true;
+    return {
+      ...c,
+      notLinkedTo: [...existing, { bookId: otherBookId, characterId: otherCharacterId }],
+    };
+  });
+  if (!changed) return cache;
+  const map = new Map(cache);
+  map.set(bookId, next);
+  return map;
+}
