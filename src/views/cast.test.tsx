@@ -115,9 +115,7 @@ function renderView(opts: { onOpenProfile?: (id: string | null) => void } = {}) 
         library={library}
         title="The Northern Star"
         onOpenProfile={opts.onOpenProfile ?? (() => {})}
-        onShowMatchDetail={() => {}}
-        onBatchRegenerate={() => {}}
-        driftEvents={[]}
+        onShowMatchDetail={() => {}}        driftEvents={[]}
         onShowDrift={() => {}}
       />
     </Provider>,
@@ -293,9 +291,7 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
             library={library}
             title="The Northern Star"
             onOpenProfile={() => {}}
-            onShowMatchDetail={() => {}}
-            onBatchRegenerate={() => {}}
-            driftEvents={[]}
+            onShowMatchDetail={() => {}}            driftEvents={[]}
             onShowDrift={() => {}}
           />
         </Provider>,
@@ -420,15 +416,22 @@ describe('CastView responsive touch-target sizing', () => {
     renderView();
     /* Open the floating pill by toggling one selection. */
     fireEvent.click(checkboxIn(rowFor('Narrator')));
-    /* Compare + Regenerate + Clear are the three action buttons inside
-       the floating pill — each carries min-h-[44px] so a thumb tap on a
-       phone clears the WCAG 2.5.5 target-size threshold. */
+    /* Compare + Clear are the two action buttons inside the floating pill —
+       each carries min-h-[44px] so a thumb tap on a phone clears the WCAG
+       2.5.5 target-size threshold. */
     const compare = screen.getByRole('button', { name: /^Compare$/ });
     expect(compare.className).toMatch(/min-h-\[44px\]/);
-    const regenerate = screen.getByRole('button', { name: /Regenerate/ });
-    expect(regenerate.className).toMatch(/min-h-\[44px\]/);
     const clear = screen.getByRole('button', { name: /Clear selection/ });
     expect(clear.className).toMatch(/min-h-\[44px\]/);
+  });
+
+  it('no longer offers a batch Regenerate button in the selection pill (plan 114)', () => {
+    renderView();
+    fireEvent.click(checkboxIn(rowFor('Narrator')));
+    /* Per-character / batch regen was removed — the pill only compares now.
+       Regeneration happens per-chapter (drawer "Regenerate this character"
+       → CharacterRegenerateModal). */
+    expect(screen.queryByRole('button', { name: /Regenerate/ })).toBeNull();
   });
 });
 
@@ -452,9 +455,7 @@ describe('CastView desktop drag-drop is intact', () => {
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}
-          onBatchRegenerate={() => {}}
-          driftEvents={[]}
+          onShowMatchDetail={() => {}}          driftEvents={[]}
           onShowDrift={() => {}}
         />
       </Provider>,
@@ -522,9 +523,7 @@ describe('CastView wave-4 tap-to-assign', () => {
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}
-          onBatchRegenerate={() => {}}
-          driftEvents={[]}
+          onShowMatchDetail={() => {}}          driftEvents={[]}
           onShowDrift={() => {}}
         />
       </Provider>,
@@ -553,9 +552,7 @@ describe('CastView wave-4 tap-to-assign', () => {
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}
-          onBatchRegenerate={() => {}}
-          driftEvents={[]}
+          onShowMatchDetail={() => {}}          driftEvents={[]}
           onShowDrift={() => {}}
         />
       </Provider>,
@@ -600,9 +597,7 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
           library={library}
           title="The Northern Star"
           onOpenProfile={() => {}}
-          onShowMatchDetail={() => {}}
-          onBatchRegenerate={() => {}}
-          driftEvents={[
+          onShowMatchDetail={() => {}}          driftEvents={[
             {
               id: 'd1',
               bookId: 'b1',

@@ -330,32 +330,3 @@ export function buildBoundaryMoveEvent(args: {
     chapterId,
   };
 }
-
-/** Build a `regenerate` log event for the batch-character regen. */
-export function buildBatchCharacterRegenEvent(args: {
-  characters: Character[];
-  chapterIds: number[];
-  reason: string;
-  note: string;
-  now?: Date;
-}): ChangeLogEvent {
-  const { characters, chapterIds, reason, note } = args;
-  const now = args.now ?? new Date();
-  const names = characters.map((c) => c.name).join(', ');
-  const scopeText =
-    chapterIds.length > 0
-      ? ` across ${chapterIds.length} ${chapterIds.length === 1 ? 'chapter' : 'chapters'}`
-      : '';
-  const noteSuffix = note.trim() ? ` ${note.trim()}` : '';
-  return {
-    id: now.getTime(),
-    at: now.toISOString(),
-    ts: 'Just now',
-    date: 'today',
-    type: 'regenerate',
-    title: `Batch regenerated ${characters.length} characters`,
-    note: `Reason: ${reasonLabel(reason).toLowerCase()}.${noteSuffix} Re-voicing ${names}${scopeText}.`.trim(),
-    actor: 'you',
-    revertible: true,
-  };
-}

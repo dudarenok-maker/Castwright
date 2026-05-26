@@ -33,6 +33,10 @@ interface Props {
       Optional so existing callers / tests don't need to pass it (the button
       simply doesn't render when undefined). */
   onOpenHistory?: () => void;
+  /** `'preview'` (plan 114 profile-regen preview gate) reframes the footer:
+      Accept fans the remaining chapters out, Reject reverts + re-adjusts.
+      Defaults to `'review'` (the standalone A/B accept flow). */
+  mode?: 'preview' | 'review';
 }
 
 export function RevisionDiffPlayer({
@@ -44,7 +48,9 @@ export function RevisionDiffPlayer({
   onAccept,
   onReject,
   onOpenHistory,
+  mode = 'review',
 }: Props) {
+  const isPreview = mode === 'preview';
   const [selected, setSelected] = useState<Record<number, 'A' | 'B'>>(() => {
     const m: Record<number, 'A' | 'B'> = {};
     revision.segments.forEach((s) => {
@@ -197,7 +203,7 @@ export function RevisionDiffPlayer({
           </span>
           <div className="flex-1 min-w-0">
             <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
-              Revision review · A/B
+              {isPreview ? 'Voice preview · A/B' : 'Revision review · A/B'}
             </p>
             <h1 className="text-base font-bold text-ink leading-tight truncate">
               CH {String(chapter.id).padStart(2, '0')} · {stripChapterPrefix(chapter.title)}
@@ -387,21 +393,30 @@ export function RevisionDiffPlayer({
       <footer className="sticky bottom-0 bg-white border-t border-ink/10">
         <div className="max-w-[1400px] mx-auto px-6 py-4 flex items-center gap-3">
           <span className="text-sm">
-            <span className="font-bold text-ink tabular-nums">{acceptedNew}</span>{' '}
-            <span className="text-ink/60">
-              of <span className="tabular-nums">{totalChanged}</span> changed segments taking the
-              new take
-            </span>
+            {isPreview ? (
+              <span className="text-ink/60">
+                Listen to both takes on this chapter, then approve to regenerate the rest — or reject
+                and re-adjust the voice.
+              </span>
+            ) : (
+              <>
+                <span className="font-bold text-ink tabular-nums">{acceptedNew}</span>{' '}
+                <span className="text-ink/60">
+                  of <span className="tabular-nums">{totalChanged}</span> changed segments taking the
+                  new take
+                </span>
+              </>
+            )}
           </span>
           <span className="ml-auto flex items-center gap-3">
             <button
               onClick={onReject}
               className="px-4 py-2.5 text-sm font-medium text-ink/70 hover:text-ink"
             >
-              Reject draft
+              {isPreview ? 'Reject & re-adjust' : 'Reject draft'}
             </button>
             <PrimaryButton variant="dark" onClick={() => onAccept(selected)}>
-              Commit selection
+              {isPreview ? 'Approve — regenerate the rest' : 'Commit selection'}
             </PrimaryButton>
           </span>
         </div>

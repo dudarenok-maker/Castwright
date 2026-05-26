@@ -17,8 +17,10 @@
  *      would fight a live local analysis for the GPU).
  *   2. HALT — `chapters/requestStreamHalt` (local-analyzer confirm prompt)
  *      pauses each open book on the server and tears every stream down NOW.
- *   3. PENDING-REVISION STUBS — on a character regen, enqueue the stub the
- *      diff player will flip to playable on chapter_complete.
+ *   3. PROFILE-REGEN PREVIEW GATE — when the single preview chapter completes
+ *      (markRevisionPlayable for the chapter the user is previewing), build the
+ *      now-playable A/B stub and auto-open the diff player. See plan
+ *      docs/features/114-profile-regen-preview.md.
  *
  * Skipped under VITE_USE_MOCKS=true? — NO. The mock SSE depends on a long-lived
  * caller; the runner (opened by the dispatcher) is that caller. */
@@ -32,7 +34,7 @@ import type { AppDispatch } from './index';
 import type { StreamRunner } from './generation-stream-runner';
 import type { ChaptersState } from './chapters-slice';
 import type { CastState } from './cast-slice';
-import type { UiState } from './ui-slice';
+import { uiActions, type UiState } from './ui-slice';
 import type { AnalysisState } from './analysis-slice';
 import type { QueueState } from './queue-slice';
 
@@ -144,39 +146,29 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
         return result;
       }
 
-      /* Pending-revision stubs on a character regen. One per (characterId,
-         chapterId); the stub is playable=false and chapter_complete (handled
-         in the runner) flips it. */
-      if (type === 'chapters/regenerateCharacter') {
-        const payload = (a as { payload?: { characterId: string; chapterIds: number[] } }).payload;
+      /* Profile-change preview gate — when the single preview chapter's render
+         completes (markRevisionPlayable for the chapter the user is
+         previewing), build the now-playable A/B stub and auto-open the diff
+         player. Built fresh on completion so a mid-render revisions poll
+         (applyPoll replaces `pending` wholesale) can't leave the gate without
+         a revision to show. Normal chapter regens never set previewRegen, so
+         this no-ops for them. See docs/features/114-profile-regen-preview.md. */
+      if (type === 'revisions/markRevisionPlayable') {
+        const payload = (a as { payload?: { chapterId: number } }).payload;
         if (payload) {
           const after = store.getState() as StreamableRootState;
-          const character = after.cast.characters.find((c) => c.id === payload.characterId);
-          if (character) {
-            for (const chapterId of payload.chapterIds) {
-              const chapter = after.chapters.chapters.find((c) => c.id === chapterId);
-              if (!chapter) continue;
+          const preview = after.ui.previewRegen;
+          if (preview && preview.previewChapterId === payload.chapterId) {
+            const character = after.cast.characters.find((c) => c.id === preview.characterId);
+            const chapter = after.chapters.chapters.find((c) => c.id === payload.chapterId);
+            if (character && chapter) {
               dispatch(
-                revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })),
+                revisionsActions.enqueuePending(
+                  buildPendingRevisionStub({ chapter, character, playable: true }),
+                ),
               );
             }
-          }
-        }
-      } else if (type === 'chapters/batchRegenerateCharacters') {
-        const payload = (a as { payload?: { characterIds: string[]; chapterIds: number[] } })
-          .payload;
-        if (payload) {
-          const after = store.getState() as StreamableRootState;
-          for (const characterId of payload.characterIds) {
-            const character = after.cast.characters.find((c) => c.id === characterId);
-            if (!character) continue;
-            for (const chapterId of payload.chapterIds) {
-              const chapter = after.chapters.chapters.find((c) => c.id === chapterId);
-              if (!chapter) continue;
-              dispatch(
-                revisionsActions.enqueuePending(buildPendingRevisionStub({ chapter, character })),
-              );
-            }
+            dispatch(uiActions.setShowRevisionPlayer(true));
           }
         }
       }

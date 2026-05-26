@@ -1,45 +1,46 @@
-# Regenerate (this or forward) + per-character
+# Regenerate (this or forward)
 
 > Status: stable
-> Key files: `src/modals/regenerate.tsx`, `src/modals/character-regenerate.tsx`, `src/store/chapters-slice.ts` (`regenerateChapter`, `regenerateCharacter`), `src/store/ui-slice.ts` (`setRegenChapter`, `setRegenCharacterCtx`)
-> URL surface: modal overlays, no URL component
-> OpenAPI ops: indirect — drive `POST /api/books/:bookId/generation` (often with subset + `force: true`)
+> Key files: `src/modals/regenerate.tsx`, `src/store/chapters-slice.ts` (`regenerateChapter`, `regenerateChapterIds`), `src/store/ui-slice.ts` (`setRegenChapter`, `setRegenInitialScope`)
+> URL surface: modal overlay, no URL component
+> OpenAPI ops: indirect — drives `POST /api/books/:bookId/generation` (often with subset + `force: true`)
+
+> **Per-character / profile-change regeneration moved to
+> [114-profile-regen-preview.md](114-profile-regen-preview.md).** The old
+> "Character regen re-synthesises only that character's lines" model was
+> removed — there is no per-character synthesis (the server always re-renders
+> the whole chapter). `CharacterRegenerateModal` is now the profile-change
+> chooser (Regenerate-all vs. opt-in one-chapter A/B preview); the
+> `regenerateCharacter` reducer is gone.
 
 ## What this covers
 
-Two scoped regeneration modals. **Chapter regen** offers `'this' | 'forward'` — synthesise only this chapter, or this chapter plus every later one. **Character regen** picks a single character + a chapter (or chapter range) and re-synthesises only that character's lines. Both flows produce revision drafts (`20-revisions-and-drift.md`) rather than overwriting audio directly.
+The **chapter regen** modal offers scope `'this' | 'forward'` — re-synthesise
+only this chapter, or this chapter plus every later one. The render replaces the
+chapter audio directly (the server preserves the prior take as `.previous.*` on
+disk, but there is no in-app accept gate — that gate is reserved for plan 114's
+opt-in preview).
 
 ## Invariants to preserve
 
-- Chapter regen modal scope union: `'this' | 'forward'`. The modal is opened by `setRegenChapter(chapter)`; closed by `setRegenChapter(null)` (`src/store/ui-slice.ts:25, 113`).
-- Character regen context shape: `RegenCharacterCtx { characterId; defaultChapterId? }` (`src/store/ui-slice.ts:15-18`). Modal is opened by `setRegenCharacterCtx(ctx)`; closed by `setRegenCharacterCtx(null)` (`ui-slice.ts:26, 114`).
-- Both modals close on confirm; cancel never enqueues. State transitions are flat overlays (not stage-guarded).
-- `chaptersActions.regenerateChapter` takes scope + chapter id; expands `'forward'` into the chapter id list and dispatches; `regenerateCharacter` takes character id + chapter range.
-- Results land as `pending` revisions in `revisions.pending[]` (see `20-revisions-and-drift.md`), NOT as direct chapter audio replacements. The user accepts/rejects per draft.
+- Chapter regen modal scope union: `'this' | 'forward'`. The modal is opened by `setRegenChapter(chapter)`; closed by `setRegenChapter(null)` (`src/store/ui-slice.ts`).
+- `setRegenInitialScope('forward')` pre-selects "this and all subsequent" when opened from the post-generation header button; cleared when the modal closes.
+- Both confirm and cancel are flat overlays (not stage-guarded); cancel never enqueues.
+- `chaptersActions.regenerateChapter` takes scope + chapter id and expands `'forward'` into the chapter id list; `regenerateChapterIds` flips an explicit chapter-id list (head → `in_progress`, rest → `queued`). Every regen enqueues whole-chapter entries (`scope:'this'`) — there is no `scope:'character'` producer anymore (plan 114).
 - A successful chapter regen overwrites the chapter's `audioModelKey` / `audioRenderedAt` stamp with the active engine (see plan 35). So regenerating a drifted chapter clears its drift caption + banner contribution automatically — no separate "clear drift" affordance is needed.
 
 ## Acceptance walkthrough
 
 Run `VITE_USE_MOCKS=true`, navigate to a book in `ready` state.
 
-### Chapter regen
-
 1. **Click Regenerate on chapter 5** → `setRegenChapter(chapter5)`; modal opens with chapter title.
-2. **Pick scope = "this chapter"**, confirm → revision drafts for chapter 5 enqueue; modal closes.
-3. **Pick scope = "this chapter and forward"** on chapter 5 (book has 10 chapters), confirm → drafts for chapters 5–10 enqueue.
-4. **Cancel** → `setRegenChapter(null)`; no drafts.
+2. **Pick scope = "this chapter"**, confirm → chapter 5 re-renders; modal closes.
+3. **Pick scope = "this chapter and forward"** on chapter 5 (book has 10 chapters), confirm → chapters 5–10 queue.
+4. **Cancel** → `setRegenChapter(null)`; nothing enqueued.
 5. **Open while one is already open** → previous modal state is replaced (chapter swaps).
-
-### Character regen
-
-1. **Click Regen on Mara's row in chapter 3** → `setRegenCharacterCtx({ characterId: 'mara', defaultChapterId: 3 })`; modal opens pre-filled with chapter 3.
-2. **Confirm with default range (just chapter 3)** → drafts for Mara in chapter 3 enqueue; modal closes.
-3. **Change range to 3–6** → drafts for Mara in chapters 3, 4, 5, 6 enqueue.
-4. **Defaults** — `defaultChapterId` is optional; modal must handle `undefined` by defaulting to the current `currentChapterId` from `ui.stage` (if `ready`).
-5. **Cancel** → `setRegenCharacterCtx(null)`; no drafts.
 
 ## Out of scope
 
-- Cross-character / cross-chapter bulk operations — that's `11-batch-character-regenerate.md`.
-- Auto-acceptance of drafts — always user-mediated via revision diff view.
+- Per-character / profile-change regeneration + the A/B preview gate — see [114-profile-regen-preview.md](114-profile-regen-preview.md).
+- Multi-character bulk regen — removed; see archived [11-batch-character-regenerate.md](archive/11-batch-character-regenerate.md).
 - Re-running with a different model key per regen (regen uses the current `ui.ttsModelKey`).

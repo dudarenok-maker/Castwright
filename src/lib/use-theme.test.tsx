@@ -32,7 +32,7 @@ function makeStore({
     regenChapter: null,
     regenInitialScope: null,
     regenCharacterCtx: null,
-    batchRegenIds: null,
+    previewRegen: null,
     staleAudio: null,
     showRevisionPlayer: false,
     revisionHistoryFor: null,

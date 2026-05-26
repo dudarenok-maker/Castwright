@@ -502,32 +502,6 @@ export const chaptersSlice = createSlice({
       }
     },
 
-    regenerateCharacter: (s, a: PayloadAction<{ characterId: string; chapterIds: number[] }>) => {
-      const { characterId, chapterIds } = a.payload;
-      const targetIds: number[] = [];
-      s.chapters = s.chapters.map((ch) => {
-        if (!chapterIds.includes(ch.id)) return ch;
-        const cur = ch.characters[characterId];
-        if (cur === 'skipped' || !cur) return ch;
-        targetIds.push(ch.id);
-        const wasDone = ch.state === 'done';
-        return {
-          ...ch,
-          characters: { ...ch.characters, [characterId]: 'queued' },
-          state: wasDone ? 'in_progress' : ch.state,
-          progress: wasDone ? 0.05 : ch.progress,
-          phase: null,
-          errorReason: undefined,
-          /* Same currentLine reset as regenerateChapter — see comment there. */
-          currentLine: wasDone ? 0 : ch.currentLine,
-        };
-      });
-      if (targetIds.length) {
-        s.lastError = null;
-        s.generationStartedAt = null;
-      }
-    },
-
     /* Merge a subset-analysis response into the slice without wiping
        per-chapter state for chapters that weren't part of the subset.
        Used after a chapter is un-excluded and re-analyzed: the response
@@ -638,40 +612,6 @@ export const chaptersSlice = createSlice({
       s.activeStreams = a.payload ? { [a.payload.streamKey]: a.payload } : {};
     },
 
-    batchRegenerateCharacters: (
-      s,
-      a: PayloadAction<{ characterIds: string[]; chapterIds: number[] }>,
-    ) => {
-      const { characterIds, chapterIds } = a.payload;
-      const targetIds: number[] = [];
-      s.chapters = s.chapters.map((ch) => {
-        if (!chapterIds.includes(ch.id)) return ch;
-        const newChars: Chapter['characters'] = { ...ch.characters };
-        let touched = false;
-        characterIds.forEach((cid) => {
-          if (newChars[cid] && newChars[cid] !== 'skipped') {
-            newChars[cid] = 'queued';
-            touched = true;
-          }
-        });
-        if (!touched) return ch;
-        targetIds.push(ch.id);
-        const wasDone = ch.state === 'done';
-        return {
-          ...ch,
-          characters: newChars,
-          state: wasDone ? 'in_progress' : ch.state,
-          progress: wasDone ? 0.05 : ch.progress,
-          phase: null,
-          errorReason: undefined,
-          currentLine: wasDone ? 0 : ch.currentLine,
-        };
-      });
-      if (targetIds.length) {
-        s.lastError = null;
-        s.generationStartedAt = null;
-      }
-    },
   },
 });
 

@@ -4,7 +4,8 @@
 // is the sole opener and the runner self-drives ticks. This middleware now
 // owns: ENQUEUE-ON-WORK (auto-enqueue the viewed book's pending chapters so the
 // dispatcher drains them — the override replacement), the HALT path, and the
-// pending-revision STUB observer. These tests cover exactly those.
+// plan-114 PROFILE-REGEN PREVIEW GATE (open the A/B player when the previewed
+// chapter completes). These tests cover exactly those.
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
@@ -204,7 +205,7 @@ describe('generationStreamMiddleware — enqueue-on-work (override replacement)'
   });
 });
 
-describe('generationStreamMiddleware — halt + stubs', () => {
+describe('generationStreamMiddleware — halt + preview gate', () => {
   it('requestStreamHalt pauses every open book on the server and tears all streams down', () => {
     const { store, getRunner } = makeStore();
     /* Directly open two cross-book streams via the runner (the dispatcher's
@@ -220,7 +221,7 @@ describe('generationStreamMiddleware — halt + stubs', () => {
     expect(getRunner().openBookCount()).toBe(0);
   });
 
-  it('enqueues a pending-revision stub on a character regen', () => {
+  it('opens a playable A/B stub when the PREVIEWED chapter completes', () => {
     const { store } = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(
@@ -229,11 +230,34 @@ describe('generationStreamMiddleware — halt + stubs', () => {
       ]),
     );
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
-    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'queued' })]));
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'in_progress' })]));
     store.dispatch(
-      chaptersSlice.actions.regenerateCharacter({ characterId: 'keefe', chapterIds: [3] }),
+      uiSlice.actions.setPreviewRegen({
+        characterId: 'keefe',
+        previewChapterId: 3,
+        remainingChapterIds: [4, 5],
+        reason: 'voice',
+        note: '',
+      }),
     );
+    /* chapter_complete for the preview chapter → markRevisionPlayable. The
+       middleware builds the playable stub fresh and opens the diff player. */
+    store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
     const pending = store.getState().revisions.pending;
-    expect(pending.some((p) => p.chapterId === 3 && p.characterId === 'keefe')).toBe(true);
+    expect(pending.some((p) => p.chapterId === 3 && p.characterId === 'keefe' && p.playable)).toBe(
+      true,
+    );
+    expect(store.getState().ui.showRevisionPlayer).toBe(true);
+  });
+
+  it('does NOT open a preview when a chapter completes outside a preview (plain regen, no A/B gate)', () => {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'in_progress' })]));
+    /* No previewRegen → a completing chapter just lands; no stub, no player. */
+    store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
+    expect(store.getState().revisions.pending).toHaveLength(0);
+    expect(store.getState().ui.showRevisionPlayer).toBe(false);
   });
 });

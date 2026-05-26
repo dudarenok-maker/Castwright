@@ -132,9 +132,9 @@ const PERSIST_RULES: Record<
       timeline: s.revisions.timeline,
     }),
   },
-  /* enqueuePending is fired by the generation-stream middleware on every
-     regenerateCharacter dispatch. Persist `pending` so a mid-regen reload
-     rehydrates the in-flight revision stub. markRevisionPlayable
+  /* enqueuePending is fired by the generation-stream middleware when a
+     profile-change preview chapter completes (plan 114). Persist `pending`
+     so a reload rehydrates the in-flight revision stub. markRevisionPlayable
      similarly persists so the playable flip survives a reload after the
      chapter completed but before the user opened the diff. */
   'revisions/enqueuePending': {
