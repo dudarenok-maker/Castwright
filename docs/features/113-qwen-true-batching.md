@@ -31,6 +31,7 @@ owner: null
 - `parseBatchFrame` (`server/src/tts/sidecar.ts`) splits on the FIRST `0x0A` only and verifies the declared `lengths` sum equals the body length.
 - The dispatch partition in `synthesiseChapter` (`server/src/tts/synthesise-chapter.ts`) only batches a group when `route.engine === 'qwen'` AND the resolved provider exposes `synthesizeBatch`; the up-front anchor group is always a single call; each batched chunk is scattered to its OWN `results[group.index]` slot.
 - `_load_voice_prompt` returns `(prompt, lang, cache_hit)` and is shared by `synthesize` + `synthesize_batch` so they can't drift (and the batch path inherits the plan-112 prompt cache).
+- `synthesize` / `synthesize_batch` / `design_voice` run `generate_voice_clone` (and the design forwards) under the per-engine `_synth_lock` (`server/tts-sidecar/main.py`). The Base forward is **not thread-safe**, so this serialises same-engine GPU forwards; a concurrent Kokoro synth still runs in parallel (separate engine instance + lock). See the concurrency-safety fix below.
 
 ## Test plan
 
@@ -40,6 +41,7 @@ owner: null
 - Vitest server (`server/src/tts/synthesise-chapter.test.ts`, `describe('Qwen true batching (plan 112)')`) — byte-identical batched (size 8) vs per-call (size 1); mixes voices in one batch; scatter-back preserves narrative order + timing; mixed Qwen+Kokoro (Kokoro one-per-call, Qwen batched); batchSize-cap splitting; abort propagation + signal forwarding; back-compat fallback when `synthesizeBatch` is absent; heartbeat re-fires during a pending batch.
 - Vitest server (`server/src/tts/sidecar.test.ts`) — the shared error-classification helpers are exercised through `synthesize`; `synthesizeBatch` reuses them unchanged.
 - Vitest frontend (`src/views/generation.test.tsx`) — the "Worker has gone quiet" banner copy now sets the batched-synthesis expectation.
+- `test_synthesize_batch_serialises_concurrent_forwards` — two concurrent batches of DIFFERENT sizes must not overlap inside the model forward (regression for the `8 vs 7` race). Instruments the fake forward to flag concurrent entry; fails without `_synth_lock` (`max_concurrent=2`), passes with it.
 
 ### Manual acceptance walkthrough (real GPU — replaces the deferred spike)
 
@@ -47,6 +49,10 @@ owner: null
 2. Generate one chapter at `QWEN_BATCH_SIZE=1`, then again at `QWEN_BATCH_SIZE=4` (or higher). Expect: **per-line audio perceptually identical** (no drift), no reordered/wrong-voice lines, and a meaningfully shorter wall-clock at the larger batch size.
 3. During a batch, confirm the Generate view never false-trips "Worker has gone quiet" (the heartbeat ticks every 10 s, under the 30 s watchdog).
 4. If drift or VRAM pressure appears, drop `QWEN_BATCH_SIZE` (or `=1` to disable). Canonical manuscript: `C:\Users\dudar\Downloads\the Coalfall Commission.txt` (do not commit).
+
+### Concurrency-safety fix (2026-05-26)
+
+The real-GPU walkthrough at `QWEN_BATCH_SIZE=8` with `GPU_VRAM_BUDGET=2` surfaced an **intermittent** (~2 of 3 chapter runs) `size of tensor a (8) must match tensor b (7) at non-singleton dimension 0` 500 — only at batch sizes that leave a remainder, only with the N-worker parallelism. Root cause: the Base model's `generate_voice_clone` is **not thread-safe**, and two batched forwards of DIFFERENT sizes dispatched in parallel (a full batch of 8 overlapping a chapter's 7-item remainder) collide on shared model state. Confirmed deterministically (6/6) by firing concurrent 8- and 7-item batches; fixed (0/6) by the per-engine `_synth_lock` serialising the forward. The single-voice micro-bench never hit it (parallel calls had identical shapes), and serial replays of the real chapter all passed — the trigger was strictly concurrent different-size forwards. Note this means `GPU_VRAM_BUDGET>1` gives **no safe same-engine Qwen parallelism** (batching is the throughput lever); it still benefits cross-engine coexistence (Kokoro + Qwen).
 
 ## Out of scope
 
