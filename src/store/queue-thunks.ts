@@ -168,14 +168,37 @@ export function startQueueEntry(entryId: string) {
   };
 }
 
-/** POST /api/queue/:entryId/complete — drop a finished entry. The dispatcher's
-    reconcile fires this once a chapter's stream closes. Distinct from
-    cancelQueueEntry (user cancel, 409s an in_progress entry): completion
-    removal is status-agnostic because the entry IS in_progress when its
-    chapter finishes. */
-export function completeQueueEntry(entryId: string) {
+/** POST /api/queue/:entryId/complete — resolve a finished entry. The
+    dispatcher's reconcile fires this once a chapter's stream closes. Distinct
+    from cancelQueueEntry (user cancel, 409s an in_progress entry): completion
+    is status-agnostic because the entry IS in_progress when its chapter
+    finishes. Default `done` done-prunes it; `{ outcome: 'failed', errorReason }`
+    marks it `failed` so it LINGERS in the queue for retry. */
+export function completeQueueEntry(
+  entryId: string,
+  opts?: { outcome?: 'done' | 'failed'; errorReason?: string },
+) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
     const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        outcome: opts?.outcome ?? 'done',
+        ...(opts?.errorReason != null ? { errorReason: opts.errorReason } : {}),
+      }),
+    });
+    const snapshot = await readSnapshot(res);
+    dispatch(queueActions.setSnapshot(snapshot));
+    return snapshot;
+  };
+}
+
+/** POST /api/queue/:entryId/retry — re-queue a FAILED entry (status → queued).
+    The modal's per-row Retry control on a failed entry fires this; the
+    dispatcher then re-claims the now-queued entry and re-runs the chapter. */
+export function retryQueueEntry(entryId: string) {
+  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}/retry`, {
       method: 'POST',
     });
     const snapshot = await readSnapshot(res);

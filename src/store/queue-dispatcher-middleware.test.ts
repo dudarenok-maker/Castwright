@@ -59,9 +59,17 @@ beforeEach(() => {
       const id = u.split('/').slice(-2)[0];
       queueEntries = queueEntries.map((e) => (e.id === id ? { ...e, status: 'in_progress' } : e));
     } else if (init?.method === 'POST' && u.endsWith('/complete')) {
-      /* Done-prune a finished entry (status-agnostic). */
+      /* Resolve a finished entry. Body `{ outcome }`: `done` (default) prunes;
+         `failed` keeps it as failed (lingers for retry). */
       const id = u.split('/').slice(-2)[0];
-      queueEntries = queueEntries.filter((e) => e.id !== id);
+      const body = init?.body ? (JSON.parse(init.body) as { outcome?: string; errorReason?: string }) : {};
+      if (body.outcome === 'failed') {
+        queueEntries = queueEntries.map((e) =>
+          e.id === id ? { ...e, status: 'failed', errorReason: body.errorReason ?? null } : e,
+        );
+      } else {
+        queueEntries = queueEntries.filter((e) => e.id !== id);
+      }
     } else if (init?.method === 'DELETE') {
       const id = u.split('/').pop();
       queueEntries = queueEntries.filter((e) => e.id !== id);
@@ -133,6 +141,20 @@ function completeStream(bookId: string, chapterId: number): void {
   });
   if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
   (call[0] as { onTick: (ev: GenerationTick) => void }).onTick({ type: 'idle' } as GenerationTick);
+}
+
+/* Drive a stream to FAILURE: a chapter_failed tick (records the reason in the
+   runner) followed by idle (closes the stream → wakes the dispatcher, which
+   then reconciles the entry as `failed`). */
+function failStream(bookId: string, chapterId: number, reason: string): void {
+  const call = streamGenerationMock.mock.calls.find((c) => {
+    const a = c[0] as { bookId?: string; chapterIds?: number[] };
+    return a.bookId === bookId && (a.chapterIds ?? []).includes(chapterId);
+  });
+  if (!call) throw new Error(`no open stream for ${bookId}::${chapterId}`);
+  const onTick = (call[0] as { onTick: (ev: GenerationTick) => void }).onTick;
+  onTick({ type: 'chapter_failed', chapterId, errorReason: reason } as GenerationTick);
+  onTick({ type: 'idle' } as GenerationTick);
 }
 
 const openedBookIds = () =>
@@ -232,7 +254,12 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     await flushMicro();
     /* ch3's entry completed (done-prune via /complete, NOT DELETE — the entry
        is in_progress by now); ch4 still in flight (not completed yet). */
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a3/complete', { method: 'POST' });
+    const doneInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: 'done' }),
+    };
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a3/complete', doneInit);
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/api/queue/a4/complete'))).toBe(
       false,
     );
@@ -240,7 +267,7 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     /* Now close chapter 4. */
     completeStream('book-A', 4);
     await flushMicro();
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a4/complete', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/a4/complete', doneInit);
   });
 
   it('fills up to N workers across books and holds the rest', async () => {
@@ -298,9 +325,47 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     completeStream('book-A', 3);
     await flushMicro();
 
-    /* Entry completed exactly once, and no re-open of the done chapter. */
-    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/complete', { method: 'POST' });
+    /* Entry completed exactly once (outcome:done — no failure recorded), and no
+       re-open of the done chapter. */
+    expect(fetchMock).toHaveBeenCalledWith('/api/queue/e1/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outcome: 'done' }),
+    });
     expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a FAILED chapter as failed (lingers) not done-pruned, and a retry re-runs it', async () => {
+    const store = makeStore(1);
+    seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+    await flushMicro();
+    expect(streamGenerationMock).toHaveBeenCalledTimes(1);
+
+    /* Chapter fails: chapter_failed records the reason, then idle closes the
+       stream → the dispatcher reconciles. */
+    failStream('book-A', 3, 'sidecar 500');
+    await flushMicro();
+
+    /* /complete sent outcome:failed → the entry LINGERS as failed (not removed). */
+    const completeCall = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/a3/complete'));
+    expect(completeCall).toBeDefined();
+    expect(JSON.parse((completeCall![1] as { body: string }).body).outcome).toBe('failed');
+    const failed = store.getState().queue.entries.find((e) => e.id === 'a3');
+    expect(failed?.status).toBe('failed');
+    expect(failed?.errorReason).toBe('sidecar 500');
+
+    /* Retry — the user flips it back to queued. The dispatcher must re-claim it
+       (a failed entry was NOT added to the no-reclaim `completed` set), opening
+       a SECOND stream for chapter 3. */
+    queueEntries = queueEntries.map((e) =>
+      e.id === 'a3' ? { ...e, status: 'queued', errorReason: null } : e,
+    );
+    store.dispatch(queueSlice.actions.setSnapshot({ entries: queueEntries, paused: false }));
+    await flushMicro();
+    const opensForCh3 = streamGenerationMock.mock.calls.filter((c) =>
+      ((c[0] as { chapterIds?: number[] }).chapterIds ?? []).includes(3),
+    );
+    expect(opensForCh3).toHaveLength(2);
   });
 
   it('does not double-claim across back-to-back snapshots', async () => {
