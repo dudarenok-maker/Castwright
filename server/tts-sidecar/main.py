@@ -726,30 +726,32 @@ class QwenEngine(Engine):
     # --- qwen_tts integration shims (the only model-API-coupled surface) ---
 
     def _load_qwen_model(self, model_id: str) -> Any:
-        """Load a Qwen3TTSModel. Isolated so the import + from_pretrained
-        signature lives in exactly one place.
+        """Load a Qwen3TTSModel onto self._device. Isolated so the import +
+        from_pretrained signature lives in exactly one place.
 
-        Attention impl: the model supports both SDPA and flash-attn but our
-        load passed neither, so it resolved to whatever transformers picked
-        (often the slow eager path — qwen_tts even warns "Will only run the
-        manual PyTorch version" on import when flash-attn is absent). SDPA
-        ships inside PyTorch (no extra dependency, builds on Windows) and is
-        the right default for the autoregressive decode loop. QWEN_ATTN_IMPL
-        overrides it (e.g. "eager" to benchmark the baseline, or
-        "flash_attention_2" if a flash-attn wheel is installed).
+        Two facts about the real qwen_tts API + this transformers/accelerate
+        stack drive the load shape (both confirmed against logs/tts.err.log):
 
-        Loading is two-tier so the sdpa win can't harden into a load failure:
-          1. PREFERRED — request attn_implementation WITHOUT device_map, then
-             move the model ourselves. Passing device_map routes the load
-             through accelerate's dispatch_model, which leaves attention params
-             on the `meta` device when attn_implementation is set and then 500s
-             trying to move them ("Cannot copy out of meta tensor"). Without
-             device_map every weight is a real tensor, so the (0.6B bf16) model
-             moves to the target device cleanly and sdpa is honoured.
-          2. FALLBACK — on ANY failure of the fast-path (an old build rejecting
-             the kwarg, OR an accelerate/transformers combo that breaks the
-             dispatch), retry the proven-good config: device_map + the library
-             default attention. The single retry's own error propagates."""
+          1. `Qwen3TTSModel` is a thin WRAPPER, not an nn.Module — it holds the
+             real module at `.model` and caches the device at `.device`. It has
+             NO `.to()`, so calling `model.to(device)` raises AttributeError. We
+             move `model.model` ourselves and resync `model.device`; the wrapper
+             sends generate-time inputs to `self.device`
+             (qwen3_tts_model.py: `input_ids.to(self.device)`), so a stale CPU
+             value there would mismatch the GPU weights mid-synth.
+          2. Passing `device_map` routes the load through accelerate's
+             dispatch_model, which on this composite model (talker /
+             code_predictor / encoder sub-modules built from default configs)
+             leaves some params on the `meta` device and then 500s moving them
+             ("Cannot copy out of meta tensor"). We avoid device_map entirely
+             and force `low_cpu_mem_usage=False` so every weight materialises as
+             a real tensor that `.to()` can move.
+
+        Attention impl defaults to sdpa (PyTorch-native, no extra dep, the right
+        default for the autoregressive decode loop); QWEN_ATTN_IMPL overrides it
+        (e.g. "eager" to bench the baseline, "flash_attention_2" with a wheel).
+        A build that *rejects* the kwarg retries without it — the load never
+        hardens into a failure over the attention knob."""
         try:
             import torch  # type: ignore
             from qwen_tts import Qwen3TTSModel  # type: ignore
@@ -760,33 +762,42 @@ class QwenEngine(Engine):
                 "server/tts-sidecar."
             ) from e
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
+        # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
+        # skeleton, so the move below can never hit "copy out of meta tensor".
+        common = {"dtype": torch.bfloat16, "low_cpu_mem_usage": False}
         try:
             model = Qwen3TTSModel.from_pretrained(
-                model_id,
-                dtype=torch.bfloat16,
-                attn_implementation=attn_impl,
+                model_id, attn_implementation=attn_impl, **common
             )
-            model.to(self._device)
-        except Exception as e:
-            # Catch broadly: sdpa can be rejected (ValueError/TypeError) OR
-            # accepted-then-break dispatch (the meta-tensor NotImplementedError
-            # we hit on this box). Either way, fall back to the pre-sdpa load
-            # that always worked — device_map dispatch + default (eager) attn.
+        except (ValueError, TypeError) as e:
+            # Only an old transformers/qwen_tts build that doesn't know the
+            # kwarg lands here — retry with library-default attention. (A
+            # device_map fallback is deliberately NOT used: it is the path that
+            # 500s with the meta-tensor NotImplementedError on this stack.)
             log.warning(
-                "Qwen load: sdpa fast-path failed (attn_implementation=%r): %s; "
-                "falling back to device_map + library-default attention.",
+                "Qwen load: attn_implementation=%r rejected (%s); retrying without it.",
                 attn_impl, e,
             )
-            model = Qwen3TTSModel.from_pretrained(
-                model_id,
-                device_map=self._device,
-                dtype=torch.bfloat16,
-            )
+            model = Qwen3TTSModel.from_pretrained(model_id, **common)
+        # Move the inner nn.Module to the device and resync the wrapper's cached
+        # device (the wrapper has no `.to()` — see docstring point 1).
+        inner = getattr(model, "model", None)
+        if inner is not None and hasattr(inner, "to"):
+            inner.to(self._device)
+        else:  # defensive: wrapper-API drift moved the module — move the object.
+            model.to(self._device)
+        try:
+            model.device = torch.device(self._device)
+        except Exception:
+            pass
         # Surface the impl that actually took effect (getattr-guarded — the
         # nested attribute path can drift across qwen_tts/transformers versions).
         resolved = getattr(getattr(model, "model", None), "config", None)
         resolved_impl = getattr(resolved, "_attn_implementation", "unknown")
-        log.info("Qwen model=%s attn_implementation=%s", model_id, resolved_impl)
+        log.info(
+            "Qwen model=%s attn_implementation=%s device=%s",
+            model_id, resolved_impl, self._device,
+        )
         return model
 
     def _ensure_base_loaded(self) -> None:
