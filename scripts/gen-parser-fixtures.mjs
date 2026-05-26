@@ -369,6 +369,107 @@ const opfPrefixedPath = resolve(fixturesDir, 'sample-opf-prefixed.epub');
 writeFileSync(opfPrefixedPath, buildOpfPrefixedEpub());
 console.log(`wrote ${opfPrefixedPath}`);
 
+/* srv-13 fixture: like buildOpfPrefixedEpub (namespace-prefixed OPF → the
+   raw-zip fallback runs, since epub2 yields an empty flow) but with the three
+   NCX-vs-body title scenarios from buildTitleFallbackEpub. Proves the fallback
+   now reads navLabels from toc.ncx — the merged "Chapter 1 — …" title is only
+   reachable if the NCX was parsed. The unprefixed equivalent is
+   sample-title-fallback.epub; both should yield identical titles.
+   - chapter1: generic NCX "Chapter 1" + descriptive body <h1> → merge.
+   - chapter2: empty NCX label + descriptive body <h2> → body heading verbatim.
+   - chapter3: descriptive NCX + body <h1> → NCX kept unchanged.
+   Chapters live under OEBPS/text/ while toc.ncx is at OEBPS/, so the NCX
+   `content src` (relative to the NCX dir) resolution path is exercised. */
+function buildOpfPrefixedTitleFallbackEpub() {
+  const containerXml = `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`;
+
+  const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
+<opf:package xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" unique-identifier="bookid" version="2.0">
+  <opf:metadata>
+    <dc:title>The Northern Star</dc:title>
+    <dc:creator opf:role="aut">Jane Doe</dc:creator>
+    <dc:identifier id="bookid">urn:uuid:fixture-opfpfx-tfb-0001</dc:identifier>
+    <dc:language>en</dc:language>
+  </opf:metadata>
+  <opf:manifest>
+    <opf:item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <opf:item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <opf:item id="ch2" href="text/chapter2.xhtml" media-type="application/xhtml+xml"/>
+    <opf:item id="ch3" href="text/chapter3.xhtml" media-type="application/xhtml+xml"/>
+  </opf:manifest>
+  <opf:spine toc="ncx">
+    <opf:itemref idref="ch1"/>
+    <opf:itemref idref="ch2"/>
+    <opf:itemref idref="ch3"/>
+  </opf:spine>
+</opf:package>`;
+
+  const tocNcx = `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="urn:uuid:fixture-opfpfx-tfb-0001"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle><text>The Northern Star</text></docTitle>
+  <navMap>
+    <navPoint id="np1" playOrder="1"><navLabel><text>Chapter 1</text></navLabel><content src="text/chapter1.xhtml"/></navPoint>
+    <navPoint id="np2" playOrder="2"><navLabel><text> </text></navLabel><content src="text/chapter2.xhtml"/></navPoint>
+    <navPoint id="np3" playOrder="3"><navLabel><text>What the Captain Knew</text></navLabel><content src="text/chapter3.xhtml"/></navPoint>
+  </navMap>
+</ncx>`;
+
+  const chapter1 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 1</title></head>
+<body>
+  <h1>The Berth at Liverpool</h1>
+  <p>The gangplank groaned beneath her boots.</p>
+</body>
+</html>`;
+
+  const chapter2 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 2</title></head>
+<body>
+  <h2>A Manifest Two Names Short</h2>
+  <p>The clerk frowned at the ledger.</p>
+</body>
+</html>`;
+
+  const chapter3 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>What the Captain Knew</title></head>
+<body>
+  <h1>What the Captain Knew</h1>
+  <p>He did not, in fact, know.</p>
+</body>
+</html>`;
+
+  const zip = new AdmZip();
+  zip.addFile('mimetype', Buffer.from('application/epub+zip', 'utf8'), '', 0);
+  zip.addFile('META-INF/container.xml', Buffer.from(containerXml, 'utf8'));
+  zip.addFile('OEBPS/content.opf', Buffer.from(contentOpf, 'utf8'));
+  zip.addFile('OEBPS/toc.ncx', Buffer.from(tocNcx, 'utf8'));
+  zip.addFile('OEBPS/text/chapter1.xhtml', Buffer.from(chapter1, 'utf8'));
+  zip.addFile('OEBPS/text/chapter2.xhtml', Buffer.from(chapter2, 'utf8'));
+  zip.addFile('OEBPS/text/chapter3.xhtml', Buffer.from(chapter3, 'utf8'));
+  return zip.toBuffer();
+}
+
+const opfPrefixedTitlesPath = resolve(fixturesDir, 'sample-opf-prefixed-titles.epub');
+writeFileSync(opfPrefixedTitlesPath, buildOpfPrefixedTitleFallbackEpub());
+console.log(`wrote ${opfPrefixedTitlesPath}`);
+
 /* Fifth fixture (plan 116): DRM diagnostic. Prefixed OPF (so the fallback
    runs) + a META-INF/encryption.xml entry + a content doc with no extractable
    text. The fallback finds zero chapters and, seeing encryption.xml, throws
