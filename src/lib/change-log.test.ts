@@ -11,6 +11,7 @@ import {
   buildCastConfirmEvent,
   buildVoiceTuneEvent,
   buildVoiceLockEvent,
+  buildNameChangeEvent,
   buildBoundaryMoveEvent,
   bucketDate,
   relativeTime,
@@ -198,6 +199,22 @@ describe('buildVoiceLockEvent', () => {
     expect(ev.type).toBe('voice_lock');
     expect(ev.title).toBe("Locked Captain Halloran's voice");
     expect(ev.actor).toBe('you');
+  });
+});
+
+describe('buildNameChangeEvent', () => {
+  it('records the old name in the title and the new name in the note', () => {
+    const ev = buildNameChangeEvent({
+      oldName: 'Dame Linnet',
+      newName: 'Councilor Linnet',
+      now: NOW,
+    });
+    expect(ev.type).toBe('name_change');
+    expect(ev.actor).toBe('you');
+    expect(ev.title).toBe('Renamed Dame Linnet');
+    expect(ev.note).toContain('Councilor Linnet');
+    /* Frames the rename as non-destructive — the old name is kept as an alias. */
+    expect(ev.note).toContain('alias');
   });
 });
 

@@ -291,6 +291,30 @@ export function buildVoiceTuneEvent(args: {
   };
 }
 
+/** User-emitted event: a character was renamed (free-text) OR an alias was
+    promoted to the primary name, both via the Profile Drawer's rename
+    affordances (`castActions.renameCharacter`). The old name is preserved as
+    an alias by the reducer, so the note frames the change as "now known as"
+    rather than a destructive replace. */
+export function buildNameChangeEvent(args: {
+  oldName: string;
+  newName: string;
+  now?: Date;
+}): ChangeLogEvent {
+  const { oldName, newName } = args;
+  const now = args.now ?? new Date();
+  return {
+    id: now.getTime(),
+    at: now.toISOString(),
+    ts: 'Just now',
+    date: 'today',
+    type: 'name_change',
+    title: `Renamed ${oldName}`,
+    note: `Now known as "${newName}". The old name is kept as an alias.`,
+    actor: 'you',
+  };
+}
+
 /** User-emitted event: a character's voice was locked via Profile Drawer. */
 export function buildVoiceLockEvent(args: { character: Character; now?: Date }): ChangeLogEvent {
   const { character } = args;
