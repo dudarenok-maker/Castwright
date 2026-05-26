@@ -50,7 +50,7 @@ import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
-import { importGenerationView } from '../routes/prefetch';
+import { importGenerationView, importUploadView } from '../routes/prefetch';
 import { ToastStack } from './toast-stack';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
@@ -145,6 +145,20 @@ export function Layout() {
     generationChunkWarmed.current = true;
     void importGenerationView();
   }, [stageKind, activeStreams.length]);
+
+  /* Same trick for the lazy UploadView chunk: warm it while the user sits on
+     the library landing page, the page hosting the "New project" entry. The
+     upload chunk graph is heavy (upload.tsx + manuscript-diff.tsx), so the
+     first cold download otherwise stretches the "#/new" route Suspense
+     fallback into a multi-second "Loading…". Gated on the books stage so it
+     doesn't compete with first paint of any in-book view; one-shot via ref. */
+  const uploadChunkWarmed = useRef(false);
+  useEffect(() => {
+    if (uploadChunkWarmed.current) return;
+    if (stageKind !== 'books') return;
+    uploadChunkWarmed.current = true;
+    void importUploadView();
+  }, [stageKind]);
 
   const matchCharacter = ui.matchDetailFor
     ? (characters.find((c) => c.id === ui.matchDetailFor) ?? null)
