@@ -298,3 +298,81 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(scroller.className).toMatch(/scrollbar-thin/);
   });
 });
+
+describe('VoiceLibraryPanel — search', () => {
+  const lib: Voice[] = [
+    makeVoice('v_Marlow', 'Marlow Halden', { bookTitle: 'The Hollow Tide' }),
+    makeVoice('v_Oduvan', 'Oduvan', { bookTitle: 'The Hollow Tide' }),
+    makeVoice('v_ro', 'Ro', { bookTitle: 'Flashback' }),
+  ];
+
+  it('filters cards by character name as the user types', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
+    expect(screen.getByText('Oduvan')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'Marlow' },
+    });
+    expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
+    expect(screen.queryByText('Oduvan')).toBeNull();
+    expect(screen.queryByText('Ro')).toBeNull();
+  });
+
+  it('also matches on book title', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'flashback' },
+    });
+    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
+  });
+
+  it('applies the tab filter before the query (tab wins first)', () => {
+    /* Marlow is "current", Ro is a "library"/series voice. On the Series tab
+       only Ro is eligible, so searching "Marlow" finds nothing even though
+       the name matches — the tab filter runs before the query. */
+    const mixed: Voice[] = [
+      makeVoice('v_Marlow', 'Marlow Halden', { source: 'current' }),
+      makeVoice('v_ro', 'Ro', { source: 'library', bookTitle: 'Flashback', bookId: 'fb' }),
+    ];
+    render(
+      <VoiceLibraryPanel library={mixed} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Series' }));
+    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'Marlow' },
+    });
+    expect(screen.getByText(/No voices match/)).toBeInTheDocument();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
+  });
+
+  it('restores the full tab-filtered list when the query is cleared', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    const input = screen.getByPlaceholderText('Search voices');
+    fireEvent.change(input, { target: { value: 'Marlow' } });
+    expect(screen.queryByText('Oduvan')).toBeNull();
+    fireEvent.change(input, { target: { value: '' } });
+    expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
+    expect(screen.getByText('Oduvan')).toBeInTheDocument();
+    expect(screen.getByText('Ro')).toBeInTheDocument();
+  });
+
+  it('shows an empty-state line when no voice matches the query', () => {
+    render(
+      <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search voices'), {
+      target: { value: 'zzzznope' },
+    });
+    expect(screen.getByText(/No voices match/)).toBeInTheDocument();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
+  });
+});
