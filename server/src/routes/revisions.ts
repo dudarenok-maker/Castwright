@@ -14,39 +14,14 @@
    regen — the user still chooses. */
 
 import { Router, type Request, type Response } from 'express';
-import { existsSync, readdirSync } from 'node:fs';
-import { audioDir, castJsonPath, revisionsJsonPath } from '../workspace/paths.js';
+import { castJsonPath, revisionsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
 import { toVoiceLike, buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
-
-interface CharacterSnapshot {
-  tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
-  gender?: 'male' | 'female' | 'neutral';
-  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
-  voiceId?: string;
-  voiceEngine?: string;
-  /** The voice NAME resolved at render time (plan 108 Wave 2b). Lets the
-      detector catch an override-only change (same voiceId, different
-      per-engine override) that the voiceId comparison misses. Absent on
-      pre-108 segments → fall back to voiceId. */
-  resolvedVoiceName?: string;
-  /** Attribute list captured at synthesis time, sorted by
-      generation.ts. Compared against the current cast's attributes —
-      any non-empty symmetric difference fires a moderate-severity drift
-      event because attributes drive prebuilt-voice selection. */
-  attributes?: string[];
-}
-
-interface SegmentsFile {
-  chapterId: number;
-  chapterTitle?: string;
-  synthesizedAt?: string;
-  characterSnapshots?: Record<string, CharacterSnapshot>;
-}
+import { loadSegmentsFiles, type CharacterSnapshot } from '../audio/segments-io.js';
 
 /* CastCharacter is imported from synthesise-chapter.ts (plan 108 R5) so the
    resolved-voice drift comparison below can reuse toVoiceLike +
@@ -405,29 +380,4 @@ function driftId(
      collide for different books with parallel-numbered chapters and
      shared narrator id. */
   return `drift:${ctx.bookId}:${ctx.chapterId}:${ctx.characterId}:${factor}`;
-}
-
-async function loadSegmentsFiles(
-  bookDir: string,
-  chapters: Array<{ id: number; slug: string }>,
-): Promise<SegmentsFile[]> {
-  const root = audioDir(bookDir);
-  if (!existsSync(root)) return [];
-  const filesOnDisk = new Set<string>();
-  try {
-    for (const f of readdirSync(root)) {
-      if (f.endsWith('.segments.json')) filesOnDisk.add(f);
-    }
-  } catch {
-    return [];
-  }
-
-  const out: SegmentsFile[] = [];
-  for (const ch of chapters) {
-    const fileName = `${ch.slug}.segments.json`;
-    if (!filesOnDisk.has(fileName)) continue;
-    const seg = await readJson<SegmentsFile>(`${root}/${fileName}`).catch(() => null);
-    if (seg && typeof seg.chapterId === 'number') out.push(seg);
-  }
-  return out;
 }
