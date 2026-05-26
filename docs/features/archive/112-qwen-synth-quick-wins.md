@@ -31,7 +31,7 @@ Generation with the Qwen engine is 5–10× slower than Kokoro. Investigation ag
 - `QwenEngine.synthesize` resolves the voice prompt (`_load_voice_prompt`) **before** `_ensure_base_loaded()`, so an undesigned voice raises without paying the model load (`main.py`).
 - `_load_voice_prompt` releases `_cache_lock` across `torch.load` — a concurrent double-miss double-loads (benign, same content); it never holds the lock during I/O.
 - `design_voice` calls `self._prompt_cache.pop(voice_id, None)` (evict, **not** warm) after writing the `.pt`/`.json`, so the next synth reloads the fresh embedding.
-- `_load_qwen_model` retries `from_pretrained` without `attn_implementation` if the kwarg is rejected — a load must never harden into a failure over the attention knob.
+- `_load_qwen_model` is two-tier: the sdpa fast-path passes `attn_implementation` **without** `device_map` then `model.to(device)`; on **any** exception it retries the proven-good `device_map` + library-default (eager) config — a load must never harden into a failure over the attention knob. (Broadened from the original `(ValueError, TypeError)`-only catch — see Post-ship fix below.)
 
 ## Test plan
 
@@ -43,7 +43,9 @@ Pytest sidecar (`server/tts-sidecar/tests/test_qwen3.py`):
 - `test_redesign_evicts_cached_prompt` — re-design drops the cache entry; next synth reloads.
 - `test_unload_clears_prompt_cache` — `unload()` empties `_prompt_cache`.
 - `test_load_passes_sdpa_attn_by_default` / `test_load_honours_qwen_attn_impl_env` — loader passes `attn_implementation="sdpa"` by default, honours `QWEN_ATTN_IMPL`.
-- `test_load_falls_back_when_attn_kwarg_rejected` — kwarg rejection → retry without it, load still succeeds.
+- `test_load_falls_back_when_attn_kwarg_rejected` — kwarg rejection (ValueError) → retry without it, load still succeeds.
+- `test_load_falls_back_when_sdpa_dispatch_fails` — sdpa **accepted then breaks** dispatch (meta-tensor `NotImplementedError`) → fast-path drops `device_map`, fallback restores it; load still succeeds (Post-ship fix regression test).
+- `test_load_passes_sdpa_attn_by_default` also asserts the fast-path passes **no** `device_map`.
 - Existing `test_synthesize_reuses_cached_voice` (asserts `weights_only=False` on the disk load) stays green — design evicts, so the first synth still loads from disk.
 
 Whole sidecar suite green via `npm run test:sidecar` (≈141 cases, exit 0).
@@ -75,3 +77,9 @@ Shipped exactly as specced: SDPA attention by default (`QWEN_ATTN_IMPL`, ships b
 Deploy-box config: `GPU_VRAM_BUDGET=2` set in `server/.env` on the target 4070, so `sentenceConcurrency`/`poolWidth` defaults to 2 (two concurrent Qwen synths per chapter; Kokoro+Qwen coexistence preserved at cost 1 each).
 
 Open (non-blocking) manual acceptance: the baseline-vs-SDPA RTF delta and the concurrency curve were NOT captured before close-out — run `bench-tts.py` per the "Manual acceptance walkthrough" anytime to record them. The real throughput lever (sentence batching) is tracked as `side-3` (in flight); `side-4` covers the `x_vector_only_mode` fidelity tradeoff.
+
+### Post-ship fix (2026-05-26) — sdpa + device_map meta-tensor crash
+
+The shipped `_load_qwen_model` passed `attn_implementation="sdpa"` **alongside** `device_map="cuda:0"`. The kwarg is accepted (sdpa is valid), but `device_map` routes the load through accelerate's `dispatch_model`, which leaves attention params on the `meta` device and then raises `NotImplementedError: Cannot copy out of meta tensor` when it tries to move them. The original fallback only caught `(ValueError, TypeError)` (a kwarg *rejection*), so this dispatch-time failure escaped: `POST /load` 500'd, the Qwen pill spun ~5s and reverted to "Qwen idle" — the model never loaded. (Ground truth: `logs/tts.err.log` traceback at `main.py` `_load_qwen_model` → `accelerate/big_modeling.py:dispatch_model` → `model.to(device)`.)
+
+Fix: the loader is now two-tier — the sdpa fast-path loads **without** `device_map` then calls `model.to(self._device)` (real tensors, no meta dispatch, sdpa still honoured), and the `except` is broadened to `Exception` so any fast-path failure retries the pre-sdpa `device_map` + default-attention config that always worked. Regression test `test_load_falls_back_when_sdpa_dispatch_fails` reproduces the meta-tensor `NotImplementedError` and asserts the fallback. Shipped via the `fix/sidecar-qwen-sdpa-meta-tensor-load` branch.
