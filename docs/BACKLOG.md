@@ -67,15 +67,6 @@ Source: net-new (2026-05-20). Captured during planning of the next full version 
 
 ## Should — important, not blocking ship
 
-### `fs-3` — Streaming audio for live playback during chapter generation
-
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
-
-- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
-- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
-- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
-- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
-
 ### `side-2` — Clean up deployer-facing warnings from the Qwen install + sidecar startup
 
 Source: net-new (2026-05-24). Surfaced running `scripts/install-qwen3.mjs` on a clean Windows box — the install + first model load print several scary-looking-but-mostly-benign warnings that an alpha-tester deployer can't tell apart from real errors. To be fixed in a dedicated cleanup run (user-directed). Sweep ALL such warnings and decide suppress-vs-document for each; today's known ones:
@@ -124,6 +115,38 @@ Source: net-new (2026-05-26). Surfaced fixing the orphaned-`in_progress` stall �
 - _Depends on:_ `srv` boot-reset shipped (PR #245). Conceptually a down-payment on plan 110 Part B (server owning the queue-entry lifecycle); could be folded into that work or shipped standalone.
 - _Benefit (user / technical):_ closes the last orphaned-`in_progress` stall path — a browser refresh mid-generation no longer strands a chapter until the user restarts the server. Together with the shipped boot sweep, every orphan trigger (restart, crash, reload) self-heals.
 
+### `fe-8` — Profile-drawer "Possible duplicate of …" chip
+
+Source: net-new (2026-05-22). Deferred from plan 101 — voices-view ⚠ pill + selection-pill swap are the v1 surfaces; this is the per-character drawer-side discoverability fix.
+
+> **Promoted Could → Should (2026-05-26):** the three plan-101 cross-book duplicate-review follow-ups (`fe-8` / `fe-9` / `fs-11`) move up together as one cast-cleanup effort — duplicate detection is only useful if resolving the duplicates is low-friction, and today it's stranded behind a single voices-view surface.
+
+- _What:_ When a character has at least one auto-detected cross-book duplicate candidate (same predicate as `src/lib/cross-book-duplicates.ts`), render a small `⚠ Possible duplicate of "<other.name>" (<other-book-title>) →` chip near the top of `src/modals/profile-drawer.tsx`. Click → opens the same `DuplicateReviewModal` pre-populated with the pair. Layout.tsx computes the candidate at drawer mount and passes it as a new optional prop.
+- _Acceptance:_ With the mock unlinked Eliza Gray (ns) + Eliza (sb) pair, open Eliza Gray's profile drawer → chip visible with "Possible duplicate of Eliza (Solway Bay) →". Click → modal opens with both rows. Same modal handles link / variant. After resolving, the chip disappears on the next drawer open.
+- _Key files:_ `src/modals/profile-drawer.tsx` (new optional props + chip render), `src/components/layout.tsx` (compute candidate, mount modal alongside drawer), `src/modals/profile-drawer.test.tsx` (paired cases).
+- _Depends on:_ plan 101 v1 already merged (this round). No server changes — reuses the v1 transport.
+- _Benefit (user):_ closes the cast-side discoverability gap. Today (post-v1) a duplicate is only surfaced on `#/voices`; users who live in the cast view don't see the affordance until they navigate to voices. The chip pulls the same signal into the drawer they're already looking at.
+
+### `fe-9` — Bulk cross-book duplicate review (one modal per series)
+
+Source: net-new (2026-05-22). Deferred from plan 101 — v1 is one-pair-at-a-time; this is the bulk-walkthrough enhancement.
+
+- _What:_ A `Review all duplicates in <Series Name>` button on the voices view (e.g. above the family grid) that opens a single modal walking through every detected pair in that series. User chooses link / variant / skip per pair; "Next" advances. Useful for the post-import case where the analyzer missed a recurring character across 3-4 books in a long series and the user wants to clean up in one sitting.
+- _Acceptance:_ With a workspace containing N duplicate candidates across one series, click `Review all duplicates in …` → modal opens at pair 1 of N → choose an action → modal advances to pair 2 → … → final pair → modal closes. Each action persists via the existing v1 routes.
+- _Key files:_ `src/modals/bulk-duplicate-review.tsx` (new — wraps `DuplicateReviewModal`'s actions with a queue), `src/views/voices.tsx` (entry button).
+- _Depends on:_ plan 101 v1 already merged.
+- _Benefit (user):_ reduces the cost of cleaning up an N-book series from N modal opens to 1. Useful exactly once per series after the user enables auto-detection or imports a long backlog of books.
+
+### `fs-11` — Undo for "different on purpose" decisions
+
+Source: net-new (2026-05-22). Deferred from plan 101 — the variant decision is currently durable but lacks a reverse path.
+
+- _What:_ When the user accidentally marks a pair as "Different on purpose" and wants to re-surface the duplicate-candidate suggestion, today there's no UI to remove the `notLinkedTo` entry. Add a "Show ignored duplicate suggestions" toggle on the voices view that surfaces every previously-variant-marked pair with an "Unmark" action. Server route gains `DELETE` semantics (or `{ remove: true }` in the body) for symmetric pair-removal.
+- _Acceptance:_ Mark a pair as variant. Click the new toggle → variant-marked pair appears in an "Ignored" section with an Unmark button. Click Unmark → the pair re-appears as a duplicate-candidate on its family card.
+- _Key files:_ `server/src/routes/cast-not-linked-to.ts` (extend with DELETE), `src/views/voices.tsx` (toggle + ignored section), paired tests.
+- _Depends on:_ plan 101 v1 already merged.
+- _Benefit (user):_ reversibility. The variant decision should be as easy to undo as to set — without this, a misclick is permanent until the user opens cast.json by hand.
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -164,21 +187,24 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 - _Depends on:_ none.
 - _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
 
+#### `fs-3` — Streaming audio for live playback during chapter generation
+
+Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
+
+> **Re-prioritised Should → Could (2026-05-26):** generation now runs close to real-time speech speed (Qwen end-to-end ~RTF 1.15, Kokoro faster), so the wait a streaming player would hide is small — a chapter finishes about as fast as you could start listening to it stream. Worth doing for the "listen as it generates" polish, not for throughput.
+
+- _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
+- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
+- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
+- _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
+
 ### Revisions & history
-
-#### `fs-4` — Per-segment regen consumer for `revisions.acceptedSelections`
-
-Source: plan 20 close-out (2026-05-18). The `revisions.acceptedSelections` map is persisted by `revisionsActions.acceptRevision` but no in-app code reads it back — per-segment splicing of accepted takes was explicitly "Out of scope" for plan 20 v1, and remains so in the v1 close-out.
-
-- _What:_ Add a per-segment regen path that consumes `acceptedSelections[revisionId]` to re-render only the segments the user flipped to 'B' (the new take) while preserving 'A' (the original) segments verbatim. This requires (a) a server endpoint that accepts `{ revisionId, segmentSelections }` and dispatches per-segment synth, (b) a segments-manifest merge step that interleaves the two takes on disk, (c) a frontend trigger from the revision-diff player's "Commit selection" action.
-- _Acceptance:_ Open a pending revision, toggle segments 3 + 7 to 'B' (others 'A'), click "Commit selection" → the chapter MP3 is rewritten with segments 3 + 7 re-rendered from the new take, all other segments byte-identical to the preserved (A) take. Server Vitest covers the manifest merge + per-segment synth; frontend Vitest covers the action dispatch shape; e2e covers the audition-then-commit flow.
-- _Key files:_ new `server/src/routes/revisions-commit-segments.ts`; `server/src/tts/synthesise-chapter.ts` (extend for per-segment paths); `src/views/revision-diff.tsx` (dispatch through the new endpoint); `src/store/revisions-slice.ts` (mark the revision as committed once the segment-level synth completes).
-- _Depends on:_ plan 20 shipped (acceptedSelections persistence is already on disk). Pairs with `fs-5` (multi-step rollback / snapshot-per-entry) — the timeline becomes meaningful once per-segment commits land separately from full regens.
-- _Benefit (user):_ true segment-level revision control. Today accept/reject is whole-revision swap — if the user likes 9 of 10 segments in the new take but wants segment 7 from the original, they have to regenerate the whole chapter under different prompts to recover that one segment. This closes the loop the slice has been quietly capturing since plan 20 v1.
 
 #### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history)
 
 Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
+
+> **Standalone value (2026-05-26):** kept in Could on its own merits after `fs-4` (per-segment commits) was retired — this is _chapter-level_ non-linear undo (whole-entry rollback), not segment-level, and plan 55's slice plumbing (`rolledBack` reducer + `reversible` field) is already on disk, so it's a self-contained feature, not gated on segment-level revision.
 
 - _What:_ Extend plan 20's `preserveExistingAsPrevious` to write `.previous.<entryId>.<slug>.mp3` per timeline entry (not just one `.previous.<slug>.mp3` per chapter). Wire a server `POST /api/books/:bookId/revisions/:entryId/rollback` endpoint that restores a specific timeline entry's audio + flips subsequent entries to `rolled-back-from`. Add a GC pass that prunes oldest snapshots after the user commits (or when disk pressure exceeds a cap, e.g. 10 entries / chapter).
 - _Acceptance:_ Generate chapter, regenerate twice, accept both. Open History → 2 active entries each `reversible: true`. Click Rollback on entry 1 → chapter audio reverts to entry-1's state; entry 2 marked `rolled-back-from`. New rollback can target a still-reversible entry; double-rollback → 409.
@@ -197,36 +223,6 @@ Source: plan 114 ship (2026-05-26). The profile-regen preview gate's full click-
 - _Benefit (technical):_ unblocks browser-level coverage of the preview gate's redux/layout/timing seam (auto-open on `chapter_complete`) that jsdom can lie about; also unblocks the long-deferred revision-diff player e2e.
 
 ### Cast, voice & duplicates
-
-#### `fe-8` — Profile-drawer "Possible duplicate of …" chip
-
-Source: net-new (2026-05-22). Deferred from plan 101 — voices-view ⚠ pill + selection-pill swap are the v1 surfaces; this is the per-character drawer-side discoverability fix.
-
-- _What:_ When a character has at least one auto-detected cross-book duplicate candidate (same predicate as `src/lib/cross-book-duplicates.ts`), render a small `⚠ Possible duplicate of "<other.name>" (<other-book-title>) →` chip near the top of `src/modals/profile-drawer.tsx`. Click → opens the same `DuplicateReviewModal` pre-populated with the pair. Layout.tsx computes the candidate at drawer mount and passes it as a new optional prop.
-- _Acceptance:_ With the mock unlinked Eliza Gray (ns) + Eliza (sb) pair, open Eliza Gray's profile drawer → chip visible with "Possible duplicate of Eliza (Solway Bay) →". Click → modal opens with both rows. Same modal handles link / variant. After resolving, the chip disappears on the next drawer open.
-- _Key files:_ `src/modals/profile-drawer.tsx` (new optional props + chip render), `src/components/layout.tsx` (compute candidate, mount modal alongside drawer), `src/modals/profile-drawer.test.tsx` (paired cases).
-- _Depends on:_ plan 101 v1 already merged (this round). No server changes — reuses the v1 transport.
-- _Benefit (user):_ closes the cast-side discoverability gap. Today (post-v1) a duplicate is only surfaced on `#/voices`; users who live in the cast view don't see the affordance until they navigate to voices. The chip pulls the same signal into the drawer they're already looking at.
-
-#### `fe-9` — Bulk cross-book duplicate review (one modal per series)
-
-Source: net-new (2026-05-22). Deferred from plan 101 — v1 is one-pair-at-a-time; this is the bulk-walkthrough enhancement.
-
-- _What:_ A `Review all duplicates in <Series Name>` button on the voices view (e.g. above the family grid) that opens a single modal walking through every detected pair in that series. User chooses link / variant / skip per pair; "Next" advances. Useful for the post-import case where the analyzer missed a recurring character across 3-4 books in a long series and the user wants to clean up in one sitting.
-- _Acceptance:_ With a workspace containing N duplicate candidates across one series, click `Review all duplicates in …` → modal opens at pair 1 of N → choose an action → modal advances to pair 2 → … → final pair → modal closes. Each action persists via the existing v1 routes.
-- _Key files:_ `src/modals/bulk-duplicate-review.tsx` (new — wraps `DuplicateReviewModal`'s actions with a queue), `src/views/voices.tsx` (entry button).
-- _Depends on:_ plan 101 v1 already merged.
-- _Benefit (user):_ reduces the cost of cleaning up an N-book series from N modal opens to 1. Useful exactly once per series after the user enables auto-detection or imports a long backlog of books.
-
-#### `fs-11` — Undo for "different on purpose" decisions
-
-Source: net-new (2026-05-22). Deferred from plan 101 — the variant decision is currently durable but lacks a reverse path.
-
-- _What:_ When the user accidentally marks a pair as "Different on purpose" and wants to re-surface the duplicate-candidate suggestion, today there's no UI to remove the `notLinkedTo` entry. Add a "Show ignored duplicate suggestions" toggle on the voices view that surfaces every previously-variant-marked pair with an "Unmark" action. Server route gains `DELETE` semantics (or `{ remove: true }` in the body) for symmetric pair-removal.
-- _Acceptance:_ Mark a pair as variant. Click the new toggle → variant-marked pair appears in an "Ignored" section with an Unmark button. Click Unmark → the pair re-appears as a duplicate-candidate on its family card.
-- _Key files:_ `server/src/routes/cast-not-linked-to.ts` (extend with DELETE), `src/views/voices.tsx` (toggle + ignored section), paired tests.
-- _Depends on:_ plan 101 v1 already merged.
-- _Benefit (user):_ reversibility. The variant decision should be as easy to undo as to set — without this, a misclick is permanent until the user opens cast.json by hand.
 
 #### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>`
 
@@ -262,38 +258,7 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 - _Depends on:_ plan 108 (series-scoped write) shipped.
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 
-#### `srv-6` — Engine-drift factor polish + `resolvedVoiceName` backfill
-
-Source: net-new (2026-05-24). Spun off from [plan 108](features/108-qwen-coexistence.md)'s R5 drift fix.
-
-- _What:_ Plan 108 adds an explicit engine-drift factor and snapshots the _resolved_ voice name (`CharacterSnapshot.resolvedVoiceName`) so override-only voice changes trip drift. Chapters rendered BEFORE that change have no `resolvedVoiceName` and degrade to "no signal." Add a one-shot backfill script (mirror `scripts/relufs-existing.mjs`) that recomputes `resolvedVoiceName` for existing `segments.json` from the cast at render time where derivable, so legacy chapters participate in override-drift detection.
-- _Acceptance:_ Running the backfill over a book generated before plan 108 populates `resolvedVoiceName` on its `segments.json` snapshots; a subsequent rebaseline of that book surfaces voice drift on those legacy chapters.
-- _Key files:_ new `scripts/backfill-resolved-voice-name.mjs`; `server/src/routes/revisions.ts` (drift comparison); `server/src/tts/synthesise-chapter.ts` (snapshot writer).
-- _Depends on:_ plan 108 Wave 4 (R5 drift fix) shipped.
-- _Benefit (user):_ rebaseline drift is complete for books generated before the feature landed, not just new ones.
-
 ### Engine, sidecar & analyzer
-
-#### `srv-5` — Tune per-engine VRAM cost map against real hardware
-
-Source: net-new (2026-05-24). Spun off from [plan 108](features/108-qwen-coexistence.md) — the VRAM-weighted GPU semaphore ships with provisional per-engine costs (R2).
-
-- _What:_ The `ENGINE_VRAM_COST` map in `server/src/tts/engine-vram-cost.ts` and the default `GPU_VRAM_BUDGET` ship as estimates (analyzer ≈ budget, coqui ≈ 3, kokoro ≈ 1, qwen ≈ 1, gemini = 0; budget ≈ 4). Measure actual peak VRAM per engine during synth on the target 8 GB GPU (per the reboot-before-perf-baselines protocol) and correct the constants so two engines pack without spilling and a single heavy engine doesn't over-serialize.
-- _Acceptance:_ With corrected costs, a Kokoro+Qwen mixed-engine run holds both resident with headroom for the analyzer to evict-and-reload; `nvidia-smi` peak stays under the card's VRAM; no spill-to-RAM slowdown. Numbers documented in plan 108's Ship notes.
-- _Key files:_ `server/src/tts/engine-vram-cost.ts`; `server/.env.example` (`GPU_VRAM_BUDGET` doc); plan 108 Ship notes.
-- _Depends on:_ plan 108 Wave 1 (the weighted semaphore) shipped.
-- _Benefit (technical):_ correct VRAM accounting is the difference between two engines coexisting smoothly and thrashing the GPU. Estimates unblock the feature; measured values make it reliable.
-- _Update (2026-05-26):_ the plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so budget>1 gives **no same-engine Qwen parallelism** — the cost map matters only for **cross-engine** packing (Kokoro 1 + Qwen 1 coexisting, vs Coqui 3 / analyzer 4). Empirically `GPU_VRAM_BUDGET=2` + `QWEN_BATCH_SIZE=8` ran an end-to-end Qwen chapter without VRAM trouble on the 4070; what's still unmeasured is true per-engine *peak* VRAM for the cross-engine packing case.
-
-#### `srv-3` — Per-call local→Gemini analyzer overflow
-
-Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
-
-- _What:_ Extend `FallbackAnalyzer` (`server/src/analyzer/index.ts:159-210`) to route partial load to Gemini when local Ollama is slow (not just unreachable). Different from plan 88's per-phase split — this is per-call. Roster names + attribution patterns must normalise across the mixed-analyzer run to avoid duplicate characters.
-- _Acceptance:_ With both local Ollama and Gemini configured, long-book analysis bursts overflow to Gemini under local slowness; the final roster contains no duplicates from cross-analyzer name variants.
-- _Key files:_ `server/src/analyzer/index.ts:159-210`; `server/src/analyzer/select-analyzer.ts`.
-- _Depends on:_ plan 88 shipped (its per-phase plumbing is the seam this builds on).
-- _Benefit (user):_ uses idle Gemini quota when local is the bottleneck. Lower priority than plan 88's bucketed split.
 
 #### `srv-13` — EPUB raw-zip fallback: NCX/nav-doc title parity
 
@@ -484,17 +449,18 @@ Source: [`16-generation-stream.md`](features/16-generation-stream.md).
 
 ### `fs-12` — Voice creation from scratch
 
-Source: [`22-voice-library.md`](features/22-voice-library.md).
+Source: [`22-voice-library.md`](features/22-voice-library.md); _What_ revised 2026-05-26 for the Qwen voice-design engine.
 
-- _Why parked:_ the library is a read-only view over the sidecar's voice catalog (28 Kokoro + Coqui's bundled set). Authoring a voice means a separate Coqui voice-cloning UI that's its own product surface.
-- _Wake when:_ user wants to author / fine-tune voices in-app rather than dropping pre-made reference `.wav`s into the sidecar's `voices/` folder. Likely depends on a much bigger Coqui training pipeline first.
+- _What (revised 2026-05-26):_ Qwen3-TTS (plan 108) already authors a bespoke per-character voice from a text persona (design → clone → cache the embedding → reuse for consistency), so "create a voice that exists in no catalog" is no longer hypothetical — it ships, scoped to a cast member. What's still missing is a _standalone_ library-voice authoring surface: design a voice from a persona (or a reference clip) as a first-class library entry not tied to one character, name + tag + pin it, reuse it across books, plus optional fine-tuning of an already-designed voice.
+- _Why parked:_ the per-character Qwen design flow covers the dominant need (give this character a distinct voice). A general-purpose voice-authoring studio (standalone named library entries, reference-clip cloning UI, fine-tune controls) is its own product surface beyond today's read-mostly library.
+- _Wake when:_ users want to design + curate voices as reusable library assets independent of a single character — e.g. building a personal stable of named narrators to assign across the catalogue. Pairs with `fe-12` (bulk library ops): a from-scratch author flow is what grows the library big enough to need them.
 
 ### `fe-12` — Bulk pin / bulk delete in voice library
 
-Source: [`22-voice-library.md`](features/22-voice-library.md).
+Source: [`22-voice-library.md`](features/22-voice-library.md); revised 2026-05-26 for Qwen custom voices.
 
-- _Why parked:_ v1 voice library has fewer than 50 entries (28 Kokoro + ~12 Coqui defaults); per-voice click is fast enough.
-- _Wake when:_ user-created voices push the library past ~50 entries and per-voice clicking becomes painful (track via user complaint, not preemptive). Pairs with `fs-12` — without an author flow there's nothing to bulk-operate on.
+- _Why parked (under review 2026-05-26):_ the original "fewer than 50 entries (28 Kokoro + ~12 Coqui defaults), per-voice click is fast enough" premise is weakening. Qwen3-TTS (plan 108) designs a bespoke voice per character, so a heavy multi-book user accumulates many cached custom voices in the library — quickly past the ~50-entry comfort threshold. At that point bulk pin / bulk delete stops being a nicety and becomes the only sane way to curate. **Flagged to move up to Could (or Should) after a review of real library sizes once a few books have been (re)generated under Qwen.**
+- _Wake when:_ a real workspace's library crosses ~50 entries from accumulated Qwen-designed voices and per-voice curation gets painful — likely soon given the catalogue-wide Qwen regen, so review proactively rather than waiting for a complaint. No longer blocked on `fs-12`: Qwen's per-character design flow already produces the bulk-worthy entries.
 
 ### `fe-13` — Live `VITE_USE_MOCKS` toggle in running UI
 
@@ -503,19 +469,33 @@ Source: [`23-mock-toggle.md`](features/23-mock-toggle.md).
 - _Why parked:_ the mock layer swaps the entire `api` module at module-load via the env flag; flipping at runtime would need a different architecture (e.g. mock middleware around the api object).
 - _Wake when:_ demo / QA flow requires mid-session real↔mock flipping. Today rebuilding with `VITE_USE_MOCKS=true` takes 5 s — building the runtime toggle would cost more than the friction it removes.
 
-### `fe-14` — Partial mock mode (some endpoints mocked, others real)
-
-Source: [`23-mock-toggle.md`](features/23-mock-toggle.md).
-
-- _Why parked:_ all-or-nothing keeps the type contract clean — every component imports from `api.*` without knowing which side it's hitting.
-- _Wake when:_ a specific endpoint needs mock-while-rest-real (e.g. mocking a flaky third-party while testing everything else live). The cheapest path then is likely a per-endpoint override in the mock layer, not the architecture change above.
-
 ### `srv-10` — Conflict resolution for two simultaneous `state.json` writers
 
 Source: [`27-book-state-persistence.md`](features/27-book-state-persistence.md).
 
 - _Why parked:_ single-user-per-workspace assumption; file locking is advisory at best on Windows network shares.
 - _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `fe-11` — both wake under the same trigger.
+
+### `srv-6` — Engine-drift factor polish + `resolvedVoiceName` backfill
+
+Source: net-new (2026-05-24), spun off from [plan 108](features/108-qwen-coexistence.md)'s R5 drift fix; moved Could → Won't 2026-05-26. Would add a one-shot backfill (mirror `scripts/relufs-existing.mjs`) recomputing `resolvedVoiceName` on legacy `segments.json` so chapters rendered before plan 108 participate in override-drift detection.
+
+- _Why parked (2026-05-26):_ the user is regenerating the whole catalogue with Qwen, so every book will get a fresh post-plan-108 `resolvedVoiceName` snapshot at render time — there are no stranded legacy chapters left for the backfill to rescue.
+- _Wake when:_ a corpus of pre-plan-108 chapters that will _not_ be regenerated needs drift detection after all (e.g. an imported back-catalogue from another deployer). Until then the regen sweep makes the backfill moot.
+
+### `srv-5` — Tune per-engine VRAM cost map against real hardware
+
+Source: net-new (2026-05-24), spun off from [plan 108](features/108-qwen-coexistence.md); moved Could → Won't 2026-05-26. The `ENGINE_VRAM_COST` map (`server/src/tts/engine-vram-cost.ts`) + default `GPU_VRAM_BUDGET` shipped as estimates; this item was to measure actual peak VRAM per engine on the 8 GB GPU and correct the constants.
+
+- _Why parked (2026-05-26):_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost map now matters only for **cross-engine** packing (Kokoro 1 + Qwen 1, vs Coqui 3 / analyzer 4). Empirically `GPU_VRAM_BUDGET=2` + `QWEN_BATCH_SIZE=8` ran an end-to-end Qwen chapter (~RTF 1.15) with no VRAM trouble on the 4070, so the provisional constants are good enough in practice. The only unmeasured residual — true per-engine _peak_ VRAM for the cross-engine case — isn't worth a dedicated tuning pass while the empirical config holds.
+- _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. Then measure peak-per-engine and correct `ENGINE_VRAM_COST`.
+
+### `srv-3` — Per-call local→Gemini analyzer overflow
+
+Source: net-new (2026-05-21), spun off from the perf-tuning survey (item B4); moved Could → Won't 2026-05-26. Would extend `FallbackAnalyzer` (`server/src/analyzer/index.ts:159-210`) to route partial load to Gemini when local Ollama is _slow_ (not just unreachable), with cross-analyzer roster-name normalisation to avoid duplicate characters.
+
+- _Why parked (2026-05-26):_ Gemini is already the strong performer in the analyzer mix, so the marginal value of overflowing to it per-call is low — and the overflow round-trip (mid-run analyzer switch + name reconciliation) would be slow in comparison while adding duplicate-character risk for no reliable latency win. Plan 88's per-phase bucketed split already covers the deliberate "use Gemini for these phases" case.
+- _Wake when:_ a workload appears where local Ollama is the genuine bottleneck AND idle Gemini quota would finish the burst faster — measured, not assumed. Plan 88's per-phase plumbing is the seam to build on.
 
 ---
 
