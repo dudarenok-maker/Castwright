@@ -137,6 +137,19 @@ class SynthResult:
         self.substituted_from = substituted_from
 
 
+class SynthBatchResult:
+    """Batched engine output: one PCM blob per input item, SAME order, plus the
+    single sample rate the model produced. Qwen-only — `generate_voice_clone`
+    runs the N sequences in one batched forward, so the whole batch shares a
+    rate. The /synthesize-batch route frames these as a length-prefixed binary
+    body (header line + concatenated PCM)."""
+    __slots__ = ("pcms", "sample_rate")
+
+    def __init__(self, pcms: list[bytes], sample_rate: int) -> None:
+        self.pcms = pcms
+        self.sample_rate = sample_rate
+
+
 class Engine:
     """Each engine returns mono PCM as int16 little-endian + a sample rate.
     We never persist audio here — the Node side encodes PCM to MP3 and
@@ -935,7 +948,9 @@ class QwenEngine(Engine):
         """Return (clone_prompt, language, cache_hit) for a designed voice.
 
         Reads <voiceId>.pt + <voiceId>.json off disk only on a cache MISS;
-        a hit skips both. Fails fast (no catalog fallback) if the voice
+        a hit skips both. Shared by synthesize + synthesize_batch so the
+        single- and batched-synth paths can never drift on prompt loading or
+        language resolution. Fails fast (no catalog fallback) if the voice
         hasn't been designed. The cache lock is released across the
         torch.load so a slow disk read can't block other threads' lookups —
         a concurrent double-miss just loads twice (benign, same content)."""
@@ -998,6 +1013,59 @@ class QwenEngine(Engine):
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
         return SynthResult(pcm=_float_audio_to_int16_le(audio), sample_rate=int(sr))
+
+    def synthesize_batch(self, model: str, items: list[dict]) -> SynthBatchResult:
+        """TRUE batching (plan 112): synth N sentences in ONE batched forward.
+
+        Each item is `{voice, text}`. We load every item's cached clone prompt
+        + manifest language and pass parallel lists to a single
+        `generate_voice_clone(text=[…], language=[…], voice_clone_prompt=[…])`
+        call, so the model runs one batched forward per decode step instead of
+        N separate ones. Two properties make this safe where plan 70d's
+        fold-into-one-string was not:
+          - each item keeps its OWN prompt → a batch may MIX voices (narrator +
+            dialogue) with no cross-bleed;
+          - each sentence is an INDEPENDENT sequence (not concatenated text) →
+            no shared decode context, so no mid-chunk voice drift.
+
+        Fails fast (RuntimeError naming the item index) if any voice hasn't
+        been designed — the whole batch fails and the caller retries / fails
+        the chapter exactly as a single call would."""
+        if not items:
+            raise RuntimeError("synthesize_batch called with no items.")
+
+        texts: list[str] = []
+        langs: list[str] = []
+        prompts: list[Any] = []
+        for i, item in enumerate(items):
+            voice = item.get("voice")
+            text = item.get("text")
+            if not isinstance(voice, str) or not voice:
+                raise RuntimeError(f"batch item {i}: `voice` is required.")
+            if not isinstance(text, str) or not text.strip():
+                raise RuntimeError(f"batch item {i}: `text` is required.")
+            try:
+                prompt, lang, _cache_hit = self._load_voice_prompt(voice)
+            except RuntimeError as e:
+                raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
+            texts.append(text)
+            langs.append(lang)
+            prompts.append(prompt)
+
+        self._ensure_base_loaded()
+        wavs, sr = self._base.generate_voice_clone(
+            text=texts, language=langs, voice_clone_prompt=prompts
+        )
+        # Hard invariant: one wav per input item, in order. A mismatch means a
+        # library API drift — fail loudly rather than silently misalign audio
+        # with sentences (which would scramble the chapter).
+        if len(wavs) != len(items):
+            raise RuntimeError(
+                f"generate_voice_clone returned {len(wavs)} wavs for "
+                f"{len(items)} items — batch demux would misalign."
+            )
+        pcms = [_float_audio_to_int16_le(w) for w in wavs]
+        return SynthBatchResult(pcms=pcms, sample_rate=int(sr))
 
 
 ENGINES: dict[str, Engine] = {
@@ -1456,6 +1524,77 @@ async def synthesize(req: Request) -> Response:
         content=result.pcm,
         media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
         headers=headers,
+    )
+
+
+@app.post("/synthesize-batch")
+async def synthesize_batch(req: Request) -> Response:
+    r"""TRUE batching (plan 112) — Qwen-only. Synthesises N sentences in ONE
+    batched forward and returns them as a single length-prefixed binary frame:
+
+        {"sampleRate":24000,"lengths":[l0,l1,…]}\n<pcm0><pcm1>…
+
+    The header is one minified-JSON line (newline-free) terminated by the FIRST
+    \n; the body is each item's 16-bit LE mono PCM concatenated in item order,
+    sliced by `lengths`. Binary (not base64) avoids ~33 % inflation per chapter
+    and parses with the Node client's existing arrayBuffer() read."""
+    try:
+        body = await req.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON.")
+
+    engine_id = body.get("engine")
+    model = body.get("model")
+    items = body.get("items")
+
+    # Batching is a Qwen-only capability: only generate_voice_clone runs a true
+    # batched forward. Coqui/Kokoro have no list API, so the Node side never
+    # routes them here (it falls back to per-call /synthesize for them).
+    if engine_id != "qwen":
+        return JSONResponse(
+            {"detail": f"/synthesize-batch is qwen-only, got engine '{engine_id}'."},
+            status_code=400,
+        )
+    if not isinstance(model, str) or not model:
+        raise HTTPException(status_code=400, detail="`model` is required.")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="`items` must be a non-empty list.")
+    for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail=f"item {i} must be an object.")
+        if not isinstance(item.get("voice"), str) or not item["voice"]:
+            raise HTTPException(status_code=400, detail=f"item {i}: `voice` is required.")
+        if not isinstance(item.get("text"), str) or not item["text"].strip():
+            raise HTTPException(status_code=400, detail=f"item {i}: `text` is required.")
+
+    engine = ENGINES["qwen"]
+
+    try:
+        # Offload like /synthesize so /health stays responsive while the
+        # (potentially multi-second) batched forward runs on a worker thread.
+        result = await asyncio.to_thread(engine.synthesize_batch, model, items)
+    except Exception as e:
+        err_str = str(e)
+        # Forensic beacon: model + item count + the failing message. A qwen
+        # CUDA error returns a plain 500 (the poison fence is Coqui-only), so
+        # the Node side classifies + retries it exactly as a single qwen synth.
+        log.exception(
+            "batch synth failed (engine=qwen model=%s items=%d): %s",
+            model, len(items), err_str,
+        )
+        return JSONResponse({"detail": err_str}, status_code=500)
+
+    import json as _json
+
+    header = _json.dumps(
+        {"sampleRate": result.sample_rate, "lengths": [len(p) for p in result.pcms]},
+        separators=(",", ":"),
+    )
+    frame = header.encode("utf-8") + b"\n" + b"".join(result.pcms)
+    return Response(
+        content=frame,
+        media_type="application/octet-stream",
+        headers={"X-Sample-Rate": str(result.sample_rate)},
     )
 
 
