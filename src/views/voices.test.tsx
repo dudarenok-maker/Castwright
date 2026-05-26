@@ -1475,6 +1475,190 @@ describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => 
   });
 });
 
+describe('LibraryView Qwen status sections (plan 117)', () => {
+  /* Bespoke Qwen voices are 1:1 with characters, so the old voice-family
+     grouping produced one degenerate section per voice. They now bucket by
+     design status into exactly two sections, regardless of how many designed
+     voices there are. A Gemini family co-exists in the same scroll. */
+  const qwenLibrary: Voice[] = [
+    makeVoice({
+      id: 'g_charon',
+      character: 'Halloran',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
+    }),
+    makeVoice({
+      id: 'q_none',
+      character: 'Bo',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      ttsVoice: { provider: 'qwen', name: '', description: 'No voice designed yet' },
+    }),
+    makeVoice({
+      id: 'q_designed',
+      character: 'Keefe',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      overrideTtsVoices: { qwen: { name: 'qwen-keefe' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-keefe', description: 'Designed voice' },
+    }),
+    makeVoice({
+      id: 'q_generated',
+      character: 'Elwin',
+      bookId: 'b2',
+      bookTitle: 'Book Two',
+      source: 'library',
+      overrideTtsVoices: { qwen: { name: 'qwen-elwin' } },
+      generated: true,
+      ttsVoice: { provider: 'qwen', name: 'qwen-elwin', description: 'Designed voice' },
+    }),
+  ];
+
+  function renderQwen() {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        library: librarySlice.reducer,
+        rebaseline: rebaselineSlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openVoices());
+    store.dispatch(
+      librarySlice.actions.hydrate({
+        authors: [
+          {
+            name: 'Test Author',
+            series: [
+              {
+                name: 'Keeper of the Lost Cities',
+                books: [
+                  {
+                    bookId: 'b1',
+                    title: 'Book One',
+                    author: 'Test Author',
+                    series: 'Keeper of the Lost Cities',
+                    seriesPosition: 1,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-01',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                  {
+                    bookId: 'b2',
+                    title: 'Book Two',
+                    author: 'Test Author',
+                    series: 'Keeper of the Lost Cities',
+                    seriesPosition: 2,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-02',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    return render(
+      <Provider store={store}>
+        <LibraryView library={qwenLibrary} />
+      </Provider>,
+    );
+  }
+
+  it('renders exactly two Qwen status sections beside the preset family — not one per voice', () => {
+    renderQwen();
+    const labels = screen.getAllByRole('region').map((s) => s.getAttribute('aria-label'));
+    expect(labels).toContain('Gemini · Charon');
+    expect(labels).toContain('Qwen · Needs a voice');
+    expect(labels).toContain('Qwen · Designed voices');
+    /* Regression: two designed Qwen voices must NOT spawn two sections. */
+    const qwenRegions = labels.filter((l) => l?.startsWith('Qwen · '));
+    expect(qwenRegions).toHaveLength(2);
+  });
+
+  it('buckets an undesigned voice under "Needs a voice" and designed ones under "Designed voices"', () => {
+    renderQwen();
+    const needs = screen.getByRole('region', { name: 'Qwen · Needs a voice' });
+    expect(within(needs).getByText('Bo')).toBeInTheDocument();
+    const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
+    expect(within(designed).getByText('Keefe')).toBeInTheDocument();
+    expect(within(designed).getByText('Elwin')).toBeInTheDocument();
+  });
+
+  it('badges a generated voice "Generated" and an unrendered designed voice "Designed"', () => {
+    renderQwen();
+    const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
+    expect(within(designed).getByText('Generated')).toBeInTheDocument();
+    expect(within(designed).getByText('Designed')).toBeInTheDocument();
+  });
+
+  it('omits the "Audition base voice" button from Qwen section headers', () => {
+    renderQwen();
+    const needs = screen.getByRole('region', { name: 'Qwen · Needs a voice' });
+    const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
+    expect(within(needs).queryByRole('button', { name: /Audition base voice/i })).toBeNull();
+    expect(within(designed).queryByRole('button', { name: /Audition base voice/i })).toBeNull();
+  });
+
+  it('shows the per-series Rebaseline button on a Qwen section', () => {
+    renderQwen();
+    const buttons = screen.getAllByTestId('rebaseline-series-Keeper of the Lost Cities');
+    expect(buttons.length).toBeGreaterThanOrEqual(1);
+    expect(buttons[0]).toHaveTextContent(/Rebaseline the series/i);
+  });
+
+  it('does not show the "No voices yet" empty state for a Qwen-only library', () => {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <LibraryView
+          library={[
+            makeVoice({
+              id: 'q_only',
+              character: 'Solo',
+              bookId: 'b1',
+              bookTitle: 'Book One',
+              source: 'current',
+              ttsVoice: { provider: 'qwen', name: '', description: 'No voice designed yet' },
+            }),
+          ]}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByText('No voices yet')).toBeNull();
+    expect(screen.getByRole('region', { name: 'Qwen · Needs a voice' })).toBeInTheDocument();
+  });
+});
+
 describe('LibraryView Base voices tab', () => {
   it('shows the catalog from getBaseVoices when the user clicks the tab', async () => {
     getBaseVoices.mockResolvedValue({
