@@ -88,8 +88,10 @@ Part A is read-side only:
   freshly-connecting client can have a just-claimed entry clobbered. This is
   server-side + once because two browser tabs each run the dispatcher with
   independent in-memory maps and a frontend reclaim would double-claim. The
-  narrower browser-refresh-while-server-stays-up orphan is left to Part B
-  (the server owning the entry lifecycle).
+  narrower browser-refresh-while-server-STAYS-UP orphan (SSE dropped, server
+  alive, so the boot sweep never runs) needs server-side SSE-disconnect
+  handling — tracked as BACKLOG `srv-12`, distinct from the frontend-only
+  Part B below.
 
 ## Test plan
 
@@ -147,3 +149,20 @@ Run in mock mode (`VITE_USE_MOCKS=true`):
 (Part A) Shipped: TBD — fill commit SHA on merge of
 `fix/frontend-queue-modal-active-generation`. Part B remains active/follow-up;
 this plan flips to `stable` + archives once Part B lands.
+
+### Related fixes (2026-05-26)
+
+Two queue-honesty bugs were fixed against this plan's invariants (see "Invariants
+to preserve" above):
+
+- **Generation pill double-count** — PR #244 (`bcd1aea`). The top-bar pill summed
+  the book-wide `activeStreams` snapshot across every same-book stream, so two
+  concurrent chapters read `10/14` instead of `5/7`. Fixed by `aggregateStreamsByBook`
+  (`chapters-slice.ts`) — dedupe per `bookId`, then sum across distinct books. Locks
+  the "computed per BOOK" invariant.
+- **Stalled generation from orphaned `in_progress`** — PR #245 (`d2e102a`). A server
+  restart / crash / browser reload stranded `in_progress` queue entries the dispatcher
+  never re-ran or reconciled, wedging generation with an idle GPU. Fixed by a server-boot
+  `in_progress` → `queued` sweep (`server/src/workspace/queue-boot.ts`, awaited before
+  `listen()`). Locks the "No orphaned `in_progress` entries survive a restart" invariant.
+  The narrower browser-refresh-while-server-stays-up case → BACKLOG `srv-12`.
