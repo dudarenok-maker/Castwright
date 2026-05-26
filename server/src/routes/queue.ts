@@ -33,6 +33,7 @@ import {
   enqueue,
   markInProgress,
   reorder,
+  retry,
   setPaused,
   type EnqueueInput,
   type QueueScope,
@@ -195,9 +196,30 @@ queueRouter.post('/:entryId/start', async (req: Request, res: Response) => {
    Idempotent for a missing id (the snapshot already caught up). */
 queueRouter.post('/:entryId/complete', async (req: Request, res: Response) => {
   const { entryId } = req.params;
+  /* Body `{ outcome: 'done' | 'failed', errorReason? }`. Default `done` for
+     back-compat (the dispatcher's success path sends no body). `failed` marks
+     the entry `failed` (it LINGERS for retry) instead of done-pruning it. */
+  const body = (req.body ?? {}) as { outcome?: unknown; errorReason?: unknown };
+  const outcome = body.outcome === 'failed' ? 'failed' : 'done';
+  const errorReason = typeof body.errorReason === 'string' ? body.errorReason : undefined;
   try {
     const before = await readQueueFile(queueJsonPath());
-    const after = completeEntry(before, entryId, 'done');
+    const after = completeEntry(before, entryId, outcome, errorReason);
+    await writeQueueFile(queueJsonPath(), after);
+    res.json({ entries: after.entries, paused: after.paused });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/* POST /api/queue/:entryId/retry — re-queue a FAILED entry (status → queued,
+   clears errorReason) so the dispatcher re-claims it. No-op for a missing or
+   non-failed entry. */
+queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
+  const { entryId } = req.params;
+  try {
+    const before = await readQueueFile(queueJsonPath());
+    const after = retry(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
   } catch (e) {

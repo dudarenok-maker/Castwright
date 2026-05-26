@@ -10,6 +10,7 @@ import {
   pruneByBook,
   reorder,
   resetInProgressToQueued,
+  retry,
   setPaused,
   startEntry,
   updateProgress,
@@ -264,6 +265,33 @@ describe('queue-io.completeEntry', () => {
       status: 'failed',
       errorReason: 'sidecar 500',
     });
+  });
+});
+
+describe('queue-io.retry', () => {
+  it('flips a failed entry back to queued and clears errorReason/progress', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    f = startEntry(f, 'e1');
+    f = updateProgress(f, 'e1', 0.5);
+    f = completeEntry(f, 'e1', 'failed', 'sidecar 500');
+    f = retry(f, 'e1');
+    expect(f.entries.find((e) => e.id === 'e1')).toMatchObject({
+      id: 'e1',
+      status: 'queued',
+      errorReason: null,
+    });
+    expect(f.entries.find((e) => e.id === 'e1')?.progress).toBeUndefined();
+  });
+
+  it('is a no-op for a non-failed entry (no disturbing a queued/in_progress row)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+    f = startEntry(f, 'e1'); // in_progress
+    expect(retry(f, 'e1')).toBe(f);
+  });
+
+  it('is a no-op for a missing id', () => {
+    const f = enqueue(emptyFile(), [sampleEntry('e1')]);
+    expect(retry(f, 'missing')).toBe(f);
   });
 });
 
