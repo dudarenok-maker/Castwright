@@ -295,6 +295,7 @@ Source: net-new (2026-05-26). Surfaced answering "why is Qwen 5–10× slower th
 - _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine.synthesize` → a batch entry); `server/src/tts/synthesise-chapter.ts` (group assembly + demux); `server/src/tts/sidecar.ts` (wire a batched request).
 - _Depends on:_ plan 112 shipped (the prompt cache + RTF logs land first; the bench harness measures the win).
 - _Benefit (technical):_ the only real throughput multiplier for an autoregressive TTS model on a single GPU — concurrency knobs (`generationWorkers`, `sentenceConcurrency`) plateau once the GPU saturates, batching does not.
+- _Measured baseline + ongoing runs:_ [docs/tts-performance.md](tts-performance.md). Same-voice batching already lands ~RTF 2.6 (vs ~8.3 serial) on the 4070, but a **real mixed-cast chapter still runs ~RTF 4.1** because the pipeline batches per-voice only — **cross-voice batching** (one forward across mixed dialogue voices) is the open lever this item should close. Append new runs there as settings change.
 
 #### `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity)
 
