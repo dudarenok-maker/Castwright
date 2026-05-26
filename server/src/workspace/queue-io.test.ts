@@ -9,6 +9,7 @@ import {
   markInProgress,
   pruneByBook,
   reorder,
+  resetInProgressToQueued,
   setPaused,
   startEntry,
   updateProgress,
@@ -196,6 +197,46 @@ describe('queue-io.markInProgress', () => {
     f = markInProgress(f, 'e1');
     f = markInProgress(f, 'e1');
     expect(f.entries[0].status).toBe('in_progress');
+  });
+});
+
+describe('queue-io.resetInProgressToQueued', () => {
+  it('flips every in_progress entry back to queued (boot orphan sweep)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2'), sampleEntry('e3')]);
+    f = markInProgress(f, 'e1');
+    f = markInProgress(f, 'e2');
+    const swept = resetInProgressToQueued(f);
+    expect(swept.entries.map((e) => [e.id, e.order, e.status])).toEqual([
+      ['e1', 0, 'queued'],
+      ['e2', 1, 'queued'],
+      ['e3', 2, 'queued'],
+    ]);
+  });
+
+  it('leaves queued / failed entries untouched', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    f = markInProgress(f, 'e2');
+    f = completeEntry(f, 'e2', 'failed', 'sidecar 500');
+    const swept = resetInProgressToQueued(f);
+    /* e1 was already queued; e2 is failed (lingers for inspection) — neither
+       is in_progress, so both pass through unchanged. */
+    expect(swept.entries.map((e) => [e.id, e.status])).toEqual([
+      ['e1', 'queued'],
+      ['e2', 'failed'],
+    ]);
+  });
+
+  it('is a no-op (preserves order) when nothing is in_progress', () => {
+    const f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    const swept = resetInProgressToQueued(f);
+    expect(swept.entries.map((e) => [e.id, e.order, e.status])).toEqual([
+      ['e1', 0, 'queued'],
+      ['e2', 1, 'queued'],
+    ]);
+  });
+
+  it('handles an empty queue', () => {
+    expect(resetInProgressToQueued(emptyFile()).entries).toEqual([]);
   });
 });
 
