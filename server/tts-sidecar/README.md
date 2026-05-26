@@ -384,10 +384,44 @@ $resp.Headers['X-Sample-Rate']
 - `QWEN_ATTN_IMPL` (default `sdpa`) — attention implementation passed to the
   Qwen `from_pretrained` load. `sdpa` (PyTorch-native, no extra dependency)
   is the right default for the autoregressive decode loop. Set `eager` to
-  measure the slow baseline, or `flash_attention_2` if a flash-attn wheel is
-  installed. A build that rejects the kwarg falls back to the library default
-  with a warning. The impl that actually took effect is logged at model load
-  (`Qwen model=… attn_implementation=…`).
+  measure the slow baseline, or `flash_attention_2` once the optional wheel is
+  installed (see **FlashAttention-2** below). A build that rejects the kwarg
+  falls back to the library default with a warning. The impl that actually took
+  effect is logged at model load (`Qwen model=… attn_implementation=…`).
+
+## FlashAttention-2 (optional, Windows / Python 3.11)
+
+FlashAttention-2 is the attention backend `qwen_tts` is built for — its model
+classes set `_supports_flash_attn = True` and the upstream `qwen-tts-demo`
+defaults `--flash-attn` on. We still default to **SDPA**: it needs no extra
+dependency and is the right call for the autoregressive decode loop. FA2 is
+installable here if you want to benchmark it.
+
+Upstream `flash-attn` ships **no Windows wheel** on PyPI and the source build is
+a notorious Windows headache. The install script instead pins a community
+prebuilt wheel that matches our exact stack (torch 2.6.0/cu124, CPython 3.11,
+win_amd64). It's **opt-in** and **non-fatal** — any other platform/Python skips,
+and a failed install just leaves you on SDPA:
+
+```powershell
+# folded into the normal install:
+node scripts\install-qwen3.mjs --flash-attn
+# or into an already-installed venv:
+.\.venv\Scripts\python.exe -m pip install https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4+cu124torch2.6.0cxx11abiFALSE-cp311-cp311-win_amd64.whl
+```
+
+Then activate it: set `QWEN_ATTN_IMPL=flash_attention_2` in the sidecar env and
+restart. Confirm it actually engaged (not a silent SDPA fallback) via the
+model-load line: `Qwen model=… attn_implementation=flash_attention_2`.
+
+> Installing the wheel also silences the upstream `flash-attn is not installed`
+> banner — though that line is benign (transformers prints it whenever FA2 isn't
+> present) and SDPA is unaffected either way.
+
+> **Worth it?** Benchmark before adopting. FA2's win is largest on long-sequence
+> *prefill*; for single-token TTS decode the gain over SDPA is often modest. Use
+> `scripts/bench-tts.py` (below) to compare RTF, and only flip the default if FA2
+> measurably wins on your GPU.
 
 ## Benchmarking
 
@@ -411,9 +445,11 @@ python scripts\bench-tts.py --engine qwen --voice <id> --concurrency 2
 python scripts\bench-tts.py --engine qwen --voice <id> --concurrency 4
 ```
 
-To compare the SDPA default against the eager baseline, set
-`QWEN_ATTN_IMPL=eager` in the sidecar env, restart it, run the bench, then
-unset it and re-run.
+To compare the SDPA default against another backend, set `QWEN_ATTN_IMPL`
+(`eager` for the slow baseline, or `flash_attention_2` for the optional wheel —
+see **FlashAttention-2** above) in the sidecar env, restart it, run the bench,
+then unset it and re-run. Confirm the model-load line reports the impl you set
+before trusting the number.
 
 ## License note
 

@@ -14,9 +14,14 @@
 //      the VoiceDesign model via Qwen3TTSModel.from_pretrained, with the HF
 //      cache pointed at server/tts-sidecar/voices/qwen/hf so the weights live
 //      with the sidecar (and stay out of the release zip per its exclude list).
+//   4. With --flash-attn (opt-in): pip-install the pinned FlashAttention-2
+//      prebuilt wheel. Win_amd64 + cp311 + torch 2.6/cu124 only; any other
+//      platform/Python skips. Non-fatal — SDPA stays the default attention
+//      impl (see main.py QWEN_ATTN_IMPL); activate FA2 with
+//      QWEN_ATTN_IMPL=flash_attention_2 once installed.
 //
 // Usage:
-//   node server/tts-sidecar/scripts/install-qwen3.mjs [--skip-design] [--cpu]
+//   node server/tts-sidecar/scripts/install-qwen3.mjs [--skip-design] [--cpu] [--flash-attn]
 //
 // Idempotent: pip is a no-op when satisfied; from_pretrained is a no-op when
 // the HF cache already has the snapshot.
@@ -24,7 +29,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIDECAR_DIR = resolve(__dirname, '..');
@@ -32,10 +37,36 @@ const SIDECAR_DIR = resolve(__dirname, '..');
 const args = process.argv.slice(2);
 const SKIP_DESIGN = args.includes('--skip-design');
 const FORCE_CPU = args.includes('--cpu');
+const INSTALL_FLASH_ATTN =
+  args.includes('--flash-attn') || process.env.QWEN_INSTALL_FLASH_ATTN === '1';
 
 const BASE_MODEL = process.env.QWEN_BASE_MODEL || 'Qwen/Qwen3-TTS-12Hz-0.6B-Base';
 const VOICEDESIGN_MODEL =
   process.env.QWEN_VOICEDESIGN_MODEL || 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign';
+
+// Pinned FlashAttention-2 prebuilt wheel. Published only for the exact stack the
+// sidecar runs (Windows AMD64 + CPython 3.11 + torch 2.6.0/cu124), so the gate
+// below refuses any other platform/Python rather than install a wheel that can't
+// load. lldacing/flash-attention-windows-wheel is the community source for
+// Windows FA2 builds (upstream flash-attn ships no Windows wheel on PyPI).
+export const FLASH_ATTN_WHEEL_URL =
+  'https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/' +
+  'flash_attn-2.7.4+cu124torch2.6.0cxx11abiFALSE-cp311-cp311-win_amd64.whl';
+
+// Pure decision fn (no I/O) so the platform/version gate is unit-testable without
+// a venv. enabled=false short-circuits to a silent skip; the caller only invokes
+// this once --flash-attn / QWEN_INSTALL_FLASH_ATTN has opted in.
+export function resolveFlashAttnInstall({ enabled, platform, pyTag }) {
+  if (!enabled) return { action: 'skip', reason: 'not requested' };
+  if (platform !== 'win32')
+    return {
+      action: 'skip',
+      reason: `no pinned wheel for ${platform}; SDPA remains the default`,
+    };
+  if (pyTag !== 'cp311')
+    return { action: 'skip', reason: `pinned wheel is cp311-only; venv is ${pyTag}` };
+  return { action: 'install', url: FLASH_ATTN_WHEEL_URL };
+}
 
 function step(msg) {
   process.stdout.write(`[install-qwen3] ${msg}\n`);
@@ -61,6 +92,52 @@ function run(python, pyArgs, env) {
   });
   if (res.error) throw new Error(`spawn failed: ${res.error.message}`);
   return res.status ?? 1;
+}
+
+// Ask the venv python for its CPython tag (e.g. "cp311") — the wheel is built per
+// minor version, so we must read the *venv's* interpreter, not Node's runtime.
+function venvPyTag(python) {
+  const res = spawnSync(
+    python,
+    ['-c', 'import sys;print(f"cp{sys.version_info.major}{sys.version_info.minor}")'],
+    { cwd: SIDECAR_DIR },
+  );
+  if (res.status !== 0 || !res.stdout) return null;
+  return res.stdout.toString().trim();
+}
+
+// Opt-in FlashAttention-2 install. Platform/version-gated and fully non-fatal:
+// flash-attn is an optional accelerator, so every failure path warns and returns
+// rather than aborting the (already-succeeded) qwen-tts install.
+function installFlashAttn(python, env) {
+  const plan = resolveFlashAttnInstall({
+    enabled: true,
+    platform: process.platform,
+    pyTag: venvPyTag(python),
+  });
+  if (plan.action === 'skip') {
+    step(`FlashAttention-2: skipped — ${plan.reason}.`);
+    return;
+  }
+  step('FlashAttention-2: installing pinned prebuilt wheel (opt-in)...');
+  step(`  ${plan.url}`);
+  if (run(python, ['-m', 'pip', 'install', plan.url], env) !== 0) {
+    step('FlashAttention-2: WARN install failed — continuing on SDPA. Retry the');
+    step('  wheel URL above, or just leave QWEN_ATTN_IMPL=sdpa (the default).');
+    return;
+  }
+  const imported = run(
+    python,
+    ['-c', 'import flash_attn;print("[install-qwen3] flash_attn",flash_attn.__version__)'],
+    env,
+  );
+  if (imported === 0) {
+    step('FlashAttention-2: installed. Activate with QWEN_ATTN_IMPL=flash_attention_2');
+    step('  in the sidecar env (SDPA stays the default until benchmarked).');
+  } else {
+    step('FlashAttention-2: WARN wheel installed but `import flash_attn` failed —');
+    step('  it may not match torch/CUDA. SDPA remains the default; safe to ignore.');
+  }
 }
 
 function main() {
@@ -93,6 +170,8 @@ function main() {
     process.exit(1);
   }
 
+  if (INSTALL_FLASH_ATTN) installFlashAttn(python, env);
+
   const models = SKIP_DESIGN ? [BASE_MODEL] : [BASE_MODEL, VOICEDESIGN_MODEL];
   step(
     `Pre-fetching ${models.length} model(s) into the default Hugging Face cache ` +
@@ -119,4 +198,8 @@ function main() {
   step('  - Design a per-character voice via POST /qwen/design-voice.');
 }
 
-main();
+// Run only when invoked directly (node install-qwen3.mjs); stay inert on import
+// so the unit test can exercise resolveFlashAttnInstall without bootstrapping.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}
