@@ -693,3 +693,41 @@ export const selectActiveStreams = (s: ChaptersRootShape): ActiveStreamSnapshot[
     `if (chapters.activeStream)` truthiness checks. */
 export const selectAnyActiveStream = (s: ChaptersRootShape): boolean =>
   Object.keys(s.chapters.activeStreams).length > 0;
+
+/** Collapse the per-chapter stream snapshots into one done/total/inProgress
+    triple for the top-bar generation pill.
+
+    Each stream's snapshot is BOOK-WIDE — `snapshotFromChapters` counts every
+    active chapter of the stream's book, not just the one chapter it renders
+    (see generation-stream-runner.ts). So two concurrent chapters of the same
+    book both report e.g. `5/7`; naively summing across streams yields `10/14`.
+    We therefore dedupe by `bookId` (taking the max of each counter per book —
+    same-book snapshots should be equal, `max` just absorbs transient
+    tick-to-tick skew) and only then sum across DISTINCT books, which keeps the
+    Wave-3 multi-book case (book A + book B generating at once) correct. */
+export function aggregateStreamsByBook(streams: ActiveStreamSnapshot[]): {
+  done: number;
+  total: number;
+  inProgress: number;
+} {
+  const byBook = new Map<string, { done: number; total: number; inProgress: number }>();
+  for (const s of streams) {
+    const cur = byBook.get(s.bookId);
+    if (!cur) {
+      byBook.set(s.bookId, { done: s.done, total: s.total, inProgress: s.inProgress });
+    } else {
+      cur.done = Math.max(cur.done, s.done);
+      cur.total = Math.max(cur.total, s.total);
+      cur.inProgress = Math.max(cur.inProgress, s.inProgress);
+    }
+  }
+  let done = 0;
+  let total = 0;
+  let inProgress = 0;
+  for (const b of byBook.values()) {
+    done += b.done;
+    total += b.total;
+    inProgress += b.inProgress;
+  }
+  return { done, total, inProgress };
+}

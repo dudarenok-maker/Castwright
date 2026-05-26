@@ -5,7 +5,12 @@ import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store'
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { fetchAccountSettings } from '../store/account-slice';
-import { chaptersActions, selectActiveStreams, STALL_THRESHOLD_MS } from '../store/chapters-slice';
+import {
+  aggregateStreamsByBook,
+  chaptersActions,
+  selectActiveStreams,
+  STALL_THRESHOLD_MS,
+} from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
 import { revisionsActions, selectDriftGroupsByBook } from '../store/revisions-slice';
@@ -76,7 +81,11 @@ export interface LayoutContext {
      or any other "did anything happen?" signal needs surfacing
      without interrupting focus. dedupeKey collapses repeated pushes
      into a single timer-bumped toast. */
-  pushToast: (args: { kind: 'error' | 'warn' | 'info'; message: string; dedupeKey?: string }) => void;
+  pushToast: (args: {
+    kind: 'error' | 'warn' | 'info';
+    message: string;
+    dedupeKey?: string;
+  }) => void;
   ttsLifecycle: TtsLifecycle;
   /* Prior-series roster for the currently-open book. Lazily fetched
      once per book — empty array until the fetch lands or if the book
@@ -467,7 +476,9 @@ export function Layout() {
           }),
         );
         dispatch(
-          revisionsActions.hydrateFromBookState(res.revisions ? { bookId, ...res.revisions } : null),
+          revisionsActions.hydrateFromBookState(
+            res.revisions ? { bookId, ...res.revisions } : null,
+          ),
         );
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
         /* Editable Listen-view metadata: seed from state.json's editorial
@@ -730,8 +741,7 @@ export function Layout() {
      GPU-heavy ops at GPU_CONCURRENCY=1 so two parallel Claude Code
      sessions don't thrash an 8 GB GPU's VRAM. */
   const gpuQueueDepth = ttsLifecycle.gpuQueueDepth;
-  const showGpuQueueBadge =
-    typeof gpuQueueDepth === 'number' && gpuQueueDepth > 0;
+  const showGpuQueueBadge = typeof gpuQueueDepth === 'number' && gpuQueueDepth > 0;
   const ttsPillElement = showGlobalTtsPill ? (
     <span className="inline-flex items-center gap-2 flex-wrap">
       {showGpuQueueBadge && (
@@ -808,12 +818,13 @@ export function Layout() {
      keeps the "stalled" check fresh against Date.now(). */
   const generationPill: GenerationPillData | null = (() => {
     if (activeStreams.length === 0) return null;
-    /* Aggregate across every open stream (Wave 3 may have several books
-       generating at once). With one stream this is byte-identical to the
-       prior single-snapshot pill. */
-    const done = activeStreams.reduce((acc, s) => acc + s.done, 0);
-    const total = activeStreams.reduce((acc, s) => acc + s.total, 0);
-    const inProgress = activeStreams.reduce((acc, s) => acc + s.inProgress, 0);
+    /* Aggregate across every open stream, deduped per book (Wave 3 may have
+       several books generating at once). Each snapshot is book-wide, so two
+       concurrent chapters of the SAME book would otherwise double-count
+       (`5/7` + `5/7` → `10/14`); aggregateStreamsByBook collapses per book
+       first, then sums across distinct books. With one stream this is
+       byte-identical to the prior single-snapshot pill. */
+    const { done, total, inProgress } = aggregateStreamsByBook(activeStreams);
     const halted = activeStreams.some((s) => s.halted);
     const percent = total > 0 ? Math.round((done / total) * 100) : 0;
     /* Stalled only when EVERY in-flight stream is quiet — one moving stream
