@@ -82,10 +82,10 @@ Source: net-new (2026-05-24). Surfaced running `scripts/install-qwen3.mjs` on a 
 
 - **HF Hub symlink warning** (`huggingface_hub cache-system uses symlinks … your machine does not support them … degraded version that might require more space`): functionally harmless — the install already localizes the cache to `voices/qwen/hf` via `HF_HOME`/`HF_HUB_CACHE` (`install-qwen3.mjs:83-84`), and with only two models (Base + VoiceDesign), downloaded once, the extra disk is negligible. **Fix:** add `HF_HUB_DISABLE_SYMLINKS_WARNING: '1'` to the install script's `env` object (`install-qwen3.mjs:84`) AND the sidecar's runtime env so it doesn't reappear at model load. Do NOT require enabling Windows Developer Mode.
 - **`SoX could not be found!`**: a no-op for our pipeline — SoX is an optional audio backend a transitive dep (the coqui/torchaudio stack sharing the venv) probes at import; we do audio I/O via `soundfile` (libsndfile) and encode MP3 via ffmpeg server-side. **Action:** document as benign, or suppress at source if cheap; do NOT install SoX (its own Windows headache for zero benefit).
-- **`flash-attn is not installed`**: the real fix is the SDPA path tracked in `side-1`, not installing flash-attn — cross-referenced, not duplicated here.
+- **`flash-attn is not installed`**: the real fix is the SDPA path shipped in plan 112 (`QwenEngine._load_qwen_model` now loads `attn_implementation="sdpa"` by default), not installing flash-attn. The warning is printed by `qwen_tts` at import unconditionally, so it may still appear — if it does, suppress/triage it here.
 
 - _What:_ In a single cleanup pass over the Qwen install + sidecar startup, suppress every benign-but-noisy warning at its source (env var or logging filter) and leave only warnings the deployer must actually act on. Concrete fixes above; also re-run the install on a clean Windows box and triage any warning not yet listed.
-- _Acceptance:_ Running `install-qwen3.mjs` + a first Qwen model load on a clean Windows box prints no scary warning that requires no action; any warning that remains is one the deployer genuinely must respond to. SoX + HF-symlink banners gone; flash-attn handled via `side-1`.
+- _Acceptance:_ Running `install-qwen3.mjs` + a first Qwen model load on a clean Windows box prints no scary warning that requires no action; any warning that remains is one the deployer genuinely must respond to. SoX + HF-symlink banners gone; flash-attn SDPA fix shipped in plan 112 (warning may still print from `qwen_tts` import — suppress if cheap).
 - _Key files:_ `server/tts-sidecar/scripts/install-qwen3.mjs` (env object ~line 84); `server/tts-sidecar/main.py` (sidecar runtime env / startup); `server/tts-sidecar/README.md` (document any warning intentionally left as-is).
 - _Depends on:_ plan 108 install script (in flight). Fold the fixes into the cleanup run, not a one-off.
 - _Benefit (user / deployer):_ clean first-run output for alpha testers — warnings that survive are actionable, not noise. Matches the multi-model-gap audit + deployer-facing-script hygiene already used elsewhere in the bundle.
@@ -280,15 +280,27 @@ Source: net-new (2026-05-24). Spun off from [plan 108](features/108-qwen-coexist
 - _Depends on:_ plan 108 Wave 1 (the weighted semaphore) shipped.
 - _Benefit (technical):_ correct VRAM accounting is the difference between two engines coexisting smoothly and thrashing the GPU. Estimates unblock the feature; measured values make it reliable.
 
-#### `side-1` — Try PyTorch-native SDPA attention for the Qwen sidecar engine
+#### `side-3` — Batch multiple sentences into one Qwen `generate_voice_clone` call
 
-Source: net-new (2026-05-24). Surfaced while investigating the `flash-attn is not installed. Will only run the manual PyTorch version` warning the Qwen Base model prints on load. The standalone `flash-attn` package is explicitly NOT worth pursuing on Windows (no official wheels; needs the CUDA Toolkit + MSVC + a long, brittle source build — same toolchain tax `requirements.txt` already documents for DeepSpeed) for a sub-1B model doing short-sequence TTS where attention isn't the bottleneck. PyTorch ships flash-attention-2-equivalent kernels via `scaled_dot_product_attention` with zero install, so this captures most of the upside cross-platform.
+**In flight (parallel agent, 2026-05-26)** — being implemented on a separate branch; don't double-up. Remove this entry when that work merges.
 
-- _What:_ Pass `attn_implementation="sdpa"` into the Qwen model load in `QwenEngine._load_qwen_model`, behind a guard so a `from_pretrained` signature that doesn't accept the kwarg falls back cleanly to today's bf16-only call (logs once, no regression). First confirm `Qwen3TTSModel.from_pretrained` actually forwards the kwarg down to the underlying transformers model — the engine's own NOTE flags these signatures as "empirical verification owed" until the weights are downloaded. Silences the scary startup warning and may modestly speed per-sentence synth.
-- _Acceptance:_ With Qwen weights present, loading the Base model no longer prints the flash-attn warning; one synth call produces same-quality PCM as the eager path; a timing on one chapter is no worse than today. If the kwarg is rejected, the engine loads exactly as it does now. New pytest case in `server/tts-sidecar/tests/test_qwen3.py` asserting the load path tolerates both kwarg-accepted and kwarg-rejected outcomes.
-- _Key files:_ `server/tts-sidecar/main.py:679-695` (`_load_qwen_model`); `server/tts-sidecar/tests/test_qwen3.py` (load-path case).
-- _Depends on:_ Qwen weights installed via `scripts/install-qwen3.mjs` to verify empirically — plan 108 in flight.
-- _Benefit (technical):_ removes a scary-looking startup warning and picks up PyTorch's optimised attention kernels for free, cross-platform, without the Windows-hostile `flash-attn` build.
+Source: net-new (2026-05-26). Surfaced answering "why is Qwen 5–10× slower than Kokoro, and does more concurrency help?" during plan 112. The honest answer: most of the gap is the autoregressive model class, and firing N concurrent `/synthesize` calls at one GPU + one model does NOT scale — concurrent decode loops time-slice the same SMs and contend on the GIL during sampling, plus each holds its own KV cache (VRAM pressure → spill-to-RAM risk on the 8 GB card). The one lever that genuinely scales throughput on a single GPU is **true batching**: `generate_voice_clone` already accepts `text=[s1, s2, …]` and runs a single batched forward per decode step instead of N separate ones.
+
+- _What:_ Assemble same-voice (and same-engine) sentence groups in `synthesise-chapter.ts` into a single batched `/synthesize`-equivalent call, demux the returned `List[np.ndarray]` back to per-sentence PCM, and preserve the plan-107 ordering + sample-rate-anchor contract. Needs a batched sidecar route (or a `texts[]` body on `/synthesize`) and careful handling of ragged batch lengths.
+- _Acceptance:_ A chapter of N same-voice sentences synthesises in materially less wall time than N serial calls at equal quality; per-sentence PCM is byte-identical to the unbatched path (determinism); ordering + sample rate unchanged. Bench (`bench-tts.py`) shows aggregate throughput rising with batch size where concurrency did not.
+- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine.synthesize` → a batch entry); `server/src/tts/synthesise-chapter.ts` (group assembly + demux); `server/src/tts/sidecar.ts` (wire a batched request).
+- _Depends on:_ plan 112 shipped (the prompt cache + RTF logs land first; the bench harness measures the win).
+- _Benefit (technical):_ the only real throughput multiplier for an autoregressive TTS model on a single GPU — concurrency knobs (`generationWorkers`, `sentenceConcurrency`) plateau once the GPU saturates, batching does not.
+
+#### `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity)
+
+Source: net-new (2026-05-26). Surfaced in plan 112. Our designed voices use ICL mode (`x_vector_only_mode=False`): the cached clone prompt drags the reference clip's audio-codec tokens through the context on every decode step, and the vocoder even decodes that reference span before slicing it off (`qwen_tts/.../qwen3_tts_model.py:614-629` — wasted work). `x_vector_only_mode=True` drops the ICL prefix and conditions on the speaker embedding alone → shorter context, faster steps, no wasted ref decode. The cost is voice fidelity/consistency, so this is a deliberate listen-test, not a blind flip.
+
+- _What:_ Add an env/per-voice toggle for `x_vector_only_mode` plumbed through `design_voice` (the prompt is built x-vector-only) and `synthesize`; design one voice both ways and A/B the audition + a full chapter for identity drift vs. speed.
+- _Acceptance:_ Documented RTF delta (ICL vs x-vector-only) on the target 4070 and a subjective fidelity verdict; ship the faster mode as default only if the quality cost is acceptable, else leave ICL default with the toggle available.
+- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine.design_voice` / `synthesize`); a per-voice manifest field.
+- _Depends on:_ plan 112 shipped (bench harness measures the delta).
+- _Benefit (technical):_ potentially the largest single per-call speedup short of batching — but it trades the very thing the bespoke-voice design exists to guarantee (consistent identity), so it must be measured, not assumed.
 
 #### `srv-3` — Per-call local→Gemini analyzer overflow
 
