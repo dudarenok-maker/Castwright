@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-27
 owner: null
 ---
 
 # Qwen voice presentation — status-first Voices view + cast Status pill
 
-> Status: active (lands across two PRs — server data layer, then frontend)
+> Status: stable (shipped across two PRs — server data layer, then frontend)
 > Key files: `server/src/routes/voices.ts`, `server/src/audio/segments-io.ts`, `src/views/voices.tsx`, `src/views/cast.tsx`, `src/mocks/voices.ts`
 > URL surface: `#/voices` (cross-book) and `#/books/<id>/cast`
 > OpenAPI ops: `GET /api/voices` (adds `Voice.generated`)
@@ -90,4 +90,11 @@ empty-name `qwen|` family.
 
 ## Ship notes
 
-(Filled when both PRs land and status → stable.)
+Shipped 2026-05-27 across two PRs:
+
+- **#272** (`9f1495b`) — data layer. Added optional `Voice.generated` to the OpenAPI `Voice` schema; `aggregateVoices` (`server/src/routes/voices.ts`) stamps it for the `engine=qwen` query by scanning rendered chapter segments (`voiceEngine === 'qwen'` + `resolvedVoiceName`). Extracted the shared segments reader into `server/src/audio/segments-io.ts` (`loadSegmentsFiles` + new `collectRenderedQwenVoiceNames`); `routes/revisions.ts` now imports it. Per-character precise (not coarse book-level), OR-aggregated across books sharing a voiceId. Preset path untouched (scan runs only for `engine=qwen`).
+- **#274** (`fd70983`) — frontend. Partitioned Qwen out of `buildFamilies` into `buildQwenStatusGroups` (two sections: "Needs a voice" / "Designed voices", the latter badged Designed/Generated off `Voice.generated`); shared `nestBySeriesBook` helper; new `QwenStatusSection`; optional `badge` prop on `VoiceCard`. Dropped "Audition base voice" + ⚠ duplicate pill for Qwen, kept per-series Rebaseline. Cast view gained an engine-aware `StatusPill` (Needs voice / Designed / Generated for Qwen rows; preset rows keep `voiceState` pills). The `voiceState` enum was NOT repurposed — collision resolved at the presentation layer.
+
+Deltas vs. the original spec: none material. The chosen UX was "two sections + per-card Designed/Generated badge" (not three top sections) and per-character precise `generated`, both confirmed with the user before build.
+
+Known simplification (carried as designed): `Voice.generated` is populated only when the library is fetched with `engine=qwen` — i.e. when the project is on Qwen, which is also the only time Qwen sections/rows appear. Mixed-engine setups conservatively render "Designed". No BACKLOG follow-up filed; revisit only if cross-book over-report proves confusing in practice.
