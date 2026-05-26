@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { IconStar, IconDrag, IconCheck } from '../lib/icons';
+import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
@@ -47,7 +47,20 @@ export function VoiceLibraryPanel({
   assigningVoiceId,
 }: VoiceLibraryPanelProps) {
   const [tab, setTab] = useState<Tab>('all');
-  const filtered = library.filter((v) => tab === 'all' || v.source === tab);
+  const [query, setQuery] = useState('');
+  /* Tab filter first, then a case-insensitive substring match on the two
+     fields a card actually shows (character name + book title). With 75+
+     voices the tabs alone don't make a single character findable, so the
+     search box is the primary on-ramp on a long series. */
+  const q = query.trim().toLowerCase();
+  const filtered = library
+    .filter((v) => tab === 'all' || v.source === tab)
+    .filter(
+      (v) =>
+        !q ||
+        v.character.toLowerCase().includes(q) ||
+        v.bookTitle.toLowerCase().includes(q),
+    );
   const bookCount = new Set(library.map((v) => v.bookId)).size;
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'all', label: 'All' },
@@ -89,25 +102,42 @@ export function VoiceLibraryPanel({
             </button>
           ))}
         </div>
+        <div className="relative mt-3 mb-1">
+          <IconSearch className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink/40" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search voices"
+            aria-label="Search voices"
+            className="w-full min-h-[44px] sm:min-h-0 pl-9 pr-3 py-2 rounded-full bg-ink/[0.04] border border-ink/10 text-xs focus:outline-none focus:border-ink/30"
+          />
+        </div>
       </div>
       <div
         data-testid="voice-library-scroll"
         className="p-5 overflow-y-auto scrollbar-thin space-y-2"
       >
-        {filtered.map((v) => (
-          <VoiceCard
-            key={v.id}
-            voice={v}
-            draggingVoiceId={draggingVoiceId}
-            setDraggingVoiceId={setDraggingVoiceId}
-            compact={compact}
-            character={findCharacter(v)}
-            onOpenProfile={onOpenProfile}
-            onPlaySample={onPlaySample}
-            onTapAssign={onTapAssign}
-            isAssigningTarget={assigningVoiceId === v.id}
-          />
-        ))}
+        {filtered.length === 0 && q ? (
+          <p className="text-center text-xs text-ink/40 py-6">
+            No voices match “{query.trim()}”
+          </p>
+        ) : (
+          filtered.map((v) => (
+            <VoiceCard
+              key={v.id}
+              voice={v}
+              draggingVoiceId={draggingVoiceId}
+              setDraggingVoiceId={setDraggingVoiceId}
+              compact={compact}
+              character={findCharacter(v)}
+              onOpenProfile={onOpenProfile}
+              onPlaySample={onPlaySample}
+              onTapAssign={onTapAssign}
+              isAssigningTarget={assigningVoiceId === v.id}
+            />
+          ))
+        )}
       </div>
     </div>
   );
