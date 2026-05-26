@@ -79,7 +79,7 @@ Plan 63 narrow-scope BroadcastChannel rule preserved: broadcast action allowlist
 
 One pre-existing intermittent `Worker exited unexpectedly` flake in `test:server` exists on `main` — verified via stash-round-trip during this round; caught + re-ran cleanly so verify cache stayed green. Tracked as part of **BACKLOG Should #3** (the broader pre-push gate de-flake work).
 
-### Follow-up — GenerationView chunk prefetch (2026-05-26)
+### Follow-up — GenerationView chunk prefetch (2026-05-26, PR #246 `ba3c855`)
 
 C5's lazy boundary meant the Generate view's chunk only began downloading on first navigation to it. Under a heavy generation run the main thread is busy, so that cold download stretched the route Suspense fallback into a multi-second "Loading…" — read as a stall. Fix: proactively warm the Generate chunk so it's resolved before navigation.
 
