@@ -736,7 +736,20 @@ class QwenEngine(Engine):
         ships inside PyTorch (no extra dependency, builds on Windows) and is
         the right default for the autoregressive decode loop. QWEN_ATTN_IMPL
         overrides it (e.g. "eager" to benchmark the baseline, or
-        "flash_attention_2" if a flash-attn wheel is installed)."""
+        "flash_attention_2" if a flash-attn wheel is installed).
+
+        Loading is two-tier so the sdpa win can't harden into a load failure:
+          1. PREFERRED — request attn_implementation WITHOUT device_map, then
+             move the model ourselves. Passing device_map routes the load
+             through accelerate's dispatch_model, which leaves attention params
+             on the `meta` device when attn_implementation is set and then 500s
+             trying to move them ("Cannot copy out of meta tensor"). Without
+             device_map every weight is a real tensor, so the (0.6B bf16) model
+             moves to the target device cleanly and sdpa is honoured.
+          2. FALLBACK — on ANY failure of the fast-path (an old build rejecting
+             the kwarg, OR an accelerate/transformers combo that breaks the
+             dispatch), retry the proven-good config: device_map + the library
+             default attention. The single retry's own error propagates."""
         try:
             import torch  # type: ignore
             from qwen_tts import Qwen3TTSModel  # type: ignore
@@ -750,17 +763,18 @@ class QwenEngine(Engine):
         try:
             model = Qwen3TTSModel.from_pretrained(
                 model_id,
-                device_map=self._device,
                 dtype=torch.bfloat16,
                 attn_implementation=attn_impl,
             )
-        except (ValueError, TypeError) as e:
-            # A transformers build (or qwen_tts wrapper) that rejects the
-            # attn_implementation kwarg must not harden into a load failure —
-            # fall back to the library default and carry on.
+            model.to(self._device)
+        except Exception as e:
+            # Catch broadly: sdpa can be rejected (ValueError/TypeError) OR
+            # accepted-then-break dispatch (the meta-tensor NotImplementedError
+            # we hit on this box). Either way, fall back to the pre-sdpa load
+            # that always worked — device_map dispatch + default (eager) attn.
             log.warning(
-                "Qwen load: attn_implementation=%r rejected (%s); "
-                "retrying with the library default.",
+                "Qwen load: sdpa fast-path failed (attn_implementation=%r): %s; "
+                "falling back to device_map + library-default attention.",
                 attn_impl, e,
             )
             model = Qwen3TTSModel.from_pretrained(
