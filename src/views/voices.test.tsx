@@ -39,6 +39,32 @@ const mergeCharactersMock =
       characters: Character[];
     }>
   >();
+const linkPriorCharacterMock =
+  vi.fn<
+    (args: {
+      bookId: string;
+      sourceCharacterId: string;
+      targetBookId: string;
+      targetCharacterId: string;
+    }) => Promise<{
+      matchedFrom: { bookId: string; characterId: string; bookTitle: string; confidence: number };
+      voiceId?: string;
+    }>
+  >();
+const notLinkedToMock =
+  vi.fn<
+    (args: {
+      bookId: string;
+      characterId: string;
+      otherBookId: string;
+      otherCharacterId: string;
+    }) => Promise<{
+      pair: {
+        a: { bookId: string; characterId: string };
+        b: { bookId: string; characterId: string };
+      };
+    }>
+  >();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -56,6 +82,18 @@ vi.mock('../lib/api', () => ({
     }) => seriesPatchCharacter(args),
     mergeCharacters: (args: { bookId: string; sourceId: string; targetId: string }) =>
       mergeCharactersMock(args),
+    linkPriorCharacter: (args: {
+      bookId: string;
+      sourceCharacterId: string;
+      targetBookId: string;
+      targetCharacterId: string;
+    }) => linkPriorCharacterMock(args),
+    notLinkedTo: (args: {
+      bookId: string;
+      characterId: string;
+      otherBookId: string;
+      otherCharacterId: string;
+    }) => notLinkedToMock(args),
   },
 }));
 
@@ -148,6 +186,8 @@ beforeEach(() => {
   getBookState.mockResolvedValue(null);
   seriesPatchCharacter.mockReset();
   mergeCharactersMock.mockReset();
+  linkPriorCharacterMock.mockReset();
+  notLinkedToMock.mockReset();
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -1253,6 +1293,57 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
       <Provider store={store}>
         <LibraryView library={libraryWithDuplicate} />
       </Provider>,
+    );
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
+  });
+
+  /* Core regression for the "merge fails silently then reappears" bug. On
+     the GLOBAL view (no open book) both pair books are foreign, so the link
+     winner's new alias must be reflected into `globalCastCache` — otherwise
+     detection re-flags the pair the moment its memo re-runs. */
+  it('suppresses the pill after linking when the winner is a foreign book (does not reappear)', async () => {
+    getBookState.mockImplementation((bookId: string) => Promise.resolve(elizaCasts(bookId)));
+    linkPriorCharacterMock.mockResolvedValue({
+      matchedFrom: { bookId: 'b1', characterId: 'v_eliza', bookTitle: 'Book One', confidence: 1 },
+      voiceId: 'v_eliza',
+    });
+    renderWithLibrarySlice();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /1 duplicate candidate/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Same character — link them/i }));
+    /* Default survivor = "Eliza Gray" (b1); loser "Eliza" (b2). The link
+       call fires, then the pill must vanish and STAY gone. */
+    await waitFor(() => expect(linkPriorCharacterMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull(),
+    );
+    /* Re-settle a tick to prove it doesn't re-flag (the bug's tell). */
+    await act(async () => {});
+    expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
+  });
+
+  it('suppresses the pill after "Different on purpose" when both books are foreign', async () => {
+    getBookState.mockImplementation((bookId: string) => Promise.resolve(elizaCasts(bookId)));
+    notLinkedToMock.mockResolvedValue({
+      pair: {
+        a: { bookId: 'b1', characterId: 'v_eliza' },
+        b: { bookId: 'b2', characterId: 'v_eliza_sb' },
+      },
+    });
+    renderWithLibrarySlice();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: /1 duplicate candidate/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Different on purpose/i })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Different on purpose/i }));
+    await waitFor(() => expect(notLinkedToMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull(),
     );
     await act(async () => {});
     expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
