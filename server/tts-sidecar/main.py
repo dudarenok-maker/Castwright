@@ -713,6 +713,18 @@ class QwenEngine(Engine):
         # is harmless, but the lock is cheap and keeps hit/miss accounting honest.
         self._prompt_cache: dict[str, tuple[Any, str]] = {}
         self._cache_lock = threading.Lock()
+        # Serialises the GPU model forward. The Qwen Base model's batched
+        # `generate_voice_clone` is NOT thread-safe: two overlapping forwards of
+        # different batch sizes (which the Node side issues when GPU_VRAM_BUDGET>1
+        # runs N workers — e.g. a full batch of 8 overlapping a chapter's 7-item
+        # remainder) collide on shared model state and raise "size of tensor a
+        # (8) must match tensor b (7)". Synth runs on asyncio.to_thread worker
+        # threads, so a plain threading.Lock here serialises same-engine forwards
+        # without blocking the event loop (asyncio offload + /health stay live).
+        # Per-engine: a concurrent Kokoro synth still runs in parallel (separate
+        # engine instance, separate lock). Batching — not concurrency — is the
+        # throughput lever on a single autoregressive model anyway.
+        self._synth_lock = threading.Lock()
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
         # The Node server points QWEN_VOICES_DIR at the per-workspace tree
@@ -921,17 +933,20 @@ class QwenEngine(Engine):
         ref_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
 
         self._ensure_design_loaded()
-        # 1. design a reference clip from the persona instruction.
-        ref_wavs, ref_sr = self._design.generate_voice_design(
-            text=ref_text, language=lang, instruct=instruct
-        )
-        ref_audio = ref_wavs[0]
-
-        # 2. distil into a reusable clone prompt on the Base model.
         self._ensure_base_loaded()
-        prompt = self._base.create_voice_clone_prompt(
-            ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-        )
+        # Serialise the GPU forwards against any concurrent synth/design — see
+        # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+        with self._synth_lock:
+            # 1. design a reference clip from the persona instruction.
+            ref_wavs, ref_sr = self._design.generate_voice_design(
+                text=ref_text, language=lang, instruct=instruct
+            )
+            ref_audio = ref_wavs[0]
+
+            # 2. distil into a reusable clone prompt on the Base model.
+            prompt = self._base.create_voice_clone_prompt(
+                ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+            )
 
         # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
         os.makedirs(self._voices_dir, exist_ok=True)
@@ -964,9 +979,10 @@ class QwenEngine(Engine):
             self._prompt_cache.pop(voice_id, None)
 
         # 4. audition preview — speak the calibration line in the new voice.
-        wavs, sr = self._base.generate_voice_clone(
-            text=[ref_text], language=[lang], voice_clone_prompt=prompt
-        )
+        with self._synth_lock:
+            wavs, sr = self._base.generate_voice_clone(
+                text=[ref_text], language=[lang], voice_clone_prompt=prompt
+            )
         return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 
     def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
@@ -1024,9 +1040,11 @@ class QwenEngine(Engine):
 
         self._ensure_base_loaded()
         gen_start = time.perf_counter()
-        wavs, sr = self._base.generate_voice_clone(
-            text=[text], language=[lang], voice_clone_prompt=prompt
-        )
+        # Serialise the forward — see `_synth_lock` in __init__.
+        with self._synth_lock:
+            wavs, sr = self._base.generate_voice_clone(
+                text=[text], language=[lang], voice_clone_prompt=prompt
+            )
         gen_ms = (time.perf_counter() - gen_start) * 1000.0
 
         audio = wavs[0]
@@ -1087,9 +1105,14 @@ class QwenEngine(Engine):
             prompts.extend(prompt if isinstance(prompt, list) else [prompt])
 
         self._ensure_base_loaded()
-        wavs, sr = self._base.generate_voice_clone(
-            text=texts, language=langs, voice_clone_prompt=prompts
-        )
+        # Serialise the forward — see `_synth_lock` in __init__. Without this,
+        # two concurrent batches of different sizes (e.g. a full 8 overlapping a
+        # 7-item remainder, which GPU_VRAM_BUDGET>1 schedules in parallel) race
+        # on shared model state → "size of tensor a (8) must match tensor b (7)".
+        with self._synth_lock:
+            wavs, sr = self._base.generate_voice_clone(
+                text=texts, language=langs, voice_clone_prompt=prompts
+            )
         # Hard invariant: one wav per input item, in order. A mismatch means a
         # library API drift — fail loudly rather than silently misalign audio
         # with sentences (which would scramble the chapter).
