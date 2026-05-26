@@ -279,6 +279,203 @@ const seriesFromTitlePath = resolve(fixturesDir, 'sample-title-no-calibre.epub')
 writeFileSync(seriesFromTitlePath, buildSeriesFromTitleEpub());
 console.log(`wrote ${seriesFromTitlePath}`);
 
+/* Fourth fixture (plan 116): an EPUB whose OPF namespaces EVERY package
+   element with an explicit `opf:` prefix (`<opf:package>`, `<opf:manifest>`,
+   `<opf:item>`, `<opf:spine>`, `<opf:itemref>`, `<opf:meta>`). epub2's
+   manifest/spine walker only recognises UNPREFIXED names, so it yields an
+   empty flow and the primary path extracts zero chapters — the raw-zip
+   fallback (parseEpubRawZip) must recover the text. Same prose as
+   sample.epub (so audio-tag + Calibre-series assertions carry over), but the
+   chapters live one level DEEPER (`OEBPS/text/chapterN.xhtml`) so the
+   href-relative-to-OPF-dir resolution path is exercised. Real-world source:
+   Simon & Schuster publisher EPUBs (e.g. "Stellarlune"). */
+function buildOpfPrefixedEpub() {
+  const containerXml = `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`;
+
+  const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
+<opf:package xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" unique-identifier="bookid" version="2.0">
+  <opf:metadata>
+    <dc:title>The Solway Light</dc:title>
+    <dc:creator opf:role="aut">Jane Doe</dc:creator>
+    <dc:identifier id="bookid">urn:uuid:fixture-opfpfx-0001</dc:identifier>
+    <dc:language>en</dc:language>
+    <opf:meta name="calibre:series" content="Solway Bay"/>
+    <opf:meta name="calibre:series_index" content="2"/>
+  </opf:metadata>
+  <opf:manifest>
+    <opf:item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <opf:item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <opf:item id="ch2" href="text/chapter2.xhtml" media-type="application/xhtml+xml"/>
+  </opf:manifest>
+  <opf:spine toc="ncx">
+    <opf:itemref idref="ch1"/>
+    <opf:itemref idref="ch2"/>
+  </opf:spine>
+</opf:package>`;
+
+  const tocNcx = `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head>
+    <meta name="dtb:uid" content="urn:uuid:fixture-opfpfx-0001"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle><text>The Solway Light</text></docTitle>
+  <navMap>
+    <navPoint id="np1" playOrder="1"><navLabel><text>Opening</text></navLabel><content src="text/chapter1.xhtml"/></navPoint>
+    <navPoint id="np2" playOrder="2"><navLabel><text>Returning</text></navLabel><content src="text/chapter2.xhtml"/></navPoint>
+  </navMap>
+</ncx>`;
+
+  const chapter1 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Opening</title></head>
+<body>
+  <h1>Opening</h1>
+  <p>The tower stood at the edge of the world.</p>
+  <p>She yelled <em>across</em> the cold water.</p>
+</body>
+</html>`;
+
+  const chapter2 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Returning</title></head>
+<body>
+  <h1>Returning</h1>
+  <p>"GET OUT NOW," she shouted.</p>
+  <p>The wick guttered.</p>
+</body>
+</html>`;
+
+  const zip = new AdmZip();
+  zip.addFile('mimetype', Buffer.from('application/epub+zip', 'utf8'), '', 0);
+  zip.addFile('META-INF/container.xml', Buffer.from(containerXml, 'utf8'));
+  zip.addFile('OEBPS/content.opf', Buffer.from(contentOpf, 'utf8'));
+  zip.addFile('OEBPS/toc.ncx', Buffer.from(tocNcx, 'utf8'));
+  zip.addFile('OEBPS/text/chapter1.xhtml', Buffer.from(chapter1, 'utf8'));
+  zip.addFile('OEBPS/text/chapter2.xhtml', Buffer.from(chapter2, 'utf8'));
+  return zip.toBuffer();
+}
+
+const opfPrefixedPath = resolve(fixturesDir, 'sample-opf-prefixed.epub');
+writeFileSync(opfPrefixedPath, buildOpfPrefixedEpub());
+console.log(`wrote ${opfPrefixedPath}`);
+
+/* Fifth fixture (plan 116): DRM diagnostic. Prefixed OPF (so the fallback
+   runs) + a META-INF/encryption.xml entry + a content doc with no extractable
+   text. The fallback finds zero chapters and, seeing encryption.xml, throws
+   UnusableEpubError with the DRM-specific message. */
+function buildDrmEpub() {
+  const containerXml = `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`;
+
+  const encryptionXml = `<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <EncryptedData xmlns="http://www.w3.org/2001/04/xmlenc#">
+    <CipherData><CipherReference URI="OEBPS/text/chapter1.xhtml"/></CipherData>
+  </EncryptedData>
+</encryption>`;
+
+  const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
+<opf:package xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" unique-identifier="bookid" version="2.0">
+  <opf:metadata>
+    <dc:title>A Locked Book</dc:title>
+    <dc:creator opf:role="aut">Jane Doe</dc:creator>
+    <dc:identifier id="bookid">urn:uuid:fixture-drm-0001</dc:identifier>
+    <dc:language>en</dc:language>
+  </opf:metadata>
+  <opf:manifest>
+    <opf:item id="ch1" href="text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+  </opf:manifest>
+  <opf:spine>
+    <opf:itemref idref="ch1"/>
+  </opf:spine>
+</opf:package>`;
+
+  /* Stand-in for an encrypted content doc: a valid XHTML shell with no text
+     in its body (decryption would be needed to reveal any). */
+  const chapter1 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Locked</title></head>
+<body></body>
+</html>`;
+
+  const zip = new AdmZip();
+  zip.addFile('mimetype', Buffer.from('application/epub+zip', 'utf8'), '', 0);
+  zip.addFile('META-INF/container.xml', Buffer.from(containerXml, 'utf8'));
+  zip.addFile('META-INF/encryption.xml', Buffer.from(encryptionXml, 'utf8'));
+  zip.addFile('OEBPS/content.opf', Buffer.from(contentOpf, 'utf8'));
+  zip.addFile('OEBPS/text/chapter1.xhtml', Buffer.from(chapter1, 'utf8'));
+  return zip.toBuffer();
+}
+
+const drmPath = resolve(fixturesDir, 'sample-epub-drm.epub');
+writeFileSync(drmPath, buildDrmEpub());
+console.log(`wrote ${drmPath}`);
+
+/* Sixth fixture (plan 116): image-only diagnostic. Prefixed OPF (so the
+   fallback runs), no encryption.xml, and the single spine doc's body holds
+   only an <img> — no text. The fallback resolves the doc but extracts no
+   body, so it throws UnusableEpubError with the image-only message. */
+function buildImageOnlyEpub() {
+  const containerXml = `<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`;
+
+  const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
+<opf:package xmlns:opf="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/" unique-identifier="bookid" version="2.0">
+  <opf:metadata>
+    <dc:title>A Picture Book</dc:title>
+    <dc:creator opf:role="aut">Jane Doe</dc:creator>
+    <dc:identifier id="bookid">urn:uuid:fixture-img-0001</dc:identifier>
+    <dc:language>en</dc:language>
+  </opf:metadata>
+  <opf:manifest>
+    <opf:item id="page1" href="text/page1.xhtml" media-type="application/xhtml+xml"/>
+    <opf:item id="img1" href="images/page1.jpg" media-type="image/jpeg"/>
+  </opf:manifest>
+  <opf:spine>
+    <opf:itemref idref="page1"/>
+  </opf:spine>
+</opf:package>`;
+
+  const page1 = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Page 1</title></head>
+<body><img src="../images/page1.jpg" alt=""/></body>
+</html>`;
+
+  const zip = new AdmZip();
+  zip.addFile('mimetype', Buffer.from('application/epub+zip', 'utf8'), '', 0);
+  zip.addFile('META-INF/container.xml', Buffer.from(containerXml, 'utf8'));
+  zip.addFile('OEBPS/content.opf', Buffer.from(contentOpf, 'utf8'));
+  zip.addFile('OEBPS/text/page1.xhtml', Buffer.from(page1, 'utf8'));
+  // 1x1 grey JPEG stand-in — content doesn't matter, only that it's not text.
+  zip.addFile('OEBPS/images/page1.jpg', Buffer.from('\xff\xd8\xff\xd9', 'binary'));
+  return zip.toBuffer();
+}
+
+const imageOnlyPath = resolve(fixturesDir, 'sample-epub-image-only.epub');
+writeFileSync(imageOnlyPath, buildImageOnlyEpub());
+console.log(`wrote ${imageOnlyPath}`);
+
 /* MOBI + AZW3 fixtures (plan 60 — real-binary parser fixtures).
  *
  * Calibre's `ebook-convert` is the canonical tool for producing real
