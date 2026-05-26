@@ -1297,6 +1297,16 @@ export function Layout() {
                     }
                   : undefined
               }
+              /* Dispatch-only — unlike onAddAlias (whose dedicated server
+                 endpoint predates the persist-rule approach), the
+                 cast/renameCharacter persistence rule round-trips the new
+                 name + demoted alias to cast.json on its own. */
+              onRename={
+                bookId
+                  ? (characterId, name) =>
+                      dispatch(castActions.renameCharacter({ characterId, name }))
+                  : undefined
+              }
               onClose={() => dispatch(uiActions.setOpenProfileId(null))}
               onSave={(updated, meta) => {
                 const prior = profileCharacter;

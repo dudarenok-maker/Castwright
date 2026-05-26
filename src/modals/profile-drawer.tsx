@@ -102,6 +102,12 @@ interface Props {
       movement — this is for stitching in a name the analyzer missed.
       Used by the Profile Drawer's "+ Add alias" affordance. */
   onAddAlias?: (characterId: string, aliasName: string) => Promise<void>;
+  /** Set this character's primary display name. Powers the header rename
+      affordance (free-text) and the per-alias-chip "Make primary" promote.
+      The old name is always demoted into aliases so a rename never loses a
+      name. Dispatch-only (no API call) — the cast-slice persistence rule
+      round-trips it to cast.json. When omitted, both affordances hide. */
+  onRename?: (characterId: string, name: string) => void;
 }
 
 export interface PriorMergeCandidate {
@@ -155,6 +161,7 @@ export function ProfileDrawer({
   onLinkPrior,
   onUnlinkAlias,
   onAddAlias,
+  onRename,
 }: Props) {
   const [tone, setTone] = useState(
     character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 },
@@ -281,6 +288,41 @@ export function ProfileDrawer({
   useEffect(() => {
     if (showAddAlias) addAliasInputRef.current?.focus();
   }, [showAddAlias]);
+
+  /* Header rename. `editingName` toggles the inline input; `nameDraft` seeds
+     from the current name on each open; `nameError` surfaces the empty guard.
+     Imperative focus on mount mirrors the +Add alias input above. The reducer
+     is the source of truth for the swap semantics — runRename only validates
+     and hands the trimmed value to onRename. */
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (editingName) nameInputRef.current?.focus();
+  }, [editingName]);
+
+  function beginRename() {
+    setNameDraft(character.name);
+    setNameError(null);
+    setEditingName(true);
+  }
+
+  function runRename(value: string) {
+    if (!onRename) return;
+    const trimmed = value.trim();
+    if (!trimmed) {
+      setNameError('Name cannot be empty.');
+      return;
+    }
+    /* No-op fast path — the reducer also guards this, but skipping the
+       dispatch avoids a needless persist PUT. */
+    if (trimmed.toLowerCase() !== character.name.trim().toLowerCase()) {
+      onRename(character.id, trimmed);
+    }
+    setEditingName(false);
+    setNameError(null);
+  }
 
   async function runUnlinkAlias(aliasName: string) {
     if (!onUnlinkAlias || aliasBusy) return;
@@ -563,7 +605,57 @@ export function ProfileDrawer({
         <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
           <Avatar name={character.name} color={character.color as CharColor} size={40} />
           <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-bold text-ink leading-tight truncate">{character.name}</h3>
+            {editingName ? (
+              <div className="flex items-center gap-1.5 min-w-0">
+                <input
+                  ref={nameInputRef}
+                  aria-label="Character name"
+                  value={nameDraft}
+                  onChange={(e) => {
+                    setNameDraft(e.target.value);
+                    if (nameError) setNameError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      runRename(nameDraft);
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setEditingName(false);
+                      setNameError(null);
+                    }
+                  }}
+                  className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-ink/20 bg-white text-base font-bold text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0"
+                />
+                <button
+                  aria-label="Save name"
+                  disabled={!nameDraft.trim()}
+                  onClick={() => runRename(nameDraft)}
+                  className="shrink-0 px-2.5 py-1 rounded-lg text-xs font-semibold bg-magenta text-white hover:bg-magenta/90 disabled:bg-ink/15 disabled:text-ink/40 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                >
+                  Save
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 min-w-0">
+                <h3 className="text-lg font-bold text-ink leading-tight truncate min-w-0">
+                  {character.name}
+                </h3>
+                {onRename && !isBucket && (
+                  <button
+                    aria-label="Rename character"
+                    onClick={beginRename}
+                    className="shrink-0 text-[11px] font-medium text-ink/45 hover:text-magenta underline-offset-2 hover:underline"
+                  >
+                    Rename
+                  </button>
+                )}
+              </div>
+            )}
+            {nameError && (
+              <p className="mt-1 text-[11px] text-red-600/90 font-medium">⚠ {nameError}</p>
+            )}
             <p className="text-xs text-ink/60 truncate">{character.role}</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
@@ -911,6 +1003,15 @@ export function ProfileDrawer({
                       className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] font-medium bg-magenta/12 text-ink min-h-[28px] sm:min-h-0"
                     >
                       <span>{a}</span>
+                      {onRename && !isBucket && (
+                        <button
+                          aria-label={`Make ${a} the primary name`}
+                          onClick={() => onRename(character.id, a)}
+                          className="inline-flex items-center justify-center w-5 h-5 rounded-full text-ink/55 hover:bg-magenta/15 hover:text-magenta coarse-pointer:opacity-100"
+                        >
+                          <IconStar className="w-3 h-3" />
+                        </button>
+                      )}
                       {onUnlinkAlias && (
                         <button
                           aria-label={`Unlink ${a}`}

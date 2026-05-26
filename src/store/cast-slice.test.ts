@@ -597,3 +597,76 @@ describe('castSlice — setVoiceStyle (plan 108)', () => {
   });
 });
 
+describe('castSlice — renameCharacter (rename + promote alias)', () => {
+  it('renames to a brand-new name and demotes the old name into aliases', () => {
+    const start = baseState([makeChar('Linnet', { name: 'Dame Linnet' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.renameCharacter({ characterId: 'Linnet', name: 'Councilor Linnet' }),
+    );
+    const c = next.characters[0];
+    expect(c.name).toBe('Councilor Linnet');
+    expect(c.aliases).toEqual(['Dame Linnet']);
+  });
+
+  it('promotes an existing alias to the primary name and swaps the old name in', () => {
+    const start = baseState([
+      makeChar('Hart', { name: 'Hart', aliases: ['Hartwell Brennan Vale', 'Hartie'] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.renameCharacter({ characterId: 'Hart', name: 'Hartwell Brennan Vale' }),
+    );
+    const c = next.characters[0];
+    /* Promoted alias becomes the name and leaves the alias list; old primary
+       takes its place — a lossless swap. */
+    expect(c.name).toBe('Hartwell Brennan Vale');
+    expect(c.aliases).toEqual(['Hartie', 'Hart']);
+  });
+
+  it('dedupes case-insensitively — no double-add of the demoted old name', () => {
+    /* New name matches an existing alias only by casing; old name already
+       present in aliases (different casing). Neither should duplicate. */
+    const start = baseState([
+      makeChar('Linnet', { name: 'Dame Linnet', aliases: ['councilor Linnet', 'Dame Linnet'] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.renameCharacter({ characterId: 'Linnet', name: 'Councilor Linnet' }),
+    );
+    const c = next.characters[0];
+    expect(c.name).toBe('Councilor Linnet');
+    /* 'councilor Linnet' stripped (it's now the name); 'Dame Linnet' kept, and
+       the demoted 'Dame Linnet' not re-added because it already matches. */
+    expect(c.aliases).toEqual(['Dame Linnet']);
+  });
+
+  it('no-ops on an empty / whitespace-only name', () => {
+    const start = baseState([makeChar('Linnet', { name: 'Dame Linnet' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.renameCharacter({ characterId: 'Linnet', name: '   ' }),
+    );
+    expect(next).toEqual(start);
+  });
+
+  it('no-ops for an unknown characterId', () => {
+    const start = baseState([makeChar('Linnet', { name: 'Dame Linnet' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.renameCharacter({ characterId: 'ghost', name: 'Whoever' }),
+    );
+    expect(next).toEqual(start);
+  });
+
+  it('no-ops when the name is unchanged apart from casing/whitespace', () => {
+    const start = baseState([makeChar('Linnet', { name: 'Dame Linnet', aliases: ['Linnet'] })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.renameCharacter({ characterId: 'Linnet', name: '  Dame Linnet  ' }),
+    );
+    /* Same name → aliases untouched, no self-demotion. */
+    expect(next).toEqual(start);
+  });
+});
+
