@@ -295,6 +295,24 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item B4).
 - _Depends on:_ plan 88 shipped (its per-phase plumbing is the seam this builds on).
 - _Benefit (user):_ uses idle Gemini quota when local is the bottleneck. Lower priority than plan 88's bucketed split.
 
+#### `srv-13` — EPUB raw-zip fallback: NCX/nav-doc title parity
+
+Source: [plan 116](features/116-epub-parsing.md) "Out of scope" (2026-05-26).
+
+- _What:_ The raw-zip EPUB fallback (`parseEpubRawZip` in `server/src/parsers/epub.ts`) titles chapters from the body `<h1>` (else `Chapter N`); it does not parse `toc.ncx` / `nav.xhtml` navLabels the way the epub2 path does. Parse the NCX navMap (or the EPUB3 nav doc) and apply the same generic-vs-descriptive merge logic (`GENERIC_NCX_RE`) the epub2 path uses, so prefixed-OPF imports get authored chapter titles.
+- _Acceptance:_ A prefixed-OPF EPUB with a descriptive NCX (e.g. "PREFACE", "Chapter One — …") surfaces those titles through the fallback, matching what epub2 produces for an equivalent unprefixed file.
+- _Key files:_ `server/src/parsers/epub.ts` (`parseEpubRawZip`); `server/src/parsers/html-utils.ts` (`GENERIC_NCX_RE`).
+- _Benefit (user):_ chapter titles in the cast/listen views read as authored rather than "Chapter 3" for front matter. Cosmetic — body extraction (the load-bearing fix) already works.
+
+#### `srv-14` — Align MOBI `DrmProtectedError` → HTTP 415 in `/api/manuscripts`
+
+Source: [plan 116](features/116-epub-parsing.md) "Out of scope" (2026-05-26).
+
+- _What:_ `POST /api/manuscripts` maps `UnsupportedFormatError` and the new `UnusableEpubError` to 415, but MOBI's `DrmProtectedError` (`server/src/parsers/mobi.ts`) still falls through to the generic 500 branch there (it predates the 415 mapping; the `/api/import` route already returns 415 for it). Map it to 415 in the manuscripts route too for consistency, ideally by having `DrmProtectedError` and `UnusableEpubError` share a small `parsers/errors.ts` base the route catches with one `instanceof`.
+- _Acceptance:_ uploading a DRM MOBI to `POST /api/manuscripts` returns 415 (not 500); existing `/api/import` DRM behaviour unchanged.
+- _Key files:_ `server/src/routes/manuscripts.ts`; `server/src/parsers/mobi.ts`; `server/src/parsers/index.ts`.
+- _Benefit (technical):_ one consistent "unusable media" status across both upload routes; not changed in plan 116 to avoid coupling MOBI behaviour into an EPUB fix.
+
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
