@@ -26,6 +26,7 @@ interface QueueEntryShape {
   order: number;
   requiredEngines?: ('coqui' | 'piper' | 'kokoro' | 'gemini' | 'qwen')[];
   multiTts?: boolean;
+  errorReason?: string | null;
 }
 
 /* Seed the in-memory mock queue before the app loads. Defaults to PAUSED so
@@ -97,6 +98,24 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await expect(page.getByTestId('queue-entry-e-stuck-cancel')).toHaveCount(0);
     await page.getByTestId('queue-entry-e-stuck-force-remove').click();
     await expect(page.getByText(/Empty/i).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('a failed entry persists as "Failed" with a Retry control that re-queues it', async ({
+    page,
+  }) => {
+    /* Seeded PAUSED so retrying doesn't immediately drain the re-queued entry. */
+    await seedQueue(page, [
+      e({ id: 'e-failed', bookId: 'sb', chapterId: 9, status: 'failed', errorReason: 'sidecar 500' }),
+    ]);
+    await page.goto('/#/books/sb/listen');
+    await page.getByTestId('topbar-queue-chip').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByTestId('topbar-queue-chip').click();
+    await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible();
+    await expect(page.getByText(/Failed · sidecar 500/)).toBeVisible();
+    await page.getByTestId('queue-entry-e-failed-retry').click();
+    /* Re-queued → the Failed line is gone and the row reads Queued. */
+    await expect(page.getByText(/Failed · sidecar 500/)).toHaveCount(0, { timeout: 5_000 });
+    await expect(page.getByText('Queued')).toBeVisible();
   });
 
   test('cross-book entries render grouped and the other book’s entry cancels while viewing one book', async ({

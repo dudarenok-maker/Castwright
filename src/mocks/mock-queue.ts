@@ -123,11 +123,37 @@ export function mockQueueRequest(
     return snapshot();
   }
 
-  /* `${entryId}/complete` — done-prune a finished entry regardless of status
-     (it IS in_progress at completion). */
+  /* `${entryId}/complete` — resolve a finished entry. Body `{ outcome }`:
+     `done` (default) done-prunes it; `failed` marks it `failed` so it lingers
+     for retry (mirrors completeEntry server-side). */
   if (method === 'POST' && rest.endsWith('/complete')) {
     const id = decodeURIComponent(rest.replace(/^\//, '').replace(/\/complete$/, ''));
-    state.entries = renumber(state.entries.filter((e) => e.id !== id));
+    const body = init?.body
+      ? (JSON.parse(init.body) as { outcome?: string; errorReason?: string })
+      : {};
+    if (body.outcome === 'failed') {
+      state.entries = renumber(
+        state.entries.map((e) =>
+          e.id === id ? { ...e, status: 'failed', errorReason: body.errorReason ?? null } : e,
+        ),
+      );
+    } else {
+      state.entries = renumber(state.entries.filter((e) => e.id !== id));
+    }
+    return snapshot();
+  }
+
+  /* `${entryId}/retry` — re-queue a FAILED entry (status → queued, clear
+     errorReason) so the dispatcher re-claims it. No-op for a non-failed id. */
+  if (method === 'POST' && rest.endsWith('/retry')) {
+    const id = decodeURIComponent(rest.replace(/^\//, '').replace(/\/retry$/, ''));
+    state.entries = renumber(
+      state.entries.map((e) =>
+        e.id === id && e.status === 'failed'
+          ? { ...e, status: 'queued', errorReason: null, progress: undefined }
+          : e,
+      ),
+    );
     return snapshot();
   }
 

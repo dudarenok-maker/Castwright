@@ -256,6 +256,39 @@ describe('QueueModal', () => {
     expect(call![1].method).toBe('DELETE');
   });
 
+  it('a failed entry renders "Failed · reason" with a Retry control (and no force-remove)', () => {
+    renderModal([
+      entry({ id: 'a1', status: 'failed', order: 0, errorReason: 'sidecar 500' }),
+    ]);
+    expect(screen.getByText(/Failed · sidecar 500/)).toBeInTheDocument();
+    expect(screen.getByTestId('queue-entry-a1-retry')).toBeInTheDocument();
+    /* Failed isn't in-flight: it keeps cancel, and shows no force-remove. */
+    expect(screen.getByTestId('queue-entry-a1-cancel')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-entry-a1-force-remove')).toBeNull();
+  });
+
+  it('Retry on a failed entry POSTs /retry to re-queue it', async () => {
+    renderModal([entry({ id: 'a1', status: 'failed', order: 0, errorReason: 'x' })]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('queue-entry-a1-retry'));
+    });
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/queue/a1/retry');
+    expect(call).toBeDefined();
+    expect(call![1].method).toBe('POST');
+  });
+
+  it('a queued entry shows neither Retry nor force-remove', () => {
+    renderModal([entry({ id: 'a1', status: 'queued', order: 0 })]);
+    expect(screen.queryByTestId('queue-entry-a1-retry')).toBeNull();
+    expect(screen.queryByTestId('queue-entry-a1-force-remove')).toBeNull();
+    expect(screen.getByTestId('queue-entry-a1-cancel')).toBeInTheDocument();
+  });
+
   it('renders EVERY in_progress entry as "In flight" (multiple concurrent under queue-sole concurrency)', () => {
     renderModal([
       entry({
