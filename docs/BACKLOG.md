@@ -200,6 +200,18 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 
 ### Revisions & history
 
+#### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history)
+
+Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
+
+> **Standalone value (2026-05-26):** kept in Could on its own merits after `fs-4` (per-segment commits) was retired — this is _chapter-level_ non-linear undo (whole-entry rollback), not segment-level, and plan 55's slice plumbing (`rolledBack` reducer + `reversible` field) is already on disk, so it's a self-contained feature, not gated on segment-level revision.
+
+- _What:_ Extend plan 20's `preserveExistingAsPrevious` to write `.previous.<entryId>.<slug>.mp3` per timeline entry (not just one `.previous.<slug>.mp3` per chapter). Wire a server `POST /api/books/:bookId/revisions/:entryId/rollback` endpoint that restores a specific timeline entry's audio + flips subsequent entries to `rolled-back-from`. Add a GC pass that prunes oldest snapshots after the user commits (or when disk pressure exceeds a cap, e.g. 10 entries / chapter).
+- _Acceptance:_ Generate chapter, regenerate twice, accept both. Open History → 2 active entries each `reversible: true`. Click Rollback on entry 1 → chapter audio reverts to entry-1's state; entry 2 marked `rolled-back-from`. New rollback can target a still-reversible entry; double-rollback → 409.
+- _Key files:_ `server/src/workspace/preserve-previous-audio.ts` (extend filename pattern); new `server/src/routes/revisions-rollback.ts`; `src/components/revision-timeline-modal.tsx` (enable Rollback button on reversible entries); slice already plumbed (plan 55's `rolledBack` reducer + `reversible` field).
+- _Depends on:_ plan 55 shipped (slice plumbing already on disk).
+- _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
+
 #### `fe-15` — Mock-mode chapters hydration so the revision A/B player opens in e2e
 
 Source: plan 114 ship (2026-05-26). The profile-regen preview gate's full click-through (Preview → A/B → Approve fans out / Reject reverts) can't be e2e'd today because mock mode doesn't hydrate `chapters` from the library payload (`state.json` hydration throws under mocks), so `RevisionDiffPlayer` returns null when the fixture chapterId doesn't resolve. Same gap `e2e/revision-diff.spec.ts` documents — that spec asserts only the toolbar pill and never opens the player. (Supersedes the removed `fe-10`, whose cross-book `regenerateCharacter` stub premise went away with plan 114.)
@@ -463,20 +475,6 @@ Source: [`27-book-state-persistence.md`](features/27-book-state-persistence.md).
 
 - _Why parked:_ single-user-per-workspace assumption; file locking is advisory at best on Windows network shares.
 - _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `fe-11` — both wake under the same trigger.
-
-### `fs-4` — Per-segment regen consumer for `revisions.acceptedSelections`
-
-Source: plan 20 close-out (2026-05-18); moved Could → Won't 2026-05-26. The `revisions.acceptedSelections` map is persisted by `revisionsActions.acceptRevision` but never read back; the intent was a per-segment regen path that re-renders only the segments the user flipped to take 'B' while preserving take 'A' verbatim (new server endpoint + segments-manifest merge + a revision-diff "Commit selection" trigger).
-
-- _Why parked (2026-05-26):_ revision in practice happens at the chapter + cast-member grain, not per-segment — the user re-casts or regenerates a whole chapter, they don't splice individual sentence takes. The segment-level commit machinery (per-segment synth + on-disk manifest interleave) is heavy for a workflow nobody reaches for, so it's likely unviable as designed.
-- _Wake when:_ a concrete user need to keep N-1 segments of a take while re-rolling a single segment emerges in practice (not hypothetically). The `acceptedSelections` map is already on disk to build from if it does. Pairs with `fs-5`.
-
-### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history)
-
-Source: net-new (2026-05-19), spun off from plan 55; moved Could → Won't 2026-05-26. Would extend `preserveExistingAsPrevious` to write `.previous.<entryId>.<slug>.mp3` per timeline entry + a `POST …/revisions/:entryId/rollback` endpoint + a snapshot-GC pass, turning plan 55's read-only history view into true non-linear per-chapter undo.
-
-- _Why parked (2026-05-26):_ parked alongside `fs-4`. The per-entry snapshot storage + rollback UI pay off mainly once segment-level revision exists to make the timeline granular, and that direction is itself parked. Whole-chapter regen plus the existing A/B accept/reject already cover the common revise loop.
-- _Wake when:_ `fs-4` wakes, or users ask for multi-step undo across several chapter regenerations rather than one-shot accept/reject. Plan 55's slice plumbing (`rolledBack` reducer + `reversible` field) is already on disk to build from.
 
 ### `srv-6` — Engine-drift factor polish + `resolvedVoiceName` backfill
 
