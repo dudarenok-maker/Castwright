@@ -78,3 +78,12 @@ Shipped **2026-05-21** via PR [#104](https://github.com/dudarenok-maker/AudioBoo
 Plan 63 narrow-scope BroadcastChannel rule preserved: broadcast action allowlist unchanged; diff scope strictly inside `activeStream`. Narrow-scope test cases (per-chapter row, inbound `applyExternal*` reducer) still red-line non-broadcast behaviour.
 
 One pre-existing intermittent `Worker exited unexpectedly` flake in `test:server` exists on `main` — verified via stash-round-trip during this round; caught + re-ran cleanly so verify cache stayed green. Tracked as part of **BACKLOG Should #3** (the broader pre-push gate de-flake work).
+
+### Follow-up — GenerationView chunk prefetch (2026-05-26)
+
+C5's lazy boundary meant the Generate view's chunk only began downloading on first navigation to it. Under a heavy generation run the main thread is busy, so that cold download stretched the route Suspense fallback into a multi-second "Loading…" — read as a stall. Fix: proactively warm the Generate chunk so it's resolved before navigation.
+
+- **`src/routes/prefetch.ts` (new):** `importGenerationView = () => import('../views/generation')` — the single dynamic-import specifier shared by both the `React.lazy` def in `src/routes/index.tsx` and the prefetch, so Vite warms the exact chunk the route awaits.
+- **`src/components/layout.tsx`:** a one-shot `useEffect` (ref-guarded) fires `importGenerationView()` once the user is inside a book (`stageKind === 'ready'`) OR any generation stream is live (`activeStreams.length > 0`). `import()` is idempotent, so warming is free if the chunk already loaded.
+- **C5 invariant preserved:** the view stays lazy (no eager-import bloat on the library landing route); only the _download timing_ moves earlier. Behaviourally invisible — the view renders identically.
+- **Tests:** `src/routes/prefetch.test.ts` locks that the shared thunk resolves the `GenerationView` module (a path typo would silently no-op the prefetch). No new e2e — the Generate view's load/render seam is already covered (`e2e/responsive/coverage.spec.ts`, `e2e/generation-parallel.spec.ts`, `e2e/queue-modal.spec.ts`), and the optimization is load-timing, which CI (warm chunks) can't observe deterministically.
