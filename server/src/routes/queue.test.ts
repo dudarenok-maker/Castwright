@@ -354,6 +354,21 @@ describe('DELETE /api/queue/:entryId', () => {
     expect(res.status).toBe(409);
   });
 
+  it('force-removes a stuck in_progress entry with ?force=true (200)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({
+        entries: [
+          { id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' },
+          { id: 'e2', bookId: 'book-A', chapterId: 2, scope: 'this' },
+        ],
+      });
+    await request(app).post('/api/queue/e1/start'); // e1 in_progress
+    const res = await request(app).delete('/api/queue/e1?force=true');
+    expect(res.status).toBe(200);
+    expect(res.body.entries.map((e: { id: string }) => e.id)).toEqual(['e2']);
+  });
+
   it('is idempotent (cancelling a missing entry returns 200 with current snapshot)', async () => {
     const res = await request(app).delete('/api/queue/missing-id');
     expect(res.status).toBe(200);

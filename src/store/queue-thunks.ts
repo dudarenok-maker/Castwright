@@ -188,10 +188,16 @@ export function completeQueueEntry(entryId: string) {
     cancel button calls this. Server 409s if the entry is in_progress; we
     surface a toast in that case rather than re-throwing because the user's
     intent is clear (they wanted to drop the entry) and surfacing a
-    structured error keeps the flow self-explanatory. */
-export function cancelQueueEntry(entryId: string) {
+    structured error keeps the flow self-explanatory.
+
+    `force` appends `?force=true`, which lets the server drop even an
+    in_progress entry — the modal's "Remove" control on a stuck/in-flight row
+    uses it to clear an orphaned in_progress entry that Pause-then-cancel
+    can't reach. */
+export function cancelQueueEntry(entryId: string, opts?: { force?: boolean }) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
-    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}`, {
+    const qs = opts?.force ? '?force=true' : '';
+    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}${qs}`, {
       method: 'DELETE',
     });
     if (res.status === 409) {
