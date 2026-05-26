@@ -15,7 +15,11 @@ import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { castSlice } from '../store/cast-slice';
 import { notificationsSlice } from '../store/notifications-slice';
-import { DuplicateReviewModal, type DuplicateReviewPair } from './duplicate-review-modal';
+import {
+  DuplicateReviewModal,
+  type DuplicateReviewPair,
+  type DuplicateResolution,
+} from './duplicate-review-modal';
 import { api } from '../lib/api';
 import type { Character, Voice } from '../lib/types';
 
@@ -83,7 +87,11 @@ function buildUnresolvedPair(): DuplicateReviewPair {
 function renderModal(
   pair: DuplicateReviewPair | null = buildPair(),
   onClose = vi.fn(),
-  extra: { loading?: boolean; hydrationError?: string | null } = {},
+  extra: {
+    loading?: boolean;
+    hydrationError?: string | null;
+    onResolved?: (resolution: DuplicateResolution) => void;
+  } = {},
 ) {
   const store = configureStore({
     reducer: {
@@ -215,6 +223,45 @@ describe('DuplicateReviewModal — link path', () => {
     expect(store.getState().notifications.toasts).toHaveLength(1);
   });
 
+  it('reports a link resolution: loser name → winner aliases (default survivor)', async () => {
+    linkSpy.mockResolvedValue({
+      matchedFrom: { bookId: 'ns', characterId: 'v_eliza', bookTitle: 'The Northern Star', confidence: 1 },
+      voiceId: 'v_eliza',
+    });
+    const onResolved = vi.fn<(r: DuplicateResolution) => void>();
+    renderModal(buildPair(), vi.fn(), { onResolved });
+    fireEvent.click(screen.getByRole('button', { name: /Same character — link them/i }));
+    await waitFor(() => {
+      expect(onResolved).toHaveBeenCalledWith({
+        kind: 'link',
+        winnerBookId: 'ns',
+        winnerCharacterId: 'v_eliza',
+        addedAlias: 'Eliza',
+      });
+    });
+  });
+
+  it('reports a flipped link resolution when the survivor radio is changed', async () => {
+    linkSpy.mockResolvedValue({
+      matchedFrom: { bookId: 'sb', characterId: 'v_eliza_sb', bookTitle: 'Solway Bay', confidence: 1 },
+      voiceId: 'v_eliza_sb',
+    });
+    const onResolved = vi.fn<(r: DuplicateResolution) => void>();
+    renderModal(buildPair(), vi.fn(), { onResolved });
+    /* Pick the 'b' side (Eliza / Solway Bay) as survivor — target its card
+       by the unique book title so we don't match the 'a' card too. */
+    fireEvent.click(screen.getByRole('button', { name: /Solway Bay/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Same character — link them/i }));
+    await waitFor(() => {
+      expect(onResolved).toHaveBeenCalledWith({
+        kind: 'link',
+        winnerBookId: 'sb',
+        winnerCharacterId: 'v_eliza_sb',
+        addedAlias: 'Eliza Gray',
+      });
+    });
+  });
+
   it('leaves the modal open and surfaces inline error on API failure', async () => {
     linkSpy.mockRejectedValue(new Error('Series guard failed'));
     const onClose = vi.fn();
@@ -228,7 +275,7 @@ describe('DuplicateReviewModal — link path', () => {
 });
 
 describe('DuplicateReviewModal — variant path', () => {
-  it('calls api.notLinkedTo with the pair and dispatches applyNotLinked', async () => {
+  it('calls api.notLinkedTo with the pair, dispatches applyNotLinked, reports a variant resolution', async () => {
     notLinkedSpy.mockResolvedValue({
       pair: {
         a: { bookId: 'ns', characterId: 'v_eliza' },
@@ -236,7 +283,8 @@ describe('DuplicateReviewModal — variant path', () => {
       },
     });
     const onClose = vi.fn();
-    const { store } = renderModal(buildPair(), onClose);
+    const onResolved = vi.fn<(r: DuplicateResolution) => void>();
+    const { store } = renderModal(buildPair(), onClose, { onResolved });
     fireEvent.click(screen.getByRole('button', { name: /Different on purpose/i }));
     await waitFor(() => {
       expect(notLinkedSpy).toHaveBeenCalledWith({
@@ -251,6 +299,11 @@ describe('DuplicateReviewModal — variant path', () => {
     });
     const eliza = store.getState().cast.characters.find((c) => c.id === 'v_eliza');
     expect(eliza?.notLinkedTo).toEqual([{ bookId: 'sb', characterId: 'v_eliza_sb' }]);
+    expect(onResolved).toHaveBeenCalledWith({
+      kind: 'variant',
+      a: { bookId: 'ns', characterId: 'v_eliza' },
+      b: { bookId: 'sb', characterId: 'v_eliza_sb' },
+    });
   });
 
   it('leaves the modal open and surfaces inline error on API failure', async () => {

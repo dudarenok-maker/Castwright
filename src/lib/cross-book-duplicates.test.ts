@@ -10,6 +10,8 @@ import {
   detectDuplicateCandidates,
   looksLikeSameName,
   normaliseDuplicateToken,
+  appendAliasToCachedCharacter,
+  appendNotLinkedToCachedCharacter,
   type BookSeriesInfo,
 } from './cross-book-duplicates';
 import type { Character, Voice } from './types';
@@ -240,5 +242,90 @@ describe('detectDuplicateCandidates', () => {
       charactersByBookId: new Map(),
     });
     expect(result).toHaveLength(0);
+  });
+});
+
+describe('appendAliasToCachedCharacter', () => {
+  const baseCache = () =>
+    new Map<string, Character[]>([['ns', [makeCharacter('v_eliza', 'Eliza Gray')]]]);
+
+  it('appends the alias to the matching cached character', () => {
+    const next = appendAliasToCachedCharacter(baseCache(), 'ns', 'v_eliza', 'Eliza');
+    expect(next.get('ns')?.[0].aliases).toEqual(['Eliza']);
+  });
+
+  it('returns a new Map (immutable) and leaves the source untouched', () => {
+    const cache = baseCache();
+    const next = appendAliasToCachedCharacter(cache, 'ns', 'v_eliza', 'Eliza');
+    expect(next).not.toBe(cache);
+    expect(cache.get('ns')?.[0].aliases).toBeUndefined();
+  });
+
+  it('is a no-op (same Map reference) when the book is not cached', () => {
+    const cache = baseCache();
+    expect(appendAliasToCachedCharacter(cache, 'unknown', 'v_eliza', 'Eliza')).toBe(cache);
+  });
+
+  it('is a no-op when the character is not in the cached book', () => {
+    const cache = baseCache();
+    expect(appendAliasToCachedCharacter(cache, 'ns', 'nobody', 'Eliza')).toBe(cache);
+  });
+
+  it('dedups case-insensitively against existing aliases', () => {
+    const cache = new Map<string, Character[]>([
+      ['ns', [makeCharacter('v_eliza', 'Eliza Gray', { aliases: ['Eliza'] })]],
+    ]);
+    expect(appendAliasToCachedCharacter(cache, 'ns', 'v_eliza', 'ELIZA')).toBe(cache);
+  });
+
+  it('drops a self-alias (alias equals the character name)', () => {
+    const cache = baseCache();
+    expect(appendAliasToCachedCharacter(cache, 'ns', 'v_eliza', 'eliza gray')).toBe(cache);
+  });
+
+  it('is a no-op on a blank alias', () => {
+    const cache = baseCache();
+    expect(appendAliasToCachedCharacter(cache, 'ns', 'v_eliza', '   ')).toBe(cache);
+  });
+});
+
+describe('appendNotLinkedToCachedCharacter', () => {
+  const baseCache = () =>
+    new Map<string, Character[]>([['ns', [makeCharacter('v_eliza', 'Eliza Gray')]]]);
+
+  it('appends the notLinkedTo pair to the matching cached character', () => {
+    const next = appendNotLinkedToCachedCharacter(baseCache(), 'ns', 'v_eliza', 'sb', 'v_eliza_sb');
+    expect(next.get('ns')?.[0].notLinkedTo).toEqual([{ bookId: 'sb', characterId: 'v_eliza_sb' }]);
+  });
+
+  it('returns a new Map (immutable) and leaves the source untouched', () => {
+    const cache = baseCache();
+    const next = appendNotLinkedToCachedCharacter(cache, 'ns', 'v_eliza', 'sb', 'v_eliza_sb');
+    expect(next).not.toBe(cache);
+    expect(cache.get('ns')?.[0].notLinkedTo).toBeUndefined();
+  });
+
+  it('is a no-op (same Map reference) when the book is not cached', () => {
+    const cache = baseCache();
+    expect(appendNotLinkedToCachedCharacter(cache, 'unknown', 'v_eliza', 'sb', 'x')).toBe(cache);
+  });
+
+  it('dedups on the (bookId, characterId) pair', () => {
+    const cache = new Map<string, Character[]>([
+      [
+        'ns',
+        [
+          makeCharacter('v_eliza', 'Eliza Gray', {
+            notLinkedTo: [{ bookId: 'sb', characterId: 'v_eliza_sb' }],
+          }),
+        ],
+      ],
+    ]);
+    expect(appendNotLinkedToCachedCharacter(cache, 'ns', 'v_eliza', 'sb', 'v_eliza_sb')).toBe(cache);
+  });
+
+  it('is a no-op on missing other-side ids', () => {
+    const cache = baseCache();
+    expect(appendNotLinkedToCachedCharacter(cache, 'ns', 'v_eliza', '', '')).toBe(cache);
   });
 });
