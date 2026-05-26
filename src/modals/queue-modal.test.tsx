@@ -225,16 +225,35 @@ describe('QueueModal', () => {
       entry({ id: 'a1', status: 'in_progress', order: 0, progress: 0.42 }),
       entry({ id: 'a2', chapterId: 2, order: 1 }),
     ]);
-    /* In-flight entry has no move/cancel buttons. */
+    /* In-flight entry has no move/cancel buttons, BUT carries a force-remove
+       control so a stuck/orphaned in_progress row can always be cleared. */
     expect(screen.queryByTestId('queue-entry-a1-up')).toBeNull();
     expect(screen.queryByTestId('queue-entry-a1-down')).toBeNull();
     expect(screen.queryByTestId('queue-entry-a1-cancel')).toBeNull();
-    /* The other entry has them. */
+    expect(screen.getByTestId('queue-entry-a1-force-remove')).toBeInTheDocument();
+    /* The queued entry has the normal controls and NO force-remove. */
     expect(screen.getByTestId('queue-entry-a2-up')).toBeInTheDocument();
     expect(screen.getByTestId('queue-entry-a2-down')).toBeInTheDocument();
     expect(screen.getByTestId('queue-entry-a2-cancel')).toBeInTheDocument();
+    expect(screen.queryByTestId('queue-entry-a2-force-remove')).toBeNull();
     /* In-flight status line shows progress. */
     expect(screen.getByText(/In flight · 42%/)).toBeInTheDocument();
+  });
+
+  it('force-remove on a stuck in-flight row DELETEs with ?force=true', async () => {
+    renderModal([entry({ id: 'a1', status: 'in_progress', order: 0 })]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('queue-entry-a1-force-remove'));
+    });
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).startsWith('/api/queue/a1'));
+    expect(call).toBeDefined();
+    expect(call![0]).toBe('/api/queue/a1?force=true');
+    expect(call![1].method).toBe('DELETE');
   });
 
   it('renders EVERY in_progress entry as "In flight" (multiple concurrent under queue-sole concurrency)', () => {

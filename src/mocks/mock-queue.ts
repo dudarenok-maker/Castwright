@@ -6,8 +6,9 @@
  * gone. So mock mode needs a working queue or generation never starts. The
  * real server lives in server/src/workspace/queue-io.ts + routes/queue.ts;
  * this mirrors just enough of its contract (enqueue / reorder / pause / cancel
- * / GET, contiguous `order`, dup-id 409, in_progress not cancellable) for the
- * frontend's queue-thunks to drive generation with no backend.
+ * / GET, contiguous `order`, dup-id 409, in_progress not cancellable except
+ * with `?force=true`) for the frontend's queue-thunks to drive generation
+ * with no backend.
  *
  * State is module-level (per page / per Vite instance) so each Playwright test
  * gets a fresh queue. e2e specs seed it via `window.__mockQueue.seed(...)` (or
@@ -132,8 +133,11 @@ export function mockQueueRequest(
 
   if (method === 'DELETE') {
     const id = decodeURIComponent(rest.replace(/^\//, ''));
+    /* `?force=true` drops even an in_progress entry (escape hatch for a stuck
+       row). `rest` already has the query stripped, so read force off `path`. */
+    const force = /[?&]force=true\b/.test(path);
     const target = state.entries.find((e) => e.id === id);
-    if (target?.status === 'in_progress') {
+    if (target?.status === 'in_progress' && !force) {
       return resp(
         { error: `queue.cancel: entry "${id}" is in_progress; pause the queue first` },
         409,
