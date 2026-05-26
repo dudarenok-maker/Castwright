@@ -23,7 +23,6 @@ import { listenProgressActions } from '../store/listen-progress-slice';
 import {
   buildChapterRegenEvent,
   buildCharacterRegenEvent,
-  buildBatchCharacterRegenEvent,
   buildVoiceTuneEvent,
   buildVoiceLockEvent,
 } from '../lib/change-log';
@@ -43,7 +42,6 @@ import { MatchDetailDrawer } from '../modals/match-detail';
 import { AppHandoffModal } from '../modals/app-handoff';
 import { RegenerateModal } from '../modals/regenerate';
 import { CharacterRegenerateModal } from '../modals/character-regenerate';
-import { BatchCharacterRegenerateModal } from '../modals/batch-character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
 import { ReattributeLinesModal } from '../modals/reattribute-lines';
@@ -1049,85 +1047,60 @@ export function Layout() {
         <CharacterRegenerateModal
           character={regenCharacter}
           chapters={chapters}
-          defaultChapterId={ui.regenCharacterCtx.defaultChapterId}
           onClose={() => dispatch(uiActions.setRegenCharacterCtx(null))}
-          onConfirm={({ characterId, chapterIds, reason, note }) => {
+          onConfirm={({ characterId, chapterIds, reason, note, preview }) => {
             dispatch(uiActions.setRegenCharacterCtx(null));
+            if (chapterIds.length === 0) return;
             reverseAnalyzerGuard(() => {
-              if (regenCharacter) {
+              if (!bookId) return;
+              const rand = Math.random().toString(36).slice(2, 8);
+              if (preview) {
+                /* Opt-in A/B preview: render ONLY the first affected chapter
+                   and stash the rest in ui.previewRegen. On chapter_complete
+                   the generation-stream middleware opens the diff player;
+                   Approve fans the rest out (RevisionDiffPlayer onAccept),
+                   Reject restores the preview chapter. The change-log entry +
+                   the rest of the chapters wait until Approve. */
+                const [previewChapterId, ...remainingChapterIds] = chapterIds;
                 dispatch(
-                  changeLogActions.appendLogEvent(
-                    buildCharacterRegenEvent({
-                      character: regenCharacter,
-                      chapterIds,
-                      reason,
-                      note,
-                    }),
-                  ),
+                  uiActions.setPreviewRegen({
+                    characterId,
+                    previewChapterId,
+                    remainingChapterIds,
+                    reason,
+                    note,
+                  }),
                 );
-              }
-              if (bookId) {
-                /* Plan 102 — one queue entry per (chapter, character)
-                   tuple so the modal can reorder each independently. */
-                const rand = Math.random().toString(36).slice(2, 8);
+                void dispatch(
+                  enqueueQueueEntries([
+                    {
+                      id: `regen-preview-${bookId}-${characterId}-${previewChapterId}-${rand}`,
+                      bookId,
+                      chapterId: previewChapterId,
+                      scope: 'this',
+                    },
+                  ]),
+                );
+              } else {
+                /* Regenerate every affected chapter now — whole-chapter
+                   renders applied immediately, no A/B gate. */
+                if (regenCharacter) {
+                  dispatch(
+                    changeLogActions.appendLogEvent(
+                      buildCharacterRegenEvent({ character: regenCharacter, chapterIds, reason, note }),
+                    ),
+                  );
+                }
                 void dispatch(
                   enqueueQueueEntries(
                     chapterIds.map((chId) => ({
                       id: `regen-char-${bookId}-${characterId}-${chId}-${rand}`,
                       bookId,
                       chapterId: chId,
-                      scope: 'character',
-                      characterId,
+                      scope: 'this' as const,
                     })),
                   ),
                 );
-              }
-              dispatch(uiActions.changeView('generate'));
-            });
-          }}
-        />
-      )}
-      {ui.batchRegenIds && (
-        <BatchCharacterRegenerateModal
-          characterIds={ui.batchRegenIds}
-          characters={characters}
-          chapters={chapters}
-          onClose={() => dispatch(uiActions.setBatchRegenIds(null))}
-          onConfirm={({ characterIds, chapterIds, reason, note }) => {
-            dispatch(uiActions.setBatchRegenIds(null));
-            reverseAnalyzerGuard(() => {
-              const targets = characters.filter((c) => characterIds.includes(c.id));
-              if (targets.length) {
-                dispatch(
-                  changeLogActions.appendLogEvent(
-                    buildBatchCharacterRegenEvent({
-                      characters: targets,
-                      chapterIds,
-                      reason,
-                      note,
-                    }),
-                  ),
-                );
-              }
-              if (bookId) {
-                /* Plan 102 — batch character regen → one entry per
-                   (character, chapter) cell. M characters × N chapters
-                   = M*N queue entries; the dispatcher drains them
-                   serially. */
-                const rand = Math.random().toString(36).slice(2, 8);
-                const entries = [];
-                for (const cid of characterIds) {
-                  for (const chId of chapterIds) {
-                    entries.push({
-                      id: `regen-batch-char-${bookId}-${cid}-${chId}-${rand}`,
-                      bookId,
-                      chapterId: chId,
-                      scope: 'character' as const,
-                      characterId: cid,
-                    });
-                  }
-                }
-                if (entries.length) void dispatch(enqueueQueueEntries(entries));
               }
               dispatch(uiActions.changeView('generate'));
             });
@@ -1147,17 +1120,47 @@ export function Layout() {
           filterCharacterId={ui.driftReportCharacterFilter}
           onClearFilter={() => dispatch(uiActions.clearDriftReportCharacterFilter())}
           onClose={() => dispatch(uiActions.setShowDriftReport(false))}
+          /* Drift "Regenerate" → an immediate whole-chapter regen (plan 114:
+             the per-character path was removed). The drifted chapter is
+             re-rendered in full and applied directly — no A/B gate (the
+             opt-in preview is anchored to the profile-change flow). */
           onRegenerateChapter={(_evBookId, charId, chapterId) => {
             dispatch(uiActions.setShowDriftReport(false));
-            dispatch(
-              uiActions.setRegenCharacterCtx({ characterId: charId, defaultChapterId: chapterId }),
-            );
+            const character = characters.find((c) => c.id === charId);
+            reverseAnalyzerGuard(() => {
+              if (character) {
+                dispatch(
+                  changeLogActions.appendLogEvent(
+                    buildCharacterRegenEvent({
+                      character,
+                      chapterIds: [chapterId],
+                      reason: 'voice',
+                      note: 'Regenerated from the drift report.',
+                    }),
+                  ),
+                );
+              }
+              if (bookId) {
+                const rand = Math.random().toString(36).slice(2, 8);
+                void dispatch(
+                  enqueueQueueEntries([
+                    {
+                      id: `drift-regen-${bookId}-${charId}-${chapterId}-${rand}`,
+                      bookId,
+                      chapterId,
+                      scope: 'this',
+                    },
+                  ]),
+                );
+              }
+              dispatch(uiActions.changeView('generate'));
+            });
           }}
-          /* Plan 20 C1+C2: severe drift events skip the regen-modal confirmation.
-             Same change-log entry + same regenerateCharacter dispatch the modal's
-             onConfirm would have fired, just without the intermediate click. The
-             reverse local-analyzer guard still gates the action so a live local
-             analysis prompts before TTS starts. */
+          /* Plan 20 C1+C2: severe drift events skip the confirmation click.
+             Same change-log entry + an immediate whole-chapter regen (plan
+             114 — no per-character scope). The reverse local-analyzer guard
+             still gates the action so a live local analysis prompts before
+             TTS starts. */
           onAutoQueueRegenerate={(_evBookId, charId, chapterId) => {
             dispatch(uiActions.setShowDriftReport(false));
             const character = characters.find((c) => c.id === charId);
@@ -1168,17 +1171,13 @@ export function Layout() {
                     buildCharacterRegenEvent({
                       character,
                       chapterIds: [chapterId],
-                      reason: 'drift_auto_queued',
+                      reason: 'voice',
                       note: 'Auto-queued from severe drift event.',
                     }),
                   ),
                 );
               }
               if (bookId) {
-                /* Plan 102 — drift auto-queue (severe) now enqueues
-                   instead of dispatching directly. Serialised through
-                   the dispatcher so it can't drop in-flight work
-                   (same fix as the regen-modal path). */
                 const rand = Math.random().toString(36).slice(2, 8);
                 void dispatch(
                   enqueueQueueEntries([
@@ -1186,8 +1185,7 @@ export function Layout() {
                       id: `drift-auto-${bookId}-${charId}-${chapterId}-${rand}`,
                       bookId,
                       chapterId,
-                      scope: 'character',
-                      characterId: charId,
+                      scope: 'this',
                     },
                   ]),
                 );
@@ -1392,6 +1390,7 @@ export function Layout() {
         <RevisionDiffPlayer
           revision={pending[0]}
           bookId={bookId}
+          mode={ui.previewRegen ? 'preview' : 'review'}
           chapter={chapters.find((c) => c.id === pending[0].chapterId)}
           character={characters.find((c) => c.id === pending[0].characterId)}
           onOpenHistory={() =>
@@ -1407,6 +1406,7 @@ export function Layout() {
                real mode tells the server the prior take is dead. */
             const id = pending[0].id;
             const chapterId = pending[0].chapterId;
+            const preview = ui.previewRegen;
             dispatch(revisionsActions.acceptRevision({ revisionId: id, selection }));
             dispatch(uiActions.setShowRevisionPlayer(false));
             api.acceptChapterRevision({ bookId, chapterId }).catch((err) => {
@@ -1418,16 +1418,52 @@ export function Layout() {
                 }),
               );
             });
+            /* Profile-regen preview Approved → fan the remaining affected
+               chapters out as straight whole-chapter regens (no further A/B).
+               The change-log entry covers the full set the user committed to. */
+            if (preview && preview.previewChapterId === chapterId) {
+              dispatch(uiActions.setPreviewRegen(null));
+              const character = characters.find((c) => c.id === preview.characterId);
+              if (character) {
+                dispatch(
+                  changeLogActions.appendLogEvent(
+                    buildCharacterRegenEvent({
+                      character,
+                      chapterIds: [chapterId, ...preview.remainingChapterIds],
+                      reason: preview.reason,
+                      note: preview.note,
+                    }),
+                  ),
+                );
+              }
+              if (preview.remainingChapterIds.length > 0) {
+                const rand = Math.random().toString(36).slice(2, 8);
+                void dispatch(
+                  enqueueQueueEntries(
+                    preview.remainingChapterIds.map((chId) => ({
+                      id: `regen-rest-${bookId}-${preview.characterId}-${chId}-${rand}`,
+                      bookId,
+                      chapterId: chId,
+                      scope: 'this' as const,
+                    })),
+                  ),
+                );
+                dispatch(uiActions.changeView('generate'));
+              }
+            }
           }}
           onReject={() => {
             /* Reject = the prior (A) render wins. Drop the pending
                revision and ask the server to promote `.previous.*` over
                the live render. 409 surfaces as an error toast so the
-               user knows to wait if a generation is mid-flight. */
+               user knows to wait if a generation is mid-flight. A preview
+               Reject also drops the stashed remaining chapters — the user
+               re-adjusts the profile and starts over. */
             const id = pending[0].id;
             const chapterId = pending[0].chapterId;
             dispatch(revisionsActions.rejectRevision(id));
             dispatch(uiActions.setShowRevisionPlayer(false));
+            if (ui.previewRegen) dispatch(uiActions.setPreviewRegen(null));
             api.rejectChapterRevision({ bookId, chapterId }).catch((err) => {
               /* Plan 20 — mid-flight Reject lands here when the server
                  returns 409 (generation in progress, can't promote the

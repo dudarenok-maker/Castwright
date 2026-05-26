@@ -593,7 +593,6 @@ function ReadyViewSwitch({
           title={projectTitle}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
-          onBatchRegenerate={(ids) => dispatch(uiActions.setBatchRegenIds(ids))}
           driftEvents={drift}
           onShowDrift={(characterId) =>
             dispatch(

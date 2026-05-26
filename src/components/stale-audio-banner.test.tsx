@@ -51,8 +51,8 @@ beforeEach(() => {
   sharedStore = makeStore();
   sharedStore.dispatch(castSlice.actions.setCharacters([halloran]));
   /* Seed chapters with halloran in their character map and a 'done' state
-     so the chapters slice's regenerateCharacter loop has something to
-     flip to 'in_progress' + populate pendingRegen with. */
+     so the banner's "stale across N chapters" copy has real chapters behind
+     it. */
   sharedStore.dispatch(
     chaptersSlice.actions.setChapters([
       {
@@ -135,16 +135,7 @@ describe('StaleAudioBanner', () => {
     expect(screen.getByText(/1 chapter\b/)).toBeInTheDocument();
   });
 
-  it('Regenerate now enqueues one queue entry per stale chapter + clears banner + switches to generate view (plan 102)', async () => {
-    sharedStore.dispatch(
-      uiSlice.actions.setStaleAudio({
-        characterId: 'halloran',
-        characterName: 'Halloran',
-        chapterIds: [1, 3],
-      }),
-    );
-    /* Need a ready stage so bookId resolves + changeView actually moves
-       the stage; the banner aborts if bookId is null. */
+  it('Regenerate opens the CharacterRegenerateModal for the stale character + clears the banner (plan 114)', () => {
     sharedStore.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
     sharedStore.dispatch(
       uiSlice.actions.setStaleAudio({
@@ -154,45 +145,17 @@ describe('StaleAudioBanner', () => {
       }),
     );
 
-    /* Plan 102 — enqueue is the new dispatch path; mock fetch. */
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: 'OK',
-      json: () => Promise.resolve({ entries: [], paused: false }),
-    } as Response);
-    vi.stubGlobal('fetch', fetchMock);
-
     renderBanner();
-    fireEvent.click(screen.getByRole('button', { name: /Regenerate now/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate/i }));
 
-    /* Banner clears + view switches synchronously; the enqueue thunk's
-       fetch lands one microtask later. */
-    const stateImmediate = sharedStore.getState();
-    expect(stateImmediate.ui.staleAudio).toBeNull();
-    expect((stateImmediate.ui.stage as { view?: string }).view).toBe('generate');
-    expect(
-      stateImmediate.changeLog.events.some(
-        (e) => e.type === 'regenerate' && e.title?.includes('Halloran'),
-      ),
-    ).toBe(true);
-
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/queue/enqueue',
-      expect.objectContaining({ method: 'POST' }),
-    );
-    const call = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/enqueue');
-    const body = JSON.parse((call?.[1] as { body: string }).body) as {
-      entries: { bookId: string; chapterId: number; scope: string; characterId?: string }[];
-    };
-    expect(body.entries.map((e) => e.chapterId)).toEqual([1, 3]);
-    expect(body.entries.every((e) => e.scope === 'character' && e.characterId === 'halloran')).toBe(
-      true,
-    );
-    vi.unstubAllGlobals();
+    /* Plan 114 — the banner hands off to the CharacterRegenerateModal (the
+       Regenerate-all vs. Preview-first chooser) rather than enqueuing
+       directly. It sets the modal context + clears its own flag; the modal
+       owns the change-log entry, the enqueue, and the view switch. */
+    const state = sharedStore.getState();
+    expect(state.ui.regenCharacterCtx).toEqual({ characterId: 'halloran' });
+    expect(state.ui.staleAudio).toBeNull();
+    expect(state.changeLog.events.some((e) => e.type === 'regenerate')).toBe(false);
   });
 
   it('Dismiss clears the slice flag without dispatching regenerate', () => {

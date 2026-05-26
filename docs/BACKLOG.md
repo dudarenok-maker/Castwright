@@ -186,15 +186,15 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 - _Depends on:_ plan 55 shipped (slice plumbing already on disk).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 
-#### `fe-10` — Pre-seed pending-revision stubs for cross-book character regens
+#### `fe-15` — Mock-mode chapters hydration so the revision A/B player opens in e2e
 
-Source: plan 102 Should #6 ship (2026-05-23) — known limitation called out in the cross-book dispatcher PR. When the dispatcher opens a CROSS-book entry whose scope is `character`, it does not enqueue a pending-revision stub the way the same-book path does (`generation-stream-middleware`'s regen observer keys off the `regenerateCharacter` action, which the cross-book path deliberately does not dispatch — it would mutate the viewed book's rows). The revision still renders once the user opens that book and its revisions hydrate from disk; only the eager in-session stub is missing.
+Source: plan 114 ship (2026-05-26). The profile-regen preview gate's full click-through (Preview → A/B → Approve fans out / Reject reverts) can't be e2e'd today because mock mode doesn't hydrate `chapters` from the library payload (`state.json` hydration throws under mocks), so `RevisionDiffPlayer` returns null when the fixture chapterId doesn't resolve. Same gap `e2e/revision-diff.spec.ts` documents — that spec asserts only the toolbar pill and never opens the player. (Supersedes the removed `fe-10`, whose cross-book `regenerateCharacter` stub premise went away with plan 114.)
 
-- _What:_ When the dispatcher's cross-book branch opens a `character`-scoped entry, enqueue the pending-revision stub directly from the queue entry's `{ bookId, chapterId, characterId }` rather than from the viewed book's `Chapter`/`Character` objects (which aren't in the slice while a different book is viewed). Requires either teaching `buildPendingRevisionStub` to accept the minimal id triple, or hydrating the other book's chapter/character names from the library/cast caches.
-- _Acceptance:_ Enqueue a character-scoped regen for Book B while viewing Book A; without navigating to B, a pending revision stub for that (chapter, character) exists in `revisions.pending` (playable=false), and flips to playable on the cross-book stream's `chapter_complete`.
-- _Key files:_ `src/store/queue-dispatcher-middleware.ts` (cross-book branch), `src/lib/build-pending-revision.ts` (accept minimal input), `src/store/revisions-slice.ts`.
-- _Depends on:_ plan 102 Should #6 (cross-book dispatcher) shipped.
-- _Benefit (user):_ the diff player's pending-revision list is complete for cross-book character regens without requiring a navigate-to-book round-trip first. Low priority — the revision is recoverable on book open today.
+- _What:_ Seed the chapters slice in mock mode (a mock `getBookState`/`state.json` that hydrates `chapters[]` for the canned complete book, OR a null-safe `RevisionDiffPlayer` fallback that renders from the revision stub alone when the chapter isn't in the slice). Then add `e2e/profile-regen-preview.spec.ts`: change a voice → Regenerate this character → Preview → A/B opens → Approve queues the rest / Reject reverts.
+- _Acceptance:_ `RevisionDiffPlayer` opens under `VITE_USE_MOCKS=true` with a populated chapter; the new e2e drives the preview→approve and preview→reject paths green in chromium.
+- _Key files:_ `src/mocks/*` (chapters/state seed), `src/views/revision-diff.tsx` (optional null-safe fallback), new `e2e/profile-regen-preview.spec.ts`.
+- _Depends on:_ plan 114 shipped (the preview flow + its unit coverage are in; this closes the browser-level seam).
+- _Benefit (technical):_ unblocks browser-level coverage of the preview gate's redux/layout/timing seam (auto-open on `chapter_complete`) that jsdom can lie about; also unblocks the long-deferred revision-diff player e2e.
 
 ### Cast, voice & duplicates
 
