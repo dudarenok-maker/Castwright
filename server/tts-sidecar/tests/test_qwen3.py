@@ -44,6 +44,7 @@ class _FakeQwenModel:
 
     def __init__(self, model_id: str) -> None:
         self.model_id = model_id
+        self.device: Any = None
         self.design_calls: list[tuple[str, str, str]] = []
         self.clone_calls: list[tuple[Any, Any]] = []
         self.prompt_calls: list[tuple[Any, str]] = []
@@ -51,6 +52,12 @@ class _FakeQwenModel:
     @classmethod
     def from_pretrained(cls, model_id: str, **_kwargs: Any) -> "_FakeQwenModel":
         return cls(model_id)
+
+    def to(self, device: Any) -> "_FakeQwenModel":
+        # The sdpa fast-path loads WITHOUT device_map then moves the model
+        # itself, so the loader now calls model.to(device). Record + chain.
+        self.device = device
+        return self
 
     def generate_voice_design(self, text: str, language: str, instruct: str):
         self.design_calls.append((text, language, instruct))
@@ -275,6 +282,11 @@ def test_load_passes_sdpa_attn_by_default(fake_qwen_runtime, monkeypatch) -> Non
 
     engine._load_qwen_model(engine.BASE_MODEL)
     assert captured["kwargs"].get("attn_implementation") == "sdpa"
+    # The sdpa fast-path must NOT pass device_map: device_map routes through
+    # accelerate's dispatch_model, which leaves attn params on the meta device
+    # when attn_implementation is set and then 500s moving them ("Cannot copy
+    # out of meta tensor"). We load real-tensor then move via model.to().
+    assert "device_map" not in captured["kwargs"]
 
 
 def test_load_honours_qwen_attn_impl_env(fake_qwen_runtime, monkeypatch) -> None:
@@ -308,6 +320,43 @@ def test_load_falls_back_when_attn_kwarg_rejected(fake_qwen_runtime, monkeypatch
     assert model is not None
     assert len(calls) == 2  # first attempt + retry
     assert "attn_implementation" in calls[0]
+    assert "attn_implementation" not in calls[1]
+
+
+def test_load_falls_back_when_sdpa_dispatch_fails(fake_qwen_runtime, monkeypatch) -> None:
+    """Regression (plan 112): attn_implementation=sdpa can be ACCEPTED but then
+    break accelerate's device_map dispatch with a meta-tensor NotImplementedError
+    ("Cannot copy out of meta tensor") — the model 500s on /load and the pill
+    reverts. The narrow (ValueError, TypeError) catch let this escape; the loader
+    must catch ANY sdpa-path failure and retry the proven-good device_map +
+    library-default-attention config."""
+    engine = fake_qwen_runtime["engine"]
+    import qwen_tts
+
+    calls: list[dict[str, Any]] = []
+
+    def flaky(model_id, **kwargs):
+        calls.append(kwargs)
+        if "attn_implementation" in kwargs:
+            # The exact failure from logs/tts.err.log: sdpa loads fine until
+            # accelerate's dispatch_model calls model.to() on meta tensors.
+            raise NotImplementedError(
+                "Cannot copy out of meta tensor; no data! Please use "
+                "torch.nn.Module.to_empty() instead of torch.nn.Module.to() "
+                "when moving module from meta to a different device."
+            )
+        return _FakeQwenModel(model_id)
+
+    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", flaky)
+
+    model = engine._load_qwen_model(engine.BASE_MODEL)
+    assert model is not None
+    assert len(calls) == 2  # sdpa fast-path + device_map fallback
+    # Fast-path: attn requested, no device_map (so it loads real tensors).
+    assert "attn_implementation" in calls[0]
+    assert "device_map" not in calls[0]
+    # Fallback: device_map restored, attn dropped (library default = eager).
+    assert "device_map" in calls[1]
     assert "attn_implementation" not in calls[1]
 
 
