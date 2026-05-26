@@ -37,14 +37,31 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
+class _FakeInnerModule:
+    """Stand-in for the real nn.Module at Qwen3TTSModel.model. The WRAPPER is
+    not an nn.Module and has no `.to()`; only this inner object does. Faithful
+    to the real qwen_tts API so a regression back to `wrapper.to()` fails here
+    the same way it does on the real weights (AttributeError on the wrapper)."""
+
+    def __init__(self) -> None:
+        self.device: Any = None
+        self.config = types.SimpleNamespace(_attn_implementation="sdpa")
+
+    def to(self, device: Any) -> "_FakeInnerModule":
+        self.device = device
+        return self
+
+
 class _FakeQwenModel:
-    """Stand-in for qwen_tts.Qwen3TTSModel. Implements just the surface
-    QwenEngine touches. Audio is a flat-zero float32 buffer at 24 kHz —
-    enough to exercise the int16 conversion + the (wavs, sr) return shape."""
+    """Stand-in for qwen_tts.Qwen3TTSModel — a thin WRAPPER (NOT an nn.Module).
+    The real nn.Module lives at `.model`; the wrapper caches its device at
+    `.device` and has NO `.to()`. Audio is a flat-zero float32 buffer at 24 kHz
+    — enough to exercise the int16 conversion + the (wavs, sr) return shape."""
 
     def __init__(self, model_id: str) -> None:
         self.model_id = model_id
-        self.device: Any = None
+        self.model = _FakeInnerModule()  # the real nn.Module the loader moves
+        self.device: Any = None  # resynced by the loader after the move
         self.design_calls: list[tuple[str, str, str]] = []
         self.clone_calls: list[tuple[Any, Any]] = []
         self.prompt_calls: list[tuple[Any, str]] = []
@@ -53,11 +70,8 @@ class _FakeQwenModel:
     def from_pretrained(cls, model_id: str, **_kwargs: Any) -> "_FakeQwenModel":
         return cls(model_id)
 
-    def to(self, device: Any) -> "_FakeQwenModel":
-        # The sdpa fast-path loads WITHOUT device_map then moves the model
-        # itself, so the loader now calls model.to(device). Record + chain.
-        self.device = device
-        return self
+    # NB: deliberately NO `.to()` — the real wrapper has none. The loader must
+    # move `self.model` (the inner module) and resync `self.device`.
 
     def generate_voice_design(self, text: str, language: str, instruct: str):
         self.design_calls.append((text, language, instruct))
@@ -101,6 +115,7 @@ def fake_qwen_runtime(monkeypatch, tmp_path):
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]
     fake_torch.bfloat16 = "bfloat16"  # type: ignore[attr-defined]
+    fake_torch.device = lambda d: d  # type: ignore[attr-defined]  # loader resyncs model.device
     fake_cuda = types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None)
     fake_torch.cuda = fake_cuda  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
@@ -282,11 +297,12 @@ def test_load_passes_sdpa_attn_by_default(fake_qwen_runtime, monkeypatch) -> Non
 
     engine._load_qwen_model(engine.BASE_MODEL)
     assert captured["kwargs"].get("attn_implementation") == "sdpa"
-    # The sdpa fast-path must NOT pass device_map: device_map routes through
-    # accelerate's dispatch_model, which leaves attn params on the meta device
-    # when attn_implementation is set and then 500s moving them ("Cannot copy
-    # out of meta tensor"). We load real-tensor then move via model.to().
+    # The loader must NOT pass device_map: device_map routes through accelerate's
+    # dispatch_model, which leaves params on the meta device on this composite
+    # model and then 500s moving them ("Cannot copy out of meta tensor"). We
+    # force real tensors (low_cpu_mem_usage=False) then move the inner module.
     assert "device_map" not in captured["kwargs"]
+    assert captured["kwargs"].get("low_cpu_mem_usage") is False
 
 
 def test_load_honours_qwen_attn_impl_env(fake_qwen_runtime, monkeypatch) -> None:
@@ -321,43 +337,33 @@ def test_load_falls_back_when_attn_kwarg_rejected(fake_qwen_runtime, monkeypatch
     assert len(calls) == 2  # first attempt + retry
     assert "attn_implementation" in calls[0]
     assert "attn_implementation" not in calls[1]
+    # Neither attempt may use device_map (the meta-tensor 500 path) — the retry
+    # only drops the attention knob, it keeps the real-tensor load shape.
+    assert "device_map" not in calls[0]
+    assert "device_map" not in calls[1]
+    assert calls[1].get("low_cpu_mem_usage") is False
 
 
-def test_load_falls_back_when_sdpa_dispatch_fails(fake_qwen_runtime, monkeypatch) -> None:
-    """Regression (plan 112): attn_implementation=sdpa can be ACCEPTED but then
-    break accelerate's device_map dispatch with a meta-tensor NotImplementedError
-    ("Cannot copy out of meta tensor") — the model 500s on /load and the pill
-    reverts. The narrow (ValueError, TypeError) catch let this escape; the loader
-    must catch ANY sdpa-path failure and retry the proven-good device_map +
-    library-default-attention config."""
+def test_load_moves_inner_model_and_resyncs_device(fake_qwen_runtime, monkeypatch) -> None:
+    """Regression (the meta-tensor /load crash): Qwen3TTSModel is a WRAPPER with
+    no `.to()`, and passing device_map 500s with a meta-tensor
+    NotImplementedError on this transformers/accelerate stack. So the loader
+    must (a) never pass device_map and force low_cpu_mem_usage=False for real
+    tensors, and (b) move the inner nn.Module (`model.model`) and resync
+    `model.device` — NOT call `wrapper.to()` (which AttributeErrors on the real
+    weights, and on _FakeQwenModel which deliberately omits `.to()`)."""
     engine = fake_qwen_runtime["engine"]
-    import qwen_tts
-
-    calls: list[dict[str, Any]] = []
-
-    def flaky(model_id, **kwargs):
-        calls.append(kwargs)
-        if "attn_implementation" in kwargs:
-            # The exact failure from logs/tts.err.log: sdpa loads fine until
-            # accelerate's dispatch_model calls model.to() on meta tensors.
-            raise NotImplementedError(
-                "Cannot copy out of meta tensor; no data! Please use "
-                "torch.nn.Module.to_empty() instead of torch.nn.Module.to() "
-                "when moving module from meta to a different device."
-            )
-        return _FakeQwenModel(model_id)
-
-    monkeypatch.setattr(qwen_tts.Qwen3TTSModel, "from_pretrained", flaky)
+    captured = _patch_from_pretrained(fake_qwen_runtime, monkeypatch)
 
     model = engine._load_qwen_model(engine.BASE_MODEL)
-    assert model is not None
-    assert len(calls) == 2  # sdpa fast-path + device_map fallback
-    # Fast-path: attn requested, no device_map (so it loads real tensors).
-    assert "attn_implementation" in calls[0]
-    assert "device_map" not in calls[0]
-    # Fallback: device_map restored, attn dropped (library default = eager).
-    assert "device_map" in calls[1]
-    assert "attn_implementation" not in calls[1]
+
+    # No device_map ever; real-tensor load forced.
+    assert "device_map" not in captured["kwargs"]
+    assert captured["kwargs"].get("low_cpu_mem_usage") is False
+    # The inner module was moved to the engine device; the wrapper's cached
+    # device was resynced to match (so generate-time inputs land on the GPU).
+    assert model.model.device == engine._device
+    assert model.device == engine._device
 
 
 # ── QWEN_VOICES_DIR relocation + legacy migration (sidecar-qwen-voice-dir) ──
@@ -405,6 +411,7 @@ def test_designed_voice_survives_restart_at_env_dir(monkeypatch, tmp_path) -> No
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]
     fake_torch.bfloat16 = "bfloat16"  # type: ignore[attr-defined]
+    fake_torch.device = lambda d: d  # type: ignore[attr-defined]
     fake_torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
         is_available=lambda: False, empty_cache=lambda: None
     )
