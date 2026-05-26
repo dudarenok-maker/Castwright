@@ -9,6 +9,7 @@ import { parseMobi } from './mobi.js';
 
 export type { ParsedManuscript };
 export { DrmProtectedError } from './mobi.js';
+export { UnusableEpubError } from './epub.js';
 
 const EXT_TO_FORMAT: Record<string, 'markdown' | 'plaintext' | 'pdf' | 'epub' | 'mobi'> = {
   md: 'markdown',
