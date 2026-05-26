@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { SectionLabel, MixedHeading, VoiceSwatch } from '../components/primitives';
+import { SectionLabel, MixedHeading, VoiceSwatch, Pill } from '../components/primitives';
 import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
 import { IconPlay, IconSparkle } from '../lib/icons';
@@ -197,11 +197,21 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     };
   }, [dispatch]);
 
-  /* Group voices into families. The key is (engine, name) on ttsVoice —
-     that's what's resolved server-side after honouring overrides, so two
-     characters with the same engine+name appear under the same family
-     regardless of how they got there. */
-  const families = useMemo(() => buildFamilies(library, tab), [library, tab]);
+  /* Partition Qwen out of family grouping (plan 117). Preset engines keep
+     the (engine, name) voice-family grouping — that's resolved server-side
+     after honouring overrides, so two characters with the same engine+name
+     appear under the same family. Bespoke Qwen voices are 1:1 with
+     characters, so they go through status buckets instead. */
+  const presetLibrary = useMemo(
+    () => library.filter((v) => v.ttsVoice?.provider !== 'qwen'),
+    [library],
+  );
+  const qwenLibrary = useMemo(
+    () => library.filter((v) => v.ttsVoice?.provider === 'qwen'),
+    [library],
+  );
+  const families = useMemo(() => buildFamilies(presetLibrary, tab), [presetLibrary, tab]);
+  const qwenGroups = useMemo(() => buildQwenStatusGroups(qwenLibrary, tab), [qwenLibrary, tab]);
   const books = [...new Set(library.map((v) => v.bookId))];
 
   /* Compare derivations. Memoised so a transient render doesn't recompute
@@ -751,8 +761,13 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     { id: 'base', label: `Base voices${baseVoicesLoaded ? ` (${baseVoices.length})` : ''}` },
   ];
 
+  /* Count preset families only — bespoke Qwen voices no longer form
+     families (they bucket by status), so counting them here would inflate
+     the tile with one-per-character noise (plan 117). */
   const familyCount = new Set(
-    library.filter((v) => v.ttsVoice).map((v) => `${v.ttsVoice!.provider}|${v.ttsVoice!.name}`),
+    presetLibrary
+      .filter((v) => v.ttsVoice)
+      .map((v) => `${v.ttsVoice!.provider}|${v.ttsVoice!.name}`),
   ).size;
 
   return (
@@ -815,7 +830,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           onPlay={playBaseVoice}
           status={familyStatus}
         />
-      ) : families.length === 0 ? (
+      ) : families.length === 0 && qwenGroups.length === 0 ? (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
           <p className="text-sm font-bold text-ink">No voices yet</p>
           <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
@@ -839,6 +854,22 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onToggleSelect={toggleSelect}
               duplicateCandidates={candidatesByFamily.get(f.key) ?? []}
               onReviewDuplicate={openDuplicateReview}
+              representativeBookIdBySeries={representativeBookIdBySeries}
+              onRebaselineSeries={(bookId) =>
+                dispatch(uiActions.openRebaselineModal({ bookId }))
+              }
+            />
+          ))}
+          {qwenGroups.map((g) => (
+            <QwenStatusSection
+              key={g.status}
+              group={g}
+              draggingVoiceId={draggingVoiceId}
+              setDraggingVoiceId={setDraggingVoiceId}
+              onTogglePin={togglePin}
+              onOpenCharacter={onOpenCharacter}
+              selectedVoiceIds={selectedVoiceIds}
+              onToggleSelect={toggleSelect}
               representativeBookIdBySeries={representativeBookIdBySeries}
               onRebaselineSeries={(bookId) =>
                 dispatch(uiActions.openRebaselineModal({ bookId }))
@@ -1075,17 +1106,47 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   );
 }
 
-/* Internal accumulator — kept module-local so the public VoiceFamily type
-   stays free of the per-build Map plumbing. */
-interface FamilyAccumulator extends VoiceFamily {
-  books: Map<string, BookGroup>;
-  seriesOrder: Map<string, string | null>;
-  seriesBuckets: Map<string, BookGroup[]>;
+/* Shared series → book nesting used by BOTH the preset voice-family builder
+   and the Qwen status-bucket builder. Members are grouped by book in
+   first-seen order, books bucketed by series; then books sort by title
+   within a series and series sort alphabetically (standalones — null
+   series — sort last under the '~' sentinel). */
+function nestBySeriesBook(members: Voice[]): SeriesGroup[] {
+  const books = new Map<string, BookGroup>();
+  const seriesBuckets = new Map<string, BookGroup[]>();
+  const seriesOrder = new Map<string, string | null>();
+  for (const v of members) {
+    /* `bookSeries` is null for standalones — bucket those under a synthetic
+       'standalone' key so the render path can flatten. */
+    const seriesKey = v.bookSeries ?? 'standalone';
+    let bg = books.get(v.bookId);
+    if (!bg) {
+      bg = { bookId: v.bookId, bookTitle: v.bookTitle, voices: [] };
+      books.set(v.bookId, bg);
+      const bucket = seriesBuckets.get(seriesKey) ?? [];
+      bucket.push(bg);
+      seriesBuckets.set(seriesKey, bucket);
+      seriesOrder.set(seriesKey, v.bookSeries ?? null);
+    }
+    bg.voices.push(v);
+  }
+  const seriesGroups: SeriesGroup[] = [];
+  for (const [seriesKey, bks] of seriesBuckets) {
+    seriesGroups.push({
+      series: seriesKey === 'standalone' ? null : (seriesOrder.get(seriesKey) as string | null),
+      books: bks.sort((a, b) => a.bookTitle.localeCompare(b.bookTitle)),
+    });
+  }
+  seriesGroups.sort((a, b) => (a.series ?? '~').localeCompare(b.series ?? '~'));
+  return seriesGroups;
 }
 
 /* Build voice families from the flat library list. Filters by tab first
    (so 'current' / 'library' don't leak voices the user isn't asking about
-   into the family count), then groups, then sub-groups by series → book. */
+   into the family count), then groups by (provider, name), then sub-groups
+   by series → book. Pass only NON-Qwen voices — bespoke Qwen voices are 1:1
+   with characters, so family grouping degenerates; they go through
+   buildQwenStatusGroups instead. */
 function buildFamilies(
   library: Voice[],
   tab: Tab,
@@ -1094,7 +1155,7 @@ function buildFamilies(
     if (tab === 'all' || tab === 'base') return true;
     return v.source === tab;
   });
-  const byKey = new Map<string, FamilyAccumulator>();
+  const byKey = new Map<string, VoiceFamily>();
   for (const v of filtered) {
     if (!v.ttsVoice) continue;
     const key = `${v.ttsVoice.provider}|${v.ttsVoice.name}`;
@@ -1110,54 +1171,16 @@ function buildFamilies(
         primary: v,
         anyPinned: false,
         gradient: gradientForTtsVoice(v.ttsVoice.name, key) as [string, string],
-        books: new Map(),
-        seriesOrder: new Map(),
-        seriesBuckets: new Map(),
       };
       byKey.set(key, fam);
     }
     fam.members.push(v);
     fam.totalUsedIn += v.usedIn;
     if (v.pinned) fam.anyPinned = true;
-    /* Nested grouping. `bookSeries` is null for standalones — bucket those
-       under a synthetic 'standalone' key so the render path can flatten. */
-    const seriesKey = v.bookSeries ?? 'standalone';
-    let bg = fam.books.get(v.bookId);
-    if (!bg) {
-      bg = { bookId: v.bookId, bookTitle: v.bookTitle, voices: [] };
-      fam.books.set(v.bookId, bg);
-      const bucket = fam.seriesBuckets.get(seriesKey) ?? [];
-      bucket.push(bg);
-      fam.seriesBuckets.set(seriesKey, bucket);
-      fam.seriesOrder.set(seriesKey, v.bookSeries ?? null);
-    }
-    bg.voices.push(v);
   }
-  /* Project each accumulator into a clean public VoiceFamily with a
-     flattened seriesGroups list. */
   const out: Array<VoiceFamily & { seriesGroups: SeriesGroup[] }> = [];
   for (const fam of byKey.values()) {
-    const seriesGroups: SeriesGroup[] = [];
-    for (const [seriesKey, books] of fam.seriesBuckets) {
-      seriesGroups.push({
-        series:
-          seriesKey === 'standalone' ? null : (fam.seriesOrder.get(seriesKey) as string | null),
-        books: books.sort((a, b) => a.bookTitle.localeCompare(b.bookTitle)),
-      });
-    }
-    seriesGroups.sort((a, b) => (a.series ?? '~').localeCompare(b.series ?? '~'));
-    out.push({
-      key: fam.key,
-      engine: fam.engine,
-      name: fam.name,
-      description: fam.description,
-      members: fam.members,
-      totalUsedIn: fam.totalUsedIn,
-      primary: fam.primary,
-      anyPinned: fam.anyPinned,
-      gradient: fam.gradient,
-      seriesGroups,
-    });
+    out.push({ ...fam, seriesGroups: nestBySeriesBook(fam.members) });
   }
   /* Family sort: pinned (any member) first, then total usedIn desc, then
      by speaker name so the order is stable across renders. */
@@ -1166,6 +1189,54 @@ function buildFamilies(
     if (a.totalUsedIn !== b.totalUsedIn) return b.totalUsedIn - a.totalUsedIn;
     return a.name.localeCompare(b.name);
   });
+  return out;
+}
+
+type QwenStatus = 'none' | 'designed';
+
+interface QwenStatusGroup {
+  status: QwenStatus;
+  title: string;
+  members: Voice[];
+  totalUsedIn: number;
+  anyPinned: boolean;
+  seriesGroups: SeriesGroup[];
+}
+
+/* Bespoke Qwen voices are designed 1:1 per character (plan 108), so the
+   (provider, name) voice-family grouping collapses into degenerate
+   single-member sections. Instead bucket Qwen voices by design status:
+     - 'none'     → ttsVoice.name empty (no designed voiceId) → "Needs a voice"
+     - 'designed' → has a designed voiceId → "Designed voices"
+   In "Designed voices" each card carries a Designed / Generated badge driven
+   by `voice.generated`. Same tab filter + series → book nesting as
+   buildFamilies; "Needs a voice" sorts first so action-needed is at the top. */
+function buildQwenStatusGroups(library: Voice[], tab: Tab): QwenStatusGroup[] {
+  const filtered = library.filter((v) => {
+    if (tab === 'all' || tab === 'base') return true;
+    return v.source === tab;
+  });
+  const buckets: Record<QwenStatus, Voice[]> = { none: [], designed: [] };
+  for (const v of filtered) {
+    buckets[v.ttsVoice?.name ? 'designed' : 'none'].push(v);
+  }
+  const order: Array<{ status: QwenStatus; title: string }> = [
+    { status: 'none', title: 'Needs a voice' },
+    { status: 'designed', title: 'Designed voices' },
+  ];
+  const out: QwenStatusGroup[] = [];
+  for (const { status, title } of order) {
+    const members = buckets[status];
+    if (members.length === 0) continue;
+    out.push({
+      status,
+      title,
+      members,
+      totalUsedIn: members.reduce((n, v) => n + v.usedIn, 0),
+      anyPinned: members.some((v) => !!v.pinned),
+      seriesGroups: nestBySeriesBook(members),
+    });
+  }
   return out;
 }
 
@@ -1325,6 +1396,119 @@ function VoiceFamilySection({
                   </div>
                 </div>
               ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+interface QwenSectionProps {
+  group: QwenStatusGroup;
+  draggingVoiceId: string | null;
+  setDraggingVoiceId: (id: string | null) => void;
+  onTogglePin: (v: Voice) => void;
+  onOpenCharacter?: (voice: Voice) => void;
+  selectedVoiceIds: string[];
+  onToggleSelect: (v: Voice) => void;
+  /* Per-series Rebaseline (plan 108 follow-up) — reused verbatim from
+     VoiceFamilySection. Rebaseline *creates* designed Qwen voices, so it
+     sits naturally on the Qwen sections' series-group headers. */
+  representativeBookIdBySeries: Map<string, string>;
+  onRebaselineSeries: (bookId: string) => void;
+}
+
+/* Status-bucketed Qwen section (plan 117): "Needs a voice" / "Designed
+   voices", each nested series → book → character. No "Audition base voice"
+   (a status bucket is not one voice) and no ⚠ duplicate pill (unique Qwen
+   voiceIds never share a base voice). The "Designed voices" cards carry a
+   Designed / Generated badge. */
+function QwenStatusSection({
+  group,
+  draggingVoiceId,
+  setDraggingVoiceId,
+  onTogglePin,
+  onOpenCharacter,
+  selectedVoiceIds,
+  onToggleSelect,
+  representativeBookIdBySeries,
+  onRebaselineSeries,
+}: QwenSectionProps) {
+  const seriesGroups = group.seriesGroups;
+  return (
+    <section aria-label={`Qwen · ${group.title}`}>
+      <header className="mb-3 flex items-center justify-between gap-4 flex-wrap">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base font-bold text-ink truncate">{group.title}</h2>
+            <span className="text-[11px] uppercase tracking-wider font-semibold text-ink/40 shrink-0">
+              {ENGINE_LABEL.qwen}
+            </span>
+          </div>
+          <p className="text-xs text-ink/50">
+            {group.members.length} {group.members.length === 1 ? 'cast member' : 'cast members'}{' '}
+            · {seriesGroups.length}{' '}
+            {seriesGroups.length === 1 ? 'series/standalone bucket' : 'series/standalone buckets'}
+          </p>
+        </div>
+      </header>
+      <div className="space-y-4">
+        {seriesGroups.map((sg) => {
+          const repBookId = sg.series ? representativeBookIdBySeries.get(sg.series) : undefined;
+          return (
+            <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/[0.06]">
+              {sg.series && (
+                <div className="flex items-center justify-between gap-3 mb-2 pl-2 flex-wrap">
+                  <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/40">
+                    {sg.series}
+                  </p>
+                  {repBookId && (
+                    <button
+                      type="button"
+                      onClick={() => onRebaselineSeries(repBookId)}
+                      data-testid={`rebaseline-series-${sg.series}`}
+                      title="Move the principal cast onto bespoke Qwen voices across this series"
+                      className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-magenta text-white text-[11px] font-semibold hover:bg-magenta/90 transition-colors min-h-[44px] sm:min-h-0"
+                    >
+                      <IconSparkle className="w-3.5 h-3.5" /> Rebaseline the series
+                    </button>
+                  )}
+                </div>
+              )}
+              <div className="space-y-3">
+                {sg.books.map((b) => (
+                  <div key={b.bookId}>
+                    <p className="text-xs font-semibold text-ink/70 mb-1.5 pl-2">{b.bookTitle}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 pl-2">
+                      {b.voices.map((v) => (
+                        <VoiceCard
+                          key={v.id}
+                          voice={v}
+                          draggingVoiceId={draggingVoiceId}
+                          setDraggingVoiceId={setDraggingVoiceId}
+                          compact={false}
+                          showBookTitle={false}
+                          pinned={!!v.pinned}
+                          onTogglePin={onTogglePin}
+                          onSelect={onOpenCharacter}
+                          selected={selectedVoiceIds.includes(v.id)}
+                          onToggleSelect={onToggleSelect}
+                          badge={
+                            group.status === 'designed' ? (
+                              v.generated ? (
+                                <Pill color="success">Generated</Pill>
+                              ) : (
+                                <Pill color="library">Designed</Pill>
+                              )
+                            ) : undefined
+                          }
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           );
