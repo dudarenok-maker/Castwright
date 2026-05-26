@@ -89,14 +89,31 @@ class _FakePromptItem:
         self.ref_code = _ref_marker(ref_text)
 
 
+class _BatchFakeInner:
+    """Inner nn.Module of the Qwen3TTSModel wrapper — the ONLY object with a
+    `.to()`. The wrapper itself has none (the loader moves `model.model` and
+    resyncs `model.device`), so the fake must too."""
+
+    def __init__(self) -> None:
+        self.device: Any = None
+        self.config = types.SimpleNamespace(_attn_implementation="sdpa")
+
+    def to(self, device: Any) -> "_BatchFakeInner":
+        self.device = device
+        return self
+
+
 class _BatchFakeQwen:
     """Stand-in for qwen_tts.Qwen3TTSModel that honours LIST inputs: returns one
     wav per text element, each stamped with its text + prompt so demux swaps and
     cross-item bleed are detectable. Records every generate_voice_clone call so
-    the list-form invariant can be asserted."""
+    the list-form invariant can be asserted. A thin WRAPPER with no `.to()` (the
+    real nn.Module lives at `.model`), matching the real API."""
 
     def __init__(self, model_id: str) -> None:
         self.model_id = model_id
+        self.model = _BatchFakeInner()  # the inner module the loader moves
+        self.device: Any = None  # resynced by the loader after the move
         self.clone_calls: list[dict[str, Any]] = []
 
     @classmethod
@@ -155,6 +172,7 @@ def qwen_batch_runtime(monkeypatch, tmp_path):
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]
     fake_torch.bfloat16 = "bfloat16"  # type: ignore[attr-defined]
+    fake_torch.device = lambda d: d  # type: ignore[attr-defined]  # loader resyncs model.device
     fake_torch.cuda = types.SimpleNamespace(  # type: ignore[attr-defined]
         is_available=lambda: False, empty_cache=lambda: None
     )
