@@ -1,9 +1,9 @@
-/* Build a stub Revision for the enqueue-on-regen path. The generation-stream
-   middleware fires this when `chapters/regenerateCharacter` (or its batch
-   sibling) dispatches, BEFORE the new render is on disk. The stub sits in
-   `revisions.pending` with `playable: false` so the toolbar pending badge
-   surfaces the in-flight regen, and the diff player renders a "Rendering…"
-   state until chapter_complete arrives.
+/* Build a stub Revision for the profile-change preview gate. The
+   generation-stream middleware fires this when a preview chapter's
+   `chapters/regenerateChapterIds` render reaches `chapter_complete`
+   (`revisions/markRevisionPlayable` for the chapter the user is previewing),
+   so it's built with `playable: true` — the new take is already on disk and
+   the A/B player can play both sides immediately.
 
    `hasPreviousAudio` is conservatively `true` because the generation route
    ALWAYS calls preserveExistingAsPrevious (which no-ops on first renders).
@@ -18,11 +18,20 @@ interface BuildArgs {
   chapter: Pick<Chapter, 'id' | 'title' | 'duration'>;
   character: Pick<Character, 'id' | 'name'>;
   /** Optional reason — surfaces in the diff player's "Triggered by" line.
-      Defaults to a generic "regenerate" tag. */
+      Defaults to a generic "voice change" tag. */
   triggeredBy?: string;
+  /** Whether the new take is already on disk. The preview gate builds the
+      stub on chapter_complete, so it passes `true`; defaults `false` for any
+      caller that enqueues a stub before the render lands. */
+  playable?: boolean;
 }
 
-export function buildPendingRevisionStub({ chapter, character, triggeredBy }: BuildArgs): Revision {
+export function buildPendingRevisionStub({
+  chapter,
+  character,
+  triggeredBy,
+  playable = false,
+}: BuildArgs): Revision {
   /* id encodes (chapterId, characterId) so enqueuePending's dedupe collapses
      a regen-restart for the same target into the same slot. The trailing
      epoch is intentionally NOT in the id — we want the dedupe to bite. */
@@ -36,7 +45,7 @@ export function buildPendingRevisionStub({ chapter, character, triggeredBy }: Bu
     oldDuration: chapter.duration ?? '',
     newDuration: chapter.duration ?? '',
     confidence: 1,
-    playable: false,
+    playable,
     /* Optimistic — flips false in the UI when the previous-audio fetch
        404s post-render. */
     hasPreviousAudio: true,

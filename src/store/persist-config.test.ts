@@ -42,7 +42,7 @@ describe('UI_PERSIST_WHITELIST', () => {
       'regenChapter',
       'regenInitialScope',
       'regenCharacterCtx',
-      'batchRegenIds',
+      'previewRegen',
       'staleAudio',
       'showRevisionPlayer',
       'showDriftReport',

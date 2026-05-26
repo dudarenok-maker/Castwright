@@ -2,61 +2,32 @@
    or more done chapters now hold audio whose voice/identity profile no
    longer matches the character's freshly-saved state. Saves the 30 s
    drift-poll wait: the user sees the alert as soon as they hit Save and
-   can regenerate in one click without bouncing through the regen modal.
+   can jump straight into the Regenerate-character flow.
 
-   Driven by `ui.staleAudio` (set in layout.tsx's onSave handler). Renders
-   nothing when the flag is null — single mount point in the cast view. */
+   "Regenerate" opens the CharacterRegenerateModal so the user gets the same
+   Regenerate-all vs. Preview-first choice the profile drawer offers (plan
+   114). Driven by `ui.staleAudio` (set in layout.tsx's onSave handler).
+   Renders nothing when the flag is null — single mount point in the cast
+   view. */
 
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { enqueueQueueEntries } from '../store/queue-thunks';
-import { changeLogActions } from '../store/change-log-slice';
-import { buildCharacterRegenEvent } from '../lib/change-log';
 import { IconRefresh, IconClose } from '../lib/icons';
 
 export function StaleAudioBanner() {
   const dispatch = useAppDispatch();
   const stale = useAppSelector((s) => s.ui.staleAudio);
-  const characters = useAppSelector((s) => s.cast.characters);
-  const bookId = useAppSelector((s) =>
-    s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null,
-  );
   if (!stale) return null;
   const n = stale.chapterIds.length;
   if (n === 0) return null;
 
-  const character = characters.find((c) => c.id === stale.characterId);
-
   function onRegenerate() {
-    if (!stale || !character || !bookId) return;
-    dispatch(
-      changeLogActions.appendLogEvent(
-        buildCharacterRegenEvent({
-          character,
-          chapterIds: stale.chapterIds,
-          reason: 'stale_after_voice_edit',
-          note: 'Voice edit invalidated existing audio.',
-        }),
-      ),
-    );
-    /* Plan 102 — stale-audio "Regenerate now" enqueues one
-       per-character entry per stale chapter; the dispatcher drains
-       them serially, so a regen mid-stream can no longer drop the
-       in-flight chapter. */
-    const rand = Math.random().toString(36).slice(2, 8);
-    void dispatch(
-      enqueueQueueEntries(
-        stale.chapterIds.map((chId) => ({
-          id: `stale-audio-${bookId}-${stale.characterId}-${chId}-${rand}`,
-          bookId,
-          chapterId: chId,
-          scope: 'character',
-          characterId: stale.characterId,
-        })),
-      ),
-    );
+    if (!stale) return;
+    /* Hand off to the CharacterRegenerateModal (mounted in Layout). It
+       recomputes the affected chapters from the live cast and offers the
+       Regenerate-all vs. Preview-first choice — no direct enqueue here. */
+    dispatch(uiActions.setRegenCharacterCtx({ characterId: stale.characterId }));
     dispatch(uiActions.clearStaleAudio());
-    dispatch(uiActions.changeView('generate'));
   }
 
   return (
@@ -74,7 +45,7 @@ export function StaleAudioBanner() {
         onClick={onRegenerate}
         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-900 text-amber-50 hover:bg-amber-950 text-xs font-semibold transition-colors"
       >
-        <IconRefresh className="w-3.5 h-3.5" /> Regenerate now
+        <IconRefresh className="w-3.5 h-3.5" /> Regenerate…
       </button>
       <button
         onClick={() => dispatch(uiActions.clearStaleAudio())}

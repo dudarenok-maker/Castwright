@@ -1,73 +1,50 @@
 import { useState } from 'react';
-import { IconClose, IconCheck, IconRefresh } from '../lib/icons';
-import { Avatar, PrimaryButton } from '../components/primitives';
+import { IconClose, IconRefresh, IconAB } from '../lib/icons';
+import { Avatar } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { REGEN_REASONS } from '../data/regen-reasons';
 import type { Character, Chapter, CharColor } from '../lib/types';
 
-type Scope = 'this' | 'selected' | 'all';
-
 interface Props {
   character: Character | null;
   chapters: Chapter[];
-  defaultChapterId?: number;
   onClose: () => void;
+  /** `preview: false` → regenerate every affected chapter now. `preview: true`
+      → render only the first affected chapter (chapterIds[0]) and open the A/B
+      gate; the layout fans the rest out on Approve. Either way `chapterIds`
+      carries every chapter the character speaks in, in reading order. */
   onConfirm: (args: {
     characterId: string;
     chapterIds: number[];
     reason: string;
     note: string;
+    preview: boolean;
   }) => void;
 }
 
-export function CharacterRegenerateModal({
-  character,
-  chapters,
-  defaultChapterId,
-  onClose,
-  onConfirm,
-}: Props) {
+export function CharacterRegenerateModal({ character, chapters, onClose, onConfirm }: Props) {
+  const [reason, setReason] = useState('voice');
+  const [note, setNote] = useState('');
   if (!character) return null;
   const c = CHAR_COLORS[character.color as CharColor] ?? CHAR_COLORS.narrator;
 
+  /* Chapters the character speaks in, in reading order. Regeneration is
+     whole-chapter — there is no per-character synthesis server-side, so a
+     voice change is applied by re-rendering each affected chapter in full.
+     The first chapter is the A/B preview sample. */
   const speakingChapters = chapters.filter(
     (ch) => ch.characters[character.id] && ch.characters[character.id] !== 'skipped',
   );
-
-  const [scope, setScope] = useState<Scope>(defaultChapterId ? 'this' : 'all');
-  const [reason, setReason] = useState('voice');
-  const [note, setNote] = useState('');
-  const [selected, setSelected] = useState<Record<number, boolean>>(() => {
-    const s: Record<number, boolean> = {};
-    speakingChapters.forEach((ch) => {
-      s[ch.id] = true;
-    });
-    return s;
-  });
-
-  const targetChapterIds = (() => {
-    if (scope === 'this') return defaultChapterId ? [defaultChapterId] : [];
-    if (scope === 'selected')
-      return Object.entries(selected)
-        .filter(([, v]) => v)
-        .map(([k]) => Number(k));
-    return speakingChapters.map((ch) => ch.id);
-  })();
+  const chapterIds = speakingChapters.map((ch) => ch.id);
+  const previewChapter = speakingChapters[0] ?? null;
+  const n = speakingChapters.length;
 
   const lines = character.lines ?? 0;
-  const [lineCounts] = useState<Record<number, number>>(() => {
-    const m: Record<number, number> = {};
-    let remaining = lines;
-    speakingChapters.forEach((ch, i, arr) => {
-      m[ch.id] = i === arr.length - 1 ? remaining : Math.round(lines / arr.length);
-      remaining -= m[ch.id];
-    });
-    return m;
-  });
+  const eta = lines > 0 ? `≈${Math.max(1, Math.round(lines / 60))} min` : '—';
 
-  const totalLines = targetChapterIds.reduce((s, id) => s + (lineCounts[id] || 0), 0);
-  const eta = totalLines > 0 ? `≈${Math.max(1, Math.round(totalLines / 60))} min` : '—';
+  const fire = (preview: boolean) =>
+    onConfirm({ characterId: character.id, chapterIds, reason, note, preview });
 
   return (
     <>
@@ -80,7 +57,7 @@ export function CharacterRegenerateModal({
               <p className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
                 Regenerate character
               </p>
-              <h3 className="text-base font-bold text-ink truncate">{character.name}'s lines</h3>
+              <h3 className="text-base font-bold text-ink truncate">{character.name}</h3>
             </div>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">
               <IconClose className="w-4 h-4" />
@@ -89,69 +66,41 @@ export function CharacterRegenerateModal({
 
           <div className="p-6 space-y-6 overflow-y-auto scrollbar-thin">
             <section>
-              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-3">
-                Which chapters?
+              <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold mb-2">
+                Affected chapters
               </p>
-              <div className="grid grid-cols-3 gap-2">
-                {defaultChapterId && (
-                  <button
-                    onClick={() => setScope('this')}
-                    className={`text-left p-3 rounded-2xl border transition-all ${scope === 'this' ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'}`}
-                  >
-                    <p className="text-sm font-semibold text-ink">
-                      Just CH {String(defaultChapterId).padStart(2, '0')}
-                    </p>
-                    <p className="text-xs text-ink/55 mt-0.5">
-                      {lineCounts[defaultChapterId] || 0} lines
-                    </p>
-                  </button>
-                )}
-                <button
-                  onClick={() => setScope('selected')}
-                  className={`text-left p-3 rounded-2xl border transition-all ${scope === 'selected' ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'}`}
-                >
-                  <p className="text-sm font-semibold text-ink">Pick chapters</p>
-                  <p className="text-xs text-ink/55 mt-0.5">
-                    {Object.values(selected).filter(Boolean).length} selected
+              {n === 0 ? (
+                <p className="text-sm text-ink/60">
+                  {character.name} doesn't speak in any chapter yet — nothing to regenerate.
+                </p>
+              ) : (
+                <>
+                  <p className="text-sm text-ink/70 leading-relaxed mb-3">
+                    {character.name} speaks in{' '}
+                    <span className="font-semibold text-ink tabular-nums">{n}</span>{' '}
+                    {n === 1 ? 'chapter' : 'chapters'}. Each is re-rendered in full with the new
+                    profile.
                   </p>
-                </button>
-                <button
-                  onClick={() => setScope('all')}
-                  className={`text-left p-3 rounded-2xl border transition-all ${scope === 'all' ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'}`}
-                >
-                  <p className="text-sm font-semibold text-ink">All ({speakingChapters.length})</p>
-                  <p className="text-xs text-ink/55 mt-0.5">{lines} lines</p>
-                </button>
-              </div>
-
-              {scope === 'selected' && (
-                <div className="mt-3 p-3 rounded-2xl bg-canvas border border-ink/10 max-h-64 overflow-y-auto">
-                  {speakingChapters.map((ch) => {
-                    const isOn = !!selected[ch.id];
-                    return (
-                      <button
-                        key={ch.id}
-                        onClick={() => setSelected({ ...selected, [ch.id]: !isOn })}
-                        className="w-full grid grid-cols-[20px_60px_1fr_60px] items-center gap-3 px-2 py-2 rounded-lg hover:bg-white text-left"
-                      >
+                  <div className="flex flex-wrap gap-1.5" data-testid="regen-affected-chapters">
+                    {speakingChapters.map((ch) => {
+                      const isPreview = previewChapter?.id === ch.id;
+                      return (
                         <span
-                          className={`w-4 h-4 rounded-md grid place-items-center transition-colors ${isOn ? 'bg-peach' : 'bg-white border border-ink/20'}`}
+                          key={ch.id}
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold tabular-nums ${
+                            isPreview
+                              ? 'bg-peach text-ink'
+                              : 'bg-ink/[0.04] text-ink/70 border border-ink/10'
+                          }`}
+                          title={stripChapterPrefix(ch.title)}
                         >
-                          {isOn && <IconCheck className="w-2.5 h-2.5 text-white" />}
-                        </span>
-                        <span className="text-[11px] tabular-nums font-bold text-ink/50">
                           CH {String(ch.id).padStart(2, '0')}
+                          {isPreview && <span className="text-[9px] uppercase">preview</span>}
                         </span>
-                        <span className="text-sm font-medium text-ink truncate">
-                          {stripChapterPrefix(ch.title)}
-                        </span>
-                        <span className="text-[11px] text-ink/55 tabular-nums text-right">
-                          {lineCounts[ch.id] || 0} lines
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                </>
               )}
             </section>
 
@@ -203,12 +152,10 @@ export function CharacterRegenerateModal({
                 </span>
                 <div className="flex-1 min-w-0">
                   <p className="text-xs uppercase tracking-wider text-ink/50 font-semibold">
-                    Will regenerate
+                    Will re-render
                   </p>
                   <p className="text-sm font-bold text-ink">
-                    <span className="tabular-nums">{totalLines}</span> lines across{' '}
-                    <span className="tabular-nums">{targetChapterIds.length}</span>{' '}
-                    {targetChapterIds.length === 1 ? 'chapter' : 'chapters'}
+                    <span className="tabular-nums">{n}</span> {n === 1 ? 'chapter' : 'chapters'}
                   </p>
                 </div>
                 <span className="text-right">
@@ -218,10 +165,13 @@ export function CharacterRegenerateModal({
                   <p className="text-sm font-bold text-ink tabular-nums">{eta}</p>
                 </span>
               </div>
-              <p className="mt-3 text-xs text-ink/60 leading-relaxed">
-                Other characters in these chapters keep their existing audio. Only {character.name}
-                's lines are re-voiced.
-              </p>
+              {previewChapter && (
+                <p className="mt-3 text-xs text-ink/60 leading-relaxed">
+                  Not sure about the new voice? Preview it on CH{' '}
+                  {String(previewChapter.id).padStart(2, '0')} first — listen to the old vs new take,
+                  then approve to regenerate the rest or reject and re-adjust.
+                </p>
+              )}
             </div>
           </div>
 
@@ -229,14 +179,23 @@ export function CharacterRegenerateModal({
             <button onClick={onClose} className="text-sm font-medium text-ink/60 hover:text-ink">
               Cancel
             </button>
-            <PrimaryButton
-              variant="dark"
-              onClick={() =>
-                onConfirm({ characterId: character.id, chapterIds: targetChapterIds, reason, note })
-              }
+            <button
+              onClick={() => fire(false)}
+              disabled={n === 0}
+              data-testid="regen-character-all"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full border border-ink/15 text-ink text-sm font-semibold hover:bg-ink/5 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              Regenerate {character.name.split(' ')[0]}
-            </PrimaryButton>
+              <IconRefresh className="w-3.5 h-3.5" /> Regenerate all {n > 0 ? n : ''}
+            </button>
+            <button
+              onClick={() => fire(true)}
+              disabled={!previewChapter}
+              data-testid="regen-character-preview"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <IconAB className="w-3.5 h-3.5" /> Preview CH{' '}
+              {previewChapter ? String(previewChapter.id).padStart(2, '0') : ''} first
+            </button>
           </div>
         </div>
       </div>
