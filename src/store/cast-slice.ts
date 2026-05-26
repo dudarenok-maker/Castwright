@@ -194,6 +194,37 @@ export const castSlice = createSlice({
       if (existing.some((n) => n.trim().toLowerCase() === key)) return;
       target.aliases = [...existing, trimmed];
     },
+    /* Set a character's primary display name. Serves two drawer affordances:
+       free-text rename ("Dame Alina" → "Councilor Alina") and promoting an
+       existing alias to be the primary name. Both collapse here because the
+       old primary name is ALWAYS demoted into aliases — a rename never loses
+       a name (earlier chapters may still use the old title). When the new
+       name is itself an existing alias (the promote case), it's stripped from
+       the aliases list so it doesn't double up. Dedup is case-insensitive,
+       trim-tolerant; display casing is preserved. Persisted to cast.json via
+       the 'cast/renameCharacter' rule in persistence-middleware.ts. */
+    renameCharacter: (
+      s,
+      a: PayloadAction<{ characterId: string; name: string }>,
+    ) => {
+      const { characterId, name } = a.payload;
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      const oldName = c.name;
+      const newKey = trimmed.toLowerCase();
+      if (oldName.trim().toLowerCase() === newKey) return;
+      /* Strip the new name off the aliases if present (covers promote). */
+      let aliases = (c.aliases ?? []).filter((al) => al.trim().toLowerCase() !== newKey);
+      /* Demote the old primary into aliases (the lossless swap), de-duped. */
+      const oldKey = oldName.trim().toLowerCase();
+      if (oldKey && !aliases.some((al) => al.trim().toLowerCase() === oldKey)) {
+        aliases = [...aliases, oldName];
+      }
+      c.name = trimmed;
+      c.aliases = aliases;
+    },
     /* From POST /api/books/:bookId/cast/link-prior — the user just
        manually declared "this character is the same person as that one
        from a prior series book." Single-row analogue of applyVoiceMatches

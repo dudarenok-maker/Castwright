@@ -45,6 +45,7 @@ const PERSIST_RULES: Record<
   'cast/setCharacters': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/declineMatch': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/updateCharacter': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  'cast/renameCharacter': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/applyVoiceMatches': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/lockVoice': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
 
