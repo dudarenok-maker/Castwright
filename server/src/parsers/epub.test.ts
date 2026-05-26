@@ -1,15 +1,18 @@
-// Pairs with docs/features/06-manuscript-parsing.md (EPUB parser).
+// Pairs with docs/features/116-epub-parsing.md (EPUB parser).
 
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseEpub } from './epub.js';
+import { parseEpub, UnusableEpubError } from './epub.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturePath = resolve(here, '__fixtures__/sample.epub');
 const titleFallbackFixturePath = resolve(here, '__fixtures__/sample-title-fallback.epub');
 const seriesFromTitleFixturePath = resolve(here, '__fixtures__/sample-title-no-calibre.epub');
+const opfPrefixedFixturePath = resolve(here, '__fixtures__/sample-opf-prefixed.epub');
+const drmFixturePath = resolve(here, '__fixtures__/sample-epub-drm.epub');
+const imageOnlyFixturePath = resolve(here, '__fixtures__/sample-epub-image-only.epub');
 
 describe('parseEpub', () => {
   it('returns format: "epub"', async () => {
@@ -145,5 +148,79 @@ describe('parseEpub', () => {
          concurrently, so we only assert this call didn't add one. */
       expect(after).toBe(before);
     });
+  });
+});
+
+/* Regression: namespace-prefixed OPF (plan 116). Publisher EPUBs (e.g. Simon
+   & Schuster's "Stellarlune") namespace every package element with an `opf:`
+   prefix (`<opf:manifest>`, `<opf:item>`, `<opf:spine>`, `<opf:itemref>`).
+   epub2's manifest/spine walker only recognises UNPREFIXED names, so the
+   primary path extracts zero chapters and — before this fix — threw "EPUB had
+   no extractable text in its spine." (HTTP 500). The yauzl-based raw-zip
+   fallback recovers the text. Chapters in this fixture live at
+   OEBPS/text/chapterN.xhtml (deeper than the OPF) to exercise
+   href-relative-to-OPF-dir resolution. */
+describe('parseEpub — namespace-prefixed OPF fallback (raw-zip parser)', () => {
+  it('recovers chapters epub2 cannot walk', async () => {
+    const buf = await readFile(opfPrefixedFixturePath);
+    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed.epub' });
+    expect(out.format).toBe('epub');
+    expect(out.chapters.length).toBe(2);
+    const allBody = out.chapters.map((c) => c.body).join('\n');
+    expect(allBody).toContain('The tower stood at the edge of the world.');
+  });
+
+  it('carries metadata + Calibre series through the fallback', async () => {
+    const buf = await readFile(opfPrefixedFixturePath);
+    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed.epub' });
+    expect(out.title).toBe('The Solway Light');
+    expect(out.author).toBe('Jane Doe');
+    expect(out.series).toBe('Solway Bay');
+    expect(out.seriesPosition).toBe(2);
+    expect(out.seriesFromTitle).toBe(false);
+  });
+
+  it('runs the same audio-tag pipeline as the primary path', async () => {
+    const buf = await readFile(opfPrefixedFixturePath);
+    const out = await parseEpub(buf, { fileName: 'sample-opf-prefixed.epub' });
+    const allBody = out.chapters.map((c) => c.body).join('\n');
+    expect(allBody).toContain('[emphatic] across');
+    expect(allBody).toContain('[shouting] Get Out Now');
+  });
+
+  it('reads from sourcePath verbatim (re-parse path) without a temp dir', async () => {
+    const { readdirSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const before = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
+    const out = await parseEpub(Buffer.alloc(0), {
+      fileName: 'sample-opf-prefixed.epub',
+      sourcePath: opfPrefixedFixturePath,
+    });
+    const after = readdirSync(tmpdir()).filter((n) => n.startsWith('epub-')).length;
+    expect(out.chapters.length).toBe(2);
+    expect(after).toBe(before);
+  });
+});
+
+/* Regression: when even the fallback finds no extractable text, parseEpub
+   throws UnusableEpubError (mapped to HTTP 415 by the route) with a classified
+   message rather than the cryptic generic. */
+describe('parseEpub — unusable-EPUB diagnostics', () => {
+  it('reports DRM when META-INF/encryption.xml is present', async () => {
+    const buf = await readFile(drmFixturePath);
+    await expect(parseEpub(buf, { fileName: 'sample-epub-drm.epub' })).rejects.toThrow(
+      UnusableEpubError,
+    );
+    await expect(parseEpub(buf, { fileName: 'sample-epub-drm.epub' })).rejects.toThrow(/DRM/i);
+  });
+
+  it('reports image-only when spine docs resolve but hold no text', async () => {
+    const buf = await readFile(imageOnlyFixturePath);
+    await expect(parseEpub(buf, { fileName: 'sample-epub-image-only.epub' })).rejects.toThrow(
+      UnusableEpubError,
+    );
+    await expect(parseEpub(buf, { fileName: 'sample-epub-image-only.epub' })).rejects.toThrow(
+      /image-only/i,
+    );
   });
 });
