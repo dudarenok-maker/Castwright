@@ -74,6 +74,21 @@ def _read_sample(pcm: bytes, i: int) -> int:
     return (hi << 8) | lo
 
 
+class _FakePromptItem:
+    """Mirror qwen_tts.VoiceClonePromptItem. The real library reads `.ref_code`
+    (and `.ref_text`) off EACH item in the prompt list — see
+    `_prompt_items_to_voice_clone_prompt`: `ref_code=[it.ref_code for it in
+    items]`. So if the batch passes a list-of-LISTS, `it` is a list and that
+    blows up with "'list' object has no attribute 'ref_code'" — the exact 500
+    we shipped. Modelling the item as an object (not a dict) keeps the fake
+    faithful to that attribute access, so the existing batch tests now catch a
+    regression in the prompt shape."""
+
+    def __init__(self, ref_text: str) -> None:
+        self.ref_text = ref_text
+        self.ref_code = _ref_marker(ref_text)
+
+
 class _BatchFakeQwen:
     """Stand-in for qwen_tts.Qwen3TTSModel that honours LIST inputs: returns one
     wav per text element, each stamped with its text + prompt so demux swaps and
@@ -92,22 +107,29 @@ class _BatchFakeQwen:
         return [np.zeros(24000, dtype=np.float32)], 24000
 
     def create_voice_clone_prompt(self, ref_audio: Any, ref_text: str, **_kwargs: Any):
-        # Carry ref_text so the synth output can prove which voice's prompt was
-        # used for which item.
-        return {"_prompt": True, "ref_text": ref_text}
+        # The REAL library returns List[VoiceClonePromptItem] (length 1 here) —
+        # NOT a bare object. That list shape is exactly what the batch path must
+        # flatten; carrying ref_text lets the synth output prove which voice's
+        # prompt was used for which item.
+        return [_FakePromptItem(ref_text)]
 
     def generate_voice_clone(self, text: Any, language: Any, voice_clone_prompt: Any):
         texts = text if isinstance(text, list) else [text]
         langs = language if isinstance(language, list) else [language]
-        prompts = (
+        prompt_items = (
             voice_clone_prompt
             if isinstance(voice_clone_prompt, list)
             else [voice_clone_prompt]
         )
-        self.clone_calls.append({"text": texts, "language": langs, "prompt": prompts})
+        self.clone_calls.append(
+            {"text": texts, "language": langs, "prompt": prompt_items}
+        )
         # The model contract: in batch mode the list args must match length.
-        assert len(texts) == len(prompts) == len(langs)
-        wavs = [_wav_for(t, p.get("ref_text", "")) for t, p in zip(texts, prompts)]
+        assert len(texts) == len(prompt_items) == len(langs)
+        # Read `.ref_text` off each item exactly as the library reads `.ref_code`
+        # — raises AttributeError if an item is itself a list (the list-of-lists
+        # bug), so a wrong prompt shape can't pass silently.
+        wavs = [_wav_for(t, p.ref_text) for t, p in zip(texts, prompt_items)]
         return wavs, 24000
 
 
@@ -128,7 +150,7 @@ def qwen_batch_runtime(monkeypatch, tmp_path):
             fh.write(b"\x00")  # presence marker for isfile()
 
     def _load(path: str, **_kwargs: Any) -> Any:
-        return _store.get(str(path), {"_prompt": True, "ref_text": ""})
+        return _store.get(str(path), [_FakePromptItem("")])
 
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]
@@ -179,7 +201,10 @@ def test_synthesize_batch_is_one_call_with_matching_lists(qwen_batch_runtime) ->
     # independent sequences, never a concatenated string).
     assert call["text"] == ["Apple.", "Banana!!", "Cat"]
     assert len(call["text"]) == len(call["language"]) == len(call["prompt"]) == 3
-    assert all(isinstance(p, dict) for p in call["prompt"])
+    # FLAT prompt-item list (one item per text), NOT a list-of-lists — the shape
+    # the library's `[it.ref_code for it in items]` demands.
+    assert all(not isinstance(p, list) for p in call["prompt"])
+    assert all(hasattr(p, "ref_code") for p in call["prompt"])
     assert res.sample_rate == 24000
     assert len(res.pcms) == 3
 
@@ -202,6 +227,29 @@ def test_synthesize_batch_preserves_order_text_and_voice(qwen_batch_runtime) -> 
         assert _read_sample(pcm, 1) == _ref_marker(refs[item["voice"]])
         # byte length tracks text length (independent ordering signal).
         assert len(pcm) == 2 * max(2, len(item["text"]))
+
+
+def test_batch_flattens_per_voice_prompt_item_lists(qwen_batch_runtime) -> None:
+    """Regression: each designed voice's cached prompt is a LIST of prompt items
+    (create_voice_clone_prompt's shape), so synthesize_batch must FLATTEN them
+    into one item per text. Appending the per-voice lists verbatim shipped a
+    list-of-lists, which made the library's `[it.ref_code for it in items]` raise
+    "'list' object has no attribute 'ref_code'" — a 500 on every batched Qwen
+    chapter."""
+    engine = qwen_batch_runtime["engine"]
+    for v in ("a", "b"):
+        _design(engine, v)
+    engine._base.clone_calls.clear()
+
+    res = engine.synthesize_batch(
+        "0.6b", [{"voice": "a", "text": "Hi."}, {"voice": "b", "text": "Yo."}]
+    )
+
+    prompts = engine._base.clone_calls[0]["prompt"]
+    assert len(prompts) == 2  # one prompt item per text, not two nested lists
+    assert all(not isinstance(p, list) for p in prompts)
+    assert all(hasattr(p, "ref_code") for p in prompts)
+    assert len(res.pcms) == 2
 
 
 def test_batch_of_one_matches_single_call(qwen_batch_runtime) -> None:
