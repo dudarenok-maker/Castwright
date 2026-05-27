@@ -115,6 +115,16 @@ export function mockQueueRequest(
     return snapshot();
   }
 
+  /* `/clear` — bulk-clear. `{ force: true }` drops everything; default keeps
+     in_progress entries (queued + failed dropped). Mirrors clearQueue server-side. */
+  if (rest === '/clear') {
+    const force = init?.body
+      ? Boolean((JSON.parse(init.body) as { force?: boolean }).force)
+      : false;
+    state.entries = renumber(force ? [] : state.entries.filter((e) => e.status === 'in_progress'));
+    return snapshot();
+  }
+
   /* `${entryId}/start` — status-only mark to in_progress, no reorder (multiple
      entries may be in_progress at once under queue-sole concurrency). */
   if (method === 'POST' && rest.endsWith('/start')) {
