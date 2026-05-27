@@ -303,6 +303,73 @@ def test_unload_clears_prompt_cache(fake_qwen_runtime) -> None:
     assert engine._prompt_cache == {}
 
 
+# ── transient VoiceDesign lifecycle: keep warm, free on idle / leave ─────
+# Regression for the 2026-05-27 CUDA OOM: the heavy VoiceDesign 1.7B model was
+# loaded on the first design and never freed (unload_design was dead code), so
+# it sat resident alongside the Base model and exhausted the 8 GB GPU during a
+# cast-review session. It now stays warm across rapid designs but frees on idle
+# or when real synthesis begins.
+
+def test_idle_watchdog_frees_only_design_model(fake_qwen_runtime) -> None:
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("sophie", "a curious teenage girl", "English", None)
+    assert engine._design is not None  # warm immediately after designing
+    assert engine._base is not None
+
+    # Still within the idle window → keep it warm (no per-design reload churn).
+    assert engine.maybe_free_idle_design(600.0) is False
+    assert engine._design is not None
+
+    # Simulate the TTL elapsing since the last design.
+    engine._design_last_used -= 1000.0
+    assert engine.maybe_free_idle_design(120.0) is True
+    assert engine._design is None    # transient design model freed …
+    assert engine._base is not None  # … resident synth model kept
+
+
+def test_idle_watchdog_noop_when_no_design_resident(fake_qwen_runtime) -> None:
+    engine = fake_qwen_runtime["engine"]
+    assert engine._design is None
+    assert engine.maybe_free_idle_design(0.0) is False  # nothing to free
+
+
+def test_synthesize_frees_resident_design_model(fake_qwen_runtime) -> None:
+    """A real synth = leaving design mode → the heavy VoiceDesign model is
+    freed so it can't squeeze generation VRAM, while Base stays and audio still
+    returns."""
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("sophie", "a curious teenage girl", "English", None)
+    assert engine._design is not None
+
+    res = engine.synthesize("qwen3-tts-0.6b", "sophie", "Hello there.")
+    assert engine._design is None      # freed on the first real synth
+    assert engine._base is not None
+    assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
+
+
+def test_consecutive_designs_reuse_warm_model(fake_qwen_runtime, monkeypatch) -> None:
+    """Back-to-back designs within the idle window reuse the warm VoiceDesign
+    model — loaded exactly once, not reloaded per design (the user's explicit
+    'stop reloading' requirement)."""
+    engine = fake_qwen_runtime["engine"]
+    design_loads = {"n": 0}
+    real_load = engine._load_qwen_model
+
+    def counting_load(model_id):
+        if model_id == engine.VOICEDESIGN_MODEL:
+            design_loads["n"] += 1
+        return real_load(model_id)
+
+    monkeypatch.setattr(engine, "_load_qwen_model", counting_load)
+
+    engine.design_voice("sophie", "a curious teenage girl", "English", None)
+    engine.design_voice("sandor", "a gravelly older man", "English", None)
+    engine.design_voice("dex", "a bright teenage boy", "English", None)
+
+    assert design_loads["n"] == 1      # one load, reused across all three
+    assert engine._design is not None  # still warm (no synth, within TTL)
+
+
 def _patch_from_pretrained(fake_qwen_runtime, monkeypatch) -> dict[str, Any]:
     """Replace the fake Qwen3TTSModel.from_pretrained with a recorder so a
     test can inspect the kwargs the loader passed. Returns the capture dict."""
