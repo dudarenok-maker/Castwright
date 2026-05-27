@@ -170,4 +170,20 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await page.waitForTimeout(300);
     await expectNoHorizontalScroll(page);
   });
+
+  test('status modal (plan 119)', async ({ page }) => {
+    /* The Status pill is always present in a book context; opening it
+       surfaces the modal (dialog on >= sm, full-screen sheet on phone)
+       carrying the TTS controls + analysis/generation/revisions sections. */
+    await page.goto('/#/books/sb/generate');
+    const statusPill = page.getByTestId('status-pill');
+    await statusPill.waitFor({ state: 'visible', timeout: 10_000 });
+    await statusPill.click();
+    await page.getByRole('dialog', { name: 'Status' }).waitFor({
+      state: 'visible',
+      timeout: 5_000,
+    });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
 });

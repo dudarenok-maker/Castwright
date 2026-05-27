@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { IconArrowLeft, IconAB, IconSpinner, IconClock, IconWarning } from '../lib/icons';
+import { IconArrowLeft, IconSpinner, IconClock, IconWarning } from '../lib/icons';
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
 import type { Stage, View } from '../lib/types';
@@ -41,6 +41,67 @@ export interface AnalysisPillData {
   onClick: () => void;
 }
 
+/* Plan 119 — the top bar no longer renders the TTS / analysis / generation /
+   revisions pills inline; they live behind a single compact Status pill that
+   opens the Status modal. `summarizeStatus` collapses the live state into ONE
+   dominant {label, tone, icon, detail} so the pill stays narrow and the nav
+   menu keeps its room. The full per-engine / per-stream detail is in the
+   modal (src/modals/status-modal.tsx). */
+export type StatusTone = 'rose' | 'amber' | 'peach' | 'neutral';
+export interface StatusSummary {
+  label: string;
+  tone: StatusTone;
+  icon: 'spinner' | 'clock' | 'warning';
+  /** Optional trailing live number, e.g. "55%" or "2". Omitted for idle /
+      terminal states that have no meaningful number. */
+  detail?: string;
+}
+export interface StatusInput {
+  analysis: AnalysisPillData | null;
+  generation: GenerationPillData | null;
+  pendingRevisionsCount: number;
+  /** True when any in-use TTS engine pill is mid-load (Layout derives this
+      from the per-engine ttsLifecycle state). */
+  anyModelLoading: boolean;
+}
+
+/* Priority ladder (highest wins → the dominant state shown on the pill):
+   halted > stalled > generation-running > analysis-running > model-loading >
+   analysis-paused > revisions-pending > idle. Generation outranks analysis
+   when both run because generation is the user's terminal goal; analysis is
+   upstream. Halted / stalled stay on top because they're attention states the
+   user must see without opening the modal. Pure + exported for unit testing. */
+export function summarizeStatus({
+  analysis,
+  generation,
+  pendingRevisionsCount,
+  anyModelLoading,
+}: StatusInput): StatusSummary {
+  if (analysis?.state === 'halted' || generation?.state === 'halted')
+    return { label: 'Halted', tone: 'rose', icon: 'warning' };
+  if (analysis?.state === 'stalled' || generation?.state === 'stalled')
+    return { label: 'Stalled', tone: 'amber', icon: 'clock' };
+  if (generation?.state === 'running')
+    return { label: 'Generating', tone: 'peach', icon: 'spinner', detail: `${generation.percent}%` };
+  if (analysis?.state === 'running')
+    return {
+      label: analysis.kind === 'subset' ? 'Retrying' : 'Analysing',
+      tone: 'peach',
+      icon: 'spinner',
+      detail: `${analysis.percent}%`,
+    };
+  if (anyModelLoading) return { label: 'Loading model', tone: 'amber', icon: 'spinner' };
+  if (analysis?.state === 'paused') return { label: 'Paused', tone: 'neutral', icon: 'clock' };
+  if (pendingRevisionsCount > 0)
+    return {
+      label: 'Revisions',
+      tone: 'peach',
+      icon: 'warning',
+      detail: String(pendingRevisionsCount),
+    };
+  return { label: 'Status', tone: 'neutral', icon: 'clock' };
+}
+
 interface TopBarProps {
   stage: Stage['kind'];
   view: View | null;
@@ -51,8 +112,6 @@ interface TopBarProps {
       acts as a back-to-home shortcut (same as the logo). The cast-confirm
       stage uses this to wire the title to re-analyse. */
   onTitleClick?: () => void;
-  pendingRevisionsCount: number;
-  onOpenRevisions: () => void;
   onOpenVoices: () => void;
   onOpenChangelog: () => void;
   /** Avatar click → Account view. The avatar shows the user's display name
@@ -66,21 +125,16 @@ interface TopBarProps {
       account slice — the persisted user-level value, with a built-in
       seed default. */
   userDisplayName: string;
-  /** Globally-visible chip surfacing background generation so the user knows
-      a run is alive (or stalled / halted) even when they're on Cast, Voices,
-      Activity, etc. `null` hides the pill entirely. Clicking routes back to
-      the Generate view of the active book. */
-  generationPill?: GenerationPillData | null;
-  /** Sibling pill for in-flight analysis. Rendered to the LEFT of the
-      generation pill so both can be visible if a generation and an
-      analysis are alive simultaneously (rare but legal post-B1). */
-  analysisPill?: AnalysisPillData | null;
-  /** Optional global TTS pill. Layout supplies a `<ModelControlPill kind="tts" ... />`
-      element here so the affordance is visible from every book-context stage
-      (Confirm Cast, Cast, Drawer-host views, Generation, Listen). The pill is
-      driven by `useTtsLifecycle()` mounted once in Layout, so its state stays
-      in sync with whatever the Generation view's local pill is showing. */
-  ttsPill?: ReactNode;
+  /** Plan 119 — the single compact Status pill's content, pre-summarized in
+      Layout (so the per-second clock tick that drives the "stalled" check
+      keeps it live). Collapses the former TTS / analysis / generation /
+      revisions pill cluster into one dominant state. `null` hides the pill
+      entirely — Layout passes null on global views (Books / Voices / Change
+      log) when there's no book in scope AND no cross-book activity, so an
+      idle workspace shows no dead pill (matches the pre-119 empty cluster). */
+  statusSummary: StatusSummary | null;
+  /** Plan 119 — click handler for the Status pill; opens the Status modal. */
+  onOpenStatus: () => void;
   /** Plan 102 — workspace queue count. When > 0, renders a compact chip in
       the top-right cluster that opens the global queue modal on click. When
       0, the chip is hidden. */
@@ -114,16 +168,13 @@ export function TopBar({
   projectTitle,
   onHome,
   onTitleClick,
-  pendingRevisionsCount,
-  onOpenRevisions,
   onOpenVoices,
   onOpenChangelog,
   onOpenAccount,
   onOpenWorktrees,
   userDisplayName,
-  generationPill,
-  analysisPill,
-  ttsPill,
+  statusSummary,
+  onOpenStatus,
   queueCount,
   onOpenQueue,
 }: TopBarProps) {
@@ -201,25 +252,15 @@ export function TopBar({
               ))}
             </nav>
           )}
-          {/* Pills cluster — pushed right via ml-auto so the nav strip
-              hugs the left of the scrollable area. */}
-          <div className="ml-auto flex items-center gap-3 shrink-0">
-            {ttsPill}
-            {analysisPill && <AnalysisPill data={analysisPill} />}
-            {generationPill && <GenerationPill data={generationPill} />}
-            {pendingRevisionsCount > 0 && (
-              <button
-                onClick={onOpenRevisions}
-                className="relative inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] sm:min-h-0 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold transition-colors"
-              >
-                <span className="relative">
-                  <IconAB className="w-4 h-4" />
-                  <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-magenta pulse-ring" />
-                </span>
-                {pendingRevisionsCount} revision{pendingRevisionsCount === 1 ? '' : 's'}
-              </button>
-            )}
-          </div>
+          {/* Plan 119 — one compact Status pill (pushed right via ml-auto)
+              replaces the former TTS / analysis / generation / revisions
+              cluster; it opens the Status modal carrying the full detail.
+              Hidden on idle global views (statusSummary === null). */}
+          {statusSummary && (
+            <div className="ml-auto shrink-0">
+              <StatusPill summary={statusSummary} onClick={onOpenStatus} />
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {onOpenWorktrees && (
@@ -261,7 +302,42 @@ export function TopBar({
   );
 }
 
-function AnalysisPill({ data }: { data: AnalysisPillData }) {
+/* Tone → className, reusing the exact tokens the analysis / generation pills
+   already use so the compact pill speaks the same visual language. */
+const STATUS_TONE_CLASS: Record<StatusTone, string> = {
+  rose: 'bg-rose-100 hover:bg-rose-200 text-rose-800',
+  amber: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
+  peach: 'bg-peach/15 hover:bg-peach/25 text-magenta',
+  neutral: 'bg-ink/[0.06] hover:bg-ink/10 text-ink/70',
+};
+const STATUS_ICON: Record<StatusSummary['icon'], ReactNode> = {
+  spinner: <IconSpinner className="w-3.5 h-3.5" />,
+  clock: <IconClock className="w-3.5 h-3.5" />,
+  warning: <IconWarning className="w-3.5 h-3.5" />,
+};
+
+function StatusPill({ summary, onClick }: { summary: StatusSummary; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid="status-pill"
+      data-status-tone={summary.tone}
+      aria-label={`Status — ${summary.label}${summary.detail ? ` ${summary.detail}` : ''}`}
+      className={`inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] sm:min-h-0 rounded-full text-xs font-semibold transition-colors ${STATUS_TONE_CLASS[summary.tone]}`}
+    >
+      {STATUS_ICON[summary.icon]}
+      <span className="tabular-nums">
+        {summary.label}
+        {summary.detail ? ` · ${summary.detail}` : ''}
+      </span>
+    </button>
+  );
+}
+
+/* Exported (since plan 119) for reuse inside the Status modal, which renders
+   the same live pill with its onClick overridden to navigate-and-close. */
+export function AnalysisPill({ data }: { data: AnalysisPillData }) {
   const { state, phaseLabel, percent, haltReason, kind, subsetChapterCount, onClick } = data;
   /* Plan 32 D2: subset retries swap the label from "Analysing" to
      "Retrying" so the user knows they're watching a subset re-run
@@ -326,7 +402,7 @@ function AnalysisPill({ data }: { data: AnalysisPillData }) {
   );
 }
 
-function GenerationPill({ data }: { data: GenerationPillData }) {
+export function GenerationPill({ data }: { data: GenerationPillData }) {
   const { state, done, total, percent, onClick } = data;
   const variants: Record<
     GenerationPillState,
@@ -352,6 +428,7 @@ function GenerationPill({ data }: { data: GenerationPillData }) {
   return (
     <button
       onClick={onClick}
+      data-testid="generation-pill"
       className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${v.className}`}
     >
       {v.icon}

@@ -96,6 +96,11 @@ export interface UiState {
       mounted in Layout and reachable from the top-bar queue chip + the
       Generate view's "View queue" button. */
   queueModalOpen: boolean;
+  /** Plan 119 — true while the global Status modal is open. The modal is
+      mounted in Layout and reachable from the top-bar Status pill; it carries
+      the TTS engine controls + analysis/generation/revisions detail that used
+      to live inline in the top bar. */
+  statusModalOpen: boolean;
   /** Plan 108 Wave 5 — true while the "Rebaseline the series" modal is
       open. Opened from the Voices view's rebaseline button (only when a
       book is loaded so the series-scoped write has an anchor). */
@@ -129,6 +134,7 @@ const initialState: UiState = {
   themeOverride: null,
   reuploadingBookId: null,
   queueModalOpen: false,
+  statusModalOpen: false,
   rebaselineModalOpen: false,
   rebaselineBookId: null,
 };
@@ -305,6 +311,16 @@ export const uiSlice = createSlice({
     },
     closeQueueModal: (s) => {
       s.queueModalOpen = false;
+    },
+    /* Plan 119 — global Status modal open/close. The modal is mounted in
+       Layout and renders nothing when closed; the top-bar Status pill
+       dispatches openStatusModal, and the modal's "go to" actions
+       dispatch closeStatusModal after navigating. */
+    openStatusModal: (s) => {
+      s.statusModalOpen = true;
+    },
+    closeStatusModal: (s) => {
+      s.statusModalOpen = false;
     },
     /* Plan 108 Wave 5 — "Rebaseline the series" modal open/close. Mounted
        in the Voices view; opened from the rebaseline button when a book is
