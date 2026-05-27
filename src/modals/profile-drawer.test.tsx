@@ -1154,3 +1154,119 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     expect(args.voice.overrideTtsVoices?.qwen).toBeUndefined();
   });
 });
+
+describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
+  /* Regression: on a Qwen project a REUSED character carries its bespoke Qwen
+     voice on the matched library `voice` (the reuse path leaves the
+     character's own ttsEngine/override empty). The cast row resolved this
+     correctly, but the drawer re-derived from the project engine + the
+     character's empty override → "Qwen · No voice designed yet", a blocked
+     Play button, and a misleading "Default (Kokoro)" engine label. The drawer
+     must now mirror the row: surface the reused Qwen voice, enable the sample,
+     and show the lifecycle pill + Reused badge together. */
+  const reusedChar: Character = {
+    id: 'narrator',
+    name: 'Narrator',
+    role: 'Third-person observer',
+    color: 'narrator',
+    lines: 5396,
+    scenes: 30,
+    voiceId: 'v_qwen_narr',
+    voiceState: 'reused',
+    matchedFrom: {
+      bookTitle: 'The Tidewatcher's Oath',
+      bookId: 'b_prev',
+      characterId: 'narrator_prev',
+      confidence: 0.95,
+    },
+  };
+  const reusedQwenVoice: Voice = {
+    id: 'v_qwen_narr',
+    character: 'Narrator',
+    bookTitle: 'The Tidewatcher's Oath',
+    bookId: 'b_prev',
+    attributes: ['descriptive'],
+    gradient: ['#E5B69C', '#C77B5C'],
+    usedIn: 2,
+    source: 'library',
+    generated: true,
+    ttsVoice: { provider: 'qwen', name: 'qwen-narrator-abc', description: 'Designed voice' },
+  };
+
+  function renderReused() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer, cast: castSlice.reducer },
+    });
+    /* Put the project on Qwen — the scenario where effectiveEngine falls back
+       to the project engine. */
+    store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    return render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={reusedChar}
+          voice={reusedQwenVoice}
+          bookId="book-1"
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('surfaces the reused Qwen voice on the card instead of "No voice designed yet"', () => {
+    renderReused();
+    expect(screen.getByText('qwen-narrator-abc')).toBeTruthy();
+    expect(screen.queryByText(/No voice designed yet/)).toBeNull();
+    expect(screen.queryByText(/Design a Qwen voice below before sampling/)).toBeNull();
+  });
+
+  it('enables the Play sample button (the reused voice is synthesisable)', () => {
+    renderReused();
+    const playBtn = screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement;
+    expect(playBtn.disabled).toBe(false);
+  });
+
+  it('shows the lifecycle pill and the Reused badge together', () => {
+    renderReused();
+    /* voice.generated === true ⇒ "Generated" lifecycle; matchedFrom ⇒ badge. */
+    expect(screen.getByText('Generated')).toBeTruthy();
+    expect(screen.getByTestId('reused-badge')).toBeTruthy();
+  });
+
+  it('labels the engine default option after the project engine, not a hardcoded Kokoro', () => {
+    renderReused();
+    expect(screen.getByRole('option', { name: 'Default (Qwen)' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Default (Kokoro)' })).toBeNull();
+  });
+
+  it('hides the preset Model-voice picker (the character effectively synthesises via Qwen)', () => {
+    /* The picker is gated on the EFFECTIVE engine, not the live engineChoice:
+       a default-engine character on a Qwen project resolves to Qwen, so the
+       preset (Coqui/Kokoro/Gemini) slots are inert and must not show. */
+    renderReused();
+    expect(screen.queryByText('Model voice')).toBeNull();
+  });
+
+  it('still shows the preset Model-voice picker for a default-engine character on a preset project', () => {
+    /* Guards against over-hiding: a default character whose project engine is
+       a preset (Kokoro) must keep the picker. */
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer, cast: castSlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.setTtsModelKey('kokoro-v1'));
+    render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={{ ...reusedChar, voiceId: undefined, voiceState: 'generated' }}
+          voice={undefined}
+          bookId="book-1"
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.getByText('Model voice')).toBeTruthy();
+  });
+});
