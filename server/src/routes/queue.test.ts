@@ -244,6 +244,42 @@ describe('POST /api/queue/pause', () => {
   });
 });
 
+describe('POST /api/queue/clear', () => {
+  it('drops queued + failed but keeps in_progress by default', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({
+        entries: [
+          { id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' },
+          { id: 'e2', bookId: 'book-A', chapterId: 2, scope: 'this' },
+        ],
+      });
+    await request(app).post('/api/queue/e2/start'); // e2 → in_progress
+    const res = await request(app).post('/api/queue/clear').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.entries.map((e: { id: string; status: string }) => [e.id, e.status])).toEqual([
+      ['e2', 'in_progress'],
+    ]);
+  });
+
+  it('drops everything with force (including in_progress)', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    await request(app).post('/api/queue/e1/start');
+    const res = await request(app).post('/api/queue/clear').send({ force: true });
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toEqual([]);
+  });
+
+  it('leaves the paused flag untouched', async () => {
+    await request(app).post('/api/queue/pause').send({ paused: true });
+    const res = await request(app).post('/api/queue/clear').send({ force: true });
+    expect(res.status).toBe(200);
+    expect(res.body.paused).toBe(true);
+  });
+});
+
 describe('POST /api/queue/:entryId/start', () => {
   it('marks the entry in_progress WITHOUT reordering (no order=0 pin)', async () => {
     await request(app)

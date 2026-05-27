@@ -12,6 +12,7 @@
  *   POST   /api/queue/enqueue          — append entries (forward expanded by client)
  *   POST   /api/queue/reorder          — set the order of non-pinned entries
  *   POST   /api/queue/pause            — toggle queue-global paused flag
+ *   POST   /api/queue/clear            — bulk-clear (queued+failed; force = all)
  *   POST   /api/queue/:entryId/start   — mark an entry in_progress (no reorder)
  *   POST   /api/queue/:entryId/complete — drop a finished entry (done-prune)
  *   DELETE /api/queue/:entryId         — cancel a QUEUED entry (409 if in_progress)
@@ -29,6 +30,7 @@ import { queueJsonPath } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import {
   cancel,
+  clearQueue,
   completeEntry,
   enqueue,
   markInProgress,
@@ -164,6 +166,27 @@ queueRouter.post('/pause', async (req: Request, res: Response) => {
   try {
     const before = await readQueueFile(queueJsonPath());
     const after = setPaused(before, body.paused);
+    await writeQueueFile(queueJsonPath(), after);
+    res.json({ entries: after.entries, paused: after.paused });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+interface ClearRequestBody {
+  force?: unknown;
+}
+
+/* Bulk-clear the queue. `{ force: false }` (default) drops queued + failed
+   entries but leaves in_progress ones running; `{ force: true }` drops
+   everything (the frontend pairs force with a stream halt so the live SSE
+   actually stops). Declared before `/:entryId` so the literal path wins. */
+queueRouter.post('/clear', async (req: Request, res: Response) => {
+  const body = (req.body ?? {}) as ClearRequestBody;
+  const force = body.force === true;
+  try {
+    const before = await readQueueFile(queueJsonPath());
+    const after = clearQueue(before, { force });
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
   } catch (e) {

@@ -184,10 +184,10 @@ test.describe('queue modal (plan 102 / 111)', () => {
   test('the queue is authoritative — generating chapters appear as real queue entries (plan 111)', async ({
     page,
   }) => {
-    /* No override any more: analysis lands → enqueue-on-work fills the queue →
-       the dispatcher drains it. So while a book generates, the queue modal
-       shows REAL entries (not the old synthetic overlay). Drives a real mock
-       generation and asserts the modal reports pending entries. */
+    /* No override any more: navigating to the Generate view fills the queue via
+       enqueue-on-work → the dispatcher drains it. So while a book generates, the
+       queue modal shows REAL entries (not the old synthetic overlay). Drives a
+       real mock generation and asserts the modal reports pending entries. */
     test.setTimeout(60_000);
 
     await goToConfirm(page);
@@ -207,5 +207,53 @@ test.describe('queue modal (plan 102 / 111)', () => {
     /* Authoritative queue → real pending entries, never "No chapters queued". */
     await expect(dialog.getByText(/entr(y|ies) pending/i)).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/No chapters queued/)).toHaveCount(0);
+  });
+
+  test('queue stays empty until the user starts generating (no enqueue at analysis/confirm)', async ({
+    page,
+  }) => {
+    /* Regression for "book queues at analysis time": a freshly-analysed book
+       must NOT enter the queue at confirm/manuscript — only when the user
+       navigates to the Generate view. Reads the persisted queue length straight
+       off the store (the e2e __store__ hook). */
+    test.setTimeout(60_000);
+    const queueLen = (): Promise<number> =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __store__: { getState: () => { queue: { entries: unknown[] } } };
+            }
+          ).__store__.getState().queue.entries.length,
+      );
+
+    await goToConfirm(page);
+    await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    /* Settle, then assert the queue STAYED empty on the manuscript review view. */
+    await page.waitForTimeout(800);
+    expect(await queueLen()).toBe(0);
+
+    /* Start generating → the queue now fills. */
+    await page.getByRole('button', { name: /^Generate$/ }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
+    await expect.poll(queueLen, { timeout: 10_000 }).toBeGreaterThan(0);
+  });
+
+  test('Clear queue empties the queue via the confirm dialog', async ({ page }) => {
+    /* Seeded PAUSED so the dispatcher doesn't drain before we clear. */
+    await seedQueue(page, [
+      e({ id: 'c1', bookId: 'sb', chapterId: 1 }),
+      e({ id: 'c2', bookId: 'sb', chapterId: 2, order: 1 }),
+    ]);
+    await page.goto('/#/books/sb/listen');
+    await page.getByTestId('topbar-queue-chip').waitFor({ state: 'visible', timeout: 10_000 });
+    await page.getByTestId('topbar-queue-chip').click();
+    await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible();
+    await page.getByTestId('queue-modal-clear').click();
+    /* The dialog's confirm button shares the "Clear queue" name with the header
+       trigger; the dialog's is the later one in the DOM. */
+    await page.getByRole('button', { name: 'Clear queue' }).last().click();
+    await expect(page.getByText(/Empty/i).first()).toBeVisible({ timeout: 5_000 });
   });
 });
