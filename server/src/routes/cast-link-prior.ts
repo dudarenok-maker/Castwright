@@ -128,9 +128,28 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
     });
   }
 
+  /* Unify the propagation key (plan 122). Aliases alone let the matcher
+     RECOGNISE both surface forms, but they don't make the two rows share the
+     series-override write key `voiceId ?? id` — so a later "Propose voices"
+     approve would skip the source book. Stamp the source character's voiceId
+     with the target's canonical key so a manual continuity link truly unifies
+     them. Idempotent: skip the write when it already matches. */
+  const canonicalVoiceId = target.voiceId ?? target.id;
+  const voiceIdChanged = source.voiceId !== canonicalVoiceId;
+  if (voiceIdChanged) {
+    const mergedSource: PersistedCharacter = { ...source, voiceId: canonicalVoiceId };
+    const nextSourceCharacters = sourceCast.characters.map((c) =>
+      c.id === sourceCharacterId ? mergedSource : c,
+    );
+    await writeJsonAtomic(castJsonPath(sourceLocated.bookDir), {
+      characters: nextSourceCharacters,
+    });
+  }
+
   console.log(
     `[cast-link-prior] ${sourceBookId}/${sourceCharacterId} → ${targetBookId}/${targetCharacterId}` +
-      (aliasesChanged ? ' (alias added)' : ' (no-op: alias already present)'),
+      (aliasesChanged ? ' (alias added)' : ' (no-op: alias already present)') +
+      (voiceIdChanged ? ` (voiceId → ${canonicalVoiceId})` : ''),
   );
 
   return res.json({
@@ -140,7 +159,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
       bookTitle: targetLocated.state.title,
       confidence: 1,
     },
-    voiceId: target.voiceId,
+    voiceId: canonicalVoiceId,
   });
 });
 

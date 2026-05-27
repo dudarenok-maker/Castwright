@@ -2,6 +2,12 @@ import type { components } from './api-types';
 
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
+  /* Provenance stamped by GET /api/books/:bookId/series-cast onto every
+     sibling character so the rebaseline modal knows which book a row came
+     from (the open/anchor book's own rows carry neither field). Used by
+     mergeSeriesCast for the notLinkedTo guard + the approve home-book. */
+  sourceBookId?: string;
+  sourceBookTitle?: string;
 };
 /* `phase` is a UI-only sub-state set from the `chapter_assembling` SSE tick.
    It lets the Generate view distinguish "synthesising sentences" from the
