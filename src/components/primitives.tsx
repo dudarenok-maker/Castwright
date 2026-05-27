@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { CHAR_COLORS, shade } from '../lib/colors';
-import { IconArrow, IconPlay, IconSpinner } from '../lib/icons';
+import { IconArrow, IconLink, IconPlay, IconSpinner } from '../lib/icons';
 import type { CharColor, Voice } from '../lib/types';
 
 type ButtonVariant = 'dark' | 'light' | 'ghost' | 'danger' | 'peach';
@@ -213,6 +213,24 @@ export function Pill({ children, color = 'neutral' }: { children: ReactNode; col
       className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium border ${map[color]}`}
     >
       {children}
+    </span>
+  );
+}
+
+/* Small provenance badge — sits beside the lifecycle status pill (the "tag")
+   to mark a character whose voice was reused/matched from a prior book in the
+   series. Orthogonal to the lifecycle state (Designed/Generated/Tuned/Locked)
+   so both can show at once. Deliberately lighter-weight than `Pill` (smaller
+   text, no border) so it reads as a secondary marker, not a second tag. */
+export function ReusedBadge() {
+  return (
+    <span
+      data-testid="reused-badge"
+      title="Voice reused from a prior book in this series"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium text-purple-deep/70 bg-purple-deep/[0.04]"
+    >
+      <IconLink className="w-2.5 h-2.5" />
+      Reused
     </span>
   );
 }
