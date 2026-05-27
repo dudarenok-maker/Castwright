@@ -7,7 +7,7 @@
 import { rm } from 'node:fs/promises';
 import { Router, type Request, type Response } from 'express';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
-import { selectAnalyzer, type AnalyzerSelection } from '../analyzer/index.js';
+import { type AnalyzerSelection } from '../analyzer/index.js';
 import {
   selectAnalyzerForPhase,
   isPerPhaseModelSelectionActive,
@@ -21,7 +21,11 @@ import {
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
-import { readUserSettings } from '../workspace/user-settings.js';
+import {
+  readUserSettings,
+  getCachedUserSettings,
+  type UserSettings,
+} from '../workspace/user-settings.js';
 import {
   clearAnalysisCache,
   loadAnalysisCache,
@@ -92,15 +96,15 @@ function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
    knobs are active AND we're not in legacy manual mode. Otherwise the
    sequential stub (Phase 1 waits for `markPhase0AllDone()` exactly
    like today's hard phase gate). Exported for unit testing. */
-export function createWatermarkForJob(): PhaseWatermark {
+export function createWatermarkForJob(userSettings?: UserSettings): PhaseWatermark {
   /* Manual cowork loop can't pipeline because it waits for human
      input between phases — short-circuit to the sequential stub
      regardless of any per-phase env vars. */
   const manual = process.env.ANALYZER === 'manual';
-  if (manual || !isPerPhaseModelSelectionActive()) {
+  if (manual || !isPerPhaseModelSelectionActive(userSettings)) {
     return createSequentialWatermark();
   }
-  return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters() });
+  return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters(userSettings) });
 }
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
@@ -1357,9 +1361,17 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      view's "Accept smaller roster" button re-fires the same request
      with this flag so the next attempt skips the gate. */
   const allowStage1Shrink = req.body?.allowStage1Shrink === true;
+  /* Plan 118 — read the user-settings snapshot once at request start and
+     resolve the Phase 0 (cast detection) analyzer via the per-phase
+     selector, so the saved `analyzerPhase0Model` is honoured rather than
+     ignored (the old `selectAnalyzer({ model })` only ever saw the
+     per-request model + the GEMINI_MODEL default). The same snapshot is
+     threaded into the job so every per-phase / watermark / lag decision
+     reflects one read-once view of the file. */
+  const userSettings = await readUserSettings();
   let selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzer({ model: requestedModel });
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     clearInterval(keepAlive);
@@ -1441,6 +1453,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     requestedFresh,
     allowStage1Shrink,
     requestedModel,
+    userSettings,
   });
 });
 
@@ -1448,11 +1461,16 @@ export interface MainAnalyzerJobOpts {
   requestedFresh: boolean;
   allowStage1Shrink: boolean;
   /* Plan 88 — when the route layer received an explicit `model` in the
-     request body, the per-phase env vars are bypassed (UI dropdown
-     wins). Carry this signal through so the job knows whether to ask
-     `selectAnalyzerForPhase` for a Phase-1-specific analyzer or just
-     reuse the main one. */
+     request body, that per-request id wins (precedence priority 2). Both
+     phases resolve through `selectAnalyzerForPhase`, so a present
+     `requestedModel` collapses the split to a single model for this run;
+     when absent, the saved per-phase models (priority 3) apply. */
   requestedModel: string | undefined;
+  /* Plan 118 — read-once user-settings snapshot from request start, so
+     per-phase model resolution and the watermark / lag decisions all see
+     the same view of the file. Optional: tests and any legacy caller may
+     omit it and the job falls back to the in-process cache. */
+  userSettings?: UserSettings;
 }
 
 /* Detached analyzer loop body. Runs as a background promise spawned
@@ -1479,45 +1497,51 @@ export async function runMainAnalyzerJob(
   const recordRef = record;
   const activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
+  /* Read-once user-settings snapshot — the handler passes one in; legacy
+     callers / tests fall back to the in-process cache. Drives both the
+     Phase 1 model resolution and the watermark / lag below so they agree
+     with the Phase 0 resolution done in the route handler. */
+  const userSettings = opts.userSettings ?? getCachedUserSettings();
 
-  /* Plan 88 — pipelined two-model analyzer.
-     When `ANALYZER_PHASE1_MODEL` is set, Phase 1 attribution runs on a
-     DIFFERENT analyzer than Phase 0 cast detection — split the load
-     across two independent free-tier rate-limit buckets. Without a
-     per-request override (`requestedModel` already handled inside
-     `selectAnalyzer`), `selectAnalyzerForPhase('phase1')` honours the
-     env var. Falls back to the same `selection.analyzer` so the legacy
-     single-model path keeps working.
+  /* Plan 88 / 118 — pipelined two-model analyzer.
+     Both phases resolve through `selectAnalyzerForPhase`, which applies
+     the documented precedence (env ANALYZER_PHASE{0,1}_MODEL > per-request
+     `model` > saved `analyzerPhase{0,1}Model` > default). So:
+       - No per-phase models + no per-request model → both phases run the
+         same default model (single-model path, unchanged).
+       - Per-phase models set + no per-request model → Phase 0 and Phase 1
+         run DIFFERENT models, splitting the load across two free-tier
+         rate-limit buckets.
+       - A per-request `model` (priority 2) collapses both phases to that
+         model for this run (env still trumps it).
 
-     The watermark seam decides the dispatch contract:
-       - Pipelined mode (per-phase env vars set, not manual): Phase 1
-         worker awaits `markPhase0ChapterComplete(K + LAG)` before
-         dispatching chapter K. Back-pressure semaphore enforced.
-       - Sequential mode (legacy / manual): Phase 1 worker awaits
-         `markPhase0AllDone()` — equivalent to today's hard phase gate.
-     The current route still runs Phase 0 → Phase 0b → Phase 1
-     serially at the code level; the awaits resolve trivially as Phase
-     0b completes. The seam is in place so a follow-up can launch the
-     two pools concurrently without re-plumbing this layer. */
-  const phase1Selection: AnalyzerSelection = opts.requestedModel
-    ? selection
-    : selectAnalyzerForPhase({ phase: 'phase1' });
+     The watermark decides the dispatch contract. When the per-phase split
+     is active (and not manual), Phase 1 chapter K dispatches once Phase 0's
+     watermark reaches `K + LAG` — `runPhase0Pool` and `runPhase1Pool` run
+     concurrently, joined by the outer `Promise.all` below. Otherwise the
+     sequential stub makes Phase 1 wait for `markPhase0AllDone()` (today's
+     hard phase gate). */
+  const phase1Selection: AnalyzerSelection = selectAnalyzerForPhase({
+    phase: 'phase1',
+    model: opts.requestedModel,
+    userSettings,
+  });
   const phase1Analyzer = phase1Selection.analyzer;
   const phase1ModelId = phase1Selection.model;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
   const pipelinedPerPhase =
     !opts.requestedModel &&
-    isPerPhaseModelSelectionActive() &&
+    isPerPhaseModelSelectionActive(userSettings) &&
     process.env.ANALYZER !== 'manual';
   if (pipelinedPerPhase) {
     console.log(
       `[analysis] manuscript=${manuscriptId} pipelined ` +
         `phase0=${selection.engine}:${selection.model} ` +
         `phase1=${phase1Selection.engine}:${phase1Selection.model} ` +
-        `lag=${resolvePhase1MinLagChapters()}`,
+        `lag=${resolvePhase1MinLagChapters(userSettings)}`,
     );
   }
-  const watermark: PhaseWatermark = createWatermarkForJob();
+  const watermark: PhaseWatermark = createWatermarkForJob(userSettings);
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
@@ -3193,9 +3217,16 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   }
 
   const requestedModel = typeof body?.model === 'string' ? body.model : undefined;
+  /* Plan 118 — resolve cast (Phase 0) and attribution (Phase 1) analyzers
+     via the per-phase selector so a saved split applies to the subset
+     retry too. This path is sequential (no watermark); the split only
+     changes which model each pass uses. */
+  const userSettings = await readUserSettings();
   let selection: AnalyzerSelection;
+  let phase1Selection: AnalyzerSelection;
   try {
-    selection = selectAnalyzer({ model: requestedModel });
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
+    phase1Selection = selectAnalyzerForPhase({ phase: 'phase1', model: requestedModel, userSettings });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     clearInterval(keepAlive);
@@ -3244,7 +3275,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   /* Run the subset analyzer in the background. The route response is
      held open by the detached promise's broadcast loop until endJob
      fires res.end() on every subscriber. */
-  void runSubsetAnalyzerJob(job, record, selection, toRun, allowStage1ShrinkSubset);
+  void runSubsetAnalyzerJob(job, record, selection, phase1Selection, toRun, allowStage1ShrinkSubset);
 });
 
 /* Detached subset-retry analyzer body. Extracted from the request
@@ -3256,6 +3287,7 @@ async function runSubsetAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
   selection: AnalyzerSelection,
+  phase1Selection: AnalyzerSelection,
   toRun: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>['chapterHints'],
   allowStage1ShrinkSubset: boolean,
 ): Promise<void> {
@@ -3264,6 +3296,11 @@ async function runSubsetAnalyzerJob(
   const analyzer = selection.analyzer;
   const analyzerLabel = engineLabel(selection.engine, selection.model);
   const subsetModelId = selection.model;
+  /* Plan 118 — Phase 1 (attribution) analyzer for the subset retry; equals
+     `selection` when no split is configured. */
+  const phase1Analyzer = phase1Selection.analyzer;
+  const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1Selection.model);
+  const phase1ModelId = phase1Selection.model;
 
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
@@ -3549,8 +3586,8 @@ async function runSubsetAnalyzerJob(
     send({ kind: 'phase', phaseId: 1, progress: 0.02, label: PHASES[1].label });
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
-      log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${analyzerLabel}…`);
-      const result = await analyzer.runStage2Chapter(
+      log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…`);
+      const result = await phase1Analyzer.runStage2Chapter(
         manuscriptId,
         ch.id,
         buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
@@ -3561,7 +3598,7 @@ async function runSubsetAnalyzerJob(
               kind: 'throttle',
               phaseId: 1,
               chapterIndex: ch.id,
-              model: subsetModelId,
+              model: phase1ModelId,
               waitMs,
               reason,
             });

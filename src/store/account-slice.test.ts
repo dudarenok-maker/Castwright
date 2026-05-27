@@ -9,6 +9,10 @@ import {
   accountActions,
   fetchAccountSettings,
   saveAccountSettings,
+  selectAnalyzerSplitIsActive,
+  selectAnalyzerPhase0Model,
+  selectAnalyzerPhase1Model,
+  selectAnalyzerPhase1MinLag,
 } from './account-slice';
 import type { UserSettings } from '../lib/types';
 
@@ -310,5 +314,37 @@ describe('accountSlice — save lifecycle', () => {
     expect(s.status).toBe('error');
     expect(s.error).toBe('disk full');
     expect(s.hydrated).toBe(true);
+  });
+});
+
+describe('per-phase analyzer selectors (plan 118)', () => {
+  const base = accountSlice.getInitialState();
+
+  it('selectAnalyzerSplitIsActive is false when both per-phase models are null', () => {
+    expect(
+      selectAnalyzerSplitIsActive({ ...base, analyzerPhase0Model: null, analyzerPhase1Model: null }),
+    ).toBe(false);
+  });
+
+  it('selectAnalyzerSplitIsActive is true when either per-phase model is set', () => {
+    expect(selectAnalyzerSplitIsActive({ ...base, analyzerPhase0Model: 'gemma-4-31b-it' })).toBe(
+      true,
+    );
+    expect(selectAnalyzerSplitIsActive({ ...base, analyzerPhase1Model: 'gemini-3.1-flash-lite' })).toBe(
+      true,
+    );
+  });
+
+  it('per-phase model selectors return the raw saved value or null — no fabricated default', () => {
+    expect(selectAnalyzerPhase0Model({ ...base, analyzerPhase0Model: null })).toBeNull();
+    expect(selectAnalyzerPhase1Model({ ...base, analyzerPhase1Model: null })).toBeNull();
+    expect(selectAnalyzerPhase0Model({ ...base, analyzerPhase0Model: 'gemma-4-31b-it' })).toBe(
+      'gemma-4-31b-it',
+    );
+  });
+
+  it('selectAnalyzerPhase1MinLag defaults to 10 and honours an override', () => {
+    expect(selectAnalyzerPhase1MinLag({ ...base, analyzerPhase1MinLagChapters: null })).toBe(10);
+    expect(selectAnalyzerPhase1MinLag({ ...base, analyzerPhase1MinLagChapters: 4 })).toBe(4);
   });
 });

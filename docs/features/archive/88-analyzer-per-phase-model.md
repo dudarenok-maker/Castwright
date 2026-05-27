@@ -6,6 +6,14 @@ owner: dudarenok-maker
 
 # Pipelined two-model analyzer (Gemma cast + Gemini attribution, 10-chapter lag)
 
+> **Follow-up:** the per-phase *model selection* shipped here was not actually
+> reachable from the UI/user-settings (the route resolved Phase 0 via
+> `selectAnalyzer`, and the frontend always sent a per-request model that
+> shadowed the per-phase settings). Fixed in
+> [plan 118](../118-analyzer-per-phase-wiring-fix.md), which also makes the
+> analysing-view chips honest. The pipelining mechanics documented below are
+> unchanged.
+
 > Status: stable
 > Key files: `server/src/analyzer/select-analyzer.ts`, `server/src/analyzer/phase-watermark.ts`, `server/src/routes/analysis.ts` (`runMainAnalyzerJob`, `runPhase0Pool`, `runPhase1Pool`, `getPhase1Stage1Snapshot`), `server/src/routes/analysis-pipelining.test.ts`, `server/src/analyzer/rate-limit.ts:122`, `server/.env.example`, `docs/features/06-analyzer-gemini.md`
 > URL surface: indirect — `#/books/<id>/analysing`; SSE stream emitted by `POST /api/books/:bookId/analyse`

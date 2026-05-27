@@ -164,22 +164,31 @@ export const accountSlice = createSlice({
 
 export const accountActions = accountSlice.actions;
 
-/* Frontend mirror of the server-side per-phase-model precedence chain
-   (server/src/analyzer/select-analyzer.ts:11–21). The server reads env
-   first, then user-settings, then a hardcoded default — the frontend
-   can't see process env, so this only covers the user-settings →
-   default fallthrough. The defaults match plan 88 and the docstrings
-   on the Account-tab pickers in src/views/account.tsx:329, 353. */
-export const PHASE0_MODEL_DEFAULT = 'gemma-4-31b-it';
-export const PHASE1_MODEL_DEFAULT = 'gemini-3.1-flash-lite';
+/* Default chapter lag between Phase 0 cast detection and Phase 1
+   attribution — matches the server's `DEFAULT_PHASE1_MIN_LAG_CHAPTERS`
+   (server/src/analyzer/select-analyzer.ts). A real constant the client
+   can mirror, unlike the per-phase model defaults (which depend on
+   server env the client can't see — see selectAnalyzerSplitIsActive). */
 export const PHASE1_MIN_LAG_DEFAULT = 10;
 
-export function selectAnalyzerPhase0Model(account: AccountState): string {
-  return account.analyzerPhase0Model ?? PHASE0_MODEL_DEFAULT;
+/* Whether the user has configured a two-model per-phase split. Mirrors the
+   user-settings half of the server's `isPerPhaseModelSelectionActive`. The
+   frontend can't see the server's `ANALYZER_PHASE{0,1}_MODEL` env vars, so an
+   env-only split won't register here — the chip then shows the honest
+   "Server default" label rather than guessing a model. */
+export function selectAnalyzerSplitIsActive(account: AccountState): boolean {
+  return !!(account.analyzerPhase0Model || account.analyzerPhase1Model);
 }
 
-export function selectAnalyzerPhase1Model(account: AccountState): string {
-  return account.analyzerPhase1Model ?? PHASE1_MODEL_DEFAULT;
+/* Raw saved per-phase model, or null = "fall through to the server default."
+   No fabricated default — the chip decides what to show when null so it can
+   stay honest about single-model vs split runs (plan 118). */
+export function selectAnalyzerPhase0Model(account: AccountState): string | null {
+  return account.analyzerPhase0Model ?? null;
+}
+
+export function selectAnalyzerPhase1Model(account: AccountState): string | null {
+  return account.analyzerPhase1Model ?? null;
 }
 
 export function selectAnalyzerPhase1MinLag(account: AccountState): number {

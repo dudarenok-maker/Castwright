@@ -669,3 +669,47 @@ describe('runMainAnalyzerJob — concurrent pool interleaving in production', ()
     }
   }, 30_000);
 });
+
+/* ───────────────────────────────────────────────────────────────────
+   Plan 118 regression — Phase 1 resolves through `selectAnalyzerForPhase`
+   uniformly, even when a per-request `model` is present. Pre-fix the job
+   used `opts.requestedModel ? selection : selectAnalyzerForPhase('phase1')`,
+   so a per-request model (which the frontend ALWAYS sent) reused the Phase 0
+   `selection` for Phase 1 — collapsing any configured split. The Phase 0 spy
+   throws on `runStage2Chapter`, so the old path would never record a Phase 1
+   dispatch; the fix routes Phase 1 through the per-phase selector (here the
+   injected Phase 1 spy), so all chapters attribute.
+   ─────────────────────────────────────────────────────────────────── */
+describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase even with a per-request model', () => {
+  it('does not reuse the Phase 0 selection for Phase 1 when requestedModel is set', async () => {
+    const manuscriptId = `test-phase1-uniform-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 4);
+    process.env.STAGE2_CONCURRENCY = '1';
+
+    const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
+    const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
+    const phase1Selection = buildSpyAnalyzerSelection(phase1Analyzer, 'gemini-3.1-flash-lite');
+    /* Force the pipelined watermark on and inject the Phase 1 spy via the
+       selectAnalyzerForPhase mock. minLag 0 → Phase 1 starts as soon as each
+       Phase 0 chapter completes. */
+    setPipelinedMode({ pipelined: true, phase1Selection, minLag: 0 });
+
+    const job = buildStubJob(manuscriptId);
+    try {
+      const recordRef = (await import('../store/manuscripts.js')).getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript missing');
+      await runMainAnalyzerJob(job, recordRef as never, phase0Selection, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        /* The frontend always sent this pre-fix; it must NOT shortcut Phase 1
+           back onto the Phase 0 spy (which throws on runStage2Chapter). */
+        requestedModel: 'gemini-2.5-flash',
+      });
+      const phase1Calls = fixture.trace.filter((t) => t.phase === 1);
+      expect(phase1Calls.length).toBe(4);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  }, 30_000);
+});
