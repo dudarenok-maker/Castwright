@@ -573,29 +573,11 @@ export function GenerationView({
               />
             )}
           </p>
-          {ttsLifecycle.evictionNotice && (
-            <p className="mt-2 inline-flex items-center gap-2 text-[11px] text-emerald-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-              {ttsLifecycle.evictionNotice}
-            </p>
-          )}
-          {ttsLifecycle.loadErrorNotice && (
-            <p
-              className="mt-2 inline-flex items-start gap-2 text-[11px] text-rose-700 max-w-prose"
-              role="alert"
-            >
-              <span className="w-1.5 h-1.5 mt-1 rounded-full bg-rose-500 shrink-0" />
-              <span>{ttsLifecycle.loadErrorNotice}</span>
-              <button
-                type="button"
-                onClick={ttsLifecycle.dismissNotices}
-                aria-label="Dismiss error"
-                className="ml-1 text-rose-600/70 hover:text-rose-800"
-              >
-                <IconClose className="w-3 h-3" />
-              </button>
-            </p>
-          )}
+          {/* TTS Load/Stop notices (eviction + load error) now render once
+              globally under the top bar via <TtsNoticeBanner> in layout.tsx —
+              see that component for why. The inline copy was removed here to
+              avoid a double render (both surfaces share the one
+              useTtsLifecycle instance). */}
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {/* Plan 102 — header CTAs.
