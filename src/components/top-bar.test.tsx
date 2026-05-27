@@ -1,15 +1,30 @@
 /* Menu wiring regression: the "Change log" button in the global nav must
    dispatch onOpenChangelog so it actually surfaces the workspace activity
    feed. Pairs with src/lib/router.test.ts (which only covers stage↔hash
-   conversion, not the click path). */
+   conversion, not the click path).
+
+   Plan 119: the former inline TTS / analysis / generation / revisions pill
+   cluster is gone — the top bar now renders a single compact Status pill
+   (driven by the pure `summarizeStatus` helper) that opens the Status modal.
+   The AnalysisPill / GenerationPill components survive (reused inside the
+   modal) and are now exercised directly here. */
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { TopBar } from './top-bar';
+import {
+  TopBar,
+  AnalysisPill,
+  GenerationPill,
+  summarizeStatus,
+  type StatusSummary,
+  type AnalysisPillData,
+} from './top-bar';
 import { uiSlice } from '../store/ui-slice';
 import { accountSlice } from '../store/account-slice';
+
+const IDLE_SUMMARY: StatusSummary = { label: 'Status', tone: 'neutral', icon: 'clock' };
 
 function makeProps(
   overrides: Partial<Parameters<typeof TopBar>[0]> = {},
@@ -19,12 +34,12 @@ function makeProps(
     view: null,
     setView: vi.fn(),
     onHome: vi.fn(),
-    pendingRevisionsCount: 0,
-    onOpenRevisions: vi.fn(),
     onOpenVoices: vi.fn(),
     onOpenChangelog: vi.fn(),
     onOpenAccount: vi.fn(),
     userDisplayName: 'Mike Dudarenok',
+    statusSummary: IDLE_SUMMARY,
+    onOpenStatus: vi.fn(),
     ...overrides,
   };
 }
@@ -90,23 +105,168 @@ describe('TopBar — avatar entry to account', () => {
   });
 });
 
-describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
-  it('hides the pill entirely when analysisPill is null (no in-flight analysis)', () => {
-    renderWithStore(<TopBar {...makeProps({ analysisPill: null })} />);
-    expect(screen.queryByTestId('analysis-pill')).not.toBeInTheDocument();
-  });
-
-  it('renders the running variant with the phase label and percent', () => {
+describe('TopBar — StatusPill (plan 119)', () => {
+  it('renders the dominant summary label, detail and tone', () => {
     renderWithStore(
       <TopBar
         {...makeProps({
-          analysisPill: {
-            state: 'running',
-            phaseLabel: 'Detecting characters',
-            percent: 42,
-            onClick: vi.fn(),
-          },
+          statusSummary: { label: 'Generating', tone: 'peach', icon: 'spinner', detail: '55%' },
         })}
+      />,
+    );
+    const pill = screen.getByTestId('status-pill');
+    expect(pill.textContent).toContain('Generating');
+    expect(pill.textContent).toContain('55%');
+    expect(pill).toHaveAttribute('data-status-tone', 'peach');
+  });
+
+  it('renders just the label (no separator) for the idle summary', () => {
+    renderWithStore(<TopBar {...makeProps({ statusSummary: IDLE_SUMMARY })} />);
+    const pill = screen.getByTestId('status-pill');
+    expect(pill.textContent).toBe('Status');
+    expect(pill.textContent).not.toContain('·');
+    expect(pill).toHaveAttribute('data-status-tone', 'neutral');
+  });
+
+  it('fires onOpenStatus when clicked (opens the Status modal)', () => {
+    const onOpenStatus = vi.fn();
+    renderWithStore(<TopBar {...makeProps({ onOpenStatus })} />);
+    fireEvent.click(screen.getByTestId('status-pill'));
+    expect(onOpenStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('no longer renders the analysis or generation pills inline', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'generate' })} />);
+    expect(screen.queryByTestId('analysis-pill')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('generation-pill')).not.toBeInTheDocument();
+  });
+
+  it('hides the pill entirely when statusSummary is null (idle global view)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'books', statusSummary: null })} />);
+    expect(screen.queryByTestId('status-pill')).not.toBeInTheDocument();
+  });
+});
+
+describe('summarizeStatus — dominant-state priority ladder (plan 119)', () => {
+  const running = (over: Partial<AnalysisPillData> = {}): AnalysisPillData => ({
+    state: 'running',
+    phaseLabel: 'Detecting characters',
+    percent: 55,
+    onClick: vi.fn(),
+    ...over,
+  });
+
+  it('idle → "Status" neutral with no detail when nothing is happening', () => {
+    expect(
+      summarizeStatus({
+        analysis: null,
+        generation: null,
+        pendingRevisionsCount: 0,
+        anyModelLoading: false,
+      }),
+    ).toEqual({ label: 'Status', tone: 'neutral', icon: 'clock' });
+  });
+
+  it('halted (generation) outranks everything → rose "Halted" with no detail', () => {
+    const s = summarizeStatus({
+      analysis: running(),
+      generation: { state: 'halted', done: 0, total: 50, percent: 0, onClick: vi.fn() },
+      pendingRevisionsCount: 3,
+      anyModelLoading: true,
+    });
+    expect(s).toEqual({ label: 'Halted', tone: 'rose', icon: 'warning' });
+  });
+
+  it('halted (analysis) also wins even while a generation is still running', () => {
+    const s = summarizeStatus({
+      analysis: running({ state: 'halted' }),
+      generation: { state: 'running', done: 1, total: 10, percent: 10, onClick: vi.fn() },
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(s.label).toBe('Halted');
+    expect(s.tone).toBe('rose');
+  });
+
+  it('stalled outranks running', () => {
+    const s = summarizeStatus({
+      analysis: running({ state: 'stalled' }),
+      generation: { state: 'running', done: 1, total: 10, percent: 10, onClick: vi.fn() },
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Stalled', tone: 'amber', icon: 'clock' });
+  });
+
+  it('generation running outranks analysis running (terminal goal wins the tie)', () => {
+    const s = summarizeStatus({
+      analysis: running({ percent: 90 }),
+      generation: { state: 'running', done: 2, total: 10, percent: 20, onClick: vi.fn() },
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Generating', tone: 'peach', icon: 'spinner', detail: '20%' });
+  });
+
+  it('analysis running → "Analysing · {percent}%"', () => {
+    const s = summarizeStatus({
+      analysis: running({ percent: 42 }),
+      generation: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Analysing', tone: 'peach', icon: 'spinner', detail: '42%' });
+  });
+
+  it('subset analysis running → "Retrying" label', () => {
+    const s = summarizeStatus({
+      analysis: running({ kind: 'subset', percent: 12 }),
+      generation: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(s.label).toBe('Retrying');
+    expect(s.detail).toBe('12%');
+  });
+
+  it('model loading (no run) → amber "Loading model"', () => {
+    const s = summarizeStatus({
+      analysis: null,
+      generation: null,
+      pendingRevisionsCount: 2,
+      anyModelLoading: true,
+    });
+    expect(s).toEqual({ label: 'Loading model', tone: 'amber', icon: 'spinner' });
+  });
+
+  it('paused analysis (no run, no loading) → neutral "Paused"', () => {
+    const s = summarizeStatus({
+      analysis: running({ state: 'paused' }),
+      generation: null,
+      pendingRevisionsCount: 5,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Paused', tone: 'neutral', icon: 'clock' });
+  });
+
+  it('pending revisions (nothing else active) → peach "Revisions · {n}"', () => {
+    const s = summarizeStatus({
+      analysis: null,
+      generation: null,
+      pendingRevisionsCount: 4,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Revisions', tone: 'peach', icon: 'warning', detail: '4' });
+  });
+});
+
+/* AnalysisPill / GenerationPill now live inside the Status modal. They no
+   longer need the TopBar (or its store) — render them directly. */
+describe('AnalysisPill (B3 sticky analysis)', () => {
+  it('renders the running variant with the phase label and percent', () => {
+    render(
+      <AnalysisPill
+        data={{ state: 'running', phaseLabel: 'Detecting characters', percent: 42, onClick: vi.fn() }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -118,39 +278,30 @@ describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
   it('renders the halted variant with the trimmed halt reason and a full-message title attribute', () => {
     const longReason =
       'Phase 1 demoted 60% of sentences to narrator — model attribution unreliable.';
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'halted',
-            phaseLabel: 'Parsing and attribution',
-            percent: 0,
-            haltReason: longReason,
-            onClick: vi.fn(),
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{
+          state: 'halted',
+          phaseLabel: 'Parsing and attribution',
+          percent: 0,
+          haltReason: longReason,
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
     expect(pill.textContent).toContain('Halted');
     /* Trimmed to 32 chars + ellipsis on render so a long halt message
-       doesn't blow out the header layout. */
+       doesn't blow out the layout. */
     expect(pill.textContent).toContain('…');
     /* Full message is preserved on the title attribute for hover. */
     expect(pill).toHaveAttribute('title', longReason);
   });
 
   it("renders the paused variant without a percent (paused work doesn't tick)", () => {
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'paused',
-            phaseLabel: 'Detecting characters',
-            percent: 30,
-            onClick: vi.fn(),
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{ state: 'paused', phaseLabel: 'Detecting characters', percent: 30, onClick: vi.fn() }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -160,70 +311,28 @@ describe('TopBar — AnalysisPill (B3 sticky analysis)', () => {
 
   it('fires onClick when the pill is clicked (routes back to the analysing view)', () => {
     const onClick = vi.fn();
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'running',
-            phaseLabel: 'Detecting characters',
-            percent: 10,
-            onClick,
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{ state: 'running', phaseLabel: 'Detecting characters', percent: 10, onClick }}
       />,
     );
     fireEvent.click(screen.getByTestId('analysis-pill'));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
-
-  it('renders alongside the generation pill — both can be visible during a cross-book analysis + generation', () => {
-    /* Sticky analysis (B1-3) + sticky generation (plan 31) can both be
-       alive at the same time on different books. The header must show
-       BOTH pills, not one or the other. */
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'running',
-            phaseLabel: 'Detecting characters',
-            percent: 20,
-            onClick: vi.fn(),
-          },
-          generationPill: {
-            state: 'running',
-            done: 3,
-            total: 10,
-            percent: 30,
-            onClick: vi.fn(),
-          },
-        })}
-      />,
-    );
-    expect(screen.getByTestId('analysis-pill')).toBeInTheDocument();
-    /* GenerationPill has no testid, identify by its visible text. */
-    expect(screen.getByText(/Generating/)).toBeInTheDocument();
-  });
 });
 
-describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
+describe('AnalysisPill subset variant (plan 32 D2)', () => {
   it('renders the running variant as "Retrying N chapters · 42%" when kind === subset', () => {
-    /* Plan 32 D2: subset retries swap the headline label from
-       "Analysing" to "Retrying" and surface the chapter count in
-       place of the per-phase label. The percent still tracks the
-       phase-weighted overall progress so the user sees the retry
-       advance. */
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'running',
-            phaseLabel: 'Detecting characters',
-            percent: 42,
-            kind: 'subset',
-            subsetChapterCount: 3,
-            onClick: vi.fn(),
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{
+          state: 'running',
+          phaseLabel: 'Detecting characters',
+          percent: 42,
+          kind: 'subset',
+          subsetChapterCount: 3,
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -237,18 +346,16 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
   });
 
   it('singularises the chapter count for a one-chapter retry', () => {
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'running',
-            phaseLabel: 'Detecting characters',
-            percent: 12,
-            kind: 'subset',
-            subsetChapterCount: 1,
-            onClick: vi.fn(),
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{
+          state: 'running',
+          phaseLabel: 'Detecting characters',
+          percent: 12,
+          kind: 'subset',
+          subsetChapterCount: 1,
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -257,20 +364,15 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
   });
 
   it('falls back to the phase label when kind === subset but subsetChapterCount is missing', () => {
-    /* Defensive default — if a cold-boot snapshot omits the chapter ids
-       (legacy file, or an in-flight glitch where the count's not on the
-       snapshot yet), the pill still renders rather than NaN-ing out. */
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'running',
-            phaseLabel: 'Detecting characters',
-            percent: 5,
-            kind: 'subset',
-            onClick: vi.fn(),
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{
+          state: 'running',
+          phaseLabel: 'Detecting characters',
+          percent: 5,
+          kind: 'subset',
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -279,20 +381,9 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
   });
 
   it('renders the main variant ("Analysing") when kind is undefined or "main"', () => {
-    /* Regression guard — a pill with no `kind` field on the data (e.g.
-       from a pre-D2 snapshot) must keep the main rendering. The
-       data-pill-kind attribute also defaults to "main" so tests can
-       target either kind explicitly. */
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'running',
-            phaseLabel: 'Detecting characters',
-            percent: 30,
-            onClick: vi.fn(),
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{ state: 'running', phaseLabel: 'Detecting characters', percent: 30, onClick: vi.fn() }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -302,24 +393,43 @@ describe('TopBar — AnalysisPill subset variant (plan 32 D2)', () => {
   });
 
   it('subset paused / halted variants keep the standard terminal copy (not the retrying label)', () => {
-    renderWithStore(
-      <TopBar
-        {...makeProps({
-          analysisPill: {
-            state: 'paused',
-            phaseLabel: 'Detecting characters',
-            percent: 0,
-            kind: 'subset',
-            subsetChapterCount: 2,
-            onClick: vi.fn(),
-          },
-        })}
+    render(
+      <AnalysisPill
+        data={{
+          state: 'paused',
+          phaseLabel: 'Detecting characters',
+          percent: 0,
+          kind: 'subset',
+          subsetChapterCount: 2,
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
     expect(pill.textContent).toContain('Paused');
-    /* Paused subset jobs still surface as "Paused · <phase>" so the
-       Resume affordance reads the same as a paused main run. */
     expect(pill.textContent).not.toContain('Retrying');
+  });
+});
+
+describe('GenerationPill', () => {
+  it('renders the done/total and percent for a running run', () => {
+    render(
+      <GenerationPill
+        data={{ state: 'running', done: 3, total: 10, percent: 30, onClick: vi.fn() }}
+      />,
+    );
+    const pill = screen.getByTestId('generation-pill');
+    expect(pill.textContent).toContain('Generating');
+    expect(pill.textContent).toContain('3/10');
+    expect(pill.textContent).toContain('30%');
+  });
+
+  it('fires onClick when clicked', () => {
+    const onClick = vi.fn();
+    render(
+      <GenerationPill data={{ state: 'running', done: 1, total: 5, percent: 20, onClick }} />,
+    );
+    fireEvent.click(screen.getByTestId('generation-pill'));
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
