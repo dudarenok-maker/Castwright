@@ -5,6 +5,7 @@ import { ToneSlider } from './profile-drawer';
 import { engineForModelKey } from '../lib/tts-models';
 import { resolveTtsVoiceForCharacter, resolveProfileForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
+import { sampleScopeFor } from '../lib/sample-scope';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -380,7 +381,7 @@ function buildSideContext(
      buildCharacterHint(character, draft). */
   const merged = mergeDraft(c, draft);
   const matched = findVoiceForCharacter(c, library);
-  const sampleVoiceId = matched ? matched.id : `char-${c.id}`;
+  const sampleVoiceId = sampleScopeFor(c, matched);
   const ttsVoice = matched?.ttsVoice ?? resolveTtsVoiceForCharacter(merged, engine);
   const subject: Voice = matched ?? {
     id: sampleVoiceId,
