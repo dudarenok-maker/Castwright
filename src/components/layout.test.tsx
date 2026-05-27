@@ -13,7 +13,7 @@
    effects the layout runs alongside. Those have their own paired tests. */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { render, waitFor, fireEvent } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -456,11 +456,13 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
 
 describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
   /* Renders Layout at the confirm stage (where showGlobalTtsPill is true)
-     with a cast that contains a Qwen-pinned character. The top-bar pill
-     cluster must surface a Qwen ModelControlPill (aria-label "Qwen <state>")
-     alongside the default Kokoro pill — proving selectEnginesInUse's
-     per-character signal drives the pill render. /health is mocked
-     unreachable so the pill resolves to "Qwen unreachable". */
+     with a cast that contains a Qwen-pinned character. Plan 119 moved the
+     TTS model-control pills into the Status modal, so the test opens the
+     modal (via the Status pill) and asserts a Qwen ModelControlPill
+     (aria-label "Qwen <state>") renders inside it alongside the default
+     Kokoro pill — proving selectEnginesInUse's per-character signal drives
+     the pill render. /health is mocked unreachable so the pill resolves to
+     "Qwen unreachable". */
   it('renders the Qwen pill when a cast character is pinned to ttsEngine="qwen"', async () => {
     getBookStateMock.mockResolvedValue({
       state: {
@@ -498,7 +500,7 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
        assert on here. */
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
 
-    const { findByRole } = render(
+    const { findByRole, findByTestId } = render(
       <Provider store={store}>
         <MemoryRouter initialEntries={['/books/b1/cast']}>
           <Routes>
@@ -508,7 +510,9 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
       </Provider>,
     );
 
-    /* The Qwen pill renders once the cast hydrates from getBookState. */
+    /* Open the Status modal — the TTS controls live inside it post-plan-119.
+       The Qwen pill then renders once the cast hydrates from getBookState. */
+    fireEvent.click(await findByTestId('status-pill'));
     const qwenPill = await findByRole('group', { name: /^Qwen / });
     expect(qwenPill).toBeTruthy();
   });
