@@ -1,10 +1,14 @@
-/* Browser-level golden path for the Kokoro Load/Stop pill in the top bar.
+/* Browser-level golden path for the Kokoro Load/Stop control.
  *
  * Runs against Vite in mock mode (`.env.e2e`) where the mock api keeps
  * Kokoro pre-loaded at startup (mirroring the real sidecar's eager-preload
  * behaviour per plan 14a). With the default Kokoro engine selected, the
- * top-bar Kokoro pill should read "Kokoro ready / Stop"; clicking Stop
- * flips it to "Kokoro idle / Load"; clicking Load brings it back.
+ * Kokoro control should read "Kokoro ready / Stop"; clicking Stop flips it
+ * to "Kokoro idle / Load"; clicking Load brings it back.
+ *
+ * Plan 119: the TTS model-control pills moved out of the top bar and into
+ * the Status modal — so each test first opens the modal via the compact
+ * Status pill (clicking Load/Stop inside the modal does NOT close it).
  *
  * Pairs with the amended plan 14a invariant 3 and exercises the
  * useTtsLifecycle hook's per-engine Load/Stop side-effects through the
@@ -13,19 +17,27 @@
 import { test, expect } from '@playwright/test';
 import { goToConfirm } from './helpers';
 
-test.describe('Kokoro Stop pill — bidirectional Load/Stop in the top bar', () => {
-  test('starts ready, flips to idle on Stop, returns to ready on Load', async ({ page }) => {
-    /* Walk the cold-boot path to the Confirm-cast view — that's the first
-       stage where the global TTS pill renders (Layout's `showGlobalTtsPill`
-       gate covers analysing / confirm / ready). The mock account default
-       is `kokoro-v1` (per FRONTEND_ACCOUNT_DEFAULTS) so the engines-in-use
-       selector resolves to {kokoro} and the Kokoro pill mounts. */
-    await goToConfirm(page);
+/* Open the Status modal — the TTS controls live inside it post-plan-119.
+   The Status pill renders from the first book-context stage (Layout's
+   `showGlobalTtsPill` gate covers analysing / confirm / ready). */
+async function openStatusModal(page: import('@playwright/test').Page) {
+  await page.getByTestId('status-pill').click();
+  await expect(page.getByRole('dialog', { name: 'Status' })).toBeVisible({ timeout: 5_000 });
+}
 
-    /* Wait for the first /health probe to resolve and the pill to render
-       its real state. The pill's button has aria-label
-       "Stop (tts model)" when the engine is ready. The displayed text
-       reads "Kokoro ready" via the engineLabel override. */
+test.describe('Kokoro Stop pill — bidirectional Load/Stop in the Status modal', () => {
+  test('starts ready, flips to idle on Stop, returns to ready on Load', async ({ page }) => {
+    /* Walk the cold-boot path to the Confirm-cast view — the first stage
+       where the global Status pill renders. The mock account default is
+       `kokoro-v1` (per FRONTEND_ACCOUNT_DEFAULTS) so the engines-in-use
+       selector resolves to {kokoro} and the Kokoro control mounts. */
+    await goToConfirm(page);
+    await openStatusModal(page);
+
+    /* Wait for the first /health probe to resolve and the control to render
+       its real state. The button has aria-label "Stop (tts model)" when the
+       engine is ready. The displayed text reads "Kokoro ready" via the
+       engineLabel override. */
     const stopButton = page.getByRole('button', { name: /^stop \(tts model\)$/i }).first();
     await expect(stopButton).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible();
@@ -47,10 +59,12 @@ test.describe('Kokoro Stop pill — bidirectional Load/Stop in the top bar', () 
     await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible();
   });
 
-  test('Coqui pill is NOT rendered when the book default is Kokoro', async ({ page }) => {
-    /* Pills only render for engines in use. The Coqui pill would mislead
-       a user on a Kokoro-default book — verify it's absent. */
+  test('Coqui control is NOT rendered when the book default is Kokoro', async ({ page }) => {
+    /* Controls only render for engines in use. The Coqui control would
+       mislead a user on a Kokoro-default book — verify it's absent (inside
+       the Status modal, where the TTS controls now live). */
     await goToConfirm(page);
+    await openStatusModal(page);
     await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible({ timeout: 5_000 });
     /* No element should read "Coqui XTTS ready / idle / unavailable". */
     await expect(page.getByText(/Coqui XTTS/i)).toHaveCount(0);
