@@ -36,8 +36,11 @@ const setVoiceOverride = vi.fn(
 const generateVoiceStyle = vi.fn((_bookId: string, _characterId: string) =>
   Promise.resolve({ voiceStyle: 'a bright, confident teenage voice' }),
 );
-const designQwenVoice = vi.fn((_bookId: string, _characterId: string, _persona?: string) =>
-  Promise.resolve({ voiceId: 'qwen-halloran', previewUrl: 'blob:preview' }),
+const designQwenVoice = vi.fn((_bookId: string, _characterId: string, _args?: unknown) =>
+  Promise.resolve({
+    voiceId: 'qwen-halloran',
+    previewUrl: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
+  }),
 );
 vi.mock('../lib/api', () => ({
   api: {
@@ -48,8 +51,8 @@ vi.mock('../lib/api', () => ({
       (setVoiceOverride as unknown as (...a: unknown[]) => Promise<void>)(...args),
     generateVoiceStyle: (bookId: string, characterId: string) =>
       generateVoiceStyle(bookId, characterId),
-    designQwenVoice: (bookId: string, characterId: string, persona?: string) =>
-      designQwenVoice(bookId, characterId, persona),
+    designQwenVoice: (bookId: string, characterId: string, args?: unknown) =>
+      designQwenVoice(bookId, characterId, args),
   },
 }));
 
@@ -1007,7 +1010,17 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     selectQwen();
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     await waitFor(() => {
-      expect(designQwenVoice).toHaveBeenCalledWith('book-1', 'halloran', 'a steady adult voice');
+      /* The persona still flows through; the 3rd arg is now the cache-identity
+         object so the audition can double as the 12s sample. */
+      expect(designQwenVoice).toHaveBeenCalledWith(
+        'book-1',
+        'halloran',
+        expect.objectContaining({
+          persona: 'a steady adult voice',
+          modelKey: 'qwen3-tts-0.6b',
+          sampleVoiceId: expect.any(String),
+        }),
+      );
     });
     await waitFor(() => {
       expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy();
