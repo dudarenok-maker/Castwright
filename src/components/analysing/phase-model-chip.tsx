@@ -1,9 +1,7 @@
 import { MODEL_OPTIONS } from '../../lib/models';
 import { useAppSelector } from '../../store';
 import {
-  type AccountState,
-  selectAnalyzerPhase0Model,
-  selectAnalyzerPhase1Model,
+  selectAnalyzerSplitIsActive,
   selectAnalyzerPhase1MinLag,
 } from '../../store/account-slice';
 
@@ -17,23 +15,39 @@ interface PhaseModelChipProps {
   prefix?: string;
 }
 
-function selectModelForPhase(phaseId: 0 | 1 | 2): (account: AccountState) => string {
-  if (phaseId === 0) return selectAnalyzerPhase0Model;
-  if (phaseId === 1) return selectAnalyzerPhase1Model;
-  // Phase 2 is library-match — no model selection. PhaseCard gates the chip
-  // render so this path never paints; returning '' keeps the type happy.
-  return () => '';
-}
-
-/* Pill displaying the model that owns a phase, with a state-coloured dot.
-   Reads from the account slice — same source of truth as the Account-tab
-   pickers (plan 88 / PR #118). Phase 2 has no model and is intentionally
-   not surfaced. */
+/* Pill displaying the model that ACTUALLY owns a phase, with a state-coloured
+   dot. Truthfulness rules (plan 118 — the old chip fabricated a hardcoded
+   per-phase default and so claimed "Gemma 4 31B" while the run was really on
+   the single default model):
+     - Split OFF (no per-phase models saved): both phases run the single
+       effective model, so show `ui.selectedModel` (the per-run model, which
+       defaults to `defaultAnalysisModel`).
+     - Split ON: show the saved per-phase model. If that phase was left blank
+       the server falls through to its own default, which the client can't
+       see (it depends on server env) — show an honest "Server default" rather
+       than guessing.
+   Phase 2 (library match) has no model and is intentionally not surfaced. */
 export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) {
-  const modelId = useAppSelector((s) => selectModelForPhase(phaseId)(s.account));
+  const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
   const minLag = useAppSelector((s) => selectAnalyzerPhase1MinLag(s.account));
+  const phaseModel = useAppSelector((s) =>
+    phaseId === 0 ? s.account.analyzerPhase0Model : phaseId === 1 ? s.account.analyzerPhase1Model : null,
+  );
+  /* The model that a single-model run uses for BOTH phases: the per-run pick
+     (ui.selectedModel) which is seeded from, and falls back to, the account
+     default. Defensive read mirroring SeriesPriorPill — some test harnesses
+     mount the chip without the ui slice; production always has it. */
+  const effectiveSingleModel = useAppSelector(
+    (s) =>
+      (s as { ui?: { selectedModel?: string } }).ui?.selectedModel || s.account.defaultAnalysisModel,
+  );
   if (phaseId === 2) return null;
-  const label = MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId;
+
+  const serverDefault = splitActive && !phaseModel;
+  const modelId = splitActive ? phaseModel : effectiveSingleModel;
+  const label = serverDefault
+    ? 'Server default'
+    : (MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId ?? 'Server default');
 
   const meta = (() => {
     if (state === 'streaming') {
@@ -48,8 +62,13 @@ export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) 
     return { tone: 'text-ink/50 bg-ink/[0.05]', dot: 'bg-ink/30' };
   })();
 
-  const title =
-    state === 'warming' && phaseId === 1 ? `Warms up after chapter ${minLag}` : undefined;
+  /* Warm-up only means something when the split is actually engaged — Phase 1
+     then dispatches `minLag` chapters behind Phase 0. With the split off,
+     Phase 1 simply waits for all of Phase 0, so don't promise a handoff.
+     PhaseCard already gates the `warming` state on splitActive; this is a
+     belt-and-suspenders guard so the sticky bar can't surface it either. */
+  const showWarmup = state === 'warming' && phaseId === 1 && splitActive;
+  const title = showWarmup ? `Warms up after chapter ${minLag}` : undefined;
 
   return (
     <span
@@ -64,9 +83,7 @@ export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) 
         {label}
       </span>
       {state === 'streaming' && <span className="text-ink/40">· streaming</span>}
-      {state === 'warming' && phaseId === 1 && (
-        <span className="text-ink/40">· warms up after ch. {minLag}</span>
-      )}
+      {showWarmup && <span className="text-ink/40">· warms up after ch. {minLag}</span>}
     </span>
   );
 }
