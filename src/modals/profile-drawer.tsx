@@ -813,7 +813,14 @@ export function ProfileDrawer({
               error={engineError}
             />
 
-            {engineChoice !== 'qwen' && (
+            {/* Preset (Coqui/Kokoro/Gemini) speaker picker — shown only when
+                this character will actually synthesise with a PRESET engine.
+                Gate on the EFFECTIVE engine, not the live `engineChoice`: a
+                default-engine character on a Qwen project resolves to Qwen, so
+                its preset slots are inert and the picker would contradict the
+                "Active engine: Qwen" header. `effectiveEngine` already folds
+                the per-character override over the project default. */}
+            {effectiveEngine !== 'qwen' && (
               <ModelVoiceOverridePicker
                 voiceId={voice?.id ?? character.voiceId ?? character.id}
                 currentOverrides={mapOverridesToBaseVoiceMap(

@@ -1239,4 +1239,34 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
     expect(screen.getByRole('option', { name: 'Default (Qwen)' })).toBeTruthy();
     expect(screen.queryByRole('option', { name: 'Default (Kokoro)' })).toBeNull();
   });
+
+  it('hides the preset Model-voice picker (the character effectively synthesises via Qwen)', () => {
+    /* The picker is gated on the EFFECTIVE engine, not the live engineChoice:
+       a default-engine character on a Qwen project resolves to Qwen, so the
+       preset (Coqui/Kokoro/Gemini) slots are inert and must not show. */
+    renderReused();
+    expect(screen.queryByText('Model voice')).toBeNull();
+  });
+
+  it('still shows the preset Model-voice picker for a default-engine character on a preset project', () => {
+    /* Guards against over-hiding: a default character whose project engine is
+       a preset (Kokoro) must keep the picker. */
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer, cast: castSlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.setTtsModelKey('kokoro-v1'));
+    render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={{ ...reusedChar, voiceId: undefined, voiceState: 'generated' }}
+          voice={undefined}
+          bookId="book-1"
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.getByText('Model voice')).toBeTruthy();
+  });
 });
