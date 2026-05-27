@@ -45,6 +45,7 @@ import { rebaselineActions, includedProposals, type Proposal } from '../store/re
 import { selectPrincipalCast } from '../lib/principal-cast';
 import { mergeSeriesCast } from '../lib/merge-series-cast';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
+import { sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
@@ -251,7 +252,16 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
         persona = res.voiceStyle;
         dispatch(castActions.setVoiceStyle({ characterId, voiceStyle: persona }));
       }
-      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, persona);
+      /* Cache the audition under the same identity playCurrent / the cast row
+         use, so the proposed preview doubles as the character's 12s sample. */
+      const character = charById.get(characterId);
+      const matched = character ? findVoiceForCharacter(character, voices) : undefined;
+      const sampleVoiceId = matched?.id ?? `char-${characterId}`;
+      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, {
+        persona,
+        sampleVoiceId,
+        modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+      });
       dispatch(
         rebaselineActions.proposalReady({
           characterId,

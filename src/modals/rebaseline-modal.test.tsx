@@ -536,7 +536,15 @@ describe('RebaselineModal — reuse already-approved voices', () => {
     // ONLY the character without a Qwen voice was designed — the approved
     // voices are reused, never rebuilt.
     expect(designQwenVoice).toHaveBeenCalledTimes(1);
-    expect(designQwenVoice).toHaveBeenCalledWith('book-1', 'keefe', expect.any(String));
+    expect(designQwenVoice).toHaveBeenCalledWith(
+      'book-1',
+      'keefe',
+      expect.objectContaining({
+        persona: expect.any(String),
+        sampleVoiceId: expect.any(String),
+        modelKey: 'qwen3-tts-0.6b',
+      }),
+    );
     // The unchanged row offers no include checkbox (nothing to do).
     expect(screen.queryByTestId('rebaseline-include-biana')).toBeNull();
 
