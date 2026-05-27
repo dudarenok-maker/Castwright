@@ -716,6 +716,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queue/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bulk-clear the queue
+         * @description Removes entries in bulk. With `{ force: false }` (the default) drops
+         *     every `queued` and `failed` entry but leaves `in_progress` ones running
+         *     to completion — a clean pending list without aborting work. With
+         *     `{ force: true }` drops everything, including `in_progress`; the caller
+         *     pairs this with a stream teardown so the live generation actually stops.
+         *     Leaves the `paused` flag untouched. Persists to `<workspace>/.queue.json`.
+         */
+        post: operations["clearQueue"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queue/{entryId}": {
         parameters: {
             query?: never;
@@ -3804,6 +3829,36 @@ export interface operations {
             content: {
                 "application/json": {
                     paused: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Resulting queue snapshot */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QueueListResponse"];
+                };
+            };
+        };
+    };
+    clearQueue: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description When true, also drop in_progress entries.
+                     * @default false
+                     */
+                    force?: boolean;
                 };
             };
         };

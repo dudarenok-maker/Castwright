@@ -30,14 +30,17 @@ import {
 } from '../store/queue-slice';
 import {
   cancelQueueEntry,
+  clearQueue,
   loadQueue,
   reorderQueue,
   retryQueueEntry,
   setQueuePaused,
 } from '../store/queue-thunks';
+import { chaptersActions } from '../store/chapters-slice';
 import { uiActions } from '../store/ui-slice';
 import { IconClose, IconDrag, IconPause, IconPlay, IconRefresh, IconTrash } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
+import { ConfirmDialog } from './confirm-dialog';
 
 interface QueueModalProps {
   open: boolean;
@@ -79,6 +82,11 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
      avoid engine-swap latency). */
   const dualModelEnabled = useAppSelector((s) => s.account?.dualModelEnabled ?? false);
 
+  /* "Clear queue" confirm-dialog state. `alsoStop` mirrors the dialog's
+     "Also stop generation in progress" checkbox. */
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [alsoStop, setAlsoStop] = useState(false);
+
   /* Refresh the queue snapshot whenever the modal opens — covers the
      cross-tab case where another tab mutated the queue while ours was
      closed. Cheap call (one /api/queue GET). */
@@ -102,6 +110,31 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
     dispatch(setQueuePaused(!paused)).catch((e: unknown) => {
       console.warn('[queue-modal] setPaused failed', e);
     });
+  };
+
+  /* True when a generation stream is live — either real in_progress entries or
+     the read-side-honesty overlay (a run with no queue entries behind it). The
+     "Also stop generation" option is only meaningful then. */
+  const hasLiveGeneration = inFlightIds.size > 0 || activeView != null;
+  /* The Clear button is offered whenever there's something to clear OR a live
+     run to stop — the latter covers the "0 entries · generating in the
+     background" state where there's otherwise no way to stop it. */
+  const canClear = count > 0 || hasLiveGeneration;
+
+  const openClearConfirm = (): void => {
+    setAlsoStop(false);
+    setConfirmClear(true);
+  };
+  const handleClear = (): void => {
+    /* No pending entries → the only action is stopping the live run (force).
+       Pending entries → force only when the user opted to also stop. */
+    const stop = count === 0 || alsoStop;
+    if (stop && hasLiveGeneration) dispatch(chaptersActions.requestStreamHalt());
+    dispatch(clearQueue({ force: stop })).catch((e: unknown) => {
+      console.warn('[queue-modal] clearQueue failed', e);
+    });
+    setConfirmClear(false);
+    setAlsoStop(false);
   };
 
   return (
@@ -132,6 +165,15 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                     : 'Empty'}
               </h3>
             </div>
+            {canClear && (
+              <button
+                onClick={openClearConfirm}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full bg-ink/5 hover:bg-red-50 hover:text-red-700 text-sm font-medium text-ink min-h-[44px] sm:min-h-0"
+                data-testid="queue-modal-clear"
+              >
+                <IconTrash className="w-4 h-4" /> Clear queue
+              </button>
+            )}
             {count > 0 && (
               <button
                 onClick={togglePause}
@@ -220,6 +262,38 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmClear}
+        eyebrow="Queue"
+        variant="danger"
+        icon={<IconTrash className="w-4 h-4" />}
+        title="Clear queue"
+        confirmLabel="Clear queue"
+        onConfirm={handleClear}
+        onClose={() => setConfirmClear(false)}
+        body={
+          <div className="space-y-3">
+            <p>
+              {count > 0
+                ? `Remove all ${count} pending ${count === 1 ? 'entry' : 'entries'} from the queue?`
+                : 'Stop the generation running in the background?'}
+            </p>
+            {count > 0 && hasLiveGeneration && (
+              <label className="flex items-center gap-2 text-sm text-ink/75 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={alsoStop}
+                  onChange={(e) => setAlsoStop(e.target.checked)}
+                  data-testid="queue-clear-also-stop"
+                  className="w-4 h-4 rounded border-ink/30 text-magenta focus:ring-magenta"
+                />
+                Also stop generation in progress
+              </label>
+            )}
+          </div>
+        }
+      />
     </>
   );
 }
