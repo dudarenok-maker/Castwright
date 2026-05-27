@@ -40,6 +40,21 @@ interface Props {
   onShowDrift: (characterId?: string) => void;
 }
 
+/* Cast table ordering (display only — sorts a filtered copy, never the store
+   order). Rows sort by line count descending so the most-spoken characters
+   lead; the two generic minor-cast buckets (`unknown-male` / `unknown-female`,
+   see server/src/analyzer/fold-minor-cast.ts) always sink to the bottom
+   regardless of their pooled line count. Ties break by name for stability. */
+const UNKNOWN_BUCKET_IDS = new Set(['unknown-male', 'unknown-female']);
+export function compareCastRows(a: Character, b: Character): number {
+  const aBucket = UNKNOWN_BUCKET_IDS.has(a.id);
+  const bBucket = UNKNOWN_BUCKET_IDS.has(b.id);
+  if (aBucket !== bBucket) return aBucket ? 1 : -1;
+  const byLines = (b.lines ?? 0) - (a.lines ?? 0);
+  if (byLines !== 0) return byLines;
+  return a.name.localeCompare(b.name);
+}
+
 export function CastView({
   characters,
   setCharacters,
@@ -93,7 +108,9 @@ export function CastView({
       return next;
     });
 
-  const filtered = characters.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
+  const filtered = characters
+    .filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
+    .sort(compareCastRows);
   const toggleSelect = (id: string) =>
     setSelectedCharIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
