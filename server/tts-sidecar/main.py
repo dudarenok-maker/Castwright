@@ -725,6 +725,12 @@ class QwenEngine(Engine):
         # engine instance, separate lock). Batching — not concurrency — is the
         # throughput lever on a single autoregressive model anyway.
         self._synth_lock = threading.Lock()
+        # Monotonic timestamp of the last voice-design activity. The startup
+        # idle watchdog frees the heavy transient VoiceDesign model once this
+        # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
+        # back-to-back designs stay warm (no reload) while a pause reclaims
+        # ~4–5 GB. 0.0 until the first design.
+        self._design_last_used: float = 0.0
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
         # The Node server points QWEN_VOICES_DIR at the per-workspace tree
@@ -895,11 +901,15 @@ class QwenEngine(Engine):
             log.info("Qwen models unloaded.")
 
     def unload_design(self) -> None:
-        """Drop only the heavy VoiceDesign model after a design pass, keeping
-        the resident Base synth model loaded."""
-        if self._design is None:
-            return
-        self._design = None
+        """Drop only the heavy VoiceDesign model, keeping the resident Base
+        synth model loaded. Lock-guarded so it can't null the model out from
+        under a concurrent design/synth forward (which holds `_synth_lock` —
+        we wait for it). MUST NOT be called while already holding `_synth_lock`:
+        it is a non-reentrant threading.Lock. Idempotent."""
+        with self._synth_lock:
+            if self._design is None:
+                return
+            self._design = None
         try:
             import torch  # type: ignore
 
@@ -908,6 +918,19 @@ class QwenEngine(Engine):
         except Exception:
             pass
         log.info("Qwen VoiceDesign unloaded (Base stays resident).")
+
+    def maybe_free_idle_design(self, ttl_seconds: float) -> bool:
+        """Free the transient VoiceDesign model when it's been idle longer than
+        `ttl_seconds` since the last design. Returns True if it freed. Driven by
+        the startup watchdog: rapid back-to-back designs keep it warm (no
+        per-design reload — the user's explicit preference), but a quiet pause
+        reclaims ~4–5 GB. Cheap no-op when nothing is resident."""
+        if self._design is None:
+            return False
+        if time.monotonic() - self._design_last_used <= ttl_seconds:
+            return False
+        self.unload_design()
+        return True
 
     def list_voices(self) -> list[str]:
         """Designed voice ids = the .json manifests under voices/qwen/."""
@@ -932,6 +955,10 @@ class QwenEngine(Engine):
         lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
         ref_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
 
+        # Mark the design model active up front so the idle watchdog can't free
+        # it out from under this in-flight design; refreshed again on completion
+        # so the TTL counts idle from when the design finished.
+        self._design_last_used = time.monotonic()
         self._ensure_design_loaded()
         self._ensure_base_loaded()
         # Serialise the GPU forwards against any concurrent synth/design — see
@@ -983,6 +1010,9 @@ class QwenEngine(Engine):
             wavs, sr = self._base.generate_voice_clone(
                 text=[ref_text], language=[lang], voice_clone_prompt=prompt
             )
+        # Idle clock starts now (design finished) — back-to-back designs keep
+        # the model warm; a pause past the TTL lets the watchdog reclaim it.
+        self._design_last_used = time.monotonic()
         return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
 
     def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
@@ -1032,6 +1062,14 @@ class QwenEngine(Engine):
         """`voice` is a designed voiceId. Loads its cached clone prompt and
         reuses it — identical identity across the book. Fails fast (no
         catalog fallback) if the voice hasn't been designed."""
+        # Leaving design mode: a real synth means generation/sampling, not
+        # designing — free the heavy VoiceDesign model so it can't squeeze
+        # generation VRAM. Auditions inside design_voice use _base directly
+        # (not synthesize), so the design→refine loop stays warm. No-op once
+        # freed. Must precede any _synth_lock acquire (unload_design takes that
+        # lock; it is non-reentrant).
+        if self._design is not None:
+            self.unload_design()
         # Resolve the voice prompt first so an undesigned voice still fails
         # fast WITHOUT paying the (heavy) Base-model load.
         load_start = time.perf_counter()
@@ -1074,6 +1112,11 @@ class QwenEngine(Engine):
         Fails fast (RuntimeError naming the item index) if any voice hasn't
         been designed — the whole batch fails and the caller retries / fails
         the chapter exactly as a single call would."""
+        # See synthesize(): a real batch synth means generation, so free the
+        # transient VoiceDesign model first (no-op once freed). Before any
+        # _synth_lock acquire — the lock is non-reentrant.
+        if self._design is not None:
+            self.unload_design()
         if not items:
             raise RuntimeError("synthesize_batch called with no items.")
 
@@ -1130,6 +1173,66 @@ ENGINES: dict[str, Engine] = {
     "kokoro": KokoroEngine(),
     "qwen": QwenEngine(),
 }
+
+
+# Default seconds of voice-design inactivity before the watchdog frees the
+# transient Qwen VoiceDesign model. Override via QWEN_DESIGN_IDLE_TTL.
+_DESIGN_IDLE_TTL_DEFAULT = 120.0
+# Handle to the background idle watchdog task so shutdown can cancel it.
+_design_idle_task: "Optional[asyncio.Task[None]]" = None
+
+
+def _design_idle_ttl() -> float:
+    """Resolve QWEN_DESIGN_IDLE_TTL (seconds) with a safe default + floor. A
+    zero/negative/tiny TTL would thrash (free immediately, reload next design),
+    defeating warm reuse — clamp to the default below the 5 s floor."""
+    try:
+        ttl = float(os.environ.get("QWEN_DESIGN_IDLE_TTL", _DESIGN_IDLE_TTL_DEFAULT))
+    except (TypeError, ValueError):
+        return _DESIGN_IDLE_TTL_DEFAULT
+    return ttl if ttl >= 5.0 else _DESIGN_IDLE_TTL_DEFAULT
+
+
+async def _qwen_design_idle_watchdog() -> None:
+    """Periodically free each Qwen engine's transient VoiceDesign model once it
+    has idled past the TTL — reclaiming ~4–5 GB after a cast-review session goes
+    quiet, while leaving rapid back-to-back designs warm (the user's stated
+    preference). The free runs in a worker thread (unload_design waits on the
+    engine's threading `_synth_lock`) so the event loop and /health stay live."""
+    ttl = _design_idle_ttl()
+    interval = min(30.0, max(5.0, ttl / 4))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            for engine in ENGINES.values():
+                if isinstance(engine, QwenEngine):
+                    freed = await asyncio.to_thread(engine.maybe_free_idle_design, ttl)
+                    if freed:
+                        log.info("Qwen VoiceDesign freed after >%.0fs idle (watchdog).", ttl)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # a watchdog must never die on a transient error
+            log.warning("Qwen design idle watchdog tick failed (%s).", e)
+
+
+@app.on_event("startup")
+async def _start_design_idle_watchdog() -> None:
+    """Launch the Qwen VoiceDesign idle watchdog (see _qwen_design_idle_watchdog)."""
+    global _design_idle_task
+    _design_idle_task = asyncio.create_task(_qwen_design_idle_watchdog())
+    log.info("Qwen VoiceDesign idle watchdog started (ttl=%.0fs).", _design_idle_ttl())
+
+
+@app.on_event("shutdown")
+async def _stop_design_idle_watchdog() -> None:
+    global _design_idle_task
+    if _design_idle_task is not None:
+        _design_idle_task.cancel()
+        try:
+            await _design_idle_task
+        except asyncio.CancelledError:
+            pass
+        _design_idle_task = None
 
 
 @app.on_event("startup")

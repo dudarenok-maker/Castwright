@@ -258,6 +258,18 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
     `POST /api/ollama/{load,unload}` (uses Ollama's `keep_alive` idiom,
     see `server/src/analyzer/ollama.ts:92` for the equivalent in-band
     evict on real chat calls).
+  - **Qwen has TWO models with split lifecycles** (`QwenEngine`,
+    `server/tts-sidecar/main.py`): the **Base 0.6B** synth model is the
+    resident one (button-driven `/load`, like Coqui; not eager unless
+    `PRELOAD_QWEN=1`). The **VoiceDesign 1.7B** model is loaded transiently
+    during `design_voice` and kept WARM across a cast-review session so
+    back-to-back designs don't reload it — then freed (reclaiming ~4–5 GB)
+    by a startup idle watchdog once it idles past `QWEN_DESIGN_IDLE_TTL`
+    (default 120 s), or immediately at the first real `/synthesize` (leaving
+    design mode for generation). On an 8 GB GPU Base + VoiceDesign are
+    co-resident only DURING a design; don't add a third heavy model
+    (e.g. an accidental Coqui `/load`) on top — that was the plan-108
+    OOM (108 post-ship `fix/sidecar-qwen-design-vram`).
   - **Per-character voice profiles are per-engine**: each cast member
     carries an `overrideTtsVoices: { coqui?: {name}, kokoro?: {name},
 gemini?: {name} }` map. Engine switches preserve cast assignments;
