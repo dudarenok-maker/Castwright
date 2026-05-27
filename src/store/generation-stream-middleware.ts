@@ -10,11 +10,14 @@
  *
  * What remains here:
  *   1. ENQUEUE-ON-WORK — the replacement for the override. When work appears
- *      for the viewed book (analysis lands, a book is reopened mid-run, the
- *      user navigates to Generate) and it isn't already in the queue, silently
- *      enqueue it so the dispatcher drains it. Gated by the queue-pause flag
- *      and the reverse-local-analyzer guard (don't auto-start generation that
- *      would fight a live local analysis for the GPU).
+ *      for the viewed book WHILE IT IS ON THE GENERATE VIEW (the user clicked
+ *      "Approve cast & start generating", or reopened a book that was already
+ *      generating) and it isn't already in the queue, silently enqueue it so
+ *      the dispatcher drains it. Gated by the Generate-view check (so a
+ *      freshly-analysed book sitting at confirm/manuscript review does NOT
+ *      auto-start), the queue-pause flag, and the reverse-local-analyzer guard
+ *      (don't auto-start generation that would fight a live local analysis for
+ *      the GPU).
  *   2. HALT — `chapters/requestStreamHalt` (local-analyzer confirm prompt)
  *      pauses each open book on the server and tears every stream down NOW.
  *   3. PROFILE-REGEN PREVIEW GATE — when the single preview chapter completes
@@ -56,11 +59,13 @@ function bookIdFromState(s: StreamableRootState): string | null {
   return stage.bookId ?? null;
 }
 
-/* Triggers that mean "work may have appeared for the viewed book" — analysis
-   landed, the slice was seeded from disk / analysis, the user confirmed cast or
-   navigated onto the Generate view. NOT the regen actions (those enqueue
-   explicitly via their callsites) and NOT applyGenerationTick (the runner
-   self-drives ticks). */
+/* Triggers that mean "work may have appeared for the viewed book" — the slice
+   was seeded from disk / analysis, the user navigated views, a book was opened,
+   or the queue snapshot changed. `enqueueOnWork` itself gates on the Generate
+   view, so a trigger that fires at analysis/confirm time (hydrateFromAnalysis,
+   confirmCast) is a no-op until the user reaches Generate. NOT the regen actions
+   (those enqueue explicitly via their callsites) and NOT applyGenerationTick
+   (the runner self-drives ticks). */
 const ENQUEUE_TRIGGER_TYPES = new Set<string>([
   'chapters/setChapters',
   'chapters/hydrateFromAnalysis',
@@ -84,6 +89,15 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
        it idempotent across repeated triggers. */
     const enqueueOnWork = (): void => {
       const after = store.getState() as StreamableRootState;
+      /* Generate-view gate (the fix for "book queues at analysis time"): only
+         auto-enqueue once the viewed book is on the Generate view — i.e. the
+         user clicked "Approve cast & start generating" (changeView → 'generate')
+         or reopened a book that was already generating (openBook sets its view
+         to 'generate'). hydrateFromAnalysis fires while the stage is still
+         'analysing', and confirmCast lands on the 'manuscript' review view, so
+         neither passes this gate — a freshly-analysed book waits for the user. */
+      const stage = after.ui.stage;
+      if (stage.kind !== 'ready' || stage.view !== 'generate') return;
       const stageBookId = bookIdFromState(after);
       const { chapters, currentBookId } = after.chapters;
       if (!stageBookId || currentBookId !== stageBookId) return;

@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   cancel,
+  clearQueue,
   completeEntry,
   enqueue,
   markInProgress,
@@ -144,6 +145,35 @@ describe('queue-io.setPaused', () => {
     expect(f.paused).toBe(true);
     f = setPaused(f, false);
     expect(f.paused).toBe(false);
+  });
+});
+
+describe('queue-io.clearQueue', () => {
+  it('drops queued + failed but keeps in_progress by default, renumbering', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2'), sampleEntry('e3')]);
+    f = markInProgress(f, 'e2'); // e2 in_progress
+    f = completeEntry(f, 'e3', 'failed', 'sidecar 500'); // e3 failed
+    const cleared = clearQueue(f);
+    expect(cleared.entries.map((e) => [e.id, e.order, e.status])).toEqual([['e2', 0, 'in_progress']]);
+  });
+
+  it('drops everything with force (including in_progress)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    f = markInProgress(f, 'e1');
+    const cleared = clearQueue(f, { force: true });
+    expect(cleared.entries).toEqual([]);
+  });
+
+  it('leaves the paused flag untouched', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+    f = setPaused(f, true);
+    expect(clearQueue(f, { force: true }).paused).toBe(true);
+    expect(clearQueue(f).paused).toBe(true);
+  });
+
+  it('is idempotent on an empty queue', () => {
+    expect(clearQueue(emptyFile()).entries).toEqual([]);
+    expect(clearQueue(emptyFile(), { force: true }).entries).toEqual([]);
   });
 });
 
