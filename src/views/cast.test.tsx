@@ -13,7 +13,7 @@ import { Provider } from 'react-redux';
 import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
-import { CastView } from './cast';
+import { CastView, compareCastRows } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
 
@@ -714,5 +714,96 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
     fireEvent.click(pills[0]);
     expect(onShowDrift).toHaveBeenCalledTimes(1);
     expect(onShowDrift).toHaveBeenCalledWith('narrator');
+  });
+});
+
+describe('compareCastRows — cast table ordering', () => {
+  const mk = (over: Partial<Character> & { id: string }): Character =>
+    ({ name: over.id, role: 'r', color: 'narrator', lines: 0, ...over }) as Character;
+
+  it('sorts by line count descending', () => {
+    const out = [mk({ id: 'a', lines: 5 }), mk({ id: 'b', lines: 100 }), mk({ id: 'c', lines: 42 })]
+      .sort(compareCastRows)
+      .map((c) => c.id);
+    expect(out).toEqual(['b', 'c', 'a']);
+  });
+
+  it('pins unknown-male and unknown-female last regardless of line count', () => {
+    const out = [
+      mk({ id: 'unknown-male', name: 'Unknown male', lines: 9999 }),
+      mk({ id: 'sophie', name: 'Sophie', lines: 10 }),
+      mk({ id: 'unknown-female', name: 'Unknown female', lines: 8888 }),
+      mk({ id: 'narrator', name: 'Narrator', lines: 5 }),
+    ]
+      .sort(compareCastRows)
+      .map((c) => c.id);
+    expect(out).toEqual(['sophie', 'narrator', 'unknown-male', 'unknown-female']);
+  });
+
+  it('orders the two buckets between themselves by line count', () => {
+    const out = [
+      mk({ id: 'unknown-female', name: 'Unknown female', lines: 3 }),
+      mk({ id: 'unknown-male', name: 'Unknown male', lines: 7 }),
+    ]
+      .sort(compareCastRows)
+      .map((c) => c.id);
+    expect(out).toEqual(['unknown-male', 'unknown-female']);
+  });
+
+  it('breaks line-count ties by name ascending', () => {
+    const out = [mk({ id: 'z', name: 'Zed', lines: 10 }), mk({ id: 'a', name: 'Amy', lines: 10 })]
+      .sort(compareCastRows)
+      .map((c) => c.name);
+    expect(out).toEqual(['Amy', 'Zed']);
+  });
+
+  it('treats a missing line count as zero', () => {
+    const out = [mk({ id: 'has', name: 'Has', lines: 1 }), mk({ id: 'none', name: 'None' })]
+      .sort(compareCastRows)
+      .map((c) => c.id);
+    expect(out).toEqual(['has', 'none']);
+  });
+});
+
+describe('CastView row ordering — wired into render', () => {
+  function renderCast(chars: Character[]) {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    return render(
+      <Provider store={store}>
+        <CastView
+          characters={chars}
+          setCharacters={() => {}}
+          library={[]}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+  }
+  const mk = (id: string, name: string, lines: number): Character =>
+    ({ id, name, role: 'r', color: 'narrator', lines }) as Character;
+
+  it('renders desktop rows by line count desc with the unknown bucket last', () => {
+    /* Input order deliberately != sorted order so the assertion proves the sort. */
+    const { container } = renderCast([
+      mk('zeta', 'Zeta', 5),
+      mk('unknown-male', 'Unknown male', 9999),
+      mk('alpha', 'Alpha', 500),
+    ]);
+    const rows = Array.from(
+      container.querySelectorAll('div[class*="grid-cols-[40px"]'),
+    ) as HTMLElement[];
+    const order = rows
+      .map((row) => {
+        if (within(row).queryByText('Alpha')) return 'Alpha';
+        if (within(row).queryByText('Zeta')) return 'Zeta';
+        if (within(row).queryByText('Unknown male')) return 'Unknown male';
+        return null; // header row shares the grid-cols class — ignore it
+      })
+      .filter((n): n is NonNullable<typeof n> => n !== null);
+    expect(order).toEqual(['Alpha', 'Zeta', 'Unknown male']);
   });
 });
