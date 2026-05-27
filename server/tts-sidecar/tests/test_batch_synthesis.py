@@ -55,16 +55,20 @@ def _ref_marker(ref_text: str) -> int:
     return sum(ord(c) for c in ref_text) & 0x7FFF
 
 
-def _wav_for(text: str, ref_text: str) -> np.ndarray:
+def _wav_for(text: str, voice_marker: int) -> np.ndarray:
     """Float wav encoding, after the int16 conversion:
-      sample[0] = ord(text[0])          -> proves the chunk carries THIS text
-      sample[1] = _ref_marker(ref_text) -> proves the chunk used THIS prompt
+      sample[0] = ord(text[0]) -> proves the chunk carries THIS text
+      sample[1] = voice_marker -> proves the chunk used THIS voice's clone
+                                  prompt (the per-voice identity is distilled
+                                  from the reference AUDIO — see _BatchFakeQwen;
+                                  the ref_text is a fixed pangram for every
+                                  voice, so it can't carry identity)
     and whose sample count == max(2, len(text)) so the frame's per-item
     `lengths` independently distinguishes differently-sized items."""
     n = max(2, len(text))
     arr = np.zeros(n, dtype=np.float32)
     arr[0] = ((ord(text[0]) & 0x7FFF) + 0.5) / 32767.0
-    arr[1] = (_ref_marker(ref_text) + 0.5) / 32767.0
+    arr[1] = ((voice_marker & 0x7FFF) + 0.5) / 32767.0
     return arr
 
 
@@ -82,11 +86,16 @@ class _FakePromptItem:
     blows up with "'list' object has no attribute 'ref_code'" — the exact 500
     we shipped. Modelling the item as an object (not a dict) keeps the fake
     faithful to that attribute access, so the existing batch tests now catch a
-    regression in the prompt shape."""
+    regression in the prompt shape.
 
-    def __init__(self, ref_text: str) -> None:
+    `ref_code` carries the per-voice identity marker (the persona, distilled
+    through the reference AUDIO in create_voice_clone_prompt). `ref_text` is the
+    fixed calibration pangram — the SAME for every voice (see
+    main.QwenEngine.CALIBRATION_TEXT) — so identity must NOT ride on it."""
+
+    def __init__(self, voice_marker: int, ref_text: str) -> None:
         self.ref_text = ref_text
-        self.ref_code = _ref_marker(ref_text)
+        self.ref_code = voice_marker
 
 
 class _BatchFakeInner:
@@ -121,14 +130,24 @@ class _BatchFakeQwen:
         return cls(model_id)
 
     def generate_voice_design(self, text: str, language: str, instruct: str):
-        return [np.zeros(24000, dtype=np.float32)], 24000
+        # The reference clip's IDENTITY comes from the persona `instruct`, not
+        # the (fixed pangram) `text`. Stamp the persona marker into the audio so
+        # create_voice_clone_prompt can distil a per-voice clone prompt from it,
+        # exactly as the real model derives the clone embedding from the audio.
+        arr = np.zeros(24000, dtype=np.float32)
+        arr[0] = float(_ref_marker(instruct))
+        return [arr], 24000
 
     def create_voice_clone_prompt(self, ref_audio: Any, ref_text: str, **_kwargs: Any):
         # The REAL library returns List[VoiceClonePromptItem] (length 1 here) —
         # NOT a bare object. That list shape is exactly what the batch path must
-        # flatten; carrying ref_text lets the synth output prove which voice's
-        # prompt was used for which item.
-        return [_FakePromptItem(ref_text)]
+        # flatten. Voice identity is distilled from the reference AUDIO (the
+        # per-voice persona marker generate_voice_design stamped into it), since
+        # ref_text is a fixed pangram shared by every voice; recovering it here
+        # lets the synth output prove which voice's prompt was used per item.
+        arr = ref_audio[0] if isinstance(ref_audio, tuple) else ref_audio
+        voice_marker = int(round(float(arr[0]))) if len(arr) else 0
+        return [_FakePromptItem(voice_marker, ref_text)]
 
     def generate_voice_clone(self, text: Any, language: Any, voice_clone_prompt: Any):
         texts = text if isinstance(text, list) else [text]
@@ -146,7 +165,7 @@ class _BatchFakeQwen:
         # Read `.ref_text` off each item exactly as the library reads `.ref_code`
         # — raises AttributeError if an item is itself a list (the list-of-lists
         # bug), so a wrong prompt shape can't pass silently.
-        wavs = [_wav_for(t, p.ref_text) for t, p in zip(texts, prompt_items)]
+        wavs = [_wav_for(t, p.ref_code) for t, p in zip(texts, prompt_items)]
         return wavs, 24000
 
 
@@ -167,7 +186,7 @@ def qwen_batch_runtime(monkeypatch, tmp_path):
             fh.write(b"\x00")  # presence marker for isfile()
 
     def _load(path: str, **_kwargs: Any) -> Any:
-        return _store.get(str(path), [_FakePromptItem("")])
+        return _store.get(str(path), [_FakePromptItem(0, "")])
 
     fake_torch.save = _save  # type: ignore[attr-defined]
     fake_torch.load = _load  # type: ignore[attr-defined]
@@ -189,12 +208,14 @@ def qwen_batch_runtime(monkeypatch, tmp_path):
     engine._design = None
 
 
-def _design(engine, voice_id: str) -> str:
-    """Design a voice with a per-voice calibration line, so each voice's clone
-    prompt carries a distinct ref_text marker. Returns that ref_text."""
-    ref_text = f"cal-{voice_id}"
-    engine.design_voice(voice_id, f"persona {voice_id}", "English", ref_text)
-    return ref_text
+def _design(engine, voice_id: str) -> int:
+    """Design a voice from a per-voice persona, so each voice's clone prompt
+    carries a distinct identity marker — distilled from the reference AUDIO, NOT
+    the ref_text (which is the same calibration pangram for every voice).
+    Returns that per-voice marker for the synth-output assertions."""
+    persona = f"persona {voice_id}"
+    engine.design_voice(voice_id, persona, "English", f"cal-{voice_id}")
+    return _ref_marker(persona)
 
 
 # ── engine-level: list-form invariant + demux correctness ────────────────
@@ -242,7 +263,7 @@ def test_synthesize_batch_preserves_order_text_and_voice(qwen_batch_runtime) -> 
         # chunk carries THIS item's text (first char) ...
         assert _read_sample(pcm, 0) == ord(item["text"][0])
         # ... and THIS item's voice prompt (no demux swap).
-        assert _read_sample(pcm, 1) == _ref_marker(refs[item["voice"]])
+        assert _read_sample(pcm, 1) == refs[item["voice"]]
         # byte length tracks text length (independent ordering signal).
         assert len(pcm) == 2 * max(2, len(item["text"]))
 
@@ -343,9 +364,9 @@ def test_route_frames_length_prefixed_binary(qwen_batch_runtime) -> None:
     assert header["sampleRate"] == 24000
     assert len(chunks) == 2
     assert _read_sample(chunks[0], 0) == ord("A")
-    assert _read_sample(chunks[0], 1) == _ref_marker(refs["a"])
+    assert _read_sample(chunks[0], 1) == refs["a"]
     assert _read_sample(chunks[1], 0) == ord("B")
-    assert _read_sample(chunks[1], 1) == _ref_marker(refs["b"])
+    assert _read_sample(chunks[1], 1) == refs["b"]
 
 
 def test_route_rejects_non_qwen_engine(qwen_batch_runtime) -> None:
