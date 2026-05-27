@@ -186,27 +186,31 @@ def test_design_voice_caches_embedding_and_manifest(fake_qwen_runtime) -> None:
     assert result.sample_rate == 24000
 
 
-def test_design_voice_speaks_supplied_calibration_text(fake_qwen_runtime) -> None:
-    """When the caller passes a calibrationText (the character's own line), the
-    reference clip AND the audition preview speak THAT line — not the generic
-    CALIBRATION_TEXT pangram. This is what lets the design audition double as
-    the character's 12s sample (server pre-caches it under the sample key)."""
+def test_design_voice_references_short_text_but_auditions_supplied_line(fake_qwen_runtime) -> None:
+    """The heavy 1.7B reference clip (+ its clone prompt) speaks the SHORT
+    CALIBRATION_TEXT — never the caller's evidence quote — so a long quote
+    can't push the reference generation past the server's design timeout (the
+    >120s stall this fix addresses). The AUDITION preview still speaks the
+    caller's supplied line, so it doubles as the character's 12s sample: the
+    server pre-caches it under the sample key, which is keyed on that exact
+    text, so changing the reference text must NOT change the audition text."""
     engine = fake_qwen_runtime["engine"]
     voices_dir = fake_qwen_runtime["dir"]
     line = "We have to tell the Council before the others wake."
+    assert engine.CALIBRATION_TEXT not in line  # guard the test's own premise
     engine.design_voice("Maerin", "a poised teenage girl", "English", line)
 
-    # generate_voice_design (ref clip) + generate_voice_clone (audition) both
-    # use the supplied line, via the Base + Design fakes.
-    assert engine._design.design_calls[-1][0] == line
+    # Reference clip + clone prompt run on the SHORT pangram (cheap on the 1.7B).
+    assert engine._design.design_calls[-1][0] == engine.CALIBRATION_TEXT
+    assert engine._base.prompt_calls[-1][1] == engine.CALIBRATION_TEXT
+    # Audition speaks the caller's full line — the cached-sample contract.
     assert engine._base.clone_calls[-1][0] == [line]
-    assert engine._base.prompt_calls[-1][1] == line
-    assert engine.CALIBRATION_TEXT not in line  # guard the test's own premise
 
     import json
 
     manifest = json.loads((voices_dir / "Maerin.json").read_text(encoding="utf-8"))
-    assert manifest["refText"] == line
+    # refText records the ACTUAL reference text (the pangram now), not the quote.
+    assert manifest["refText"] == engine.CALIBRATION_TEXT
 
 
 def test_design_voice_falls_back_to_calibration_pangram_when_unset(fake_qwen_runtime) -> None:

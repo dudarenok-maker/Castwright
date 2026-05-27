@@ -56,8 +56,12 @@ interface CastFile {
 /* Cold voice-design (load VoiceDesign model transiently + generate a
    reference clip + distil the clone prompt) can take noticeably longer
    than a warm synth on first call, so budget generously like the load
-   proxy rather than the 2s health probe. */
-const DESIGN_TIMEOUT_MS = 120_000;
+   proxy rather than the 2s health probe. The sidecar now voices only the
+   short CALIBRATION_TEXT on the heavy 1.7B reference model (the audition
+   on the 0.6B Base still speaks the full quote), so a warm design lands in
+   ~60-90s — but a cold first-design (1.7B load + CUDA kernel JIT) plus a
+   max-length audition can still approach two minutes, so keep headroom. */
+const DESIGN_TIMEOUT_MS = 180_000;
 
 /* Stable cache key for the designed voice — keyed on the character's
    voiceId when present (so a series-shared identity reuses one embedding)
