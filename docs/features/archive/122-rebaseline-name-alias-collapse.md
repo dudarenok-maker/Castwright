@@ -1,6 +1,6 @@
 ---
 status: stable
-shipped: null
+shipped: 2026-05-27
 owner: null
 ---
 
@@ -43,4 +43,4 @@ Four parts:
 
 ## Ship notes
 
-_Shipped: pending — fill commit SHA + date on merge._
+Shipped 2026-05-27 via PR #295 (merge commit `ac6f4f8`). Preceded by a one-off data fix that repaired the live KOTLC workspace (split-id voiceId alignment + breaking named characters out of fold-bucket ids); this plan makes the de-duplication durable so it stops recurring on new books. `npm run verify` green locally and in CI (verify 15m + title lint). Follows plan [108](../108-qwen-coexistence.md) (the rebaseline modal itself).
