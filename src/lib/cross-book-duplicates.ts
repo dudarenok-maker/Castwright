@@ -47,6 +47,57 @@ export function looksLikeSameName(a: string, b: string): boolean {
    Mirrors `src/views/voices.tsx::UNMERGEABLE_IDS` — keep in sync. */
 const UNMERGEABLE_IDS = new Set(['narrator', 'unknown-male', 'unknown-female']);
 
+/* A character's identity for cross-book "same person?" matching: home book
+   + id (for the notLinkedTo guard) plus the name/alias surface forms. */
+export interface CharacterIdentity {
+  bookId: string;
+  characterId: string;
+  name: string;
+  aliases?: string[];
+  notLinkedTo?: Array<{ bookId: string; characterId: string }>;
+}
+
+/* A character's normalised name + alias tokens (empty tokens dropped). */
+function identityTokens(x: { name: string; aliases?: string[] }): string[] {
+  const out: string[] = [];
+  const n = normaliseDuplicateToken(x.name);
+  if (n) out.push(n);
+  for (const a of x.aliases ?? []) {
+    const t = normaliseDuplicateToken(a);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/* Are two same-series characters the same person, judged by name/alias?
+   True when any pair of their normalised name/alias tokens `looksLikeSameName`
+   (exact or strict-substring — e.g. "sophie" ⊂ "sophiefoster", "Bronte" ≡
+   "bron-te"). Returns FALSE when either side has marked the other
+   `notLinkedTo` — the user's "intentionally different" escape hatch — or when
+   the two refer to the same (book, character) row. A bucket id on either side
+   never matches (those are catch-alls, not a person).
+
+   Same normalisation the analyzer's series-prior dedup uses
+   (`server/src/workspace/series-prior-dedup.ts`) and the
+   `voice-override-linked` route mirrors on the write side — keep the three
+   in sync. */
+export function sameCharacterByNameAlias(a: CharacterIdentity, b: CharacterIdentity): boolean {
+  if (a.bookId === b.bookId && a.characterId === b.characterId) return false;
+  if (UNMERGEABLE_IDS.has(a.characterId) || UNMERGEABLE_IDS.has(b.characterId)) return false;
+  if ((a.notLinkedTo ?? []).some((p) => p.bookId === b.bookId && p.characterId === b.characterId))
+    return false;
+  if ((b.notLinkedTo ?? []).some((p) => p.bookId === a.bookId && p.characterId === a.characterId))
+    return false;
+  const ta = identityTokens(a);
+  const tb = identityTokens(b);
+  for (const x of ta) {
+    for (const y of tb) {
+      if (looksLikeSameName(x, y)) return true;
+    }
+  }
+  return false;
+}
+
 export interface DuplicateCandidate {
   voiceKey: string; // provider|name (the family key)
   seriesKey: string; // author|series — both voices share this

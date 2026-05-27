@@ -102,4 +102,89 @@ describe('mergeSeriesCast', () => {
     mergeSeriesCast(anchor, siblings);
     expect(anchor[0].lines).toBe(10); // unchanged
   });
+
+  /* ── plan 122: collapse by name/alias when voiceId ?? id diverges ── */
+
+  it('collapses divergent ids that share a name/alias (no shared voiceId)', () => {
+    /* "Sophie" (b1) ↔ "Sophie Foster" (b2): different ids, no voiceId, bridged
+       by the alias "Sophie Foster" on the anchor. */
+    const anchor = [
+      char({ id: 'sophie', name: 'Sophie', aliases: ['Sophie Foster'], lines: 1625 }),
+    ];
+    const siblings = [
+      char({ id: 'sophie-foster', name: 'Sophie Foster', sourceBookId: 'b2', lines: 1678 }),
+    ];
+    const out = mergeSeriesCast(anchor, siblings, 'b1');
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe('sophie'); // anchor identity wins
+    expect(out[0].lines).toBe(3303);
+  });
+
+  it('collapses a strict-substring name pair with no alias bridge', () => {
+    const anchor = [char({ id: 'sophie', name: 'Sophie', lines: 10 })];
+    const siblings = [char({ id: 'sophie-foster', name: 'Sophie Foster', sourceBookId: 'b2', lines: 5 })];
+    const out = mergeSeriesCast(anchor, siblings, 'b1');
+    expect(out).toHaveLength(1);
+    expect(out[0].lines).toBe(15);
+  });
+
+  it('collapses punctuation/case id variants (Bronte ≡ bron-te)', () => {
+    const anchor = [char({ id: 'bronte', name: 'Bronte', lines: 29 })];
+    const siblings = [char({ id: 'bron-te', name: 'Bron-te', sourceBookId: 'b2', lines: 33 })];
+    const out = mergeSeriesCast(anchor, siblings, 'b1');
+    expect(out).toHaveLength(1);
+    expect(out[0].lines).toBe(62);
+  });
+
+  it('does NOT collapse a notLinkedTo pair (divergent keys, name would otherwise match)', () => {
+    /* Different ids + no shared voiceId, so only the name/alias pass could
+       merge them — and notLinkedTo blocks it. (A shared write key is a
+       different story: same propagation target, collapses regardless.) */
+    const anchor = [
+      char({
+        id: 'sophie',
+        name: 'Sophie',
+        lines: 10,
+        notLinkedTo: [{ bookId: 'b2', characterId: 'sophie-foster' }],
+      }),
+    ];
+    const siblings = [char({ id: 'sophie-foster', name: 'Sophie Foster', sourceBookId: 'b2', lines: 5 })];
+    const out = mergeSeriesCast(anchor, siblings, 'b1');
+    expect(out).toHaveLength(2);
+  });
+
+  it('does NOT collapse unrelated names with no shared token (aldan vs alden)', () => {
+    const anchor = [char({ id: 'aldan', name: 'Aldan', lines: 10 })];
+    const siblings = [char({ id: 'alden', name: 'Alden', sourceBookId: 'b2', lines: 5 })];
+    const out = mergeSeriesCast(anchor, siblings, 'b1');
+    expect(out).toHaveLength(2);
+  });
+
+  it('carries a sibling Qwen voice across a name/alias collapse (no shared voiceId)', () => {
+    const anchor = [char({ id: 'sophie', name: 'Sophie', lines: 10 })];
+    const siblings = [
+      char({
+        id: 'sophie-foster',
+        name: 'Sophie Foster',
+        sourceBookId: 'b2',
+        lines: 5,
+        ttsEngine: 'qwen',
+        voiceStyle: 'curious teleporter',
+        overrideTtsVoices: { qwen: { name: 'sophie-designed' } },
+      }),
+    ];
+    const out = mergeSeriesCast(anchor, siblings, 'b1');
+    expect(out).toHaveLength(1);
+    expect(out[0].overrideTtsVoices?.qwen?.name).toBe('sophie-designed');
+    expect(out[0].ttsEngine).toBe('qwen');
+    expect(out[0].voiceStyle).toBe('curious teleporter');
+  });
+
+  it('never collapses a fold bucket into a real character', () => {
+    /* unknown-male named after a folded char must not merge with the real one. */
+    const anchor = [char({ id: 'unknown-male', name: 'Lord Cassius', lines: 35 })];
+    const siblings = [char({ id: 'lord-cassius', name: 'Lord Cassius', sourceBookId: 'b2', lines: 262 })];
+    const out = mergeSeriesCast(anchor, siblings, 'b1');
+    expect(out).toHaveLength(2);
+  });
 });

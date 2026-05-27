@@ -159,8 +159,8 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
      deduped by the override write key (voiceId ?? id) with line counts summed
      series-wide. Falls back to the anchor alone while siblings load. */
   const characters = useMemo(
-    () => mergeSeriesCast(anchorCharacters, siblingCharacters ?? []),
-    [anchorCharacters, siblingCharacters],
+    () => mergeSeriesCast(anchorCharacters, siblingCharacters ?? [], bookId),
+    [anchorCharacters, siblingCharacters, bookId],
   );
 
   /* Wait for BOTH the anchor cast AND the series aggregation before seeding
@@ -375,20 +375,23 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
     for (const p of included) {
       const character = charById.get(p.characterId);
       if (!character || !p.proposedVoiceId) continue;
-      /* The voice override is keyed by the character's library voiceId
-         (mirrors the profile drawer); fall back to the character id. */
-      const matched = findVoiceForCharacter(character, voices);
-      const voiceIdForApi = matched?.id ?? character.voiceId ?? character.id;
+      /* Name/alias-aware series write (plan 122): the server rediscovers this
+         character's whole name/alias group across the series, unifies their
+         voiceId, and writes the Qwen override to every member — so this reaches
+         books on a divergent key, not just the ones already sharing voiceId.
+         The rep's HOME book is its source book (siblings) or the modal's book
+         (anchor rows). */
+      const homeBookId = character.sourceBookId ?? bookId;
       try {
-        await api.setVoiceOverride(
-          voiceIdForApi,
-          { engine: 'qwen', name: p.proposedVoiceId },
-          { scope: 'series', bookId },
-        );
-        /* Mirror the engine + persona + override into redux so the cast
-           view is correct without a full re-hydrate. */
+        const linked = await api.setVoiceOverrideLinked(homeBookId, character.id, {
+          engine: 'qwen',
+          name: p.proposedVoiceId,
+        });
+        /* Mirror the engine + persona + override (and the now-unified voiceId)
+           into redux so the cast view is correct without a full re-hydrate. */
         const next: Character = {
           ...character,
+          voiceId: linked.canonicalVoiceId ?? character.voiceId,
           ttsEngine: 'qwen',
           voiceStyle: p.persona,
           overrideTtsVoices: {
