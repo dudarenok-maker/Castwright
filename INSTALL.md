@@ -161,7 +161,7 @@ The install bundle ships Kokoro weights for TTS only — the analyzer needs eith
 
 Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Account tab.
 
-**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to `server/user-settings.json` (gitignored, plaintext, same trust model as `server/.env`).
+**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.audiobook-generator/user-settings.json` (plaintext, same trust model as `server/.env`).
 
 **Option C — Pipelined two-model split (v1.4.0).** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`. Manual handoff (`ANALYZER=manual`) short-circuits to sequential — the file-drop cowork loop can't pipeline.
 
@@ -179,7 +179,7 @@ The same Gemini key configured for the analyzer (see Option B above) doubles as 
 2. **Account → Defaults for new books → TTS engine** → "Gemini (cloud)".
 3. **TTS model** → pick `gemini-3.1-flash-preview-tts` or `gemini-2.5-flash-preview-tts`. Save.
 
-The key is stored plaintext in `server/user-settings.json` (gitignored, same trust model as `server/.env` for a single-user workspace). The env var `GEMINI_API_KEY` in `server/.env` still wins if both are set — useful for CI / scripted setups.
+The key is stored plaintext in `~/.audiobook-generator/user-settings.json` (per-user, same trust model as `server/.env` for a single-user workspace). The env var `GEMINI_API_KEY` in `server/.env` still wins if both are set — useful for CI / scripted setups.
 
 ---
 
@@ -215,7 +215,7 @@ A new release is just a new zip — there's no in-app auto-update yet. Tracked a
 
 1. `npm run stop:prod` in the existing install folder.
 2. Download the new `audiobook-generator-vX.Y.Z.zip`.
-3. Extract OVER the existing folder, or extract to a fresh folder and copy your `server/.env` + `server/user-settings.json` across.
+3. Extract OVER the existing folder, or extract to a fresh folder and copy your `server/.env` across. Your account settings live in `~/.audiobook-generator/user-settings.json`, outside the install folder, so they carry over automatically. (Upgrading from a pre-1.4 install? The server migrates a legacy `server/user-settings.json` to that shared path automatically on first launch.)
 4. `npm ci && npm --prefix server ci` (catches any new deps).
 5. `npm run start:prod`.
 

@@ -42,8 +42,11 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
+    /* Redirect user-settings to a temp file before any module loads (plan
+       122) so suites never touch the real ~/.audiobook-generator file. */
+    setupFiles: ['src/test-setup.ts'],
     include: ['src/**/*.{test,spec}.ts'],
-    exclude: ['node_modules/**', 'dist/**', ...SLOW_FILES_TO_EXCLUDE],
+    exclude: ['node_modules/**', 'dist/**', 'src/test-setup.ts', ...SLOW_FILES_TO_EXCLUDE],
     testTimeout: 15_000,
     hookTimeout: 30_000,
     pool: 'forks',

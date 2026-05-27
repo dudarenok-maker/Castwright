@@ -3,14 +3,16 @@
    and legacy-file back-compat. */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   DEFAULT_USER_SETTINGS,
   userSettingsSchema,
   getResolvedAutoStartSidecar,
   getResolvedGenerationWorkers,
+  resolveUserSettingsPath,
+  migrateLegacyUserSettings,
   _resetUserSettingsCache,
 } from './user-settings.js';
 
@@ -347,5 +349,74 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
       });
       mod._resetUserSettingsCache();
     }
+  });
+});
+
+describe('user-settings location (plan 122 — shared across checkouts)', () => {
+  describe('resolveUserSettingsPath', () => {
+    const sharedDefault = join(homedir(), '.audiobook-generator', 'user-settings.json');
+
+    it('honours USER_SETTINGS_FILE when set', () => {
+      expect(
+        resolveUserSettingsPath({ USER_SETTINGS_FILE: '/custom/us.json' } as NodeJS.ProcessEnv),
+      ).toBe('/custom/us.json');
+    });
+
+    it('falls back to ~/.audiobook-generator/user-settings.json (NOT the checkout)', () => {
+      expect(resolveUserSettingsPath({} as NodeJS.ProcessEnv)).toBe(sharedDefault);
+    });
+
+    it('ignores a blank / whitespace override', () => {
+      expect(resolveUserSettingsPath({ USER_SETTINGS_FILE: '   ' } as NodeJS.ProcessEnv)).toBe(
+        sharedDefault,
+      );
+    });
+  });
+
+  describe('migrateLegacyUserSettings', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'us-migrate-'));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('copies the legacy file to the shared path when the shared file is absent', async () => {
+      const from = join(dir, 'legacy.json');
+      const to = join(dir, 'shared', 'user-settings.json'); // dir created on demand
+      writeFileSync(
+        from,
+        JSON.stringify({ defaultTtsModelKey: 'qwen3-tts-0.6b', eagerLoadKokoro: false }),
+      );
+      expect(await migrateLegacyUserSettings({ from, to, overridden: false })).toBe(true);
+      expect(existsSync(to)).toBe(true);
+      expect(JSON.parse(readFileSync(to, 'utf8')).defaultTtsModelKey).toBe('qwen3-tts-0.6b');
+    });
+
+    it('is a no-op (no overwrite) when the shared file already exists', async () => {
+      const from = join(dir, 'legacy.json');
+      const to = join(dir, 'shared.json');
+      writeFileSync(from, JSON.stringify({ eagerLoadKokoro: false }));
+      writeFileSync(to, JSON.stringify({ eagerLoadKokoro: true }));
+      expect(await migrateLegacyUserSettings({ from, to, overridden: false })).toBe(false);
+      expect(JSON.parse(readFileSync(to, 'utf8')).eagerLoadKokoro).toBe(true); // untouched
+    });
+
+    it('is a no-op when there is no legacy file to migrate', async () => {
+      const to = join(dir, 'shared.json');
+      expect(
+        await migrateLegacyUserSettings({ from: join(dir, 'nope.json'), to, overridden: false }),
+      ).toBe(false);
+      expect(existsSync(to)).toBe(false);
+    });
+
+    it('is skipped when the path is overridden, so a test run never migrates real settings', async () => {
+      const from = join(dir, 'legacy.json');
+      const to = join(dir, 'shared.json');
+      writeFileSync(from, JSON.stringify({ eagerLoadKokoro: false }));
+      expect(await migrateLegacyUserSettings({ from, to, overridden: true })).toBe(false);
+      expect(existsSync(to)).toBe(false);
+    });
   });
 });
