@@ -46,7 +46,6 @@ function makeStore({
     themeOverride,
     reuploadingBookId: null,
     queueModalOpen: false,
-    statusModalOpen: false,
     rebaselineModalOpen: false,
     rebaselineBookId: null,
   };

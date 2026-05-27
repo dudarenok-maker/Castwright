@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { IconArrowLeft, IconSpinner, IconClock, IconWarning } from '../lib/icons';
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
+import { StatusPopover } from './status-popover';
 import type { Stage, View } from '../lib/types';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
@@ -41,12 +42,12 @@ export interface AnalysisPillData {
   onClick: () => void;
 }
 
-/* Plan 120 — the top bar no longer renders the TTS / analysis / generation /
-   revisions pills inline; they live behind a single compact Status pill that
-   opens the Status modal. `summarizeStatus` collapses the live state into ONE
+/* The top bar no longer renders the TTS / analysis / generation / revisions
+   pills inline; they live behind a single compact Status pill that reveals a
+   hover/tap popover. `summarizeStatus` collapses the live state into ONE
    dominant {label, tone, icon, detail} so the pill stays narrow and the nav
    menu keeps its room. The full per-engine / per-stream detail is in the
-   modal (src/modals/status-modal.tsx). */
+   popover (src/components/status-popover.tsx). */
 export type StatusTone = 'rose' | 'amber' | 'peach' | 'neutral';
 export interface StatusSummary {
   label: string;
@@ -102,6 +103,19 @@ export function summarizeStatus({
   return { label: 'Status', tone: 'neutral', icon: 'clock' };
 }
 
+/* The popover content behind the Status pill — built in Layout (the same data
+   the plan-120 modal received) and rendered by StatusPill's hover/tap popover. */
+export interface StatusDetail {
+  /** The <ModelControlPill> cluster (ttsPillElement), incl. the GPU-busy badge. */
+  ttsControls: ReactNode;
+  analysis: AnalysisPillData | null;
+  generation: GenerationPillData | null;
+  pendingRevisionsCount: number;
+  onOpenRevisions: () => void;
+  onGoToAnalysing: () => void;
+  onGoToGeneration: () => void;
+}
+
 interface TopBarProps {
   stage: Stage['kind'];
   view: View | null;
@@ -133,8 +147,8 @@ interface TopBarProps {
       log) when there's no book in scope AND no cross-book activity, so an
       idle workspace shows no dead pill (matches the pre-120 empty cluster). */
   statusSummary: StatusSummary | null;
-  /** Plan 120 — click handler for the Status pill; opens the Status modal. */
-  onOpenStatus: () => void;
+  /** The detail rendered in the Status pill's hover/tap popover. */
+  statusDetail: StatusDetail;
   /** Plan 102 — workspace queue count. When > 0, renders a compact chip in
       the top-right cluster that opens the global queue modal on click. When
       0, the chip is hidden. */
@@ -174,7 +188,7 @@ export function TopBar({
   onOpenWorktrees,
   userDisplayName,
   statusSummary,
-  onOpenStatus,
+  statusDetail,
   queueCount,
   onOpenQueue,
 }: TopBarProps) {
@@ -252,13 +266,14 @@ export function TopBar({
               ))}
             </nav>
           )}
-          {/* Plan 120 — one compact Status pill (pushed right via ml-auto)
-              replaces the former TTS / analysis / generation / revisions
-              cluster; it opens the Status modal carrying the full detail.
-              Hidden on idle global views (statusSummary === null). */}
+          {/* One compact Status pill (pushed right via ml-auto) replaces the
+              former TTS / analysis / generation / revisions cluster. Hovering
+              (or tapping / focusing) it reveals an anchored popover with the
+              full detail — no modal, no backdrop, so it never dismisses an open
+              cast drawer. Hidden on idle global views (statusSummary === null). */}
           {statusSummary && (
             <div className="ml-auto shrink-0">
-              <StatusPill summary={statusSummary} onClick={onOpenStatus} />
+              <StatusPill summary={statusSummary} detail={statusDetail} />
             </div>
           )}
         </div>
@@ -316,27 +331,132 @@ const STATUS_ICON: Record<StatusSummary['icon'], ReactNode> = {
   warning: <IconWarning className="w-3.5 h-3.5" />,
 };
 
-function StatusPill({ summary, onClick }: { summary: StatusSummary; onClick: () => void }) {
+/* The Status pill is the at-a-glance indicator AND the trigger for the hover
+   popover. Open-state machine (local, not redux) covers every input mode:
+     - hoverOpen  : pointer over the pill OR the panel (hover-bridge); a short
+                    close delay lets the mouse cross the gap into the panel.
+     - focusOpen  : focus within the pill OR the panel (keyboard peek).
+     - stickyOpen : toggled by click/tap — a tap on touch pins it open so the
+                    Load/Stop buttons are pressable; an outside click / Escape
+                    clears it.
+   The popover is portaled (escapes the top bar's overflow-x-auto) and carries
+   no backdrop, so clicking its buttons never dismisses an open cast drawer. */
+function StatusPill({ summary, detail }: { summary: StatusSummary; detail: StatusDetail }) {
+  const pillRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const [focusOpen, setFocusOpen] = useState(false);
+  const [stickyOpen, setStickyOpen] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const open = hoverOpen || focusOpen || stickyOpen;
+
+  const cancelClose = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+  const openHover = () => {
+    cancelClose();
+    setHoverOpen(true);
+  };
+  /* Grace delay so moving the mouse from the pill into the (gap-separated)
+     panel doesn't close it mid-cross. */
+  const scheduleHoverClose = () => {
+    cancelClose();
+    closeTimer.current = setTimeout(() => setHoverOpen(false), 140);
+  };
+  const closeAll = () => {
+    cancelClose();
+    setHoverOpen(false);
+    setFocusOpen(false);
+    setStickyOpen(false);
+  };
+
+  useEffect(() => () => cancelClose(), []);
+
+  /* Outside-click + Escape dismissal. Excludes the pill and the panel so a
+     click inside either keeps it open (the panel ALSO stops propagation, so
+     this is belt-and-suspenders and, crucially, never reaches the cast
+     drawer's backdrop). */
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (pillRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t)) return;
+      closeAll();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        closeAll();
+        pillRef.current?.blur();
+      }
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-testid="status-pill"
-      data-status-tone={summary.tone}
-      aria-label={`Status — ${summary.label}${summary.detail ? ` ${summary.detail}` : ''}`}
-      className={`inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] sm:min-h-0 rounded-full text-xs font-semibold transition-colors ${STATUS_TONE_CLASS[summary.tone]}`}
-    >
-      {STATUS_ICON[summary.icon]}
-      <span className="tabular-nums">
-        {summary.label}
-        {summary.detail ? ` · ${summary.detail}` : ''}
-      </span>
-    </button>
+    <>
+      <button
+        ref={pillRef}
+        type="button"
+        data-testid="status-pill"
+        data-status-tone={summary.tone}
+        aria-haspopup="true"
+        aria-expanded={open}
+        aria-label={`Status — ${summary.label}${summary.detail ? ` ${summary.detail}` : ''}`}
+        className={`inline-flex items-center gap-2 px-3 py-1.5 min-h-[44px] sm:min-h-0 rounded-full text-xs font-semibold transition-colors ${STATUS_TONE_CLASS[summary.tone]}`}
+        onPointerEnter={openHover}
+        onPointerLeave={scheduleHoverClose}
+        onFocus={() => setFocusOpen(true)}
+        onBlur={() => setFocusOpen(false)}
+        onClick={() => setStickyOpen((s) => !s)}
+      >
+        {STATUS_ICON[summary.icon]}
+        <span className="tabular-nums">
+          {summary.label}
+          {summary.detail ? ` · ${summary.detail}` : ''}
+        </span>
+      </button>
+      <StatusPopover
+        open={open}
+        anchorRef={pillRef}
+        panelRef={panelRef}
+        onPointerEnter={openHover}
+        onPointerLeave={scheduleHoverClose}
+        onFocusCapture={() => setFocusOpen(true)}
+        onBlurCapture={() => setFocusOpen(false)}
+        ttsControls={detail.ttsControls}
+        analysis={detail.analysis}
+        generation={detail.generation}
+        pendingRevisionsCount={detail.pendingRevisionsCount}
+        onOpenRevisions={() => {
+          detail.onOpenRevisions();
+          closeAll();
+        }}
+        onGoToAnalysing={() => {
+          detail.onGoToAnalysing();
+          closeAll();
+        }}
+        onGoToGeneration={() => {
+          detail.onGoToGeneration();
+          closeAll();
+        }}
+      />
+    </>
   );
 }
 
-/* Exported (since plan 120) for reuse inside the Status modal, which renders
-   the same live pill with its onClick overridden to navigate-and-close. */
+/* Exported for reuse inside the Status popover, which renders the same live
+   pill with its onClick overridden to navigate-and-close. */
 export function AnalysisPill({ data }: { data: AnalysisPillData }) {
   const { state, phaseLabel, percent, haltReason, kind, subsetChapterCount, onClick } = data;
   /* Plan 32 D2: subset retries swap the label from "Analysing" to
