@@ -13,7 +13,8 @@ import {
 import type { SeriesRosterEntry } from '../lib/api';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
-import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
+import { Avatar, VoiceSwatch, Pill, PrimaryButton, ReusedBadge } from '../components/primitives';
+import { resolveVoiceStatus } from '../lib/voice-status';
 import { CHAR_COLORS } from '../lib/colors';
 import { sampleScopeFor } from '../lib/sample-scope';
 import type { Character, Voice, CharColor } from '../lib/types';
@@ -205,9 +206,16 @@ export function ProfileDrawer({
   /* Designed voiceId staged this session — set by Design & preview, read
      by Save to write overrideTtsVoices.qwen.name. Seeds from the existing
      assignment so a re-open of an already-Qwen character can Save without
-     re-designing. */
+     re-designing. A REUSED character carries its Qwen voice on the matched
+     library `voice` (the reuse path leaves the character's own `ttsEngine`/
+     `overrideTtsVoices` empty), so fall back to the matched voice — otherwise
+     the drawer reads "No voice designed yet" and blocks the sample while the
+     cast row correctly shows the reused Qwen voice. */
   const [designedVoiceId, setDesignedVoiceId] = useState<string | null>(
-    character.overrideTtsVoices?.qwen?.name ?? null,
+    character.overrideTtsVoices?.qwen?.name ??
+      voice?.overrideTtsVoices?.qwen?.name ??
+      (voice?.ttsVoice?.provider === 'qwen' ? voice.ttsVoice.name : null) ??
+      null,
   );
   /* URL of the most-recent audition preview. Now a stable cached-sample URL
      (the design route writes the audition into the voice-sample cache), so
@@ -391,6 +399,14 @@ export function ProfileDrawer({
     ...character,
     gender: gender || undefined,
     ageRange: ageRange || undefined,
+    /* Stage the effective Qwen voice (designed this session OR inherited from
+       a reused match) onto the character so `resolveTtsVoiceForCharacter(…,
+       'qwen')` resolves it for the card line + sample, instead of reading the
+       character's own (empty-when-reused) override and reporting "No voice
+       designed yet". */
+    overrideTtsVoices: designedVoiceId
+      ? { ...(character.overrideTtsVoices ?? {}), qwen: { name: designedVoiceId } }
+      : character.overrideTtsVoices,
   };
   const stubTtsVoice = resolveTtsVoiceForCharacter(editedCharacter, ttsEngine);
   const sampleSubject = voice ?? {
@@ -665,10 +681,19 @@ export function ProfileDrawer({
               <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">
                 Voice profile
               </p>
-              <div className="flex items-center gap-3">
-                {character.voiceState === 'reused' && <Pill color="library">Reused</Pill>}
-                {character.voiceState === 'generated' && <Pill color="success">Generated</Pill>}
-                {character.voiceState === 'tuned' && <Pill color="warning">Tuned</Pill>}
+              <div className="flex items-center gap-2">
+                {/* Lifecycle pill + Reused badge, resolved the same way as the
+                    cast view's Status column so the two surfaces agree (a
+                    reused Qwen voice shows "Designed/Generated · Reused"). */}
+                {(() => {
+                  const { lifecycle, reused } = resolveVoiceStatus(character, voice);
+                  return (
+                    <>
+                      {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
+                      {reused && <ReusedBadge />}
+                    </>
+                  );
+                })()}
               </div>
             </div>
 
@@ -776,6 +801,7 @@ export function ProfileDrawer({
               value={engineChoice}
               onChange={onSelectEngine}
               installedEngines={['kokoro', 'qwen']}
+              defaultEngineLabel={capitalise(ttsEngine)}
               persona={persona}
               onPersonaChange={setPersona}
               onRegeneratePersona={() => void generatePersona()}
