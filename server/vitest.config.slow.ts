@@ -36,6 +36,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
+    /* Same user-settings redirect as the main config (plan 122). */
+    setupFiles: ['src/test-setup.ts'],
     include: SLOW_FILES,
     testTimeout: 15_000,
     hookTimeout: 30_000,
