@@ -414,10 +414,10 @@ describe('CastView Qwen status pill (plan 117)', () => {
     expect(within(row).getByText('Generated')).toBeInTheDocument();
   });
 
-  it('keeps the preset provenance pills (Generated / Reused) for non-Qwen rows', () => {
+  it('keeps the preset provenance pills (Matched / Reused) for non-Qwen rows', () => {
     renderView();
     /* sweeney: coqui, voiceState 'generated'; narrator: voiceState 'reused'. */
-    expect(within(rowFor('Mr. Sweeney')).getByText('Generated')).toBeInTheDocument();
+    expect(within(rowFor('Mr. Sweeney')).getByText('Matched')).toBeInTheDocument();
     expect(within(rowFor('Narrator')).getByText('Reused')).toBeInTheDocument();
   });
 
