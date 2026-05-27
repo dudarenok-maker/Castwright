@@ -510,3 +510,63 @@ describe('QueueModal', () => {
     expect(loadCall).toBeDefined();
   });
 });
+
+describe('QueueModal — Clear queue', () => {
+  /* The header "Clear queue" button and the confirm dialog's confirm button
+     share the accessible name "Clear queue"; the header one carries the testid,
+     so the dialog confirm is the other match. */
+  function clickDialogConfirm() {
+    const btns = screen.getAllByRole('button', { name: 'Clear queue' });
+    const confirm = btns.find((b) => b.getAttribute('data-testid') !== 'queue-modal-clear');
+    fireEvent.click(confirm!);
+  }
+
+  it('shows the Clear queue button when entries are queued', () => {
+    renderModal([entry({ id: 'a1' })]);
+    expect(screen.getByTestId('queue-modal-clear')).toBeInTheDocument();
+  });
+
+  it('hides the Clear queue button when the queue is empty and nothing is generating', () => {
+    renderModal([]);
+    expect(screen.queryByTestId('queue-modal-clear')).toBeNull();
+  });
+
+  it('clears pending entries with force:false when nothing is in flight', async () => {
+    renderModal([entry({ id: 'a1' }), entry({ id: 'a2', chapterId: 2, order: 1 })]);
+    fireEvent.click(screen.getByTestId('queue-modal-clear'));
+    /* No in-flight run → no "also stop" checkbox to offer. */
+    expect(screen.queryByTestId('queue-clear-also-stop')).toBeNull();
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+    await act(async () => {
+      clickDialogConfirm();
+    });
+    const call = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/clear');
+    expect(call).toBeDefined();
+    expect(call![1].method).toBe('POST');
+    expect(call![1].body).toBe('{"force":false}');
+  });
+
+  it('offers "Also stop generation" when in flight; checking it force-clears', async () => {
+    renderModal([
+      entry({ id: 'a1', status: 'in_progress', order: 0 }),
+      entry({ id: 'a2', chapterId: 2, order: 1 }),
+    ]);
+    fireEvent.click(screen.getByTestId('queue-modal-clear'));
+    fireEvent.click(screen.getByTestId('queue-clear-also-stop'));
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+    await act(async () => {
+      clickDialogConfirm();
+    });
+    const call = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/clear');
+    expect(call).toBeDefined();
+    expect(call![1].body).toBe('{"force":true}');
+  });
+});

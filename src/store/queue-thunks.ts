@@ -150,6 +150,25 @@ export function setQueuePaused(paused: boolean) {
   };
 }
 
+/** POST /api/queue/clear — bulk-clear the queue. Default (`force` omitted/false)
+    drops queued + failed entries but leaves any in_progress chapter running;
+    `{ force: true }` drops everything, including in_progress. The modal's "Clear
+    queue" control calls this; when the user opts to also stop generation it
+    dispatches `chaptersActions.requestStreamHalt()` (tears the live streams down
+    + pauses each book server-side) BEFORE this force-clear. */
+export function clearQueue(opts: { force?: boolean } = {}) {
+  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+    const res = await queueRequest('/api/queue/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: opts.force ?? false }),
+    });
+    const snapshot = await readSnapshot(res);
+    dispatch(queueActions.setSnapshot(snapshot));
+    return snapshot;
+  };
+}
+
 /** POST /api/queue/:entryId/start — mark an entry in_progress. The dispatcher
     fires this the instant it claims an entry and opens that chapter's stream
     (one entry = one chapter actively starting; claim == in_progress). Status

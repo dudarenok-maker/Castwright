@@ -1012,6 +1012,35 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/QueueListResponse' }
 
+  /api/queue/clear:
+    post:
+      summary: Bulk-clear the queue
+      operationId: clearQueue
+      description: |
+        Removes entries in bulk. With `{ force: false }` (the default) drops
+        every `queued` and `failed` entry but leaves `in_progress` ones running
+        to completion — a clean pending list without aborting work. With
+        `{ force: true }` drops everything, including `in_progress`; the caller
+        pairs this with a stream teardown so the live generation actually stops.
+        Leaves the `paused` flag untouched. Persists to `<workspace>/.queue.json`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                force:
+                  type: boolean
+                  default: false
+                  description: When true, also drop in_progress entries.
+      responses:
+        '200':
+          description: Resulting queue snapshot
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueueListResponse' }
+
   /api/queue/{entryId}:
     delete:
       summary: Cancel (remove) a queued entry
