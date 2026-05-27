@@ -19,6 +19,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
+import { selectAnalyzerSplitIsActive } from '../store/account-slice';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -245,6 +246,17 @@ export function AnalysingView({
     return MODEL_OPTIONS.find((m) => m.id === id);
   }, [model]);
   const isLocalAnalyzer = selectedModel?.engine === 'local';
+  /* Plan 118 — the model id to SEND on the request (distinct from the
+     readiness/engine derivation above, which keeps reading the always-
+     populated `model` prop = ui.selectedModel). When the user has a per-phase
+     split configured AND hasn't made an explicit per-run pick, send nothing
+     so the server's saved per-phase models apply (precedence priority 3).
+     Otherwise send the selected model — preserving the single-model path
+     (split off → both phases use defaultAnalysisModel) and the explicit
+     per-run override (priority 2). */
+  const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
+  const selectedModelExplicit = useAppSelector((s) => s.ui.selectedModelExplicit);
+  const requestModel = splitActive && !selectedModelExplicit ? undefined : model;
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
   const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
   const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
@@ -333,7 +345,7 @@ export function AnalysingView({
       try {
         const payload = await api.analyseManuscript(manuscriptId, {
           signal: controller.signal,
-          model,
+          model: requestModel,
           fresh: retry.fresh || undefined,
           allowStage1Shrink: retry.allowStage1Shrink || undefined,
           onPhase: ({ phaseId, progress, live }) => {
@@ -663,7 +675,7 @@ export function AnalysingView({
     let retryReFailed = false;
     api
       .runAnalysisForChapters(manuscriptId, [chapterId], {
-        model,
+        model: requestModel,
         onPhase: ({ phaseId, progress, live }) => {
           markEvent();
           setConn('streaming');

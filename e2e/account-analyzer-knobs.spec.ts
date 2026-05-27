@@ -61,6 +61,11 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
     const sentinelOptions = page.getByRole('option', { name: '(use server default)' });
     /* Two pickers × one sentinel option each = 2. */
     await expect(sentinelOptions).toHaveCount(2);
+
+    /* Plan 118 — the live status line reads OFF when both pickers sit at the
+       sentinel (single-model), so the user can see at a glance the split is
+       not engaged. */
+    await expect(page.getByTestId('analyzer-split-status')).toContainText(/Currently OFF/i);
   });
 
   test('changing the three knobs + Save round-trips through the slice', async ({ page }) => {
@@ -76,6 +81,15 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
     await phase0.selectOption('gemma-4-31b-it');
     await phase1.selectOption('gemini-3.1-flash-lite');
     await minLag.fill('15');
+
+    /* Plan 118 — the status line flips to ON the moment both phases have a
+       model, naming each phase's model + the lag (driven by the live form
+       state, before Save). */
+    const status = page.getByTestId('analyzer-split-status');
+    await expect(status).toContainText(/Currently ON/i);
+    await expect(status).toContainText('Gemma 4 31B');
+    await expect(status).toContainText('Gemini 3.1 Flash Lite');
+    await expect(status).toContainText('lag 15');
 
     await page.getByRole('button', { name: /save changes/i }).click();
     await expect(page.getByText(/^saved\.$/i)).toBeVisible({ timeout: 5_000 });
