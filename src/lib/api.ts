@@ -395,14 +395,27 @@ export interface GenerateAllVoiceStylesResponse {
 
 /* Design + audition a bespoke Qwen voice for a cast member (plan 108,
    Wave 4). The server proxies the sidecar's /qwen/design-voice, which
-   caches a reusable speaker embedding under a derived voiceId and returns
-   an audition preview. The Profile Drawer plays `previewUrl` and, on
-   Save, pins `voiceId` into the character's overrideTtsVoices.qwen slot. */
+   caches a reusable speaker embedding under a derived voiceId. The audition
+   speaks the character's own line and is written into the voice-sample cache,
+   so `previewUrl` IS the 12s sample — clicking "Play 12s" afterwards is a
+   cache hit, not a second synthesis. The Profile Drawer plays `previewUrl`
+   and, on Save, pins `voiceId` into overrideTtsVoices.qwen. */
+export interface DesignQwenVoiceArgs {
+  /** Natural-language persona. Defaults server-side to the character's
+      persisted voiceStyle when omitted. */
+  persona?: string;
+  /** The voiceId path the /sample player will use as its cache scope — pass
+      the same value the drawer would send to getVoiceSample. */
+  sampleVoiceId: string;
+  /** The TTS modelKey the sample is cached under (the Qwen sample key). */
+  modelKey: TtsModelKey;
+}
+
 export interface DesignQwenVoiceResponse {
-  /** Derived cache voiceId (echoed from the X-Qwen-Voice-Id header). */
+  /** Derived cache voiceId (the designed-voice embedding id). */
   voiceId: string;
-  /** Object URL for the audition preview blob (WAV-wrapped PCM). The
-      caller is responsible for revoking it after playback. */
+  /** Stable URL of the cached audition MP3 (= the 12s sample). Not a blob —
+      nothing to revoke. */
   previewUrl: string;
 }
 
@@ -525,22 +538,18 @@ async function mockSetVoiceOverride(
 }
 
 /* Mock Qwen voice design — returns a deterministic derived voiceId and a
-   tiny silent-WAV object URL so the drawer's audition button round-trips
-   under VITE_USE_MOCKS without a live sidecar. */
+   cache-style sample URL (matching the real route's shape, now that the
+   audition IS the cached 12s sample) so the drawer's audition button
+   round-trips under VITE_USE_MOCKS without a live sidecar. */
 async function mockDesignQwenVoice(
   _bookId: string,
   characterId: string,
-  _persona?: string,
+  { sampleVoiceId, modelKey }: DesignQwenVoiceArgs,
 ): Promise<DesignQwenVoiceResponse> {
   await wait(120);
-  /* 8 bytes of silence wrapped as WAV @ 24kHz — enough for an <audio>
-     src; jsdom never actually decodes it in tests. */
-  const blob = pcm16ToWavBlob(new ArrayBuffer(8), 24000);
-  const previewUrl =
-    typeof URL.createObjectURL === 'function'
-      ? URL.createObjectURL(blob)
-      : 'blob:mock-qwen-preview';
-  return { voiceId: `qwen-${characterId}`, previewUrl };
+  const voiceId = `qwen-${characterId}`;
+  const previewUrl = `/audio/voices/${sampleVoiceId}-${modelKey}-mock.mp3`;
+  return { voiceId, previewUrl };
 }
 
 async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
@@ -1326,48 +1335,21 @@ async function realSetVoiceOverride(
     );
 }
 
-/* Wrap raw 16-bit little-endian PCM in a minimal WAV header so an
-   <audio> element can decode the audition preview without a codec. The
-   sidecar returns mono signed-16 LE at the given sample rate. */
-function pcm16ToWavBlob(pcm: ArrayBuffer, sampleRate: number): Blob {
-  const channels = 1;
-  const bitsPerSample = 16;
-  const byteRate = (sampleRate * channels * bitsPerSample) / 8;
-  const blockAlign = (channels * bitsPerSample) / 8;
-  const dataLen = pcm.byteLength;
-  const buffer = new ArrayBuffer(44 + dataLen);
-  const view = new DataView(buffer);
-  const writeStr = (off: number, s: string) => {
-    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
-  };
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + dataLen, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, channels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeStr(36, 'data');
-  view.setUint32(40, dataLen, true);
-  new Uint8Array(buffer, 44).set(new Uint8Array(pcm));
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
 async function realDesignQwenVoice(
   bookId: string,
   characterId: string,
-  persona?: string,
+  { persona, sampleVoiceId, modelKey }: DesignQwenVoiceArgs,
 ): Promise<DesignQwenVoiceResponse> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/design-voice`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(persona !== undefined ? { persona } : {}),
+      body: JSON.stringify({
+        ...(persona !== undefined ? { persona } : {}),
+        sampleVoiceId,
+        modelKey,
+      }),
     },
   );
   if (!res.ok) {
@@ -1379,11 +1361,13 @@ async function realDesignQwenVoice(
     }
     throw new Error(detail || `Voice design failed (${res.status}).`);
   }
-  const voiceId = res.headers.get('X-Qwen-Voice-Id') ?? `qwen-${characterId}`;
-  const sampleRate = Number(res.headers.get('X-Sample-Rate') ?? '24000') || 24000;
-  const pcm = await res.arrayBuffer();
-  const blob = pcm16ToWavBlob(pcm, sampleRate);
-  return { voiceId, previewUrl: URL.createObjectURL(blob) };
+  /* Response is JSON { voiceId, url } pointing at the cached audition MP3 —
+     which is also the 12s sample the player will hit. */
+  const data = (await res.json()) as { voiceId?: string; url?: string };
+  return {
+    voiceId: data.voiceId ?? `qwen-${characterId}`,
+    previewUrl: data.url ?? '',
+  };
 }
 
 async function realImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {

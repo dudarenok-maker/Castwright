@@ -8,8 +8,6 @@
 import { Router, type Request, type Response } from 'express';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   engineForModelKey,
   isTtsModelKey,
@@ -21,59 +19,16 @@ import {
 import { encodePcmToAudio } from '../tts/mp3.js';
 import { pcmDurationSec } from '../tts/pcm.js';
 import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from '../tts/voice-mapping.js';
+import {
+  buildSampleText,
+  djb2,
+  voiceSampleAudioDir,
+  voiceSampleFileName,
+  voiceSampleFilePath,
+  voiceSamplePublicUrl,
+} from '../tts/voice-sample-cache.js';
 
 export const voiceSampleRouter = Router();
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-/* Tests override the on-disk cache root via VOICE_SAMPLE_AUDIO_DIR so a run
-   doesn't leave files in the dev server's real audio dir. Production uses
-   server/audio/voices/ which is also the static mount root in index.ts. */
-const AUDIO_DIR =
-  process.env.VOICE_SAMPLE_AUDIO_DIR ?? resolve(__dirname, '..', '..', 'audio', 'voices');
-
-/* Sample script. The analyzer ships ≥3 evidence quotes per character,
-   sorted longest-first server-side (see analysis.ts sortEvidence) and
-   verified against the manuscript by verifyEvidenceAgainstSource. We
-   feed the longest *real* quote to the TTS so each preview sounds like
-   that character — even if it's short. We never pad with invented text
-   (no "X said:" prefix, no canned intro tacked on); a 40-char real line
-   beats a 200-char fabricated one for voice cloning. The canned
-   "Hello. I'm…" script is only used when the evidence array is
-   genuinely empty (brand-new library voices, all-fabricated rosters
-   the verifier swept clean). */
-const MAX_CHARS = 320;
-
-function buildSampleText(voice: VoiceLike, hint?: CharacterHint): string {
-  /* Defensive re-sort — the route also accepts a characterHint from
-     the client where the array may not have been through sortEvidence
-     (e.g. user edits in the profile drawer that haven't been saved). */
-  const cleaned = (hint?.evidence ?? [])
-    .map(stripQuoteMarks)
-    .filter((s) => s.length > 0)
-    .sort((a, b) => b.length - a.length);
-
-  const longest = cleaned[0];
-  if (longest) {
-    return longest.slice(0, MAX_CHARS);
-  }
-
-  const name = voice.character?.trim() || 'an unnamed character';
-  const attrs = (voice.attributes ?? []).slice(0, 5).join(', ') || 'no particular style';
-  return `Hello. I'm ${name}. ${attrs}. Listen — every voice in this book carries the weight of who I am, and every line I speak should sound like it could only have come from me.`;
-}
-
-function stripQuoteMarks(s: string): string {
-  return s.replace(/^[“”"'‘’\s]+|[“”"'‘’\s]+$/g, '').trim();
-}
-
-/* DJB2 — short deterministic hash for cache filenames. We don't need crypto
-   strength; we just need the same (text, voiceName) to map to the same file
-   so repeat clicks hit cache, and any change to either bust it. */
-function djb2(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
 
 /* Fixed neutral preview script used by the "Base voices" tab and the
    family-header Play buttons. Same text for every (engine, speaker)
@@ -160,17 +115,15 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
     voiceName = pickVoiceForEngine(engine, voice, body.characterHint);
     cacheScope = voiceId;
   }
-  const paramHash = djb2(`${text}|${voiceName}`).toString(36).slice(0, 8);
-
-  const fileName = `${cacheScope}-${effectiveModelKey}-${paramHash}.mp3`;
-  const filePath = resolve(AUDIO_DIR, fileName);
-  const publicUrl = `/audio/voices/${fileName}`;
+  const fileName = voiceSampleFileName({ cacheScope, modelKey: effectiveModelKey, text, voiceName });
+  const filePath = voiceSampleFilePath(fileName);
+  const publicUrl = voiceSamplePublicUrl(fileName);
 
   if (existsSync(filePath)) {
     return res.json({ url: publicUrl, durationSec: null, cached: true, modelKey });
   }
 
-  await mkdir(AUDIO_DIR, { recursive: true });
+  await mkdir(voiceSampleAudioDir(), { recursive: true });
 
   let provider;
   try {
@@ -183,7 +136,7 @@ voiceSampleRouter.post('/:voiceId/sample', async (req: Request, res: Response) =
   }
 
   console.info(
-    `[tts] ${cacheScope} → ${voiceName} (engine=${engine}, model=${effectiveModelKey}, ${text.length} chars, hash=${paramHash})`,
+    `[tts] ${cacheScope} → ${voiceName} (engine=${engine}, model=${effectiveModelKey}, ${text.length} chars, file=${fileName})`,
   );
 
   try {
