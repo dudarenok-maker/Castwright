@@ -10,8 +10,11 @@
    6. eagerLoadKokoro=false → env has PRELOAD_KOKORO=0.
    7. handle.kill() on win32 shells out to `taskkill /T /F /PID`. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnSidecar } from './spawn-sidecar.js';
 
 interface FakeChild extends EventEmitter {
@@ -33,12 +36,23 @@ describe('spawnSidecar', () => {
   let probeFn: ReturnType<typeof vi.fn>;
   let log: ReturnType<typeof vi.fn>;
   let warn: ReturnType<typeof vi.fn>;
+  /* A real, writable temp dir per test — spawnSidecar opens the sidecar log
+     files (logs/tts.log, logs/tts.err.log) and writes .run/tts.pid under
+     repoRoot, so it must point at a directory we can actually create files
+     in (the old '/repo' literal would EACCES on Linux CI and pollute C:\repo
+     on Windows). */
+  let repoRoot: string;
 
   beforeEach(() => {
     spawnFn = vi.fn(() => makeFakeChild());
     probeFn = vi.fn(async () => false);
     log = vi.fn();
     warn = vi.fn();
+    repoRoot = mkdtempSync(join(tmpdir(), 'wt-sidecar-'));
+  });
+
+  afterEach(() => {
+    rmSync(repoRoot, { recursive: true, force: true });
   });
 
   it('returns null and does not spawn when autoStart is false', async () => {
@@ -46,7 +60,7 @@ describe('spawnSidecar', () => {
       autoStart: false,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
-      repoRoot: '/repo',
+      repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
       log,
@@ -66,7 +80,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
-      repoRoot: '/repo',
+      repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
       log,
@@ -84,7 +98,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
-      repoRoot: '/repo',
+      repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
       log,
@@ -113,7 +127,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: false,
-      repoRoot: '/repo',
+      repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
       log,
@@ -134,7 +148,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'coqui-xtts-v2',
       eagerLoadKokoro: true,
-      repoRoot: '/repo',
+      repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
       log,
@@ -147,6 +161,40 @@ describe('spawnSidecar', () => {
     expect(options.env.PRELOAD_COQUI).toBe('1');
   });
 
+  it('hands the child inherited log-file descriptors as stdout/stderr (survives parent death)', async () => {
+    /* Regression for the orphaned-sidecar [Errno 22] bug: a `tsx watch` dev
+       reload restarts the Node server but leaves the long-lived sidecar
+       running. If the sidecar's stdout/stderr were Node PIPES owned by the
+       (now-dead) parent, its next write — the huggingface from_pretrained
+       tqdm progress bar during a model /load — raised
+       "OSError: [Errno 22] Invalid argument", surfacing as an opaque /load
+       500 and a TTS pill that reverts to idle. Handing the child raw FILE
+       descriptors (its own OS handles) instead keeps logging alive
+       regardless of the parent's lifetime. */
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+
+    expect(handle).not.toBeNull();
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.stdio[0]).toBe('ignore');
+    /* stdout + stderr are raw integer fds, NOT the string 'pipe' the old
+       WriteStream-piping path used. */
+    expect(typeof options.stdio[1]).toBe('number');
+    expect(typeof options.stdio[2]).toBe('number');
+    /* The log files were actually created under repoRoot/logs ... */
+    expect(readdirSync(join(repoRoot, 'logs')).sort()).toEqual(['tts.err.log', 'tts.log']);
+    /* ... with no "log file open failed" fallback-to-discard warning. */
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('log file open failed'));
+  });
+
   it('logs a warning when the spawned child exits unexpectedly', async () => {
     const child = makeFakeChild(54321);
     spawnFn.mockReturnValueOnce(child);
@@ -155,7 +203,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
-      repoRoot: '/repo',
+      repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
       log,
@@ -193,7 +241,7 @@ describe('spawnSidecar', () => {
         autoStart: true,
         modelKey: 'kokoro-v1',
         eagerLoadKokoro: true,
-        repoRoot: '/repo',
+        repoRoot,
         spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
         probeFn,
         log,
