@@ -31,7 +31,12 @@ import { api, type SeriesRosterEntry } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { stageToHash } from '../lib/router';
-import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
+import {
+  TopBar,
+  summarizeStatus,
+  type GenerationPillData,
+  type AnalysisPillData,
+} from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { selectEnginesInUse } from '../store/engines-in-use-selector';
@@ -48,6 +53,7 @@ import { ProfileDrawer } from '../modals/profile-drawer';
 import { ReattributeLinesModal } from '../modals/reattribute-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
+import { StatusModal } from '../modals/status-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
@@ -932,6 +938,33 @@ export function Layout() {
     };
   })();
 
+  /* Plan 119 — collapse the live state into the single dominant summary the
+     compact Status pill renders. Computed inline (not memoised) so the
+     per-second forceClockTick above keeps the "stalled" rung fresh against
+     Date.now(), same as the pill IIFEs. `anyModelLoading` only counts engines
+     the current book actually uses. */
+  const anyModelLoading = (['kokoro', 'coqui', 'qwen'] as const).some(
+    (e) => enginesInUse.has(e) && ttsLifecycle[e].state === 'loading',
+  );
+  /* Show the Status pill whenever there's a book in scope (so the TTS
+     model controls are always reachable) OR there's cross-book activity /
+     pending revisions to surface. On an idle global view (Books / Voices /
+     Change log with nothing running) the pill is hidden — matching the
+     pre-119 empty cluster — so the workspace doesn't show a dead pill. */
+  const showStatus =
+    showGlobalTtsPill ||
+    analysisPill !== null ||
+    generationPill !== null ||
+    pending.length > 0;
+  const statusSummary = showStatus
+    ? summarizeStatus({
+        analysis: analysisPill,
+        generation: generationPill,
+        pendingRevisionsCount: pending.length,
+        anyModelLoading,
+      })
+    : null;
+
   return (
     <div className={`min-h-screen ${trackChapter ? 'pb-24' : 'pb-20'}`}>
       <TopBar
@@ -941,11 +974,8 @@ export function Layout() {
         projectTitle={projectTitle}
         onHome={() => dispatch(uiActions.goHome())}
         onTitleClick={stageKind === 'confirm' ? () => dispatch(uiActions.reanalyse()) : undefined}
-        pendingRevisionsCount={pending.length}
-        generationPill={generationPill}
-        analysisPill={analysisPill}
-        ttsPill={ttsPillElement}
-        onOpenRevisions={() => dispatch(uiActions.setShowRevisionPlayer(true))}
+        statusSummary={statusSummary}
+        onOpenStatus={() => dispatch(uiActions.openStatusModal())}
         onOpenVoices={() => dispatch(uiActions.openVoices())}
         onOpenChangelog={() => dispatch(uiActions.openChangelog())}
         onOpenAccount={() => dispatch(uiActions.openAccount())}
@@ -1423,6 +1453,31 @@ export function Layout() {
         />
       )}
       <QueueModalContainer />
+
+      {/* Plan 119 — Status modal: the TTS controls + analysis/generation/
+          revisions detail that used to live inline in the top bar. The
+          "go to" handlers reuse the pills' existing onClick routing
+          (single-book → Generate, multi-book → queue) then close. */}
+      <StatusModal
+        open={ui.statusModalOpen}
+        onClose={() => dispatch(uiActions.closeStatusModal())}
+        ttsControls={ttsPillElement}
+        analysis={analysisPill}
+        generation={generationPill}
+        pendingRevisionsCount={pending.length}
+        onOpenRevisions={() => {
+          dispatch(uiActions.setShowRevisionPlayer(true));
+          dispatch(uiActions.closeStatusModal());
+        }}
+        onGoToAnalysing={() => {
+          analysisPill?.onClick();
+          dispatch(uiActions.closeStatusModal());
+        }}
+        onGoToGeneration={() => {
+          generationPill?.onClick();
+          dispatch(uiActions.closeStatusModal());
+        }}
+      />
 
       {ui.showRevisionPlayer && pending[0] && bookId && (
         <RevisionDiffPlayer
