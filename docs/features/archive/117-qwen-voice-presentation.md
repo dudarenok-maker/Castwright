@@ -97,4 +97,8 @@ Shipped 2026-05-27 across two PRs:
 
 Deltas vs. the original spec: none material. The chosen UX was "two sections + per-card Designed/Generated badge" (not three top sections) and per-character precise `generated`, both confirmed with the user before build.
 
+## Amendment (2026-05-27) — preset pill relabel "Generated" → "Matched"
+
+The preset (`voiceState`) Status pill for `voiceState: 'generated'` was relabeled from **Generated** to **Matched** (`resolveStatusPill`, `src/views/cast.tsx`). Rationale: in the provenance enum, `'generated'` means "voice auto-matched/assigned during analysis" — not "audio rendered" — so "Matched" reads accurately and removes the wording collision with the Qwen-lifecycle **Generated** pill (which genuinely means rendered audio and is unchanged). Only the preset path changed; the Qwen lifecycle (Needs voice / Designed / Generated) is untouched. The `cast.test.tsx` "keeps the preset provenance pills" case now asserts **Matched**.
+
 Known simplification (carried as designed): `Voice.generated` is populated only when the library is fetched with `engine=qwen` — i.e. when the project is on Qwen, which is also the only time Qwen sections/rows appear. Mixed-engine setups conservatively render "Designed". No BACKLOG follow-up filed; revisit only if cross-book over-report proves confusing in practice.
