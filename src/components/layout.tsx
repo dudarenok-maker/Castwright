@@ -406,8 +406,22 @@ export function Layout() {
   /* Voice library hydration — derived from every confirmed cast on disk.
      Re-fires when the active book or selected TTS engine changes so
      `source: 'current'` and the engine-specific ttsVoice labels are correct
-     for the current UI state. */
+     for the current UI state.
+
+     ALSO re-fires as generation renders chapters: a bespoke Qwen voice's
+     `generated` flag is derived server-side from rendered segments
+     (collectRenderedQwenVoiceNames), and the cast Status column reads it to
+     show "Designed" vs "Generated". `genProgress` sums the completed-chapter
+     count across every active stream, so each rendered chapter (in ANY book —
+     the concurrent-multibook invariant) bumps it and triggers a refetch, and
+     the count drops when a stream clears on completion. Without this the table
+     only refreshed on book/engine/stage change, so a voice generated while the
+     user sat on the cast or voices view stayed "Designed" until they navigated
+     away and back. */
   const ttsEngine = useAppSelector((s) => engineForModelKey(s.ui.ttsModelKey));
+  const genProgress = useAppSelector((s) =>
+    Object.values(s.chapters.activeStreams).reduce((n, st) => n + st.done, 0),
+  );
   useEffect(() => {
     let cancelled = false;
     api
@@ -422,7 +436,7 @@ export function Layout() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, stageKind, ttsEngine]);
+  }, [bookId, stageKind, ttsEngine, genProgress]);
 
   /* Base-voice catalog — used by the Profile Drawer override picker and
      the Voices view's Base voices tab. Hydrate once at app start (the
