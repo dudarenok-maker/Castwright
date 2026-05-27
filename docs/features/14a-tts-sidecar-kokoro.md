@@ -75,6 +75,15 @@ the cast UI ever surfaces "upload a reference clip per character").
    chapters as drifted in the Generation view so the user knows to
    regenerate for book-wide voice consistency.
 
+7. **Account TTS defaults persist round-trip.** The engine/model picker
+   and the `eagerLoadKokoro` toggle (Account → "Defaults for new books")
+   write through `PUT /api/user/settings` and re-hydrate on the boot-time
+   `GET`. Every writable user-setting field is asserted to survive
+   PUT → GET → disk by `server/src/routes/user-settings.test.ts` ("round-trips
+   every writable field"), guarding the allow-list-gap class of bug that
+   silently dropped `qwen3-tts-0.6b` until `fb094e2` — a saved default that
+   400s on PUT "reverts" to the built-in default on the next load.
+
 ## Critical files
 
 - `server/tts-sidecar/main.py` — `KokoroEngine` class, `/speakers`
