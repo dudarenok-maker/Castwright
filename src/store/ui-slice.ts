@@ -96,7 +96,7 @@ export interface UiState {
       mounted in Layout and reachable from the top-bar queue chip + the
       Generate view's "View queue" button. */
   queueModalOpen: boolean;
-  /** Plan 119 — true while the global Status modal is open. The modal is
+  /** Plan 120 — true while the global Status modal is open. The modal is
       mounted in Layout and reachable from the top-bar Status pill; it carries
       the TTS engine controls + analysis/generation/revisions detail that used
       to live inline in the top bar. */
@@ -312,7 +312,7 @@ export const uiSlice = createSlice({
     closeQueueModal: (s) => {
       s.queueModalOpen = false;
     },
-    /* Plan 119 — global Status modal open/close. The modal is mounted in
+    /* Plan 120 — global Status modal open/close. The modal is mounted in
        Layout and renders nothing when closed; the top-bar Status pill
        dispatches openStatusModal, and the modal's "go to" actions
        dispatch closeStatusModal after navigating. */

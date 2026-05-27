@@ -939,7 +939,7 @@ export function Layout() {
     };
   })();
 
-  /* Plan 119 — collapse the live state into the single dominant summary the
+  /* Plan 120 — collapse the live state into the single dominant summary the
      compact Status pill renders. Computed inline (not memoised) so the
      per-second forceClockTick above keeps the "stalled" rung fresh against
      Date.now(), same as the pill IIFEs. `anyModelLoading` only counts engines
@@ -951,7 +951,7 @@ export function Layout() {
      model controls are always reachable) OR there's cross-book activity /
      pending revisions to surface. On an idle global view (Books / Voices /
      Change log with nothing running) the pill is hidden — matching the
-     pre-119 empty cluster — so the workspace doesn't show a dead pill. */
+     pre-120 empty cluster — so the workspace doesn't show a dead pill. */
   const showStatus =
     showGlobalTtsPill ||
     analysisPill !== null ||
@@ -1469,7 +1469,7 @@ export function Layout() {
       )}
       <QueueModalContainer />
 
-      {/* Plan 119 — Status modal: the TTS controls + analysis/generation/
+      {/* Plan 120 — Status modal: the TTS controls + analysis/generation/
           revisions detail that used to live inline in the top bar. The
           "go to" handlers reuse the pills' existing onClick routing
           (single-book → Generate, multi-book → queue) then close. */}

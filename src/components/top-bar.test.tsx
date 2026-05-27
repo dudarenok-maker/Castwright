@@ -3,7 +3,7 @@
    feed. Pairs with src/lib/router.test.ts (which only covers stage↔hash
    conversion, not the click path).
 
-   Plan 119: the former inline TTS / analysis / generation / revisions pill
+   Plan 120: the former inline TTS / analysis / generation / revisions pill
    cluster is gone — the top bar now renders a single compact Status pill
    (driven by the pure `summarizeStatus` helper) that opens the Status modal.
    The AnalysisPill / GenerationPill components survive (reused inside the
@@ -105,7 +105,7 @@ describe('TopBar — avatar entry to account', () => {
   });
 });
 
-describe('TopBar — StatusPill (plan 119)', () => {
+describe('TopBar — StatusPill (plan 120)', () => {
   it('renders the dominant summary label, detail and tone', () => {
     renderWithStore(
       <TopBar
@@ -147,7 +147,7 @@ describe('TopBar — StatusPill (plan 119)', () => {
   });
 });
 
-describe('summarizeStatus — dominant-state priority ladder (plan 119)', () => {
+describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => {
   const running = (over: Partial<AnalysisPillData> = {}): AnalysisPillData => ({
     state: 'running',
     phaseLabel: 'Detecting characters',
