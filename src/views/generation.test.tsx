@@ -777,7 +777,7 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
     return screen.findByRole('button', { name: /load model \(tts model\)/i });
   }
 
-  it('calls unloadAnalyzer before loadSidecar and surfaces the eviction banner when the analyzer was loaded', async () => {
+  it('calls unloadAnalyzer before loadSidecar when the analyzer was loaded', async () => {
     /* modelResident is the truth: pulled-but-not-resident shouldn't fire
        the banner. /api/ps says qwen3.5:4b is in VRAM right now. */
     getOllamaHealthSpy.mockResolvedValue({
@@ -802,8 +802,10 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
     expect(unloadAnalyzerSpy.mock.invocationCallOrder[0]).toBeLessThan(
       loadSidecarSpy.mock.invocationCallOrder[0],
     );
-
-    expect(await screen.findByText(/Analyzer unloaded to free VRAM/i)).toBeInTheDocument();
+    /* The "Analyzer unloaded to free VRAM" banner itself now renders globally
+       under the top bar via <TtsNoticeBanner> (layout.tsx), not in this view —
+       its render is covered by tts-notice-banner.test.tsx and the eviction
+       state by use-tts-lifecycle.test.ts. */
   });
 
   it('does not surface the banner when the analyzer had no model loaded', async () => {
@@ -845,12 +847,16 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
     expect(unloadSidecarSpy).toHaveBeenCalledTimes(1);
   });
 
-  /* Regression: before the fix, /api/sidecar/load returning a 5xx body
-     with {status:'error', error:'…'} (e.g. weights missing, DeepSpeed init
-     crash, 90s timeout) was silently discarded. The pill flipped back to
-     "Load model" on the next /health probe and the user had no clue
-     anything had failed. Surface the daemon's error string instead. */
-  it('surfaces the error message when loadSidecar resolves with status:error', async () => {
+  /* Regression: a /load error (5xx {status:'error', error:'…'} — weights
+     missing, DeepSpeed init crash, 90s timeout — or a fetch throw) used to be
+     silently discarded; the pill flipped back to "Load model" with no signal.
+     The fix surfaces the daemon's error string. The error STRING now renders
+     in the GLOBAL <TtsNoticeBanner> (layout.tsx) — its render is pinned by
+     tts-notice-banner.test.tsx and the loadErrorNotice STATE by
+     use-tts-lifecycle.test.ts. From this view (rendered without the layout)
+     we assert the click attempts the load and the pill doesn't WEDGE in
+     "loading" — it reverts to the idle "Load model". */
+  it('attempts the load and reverts the pill to idle when loadSidecar resolves with status:error', async () => {
     loadSidecarSpy.mockResolvedValue({
       status: 'error',
       error: 'Sidecar /load returned 500: weights missing',
@@ -860,19 +866,21 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
     const loadBtn = await findLoadTtsButton();
     fireEvent.click(loadBtn);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /Sidecar \/load returned 500: weights missing/i,
-    );
+    /* Pill must not wedge in "loading" — it returns to "Load model" once the
+       error lands (by which point loadSidecar has resolved). */
+    expect(await findLoadTtsButton()).toBeInTheDocument();
+    expect(loadSidecarSpy).toHaveBeenCalled();
   });
 
-  it('surfaces a fetch failure when loadSidecar throws', async () => {
+  it('attempts the load and reverts the pill to idle when loadSidecar throws', async () => {
     loadSidecarSpy.mockRejectedValue(new Error('Failed to fetch'));
 
     renderView();
     const loadBtn = await findLoadTtsButton();
     fireEvent.click(loadBtn);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't reach the sidecar/i);
+    expect(await findLoadTtsButton()).toBeInTheDocument();
+    expect(loadSidecarSpy).toHaveBeenCalled();
   });
 });
 

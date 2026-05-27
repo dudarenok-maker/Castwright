@@ -17,7 +17,7 @@
                                         failure. We never crash the parent. */
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createWriteStream, mkdirSync, WriteStream } from 'node:fs';
+import { closeSync, mkdirSync, openSync } from 'node:fs';
 import * as net from 'node:net';
 import { dirname, join } from 'node:path';
 import { writeFile } from 'node:fs/promises';
@@ -78,20 +78,32 @@ export function probeListening(host: string, port: number): Promise<boolean> {
   });
 }
 
-/** Open a write stream for an append-only log file. If the canonical path
-    is locked (OneDrive / antivirus on Windows can hold the file open after
-    a previous run rotated to a new one), fall back to a timestamped
-    sibling so the server boot doesn't crash. Mirrors the `New-FreshLog`
-    trick scripts/lib/log-utils.psm1 already uses. */
-function openLogStream(canonicalPath: string): WriteStream {
+/** Open an append-only log file and return its raw file descriptor.
+    If the canonical path is locked (OneDrive / antivirus on Windows can
+    hold the file open after a previous run rotated to a new one), fall
+    back to a timestamped sibling so the server boot doesn't crash.
+    Mirrors the `New-FreshLog` trick scripts/lib/log-utils.psm1 already uses.
+
+    We hand this fd straight to the child's stdio (see spawnSidecar) instead
+    of piping `child.stdout`/`stderr` through a Node WriteStream. The pipe
+    approach broke the sidecar's logging the moment the Node parent died
+    (e.g. a `tsx watch` dev reload that restarts the server but ORPHANS the
+    long-lived sidecar): the pipe's read end belonged to the dead parent, so
+    the orphaned sidecar's next stdout/stderr write — notably the
+    huggingface `from_pretrained` tqdm progress bar during a model /load —
+    raised `OSError: [Errno 22] Invalid argument`, surfacing as an opaque
+    `/load` 500 and a TTS pill that reverts to idle. An inherited file
+    descriptor is the child's OWN OS handle to the file, so it stays valid
+    regardless of the parent's lifetime. */
+function openLogFd(canonicalPath: string): number {
   mkdirSync(dirname(canonicalPath), { recursive: true });
   try {
-    return createWriteStream(canonicalPath, { flags: 'a' });
+    return openSync(canonicalPath, 'a');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EBUSY') throw err;
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fallback = canonicalPath.replace(/\.log$/, `.${stamp}.log`);
-    return createWriteStream(fallback, { flags: 'a' });
+    return openSync(fallback, 'a');
   }
 }
 
@@ -164,6 +176,25 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     QWEN_VOICES_DIR: join(WORKSPACE_ROOT, 'voices', 'qwen'),
   };
 
+  /* Open the sidecar's log files (tts.log / tts.err.log, the same convention
+     start-app.ps1 uses) and hand the child their raw file descriptors as
+     stdout/stderr. The child inherits them as its OWN OS handles, so its
+     logging survives the Node parent dying — the orphaned-sidecar [Errno 22]
+     bug openLogFd documents. Logging is non-fatal: if the files can't be
+     opened, fall back to discarding the child's output rather than refusing
+     to spawn. */
+  let outFd: number | null = null;
+  let errFd: number | null = null;
+  try {
+    outFd = openLogFd(join(logDir, 'tts.log'));
+    errFd = openLogFd(join(logDir, 'tts.err.log'));
+  } catch (err) {
+    warn('[sidecar] log file open failed (output discarded):', err);
+    if (outFd !== null) closeSync(outFd);
+    outFd = null;
+    errFd = null;
+  }
+
   let child: ChildProcess;
   try {
     child = spawnFn(
@@ -172,31 +203,26 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       {
         env,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['ignore', outFd ?? 'ignore', errFd ?? 'ignore'],
       },
     );
   } catch (err) {
     warn('[sidecar] spawn failed:', err);
     return null;
+  } finally {
+    /* The child dup'd the fds into its own process during spawn, so close
+       the parent's copies — otherwise the Node server keeps the log files
+       open (blocking rotation) and leaks a handle per spawn. Closing here is
+       safe whether spawn succeeded or threw; the child's handles are
+       independent of ours. */
+    if (outFd !== null) closeSync(outFd);
+    if (errFd !== null) closeSync(errFd);
   }
 
   const pid = child.pid;
   if (typeof pid !== 'number') {
     warn('[sidecar] spawn returned no pid; child may not have started');
     return null;
-  }
-
-  /* Pipe stdout/stderr to log files, mirroring start-app.ps1's tts.log /
-     tts.err.log convention. The streams stay open for the life of the
-     child; on EBUSY (OneDrive lock) we fall back to a timestamped
-     sibling. */
-  try {
-    const outStream = openLogStream(join(logDir, 'tts.log'));
-    const errStream = openLogStream(join(logDir, 'tts.err.log'));
-    child.stdout?.pipe(outStream);
-    child.stderr?.pipe(errStream);
-  } catch (err) {
-    warn('[sidecar] log piping failed (non-fatal):', err);
   }
 
   /* Write PID to .run/tts.pid so scripts/stop-app.ps1's taskkill loop
