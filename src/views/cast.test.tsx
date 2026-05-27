@@ -414,11 +414,46 @@ describe('CastView Qwen status pill (plan 117)', () => {
     expect(within(row).getByText('Generated')).toBeInTheDocument();
   });
 
-  it('keeps the preset provenance pills (Matched / Reused) for non-Qwen rows', () => {
+  it('renders the lifecycle pill and the Reused badge as separate, coexisting markers', () => {
     renderView();
-    /* sweeney: coqui, voiceState 'generated'; narrator: voiceState 'reused'. */
-    expect(within(rowFor('Mr. Sweeney')).getByText('Matched')).toBeInTheDocument();
-    expect(within(rowFor('Narrator')).getByText('Reused')).toBeInTheDocument();
+    /* sweeney: coqui, voiceState 'generated', no match → "Matched" pill only.
+       narrator: coqui voice, voiceState 'reused' + matchedFrom → "Matched"
+       lifecycle pill AND a Reused provenance badge (they no longer collapse
+       into a single "Reused" pill). */
+    const sweeneyRow = rowFor('Mr. Sweeney');
+    expect(within(sweeneyRow).getByText('Matched')).toBeInTheDocument();
+    expect(within(sweeneyRow).queryByTestId('reused-badge')).toBeNull();
+
+    const narratorRow = rowFor('Narrator');
+    expect(within(narratorRow).getByText('Matched')).toBeInTheDocument();
+    expect(within(narratorRow).getByTestId('reused-badge')).toBeInTheDocument();
+  });
+
+  it('shows "Generated · Reused" together for a reused Qwen voice', () => {
+    /* The real-world case the badge split fixes: a character reused from a
+       prior book whose matched library voice is a bespoke Qwen voice. The
+       provenance lives on `matchedFrom`; the Qwen lifecycle on the matched
+       voice (its `generated` flag) — both must render, where the old single
+       pill showed only "Reused". */
+    const reusedQwen: Character = { ...narrator, voiceId: 'v_qwen_narrator' };
+    const qwenLib: Voice[] = [
+      {
+        id: 'v_qwen_narrator',
+        character: 'Narrator',
+        bookId: 'b_prev',
+        bookTitle: 'Bonus Keefe Story',
+        attributes: ['descriptive'],
+        gradient: ['#E5B69C', '#C77B5C'],
+        usedIn: 2,
+        source: 'library',
+        generated: true,
+        ttsVoice: { provider: 'qwen', name: 'qwen-narrator-abc', description: 'Designed voice' },
+      },
+    ];
+    renderWithLibrary([reusedQwen], qwenLib);
+    const row = rowFor('Narrator');
+    expect(within(row).getByText('Generated')).toBeInTheDocument();
+    expect(within(row).getByTestId('reused-badge')).toBeInTheDocument();
   });
 
   it('renders a Qwen row without throwing when the library is empty (defensive)', () => {

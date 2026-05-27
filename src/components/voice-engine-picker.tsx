@@ -2,9 +2,10 @@
 
    Sits inside the Profile Drawer's Voice profile section. Two jobs:
 
-   1. Engine selector — "Default (Kokoro)" plus each installed engine. The
-      narrator usually stays Default; speaking characters can move to a
-      bespoke Qwen voice. Writes `Character.ttsEngine` (Default → undefined).
+   1. Engine selector — "Default (<project engine>)" plus each installed
+      engine. The narrator usually stays Default; speaking characters can move
+      to a bespoke Qwen voice. Writes `Character.ttsEngine` (Default →
+      undefined).
 
    2. When Qwen is selected, the bespoke voice-DESIGN flow: an editable
       persona textarea (the Gemini-generated `voiceStyle`), a Regenerate
@@ -34,13 +35,17 @@ const ENGINE_LABELS: Record<TtsEngine, string> = {
 };
 
 interface Props {
-  /** Current per-character engine. 'default' renders the "Default
-      (Kokoro)" option; any real engine selects that row. */
+  /** Current per-character engine. 'default' renders the "Default (…)"
+      option; any real engine selects that row. */
   value: EngineChoice;
   onChange: (next: EngineChoice) => void;
-  /** Engines offered below "Default (Kokoro)". At minimum Kokoro + Qwen
+  /** Engines offered below the "Default (…)" row. At minimum Kokoro + Qwen
       (plan 108). Order is preserved. */
   installedEngines: TtsEngine[];
+  /** Human label of the project's default engine, e.g. "Kokoro" or "Qwen".
+      Surfaced in the "Default (…)" option so a Qwen project doesn't show a
+      misleading "Default (Kokoro)". */
+  defaultEngineLabel: string;
 
   /* ── Qwen sub-flow (only rendered when value === 'qwen') ─────────── */
   /** The editable voice-design persona (Character.voiceStyle). */
@@ -66,6 +71,7 @@ export function VoiceEnginePicker({
   value,
   onChange,
   installedEngines,
+  defaultEngineLabel,
   persona,
   onPersonaChange,
   onRegeneratePersona,
@@ -91,7 +97,7 @@ export function VoiceEnginePicker({
         onChange={(e) => onChange(e.target.value as EngineChoice)}
         className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0"
       >
-        <option value="default">Default (Kokoro)</option>
+        <option value="default">Default ({defaultEngineLabel})</option>
         {installedEngines.map((engine) => (
           <option key={engine} value={engine}>
             {ENGINE_LABELS[engine]}
