@@ -49,16 +49,25 @@ let prepInFlight: Promise<{ analyzerEvicted: boolean }> | null = null;
 export async function playSampleWithAutoLoad(opts: PlaySampleOptions): Promise<PlaySampleResult> {
   const { args, playback, onStatus } = opts;
 
-  /* Phase 1: ensure the sidecar model is resident. Shared across concurrent
-     callers so a Drawer click + a Cast row click don't both fire evict+load. */
-  const prep = prepInFlight ?? (prepInFlight = prepareSidecar(onStatus));
+  /* Phase 1: ensure the sidecar model is resident. The engine the voice
+     actually uses drives WHICH model warms — without it the load defaulted to
+     Coqui, warming the wrong ~2 GB XTTS model when the voice is Kokoro/Qwen
+     (and on an 8 GB GPU that stacked onto the Qwen models and OOM'd design).
+     Gemini is cloud-only — no local sidecar — so skip prep entirely (mirrors
+     playBaseVoiceSampleWithAutoLoad). Shared single-flight gate so a Drawer
+     click + a Cast row click don't both fire evict+load. */
+  const engine = args.voice.ttsVoice?.provider;
   let analyzerEvicted = false;
-  try {
-    ({ analyzerEvicted } = await prep);
-  } finally {
-    /* Only the caller that started prepInFlight should clear it. Cheap to
-       just clear unconditionally — the next click rebuilds it if needed. */
-    if (prepInFlight === prep) prepInFlight = null;
+  if (engine !== 'gemini') {
+    const prep =
+      prepInFlight ?? (prepInFlight = prepareSidecar(onStatus, sidecarEngineFor(engine)));
+    try {
+      ({ analyzerEvicted } = await prep);
+    } finally {
+      /* Only the caller that started prepInFlight should clear it. Cheap to
+         just clear unconditionally — the next click rebuilds it if needed. */
+      if (prepInFlight === prep) prepInFlight = null;
+    }
   }
 
   /* Phase 2: synth + play. Each call is independent — different voiceId /
@@ -73,8 +82,19 @@ export async function playSampleWithAutoLoad(opts: PlaySampleOptions): Promise<P
   return { analyzerEvicted };
 }
 
+/* Map a voice's engine to the engine the local sidecar can `/load`. Gemini
+   is cloud-only (callers skip prep before reaching here); anything without a
+   sidecar `/load` engine (e.g. piper, or a voice with no ttsVoice yet) returns
+   undefined, falling back to the server's default — exact prior behaviour. */
+function sidecarEngineFor(
+  engine: TtsEngine | undefined,
+): 'coqui' | 'kokoro' | 'qwen' | undefined {
+  return engine === 'coqui' || engine === 'kokoro' || engine === 'qwen' ? engine : undefined;
+}
+
 async function prepareSidecar(
   onStatus: PlaySampleOptions['onStatus'],
+  engine?: 'coqui' | 'kokoro' | 'qwen',
 ): Promise<{ analyzerEvicted: boolean }> {
   const health = await api.getSidecarHealth();
   if (health.status === 'unreachable') {
@@ -126,7 +146,7 @@ async function prepareSidecar(
   }
 
   onStatus?.('loading-tts', { analyzerEvicted: analyzerResident });
-  const result = await api.loadSidecar();
+  const result = await api.loadSidecar(engine ? { engine } : {});
   if (result.status === 'error') {
     throw new Error(result.error ?? 'TTS sidecar failed to load.');
   }
@@ -152,7 +172,8 @@ export async function playBaseVoiceSampleWithAutoLoad(
   const needsSidecar: TtsEngine = args.engine;
   let analyzerEvicted = false;
   if (needsSidecar !== 'gemini') {
-    const prep = prepInFlight ?? (prepInFlight = prepareSidecar(onStatus));
+    const prep =
+      prepInFlight ?? (prepInFlight = prepareSidecar(onStatus, sidecarEngineFor(needsSidecar)));
     try {
       ({ analyzerEvicted } = await prep);
     } finally {
