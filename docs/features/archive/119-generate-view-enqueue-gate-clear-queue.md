@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-27
 owner: null
 ---
 
 # Generate-view enqueue gate + Clear-queue control
 
-> Status: active
+> Status: stable
 > Key files: `src/store/generation-stream-middleware.ts`, `src/modals/queue-modal.tsx`, `src/store/queue-thunks.ts`, `src/mocks/mock-queue.ts`, `server/src/workspace/queue-io.ts`, `server/src/routes/queue.ts`
 > URL surface: indirect — the global queue modal (`ui.queueModalOpen`), reached from the top-bar queue chip / Generate-view "View queue"
 > OpenAPI ops: `POST /api/queue/clear`
@@ -53,4 +53,4 @@ owner: null
 
 ## Ship notes
 
-(Finalize at merge — append the merge commit SHA, then flip to `stable` + archive.) Landed on branch `fix/frontend-queue-enqueue-gate-clear` 2026-05-27. Fixes the "book queues at analysis time" report and the missing bulk-clear control. Cross-links: plan 102 (global queue modal), plan 110 (active-generation honesty), plan 111 (persisted-queue worker migration).
+Shipped 2026-05-27 via PR #281 (merge commit `acf2602`). Fixes the "book queues at analysis time" report and the missing bulk-clear control. Cross-links: plan 102 (global queue modal), plan 110 (active-generation honesty), plan 111 (persisted-queue worker migration).
