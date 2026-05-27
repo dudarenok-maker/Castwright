@@ -26,6 +26,16 @@ import { accountSlice } from '../store/account-slice';
 
 const IDLE_SUMMARY: StatusSummary = { label: 'Status', tone: 'neutral', icon: 'clock' };
 
+const STATUS_DETAIL: Parameters<typeof TopBar>[0]['statusDetail'] = {
+  ttsControls: <span data-testid="tts-sentinel">Kokoro ready</span>,
+  analysis: null,
+  generation: null,
+  pendingRevisionsCount: 0,
+  onOpenRevisions: vi.fn(),
+  onGoToAnalysing: vi.fn(),
+  onGoToGeneration: vi.fn(),
+};
+
 function makeProps(
   overrides: Partial<Parameters<typeof TopBar>[0]> = {},
 ): Parameters<typeof TopBar>[0] {
@@ -39,7 +49,7 @@ function makeProps(
     onOpenAccount: vi.fn(),
     userDisplayName: 'Mike Dudarenok',
     statusSummary: IDLE_SUMMARY,
-    onOpenStatus: vi.fn(),
+    statusDetail: STATUS_DETAIL,
     ...overrides,
   };
 }
@@ -105,7 +115,7 @@ describe('TopBar — avatar entry to account', () => {
   });
 });
 
-describe('TopBar — StatusPill (plan 120)', () => {
+describe('TopBar — StatusPill (hover popover)', () => {
   it('renders the dominant summary label, detail and tone', () => {
     renderWithStore(
       <TopBar
@@ -128,15 +138,27 @@ describe('TopBar — StatusPill (plan 120)', () => {
     expect(pill).toHaveAttribute('data-status-tone', 'neutral');
   });
 
-  it('fires onOpenStatus when clicked (opens the Status modal)', () => {
-    const onOpenStatus = vi.fn();
-    renderWithStore(<TopBar {...makeProps({ onOpenStatus })} />);
-    fireEvent.click(screen.getByTestId('status-pill'));
-    expect(onOpenStatus).toHaveBeenCalledTimes(1);
+  it('reveals the popover on hover (pointer enter) with the detail sections', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'generate' })} />);
+    expect(screen.queryByTestId('status-popover')).not.toBeInTheDocument();
+    fireEvent.pointerEnter(screen.getByTestId('status-pill'));
+    expect(screen.getByTestId('status-popover')).toBeInTheDocument();
+    expect(screen.getByTestId('status-popover-tts')).toBeInTheDocument();
+    expect(screen.getByTestId('tts-sentinel')).toBeInTheDocument();
   });
 
-  it('no longer renders the analysis or generation pills inline', () => {
+  it('reveals the popover on click/tap (sticky) and reflects aria-expanded', () => {
+    renderWithStore(<TopBar {...makeProps()} />);
+    const pill = screen.getByTestId('status-pill');
+    expect(pill).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(pill);
+    expect(screen.getByTestId('status-popover')).toBeInTheDocument();
+    expect(pill).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('keeps the analysis/generation pills out of the bar until the popover opens', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'generate' })} />);
+    /* Closed popover → no pills anywhere. */
     expect(screen.queryByTestId('analysis-pill')).not.toBeInTheDocument();
     expect(screen.queryByTestId('generation-pill')).not.toBeInTheDocument();
   });
