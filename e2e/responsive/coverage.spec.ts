@@ -171,7 +171,7 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
-  test('status modal (plan 119)', async ({ page }) => {
+  test('status modal (plan 120)', async ({ page }) => {
     /* The Status pill is always present in a book context; opening it
        surfaces the modal (dialog on >= sm, full-screen sheet on phone)
        carrying the TTS controls + analysis/generation/revisions sections. */

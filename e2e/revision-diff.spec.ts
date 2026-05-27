@@ -9,7 +9,7 @@ test.describe.configure({ mode: 'serial' });
  *
  * Asserts the integration bit Vitest can't cover: the revisions poll
  * resolves under VITE_USE_MOCKS and the pending-revisions action renders.
- * Plan 119 moved that affordance out of an inline top-bar pill into the
+ * Plan 120 moved that affordance out of an inline top-bar pill into the
  * Status modal, so the test opens the modal (via the compact Status pill)
  * and asserts the "N revisions pending" action inside it. The full
  * diff-player open + a/b mutual exclusion logic is covered by
@@ -40,7 +40,7 @@ test.describe('revision diff a/b audition pill', () => {
       .first()
       .click({ timeout: 10_000 });
 
-    /* Plan 119 — the revisions affordance lives in the Status modal now.
+    /* Plan 120 — the revisions affordance lives in the Status modal now.
        The Status pill is always present in a book context; open the modal
        and wait for the revisions action to appear once the mock
        pollRevisions call resolves (≈200ms) and the slice flips loaded. */

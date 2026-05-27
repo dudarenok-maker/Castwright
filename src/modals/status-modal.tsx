@@ -1,4 +1,4 @@
-/* Plan 119 — global Status modal.
+/* Plan 120 — global Status modal.
  *
  * Mounted in Layout; renders nothing when `ui.statusModalOpen` is false.
  * Collapses the former top-bar status cluster — the TTS model-control pills
