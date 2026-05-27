@@ -7,6 +7,7 @@ owner: null
 # 108 — Qwen3-TTS coexistence + per-character engine/voice + series rebaseline
 
 > Status: draft — implemented across waves (see "Implementation waves" below). Each wave's PR flips the relevant section to `stable` and fills Ship notes.
+> Follow-up: the rebaseline modal's cross-book de-duplication was made durable in plan [122](archive/122-rebaseline-name-alias-collapse.md) — it now collapses recurring cast by name/alias (not just `voiceId ?? id`) and the approve path unifies `voiceId` + propagates to every matching book.
 > Key files: `server/tts-sidecar/main.py` (`QwenEngine`, inline like the other engines), `server/tts-sidecar/scripts/install-qwen3.mjs`, `server/src/tts/index.ts`, `server/src/tts/voice-mapping.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/tts/per-character-engine.ts`, `server/src/gpu/semaphore.ts`, `server/src/routes/rebaseline.ts`, `src/modals/rebaseline-modal.tsx`, `src/components/voice-engine-picker.tsx`, `src/views/account.tsx`
 > URL surface: `#/cast` (per-character picker + rebaseline trigger), Account tab (dual-model flag + Qwen install), the global queue modal (engine badges)
 > OpenAPI ops: `PUT /api/voices/{voiceId}/override` (+`scope`/`bookId`), new `POST /api/series/{bookId}/rebaseline/{propose,apply}`, `GET/PUT /api/user/settings` (+`dualModelEnabled`), sidecar `POST /load`,`/unload`,`/synthesize` (+`qwen` engine)
