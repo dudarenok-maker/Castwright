@@ -11,7 +11,15 @@ import {
   IconSpinner,
   IconClose,
 } from '../lib/icons';
-import { SectionLabel, MixedHeading, Avatar, Pill, VoiceSwatch } from '../components/primitives';
+import {
+  SectionLabel,
+  MixedHeading,
+  Avatar,
+  Pill,
+  VoiceSwatch,
+  ReusedBadge,
+} from '../components/primitives';
+import { resolveVoiceStatus } from '../lib/voice-status';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
 import type { Character, Voice, DriftEvent, CharColor, TtsModelKey, TtsEngine } from '../lib/types';
 import type { TtsVoiceAssignment } from '../lib/tts-voice-mapping';
@@ -945,44 +953,21 @@ function resolveDisplayTtsVoice(
   return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
 }
 
-type StatusPillColor = 'success' | 'warning' | 'library' | 'neutral';
-
-/* Engine-aware Status pill (plan 117). A Qwen character follows the bespoke
-   design → generate lifecycle (Needs voice → Designed → Generated), driven
-   by its designed voiceId + the matched library voice's `generated` flag —
-   NOT the provenance `voiceState` enum (whose "generated" means "auto-
-   assigned during analysis", which would falsely flag an undesigned Qwen
-   character green). Preset characters keep their existing `voiceState`
-   pills unchanged. `generated` is only populated when the library was
-   fetched with engine=qwen (i.e. the project is on Qwen — the case that
-   matters); otherwise it reads "Designed", a safe conservative default. */
-function resolveStatusPill(
-  c: Character,
-  voice: Voice | undefined,
-): { label: string; color: StatusPillColor } | null {
-  if (c.ttsEngine === 'qwen') {
-    if (!c.overrideTtsVoices?.qwen?.name) return { label: 'Needs voice', color: 'warning' };
-    if (voice?.generated) return { label: 'Generated', color: 'success' };
-    return { label: 'Designed', color: 'library' };
-  }
-  switch (c.voiceState) {
-    case 'generated':
-      return { label: 'Matched', color: 'success' };
-    case 'tuned':
-      return { label: 'Tuned', color: 'warning' };
-    case 'reused':
-      return { label: 'Reused', color: 'library' };
-    case 'locked':
-      return { label: 'Locked', color: 'neutral' };
-    default:
-      return null;
-  }
-}
-
+/* Engine-aware Status display (plan 117 + reused-badge split). Renders two
+   ORTHOGONAL markers via `resolveVoiceStatus`: the lifecycle pill (Needs voice
+   → Designed → Generated for Qwen; Matched / Tuned / Locked otherwise) plus a
+   small Reused badge whenever the voice was matched from a prior book — so a
+   reused Qwen voice reads "Generated · Reused" instead of collapsing to a lone
+   "Reused" pill. See src/lib/voice-status.ts for the resolution rules. */
 function StatusPill({ c, voice }: { c: Character; voice: Voice | undefined }) {
-  const pill = resolveStatusPill(c, voice);
-  if (!pill) return null;
-  return <Pill color={pill.color}>{pill.label}</Pill>;
+  const { lifecycle, reused } = resolveVoiceStatus(c, voice);
+  if (!lifecycle && !reused) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 flex-wrap">
+      {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
+      {reused && <ReusedBadge />}
+    </span>
+  );
 }
 
 interface TtsVoiceLineProps {
