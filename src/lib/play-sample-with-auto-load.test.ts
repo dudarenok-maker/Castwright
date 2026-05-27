@@ -263,4 +263,69 @@ describe('playSampleWithAutoLoad', () => {
     );
     expect(playback.play).not.toHaveBeenCalled();
   });
+
+  /* Engine threading. Regression for the 2026-05-27 OOM: previewing a Qwen
+     voice fired loadSidecar() with no engine, which the server defaults to
+     Coqui — warming the ~2 GB XTTS model on top of the resident Qwen models
+     and exhausting the 8 GB GPU. The sidecar must warm the engine the VOICE
+     actually uses. */
+  it.each(['coqui', 'kokoro', 'qwen'] as const)(
+    'warms the %s engine (not the Coqui default) when the voice uses it',
+    async (engine) => {
+      vi.mocked(api.getSidecarHealth).mockResolvedValueOnce({
+        status: 'reachable',
+        url: '',
+        modelLoaded: false,
+        loading: false,
+      });
+      vi.mocked(api.getOllamaHealth).mockResolvedValueOnce({
+        status: 'reachable',
+        url: '',
+        modelResident: false,
+      });
+      vi.mocked(api.loadSidecar).mockResolvedValueOnce({ status: 'ready' });
+      vi.mocked(api.getVoiceSample).mockResolvedValueOnce({
+        url: '/audio/voices/x.mp3',
+      } as never);
+      const playback = { play: vi.fn().mockResolvedValue(undefined) };
+
+      await playSampleWithAutoLoad({
+        args: {
+          ...sampleArgs,
+          voice: {
+            ...sampleArgs.voice,
+            ttsVoice: { provider: engine, name: 'V', description: '' },
+          },
+        },
+        playback,
+      });
+
+      expect(api.loadSidecar).toHaveBeenCalledWith({ engine });
+    },
+  );
+
+  it('skips sidecar prep entirely for a Gemini voice (cloud engine, no local model)', async () => {
+    vi.mocked(api.getVoiceSample).mockResolvedValueOnce({ url: '/audio/voices/g.mp3' } as never);
+    const playback = { play: vi.fn().mockResolvedValue(undefined) };
+    const statuses: SampleStatus[] = [];
+
+    await playSampleWithAutoLoad({
+      args: {
+        ...sampleArgs,
+        voice: {
+          ...sampleArgs.voice,
+          ttsVoice: { provider: 'gemini', name: 'Kore', description: '' },
+        },
+      },
+      playback,
+      onStatus: (s) => statuses.push(s),
+    });
+
+    /* No sidecar hop at all — not even the health probe. */
+    expect(api.getSidecarHealth).not.toHaveBeenCalled();
+    expect(api.loadSidecar).not.toHaveBeenCalled();
+    expect(api.unloadAnalyzer).not.toHaveBeenCalled();
+    expect(statuses).toEqual(['synthesizing']);
+    expect(playback.play).toHaveBeenCalledWith('/audio/voices/g.mp3');
+  });
 });
