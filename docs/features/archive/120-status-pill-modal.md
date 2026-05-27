@@ -1,6 +1,6 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-05-27
 owner: null
 ---
 
@@ -28,7 +28,7 @@ owner: null
 ## Invariants to preserve
 
 1. **The top-bar middle strip renders the nav + at most one `status-pill`.** The former cluster of `{ttsPill}` + `<AnalysisPill>` + `<GenerationPill>` + revisions badge is gone (`src/components/top-bar.tsx` — the `ml-auto` slot now holds only `<StatusPill>`).
-2. **The Status pill is hidden on idle global views.** `Layout` passes `statusSummary={null}` when there is no book in scope AND no analysis/generation stream AND no pending revisions, so Books/Voices/Change log with nothing running show no dead pill (matches the pre-119 empty cluster). `top-bar.tsx` renders nothing when `statusSummary === null`.
+2. **The Status pill is hidden on idle global views.** `Layout` passes `statusSummary={null}` when there is no book in scope AND no analysis/generation stream AND no pending revisions, so Books/Voices/Change log with nothing running show no dead pill (matches the pre-120 empty cluster). `top-bar.tsx` renders nothing when `statusSummary === null`.
 3. **Queue chip, `wt` dev link, theme toggle, and avatar stay inline and unchanged** (the right-anchored `shrink-0` cluster in `top-bar.tsx`). Only the queue chip's `data-testid="topbar-queue-chip"` flow is asserted by `e2e/queue-modal.spec.ts`, which is untouched.
 4. **`ModelControlPill` Load/Stop is reused verbatim inside the modal.** The buttons keep their `aria-label`s (`stop (tts model)` / `load model (tts model)`); clicking them does NOT close the modal.
 5. **`summarizeStatus` priority ladder** (highest wins): halted › stalled › generation-running › analysis-running › model-loading › analysis-paused › revisions-pending › idle. Generation outranks analysis when both run.
@@ -46,7 +46,7 @@ owner: null
 - Vitest unit (`src/components/layout.test.tsx`) — the Qwen-pinned-cast test opens the Status modal (via the pill) and asserts the Qwen `ModelControlPill` renders inside it.
 - Playwright e2e (`e2e/kokoro-stop-pill.spec.ts`) — opens the Status modal, then drives the Kokoro ready→idle→ready Load/Stop round-trip against the buttons inside it; Coqui control absent on a Kokoro-default book.
 - Playwright e2e (`e2e/revision-diff.spec.ts`) — the pending-revisions action appears inside the Status modal after opening a complete book under mocks.
-- Playwright e2e (`e2e/responsive/coverage.spec.ts`) — "status modal (plan 119)" opens the modal and asserts no horizontal overflow at all three viewports.
+- Playwright e2e (`e2e/responsive/coverage.spec.ts`) — "status modal (plan 120)" opens the modal and asserts no horizontal overflow at all three viewports.
 
 ### Manual acceptance walkthrough
 
@@ -66,4 +66,4 @@ Run in mock mode (`VITE_USE_MOCKS=true`).
 
 ## Ship notes
 
-Shipped 2026-05-27 on branch `feat/frontend-plan-119-status-pill-modal`. Collapses the top-bar TTS/analysis/generation/revisions cluster into one compact, color-coded Status pill + a Status modal; queue chip / theme / avatar unchanged; pill hidden on idle global views. Commit SHA: _(filled on merge)_.
+Shipped 2026-05-27 via PR #283 (merge commit `08ae6fb`), branch `feat/frontend-plan-119-status-pill-modal`. Collapses the top-bar TTS/analysis/generation/revisions cluster into one compact, color-coded Status pill + a Status modal; queue chip / theme / avatar unchanged; pill hidden on idle global views. Renumbered 119 → 120 in a follow-up (a parallel PR shipped a different plan 119 — `archive/119-generate-view-enqueue-gate-clear-queue.md` — concurrently); the in-code comments + this doc now read "plan 120".

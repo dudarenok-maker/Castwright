@@ -41,7 +41,7 @@ export interface AnalysisPillData {
   onClick: () => void;
 }
 
-/* Plan 119 — the top bar no longer renders the TTS / analysis / generation /
+/* Plan 120 — the top bar no longer renders the TTS / analysis / generation /
    revisions pills inline; they live behind a single compact Status pill that
    opens the Status modal. `summarizeStatus` collapses the live state into ONE
    dominant {label, tone, icon, detail} so the pill stays narrow and the nav
@@ -125,15 +125,15 @@ interface TopBarProps {
       account slice — the persisted user-level value, with a built-in
       seed default. */
   userDisplayName: string;
-  /** Plan 119 — the single compact Status pill's content, pre-summarized in
+  /** Plan 120 — the single compact Status pill's content, pre-summarized in
       Layout (so the per-second clock tick that drives the "stalled" check
       keeps it live). Collapses the former TTS / analysis / generation /
       revisions pill cluster into one dominant state. `null` hides the pill
       entirely — Layout passes null on global views (Books / Voices / Change
       log) when there's no book in scope AND no cross-book activity, so an
-      idle workspace shows no dead pill (matches the pre-119 empty cluster). */
+      idle workspace shows no dead pill (matches the pre-120 empty cluster). */
   statusSummary: StatusSummary | null;
-  /** Plan 119 — click handler for the Status pill; opens the Status modal. */
+  /** Plan 120 — click handler for the Status pill; opens the Status modal. */
   onOpenStatus: () => void;
   /** Plan 102 — workspace queue count. When > 0, renders a compact chip in
       the top-right cluster that opens the global queue modal on click. When
@@ -252,7 +252,7 @@ export function TopBar({
               ))}
             </nav>
           )}
-          {/* Plan 119 — one compact Status pill (pushed right via ml-auto)
+          {/* Plan 120 — one compact Status pill (pushed right via ml-auto)
               replaces the former TTS / analysis / generation / revisions
               cluster; it opens the Status modal carrying the full detail.
               Hidden on idle global views (statusSummary === null). */}
@@ -335,7 +335,7 @@ function StatusPill({ summary, onClick }: { summary: StatusSummary; onClick: () 
   );
 }
 
-/* Exported (since plan 119) for reuse inside the Status modal, which renders
+/* Exported (since plan 120) for reuse inside the Status modal, which renders
    the same live pill with its onClick overridden to navigate-and-close. */
 export function AnalysisPill({ data }: { data: AnalysisPillData }) {
   const { state, phaseLabel, percent, haltReason, kind, subsetChapterCount, onClick } = data;
