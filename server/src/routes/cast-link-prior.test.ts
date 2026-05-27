@@ -275,15 +275,49 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(afterSecond).toEqual(beforeSecond);
   });
 
-  it("does not modify the source book's cast.json", async () => {
-    const before = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK);
-    await callLink(newBookId, {
+  it("unifies the source character's voiceId to the target's key (plan 122)", async () => {
+    const before = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'Hartwell-alvin-Vale',
+    );
+    expect(before?.voiceId).toBeUndefined();
+    const res = await callLink(newBookId, {
       sourceCharacterId: 'Hartwell-alvin-Vale',
       targetBookId: keeperBookId,
       targetCharacterId: 'Hart',
     });
-    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK);
-    expect(after).toEqual(before);
+    expect(res.status).toBe(200);
+    /* The source now shares the target's series-override write key — aliases
+       alone never did that, so a later "Propose voices" approve would skip
+       this book. Other source fields are untouched. */
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'Hartwell-alvin-Vale',
+    );
+    expect(after?.voiceId).toBe('v_Hart');
+    expect(after?.name).toBe('Hartwell Brennan Vale');
+    expect(after?.aliases).toEqual(['Bren']);
+  });
+
+  it("falls back to the target's id when the target has no voiceId", async () => {
+    /* Re-seed keeper with a target carrying NO voiceId — the canonical key is
+       then the target's id, and the source should adopt it. */
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      { id: 'Maerin', name: 'Maerin', role: 'character', color: 'unset' },
+    ]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
+      { id: 'Maerin-Vell', name: 'Maerin Vell', role: 'character', color: 'unset' },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'Maerin-Vell',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'Maerin',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('Maerin');
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'Maerin-Vell',
+    );
+    expect(after?.voiceId).toBe('Maerin');
   });
 
   it('drops target.name from the alias pool (no self-alias)', async () => {

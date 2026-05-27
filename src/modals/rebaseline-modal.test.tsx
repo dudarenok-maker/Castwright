@@ -33,7 +33,11 @@ const generateVoiceStyle = vi.fn(async (_bookId: string, characterId: string) =>
   voiceStyle: `persona for ${characterId}`,
 }));
 const generateAllVoiceStyles = vi.fn(async () => ({ voiceStyles: {}, failures: {} }));
-const setVoiceOverride = vi.fn(async () => undefined);
+const setVoiceOverrideLinked = vi.fn(async (_bookId: string, characterId: string) => ({
+  canonicalVoiceId: `v_${characterId}`,
+  updated: [],
+  failed: [],
+}));
 const getBookState = vi.fn(async (_bookId: string) => null as unknown);
 /* The whole-series aggregation fetch. Default: no series-mates (single-book
    workspace), so the modal works from the anchor cast alone — the pre-
@@ -45,7 +49,8 @@ vi.mock('../lib/api', () => ({
     designQwenVoice: (...args: unknown[]) => designQwenVoice(...(args as [string, string])),
     generateVoiceStyle: (...args: unknown[]) => generateVoiceStyle(...(args as [string, string])),
     generateAllVoiceStyles: () => generateAllVoiceStyles(),
-    setVoiceOverride: (...args: unknown[]) => setVoiceOverride(...(args as [])),
+    setVoiceOverrideLinked: (...args: unknown[]) =>
+      setVoiceOverrideLinked(...(args as [string, string])),
     getBookState: (...args: unknown[]) => getBookState(...(args as [string])),
     getSeriesCast: (...args: unknown[]) => getSeriesCast(...(args as [string])),
   },
@@ -149,7 +154,7 @@ beforeEach(() => {
   }));
   generateVoiceStyle.mockClear();
   generateAllVoiceStyles.mockClear();
-  setVoiceOverride.mockClear();
+  setVoiceOverrideLinked.mockClear();
   getBookState.mockClear();
   getBookState.mockResolvedValue(null);
   getSeriesCast.mockClear();
@@ -283,6 +288,49 @@ describe('RebaselineModal — whole-series aggregation', () => {
       expect(sel).not.toContain('Marlow'); // dropped below 80% once Pell's lines count
       expect(sel).not.toContain('narrator');
     });
+  });
+
+  it('collapses a divergent-id same-name sibling into ONE row (plan 122 name/alias)', async () => {
+    /* Anchor book-1 has "Maerin" (id 'Maerin'). A later volume detected her as
+       "Maerin Vell" (different id, NO shared voiceId) — divergent write key.
+       Name/alias collapse must fold her into the single anchor row, NOT render
+       a second "Maerin Vell" row. */
+    getSeriesCast.mockResolvedValue({
+      characters: [{ ...char('Maerin-Vell', 'Maerin Vell', 200), sourceBookId: 'book-2' } as Character],
+    });
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitFor(() => expect(getSeriesCast).toHaveBeenCalledWith('book-1'));
+    /* getByLabelText throws if there were two "Maerin" rows — single row proves
+       the collapse; the divergent-id name never spawns its own row. */
+    await waitFor(() => expect(screen.getByLabelText('Rebaseline Maerin')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Rebaseline Maerin Vell')).toBeNull();
+  });
+
+  it('keeps a notLinkedTo sibling as a SEPARATE row (auto-collapse escape hatch)', async () => {
+    getSeriesCast.mockResolvedValue({
+      characters: [
+        {
+          ...char('Maerin-Vell', 'Maerin Vell', 200),
+          sourceBookId: 'book-2',
+          notLinkedTo: [{ bookId: 'book-1', characterId: 'Maerin' }],
+        } as Character,
+      ],
+    });
+    const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
+    render(
+      <Provider store={store}>
+        <RebaselineModalContainer bookId="book-1" />
+      </Provider>,
+    );
+    await waitFor(() => expect(getSeriesCast).toHaveBeenCalledWith('book-1'));
+    /* The user marked them intentionally different → both rows remain. */
+    await waitFor(() => expect(screen.getByLabelText('Rebaseline Maerin Vell')).toBeInTheDocument());
+    expect(screen.getByLabelText('Rebaseline Maerin')).toBeInTheDocument();
   });
 
   it('falls back to the anchor cast when the series-cast fetch fails', async () => {
@@ -552,10 +600,10 @@ describe('RebaselineModal — reuse already-approved voices', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-approve'));
     });
-    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(2));
-    const names = (setVoiceOverride.mock.calls as unknown as Array<[string, { name: string }]>).map(
-      (c) => c[1].name,
-    );
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalledTimes(2));
+    const names = (
+      setVoiceOverrideLinked.mock.calls as unknown as Array<[string, string, { name: string }]>
+    ).map((c) => c[2].name);
     expect(names).toContain('qwen-Hart-approved');
     expect(names).toContain('qwen-Marlow');
     expect(names).not.toContain('qwen-Maerin-approved');
@@ -578,17 +626,18 @@ describe('RebaselineModal — approve', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-approve'));
     });
-    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(2));
-    // Assert the call shape: keyed by the character's library voiceId,
-    // engine qwen + designed voiceId, scope series + the anchor bookId.
-    const calls = setVoiceOverride.mock.calls as unknown as Array<
-      [string, { engine: string; name: string }, { scope: string; bookId: string }]
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalledTimes(2));
+    // Assert the call shape: the name/alias-aware write is keyed by the rep's
+    // HOME book + character id (plan 122 — the server rediscovers the group
+    // and unifies voiceId), with the qwen engine + designed voiceId.
+    const calls = setVoiceOverrideLinked.mock.calls as unknown as Array<
+      [string, string, { engine: string; name: string }]
     >;
-    const MaerinCall = calls.find((c) => c[1].name === 'qwen-Maerin');
+    const MaerinCall = calls.find((c) => c[2].name === 'qwen-Maerin');
     expect(MaerinCall).toBeTruthy();
-    expect(MaerinCall![0]).toBe('voice-Maerin');
-    expect(MaerinCall![1]).toEqual({ engine: 'qwen', name: 'qwen-Maerin' });
-    expect(MaerinCall![2]).toEqual({ scope: 'series', bookId: 'book-1' });
+    expect(MaerinCall![0]).toBe('book-1'); // home book (anchor = open book)
+    expect(MaerinCall![1]).toBe('Maerin'); // character id
+    expect(MaerinCall![2]).toEqual({ engine: 'qwen', name: 'qwen-Maerin' });
     // The cast slice mirrors the engine + override.
     const Maerin = store.getState().cast.characters.find((c) => c.id === 'Maerin')!;
     expect(Maerin.ttsEngine).toBe('qwen');
@@ -618,9 +667,11 @@ describe('RebaselineModal — approve', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-approve'));
     });
-    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(1));
-    const calls = setVoiceOverride.mock.calls as unknown as Array<[string, { name: string }]>;
-    expect(calls[0][1].name).toBe('qwen-Maerin');
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalledTimes(1));
+    const calls = setVoiceOverrideLinked.mock.calls as unknown as Array<
+      [string, string, { name: string }]
+    >;
+    expect(calls[0][2].name).toBe('qwen-Maerin');
   });
 });
 
@@ -648,8 +699,10 @@ describe('RebaselineModal — per-character failure', () => {
       fireEvent.click(screen.getByTestId('rebaseline-approve'));
     });
     // Only the surviving row is written.
-    await waitFor(() => expect(setVoiceOverride).toHaveBeenCalledTimes(1));
-    const calls = setVoiceOverride.mock.calls as unknown as Array<[string, { name: string }]>;
-    expect(calls[0][1].name).toBe('qwen-Maerin');
+    await waitFor(() => expect(setVoiceOverrideLinked).toHaveBeenCalledTimes(1));
+    const calls = setVoiceOverrideLinked.mock.calls as unknown as Array<
+      [string, string, { name: string }]
+    >;
+    expect(calls[0][2].name).toBe('qwen-Maerin');
   });
 });
