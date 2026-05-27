@@ -1,24 +1,35 @@
 /* Integration tests for the Qwen design-voice proxy router (plan 108,
-   Wave 4).
+   Wave 4; reuse-as-sample optimisation).
 
-   Seeds one book with a speaking character carrying a persona on disk and
-   asserts:
+   Seeds one book with a speaking character carrying a persona + evidence on
+   disk and asserts:
      - the route proxies the sidecar's /qwen/design-voice with the derived
-       voiceId + persona, and streams back the PCM + X-Sample-Rate +
-       X-Qwen-Voice-Id headers (the audition)
-     - the persona defaults to the character's voiceStyle, and an explicit
-       body persona overrides it
+       voiceId + persona + a calibrationText drawn from the character's own
+       longest evidence quote (so the audition speaks their line)
+     - the audition MP3 is written into the voice-sample cache under the
+       filename the /sample player computes, and the route returns JSON
+       `{ voiceId, url }` pointing at it
+     - ONE-PASS: after design, a /sample request for the same identity is a
+       cache hit — the TTS provider is never invoked (no second synthesis)
+     - the persona defaults to the character's voiceStyle; a body persona wins
      - 400 when neither a body persona nor a persisted voiceStyle exists
+     - 400 when sampleVoiceId / modelKey are missing
      - the route does NOT persist the override (design only caches + previews)
-     - a sidecar that's down → 502 with a clear message
-     - unknown book / character → 404
+     - a sidecar that's down → 502; unknown book / character → 404
 
-   `global.fetch` is mocked so the route test never touches a live sidecar.
-   Lazy-import pattern mirrors the sibling route tests so WORKSPACE_DIR is
-   set before paths.ts binds BOOKS_ROOT. */
+   `global.fetch` is mocked (sidecar); selectTtsProvider is mocked so the
+   /sample coherence check can assert the provider is untouched. Real ffmpeg
+   encodes the audition (same boundary as voice-sample.ts). */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  readdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -27,12 +38,26 @@ import request from 'supertest';
 const AUTHOR = 'Shannon Messenger';
 const SERIES = 'Keeper of the Lost Cities';
 const BOOK = 'Keeper of the Lost Cities';
+const QWEN_KEY = 'qwen3-tts-0.6b';
+
+/* Biana's longest evidence quote, smart-quotes stripped — what buildSampleText
+   picks and the audition therefore speaks. */
+const BIANA_LINE = 'We have to tell the Council, and we have to do it before the others wake.';
 
 let workspaceRoot: string;
+let audioDir: string;
 let app: Express;
 let bookId: string;
 
 const fetchMock = vi.fn();
+/* selectTtsProvider stub — the /sample coherence test asserts synthesize is
+   NEVER called (the design route already wrote the file). */
+const { synthesize } = vi.hoisted(() => ({ synthesize: vi.fn() }));
+
+vi.mock('../tts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../tts/index.js')>();
+  return { ...actual, selectTtsProvider: vi.fn(() => ({ synthesize })) };
+});
 
 const characters = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
@@ -43,6 +68,7 @@ const characters = [
     color: 'lilac',
     voiceId: 'v_biana',
     voiceStyle: 'a poised, confident teenage girl, clear and warm',
+    evidence: [{ quote: `“${BIANA_LINE}”` }, { quote: 'Wait.' }],
   },
   { id: 'nopersona', name: 'Nopersona', role: 'extra', color: 'amber' },
 ];
@@ -77,9 +103,8 @@ function readCast(): { characters: Array<Record<string, unknown>> } {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-/* A successful sidecar response: a few PCM bytes + the headers the engine
-   sets on a design audition. */
-function okSidecarResponse(pcm = new Uint8Array([1, 2, 3, 4])) {
+/* A few hundred ms of silence so ffmpeg produces a real MP3 frame. */
+function okSidecarResponse(pcm = new Uint8Array(24_000 * 2 * 0.3)) {
   return {
     ok: true,
     status: 200,
@@ -90,13 +115,25 @@ function okSidecarResponse(pcm = new Uint8Array([1, 2, 3, 4])) {
   };
 }
 
+function isMp3Magic(buf: Buffer): boolean {
+  if (buf.length < 3) return false;
+  if (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) return true; // ID3v2
+  if (buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0) return true; // MPEG frame sync
+  return false;
+}
+
+const designBody = { sampleVoiceId: 'v_biana', modelKey: QWEN_KEY };
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-qwen-voice-test-'));
+  audioDir = mkdtempSync(join(tmpdir(), 'audiobook-qwen-voice-audio-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
+  process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
   vi.stubGlobal('fetch', fetchMock);
 
-  const [{ qwenVoiceRouter }, { makeBookId }] = await Promise.all([
+  const [{ qwenVoiceRouter }, { voiceSampleRouter }, { makeBookId }] = await Promise.all([
     import('./qwen-voice.js'),
+    import('./voice-sample.js'),
     import('../workspace/paths.js'),
   ]);
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
@@ -104,31 +141,39 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', qwenVoiceRouter);
+  app.use('/api/voices', voiceSampleRouter);
 });
 
 beforeEach(() => {
   fetchMock.mockReset();
   fetchMock.mockResolvedValue(okSidecarResponse());
+  synthesize.mockReset();
+  synthesize.mockResolvedValue({ pcm: Buffer.alloc(24_000 * 2 * 0.3, 0), sampleRate: 24_000 });
+  for (const f of readdirSync(audioDir)) rmSync(join(audioDir, f), { force: true });
   writeBookOnDisk(characters);
 });
 
 afterAll(() => {
   vi.unstubAllGlobals();
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  if (audioDir) rmSync(audioDir, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
+  delete process.env.VOICE_SAMPLE_AUDIO_DIR;
 });
 
 describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
-  it('proxies the sidecar with the derived voiceId + persona and streams back PCM + headers', async () => {
-    const res = await request(app).post(`/api/books/${bookId}/cast/biana/design-voice`).send({});
+  it('forwards persona + a calibrationText from the character line, caches the MP3, returns {voiceId,url}', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
+
     expect(res.status).toBe(200);
-    /* PCM streamed back verbatim. */
-    expect(res.body).toBeInstanceOf(Buffer);
-    expect(Array.from(res.body as Buffer)).toEqual([1, 2, 3, 4]);
-    /* Headers echo the sample rate + the derived cache voiceId. */
-    expect(res.headers['x-sample-rate']).toBe('24000');
-    expect(res.headers['x-qwen-voice-id']).toBe('qwen-v_biana');
-    /* Sidecar called once with the right payload. */
+    expect(res.headers['content-type']).toMatch(/application\/json/);
+    expect(res.body.voiceId).toBe('qwen-v_biana');
+    expect(res.body.url).toMatch(/^\/audio\/voices\/v_biana-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+
+    /* Sidecar called once with the right payload — including the character's
+       own line as the audition calibration text. */
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('http://localhost:9000/qwen/design-voice');
@@ -137,19 +182,51 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
       voiceId: 'qwen-v_biana',
       instruct: 'a poised, confident teenage girl, clear and warm',
       language: 'English',
+      calibrationText: BIANA_LINE,
     });
+
+    /* The cached file on disk is a real MP3 at the URL's filename. */
+    const fileName = res.body.url.split('/').pop() as string;
+    const fileBuf = readFileSync(join(audioDir, fileName));
+    expect(isMp3Magic(fileBuf)).toBe(true);
+  });
+
+  it('ONE PASS: after design, /sample for the same identity is a cache hit (no provider call)', async () => {
+    const design = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
+    expect(design.status).toBe(200);
+
+    /* The drawer / cast row would request the 12s sample with the designed
+       voice pinned in overrideTtsVoices.qwen and the character's evidence as
+       the hint — exactly the inputs that reproduce the cached filename. */
+    const sample = await request(app)
+      .post('/api/voices/v_biana/sample')
+      .send({
+        modelKey: QWEN_KEY,
+        voice: { id: 'v_biana', overrideTtsVoices: { qwen: { name: 'qwen-v_biana' } } },
+        characterHint: { evidence: [`“${BIANA_LINE}”`, 'Wait.'] },
+      });
+
+    expect(sample.status).toBe(200);
+    expect(sample.body.cached).toBe(true);
+    expect(sample.body.url).toBe(design.body.url);
+    /* The whole point: the player never re-synthesised. */
+    expect(synthesize).not.toHaveBeenCalled();
   });
 
   it('defaults the persona to the character voiceStyle and lets the body override it', async () => {
     await request(app)
       .post(`/api/books/${bookId}/cast/biana/design-voice`)
-      .send({ persona: 'a gruff old sailor' });
+      .send({ ...designBody, persona: 'a gruff old sailor' });
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sent.instruct).toBe('a gruff old sailor');
   });
 
   it('does NOT persist the override (design only caches + previews)', async () => {
-    await request(app).post(`/api/books/${bookId}/cast/biana/design-voice`).send({});
+    await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
     const cast = readCast();
     const biana = cast.characters.find((c) => c.id === 'biana');
     expect(biana?.overrideTtsVoices).toBeUndefined();
@@ -159,14 +236,34 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
   it('400s when neither a body persona nor a persisted voiceStyle exists', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/nopersona/design-voice`)
-      .send({});
+      .send(designBody);
     expect(res.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('400s when sampleVoiceId is missing', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send({ modelKey: QWEN_KEY });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/sampleVoiceId/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('400s when modelKey is missing or invalid', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send({ sampleVoiceId: 'v_biana', modelKey: 'nope' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/modelKey/);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('502s with a clear message when the sidecar is unreachable', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
-    const res = await request(app).post(`/api/books/${bookId}/cast/biana/design-voice`).send({});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/unreachable/i);
   });
@@ -180,18 +277,22 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
       arrayBuffer: async () => new ArrayBuffer(0),
       json: async () => ({ error: 'qwen-tts not installed' }),
     });
-    const res = await request(app).post(`/api/books/${bookId}/cast/biana/design-voice`).send({});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/qwen-tts not installed/);
   });
 
   it('404s for an unknown bookId', async () => {
-    const res = await request(app).post('/api/books/nope/cast/biana/design-voice').send({});
+    const res = await request(app).post('/api/books/nope/cast/biana/design-voice').send(designBody);
     expect(res.status).toBe(404);
   });
 
   it('404s for an unknown characterId', async () => {
-    const res = await request(app).post(`/api/books/${bookId}/cast/ghost/design-voice`).send({});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/ghost/design-voice`)
+      .send(designBody);
     expect(res.status).toBe(404);
   });
 });
