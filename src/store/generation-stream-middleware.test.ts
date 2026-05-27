@@ -205,6 +205,57 @@ describe('generationStreamMiddleware — enqueue-on-work (override replacement)'
   });
 });
 
+/* Generate-view enqueue gate (the "book queues at analysis time" fix). A book
+   only enters the queue once it's on the Generate view — i.e. the user clicked
+   "Approve cast & start generating". Walking the real post-analysis stage flow
+   (analysing → confirm → ready/manuscript → ready/generate) proves the queue
+   stays empty until that final step. */
+describe('generationStreamMiddleware — Generate-view enqueue gate', () => {
+  /* Mirror the route's onComplete: land the analysis (chapters seeded while the
+     stage is still 'analysing'), then flip the stage to 'confirm'. */
+  function seedAnalysed(
+    store: ReturnType<typeof makeStore>['store'],
+    bookId: string,
+    chapters: Chapter[],
+  ) {
+    store.dispatch(uiSlice.actions.startNewBook());
+    store.dispatch(uiSlice.actions.manuscriptUploaded({ bookId, manuscriptId: null }));
+    store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromAnalysis({ bookId, chapters, sentences: [] } as never),
+    );
+    store.dispatch(uiSlice.actions.analysisComplete({ bookId }));
+  }
+
+  it('does NOT enqueue when analysis completes (stage analysing → confirm)', async () => {
+    const { store } = makeStore();
+    seedAnalysed(store, 'b1', [ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]);
+    await Promise.resolve();
+    expect(enqueueCalls()).toHaveLength(0);
+  });
+
+  it('does NOT enqueue on cast confirmation (stage ready/manuscript review)', async () => {
+    const { store } = makeStore();
+    seedAnalysed(store, 'b1', [ch(1, { state: 'queued' })]);
+    store.dispatch(uiSlice.actions.confirmCast());
+    await Promise.resolve();
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'ready', view: 'manuscript' });
+    expect(enqueueCalls()).toHaveLength(0);
+  });
+
+  it('DOES enqueue once the user starts generating (stage ready/generate)', async () => {
+    const { store } = makeStore();
+    seedAnalysed(store, 'b1', [ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]);
+    store.dispatch(uiSlice.actions.confirmCast());
+    store.dispatch(uiSlice.actions.changeView('generate'));
+    await Promise.resolve();
+    const calls = enqueueCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(calls[calls.length - 1][1].body);
+    expect(body.entries.map((e: { chapterId: number }) => e.chapterId).sort()).toEqual([1, 2]);
+  });
+});
+
 describe('generationStreamMiddleware — halt + preview gate', () => {
   it('requestStreamHalt pauses every open book on the server and tears all streams down', () => {
     const { store, getRunner } = makeStore();

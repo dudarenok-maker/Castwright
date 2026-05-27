@@ -138,6 +138,19 @@ export function cancel(file: QueueFile, entryId: string, opts?: { force?: boolea
   return renumber({ ...file, entries: file.entries.filter((e) => e.id !== entryId) });
 }
 
+/** Bulk-clear the queue. By default drops every `queued` + `failed` entry but
+ *  KEEPS `in_progress` ones (the user wants a clean pending list, not to abort
+ *  chapters mid-render). `force` drops everything, including `in_progress` — the
+ *  caller pairs this with a stream teardown (chapters/requestStreamHalt) so the
+ *  live SSE actually stops. Leaves the `paused` flag untouched (a clear is not a
+ *  pause). Idempotent on an empty queue. */
+export function clearQueue(file: QueueFile, opts?: { force?: boolean }): QueueFile {
+  return renumber({
+    ...file,
+    entries: opts?.force ? [] : file.entries.filter((e) => e.status === 'in_progress'),
+  });
+}
+
 /** Set the queue-global pause flag. */
 export function setPaused(file: QueueFile, paused: boolean): QueueFile {
   return { ...file, paused };
