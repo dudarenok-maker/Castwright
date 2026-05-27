@@ -186,6 +186,37 @@ def test_design_voice_caches_embedding_and_manifest(fake_qwen_runtime) -> None:
     assert result.sample_rate == 24000
 
 
+def test_design_voice_speaks_supplied_calibration_text(fake_qwen_runtime) -> None:
+    """When the caller passes a calibrationText (the character's own line), the
+    reference clip AND the audition preview speak THAT line — not the generic
+    CALIBRATION_TEXT pangram. This is what lets the design audition double as
+    the character's 12s sample (server pre-caches it under the sample key)."""
+    engine = fake_qwen_runtime["engine"]
+    voices_dir = fake_qwen_runtime["dir"]
+    line = "We have to tell the Council before the others wake."
+    engine.design_voice("biana", "a poised teenage girl", "English", line)
+
+    # generate_voice_design (ref clip) + generate_voice_clone (audition) both
+    # use the supplied line, via the Base + Design fakes.
+    assert engine._design.design_calls[-1][0] == line
+    assert engine._base.clone_calls[-1][0] == [line]
+    assert engine._base.prompt_calls[-1][1] == line
+    assert engine.CALIBRATION_TEXT not in line  # guard the test's own premise
+
+    import json
+
+    manifest = json.loads((voices_dir / "biana.json").read_text(encoding="utf-8"))
+    assert manifest["refText"] == line
+
+
+def test_design_voice_falls_back_to_calibration_pangram_when_unset(fake_qwen_runtime) -> None:
+    """No calibrationText → the audition speaks the built-in CALIBRATION_TEXT."""
+    engine = fake_qwen_runtime["engine"]
+    engine.design_voice("dex", "a witty teenage boy", "English", None)
+    assert engine._design.design_calls[-1][0] == engine.CALIBRATION_TEXT
+    assert engine._base.clone_calls[-1][0] == [engine.CALIBRATION_TEXT]
+
+
 def test_synthesize_reuses_cached_voice(fake_qwen_runtime) -> None:
     engine = fake_qwen_runtime["engine"]
     engine.design_voice("biana", "a bright, confident teenage girl", "English", None)

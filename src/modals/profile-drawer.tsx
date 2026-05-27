@@ -208,8 +208,9 @@ export function ProfileDrawer({
   const [designedVoiceId, setDesignedVoiceId] = useState<string | null>(
     character.overrideTtsVoices?.qwen?.name ?? null,
   );
-  /* Object URL of the most-recent audition preview — revoked on the next
-     design + on unmount so blobs don't leak. */
+  /* URL of the most-recent audition preview. Now a stable cached-sample URL
+     (the design route writes the audition into the voice-sample cache), so
+     there's no blob to revoke — the ref only feeds `designPlaying` below. */
   const designPreviewUrlRef = useRef<string | null>(null);
   const designPlaying =
     playback.isPlaying &&
@@ -566,15 +567,14 @@ export function ProfileDrawer({
     setDesignBusy(true);
     setEngineError(null);
     try {
-      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, character.id, trimmed);
-      /* Revoke the prior preview URL before replacing it. */
-      if (designPreviewUrlRef.current) {
-        try {
-          URL.revokeObjectURL(designPreviewUrlRef.current);
-        } catch {
-          /* jsdom / no-op env */
-        }
-      }
+      /* Pass the same cache identity the "Play 12s" player uses so the
+         audition is rendered straight into the sample cache — designing here
+         and playing the 12s sample later is one synthesis, not two. */
+      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, character.id, {
+        persona: trimmed,
+        sampleVoiceId,
+        modelKey: effectiveSampleModelKey,
+      });
       designPreviewUrlRef.current = previewUrl;
       setDesignedVoiceId(voiceId);
       await playback.play(previewUrl);
@@ -584,19 +584,6 @@ export function ProfileDrawer({
       setDesignBusy(false);
     }
   }
-
-  /* Revoke a staged preview blob on unmount so it doesn't leak. */
-  useEffect(() => {
-    return () => {
-      if (designPreviewUrlRef.current) {
-        try {
-          URL.revokeObjectURL(designPreviewUrlRef.current);
-        } catch {
-          /* no-op */
-        }
-      }
-    };
-  }, []);
 
   return (
     <>
