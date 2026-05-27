@@ -587,8 +587,14 @@ export function ProfileDrawer({
 
   return (
     <>
-      <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-40 fade-in" />
-      <aside className="fixed top-0 right-0 bottom-0 w-full max-w-[520px] bg-white shadow-drawer z-50 overflow-y-auto slide-in-right">
+      {/* Plan (status-popover) — the backdrop + drawer start BELOW the 64px
+          top-bar header (top-16) so the drawer tucks under the bar rather than
+          covering it. This keeps the top bar (Status pill, queue chip, theme,
+          avatar) interactive while the drawer is open — clicking/hovering the
+          Status pill no longer lands on this backdrop and dismisses the drawer.
+          Clicking the dimmed area below the header still closes it. */}
+      <div onClick={onClose} className="fixed inset-x-0 top-16 bottom-0 bg-ink/30 z-40 fade-in" />
+      <aside className="fixed top-16 right-0 bottom-0 w-full max-w-[520px] bg-white shadow-drawer z-50 overflow-y-auto slide-in-right">
         <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
           <Avatar name={character.name} color={character.color as CharColor} size={40} />
           <div className="flex-1 min-w-0">

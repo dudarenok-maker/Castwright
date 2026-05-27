@@ -36,6 +36,7 @@ import {
   summarizeStatus,
   type GenerationPillData,
   type AnalysisPillData,
+  type StatusDetail,
 } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
 import { TtsNoticeBanner } from './tts-notice-banner';
@@ -54,7 +55,6 @@ import { ProfileDrawer } from '../modals/profile-drawer';
 import { ReattributeLinesModal } from '../modals/reattribute-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
-import { StatusModal } from '../modals/status-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
@@ -979,6 +979,19 @@ export function Layout() {
         anyModelLoading,
       })
     : null;
+  /* The detail rendered in the Status pill's hover/tap popover (the same data
+     the plan-120 modal received). The "go to" handlers reuse the pills'
+     existing onClick routing (single-book → Generate, multi-book → queue); the
+     popover closes itself afterwards, so no modal-close dispatch is needed. */
+  const statusDetail: StatusDetail = {
+    ttsControls: ttsPillElement,
+    analysis: analysisPill,
+    generation: generationPill,
+    pendingRevisionsCount: pending.length,
+    onOpenRevisions: () => dispatch(uiActions.setShowRevisionPlayer(true)),
+    onGoToAnalysing: () => analysisPill?.onClick(),
+    onGoToGeneration: () => generationPill?.onClick(),
+  };
 
   return (
     <div className={`min-h-screen ${trackChapter ? 'pb-24' : 'pb-20'}`}>
@@ -990,7 +1003,7 @@ export function Layout() {
         onHome={() => dispatch(uiActions.goHome())}
         onTitleClick={stageKind === 'confirm' ? () => dispatch(uiActions.reanalyse()) : undefined}
         statusSummary={statusSummary}
-        onOpenStatus={() => dispatch(uiActions.openStatusModal())}
+        statusDetail={statusDetail}
         onOpenVoices={() => dispatch(uiActions.openVoices())}
         onOpenChangelog={() => dispatch(uiActions.openChangelog())}
         onOpenAccount={() => dispatch(uiActions.openAccount())}
@@ -1482,31 +1495,6 @@ export function Layout() {
         />
       )}
       <QueueModalContainer />
-
-      {/* Plan 120 — Status modal: the TTS controls + analysis/generation/
-          revisions detail that used to live inline in the top bar. The
-          "go to" handlers reuse the pills' existing onClick routing
-          (single-book → Generate, multi-book → queue) then close. */}
-      <StatusModal
-        open={ui.statusModalOpen}
-        onClose={() => dispatch(uiActions.closeStatusModal())}
-        ttsControls={ttsPillElement}
-        analysis={analysisPill}
-        generation={generationPill}
-        pendingRevisionsCount={pending.length}
-        onOpenRevisions={() => {
-          dispatch(uiActions.setShowRevisionPlayer(true));
-          dispatch(uiActions.closeStatusModal());
-        }}
-        onGoToAnalysing={() => {
-          analysisPill?.onClick();
-          dispatch(uiActions.closeStatusModal());
-        }}
-        onGoToGeneration={() => {
-          generationPill?.onClick();
-          dispatch(uiActions.closeStatusModal());
-        }}
-      />
 
       {ui.showRevisionPlayer && pending[0] && bookId && (
         <RevisionDiffPlayer
