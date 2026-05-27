@@ -23,10 +23,13 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+type SettingsModule = typeof import('../workspace/user-settings.js');
+
 let workspaceRoot: string;
 let app: Express;
 let userSettingsPath: string;
 let resetCache: () => void;
+let userSettingsSchema: SettingsModule['userSettingsSchema'];
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-user-settings-test-'));
@@ -40,6 +43,7 @@ beforeAll(async () => {
 
   userSettingsPath = settings.USER_SETTINGS_PATH;
   resetCache = settings._resetUserSettingsCache;
+  userSettingsSchema = settings.userSettingsSchema;
 
   app = express();
   app.use(express.json());
@@ -202,6 +206,62 @@ describe('user-settings router', () => {
 
     const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
     expect(onDisk.defaultTtsModelKey).toBe('qwen3-tts-0.6b');
+  });
+
+  /* Regression — EVERY writable setting must survive PUT → GET → disk.
+     The qwen bug above shipped because a new model key was added to the
+     schema but missed from the PUT allow-list, so its save silently 400'd
+     and the value "reverted" on the next load (the user-reported symptom,
+     also seen with eagerLoadKokoro). This locks the whole object: one
+     non-default sample per writable field, asserted in the PUT echo AND on
+     disk. The key list is derived from the schema, so a future field added
+     without a sample value fails the guard below — forcing it to be
+     covered. geminiApiKey is excluded: it's intentionally stripped from the
+     general PUT (see the secret-stripping test) and has its own endpoint. */
+  it('PUT round-trips every writable field onto disk and back (no silent drops)', async () => {
+    const SAMPLE_VALUES: Record<string, unknown> = {
+      displayName: 'Round Trip User',
+      defaultAnalysisModel: 'gemini-2.5-flash',
+      defaultTtsEngine: 'gemini',
+      /* The user's exact TTS-model choice. The server stores engine +
+         modelKey independently (no cross-field coherence check), so this is
+         a valid persistence probe even though the UI pairs Qwen with the
+         `local` engine. */
+      defaultTtsModelKey: 'qwen3-tts-0.6b',
+      sidecarUrl: 'http://localhost:9100',
+      analysisEngine: 'local',
+      ollamaUrl: 'http://localhost:11500',
+      workspaceDirOverride: 'D:/audiobooks-ws',
+      exportSyncFolder: '/tmp/export-sync',
+      minorCastMinLines: 7,
+      coverPickerDefaultTab: 'upload',
+      defaultThemePreference: 'dark',
+      autoStartSidecar: false,
+      analyzerPhase0Model: 'gemma-4-31b-it',
+      analyzerPhase1Model: 'gemini-3.1-flash-lite',
+      analyzerPhase1MinLagChapters: 5,
+      dualModelEnabled: true,
+      /* The user's other reported field — eager-load off for a Qwen-primary
+         setup. */
+      eagerLoadKokoro: false,
+      generationWorkers: 4,
+    };
+
+    /* Guard: every writable schema field has a sample value here. A field
+       added to userSettingsSchema without one trips this assertion. */
+    const writableKeys = Object.keys(userSettingsSchema.shape).filter((k) => k !== 'geminiApiKey');
+    for (const key of writableKeys) {
+      expect(SAMPLE_VALUES, `add a SAMPLE_VALUES entry for new field "${key}"`).toHaveProperty(key);
+    }
+
+    const res = await request(app).put('/api/user/settings').send(SAMPLE_VALUES);
+    expect(res.status).toBe(200);
+
+    const onDisk = JSON.parse(readFileSync(userSettingsPath, 'utf8'));
+    for (const key of writableKeys) {
+      expect(res.body[key], `GET echo for "${key}"`).toEqual(SAMPLE_VALUES[key]);
+      expect(onDisk[key], `on-disk value for "${key}"`).toEqual(SAMPLE_VALUES[key]);
+    }
   });
 
   /* Plan 49 — dedicated Gemini-key PUT endpoint. The general PUT still
