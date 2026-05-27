@@ -693,6 +693,64 @@ describe('foldMinorCast', () => {
   it('PROTECTED_ROLES_DEFAULT lists the three canonical roles', () => {
     expect(PROTECTED_ROLES_DEFAULT).toEqual(['Bodyguard', 'Mentor', 'Family Member']);
   });
+
+  /* ── plan 122: a bucket id never wears a real character's name ── */
+
+  it('canonicalises a drifted bucket name back to the generic (no named char wears a bucket id)', () => {
+    /* A real character that drifted onto the unknown-male id (via an old
+       merge / voice-match), plus a genuine minor male that folds this pass. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('unknown-male', { name: 'Lord Vane', gender: 'male' }),
+      makeChar('jogger', { name: 'The Jogger', gender: 'male' }),
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'],
+      [1, 'unknown-male'],
+      [1, 'jogger'],
+    ]);
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+    const bucket = result.characters.find((c) => c.id === 'unknown-male');
+    expect(bucket?.name).toBe('Unknown male');
+    expect(bucket?.gender).toBe('male');
+    /* The drifted NAME is deliberately not kept as an alias — otherwise the
+       matcher would re-bind Lord Vane to the bucket on the next book. */
+    expect(bucket?.aliases ?? []).not.toContain('Lord Vane');
+  });
+
+  it('canonicalises a drifted bucket even when nothing folds this pass', () => {
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Wren', { name: 'Wren', gender: 'female' }),
+      makeChar('unknown-female', { name: 'Senna', gender: 'female' }),
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'],
+      [1, 'Wren'],
+      [1, 'Wren'],
+      [1, 'Wren'],
+      [1, 'unknown-female'],
+      [1, 'unknown-female'],
+      [1, 'unknown-female'],
+    ]);
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+    expect(result.summary.foldedCount).toBe(0);
+    const bucket = result.characters.find((c) => c.id === 'unknown-female');
+    expect(bucket?.name).toBe('Unknown female');
+  });
+
+  it('never folds a non-descriptor character with ≥ minLines into a bucket (keeps its own id)', () => {
+    const chars = [makeChar('narrator'), makeChar('lord-Vane', { name: 'Lord Vane', gender: 'male' })];
+    const sentences = makeSentences([
+      [1, 'lord-Vane'],
+      [1, 'lord-Vane'],
+      [1, 'lord-Vane'],
+      [2, 'lord-Vane'],
+    ]);
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+    expect(result.rewrites['lord-Vane']).toBeUndefined();
+    expect(result.characters.find((c) => c.id === 'lord-Vane')?.id).toBe('lord-Vane');
+  });
 });
 
 describe('matchesProtectedRole', () => {
