@@ -26,7 +26,6 @@
    that cached file. A sidecar that's down → 502 with a clear message. */
 
 import { Router, type Request, type Response } from 'express';
-import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
@@ -150,7 +149,14 @@ qwenVoiceRouter.post(
       if (!upstream.ok) {
         let detail = '';
         try {
-          detail = ((await upstream.json()) as { error?: string }).error ?? '';
+          /* The sidecar reports failures as FastAPI's `{ detail }` (both its
+             HTTPException 4xx and its 500 catch-all), NOT `{ error }`. Reading
+             only `.error` here silently dropped the real reason — e.g. a CUDA
+             "Cannot copy out of meta tensor" load failure surfaced to the user
+             as a bare "returned 500" with no cause. Prefer `detail`, fall back
+             to `error` for any endpoint that uses that shape. */
+          const body = (await upstream.json()) as { detail?: string; error?: string };
+          detail = body.detail ?? body.error ?? '';
         } catch {
           /* not json */
         }
@@ -175,11 +181,16 @@ qwenVoiceRouter.post(
       const filePath = voiceSampleFilePath(fileName);
       const url = voiceSamplePublicUrl(fileName);
       try {
-        if (!existsSync(filePath)) {
-          await mkdir(voiceSampleAudioDir(), { recursive: true });
-          const mp3 = await encodePcmToAudio(pcm, sampleRate);
-          await writeFile(filePath, mp3);
-        }
+        /* Always (over)write. Designing is an explicit (re)generate: the
+           audition we just synthesised IS the fresh voice. The cache key
+           (text + voiceId) is unchanged across re-designs of the same
+           character, so a stale file from a prior design must be replaced —
+           otherwise "Play 12s" (and the drawer's own post-design playback,
+           which reads this same URL) would serve the previous voice and the
+           re-design would look like it did nothing. */
+        await mkdir(voiceSampleAudioDir(), { recursive: true });
+        const mp3 = await encodePcmToAudio(pcm, sampleRate);
+        await writeFile(filePath, mp3);
       } catch (encErr) {
         return res.status(502).json({
           error: `Designed the voice but failed to cache its preview: ${(encErr as Error).message}`,
