@@ -1,5 +1,6 @@
 /* Single source of truth for user-level account defaults + non-secret env
-   overrides. Persisted to `server/user-settings.json` (gitignored).
+   overrides. Persisted to a single per-user file shared across every git
+   checkout (see resolveUserSettingsPath / plan 122).
 
    The file holds only the writable subset. The route layer derives the
    read-only fields (apiKeyStatus, workspaceRoot, workspaceSource) before
@@ -11,12 +12,58 @@
 import { z } from 'zod';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { existsSync } from 'node:fs';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from './state-io.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
 
-export const USER_SETTINGS_PATH = join(SERVER_ROOT, 'user-settings.json');
+/* Account defaults are USER-scoped, not checkout-scoped — so they live in
+   one per-user file OUTSIDE any git checkout. Before plan 122 the file lived
+   at `<SERVER_ROOT>/user-settings.json`, which meant every git worktree
+   carried its own copy: a save in one tree silently "reverted" when the app
+   was next launched from another tree (or the same setting was changed in
+   N trees independently). Resolving to a shared `~/.audiobook-generator/`
+   path makes main, every worktree, and the packaged app read ONE file.
+
+   `USER_SETTINGS_FILE` overrides the location: the server test bootstrap
+   points it at a throwaway temp file (so tests never touch real settings),
+   and ops can pin a custom path. Exported as a pure function so the
+   resolution is unit-testable without re-importing the module. */
+export function resolveUserSettingsPath(env: NodeJS.ProcessEnv = process.env): string {
+  const override = env.USER_SETTINGS_FILE?.trim();
+  if (override) return override;
+  return join(homedir(), '.audiobook-generator', 'user-settings.json');
+}
+
+export const USER_SETTINGS_PATH = resolveUserSettingsPath();
+
+/* Pre-plan-122 per-checkout location — kept ONLY as the one-time migration
+   source so an upgrade carries the user's existing settings forward. */
+export const LEGACY_USER_SETTINGS_PATH = join(SERVER_ROOT, 'user-settings.json');
+const SETTINGS_PATH_OVERRIDDEN = !!process.env.USER_SETTINGS_FILE?.trim();
+
+/* One-time migration: copy the legacy per-checkout file to the shared
+   location the first time we read and the shared file is absent. COPY (not
+   move) so rolling back to a pre-122 build still finds its file. Skipped
+   when the path is overridden (tests/CI) so a developer's real settings
+   can't bleed into a temp-file test run. Returns true iff it copied.
+   Paths are injected so this is unit-testable against temp dirs. */
+export async function migrateLegacyUserSettings(opts: {
+  from: string;
+  to: string;
+  overridden: boolean;
+}): Promise<boolean> {
+  if (opts.overridden) return false;
+  if (existsSync(opts.to)) return false;
+  if (!existsSync(opts.from)) return false;
+  await mkdir(dirname(opts.to), { recursive: true });
+  await copyFile(opts.from, opts.to);
+  console.info(`[user-settings] migrated ${opts.from} -> ${opts.to}`);
+  return true;
+}
 
 export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
 export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
@@ -197,6 +244,11 @@ let writeChain: Promise<unknown> = Promise.resolve();
     URL resolution) don't re-parse JSON on every request. */
 export async function readUserSettings(): Promise<UserSettings> {
   if (cached) return cached;
+  await migrateLegacyUserSettings({
+    from: LEGACY_USER_SETTINGS_PATH,
+    to: USER_SETTINGS_PATH,
+    overridden: SETTINGS_PATH_OVERRIDDEN,
+  });
   const raw = await readJson<unknown>(USER_SETTINGS_PATH);
   if (!raw) {
     cached = { ...DEFAULT_USER_SETTINGS };
