@@ -1,76 +1,139 @@
-// Pairs with docs/features/archive/95-analysing-multi-model-ui.md
+// Pairs with docs/features/118-analyzer-per-phase-wiring-fix.md
+// (originally docs/features/archive/95-analysing-multi-model-ui.md)
 
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { accountSlice, PHASE0_MODEL_DEFAULT, PHASE1_MODEL_DEFAULT } from '../../store/account-slice';
+import { accountSlice } from '../../store/account-slice';
+import { uiSlice } from '../../store/ui-slice';
 import { PhaseModelChip } from './phase-model-chip';
 
-function mountStore(overrides: Partial<{
-  analyzerPhase0Model: string | null;
-  analyzerPhase1Model: string | null;
-  analyzerPhase1MinLagChapters: number | null;
-}>) {
+function mountStore(
+  account: Partial<{
+    analyzerPhase0Model: string | null;
+    analyzerPhase1Model: string | null;
+    analyzerPhase1MinLagChapters: number | null;
+    defaultAnalysisModel: string;
+  }>,
+  ui?: Partial<{ selectedModel: string }>,
+) {
   return configureStore({
-    reducer: { account: accountSlice.reducer },
+    reducer: { account: accountSlice.reducer, ui: uiSlice.reducer },
     preloadedState: {
       account: {
         ...accountSlice.getInitialState(),
-        ...overrides,
+        ...account,
       } as ReturnType<typeof accountSlice.getInitialState>,
+      ui: {
+        ...uiSlice.getInitialState(),
+        ...ui,
+      } as ReturnType<typeof uiSlice.getInitialState>,
     },
   });
 }
 
-function renderChip(opts: Parameters<typeof mountStore>[0], chipProps: React.ComponentProps<typeof PhaseModelChip>) {
+function renderChip(
+  account: Parameters<typeof mountStore>[0],
+  chipProps: React.ComponentProps<typeof PhaseModelChip>,
+  ui?: Parameters<typeof mountStore>[1],
+) {
   return render(
-    <Provider store={mountStore(opts)}>
+    <Provider store={mountStore(account, ui)}>
       <PhaseModelChip {...chipProps} />
     </Provider>,
   );
 }
 
 describe('PhaseModelChip', () => {
-  it('renders the phase-0 user-settings model label when set', () => {
-    renderChip({ analyzerPhase0Model: 'gemma-4-31b-it' }, { phaseId: 0, state: 'streaming' });
-    const chip = screen.getByTestId('phase-model-chip-0');
-    expect(chip).toBeTruthy();
-    expect(chip.textContent).toContain('Gemma 4 31B');
-    expect(chip.textContent).toContain('streaming');
-    expect(chip.getAttribute('data-phase-state')).toBe('streaming');
+  describe('split OFF (no per-phase models) — both phases show the single effective model', () => {
+    it('shows ui.selectedModel for phase 0, not a fabricated per-phase default', () => {
+      /* Regression for plan 118: the chip used to fabricate "Gemma 4 31B"
+         for phase 0 even though cast detection ran on the single default. */
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'streaming' },
+        { selectedModel: 'gemini-2.5-flash' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('Gemini 2.5 Flash');
+      expect(chip.textContent).not.toContain('Gemma');
+      expect(chip.textContent).toContain('streaming');
+    });
+
+    it('shows the same single model for phase 1 (not the old Flash-Lite default)', () => {
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 1, state: 'streaming' },
+        { selectedModel: 'gemini-2.5-flash' },
+      );
+      expect(screen.getByTestId('phase-model-chip-1').textContent).toContain('Gemini 2.5 Flash');
+    });
+
+    it('falls back to account.defaultAnalysisModel when ui has no selected model', () => {
+      renderChip({ analyzerPhase0Model: null }, { phaseId: 0, state: 'pending' }, { selectedModel: '' });
+      /* account initial defaultAnalysisModel is gemini-3.1-flash-lite. */
+      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Gemini 3.1 Flash Lite');
+    });
+
+    it('does NOT show the warm-up hint for phase 1 even in the warming state', () => {
+      /* With the split off there is no handoff — the chip must not promise one
+         (plan 118). PhaseCard also gates this, but the chip self-guards. */
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 1, state: 'warming' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-1');
+      expect(chip.textContent).not.toContain('warms up');
+      expect(chip.getAttribute('title')).toBeNull();
+    });
   });
 
-  it('falls back to the documented Phase 0 default when user-settings is null', () => {
-    renderChip({ analyzerPhase0Model: null }, { phaseId: 0, state: 'pending' });
-    /* The default label is the MODEL_OPTIONS label for PHASE0_MODEL_DEFAULT
-       (gemma-4-31b-it → "Gemma 4 31B"). */
-    expect(PHASE0_MODEL_DEFAULT).toBe('gemma-4-31b-it');
-    expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Gemma 4 31B');
-  });
+  describe('split ON (per-phase models set)', () => {
+    it('shows each phase its own saved model', () => {
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { phaseId: 0, state: 'streaming' },
+      );
+      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Gemma 4 31B');
+    });
 
-  it('renders the phase-1 default (Gemini 3.1 Flash Lite) when nothing is set', () => {
-    renderChip({ analyzerPhase1Model: null }, { phaseId: 1, state: 'warming' });
-    expect(PHASE1_MODEL_DEFAULT).toBe('gemini-3.1-flash-lite');
-    const chip = screen.getByTestId('phase-model-chip-1');
-    expect(chip.textContent).toContain('Gemini 3.1 Flash Lite');
-    /* warming state surfaces the "warms up after chapter N" hint. Default
-       lag is 10. */
-    expect(chip.textContent).toContain('warms up after ch. 10');
-    expect(chip.getAttribute('title')).toContain('Warms up after chapter 10');
-  });
+    it('shows the phase-1 model + warm-up hint while phase 0 is warming', () => {
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { phaseId: 1, state: 'warming' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-1');
+      expect(chip.textContent).toContain('Gemini 3.1 Flash Lite');
+      expect(chip.textContent).toContain('warms up after ch. 10');
+      expect(chip.getAttribute('title')).toContain('Warms up after chapter 10');
+    });
 
-  it('honours a custom phase-1 min-lag in the warming hint', () => {
-    renderChip(
-      { analyzerPhase1Model: 'gemini-3.1-flash-lite', analyzerPhase1MinLagChapters: 15 },
-      { phaseId: 1, state: 'warming' },
-    );
-    expect(screen.getByTestId('phase-model-chip-1').textContent).toContain('warms up after ch. 15');
+    it('honours a custom phase-1 min-lag in the warming hint', () => {
+      renderChip(
+        {
+          analyzerPhase0Model: 'gemma-4-31b-it',
+          analyzerPhase1Model: 'gemini-3.1-flash-lite',
+          analyzerPhase1MinLagChapters: 15,
+        },
+        { phaseId: 1, state: 'warming' },
+      );
+      expect(screen.getByTestId('phase-model-chip-1').textContent).toContain('warms up after ch. 15');
+    });
+
+    it('shows an honest "Server default" when a phase is left blank but the split is active', () => {
+      /* Phase 0 set, Phase 1 null → the server falls through to its own
+         default for Phase 1, which the client can't see. Don't fabricate. */
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: null },
+        { phaseId: 1, state: 'streaming' },
+      );
+      expect(screen.getByTestId('phase-model-chip-1').textContent).toContain('Server default');
+    });
   });
 
   it('renders nothing for phase 2 (no model selection)', () => {
     const { container } = renderChip({}, { phaseId: 2, state: 'pending' });
-    /* The chip returns null for phase 2 — render output should be empty. */
     expect(container.querySelector('[data-testid^="phase-model-chip"]')).toBeNull();
   });
 });

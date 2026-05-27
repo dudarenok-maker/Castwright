@@ -50,6 +50,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [04 — Analysing view & SSE progress](04-analysing-view-progress.md) — Stream rendering, live ETA, model selection, "Start fresh."
 - [95 — Analysing-stage multi-model UI + sticky bar](archive/95-analysing-multi-model-ui.md) — Per-phase model chip + swap inside each PhaseCard; CSS-only sticky status bar pins Pause + active-model under the topbar as the page scrolls. Consumes the per-phase defaults shipped in plan 88 / PR #118. Extracts `PhaseCard` from the 1,769-line `src/views/analysing.tsx` monolith. Shipped 2026-05-22 via PR #138.
+- [118 — Per-phase analyzer split wiring fix + chip honesty](118-analyzer-per-phase-wiring-fix.md) — Makes the opt-in two-model split (plan 88) actually function: the route resolves Phase 0 via `selectAnalyzerForPhase('phase0')` and the frontend only sends a per-request `model` when it should, so the saved per-phase models are reachable. Chips show the truly-effective model (no fabricated "Gemma 4 31B" when single-model) and "warms up after ch. N" only shows when a split is engaged. Account card retitled + live OFF/ON status line.
 - [05 — Manual handoff analyzer](05-analyzer-manual-handoff.md) — `ANALYZER=manual` file-drop cowork loop.
 - [06 — Gemini analyzer](06-analyzer-gemini.md) — `ANALYZER=gemini` direct-API mode (also the fallback when local is unreachable).
 - [29 — Local Ollama analyzer + fallback](29-analyzer-ollama-local.md) — `ANALYZER=local` default; auto-fallback to Gemini only when daemon is unreachable.
