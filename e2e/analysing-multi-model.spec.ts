@@ -3,8 +3,9 @@
  * Boots a fresh book through the upload flow, lands on /analysing, kicks
  * off the mock analysis stream, and asserts:
  *   1. Both phase-model chips are present in the DOM (Phase 0 + Phase 1).
- *   2. The Phase 0 chip lights up in `streaming` state while the SSE is in
- *      flight; Phase 1 chip stays in `warming` until the watermark releases.
+ *   2. With no per-phase split configured (the default), both chips show the
+ *      single effective model and Phase 1 shows NO "warms up after ch." hint
+ *      (plan 118 — that handoff only happens when a split is engaged).
  *   3. Scrolling past the header pins the sticky bar at top-16 (header h1
  *      is no longer in viewport, sticky bar IS).
  *   4. Clicking the sticky bar's Pause button transitions activeStream.state
@@ -77,6 +78,25 @@ test.describe('plan 95 — analysing multi-model UI + sticky bar', () => {
     await expect(page.getByTestId('phase-model-chip-1')).toHaveCount(1);
     /* Phase 2 has no chip — no model selection for the library-match phase. */
     await expect(page.getByTestId('phase-model-chip-2')).toHaveCount(0);
+  });
+
+  test('single-model (no split): both chips name the same model and Phase 1 shows no warm-up hint', async ({
+    page,
+  }) => {
+    await bootFreshBookIntoAnalysing(page);
+    await page.getByRole('button', { name: /Start analysis/i }).click();
+    const phase1 = page.getByTestId('phase-model-chip-1');
+    await expect(phase1).toBeVisible({ timeout: 5_000 });
+    /* No per-phase split is configured (fresh account), so both phases run
+       the single effective model — the mock default is Gemini 3.1 Flash Lite
+       (FRONTEND_ACCOUNT_DEFAULTS.defaultAnalysisModel). The old chip
+       fabricated "Gemma 4 31B" for Phase 0; plan 118 makes it honest. */
+    await expect(page.getByTestId('phase-model-chip-0').first()).toContainText(
+      'Gemini 3.1 Flash Lite',
+    );
+    await expect(phase1).toContainText('Gemini 3.1 Flash Lite');
+    /* And no false promise of a handoff that won't happen with the split off. */
+    await expect(phase1).not.toContainText(/warms up/i);
   });
 
   test('sticky bar remains in viewport after the page scrolls', async ({ page }) => {

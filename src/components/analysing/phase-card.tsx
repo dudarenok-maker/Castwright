@@ -9,6 +9,7 @@ import {
 import { MODEL_OPTIONS } from '../../lib/models';
 import type { AnalysisPhase, DroppedQuotesResponse } from '../../lib/types';
 import { useAppSelector } from '../../store';
+import { selectAnalyzerSplitIsActive } from '../../store/account-slice';
 import { PhaseModelChip, type PhaseChipState } from './phase-model-chip';
 import { PhaseModelSwap } from './phase-model-swap';
 
@@ -362,17 +363,19 @@ export function PhaseCard({
   const isActive = activePhaseId === p.id;
   const isDone = activePhaseId > p.id;
   const throttleActive = throttle && throttle.until > Date.now();
-  /* Chip state derived from activePhaseId. Phase 1 reads "warming" while
-     Phase 0 is still running because attribution can't start until the
-     min-lag watermark (default 10 chapters) releases — surfaced as the
-     "warms up after chapter N" tooltip on the chip. Phase 2 returns null
-     from PhaseModelChip (no model selection), so the state value is
-     ignored there. */
+  /* The "warms up after ch. N" handoff only happens when the two-model split
+     is engaged — then Phase 1 dispatches `minLag` chapters behind Phase 0
+     (the pipelined watermark). With the split OFF, both phases run the same
+     model and Phase 1 just waits for all of Phase 0, so Phase 1 stays
+     'pending' rather than falsely promising a handoff (plan 118). */
+  const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
+  /* Chip state derived from activePhaseId. Phase 2 returns null from
+     PhaseModelChip (no model selection), so the state value is ignored there. */
   const chipState: PhaseChipState = isDone
     ? 'done'
     : isActive
       ? 'streaming'
-      : p.id === 1 && activePhaseId === 0
+      : p.id === 1 && activePhaseId === 0 && splitActive
         ? 'warming'
         : 'pending';
   const hasModelControls = p.id === 0 || p.id === 1;
