@@ -1,4 +1,4 @@
-/* Plan 119 — Status modal. Presentational (no redux): Layout wires the
+/* Plan 120 — Status modal. Presentational (no redux): Layout wires the
    ttsControls node + the navigate-then-close handlers. These tests pin the
    four sections, their empty fallbacks, and that the reused AnalysisPill /
    GenerationPill route through the navigate-and-close handlers. */

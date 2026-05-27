@@ -456,7 +456,7 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
 
 describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
   /* Renders Layout at the confirm stage (where showGlobalTtsPill is true)
-     with a cast that contains a Qwen-pinned character. Plan 119 moved the
+     with a cast that contains a Qwen-pinned character. Plan 120 moved the
      TTS model-control pills into the Status modal, so the test opens the
      modal (via the Status pill) and asserts a Qwen ModelControlPill
      (aria-label "Qwen <state>") renders inside it alongside the default
@@ -510,7 +510,7 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
       </Provider>,
     );
 
-    /* Open the Status modal — the TTS controls live inside it post-plan-119.
+    /* Open the Status modal — the TTS controls live inside it post-plan-120.
        The Qwen pill then renders once the cast hydrates from getBookState. */
     fireEvent.click(await findByTestId('status-pill'));
     const qwenPill = await findByRole('group', { name: /^Qwen / });

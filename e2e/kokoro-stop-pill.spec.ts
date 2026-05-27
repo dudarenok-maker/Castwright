@@ -6,7 +6,7 @@
  * Kokoro control should read "Kokoro ready / Stop"; clicking Stop flips it
  * to "Kokoro idle / Load"; clicking Load brings it back.
  *
- * Plan 119: the TTS model-control pills moved out of the top bar and into
+ * Plan 120: the TTS model-control pills moved out of the top bar and into
  * the Status modal — so each test first opens the modal via the compact
  * Status pill (clicking Load/Stop inside the modal does NOT close it).
  *
@@ -17,7 +17,7 @@
 import { test, expect } from '@playwright/test';
 import { goToConfirm } from './helpers';
 
-/* Open the Status modal — the TTS controls live inside it post-plan-119.
+/* Open the Status modal — the TTS controls live inside it post-plan-120.
    The Status pill renders from the first book-context stage (Layout's
    `showGlobalTtsPill` gate covers analysing / confirm / ready). */
 async function openStatusModal(page: import('@playwright/test').Page) {
