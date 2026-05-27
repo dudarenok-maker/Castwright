@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
-import { MODEL_OPTION_GROUPS } from '../lib/models';
+import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { TtsModelKey, UserSettings, UserSettingsPatch } from '../lib/types';
 import type { ThemePreference } from '../lib/use-theme';
@@ -351,9 +351,42 @@ export function AccountView() {
         </FormCard>
 
         <FormCard
-          title="Analyzer"
-          hint="Plan 88 — per-phase analyzer models + minimum chapter lag between Phase 0 cast detection and Phase 1 attribution. Leave any field blank to fall through to the server's env var or hardcoded default. Explicit env vars on the server (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still win — ops can override at the process boundary for triage."
+          title="Two-model analyzer split (advanced)"
+          hint="Optional. By default both analysis passes run on your default analysis model. Pick a model for EACH phase to split the work: Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (1,500/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. Leave both blank for the single-model default. Server env vars (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still override for ops triage."
         >
+          {(() => {
+            const on = !!(analyzerPhase0Model || analyzerPhase1Model);
+            return (
+              <p
+                data-testid="analyzer-split-status"
+                className="rounded-xl border border-ink/10 bg-ink/[0.02] px-3 py-2 text-xs text-ink/70"
+              >
+                {on ? (
+                  <>
+                    <span className="font-semibold text-emerald-700">Currently ON</span> — Phase 0:{' '}
+                    <span className="font-medium text-ink">
+                      {analyzerModelLabel(analyzerPhase0Model)}
+                    </span>{' '}
+                    · Phase 1:{' '}
+                    <span className="font-medium text-ink">
+                      {analyzerModelLabel(analyzerPhase1Model)}
+                    </span>{' '}
+                    · lag {analyzerPhase1MinLagChapters ?? 10} chapter
+                    {(analyzerPhase1MinLagChapters ?? 10) === 1 ? '' : 's'}.
+                  </>
+                ) : (
+                  <>
+                    <span className="font-semibold">Currently OFF</span> — both phases run on the
+                    default analysis model (
+                    <span className="font-medium text-ink">
+                      {analyzerModelLabel(defaultAnalysisModel)}
+                    </span>
+                    ).
+                  </>
+                )}
+              </p>
+            );
+          })()}
           <FieldRow
             label="Phase 0 model (cast detection)"
             sublabel='Drives the cast-roster pass. Gemma 4 31B is the recommended default — high free-tier headroom (1,500/day) and strong at character identification.'
@@ -704,6 +737,14 @@ export function AccountView() {
       </div>
     </div>
   );
+}
+
+/* Human label for an analyzer model id, for the split-status line. `null`
+   (no per-phase override) reads as "server default" since the actual model
+   then depends on the server's resolution. */
+function analyzerModelLabel(id: string | null | undefined): string {
+  if (!id) return 'server default';
+  return MODEL_OPTIONS.find((m) => m.id === id)?.label ?? id;
 }
 
 function FormCard({

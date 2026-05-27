@@ -1459,3 +1459,60 @@ describe('AnalysingView — overall progress matches shared helper', () => {
     expect(screen.queryByText('40%')).not.toBeInTheDocument();
   });
 });
+
+/* Plan 118 — the request `model` is gated so the per-phase split can take
+   effect. Uses a Gemini model prop so isAnalyzerReady is true without the
+   Ollama probe (cloud analyzers have no local lifecycle to wait on). */
+describe('AnalysingView — request-model gating (plan 118)', () => {
+  async function renderAndStart(opts: {
+    modelProp: string;
+    splitActive?: boolean;
+    explicit?: boolean;
+  }) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          selectedModel: opts.modelProp,
+          selectedModelExplicit: opts.explicit ?? false,
+        } as ReturnType<typeof uiSlice.getInitialState>,
+        account: {
+          ...accountSlice.getInitialState(),
+          analyzerPhase0Model: opts.splitActive ? 'gemma-4-31b-it' : null,
+          analyzerPhase1Model: opts.splitActive ? 'gemini-3.1-flash-lite' : null,
+        } as ReturnType<typeof accountSlice.getInitialState>,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView manuscriptId="m1" title="Bonus Keefe Story" model={opts.modelProp} onComplete={() => {}} />
+      </Provider>,
+    );
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+  }
+
+  it('sends the selected model when the split is OFF (single-model path preserved)', async () => {
+    await renderAndStart({ modelProp: 'gemini-3.1-flash-lite', splitActive: false });
+    expect(capturedOpts?.model).toBe('gemini-3.1-flash-lite');
+  });
+
+  it('omits the model when the split is ON and no explicit per-run pick (lets per-phase settings apply)', async () => {
+    await renderAndStart({ modelProp: 'gemini-3.1-flash-lite', splitActive: true, explicit: false });
+    expect(capturedOpts?.model).toBeUndefined();
+  });
+
+  it('sends the model when the split is ON but the user made an explicit per-run pick', async () => {
+    await renderAndStart({ modelProp: 'gemini-2.5-flash', splitActive: true, explicit: true });
+    expect(capturedOpts?.model).toBe('gemini-2.5-flash');
+  });
+});
