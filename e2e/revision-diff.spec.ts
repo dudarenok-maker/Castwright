@@ -9,13 +9,13 @@ test.describe.configure({ mode: 'serial' });
  *
  * Asserts the integration bit Vitest can't cover: the revisions poll
  * resolves under VITE_USE_MOCKS and the pending-revisions action renders.
- * Plan 120 moved that affordance out of an inline top-bar pill into the
- * Status modal, so the test opens the modal (via the compact Status pill)
- * and asserts the "N revisions pending" action inside it. The full
- * diff-player open + a/b mutual exclusion logic is covered by
- * `src/views/revision-diff.test.tsx` (jsdom + spied <audio>), which doesn't
- * need a populated chapters slice — the e2e here just proves the polling
- * effect → slice → Status-modal seam is wired.
+ * The affordance lives in the Status popover (not an inline top-bar pill), so
+ * the test opens the popover (via the compact Status pill) and asserts the
+ * "N revisions pending" action inside it. The full diff-player open + a/b
+ * mutual exclusion logic is covered by `src/views/revision-diff.test.tsx`
+ * (jsdom + spied <audio>), which doesn't need a populated chapters slice —
+ * the e2e here just proves the polling effect → slice → Status-popover seam
+ * is wired.
  *
  * Why not also click through to the player here: mock mode doesn't
  * hydrate chapters from the library payload (state.json hydration
@@ -26,7 +26,7 @@ test.describe.configure({ mode: 'serial' });
  */
 
 test.describe('revision diff a/b audition pill', () => {
-  test('pending-revisions action appears in the Status modal after opening a complete book under mocks', async ({
+  test('pending-revisions action appears in the Status popover after opening a complete book under mocks', async ({
     page,
   }) => {
     await page.goto('/');
@@ -40,13 +40,13 @@ test.describe('revision diff a/b audition pill', () => {
       .first()
       .click({ timeout: 10_000 });
 
-    /* Plan 120 — the revisions affordance lives in the Status modal now.
-       The Status pill is always present in a book context; open the modal
-       and wait for the revisions action to appear once the mock
-       pollRevisions call resolves (≈200ms) and the slice flips loaded. */
+    /* The revisions affordance lives in the Status popover. The Status pill
+       is always present in a book context; clicking it pins the popover open.
+       Wait for the revisions action to appear once the mock pollRevisions call
+       resolves (≈200ms) and the slice flips loaded. */
     await page.getByTestId('status-pill').click();
     await expect(
-      page.getByTestId('status-modal-revisions').getByRole('button', { name: /\d+ revisions?/i }),
+      page.getByTestId('status-popover-revisions').getByRole('button', { name: /\d+ revisions?/i }),
     ).toBeVisible({ timeout: 10_000 });
   });
 });

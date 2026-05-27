@@ -30,7 +30,6 @@ const baseState = (stage: Stage): UiState => ({
   themeOverride: null,
   reuploadingBookId: null,
   queueModalOpen: false,
-  statusModalOpen: false,
   rebaselineModalOpen: false,
   rebaselineBookId: null,
 });
