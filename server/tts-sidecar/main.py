@@ -1574,7 +1574,10 @@ async def qwen_design_voice(req: Request) -> Response:
         )
     except Exception as e:
         log.exception("/qwen/design-voice failed (voiceId=%s)", voice_id)
-        return JSONResponse({"detail": str(e)}, status_code=500)
+        # `str(e)` is empty for some exception types (a bare raise, certain
+        # torch/CUDA errors), which would surface to the UI as a blank 500.
+        # Fall back to repr so the reason is never empty.
+        return JSONResponse({"detail": str(e) or repr(e)}, status_code=500)
 
     return Response(
         content=result.pcm,

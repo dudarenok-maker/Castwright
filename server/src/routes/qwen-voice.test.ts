@@ -215,6 +215,30 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(synthesize).not.toHaveBeenCalled();
   });
 
+  it('OVERWRITES the cached audition on re-design (an explicit regenerate must refresh the preview)', async () => {
+    const first = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/design-voice`)
+      .send(designBody);
+    expect(first.status).toBe(200);
+    const fileName = first.body.url.split('/').pop() as string;
+    const firstBytes = readFileSync(join(audioDir, fileName));
+
+    /* Re-designing produces a DIFFERENT audition (the freshly-designed voice).
+       The cache filename is keyed on (text, voiceId) — unchanged across
+       re-designs of the same character — so the route MUST overwrite the file.
+       Before the fix an `existsSync` guard skipped the write, so "Play 12s"
+       (and the drawer's post-design playback, which reads this same URL) kept
+       serving the FIRST design's audio and the re-design looked like a no-op. */
+    fetchMock.mockResolvedValue(okSidecarResponse(new Uint8Array(24_000 * 2).fill(0x40)));
+    const second = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/design-voice`)
+      .send(designBody);
+    expect(second.status).toBe(200);
+    expect(second.body.url).toBe(first.body.url); // same deterministic filename
+    const secondBytes = readFileSync(join(audioDir, fileName));
+    expect(secondBytes.equals(firstBytes)).toBe(false); // refreshed, not stale
+  });
+
   it('defaults the persona to the character voiceStyle and lets the body override it', async () => {
     await request(app)
       .post(`/api/books/${bookId}/cast/Maerin/design-voice`)
@@ -282,6 +306,27 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
       .send(designBody);
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/qwen-tts not installed/);
+  });
+
+  it('502 surfaces the sidecar FastAPI {detail} field, not a bare "returned 500"', async () => {
+    /* The sidecar reports failures as `{ detail }` (FastAPI), e.g. a CUDA
+       "Cannot copy out of meta tensor" load error. The route used to read only
+       `.error`, dropping the reason and showing a generic "returned 500" — so
+       the user couldn't tell WHY the model failed to load. */
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      headers: new Headers(),
+      arrayBuffer: async () => new ArrayBuffer(0),
+      json: async () => ({ detail: 'Cannot copy out of meta tensor; no data!' }),
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/meta tensor/);
+    expect(res.body.error).not.toMatch(/returned 500/);
   });
 
   it('404s for an unknown bookId', async () => {

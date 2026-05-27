@@ -15,6 +15,7 @@ import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
 import { Avatar, VoiceSwatch, Pill, PrimaryButton } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
+import { sampleScopeFor } from '../lib/sample-scope';
 import type { Character, Voice, CharColor } from '../lib/types';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-with-auto-load';
@@ -382,7 +383,7 @@ export function ProfileDrawer({
      character-derived stub so brand-new (unmatched) characters can still
      preview their attributes. Server file is namespaced `char-<id>` for
      character samples to keep them separate from library voice samples. */
-  const sampleVoiceId = voice ? voice.id : `char-${character.id}`;
+  const sampleVoiceId = sampleScopeFor(character, voice);
   /* Recompute against the *edited* identity so the displayed TTS voice
      updates live as the user changes the dropdowns. Saving the drawer
      persists these values; until then the recompute is local-only. */
