@@ -949,7 +949,7 @@ function resolveStatusPill(
   }
   switch (c.voiceState) {
     case 'generated':
-      return { label: 'Generated', color: 'success' };
+      return { label: 'Matched', color: 'success' };
     case 'tuned':
       return { label: 'Tuned', color: 'warning' };
     case 'reused':
