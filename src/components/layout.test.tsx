@@ -13,7 +13,7 @@
    effects the layout runs alongside. Those have their own paired tests. */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, waitFor, fireEvent } from '@testing-library/react';
+import { render, waitFor, fireEvent, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
@@ -85,6 +85,7 @@ vi.mock('../lib/api', () => ({
 }));
 
 import { Layout } from './layout';
+import { api } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { bookMetaActions } from '../store/book-meta-slice';
@@ -515,5 +516,89 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
     fireEvent.click(await findByTestId('status-pill'));
     const qwenPill = await findByRole('group', { name: /^Qwen / });
     expect(qwenPill).toBeTruthy();
+  });
+});
+
+describe('Layout — voices re-hydrate as generation renders chapters', () => {
+  /* Regression: a bespoke Qwen voice's `generated` flag (cast Status column:
+     "Designed" vs "Generated") is derived server-side from rendered segments.
+     The voice library only re-hydrated on book/engine/stage change, so a voice
+     generated while the user sat on the cast view stayed "Designed" until they
+     navigated away and back. The hydrate effect now also keys off the
+     completed-chapter count across active streams, so each rendered chapter
+     re-fetches the library. */
+  it('re-fetches getVoices when an active stream advances its done count', async () => {
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns_test',
+        title: 'Bonus Keefe Story',
+        author: 'Shannon Messenger',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#3C194F', '#0F0E0D'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: [] },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+    });
+
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes>
+            <Route path="/books/:bookId/cast" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    const getVoices = vi.mocked(api.getVoices);
+    await waitFor(() => expect(getVoices).toHaveBeenCalled());
+    const callsAfterMount = getVoices.mock.calls.length;
+
+    /* A chapter finished rendering for this book — the stream's done count
+       climbs from 0 to 1. */
+    act(() => {
+      store.dispatch(
+        chaptersSlice.actions.setActiveStream({
+          streamKey: 'b1::1',
+          bookId: 'b1',
+          chapterId: 1,
+          modelKey: 'qwen3-tts-0.6b',
+          done: 1,
+          total: 5,
+          inProgress: 1,
+          lastTickAt: null,
+          halted: false,
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(getVoices.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    });
+
+    /* A second chapter completes — done climbs to 2, refetching again so the
+       table keeps pace with generation. */
+    const callsAfterFirstChapter = getVoices.mock.calls.length;
+    act(() => {
+      store.dispatch(
+        chaptersSlice.actions.updateActiveStreamProgress({ streamKey: 'b1::1', done: 2 }),
+      );
+    });
+    await waitFor(() => {
+      expect(getVoices.mock.calls.length).toBeGreaterThan(callsAfterFirstChapter);
+    });
   });
 });
