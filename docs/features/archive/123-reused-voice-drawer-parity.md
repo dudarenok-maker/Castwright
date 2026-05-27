@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-28
 owner: null
 ---
 
 # Reused-voice drawer parity + Reused/lifecycle status split
 
-> Status: active (frontend-only fix; extends archived plans 117 + 10 + 108)
+> Status: stable (frontend-only fix; extends archived plans 117 + 10 + 108)
 > Key files: `src/lib/voice-status.ts`, `src/views/cast.tsx`, `src/modals/profile-drawer.tsx`, `src/components/voice-engine-picker.tsx`, `src/components/primitives.tsx`
 > URL surface: `#/books/<id>/cast` (cast table Status column + profile drawer)
 > OpenAPI ops: none (pure presentation — no contract change)
@@ -30,7 +30,9 @@ hardcoded "Default (Kokoro)" engine label even on a Qwen project.
   sample, and a truthful "Default (<project engine>)" label — matching the cast
   row. The Status now shows the lifecycle (Designed/Generated/Tuned/Locked)
   **and** a small "Reused" badge together, instead of "Reused" hiding the
-  lifecycle.
+  lifecycle. The preset (Coqui/Kokoro/Gemini) Model-voice picker no longer
+  renders for a character that effectively synthesises via Qwen, so the drawer
+  stops showing preset speaker tabs under an "Active engine: Qwen" header.
 - **Technical:** one shared resolver (`resolveVoiceStatus`) backs both the cast
   Status column and the drawer header, so they can't drift again.
 - **Architectural:** provenance ("reused from a prior book", keyed off
@@ -53,6 +55,10 @@ hardcoded "Default (Kokoro)" engine label even on a Qwen project.
   only persisted when the user explicitly pins the Qwen engine.
 - **Picker fix:** `VoiceEnginePicker` takes a `defaultEngineLabel` prop instead
   of hardcoding "Kokoro" in the "Default (…)" option.
+- **Preset-picker gate:** the `ModelVoiceOverridePicker` is gated on
+  `effectiveEngine !== 'qwen'` (the per-character override folded over the
+  project default) instead of the live `engineChoice`, so a default-engine
+  character on a Qwen project no longer shows inert preset speaker tabs.
 - **Invariants preserved:** OpenAPI is untouched (no new fields). The reuse
   reducers are untouched — this is a read-side display fix. Plan 117's Qwen
   lifecycle (Needs voice / Designed / Generated) is preserved verbatim inside
@@ -72,6 +78,9 @@ hardcoded "Default (Kokoro)" engine label even on a Qwen project.
   yet" for a character the cast row shows a Qwen voice for.
 - `VoiceEnginePicker`'s "Default (…)" option label is driven by
   `defaultEngineLabel`, never hardcoded.
+- The preset `ModelVoiceOverridePicker` (`src/modals/profile-drawer.tsx`) is
+  gated on `effectiveEngine !== 'qwen'`, NOT `engineChoice !== 'qwen'`, so it
+  shows iff the character will synthesise with a preset engine.
 
 ## Test plan
 
@@ -87,7 +96,9 @@ hardcoded "Default (Kokoro)" engine label even on a Qwen project.
 - Vitest (`src/modals/profile-drawer.test.tsx`) — "ProfileDrawer reused Qwen
   voice (drawer/table parity)": the card surfaces the reused voiceId (not "No
   voice designed yet"), the Play button is enabled, the lifecycle pill + Reused
-  badge both render, and the engine default option reads "Default (Qwen)".
+  badge both render, the engine default option reads "Default (Qwen)", the
+  preset Model-voice picker is hidden for the effective-Qwen character, and it
+  still renders for a default-engine character on a Kokoro project.
 
 ### Manual acceptance walkthrough
 
@@ -109,10 +120,16 @@ Real backend on a Qwen project with a series whose later book reuses prior cast
   `overrideTtsVoices` at reuse time (would make the drawer + table read from the
   same field). Deferred — the read-side resolver is sufficient and avoids
   touching the reuse reducers / cast.json shape.
-- The drawer's preset Model-voice override picker still renders for a
-  default-engine character on a Qwen project (it's gated on `engineChoice !==
-  'qwen'`, not the effective engine). Pre-existing; not in this fix's scope.
+- The cast row's `resolveDisplayTtsVoice` still shows a reused Qwen voice even
+  when the project engine is a preset (a degenerate cross-engine-reuse case);
+  the drawer's preset-picker gate tracks the *effective* synth engine, so the
+  two can disagree in that rare case. Not chased here.
 
 ## Ship notes
 
-(Filled in on ship.)
+Shipped 2026-05-28 on branch `fix/frontend-reused-voice-drawer-status`.
+Frontend-only; no OpenAPI/contract change. Delivered exactly as specified plus
+the folded-in preset-picker gate (`effectiveEngine !== 'qwen'`) that the
+original draft had parked under "Out of scope". Paired tests landed in the same
+change (`src/lib/voice-status.test.ts`, `src/views/cast.test.tsx`,
+`src/modals/profile-drawer.test.tsx`).
