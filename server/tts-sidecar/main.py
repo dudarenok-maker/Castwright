@@ -953,7 +953,20 @@ class QwenEngine(Engine):
         import torch  # type: ignore
 
         lang = (language or self.DEFAULT_LANGUAGE).strip() or self.DEFAULT_LANGUAGE
-        ref_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
+        # The reference clip + clone prompt only need a few seconds of
+        # phonetically rich audio to fix the voice's timbre — the persona
+        # (`instruct`) defines the identity; the words are just a carrier. So
+        # voice the SHORT CALIBRATION_TEXT here, never the caller's evidence
+        # quote (up to 320 chars). The reference is generated on the heavy 1.7B
+        # VoiceDesign model, and voicing a long quote there at design-RTF ~10 is
+        # what pushed cold designs past the 120s server budget.
+        ref_text = self.CALIBRATION_TEXT
+        # The audition preview speaks the caller's own calibration line, so the
+        # UI plays back the character's actual words AND the MP3 the design
+        # route caches matches the "Play 12s" player's cache key (the server
+        # keys it on this exact text). Falls back to CALIBRATION_TEXT when the
+        # caller sent nothing.
+        audition_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
 
         # Mark the design model active up front so the idle watchdog can't free
         # it out from under this in-flight design; refreshed again on completion
@@ -1005,10 +1018,11 @@ class QwenEngine(Engine):
         with self._cache_lock:
             self._prompt_cache.pop(voice_id, None)
 
-        # 4. audition preview — speak the calibration line in the new voice.
+        # 4. audition preview — speak the caller's calibration line in the new
+        #    voice (the full evidence quote, NOT the short reference text).
         with self._synth_lock:
             wavs, sr = self._base.generate_voice_clone(
-                text=[ref_text], language=[lang], voice_clone_prompt=prompt
+                text=[audition_text], language=[lang], voice_clone_prompt=prompt
             )
         # Idle clock starts now (design finished) — back-to-back designs keep
         # the model warm; a pause past the TTL lets the watchdog reclaim it.

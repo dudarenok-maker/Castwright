@@ -270,15 +270,15 @@ Source: [`30-global-model-control.md`](features/30-global-model-control.md) "Whe
 - _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
 - _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
 
-#### `side-5` — Investigate the per-call Qwen `code_predictor` re-init log
+#### `side-5` — Silence the benign Qwen `code_predictor` config-default log
 
-Source: [`108-qwen-coexistence.md`](features/108-qwen-coexistence.md) post-ship `fix/sidecar-qwen-design-vram`.
+Source: [`108-qwen-coexistence.md`](features/108-qwen-coexistence.md) post-ship `fix/sidecar-qwen-design-ref-text`.
 
-- _What:_ On every Qwen design AND every synth the sidecar logs `code_predictor_config is None. Initializing code_predictor model with default values` (sometimes twice). The line comes from inside the `qwen_tts` library's `generate_voice_design` / `generate_voice_clone` / `create_voice_clone_prompt` calls — not our code. Determine whether it is a genuine per-call sub-module recompute (a real cost paid on every sentence, worth building-once-per-load) or benign once-per-call config logging.
-- _Acceptance:_ A measurement (time the init, or profile a synth) that classifies the line as recompute-vs-noise, plus either a fix (build the code_predictor once per model load) or a note in `108` / `server/tts-sidecar/README.md` documenting it as benign so it stops looking alarming in logs.
-- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine._load_qwen_model` / `synthesize` / `design_voice`); the installed `qwen_tts` package (read-only — the log originates there).
-- _Depends on:_ nothing; needs the real Qwen weights installed to reproduce (not mock-able).
-- _Benefit (technical):_ if it's a per-sentence recompute, removing it speeds every Qwen synth across a book; if benign, it stops masquerading as a problem (it drew the eye during the plan-108 OOM debugging).
+- _What:_ The sidecar logs `code_predictor_config is None. Initializing code_predictor model with default values` around Qwen model load. **The perf question is resolved** (post-ship `fix/sidecar-qwen-design-ref-text`): the line originates in `qwen_tts`'s `Qwen3TTSTalkerConfig.__init__` (`configuration_qwen3_tts.py`) — HuggingFace config-defaulting at `from_pretrained`, NOT a per-sentence recompute. The design slowness that drew the eye was generation-length-bound (the calibration text voiced twice at RTF ~10 on the 1.7B model), fixed by the reference-text split. What remains is purely cosmetic: it's benign log noise that still reads as alarming.
+- _Acceptance:_ Either suppress the line (raise the `qwen_tts` config logger level around the `from_pretrained` call) or add a one-line note in `server/tts-sidecar/README.md` documenting it as benign.
+- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine._load_qwen_model`); the installed `qwen_tts` package (read-only — the log originates there).
+- _Depends on:_ nothing.
+- _Benefit (technical):_ stops a benign config log masquerading as a problem (it drew the eye during both the plan-108 OOM debugging and the design-timeout debugging).
 
 ### Workflow, power-user & dev settings
 
