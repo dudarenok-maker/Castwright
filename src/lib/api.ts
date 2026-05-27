@@ -537,6 +537,17 @@ async function mockSetVoiceOverride(
   await wait(20);
 }
 
+async function mockSetVoiceOverrideLinked(
+  _bookId: string,
+  characterId: string,
+  _override: BaseVoice | null,
+): Promise<LinkedOverrideResponse> {
+  /* Single-book mock workspace — no series-mates to propagate to. Echo a
+     benign success so the rebaseline approve round-trips under VITE_USE_MOCKS. */
+  await wait(20);
+  return { canonicalVoiceId: characterId, updated: [], failed: [] };
+}
+
 /* Mock Qwen voice design — returns a deterministic derived voiceId and a
    cache-style sample URL (matching the real route's shape, now that the
    audition IS the cached 12s sample) so the drawer's audition button
@@ -1333,6 +1344,39 @@ async function realSetVoiceOverride(
     throw new Error(
       `Voice override update failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+}
+
+/* POST /api/books/:bookId/cast/:characterId/voice-override-linked (plan 122).
+   Name/alias-aware series voice write used by the rebaseline approve: unifies
+   voiceId across the recurring character's whole name/alias group and writes
+   the override to every member book — so approving a collapsed modal row can't
+   silently skip a book on a divergent key. Server rediscovers the group
+   (respecting notLinkedTo); the caller only supplies the representative's home
+   (bookId, characterId). */
+export interface LinkedOverrideResponse {
+  canonicalVoiceId: string;
+  updated: Array<{ bookId: string; bookTitle: string; characterId: string }>;
+  failed: Array<{ bookId: string; bookTitle: string; error: string }>;
+}
+
+async function realSetVoiceOverrideLinked(
+  bookId: string,
+  characterId: string,
+  override: BaseVoice | null,
+): Promise<LinkedOverrideResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/voice-override-linked`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ override }),
+    },
+  );
+  if (!res.ok)
+    throw new Error(
+      `Linked voice override failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
 }
 
 async function realDesignQwenVoice(
@@ -3970,6 +4014,7 @@ const real = {
   setVoicePin: realSetVoicePin,
   getBaseVoices: realGetBaseVoices,
   setVoiceOverride: realSetVoiceOverride,
+  setVoiceOverrideLinked: realSetVoiceOverrideLinked,
   getBookState: realGetBookState,
   putBookState: realPutBookState,
   getListenProgress: realGetListenProgress,
@@ -4150,6 +4195,7 @@ const mock = {
   setVoicePin: mockSetVoicePin,
   getBaseVoices: mockGetBaseVoices,
   setVoiceOverride: mockSetVoiceOverride,
+  setVoiceOverrideLinked: mockSetVoiceOverrideLinked,
   getBookState: mockGetBookState,
   putBookState: mockPutBookState,
   getListenProgress: mockGetListenProgress,

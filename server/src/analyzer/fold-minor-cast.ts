@@ -251,8 +251,21 @@ export function foldMinorCast(
     foldedSources.push(c);
   }
 
-  /* No folds and no drops → no-op, preserve referential identity. */
-  if (foldedSources.length === 0 && droppedIds.size === 0) {
+  /* A bucket-id row carrying a non-canonical name is a drift (a real
+     character that ended up wearing `unknown-male`/`unknown-female` via an
+     old merge / voice-match / manual edit). When present we skip the no-op
+     shortcut so the canonicalisation in `withCounts` below runs and restores
+     the bucket's generic name — closing "named character wearing a bucket id"
+     (plan 122). */
+  const hasDriftedBucket = characters.some(
+    (c) =>
+      (c.id === MALE_BUCKET_ID && c.name !== 'Unknown male') ||
+      (c.id === FEMALE_BUCKET_ID && c.name !== 'Unknown female'),
+  );
+
+  /* No folds and no drops (and no drifted bucket) → no-op, preserve
+     referential identity. */
+  if (foldedSources.length === 0 && droppedIds.size === 0 && !hasDriftedBucket) {
     return {
       characters,
       sentences,
@@ -327,11 +340,26 @@ export function foldMinorCast(
     }
     set.add(s.chapterId);
   }
-  const withCounts = survivors.map((c) => ({
-    ...c,
-    lines: lines.get(c.id) ?? c.lines ?? 0,
-    scenes: scenes.get(c.id)?.size ?? c.scenes ?? 0,
-  }));
+  const withCounts = survivors.map((c) => {
+    const base = {
+      ...c,
+      lines: lines.get(c.id) ?? c.lines ?? 0,
+      scenes: scenes.get(c.id)?.size ?? c.scenes ?? 0,
+    };
+    /* Invariant (plan 122): a bucket id ALWAYS carries the canonical generic
+       name + gender — never a real character's name. A drifted entry
+       ({ id: 'unknown-male', name: 'Lord Cassius' }) is normalised back to
+       the bucket here; its aliases / voiceId / overrides are preserved (the
+       drifted NAME is deliberately NOT kept as an alias, so the matcher won't
+       re-bind that character to the bucket). */
+    if (base.id === MALE_BUCKET_ID) {
+      return { ...base, name: 'Unknown male', gender: 'male' as const, role: base.role || 'background' };
+    }
+    if (base.id === FEMALE_BUCKET_ID) {
+      return { ...base, name: 'Unknown female', gender: 'female' as const, role: base.role || 'background' };
+    }
+    return base;
+  });
 
   /* Summary counters for the log line. */
   let intoMale = 0,
