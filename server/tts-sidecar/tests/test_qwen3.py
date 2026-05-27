@@ -635,6 +635,27 @@ def test_design_voice_route_requires_voiceid_and_instruct(fake_qwen_runtime) -> 
     assert client.post("/qwen/design-voice", json={"voiceId": "x"}).status_code == 400
 
 
+def test_design_voice_route_500_detail_never_empty(fake_qwen_runtime, monkeypatch) -> None:
+    """A design failure whose str(e) is empty (some torch/CUDA errors raise with
+    no message) must still surface a non-empty detail. The server proxies this
+    detail to the UI, so a blank 500 leaves the user with no reason the model
+    failed — the route falls back to repr(e)."""
+    engine = fake_qwen_runtime["engine"]
+
+    class _Empty(Exception):
+        def __str__(self) -> str:  # mimics a no-message exception
+            return ""
+
+    def boom(*_args, **_kwargs):
+        raise _Empty()
+
+    monkeypatch.setattr(engine, "design_voice", boom)
+    client = TestClient(main.app)
+    resp = client.post("/qwen/design-voice", json={"voiceId": "x", "instruct": "y"})
+    assert resp.status_code == 500
+    assert resp.json()["detail"], "500 detail must never be empty"
+
+
 def test_synthesize_route_routes_qwen(fake_qwen_runtime) -> None:
     client = TestClient(main.app)
     client.post(

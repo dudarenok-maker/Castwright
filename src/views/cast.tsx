@@ -18,6 +18,7 @@ import type { TtsVoiceAssignment } from '../lib/tts-voice-mapping';
 import { useAppSelector } from '../store';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
+import { sampleScopeFor } from '../lib/sample-scope';
 import { resolveTtsVoiceForCharacter, sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
@@ -125,7 +126,7 @@ export function CastView({
   const effectiveEngineFor = (c: Character): TtsEngine => c.ttsEngine ?? ttsEngine;
 
   async function playSampleFor(c: Character, voice: Voice | undefined) {
-    const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
+    const sampleVoiceId = sampleScopeFor(c, voice);
     const effectiveEngine = effectiveEngineFor(c);
     const effectiveModelKey = sampleModelKeyForEngine(effectiveEngine, ttsModelKey);
     /* Server appends a hash of (text, voiceName) to the cached filename so
@@ -390,7 +391,7 @@ export function CastView({
             const voice = findVoiceForCharacter(c, library);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
-            const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
+            const sampleVoiceId = sampleScopeFor(c, voice);
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
               effectiveEngineFor(c),
               ttsModelKey,
@@ -578,7 +579,7 @@ export function CastView({
             const voice = findVoiceForCharacter(c, library);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
-            const sampleVoiceId = voice ? voice.id : `char-${c.id}`;
+            const sampleVoiceId = sampleScopeFor(c, voice);
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
               effectiveEngineFor(c),
               ttsModelKey,
