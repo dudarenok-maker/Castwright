@@ -33,6 +33,7 @@ import { computeOverallProgress } from '../lib/analysis-progress';
 import { stageToHash } from '../lib/router';
 import { TopBar, type GenerationPillData, type AnalysisPillData } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
+import { TtsNoticeBanner } from './tts-notice-banner';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
 import { selectEnginesInUse } from '../store/engines-in-use-selector';
 import { useTheme } from '../lib/use-theme';
@@ -958,6 +959,20 @@ export function Layout() {
         queueCount={queueCount}
         onOpenQueue={() => dispatch(uiActions.openQueueModal())}
       />
+
+      {/* Global TTS Load/Stop notices. Rendered here (not just in the Generate
+          view) so a Load failure or analyzer-eviction triggered from the
+          top-bar pill is visible on every stage that shows the pill —
+          previously these only surfaced in generation.tsx, so a top-bar Load
+          error silently reverted the pill to idle. Gated on the same flag as
+          the pill itself. */}
+      {showGlobalTtsPill && (
+        <TtsNoticeBanner
+          evictionNotice={ttsLifecycle.evictionNotice}
+          loadErrorNotice={ttsLifecycle.loadErrorNotice}
+          onDismiss={ttsLifecycle.dismissNotices}
+        />
+      )}
 
       {/* Plan 89 C5 — single shared Suspense boundary for the route-leaf
           views (each lazy-loaded in src/routes/index.tsx). The fallback's
