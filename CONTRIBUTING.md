@@ -393,15 +393,17 @@ The compact version:
 Cutting a public release is one command (after the notes file is ready):
 
 ```sh
-# 1. Clean main.
+# 1. Clean main, synced with origin (the cross-OS gate validates origin/main).
 git switch main
 git pull --ff-only
 
 # 2. Author release notes (markdown file, sections per "Release notes" below).
 $EDITOR ~/Desktop/vX.Y.Z-notes.md   # or notepad on Windows
 
-# 3. Bump versions + create the chore commit + create the annotated tag.
-#    Same command on Windows, macOS, Linux.
+# 3. Bump versions, GATE on a green cross-OS run, then create the chore commit
+#    + annotated tag. Same command on Windows, macOS, Linux. This fires
+#    cross-os.yml on main and BLOCKS (~15–20 min); if it fails the tag is NOT
+#    created — fix main and re-run. --skip-cross-os bypasses the gate.
 node scripts/bump-version.mjs --level minor --notes-file ~/Desktop/vX.Y.Z-notes.md
 
 # 4. Push the bump, then the tag. The tag push fires .github/workflows/release.yml.
@@ -411,13 +413,21 @@ git push origin vX.Y.Z
 # 5. Watch:  gh run watch   (or the Actions tab in the browser)
 ```
 
-The workflow runs `verify:quick` on Ubuntu + macOS + Windows runners, then
-builds the platform-independent zip + SHA-256 on Ubuntu and publishes the
-GitHub Release using the tag annotation as the body. Full spec:
-[`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
+Step 3's cross-OS gate (plan 127) is the macOS + Windows verify/build + mobile-e2e
+smoke that plan 103 moved out of `release.yml` into `cross-os.yml` to cut Actions
+minutes. The bumper now fires + blocks on it before tagging, so a cross-OS break
+can't ship — without re-paying the matrix on every PR. `release.yml` then runs
+`verify:quick` on Ubuntu against the tagged commit and publishes the
+platform-independent zip + SHA-256 using the tag annotation as the body. Full spec:
+[`docs/features/127-release-cross-os-gate.md`](docs/features/127-release-cross-os-gate.md)
++ [`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
 
 **Invariants the bumper enforces** — read these before you bypass it:
 
+- The **cross-OS gate** (plan 127) must pass before the tag is created. The gate
+  validates `origin/main`, so local `main` must be in sync with it (the bumper
+  refuses otherwise). `--skip-cross-os` is the escape hatch (emergency / no-`gh`
+  boxes); if you use it, fire `cross-os.yml` manually before announcing the release.
 - `package.json` and `server/package.json` versions MUST stay in lockstep
   (the bumper refuses to run if they've drifted).
 - Every `vX.Y.Z` tag is an annotated tag pointing at a `chore: bump version
