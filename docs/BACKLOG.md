@@ -290,6 +290,16 @@ Source: [`108-qwen-coexistence.md`](features/108-qwen-coexistence.md) post-ship 
 - _Depends on:_ nothing.
 - _Benefit (technical):_ stops a benign config log masquerading as a problem (it drew the eye during both the plan-108 OOM debugging and the design-timeout debugging).
 
+#### `fs-13` — Exact per-character progress under parallel synthesis
+
+Source: net-new (2026-05-28). Surfaced shipping the generation progress-bounce fix (PR #308, `fix/server-generation-progress-bounce`). That fix made the chapter "line N of M" counter monotonic by deriving it from a shared `completed` GROUP COUNT (plan 107 invariant 6) instead of each in-flight group's narrative position. Side effect: the per-character mini-bars in the Generate view (`linesDoneAt(positions, chapter.currentLine)`) now read `currentLine` as a COUNT, not a narrative watermark — so under genuinely out-of-order completion (`GPU_VRAM_BUDGET`/poolWidth > 1 + Qwen batching) a character whose lines cluster late/early in the chapter can read slightly low/high until the count catches up. Strictly better than the prior backward bounce, but no longer an exact per-character tally.
+
+- _What:_ Carry per-character completion in the generation SSE tick so the Generate view renders an exact per-character "X / Y done" rather than deriving an approximation from one chapter-wide `currentLine` count. Likely shape: each completed-group tick includes the completed sentence id(s) (or a per-character done tally), and the frontend tracks the SET of completed positions per character instead of `linesDoneAt(positions, currentLine)`. Keep the chapter-level `currentLine`/`progress` as the monotonic count it is today — that part is correct.
+- _Acceptance:_ Generate a multi-character chapter at `GPU_VRAM_BUDGET=2` + `QWEN_BATCH_SIZE=8` (forces out-of-order completion). Each character's mini-bar reflects exactly that character's synthesised lines at all times — never reads ahead of or behind its true done count — while the chapter-level counter stays monotonic. New paired test pins per-character accuracy under forced out-of-order completion.
+- _Key files:_ `server/src/routes/generation.ts` (tick payload — emit completed sentence id / per-character tally; `onGroupComplete` already knows the group's `characterId` + `sentenceIds`), `server/src/tts/synthesise-chapter.ts` (`fireComplete`), `openapi.yaml` + `src/lib/api-types.ts` (`GenerationTick` shape), `src/lib/generation-progress.ts` (`linesDoneAt` → set-based), `src/store/chapters-slice.ts` (track completed positions per character), `src/views/generation.tsx` (per-character bar source).
+- _Depends on:_ the progress-bounce fix shipped (PR #308) — builds on the same `completed`-count plumbing.
+- _Benefit (user):_ per-character progress bars become exact under parallel synthesis, not a monotonic approximation. Low urgency — the bars are already monotonic and directionally right; this only bites if a user watches a single character's bar closely during a heavily-parallel run.
+
 ### Workflow, power-user & dev settings
 
 #### `srv-2` — Auto-backup scheduling for `state.json`
