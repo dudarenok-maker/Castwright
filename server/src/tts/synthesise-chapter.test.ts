@@ -1039,6 +1039,54 @@ describe('synthesiseChapter within-chapter parallelism (plan 107)', () => {
     expect(completed).toHaveLength(5);
   });
 
+  it('exposes a monotonic `completed` count even when groups finish out of order (progress-bounce fix)', async () => {
+    /* The "17 ↔ 25, stalled" bug: under poolWidth > 1 the route reported
+       currentLine/progress from each in-flight group's narrative POSITION, so
+       two concurrent items (plus the 10 s heartbeat re-firing onGroupStart)
+       ping-ponged the displayed line backward. Both callbacks now also carry
+       `completed` — one counter incremented only on completion, shared by every
+       worker — and the route reports currentLine/progress from THAT. This pins
+       that `completed` is monotonic regardless of completion order, while
+       group.index (the old source) bounces in the very same fire order. */
+    const delayForText = (text: string) => Math.max(0, 60 - text.length);
+    const provider = makeDeterministicProvider({ delayForText });
+
+    /* `completed` value + group position (1-based, == the OLD currentLine),
+       captured in fire order across BOTH callbacks. */
+    const completedInFireOrder: number[] = [];
+    const positionInFireOrder: number[] = [];
+    const record = (completedSoFar: number, index: number) => {
+      completedInFireOrder.push(completedSoFar);
+      positionInFireOrder.push(index + 1);
+    };
+
+    await synthesiseChapter({
+      sentences: SENTENCES,
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      sentenceConcurrency: 2,
+      onGroupStart: ({ group, completed }) => record(completed, group.index),
+      onGroupComplete: ({ group, completed }) => record(completed, group.index),
+    });
+
+    /* The hazard was actually exercised: the pool overlapped and at least one
+       group completed out of dispatch order. */
+    expect(provider.peakInFlight).toBeGreaterThanOrEqual(2);
+    expect(provider.completionOrder).not.toEqual(provider.startOrder);
+
+    const isMonotonic = (xs: number[]): boolean => xs.every((x, i) => i === 0 || x >= xs[i - 1]);
+
+    /* The fix: the count only ever climbs. */
+    expect(isMonotonic(completedInFireOrder)).toBe(true);
+    /* …whereas the OLD position-based source bounced in the same fire order —
+       exactly the backward jump (e.g. 25 → 17) we removed. */
+    expect(isMonotonic(positionInFireOrder)).toBe(false);
+    /* Ends at the full group count. */
+    expect(completedInFireOrder[completedInFireOrder.length - 1]).toBe(SENTENCES.length);
+  });
+
   it('throws AbortError when aborted mid-run at sentenceConcurrency 2', async () => {
     /* INVARIANT 4 (abort). Aborting while the pool is running must reject with
        AbortError and stop dispatching further groups. */
