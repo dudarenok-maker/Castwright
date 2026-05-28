@@ -52,3 +52,15 @@ export function selectEnginesInUse(state: RootState): Set<EngineFamily> {
   }
   return result;
 }
+
+/* selectDefaultTtsEngine — the user-wide default/primary engine derived from
+   `account.defaultTtsModelKey`, independent of any loaded book or its cast.
+   The top bar uses this to keep the default engine's Load/Stop pill reachable
+   on book-less views (Books home, Voices, …) so the model can be pre-loaded
+   right after launch — whereas the per-character additions in
+   `selectEnginesInUse` (e.g. a Qwen-pinned cast member) stay gated behind an
+   open book. Returns null when no default key has hydrated yet. */
+export function selectDefaultTtsEngine(state: RootState): EngineFamily | null {
+  const modelKey = state.account?.defaultTtsModelKey;
+  return modelKey ? engineFamilyForKey(modelKey) : null;
+}
