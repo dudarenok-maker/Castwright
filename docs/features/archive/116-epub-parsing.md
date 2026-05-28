@@ -12,7 +12,7 @@ owner: null
 > `server/src/parsers/mobi.ts`, `server/src/routes/manuscripts.ts`,
 > `scripts/gen-parser-fixtures.mjs`
 > URL surface: `#/new` (no new routes) — owns the EPUB parser internals that
-> [02 — Upload (paste or file)](02-upload-paste-or-file.md) delegates.
+> [02 — Upload (paste or file)](../02-upload-paste-or-file.md) delegates.
 > OpenAPI ops: `POST /api/manuscripts` (existing)
 
 ## Benefit / Rationale

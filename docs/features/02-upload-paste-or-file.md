@@ -13,7 +13,7 @@ MOBI / AZW3 parsing is owned by [`52-mobi-parsing.md`](archive/52-mobi-parsing.m
 plan covers the parser module, DRM detection, and the extension-preserving
 persist path. EPUB parsing (epub2 primary path + the namespace-prefixed-OPF
 raw-zip fallback + the `UnusableEpubError` diagnostics) is owned by
-[`116-epub-parsing.md`](116-epub-parsing.md). This plan owns the upload UI
+[`archive/116-epub-parsing.md`](archive/116-epub-parsing.md). This plan owns the upload UI
 surface only.
 
 ## Invariants to preserve

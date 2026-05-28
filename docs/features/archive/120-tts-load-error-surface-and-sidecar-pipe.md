@@ -1,14 +1,14 @@
 ---
-status: active
+status: stable
 shipped: 2026-05-27
 owner: null
 ---
 
 # TTS load-error surfacing + orphaned-sidecar log resilience
 
-> Status: active
+> Status: stable
 > Key files: `src/components/tts-notice-banner.tsx`, `src/components/layout.tsx`, `src/views/generation.tsx`, `server/src/tts/spawn-sidecar.ts`
-> URL surface: indirect — the global TTS pill in the top bar (see [30-global-model-control.md](30-global-model-control.md))
+> URL surface: indirect — the global TTS pill in the top bar (see [30-global-model-control.md](../30-global-model-control.md))
 > OpenAPI ops: none (uses existing `POST /api/sidecar/load`)
 
 ## Benefit / Rationale
@@ -56,7 +56,7 @@ process loads Qwen Base fine; the resident orphaned one 500s.)
   sibling is preserved; if the files can't be opened at all, stdio falls back
   to `'ignore'` (logging is non-fatal, spawn still proceeds).
 - **Preserves** the dev-reload sidecar-persistence optimization (`spawnSidecar`
-  still honours an existing `:9000` listener — see [43-auto-start-sidecar.md](archive/43-auto-start-sidecar.md));
+  still honours an existing `:9000` listener — see [43-auto-start-sidecar.md](43-auto-start-sidecar.md));
   the persisted sidecar's logging now simply survives the reload.
 - **Reversibility:** revert the two files; no data/format/migration change.
 
@@ -115,5 +115,5 @@ assert in mock mode.
 
 Shipped 2026-05-27 on branch `fix/frontend-qwen-load-reverts`. Two layers:
 global `TtsNoticeBanner` (frontend) + inherited log fds in `spawn-sidecar.ts`
-(server). Pairs with [30-global-model-control.md](30-global-model-control.md)
-and [43-auto-start-sidecar.md](archive/43-auto-start-sidecar.md).
+(server). Pairs with [30-global-model-control.md](../30-global-model-control.md)
+and [43-auto-start-sidecar.md](43-auto-start-sidecar.md).
