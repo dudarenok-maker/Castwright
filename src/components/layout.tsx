@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, Suspense, type ReactNode } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { DelayedSpinner } from './delayed-spinner';
+import { BuildStamp } from './build-stamp';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
@@ -1039,6 +1040,12 @@ export function Layout() {
       <Suspense fallback={<DelayedSpinner />}>
         <Outlet context={ctx} />
       </Suspense>
+
+      {/* Plan 124 — build-version footer. Last in-flow child of the shell so it
+          sits at the bottom of page content on every stage. The fixed MiniPlayer
+          (ready stage) floats over the root's reserved pb-20/pb-24 gap, so it
+          doesn't occlude this footer. */}
+      <BuildStamp />
 
       <ToastStack />
 
