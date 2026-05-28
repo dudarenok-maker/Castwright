@@ -85,6 +85,24 @@ describe('voicesSlice — setPinned', () => {
   });
 });
 
+describe('voicesSlice — markSampled', () => {
+  it('sets sampled=true on the matching voice and leaves others untouched', () => {
+    const start = voicesSlice.reducer(
+      undefined,
+      voicesActions.hydrate({ voices: [voice('v1'), voice('v2')] }),
+    );
+    const next = voicesSlice.reducer(start, voicesActions.markSampled({ voiceId: 'v1' }));
+    expect(next.voices.find((v) => v.id === 'v1')!.sampled).toBe(true);
+    expect(next.voices.find((v) => v.id === 'v2')!.sampled).toBeUndefined();
+  });
+
+  it('is a no-op for an unknown voiceId', () => {
+    const start = voicesSlice.reducer(undefined, voicesActions.hydrate({ voices: [voice('v1')] }));
+    const next = voicesSlice.reducer(start, voicesActions.markSampled({ voiceId: 'missing' }));
+    expect(next.voices).toEqual(start.voices);
+  });
+});
+
 describe('voicesSlice — setOverride', () => {
   it('writes the override into overrideTtsVoices[engine] and projects it onto the legacy field', () => {
     const start = voicesSlice.reducer(

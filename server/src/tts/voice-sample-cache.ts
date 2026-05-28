@@ -8,6 +8,7 @@
    routes agree on the cache key AND the sample-text selection by construction
    (drift between them would silently miss the cache and re-synthesise). */
 
+import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { TtsModelKey } from './index.js';
@@ -22,6 +23,22 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
    routes that share this module can't pin a stale value. */
 export function voiceSampleAudioDir(): string {
   return process.env.VOICE_SAMPLE_AUDIO_DIR ?? resolve(__dirname, '..', '..', 'audio', 'voices');
+}
+
+/* Every cached sample .mp3 currently on disk (filenames only, not paths).
+   The voices aggregator reads this once per Qwen query to stamp the
+   `sampled` lifecycle flag: a designed Qwen voice whose
+   `<scope>-<modelKey>-<hash>.mp3` audition exists has been "Sampled" even
+   though no chapter has rendered. Empty (not throwing) when the dir is
+   absent — a fresh workspace has no samples yet. */
+export function listVoiceSampleFiles(): string[] {
+  const dir = voiceSampleAudioDir();
+  if (!existsSync(dir)) return [];
+  try {
+    return readdirSync(dir).filter((f) => f.endsWith('.mp3'));
+  } catch {
+    return [];
+  }
 }
 
 /* Sample script. The analyzer ships ≥3 evidence quotes per character,

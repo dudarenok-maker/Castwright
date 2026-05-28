@@ -13,6 +13,7 @@ import { Provider } from 'react-redux';
 import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
+import { voicesSlice } from '../store/voices-slice';
 import { CastView, compareCastRows } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import type { Character, Voice } from '../lib/types';
@@ -412,6 +413,48 @@ describe('CastView Qwen status pill (plan 117)', () => {
     renderWithLibrary([sweeneyQwen], generatedLib);
     const row = rowFor('Mr. Sweeney');
     expect(within(row).getByText('Generated')).toBeInTheDocument();
+  });
+
+  it('shows "Sampled" for a designed Qwen voice whose matched library voice has a cached audition', () => {
+    const sampledLib = library.map((v) => (v.id === 'v_sweeney' ? { ...v, sampled: true } : v));
+    renderWithLibrary([sweeneyQwen], sampledLib);
+    const row = rowFor('Mr. Sweeney');
+    expect(within(row).getByText('Sampled')).toBeInTheDocument();
+    expect(within(row).queryByText('Designed')).toBeNull();
+  });
+
+  it('optimistically marks the matched voice sampled after a successful Qwen audition', async () => {
+    /* The library only re-hydrates on book/stage/engine/genProgress change, so
+       the cast view dispatches voicesActions.markSampled on a successful sample
+       synth to flip the pill live. Assert the store mutation (the rendered pill
+       reads the static `library` prop in this harness). */
+    vi.mocked(playSampleWithAutoLoad).mockClear();
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, voices: voicesSlice.reducer },
+      preloadedState: {
+        voices: { ...voicesSlice.getInitialState(), loaded: true, voices: library },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[sweeneyQwen]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    const row = rowFor('Mr. Sweeney');
+    const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
+    fireEvent.click(swatch);
+    await waitFor(() =>
+      expect(store.getState().voices.voices.find((v) => v.id === 'v_sweeney')?.sampled).toBe(true),
+    );
   });
 
   it('renders the lifecycle pill and the Reused badge as separate, coexisting markers', () => {

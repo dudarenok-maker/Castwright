@@ -1507,6 +1507,16 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
       ttsVoice: { provider: 'qwen', name: 'qwen-keefe', description: 'Designed voice' },
     }),
     makeVoice({
+      id: 'q_sampled',
+      character: 'Wren',
+      bookId: 'b1',
+      bookTitle: 'Book One',
+      source: 'current',
+      overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+      sampled: true,
+      ttsVoice: { provider: 'qwen', name: 'qwen-wren', description: 'Designed voice' },
+    }),
+    makeVoice({
       id: 'q_generated',
       character: 'Elwin',
       bookId: 'b2',
@@ -1611,6 +1621,14 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
     const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
     expect(within(designed).getByText('Generated')).toBeInTheDocument();
     expect(within(designed).getByText('Designed')).toBeInTheDocument();
+  });
+
+  it('badges a sampled-but-unrendered designed voice "Sampled"', () => {
+    renderQwen();
+    const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
+    /* Wren is designed + auditioned (sampled) but no chapter has rendered. */
+    expect(within(designed).getByText('Wren')).toBeInTheDocument();
+    expect(within(designed).getByText('Sampled')).toBeInTheDocument();
   });
 
   it('omits the "Audition base voice" button from Qwen section headers', () => {
