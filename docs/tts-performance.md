@@ -148,15 +148,34 @@ Driven by a live full-book run reading **RTF ~3.5–5** while the 2026-05-26 cle
 
 **Recommended deploy config (to validate end-to-end):** `QWEN_BATCH_SIZE=16`, `generationWorkers=1` for a single Qwen-heavy book (keep 2 only for cross-engine Kokoro+Qwen coexistence), Windows High-performance + NVIDIA "prefer max performance" for the sidecar `python.exe`. Predicted full-pipeline chapter RTF ≈ ~1 — **needs a real `POST /api/books/:id/generation` run to confirm** (title-beat/anchor single-synths mean it won't be exactly the 0.80 micro-number).
 
+### Qwen3-TTS 0.6B — clock-lock test + worker confound (live full-book) — 2026-05-29
+
+Followed the 2026-05-28 recommendation into a live full-book run (`QWEN_BATCH_SIZE=16`, Windows High-performance, GPU clock locked via `nvidia-smi -lgc`). Two findings, one of them a correction.
+
+**1. It's dispatch-bound, NOT clock-limited — confirmed by forcing the clock.** Live batch-16 forwards (`qwen-narrator` + dialogue, real prose):
+
+| GPU clock | batch-16 RTF | util / power during forward |
+|---|---|---|
+| `-lgc 2100,3105` (floor 2100) | 1.31 / 2.29 / 2.62 | 0–24%, 4–17 W |
+| `-lgc 3105,3105` (forced; ran at **2610** under power envelope) | 2.35 / 2.50 / 2.60 | **0–15%**, 7–24 W |
+
+Forcing the clock higher did **not** improve RTF and util stayed ~15% — the GPU is idle most of every forward waiting on CPU kernel launches. **The clock lock's only value is preventing the earlier sag to 375 MHz** (that was the 5→~2.5 win); past a ~2100 floor, more clock does nothing. Hard `-lgc` is therefore unnecessary — the High-performance plan + NVIDIA "prefer max performance" prevent the sag without pinning idle power.
+
+**2. CORRECTION — `GEN_WORKERS` env is vestigial; the 2-worker reads were contended.** `GEN_WORKERS=1` in `server/.env` did **not** cap concurrency: the worker count is decided **client-side** in `src/store/queue-dispatcher-middleware.ts` (`state.account.generationWorkers ?? 2`), fed by the user-settings GET, which returns the **raw account setting (2)** — the env-aware `getResolvedGenerationWorkers()` (server) is **dead code** (only tests call it). So the live run was **2 workers**, and the rising 2.35→3.66 batch RTFs were **2-worker lock-contended**, not the single-worker number. **Clean single-worker batch-16 ≈ 1.3–2.0.** (Fix tracked: wire `getResolvedGenerationWorkers()` into the user-settings GET so the env override reaches the client; the real lever today is the **account setting**, not the env.)
+
+**Corrected realistic number:** single-worker, batch-16, real-prose chapters land **~2** RTF on this box (dispatch-bound + per-batch padding-to-longest-sentence), **not ~1**. The 0.80/1.15 bench figures were optimistic (short, uniform, back-to-back sentences). **Qwen bespoke ≈ overnight render; Kokoro stays the book-length workhorse.** The remaining realistic lever short of the (blocked) static-cache/CUDA-graphs fork is **length-bucketing** batches (group similar-length sentences to cut padding waste) — see plan 128.
+
 ### Kokoro v1 — 4070 — _TODO_
 
 Not yet benchmarked here. Expected sub-1 RTF on GPU. Run `bench-tts.py --engine kokoro --voice af_heart` and add a row as the reference point.
 
 ## Open levers to measure (feeds `side-3` / `side-4`)
 
-1. **Cross-voice batching** — batch mixed-cast sentences in one forward regardless of voice (each item keeps its own clone prompt). Would close the 4.1-vs-2.6 mixed-cast gap; the single biggest realistic win for real chapters.
-2. **Larger batch sizes** (VRAM-permitting) + a **concurrency sweep** (`bench-tts.py --concurrency 1/2/4`) to confirm batching scales where concurrency plateaus.
-3. **`x_vector_only_mode=True`** ([`side-4`](BACKLOG.md)) — drop the ICL prefix; speed vs. fidelity A/B.
-4. ~~**flash-attn** wheel on Windows~~ — **measured 2026-05-26: FA2 ≈ SDPA (modest + noisy); SDPA stays default, FA2 opt-in** (plan 115 / `side-5` resolved).
-5. **Quantization** (int8/fp8) of the 0.6B base.
-6. ~~**Clean full-pipeline re-measure**~~ — **done 2026-05-26** (end-to-end record above: batch-8 ~RTF 1.15–1.2; surfaced + fixed the concurrent-batch race, plan 113).
+1. **Length-bucketing batches** (plan 128) — group similar-length sentences before each `/synthesize-batch` so a batch decodes to a tighter max-length. A batch decodes to its LONGEST item, so a mixed-length batch wastes compute padding the short ones; bucketing cuts that. Self-contained `synthesise-chapter.ts` partition change; the top realistic lever short of the blocked CUDA-graphs fork. ~10–30% expected.
+2. ~~**Larger batch sizes** + concurrency sweep~~ — **measured 2026-05-28/29:** B=16 ~halves RTF vs B=8 (single-stream 1.28→0.80); concurrency=2 only contends (serialised forward). `GEN_WORKERS=1` (single-book) is the recommendation, but the env knob is **not wired** — fix tracked (wire `getResolvedGenerationWorkers()` into the user-settings GET; today the **account setting** is the real lever).
+3. **Cross-voice batching** — already implemented (plan 112/113: `synthesize_batch` sends per-element voice prompts, `synthesiseChapter` collects Qwen groups across voices). Length-bucketing (1) is the remaining batch-composition win.
+4. **`x_vector_only_mode=True`** ([`side-4`](BACKLOG.md)) — drop the ICL prefix; speed vs. fidelity A/B.
+5. **Static-cache fork → CUDA graphs / `torch.compile`** — the only path past the dispatch-bound ceiling to ~1, but BLOCKED: `qwen_tts` `_supports_static_cache=False` + DynamicCache + nested per-step `code_predictor.generate()`. Large/risky fork of the talker + code predictor. Last resort; effort/risk assessment owed.
+6. ~~**flash-attn** wheel on Windows~~ — **measured 2026-05-26: FA2 ≈ SDPA (modest + noisy); SDPA stays default, FA2 opt-in** (plan 115 / `side-5` resolved).
+7. **Quantization** (int8/fp8) of the 0.6B base.
+8. ~~**Clean full-pipeline re-measure**~~ — **done 2026-05-26** (end-to-end record above: batch-8 ~RTF 1.15–1.2; surfaced + fixed the concurrent-batch race, plan 113).
