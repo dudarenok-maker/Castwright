@@ -3,6 +3,7 @@ import { IconArrowLeft, IconSpinner, IconClock, IconWarning } from '../lib/icons
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
 import { StatusPopover } from './status-popover';
+import { WorktreesRtfPill } from './worktrees-rtf-pill';
 import type { Stage, View } from '../lib/types';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
@@ -279,16 +280,7 @@ export function TopBar({
         </div>
         <div className="flex items-center gap-3 shrink-0">
           {onOpenWorktrees && (
-            <button
-              type="button"
-              onClick={onOpenWorktrees}
-              aria-label="Worktrees (dev)"
-              title="Worktrees (dev)"
-              data-testid="topbar-worktrees-link"
-              className={`text-xs font-mono px-2 py-1 rounded-md transition-colors hover:bg-ink/5 ${stage === 'worktrees' ? 'bg-ink/10 ring-1 ring-ink/20' : 'text-ink/50'}`}
-            >
-              wt
-            </button>
+            <WorktreesRtfPill onClick={onOpenWorktrees} active={stage === 'worktrees'} />
           )}
           {(queueCount ?? 0) > 0 && onOpenQueue && (
             <button
