@@ -1134,6 +1134,7 @@ class QwenEngine(Engine):
         if not items:
             raise RuntimeError("synthesize_batch called with no items.")
 
+        load_start = time.perf_counter()
         texts: list[str] = []
         langs: list[str] = []
         prompts: list[Any] = []
@@ -1160,16 +1161,19 @@ class QwenEngine(Engine):
             # single /synthesize path passes the whole length-1 list for its one
             # text, which is why it never tripped this.)
             prompts.extend(prompt if isinstance(prompt, list) else [prompt])
+        load_ms = (time.perf_counter() - load_start) * 1000.0
 
         self._ensure_base_loaded()
         # Serialise the forward — see `_synth_lock` in __init__. Without this,
         # two concurrent batches of different sizes (e.g. a full 8 overlapping a
         # 7-item remainder, which GPU_VRAM_BUDGET>1 schedules in parallel) race
         # on shared model state → "size of tensor a (8) must match tensor b (7)".
+        gen_start = time.perf_counter()
         with self._synth_lock:
             wavs, sr = self._base.generate_voice_clone(
                 text=texts, language=langs, voice_clone_prompt=prompts
             )
+        gen_ms = (time.perf_counter() - gen_start) * 1000.0
         # Hard invariant: one wav per input item, in order. A mismatch means a
         # library API drift — fail loudly rather than silently misalign audio
         # with sentences (which would scramble the chapter).
@@ -1178,6 +1182,23 @@ class QwenEngine(Engine):
                 f"generate_voice_clone returned {len(wavs)} wavs for "
                 f"{len(items)} items — batch demux would misalign."
             )
+        # Batch-path perf log. The single /synthesize path logs a per-call
+        # `qwen synth: … rtf=` line; without a batch equivalent the FAST batched
+        # path — the one that actually drives chapter generation — is invisible,
+        # so the only rtf in the log is the slow per-sample audition path (~8),
+        # not the batched chapter throughput (target ~1). `rtf` here is the
+        # AGGREGATE gen_ms / Σ audio_ms over the whole batch (one forward, N
+        # sentences) — a throughput figure, not a per-sentence one. Same `rtf=`
+        # token as the single line so a grep across the log catches both;
+        # `batch synth` vs `synth` distinguishes them.
+        audio_ms = sum(_audio_duration_ms(w, int(sr)) for w in wavs)
+        n_voices = len({item.get("voice") for item in items})
+        log.info(
+            "qwen batch synth: items=%d voices=%d text_len=%d load_ms=%.1f "
+            "gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
+            len(items), n_voices, sum(len(t) for t in texts), load_ms,
+            gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
+        )
         pcms = [_float_audio_to_int16_le(w) for w in wavs]
         return SynthBatchResult(pcms=pcms, sample_rate=int(sr))
 
