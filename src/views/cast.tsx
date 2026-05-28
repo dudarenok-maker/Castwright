@@ -23,7 +23,8 @@ import { resolveVoiceStatus } from '../lib/voice-status';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
 import type { Character, Voice, DriftEvent, CharColor, TtsModelKey, TtsEngine } from '../lib/types';
 import type { TtsVoiceAssignment } from '../lib/tts-voice-mapping';
-import { useAppSelector } from '../store';
+import { useAppSelector, useAppDispatch } from '../store';
+import { voicesActions } from '../store/voices-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -97,6 +98,7 @@ export function CastView({
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
+  const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   /* Per-row sample state: { [characterId]: 'loading' | 'error: msg' }. The
      "playing" indicator is derived from the singleton playback hook by
@@ -203,6 +205,13 @@ export function CastView({
         },
       });
       setRow(c.id, { loading: false, error: undefined });
+      /* Optimistically advance the Qwen Status pill Designed → Sampled the
+         moment the audition synthesises. Only meaningful when a matched
+         library voice exists (its id is the store key); the next /api/voices
+         hydrate confirms it from the on-disk sample cache. */
+      if (effectiveEngine === 'qwen' && voice) {
+        dispatch(voicesActions.markSampled({ voiceId: voice.id }));
+      }
     } catch (err) {
       setRow(c.id, { loading: false, error: (err as Error).message });
     }
