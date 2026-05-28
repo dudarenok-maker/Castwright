@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-28
 owner: null
 ---
 
 # Build version footer
 
-> Status: active
+> Status: stable
 > Key files: `vite.config.ts`, `src/lib/build-info.ts`, `src/components/build-stamp.tsx`, `src/components/layout.tsx`, `src/vite-env.d.ts`
 > URL surface: none — renders in the app shell on every stage
 > OpenAPI ops: none
@@ -57,4 +57,4 @@ Note: on the dev server the SHA/branch/dirty/time are captured at vite-start. Co
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-05-28 via PR #303 (branch `feat/frontend-plan-124`). No deltas vs. the spec above. `npm run verify` green locally before merge (all 11 steps cached on push). The dev-server-stale caveat (invariant note in the manual walkthrough) is intended behaviour, not a bug — `vite build` always captures fresh provenance.
