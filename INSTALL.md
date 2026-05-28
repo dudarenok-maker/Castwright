@@ -171,6 +171,30 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 2. **TTS model** → "Coqui XTTS v2".
 3. Save. The first chapter generation triggers a one-time ~2 GB model download.
 
+## Switching TTS to Qwen3-TTS (v1.5.0, bespoke per-character voices)
+
+Qwen3-TTS designs a unique voice per character from the cast persona instead of picking from a preset catalogue — only two English Qwen speakers exist upstream, so the app caches each designed voice's embedding and reuses it across the book and series for vocal consistency. This is the v1.5.0 headline TTS engine and is **NOT** auto-downloaded with the Kokoro / Coqui paths — it needs a one-time bootstrap of the Python package + model weights before you can pick it in the app.
+
+1. **Install the engine.** From the extracted folder, with the sidecar venv already bootstrapped (step 2 of the per-OS install above):
+
+   ```sh
+   node server/tts-sidecar/scripts/install-qwen3.mjs
+   ```
+
+   Cross-platform Node ESM — same command on Windows / macOS / Linux. Idempotent (pip is a no-op when satisfied; the model download is a no-op when the Hugging Face cache already has the snapshot). Pip-installs `qwen-tts` into the sidecar venv and pre-fetches the Base (synth) + VoiceDesign models into `server/tts-sidecar/voices/qwen/hf`. Add `--skip-design` if you only want the synth model (saves ~1.7 GB on machines that won't host the cast-review design step); add `--cpu` to force CPU-only torch on a box without a CUDA GPU.
+
+2. **Optional — FlashAttention-2 wheel (Windows-only).** SDPA is the default attention impl and benchmarked at parity with FA2 on TTS-decode-bound workloads, so skipping FA2 costs nothing measurable. To install the wheel anyway (e.g. for a benchmark):
+
+   ```sh
+   node server/tts-sidecar/scripts/install-qwen3.mjs --flash-attn
+   ```
+
+   The script auto-skips on macOS / Linux / non-`cp311` Python / non-`torch-2.6 + cu124` — a wheel that can't load doesn't get installed. Once installed, activate it by setting `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
+
+3. **Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → TTS engine** → "Local (free)" → **TTS model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast with current-vs-proposed audition before regenerating.
+
+**Disk + VRAM.** Qwen Base ~1 GB on disk, Base + VoiceDesign together ~2.5 GB. At runtime Base resides at ~2 GB VRAM during synth and VoiceDesign loads transiently during a design (~4–5 GB on top of Base, freed on idle or at the next synth). The GPU-arbitration semaphore (`GPU_VRAM_BUDGET` in `server/.env`, default 8 GiB) keeps an 8 GB GPU from double-booking against the analyzer.
+
 ## Using Gemini for TTS (cloud, free tier)
 
 The same Gemini key configured for the analyzer (see Option B above) doubles as the TTS provider when picked.
@@ -220,6 +244,18 @@ A new release is just a new zip — there's no in-app auto-update yet. Tracked a
 5. `npm run start:prod`.
 
 Your workspace (`WORKSPACE_DIR` from `server/.env`) is separate from the install folder and survives across upgrades unchanged.
+
+### v1.4.0 → v1.5.0 notes
+
+- **Qwen3-TTS is the new headline TTS engine** but is NOT auto-installed by the per-OS steps above. Existing books continue to render through Kokoro / Coqui / Gemini unchanged. To opt a book into Qwen3, follow the "Switching TTS to Qwen3-TTS" section above — `node server/tts-sidecar/scripts/install-qwen3.mjs` is the one-time bootstrap.
+- **Per-character TTS engine.** Cast members now carry a per-engine `overrideTtsVoices: { coqui?, kokoro?, gemini?, qwen? }` map; legacy single-field `overrideTtsVoice` rows migrate lazily on read, so books from v1.4.0 keep their voice assignments when you flip a project's engine — no re-cast required.
+- **Persisted generation queue** at `<workspace>/.queue.json`. No migration: the file is created on first enqueue post-upgrade; in-progress generations pre-1.5.0 just finish.
+- **New optional env knobs** in `server/.env` (all have safe defaults — leave unset to keep the v1.4.0 behaviour):
+  - `GPU_VRAM_BUDGET` — VRAM-weighted GPU semaphore budget in GiB (default `8`). Drop to `6` on a 6 GB card to keep analyzer + Qwen Base co-resident.
+  - `QWEN_BATCH_SIZE` — Qwen sentences-per-batched-forward cap (default `8`). Set `=1` as a per-call kill-switch to fall back to one-sentence-per-call.
+  - `QWEN_ATTN_IMPL` — attention impl for Qwen (default `sdpa`). Flip to `flash_attention_2` after running `install-qwen3.mjs --flash-attn`.
+- **Build-version footer.** Every view now stamps the running build at the bottom (`v1.5.0 (a1b2c3d)` in production). If you upgraded but the footer still reads `v1.4.0`, the new bundle didn't extract over — re-run the unpack.
+- **No `BookStateJson` schema change.** Books from v1.4.0 hydrate as-is.
 
 ### v1.3.x → v1.4.0 notes
 
