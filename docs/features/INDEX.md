@@ -115,6 +115,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 - [34 — MP3-folder export](34-mp3-folder-export.md) — Per-chapter MP3s in a sub-folder for folder-scanning audiobook apps (Smart AudioBook Player, BookPlayer, Audiobookshelf). Sync-folder destination only; APIC cover travels with each chapter.
 - [67 — Streaming-link download tile](archive/67-streaming-link-tile.md) — Mints a 12-char Crockford base32 slug; `GET /share/:slug` proxies the book's most-recent M4B export off disk. Closes the last "Coming soon" tile on the Listen view. Shipped 2026-05-19.
 - [77 — Per-chapter loudness report card](77-loudness-report-card.md) — Consumes plan 71's `<slug>.lufs.json` sidecars and surfaces them in the Listen view as (a) a colour-coded per-row drift pill (≤2 / 2–4 / >4 LU buckets) and (b) an expandable report card with summary line + sparkline + per-chapter table. Drift comparisons gated on `twoPass === true`; single-pass values degrade to neutral.
+- [125 — Listen row mirrors the live playhead](archive/125-listen-row-live-progress.md) — The actively-playing chapter row's elapsed time + waveform now track the real audio (and match the bottom mini-player's total to the second) instead of a decorative animation; the "Resume at" pill is suppressed on the playing row. New ephemeral `livePlayback` slice channel + narrowed `selectLivePlaybackFor` selector so only the playing row re-renders on the ~2 Hz tick. No on-disk change. Shipped 2026-05-28.
 
 ### I. Revisions & drift
 

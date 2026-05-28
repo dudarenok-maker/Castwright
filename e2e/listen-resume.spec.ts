@@ -104,4 +104,38 @@ test.describe('listen-progress resume', () => {
     await expect(chapter1).toBeVisible();
     await expect(chapter1.getByText(/Resume at/i)).not.toBeVisible();
   });
+
+  /* Plan 125 — once the bookmarked chapter is actively playing the
+     "Resume at" pill is moot (the live row time covers it), so the row
+     suppresses it. This walks the click → currentTrack (redux) → row
+     `!isPlaying` gate at the browser level; deterministic because the
+     gate keys on currentTrack, not on the audio playhead. */
+  test('hides the Resume pill once the bookmarked chapter starts playing', async ({ page }) => {
+    await page.goto('/#/books/sb/listen');
+    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.evaluate(async () => {
+      const store = (
+        window as unknown as {
+          __store__: { dispatch: (a: unknown) => void };
+        }
+      ).__store__;
+      store.dispatch({
+        type: 'listenProgress/hydrate',
+        payload: {
+          bookId: 'sb',
+          progress: { chapterId: 1, currentSec: 67, updatedAt: new Date().toISOString() },
+        },
+      });
+    });
+
+    const chapter1 = page.getByTestId('chapter-row-1');
+    await expect(chapter1.getByText(/Resume at/i)).toBeVisible({ timeout: 3_000 });
+
+    /* Start playback from this chapter's row → pill vanishes. */
+    await chapter1.getByRole('button', { name: /Play chapter 1/i }).click();
+    await expect(chapter1.getByText(/Resume at/i)).not.toBeVisible();
+  });
 });
