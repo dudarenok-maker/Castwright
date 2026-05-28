@@ -107,6 +107,42 @@ def _schedule_poison_exit() -> None:
     threading.Timer(delay_s, _do_exit).start()
 
 
+# Process-wide CUDA poison state. The CUDA context is shared by EVERY engine in
+# this process, so once any kernel corrupts it (device-side assert, OR a
+# context-fatal "CUDA error: unknown error" — see _CUDA_POISON_RE) all
+# subsequent CUDA calls re-raise regardless of which engine made them. We
+# therefore track poison per-PROCESS, not per-engine: any engine's CUDA failure
+# fast-fails every engine AND schedules ONE supervised self-exit so start.ps1
+# respawns a fresh process. (This was previously gated to CoquiEngine, which
+# left the Qwen default — the common case — wedged: a Qwen CUDA error returned a
+# plain 500, never self-exited, and every retry re-hit the dead context.)
+_process_poisoned: bool = False
+_process_poison_reason: Optional[str] = None
+_poison_exit_scheduled: bool = False
+
+
+def _mark_cuda_poisoned(reason: str) -> None:
+    """Flag the process CUDA context as corrupted and schedule the supervised
+    exit exactly once. Safe to call from any engine / any concurrent in-flight
+    request — the `_poison_exit_scheduled` guard makes the exit single-shot."""
+    global _process_poisoned, _process_poison_reason, _poison_exit_scheduled
+    _process_poisoned = True
+    if _process_poison_reason is None:
+        _process_poison_reason = reason
+    if not _poison_exit_scheduled:
+        _poison_exit_scheduled = True
+        _schedule_poison_exit()
+
+
+def _reset_poison_for_test() -> None:
+    """Test-only: clear process poison state so cases don't bleed into each
+    other (the flags are module globals that outlive a TestClient)."""
+    global _process_poisoned, _process_poison_reason, _poison_exit_scheduled
+    _process_poisoned = False
+    _process_poison_reason = None
+    _poison_exit_scheduled = False
+
+
 def _parse_bool(value: Optional[str], default: bool) -> bool:
     """Parse an env-var string into a bool. `"1"`, `"true"`, `"yes"`, `"on"`
     (case-insensitive) → True; `"0"`, `"false"`, `"no"`, `"off"` → False;
@@ -221,21 +257,10 @@ class CoquiEngine(Engine):
         # user as a 500 with no actionable detail. Validating up front lets
         # us substitute the fallback and tell the caller what happened.
         self._speakers: list[str] = []
-        # Process-lifetime poison fence. Set to True the first time
-        # /synthesize catches a CUDA device-side assert (see _CUDA_POISON_RE).
-        # PyTorch/NVIDIA semantics: once a kernel asserts on the device, the
-        # CUDA context is corrupted for the rest of the process — no amount
-        # of empty_cache(), reload, or model recreation will reset it. Only
-        # restarting Python clears the state. While poisoned, /synthesize
-        # fast-fails 503 with a structured detail so the Node classifier can
-        # surface a single "auto-restarting" banner; meanwhile the
-        # `_exit_scheduled` flag stops us from scheduling overlapping exit
-        # timers when concurrent in-flight requests all hit the same poison
-        # detection. `_poison_reason` carries the original CUDA error string
-        # for /health diagnostics.
-        self._poisoned: bool = False
-        self._poison_reason: Optional[str] = None
-        self._exit_scheduled: bool = False
+        # CUDA poison is tracked PROCESS-WIDE (a CUDA context is shared by every
+        # engine), not per-engine — see the module-level `_process_poisoned` /
+        # `_mark_cuda_poisoned`. Any engine's context-fatal CUDA error fast-fails
+        # all engines + schedules one supervised self-exit.
 
     def _resolve_runtime_options(self, torch_module: Any) -> dict[str, Any]:
         """Resolve device + fp16 + deepspeed knobs into a concrete config dict.
@@ -1382,21 +1407,21 @@ def health() -> dict[str, Any]:
     consolidated useTtsLifecycle hook stays on one /health poll per tick.
 
     `poisoned: true` signals "this process needs to be restarted before
-    /synthesize will work again" — set the first time a device-side assert
-    fires (see CoquiEngine._poisoned). The UI shows a red banner; the user
-    has to actually kill+restart the sidecar."""
+    synthesis will work again" — set the first time ANY engine hits a
+    context-fatal CUDA error (see `_process_poisoned` / `_CUDA_POISON_RE`). The
+    UI shows a red banner; the supervised self-exit respawns a fresh process."""
     coqui = ENGINES.get("coqui")
     model_loaded = False
     loading = False
     device: Optional[str] = None
-    poisoned = False
-    poison_reason: Optional[str] = None
+    # Process-wide — a CUDA context is shared by every engine, so poison is not
+    # Coqui-specific (a Qwen / Kokoro CUDA error corrupts it just the same).
+    poisoned = _process_poisoned
+    poison_reason = _process_poison_reason
     if isinstance(coqui, CoquiEngine):
         model_loaded = coqui._tts is not None
         loading = coqui._loading
         device = coqui._resolved_device if model_loaded else None
-        poisoned = coqui._poisoned
-        poison_reason = coqui._poison_reason
     # Kokoro load state — `model_loaded` / `loading` above stay Coqui-specific
     # for back-compat (the Node proxy reads them as the Coqui pill's state).
     # Kokoro gets its own pair of fields so the new Kokoro pill (top bar +
@@ -1673,14 +1698,14 @@ async def synthesize(req: Request) -> Response:
     # chapter and the cascade detector takes ~2 chapters to bail. With it,
     # we fail fast and give the Node side a single fatal classification
     # that surfaces a clear "restart the sidecar" banner.
-    if isinstance(engine, CoquiEngine) and engine._poisoned:
+    if _process_poisoned:
         return JSONResponse(
             {
                 "detail": (
-                    "TTS sidecar is in a poisoned CUDA state from a prior "
-                    "device-side assert and must be restarted. Stop the "
-                    "sidecar (Stop button or kill the process) and start it "
-                    "again before retrying."
+                    "TTS sidecar is in a poisoned CUDA state from a prior CUDA "
+                    "error and must be restarted. A fresh process is being "
+                    "respawned automatically; retry once /health responds again."
+                    + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
                 ),
                 "poisoned": True,
             },
@@ -1725,19 +1750,14 @@ async def synthesize(req: Request) -> Response:
         # with a clean CUDA context. The user sees a brief "click Retry"
         # window while uvicorn rebinds :9000 (~2 s, model lazy-loads on the
         # next /synthesize).
-        is_cuda_poisoned = bool(_CUDA_POISON_RE.search(err_str))
-        if is_cuda_poisoned and isinstance(engine, CoquiEngine):
-            engine._poisoned = True
-            engine._poison_reason = err_str
+        if _CUDA_POISON_RE.search(err_str):
             log.error(
                 "CUDA poisoned — scheduling self-exit so the supervisor "
-                "respawns me. Trigger: engine=%s model=%s voice=%s "
+                "respawns a fresh process. Trigger: engine=%s model=%s voice=%s "
                 "text_preview=%r",
                 engine_id, model, voice, truncated,
             )
-            if not engine._exit_scheduled:
-                engine._exit_scheduled = True
-                _schedule_poison_exit()
+            _mark_cuda_poisoned(err_str)
             return JSONResponse(
                 {"detail": err_str, "poisoned": True},
                 status_code=503,
@@ -1800,19 +1820,41 @@ async def synthesize_batch(req: Request) -> Response:
 
     engine = ENGINES["qwen"]
 
+    # Same process-wide poison fence as /synthesize: once the CUDA context is
+    # corrupted, every batched forward re-raises until a fresh process — fail
+    # fast with the structured 503 so the Node side surfaces the restart banner
+    # instead of retrying into the dead context.
+    if _process_poisoned:
+        return JSONResponse(
+            {
+                "detail": (
+                    "TTS sidecar is in a poisoned CUDA state from a prior CUDA "
+                    "error and must be restarted. A fresh process is being "
+                    "respawned automatically; retry once /health responds again."
+                    + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
+                ),
+                "poisoned": True,
+            },
+            status_code=503,
+        )
+
     try:
         # Offload like /synthesize so /health stays responsive while the
         # (potentially multi-second) batched forward runs on a worker thread.
         result = await asyncio.to_thread(engine.synthesize_batch, model, items)
     except Exception as e:
         err_str = str(e)
-        # Forensic beacon: model + item count + the failing message. A qwen
-        # CUDA error returns a plain 500 (the poison fence is Coqui-only), so
-        # the Node side classifies + retries it exactly as a single qwen synth.
+        # Forensic beacon: model + item count + the failing message.
         log.exception(
             "batch synth failed (engine=qwen model=%s items=%d): %s",
             model, len(items), err_str,
         )
+        # A CUDA error here corrupts the shared context exactly as in /synthesize
+        # — flag poison + schedule the supervised restart (was Coqui-only, which
+        # left the Qwen batch path wedging the whole run).
+        if _CUDA_POISON_RE.search(err_str):
+            _mark_cuda_poisoned(err_str)
+            return JSONResponse({"detail": err_str, "poisoned": True}, status_code=503)
         return JSONResponse({"detail": err_str}, status_code=500)
 
     import json as _json
