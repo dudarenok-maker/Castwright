@@ -27,6 +27,8 @@ test_qwen3.py.
 from __future__ import annotations
 
 import json
+import logging
+import re
 import sys
 import types
 from pathlib import Path
@@ -323,6 +325,45 @@ def test_empty_batch_raises(qwen_batch_runtime) -> None:
     engine = qwen_batch_runtime["engine"]
     with pytest.raises(RuntimeError):
         engine.synthesize_batch("0.6b", [])
+
+
+# ── batch-path perf log ──────────────────────────────────────────────────
+
+_BATCH_LOG = re.compile(
+    r"qwen batch synth: items=(\d+) voices=(\d+) text_len=(\d+) "
+    r"load_ms=[0-9.]+ gen_ms=[0-9.]+ audio_ms=[0-9.]+ rtf=([0-9.]+)"
+)
+
+
+def test_synthesize_batch_logs_aggregate_rtf(qwen_batch_runtime, caplog) -> None:
+    """The batched forward — the path that drives real chapter generation —
+    must emit a `qwen batch synth: … rtf=` perf line mirroring the single
+    /synthesize line. Without it the only rtf in the log is the slow per-sample
+    voice-audition path (~8), which hides the batched chapter throughput (the
+    ~1 target the box is tuned for). `voices` counts DISTINCT voices so a
+    mixed narrator+dialogue batch is legible; `rtf` is the aggregate
+    gen_ms / Σ audio_ms across the whole batch."""
+    engine = qwen_batch_runtime["engine"]
+    for v in ("a", "b"):
+        _design(engine, v)
+    engine._base.clone_calls.clear()  # drop the per-voice audition calls + logs
+
+    items = [
+        {"voice": "a", "text": "Apple."},
+        {"voice": "a", "text": "Banana!!"},
+        {"voice": "b", "text": "Cat"},
+    ]
+    with caplog.at_level(logging.INFO, logger="sidecar"):
+        engine.synthesize_batch("0.6b", items)
+
+    lines = [r.getMessage() for r in caplog.records if "qwen batch synth:" in r.getMessage()]
+    assert len(lines) == 1, f"expected exactly one batch-synth log line, got {lines!r}"
+    m = _BATCH_LOG.search(lines[0])
+    assert m, f"batch-synth log shape drifted: {lines[0]!r}"
+    assert int(m.group(1)) == 3  # items
+    assert int(m.group(2)) == 2  # distinct voices (a appears twice, b once)
+    assert int(m.group(3)) == len("Apple.") + len("Banana!!") + len("Cat")  # text_len
+    float(m.group(4))  # rtf parses as a float
 
 
 # ── HTTP surface: the length-prefixed binary frame ───────────────────────

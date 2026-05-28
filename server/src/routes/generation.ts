@@ -62,6 +62,7 @@ import {
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
+import { recordChapterThroughput } from '../tts/generation-stats.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 
 export const generationRouter = Router();
@@ -706,6 +707,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          for callers that haven't opted in. */
       const chapterTitleNarration =
         buildChapterTitleNarration({ id: chapter.id, title: chapter.title }) ?? undefined;
+      /* Wall around the synth phase only (all TTS — title beat + body groups;
+         encode/disk happens after and is excluded) — drives the RTF rollup +
+         the dev top-bar throughput pill. */
+      const synthStartMs = Date.now();
       const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
@@ -961,6 +966,24 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          tick carries the post-completion state. */
       job.runInProgress.delete(chapter.id);
       job.completedThisRun.add(chapter.id);
+
+      /* RTF rollup. The sidecar logs per-batch compute rtf; this is the
+         end-to-end pipeline figure (synth wall ÷ audio) the operator watches
+         while a book renders, plus a rolling run average that also feeds the
+         dev top-bar throughput pill (GET /api/generation/stats). */
+      const synthSec = (Date.now() - synthStartMs) / 1000;
+      const audioSec = result.durationSec;
+      const chapterRtf = audioSec > 0 ? synthSec / audioSec : 0;
+      const roll = recordChapterThroughput({ chapterId: chapter.id, audioSec, synthMs: Date.now() - synthStartMs });
+      console.info(
+        `[generation] chapter ${chapter.id} "${chapter.title ?? ''}" rendered: ` +
+          `lines=${totalLines} groups=${result.segments.length} ` +
+          `audio=${audioSec.toFixed(1)}s synth=${synthSec.toFixed(1)}s ` +
+          `rtf=${chapterRtf.toFixed(2)} (${(audioSec / Math.max(synthSec, 0.001)).toFixed(2)}x realtime); ` +
+          `run: ${roll.chapters} ch, ${roll.rtf != null ? `rtf=${roll.rtf.toFixed(2)}` : 'rtf=–'}` +
+          (roll.chaptersPerHour != null ? `, ${roll.chaptersPerHour.toFixed(1)} ch/hr` : ''),
+      );
+
       broadcast(job, {
         type: 'chapter_complete',
         chapterId: chapter.id,
