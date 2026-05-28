@@ -81,6 +81,19 @@ describe('SearchablePicker', () => {
     expect(screen.getByLabelText('Search fruit…')).toHaveFocus();
   });
 
+  it('gives the search input a themeable background (not the un-themeable bg-canvas opacity)', () => {
+    /* Regression: `bg-canvas/40` produced no valid rule (there is no
+       `--canvas-rgb` channel for the alpha), so the input fell back to the UA
+       white field — invisible light-on-white text in dark mode. The field must
+       use a background that flips with the theme (bg-white has an explicit
+       [data-theme='dark'] override) plus an explicit ink text colour. */
+    renderPicker();
+    const input = screen.getByLabelText('Search fruit…');
+    expect(input.className).not.toMatch(/bg-canvas\//);
+    expect(input.className).toContain('bg-white');
+    expect(input.className).toContain('text-ink');
+  });
+
   it('renders all groups with separator above labelled groups', () => {
     renderPicker();
     const picker = screen.getByRole('dialog', { name: 'Fruit picker' });

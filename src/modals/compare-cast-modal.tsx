@@ -381,7 +381,7 @@ function buildSideContext(
      buildCharacterHint(character, draft). */
   const merged = mergeDraft(c, draft);
   const matched = findVoiceForCharacter(c, library);
-  const sampleVoiceId = sampleScopeFor(c, matched);
+  const sampleVoiceId = sampleScopeFor(c);
   const ttsVoice = matched?.ttsVoice ?? resolveTtsVoiceForCharacter(merged, engine);
   const subject: Voice = matched ?? {
     id: sampleVoiceId,

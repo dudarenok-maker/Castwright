@@ -462,6 +462,36 @@ describe('CastView Qwen status pill (plan 117)', () => {
     /* No matched voice ⇒ generated unknown ⇒ conservative "Designed". */
     expect(within(row).getByText('Designed')).toBeInTheDocument();
   });
+
+  it('shows "Needs voice" for a DEFAULT-engine character on a Qwen project (not a stale "Matched")', () => {
+    /* The Lady Alexine bug: a character with no per-character `ttsEngine`
+       still synthesises via the project default (Qwen), so an undesigned one
+       must read "Needs voice" — not the preset "Matched" pill its voiceState
+       would otherwise produce. The Status column resolves the effective engine
+       (c.ttsEngine ?? project engine), so flipping the project to Qwen flips
+       the pill. */
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    /* sweeney: voiceState 'generated', no ttsEngine, no qwen override; empty
+       library ⇒ no matched voice. */
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[sweeney]}
+          setCharacters={() => {}}
+          library={[]}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    const row = rowFor('Mr. Sweeney');
+    expect(within(row).getByText('Needs voice')).toBeInTheDocument();
+    expect(within(row).queryByText('Matched')).toBeNull();
+  });
 });
 
 /* Plan 81 wave 3 — responsive layout coverage.
