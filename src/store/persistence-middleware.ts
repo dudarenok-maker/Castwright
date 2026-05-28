@@ -47,6 +47,22 @@ const PERSIST_RULES: Record<
   'cast/updateCharacter': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/renameCharacter': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/applyVoiceMatches': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  /* Manual continuity link (link-prior) must persist the SAME way auto-reuse
+     (applyVoiceMatches) does — both stamp `matchedFrom`/`voiceId` on the
+     character, so a forced reuse should land the identical durable end-state.
+     Without this rule the link-prior endpoint wrote the prior book's alias +
+     the source's voiceId but the source's `matchedFrom` lived only in redux
+     and was lost on reload — so the "Reused" badge and the merge-picker
+     "already linked" suppression (both keyed on `matchedFrom`) silently
+     reverted. */
+  'cast/applyManualMatch': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
+  /* Adding an alias goes through a dedicated server endpoint that writes
+     cast.json directly; mirror it into a full-cast persist so the LATEST
+     redux (which carries the new alias AND any concurrent rename) is the
+     authoritative last writer. Otherwise a debounced cast PUT from an earlier
+     edit, or the endpoint reading pre-rename disk, could clobber the alias /
+     rename (the intermittent "also-known-as / rename didn't save" race). */
+  'cast/applyAddAlias': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
   'cast/lockVoice': { slice: 'cast', build: (s) => ({ characters: s.cast.characters }) },
 
   'manuscript/setSentenceCharacter': {
