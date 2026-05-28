@@ -1,6 +1,6 @@
 ---
 status: stable
-shipped: null
+shipped: 2026-05-27
 owner: dudarenok-maker
 ---
 
@@ -13,7 +13,7 @@ owner: dudarenok-maker
 
 ## Context / why
 
-Follow-up to [plan 88](archive/88-analyzer-per-phase-model.md). The pipelining *mechanics* (concurrent Phase 0 + Phase 1 pools, watermark back-pressure) shipped and work — but the per-phase **model selection** was never actually reachable, and the analysing-view chips lied about which model was running:
+Follow-up to [plan 88](88-analyzer-per-phase-model.md). The pipelining *mechanics* (concurrent Phase 0 + Phase 1 pools, watermark back-pressure) shipped and work — but the per-phase **model selection** was never actually reachable, and the analysing-view chips lied about which model was running:
 
 - The main route resolved Phase 0 via `selectAnalyzer({ model: requestedModel })` — it **never called `selectAnalyzerForPhase({ phase: 'phase0' })`**, so the saved `analyzerPhase0Model` was ignored for the actual cast-detection model.
 - Phase 1 reused the per-request model whenever one was present (`opts.requestedModel ? selection : …`).
@@ -69,4 +69,5 @@ This plan makes the opt-in split actually function and makes the UI honest. The 
 - A server `getResolvedAnalysisModel()` so a split-ON-but-one-phase-blank config falls back to `defaultAnalysisModel` instead of `GEMINI_MODEL` — deferred; the "Server default" chip label is honest in the meantime. Reopens the env-precedence question, so left for a follow-up.
 
 ## Ship notes
-(Filled on merge: shipped date + commit SHA.)
+
+Shipped 2026-05-27 via PR #280 (`d2ab826`) on branch `fix/server-analyzer-per-phase-118`. The route-side resolver, the request-side single-model gate, and the chip-honesty plumbing all landed together; new Playwright specs (`e2e/analysing-multi-model.spec.ts`, `e2e/account-analyzer-knobs.spec.ts`) lock the chip + status-line invariants.
