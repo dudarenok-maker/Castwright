@@ -83,6 +83,10 @@ export function MiniPlayer({
   const pendingSeekRef = useRef<number | null>(null);
   const currentSecRef = useRef(0);
   const lastSavedAtRef = useRef(0);
+  /* Plan 125 — separate, faster throttle for the in-memory live-playhead
+     dispatch (the Listen-view row mirrors it). Independent of the 5 s
+     disk-save gate above: this only churns Redux, never the disk. */
+  const lastLiveDispatchRef = useRef(0);
 
   /* Plan 53 — playback rate + markers + sleep timer.
 
@@ -160,6 +164,10 @@ export function MiniPlayer({
       });
     return () => {
       cancelled = true;
+      /* Plan 125 — drop the live playhead for the chapter we're leaving so
+         a stale entry can't linger past this chapter (or past the player
+         closing). The next chapter's first onTimeUpdate re-publishes. */
+      dispatch(listenProgressActions.clearLivePlayback());
       /* Flush-on-unmount: persist the latest position if the user got
          past the first 5 s. Skipping when <= 5 s avoids polluting the
          resume point with accidental click-and-close noise. */
@@ -650,6 +658,26 @@ export function MiniPlayer({
             const t = e.currentTarget.currentTime;
             setCurrentSec(t);
             currentSecRef.current = t;
+            /* Plan 125 — publish the live playhead (throttled, ~2 Hz) so
+               the Listen-view chapter row mirrors elapsed + waveform
+               instead of running a decorative animation. No noise floor
+               (the row tracks from 0:00) and independent of the disk-save
+               gate below. `totalSec` is the same resolved value the player
+               displays, so the row matches its total to the second. */
+            if (chapter) {
+              const liveNow = Date.now();
+              if (liveNow - lastLiveDispatchRef.current >= 500) {
+                lastLiveDispatchRef.current = liveNow;
+                dispatch(
+                  listenProgressActions.setLivePlayback({
+                    bookId,
+                    chapterId: chapter.id,
+                    currentSec: t,
+                    durationSec: totalSec,
+                  }),
+                );
+              }
+            }
             /* Plan 47 — debounced save. Once per 5 s of wall-clock,
                post the position so a refresh / close / app crash
                loses at most ~5 s of resume accuracy. Don't dispatch

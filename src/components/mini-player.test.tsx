@@ -437,3 +437,111 @@ describe('MiniPlayer — plan 109 duration source of truth', () => {
     expect(container.textContent).toContain('10:00'); // formatTime(600)
   });
 });
+
+describe('MiniPlayer — plan 125 live playhead → Redux', () => {
+  async function fireLoadedMetadata(audioEl: HTMLAudioElement, durationSec: number) {
+    Object.defineProperty(audioEl, 'duration', { configurable: true, value: durationSec });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('loadedmetadata'));
+    });
+  }
+  async function fireTimeUpdate(audioEl: HTMLAudioElement, currentTimeSec: number) {
+    Object.defineProperty(audioEl, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: currentTimeSec,
+    });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('publishes the live playhead on timeupdate with currentSec + resolved durationSec', async () => {
+    const store = makeStore();
+    const { container } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    /* resolveChapter resolves with durationSec: 600 → totalSec = 600. */
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+    await fireTimeUpdate(audioEl, 42);
+    expect(store.getState().listenProgress.livePlayback).toMatchObject({
+      bookId: 'book-1',
+      chapterId: 1,
+      currentSec: 42,
+      durationSec: 600,
+    });
+  });
+
+  it('throttles repeat ticks to ~2 Hz (skips a second tick within 500 ms)', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const store = makeStore();
+      const { container } = render(
+        <Provider store={store}>
+          <MiniPlayer
+            chapter={chapter1}
+            bookId="book-1"
+            onClose={noop}
+            onPrev={noop}
+            onNext={noop}
+            prevAvailable={false}
+            nextAvailable={true}
+          />
+        </Provider>,
+      );
+      const audioEl = container.querySelector('audio') as HTMLAudioElement;
+      await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+      await fireLoadedMetadata(audioEl, 600);
+      /* First tick fires (lastLiveDispatchRef starts at 0). */
+      await fireTimeUpdate(audioEl, 10);
+      expect(store.getState().listenProgress.livePlayback?.currentSec).toBe(10);
+      /* Same wall-clock → second tick is throttled, value unchanged. */
+      await fireTimeUpdate(audioEl, 11);
+      expect(store.getState().listenProgress.livePlayback?.currentSec).toBe(10);
+      /* Past the 500 ms window → fires again. */
+      now.mockReturnValue(1_000_600);
+      await fireTimeUpdate(audioEl, 12);
+      expect(store.getState().listenProgress.livePlayback?.currentSec).toBe(12);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('clears the live playhead on unmount / chapter teardown', async () => {
+    const store = makeStore();
+    const { container, unmount } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl, 600);
+    await fireTimeUpdate(audioEl, 30);
+    expect(store.getState().listenProgress.livePlayback).not.toBeNull();
+    await act(async () => {
+      unmount();
+    });
+    expect(store.getState().listenProgress.livePlayback).toBeNull();
+  });
+});

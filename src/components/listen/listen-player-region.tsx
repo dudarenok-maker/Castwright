@@ -10,7 +10,7 @@
    shell (not on the listen view), so this region only exposes the
    chapter-row triggers + the markers sidebar. */
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconPlay,
@@ -24,7 +24,11 @@ import { Waveform } from '../waveform';
 import { parseDuration, formatTime } from '../../lib/time';
 import { stripChapterPrefix } from '../../lib/format-chapter-title';
 import { useAppSelector } from '../../store';
-import { selectListenProgress, type ListenMarker } from '../../store/listen-progress-slice';
+import {
+  selectListenProgress,
+  selectLivePlaybackFor,
+  type ListenMarker,
+} from '../../store/listen-progress-slice';
 import { ShareClipModal } from '../../modals/share-clip';
 import { EditChapterTitleModal } from '../../modals/edit-chapter-title';
 import { LoudnessReport, classifyDrift } from '../loudness-report';
@@ -222,20 +226,21 @@ function ChapterListenRow({
   onShareClip,
   onRename,
 }: ChapterListenRowProps) {
-  /* Plan 47 — read the per-book resume bookmark. The pill renders
-     only when it points at THIS chapter and the user got past the
-     first 5 s (same noise-floor as the mini-player's save gate). */
+  /* Plan 47 — read the per-book resume bookmark. The pill renders only
+     when it points at THIS chapter and the user got past the first 5 s
+     (same noise-floor as the mini-player's save gate). Plan 125: suppress
+     it while THIS chapter is actively playing — once you're listening past
+     the bookmark, "Resume at …" is noise (the live row time covers it). */
   const resume = useAppSelector(selectListenProgress(bookId));
-  const showResume = resume?.chapterId === chapter.id && resume.currentSec > 5;
-  const [progress, setProgress] = useState(0);
-  useEffect(() => {
-    if (!isPlaying) return;
-    setProgress(0);
-    const t = setInterval(() => setProgress((p) => (p >= 1 ? p : Math.min(1, p + 0.012))), 800);
-    return () => clearInterval(t);
-  }, [isPlaying]);
-  const totalSec = parseDuration(chapter.duration);
-  const elapsedSec = Math.floor(totalSec * progress);
+  const showResume = !isPlaying && resume?.chapterId === chapter.id && resume.currentSec > 5;
+  /* Plan 125 — mirror the mini-player's real playhead. The narrowed
+     selector returns null for every row except the one actually playing,
+     so only that row re-renders on each ~2 Hz tick. Falls back to the
+     chapter-metadata duration until the first live tick lands. */
+  const live = useAppSelector(selectLivePlaybackFor(bookId, chapter.id));
+  const totalSec = live?.durationSec || parseDuration(chapter.duration);
+  const elapsedSec = live ? Math.min(live.currentSec, totalSec) : 0;
+  const progress = totalSec ? elapsedSec / totalSec : 0;
   return (
     <div
       data-testid={`chapter-row-${chapter.id}`}
@@ -296,7 +301,7 @@ function ChapterListenRow({
           <span className="text-sm tabular-nums text-ink/60 md:text-right flex-1 md:flex-none">
             {isPlaying ? (
               <span className="text-ink font-semibold">
-                {formatTime(elapsedSec)} / {chapter.duration}
+                {formatTime(elapsedSec)} / {formatTime(totalSec)}
               </span>
             ) : (
               chapter.duration
