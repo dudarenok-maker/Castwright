@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   __resetGenerationStatsForTest,
   getGenerationStats,
+  recordBatchThroughput,
   recordChapterThroughput,
 } from './generation-stats.js';
 
@@ -66,5 +67,42 @@ describe('generation-stats accumulator', () => {
     recordChapterThroughput({ chapterId: 3, audioSec: 100, synthMs: 50_000 }, T0);
     expect(getGenerationStats(T0 + 60_000).chapters).toBe(1);
     expect(getGenerationStats(T0 + 11 * 60_000).chapters).toBe(0);
+  });
+});
+
+describe('generation-stats live per-batch window', () => {
+  it('reports liveBatchRtf for a single batch (genMs ÷ audioMs)', () => {
+    // 90 s compute for 30 s of audio → rtf 3.0.
+    const s = recordBatchThroughput({ genMs: 90_000, audioMs: 30_000 }, T0);
+    expect(s.liveBatchRtf).toBeCloseTo(3, 5);
+    expect(s.lastBatchRtf).toBeCloseTo(3, 5);
+    expect(s.batchesInWindow).toBe(1);
+    expect(s.batchUpdatedAt).toBe(new Date(T0).toISOString());
+  });
+
+  it('aggregates recent batches and tracks the latest separately', () => {
+    recordBatchThroughput({ genMs: 90_000, audioMs: 30_000 }, T0); // rtf 3.0
+    const s = recordBatchThroughput({ genMs: 30_000, audioMs: 30_000 }, T0 + 90_000); // rtf 1.0
+    // aggregate: 120 000 ms gen / 60 000 ms audio = 2.0; last batch = 1.0.
+    expect(s.liveBatchRtf).toBeCloseTo(2, 5);
+    expect(s.lastBatchRtf).toBeCloseTo(1, 5);
+    expect(s.batchesInWindow).toBe(2);
+  });
+
+  it('drops the batch readout once no batch is recent (idle past 5 min)', () => {
+    recordBatchThroughput({ genMs: 90_000, audioMs: 30_000 }, T0);
+    expect(getGenerationStats(T0 + 60_000).liveBatchRtf).toBeCloseTo(3, 5);
+    const idle = getGenerationStats(T0 + 6 * 60_000);
+    expect(idle.liveBatchRtf).toBeNull();
+    expect(idle.batchesInWindow).toBe(0);
+    expect(idle.batchUpdatedAt).toBeNull();
+  });
+
+  it('is independent of the chapter window — live while the first chapter is still rendering', () => {
+    // No chapter completed yet (chapters stays 0), but batches are landing.
+    const s = recordBatchThroughput({ genMs: 45_000, audioMs: 30_000 }, T0);
+    expect(s.chapters).toBe(0);
+    expect(s.rtf).toBeNull();
+    expect(s.liveBatchRtf).toBeCloseTo(1.5, 5);
   });
 });

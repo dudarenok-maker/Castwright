@@ -125,7 +125,7 @@ export class SidecarTtsProvider implements TtsProvider {
         throw new Error('Local TTS sidecar returned an empty batch body.');
       }
 
-      const { sampleRate, pcms } = parseBatchFrame(buf);
+      const { sampleRate, pcms, genMs, audioMs } = parseBatchFrame(buf);
       /* Hard invariant — one PCM chunk per requested item. A mismatch means the
          sidecar demux drifted; fail loudly rather than scatter misaligned audio
          back onto the wrong sentences. */
@@ -134,7 +134,7 @@ export class SidecarTtsProvider implements TtsProvider {
           `Local TTS sidecar batch returned ${pcms.length} chunks for ${items.length} items.`,
         );
       }
-      return { pcms, sampleRate };
+      return { pcms, sampleRate, genMs, audioMs };
     } finally {
       releaseGpu();
     }
@@ -198,12 +198,17 @@ async function throwForResponse(response: Response): Promise<never> {
    Split on the FIRST newline only — the JSON header is newline-free, so PCM
    payload bytes that happen to equal 0x0A (a valid 16-bit sample byte) are
    never mis-parsed. */
-function parseBatchFrame(buf: Buffer): { sampleRate: number; pcms: Buffer[] } {
+function parseBatchFrame(buf: Buffer): {
+  sampleRate: number;
+  pcms: Buffer[];
+  genMs?: number;
+  audioMs?: number;
+} {
   const nl = buf.indexOf(0x0a);
   if (nl < 0) {
     throw new Error('Local TTS sidecar batch frame is missing its header terminator.');
   }
-  let header: { sampleRate?: unknown; lengths?: unknown };
+  let header: { sampleRate?: unknown; lengths?: unknown; genMs?: unknown; audioMs?: unknown };
   try {
     header = JSON.parse(buf.subarray(0, nl).toString('utf8'));
   } catch {
@@ -214,6 +219,10 @@ function parseBatchFrame(buf: Buffer): { sampleRate: number; pcms: Buffer[] } {
   if (!Array.isArray(lengths) || !Number.isFinite(sampleRate)) {
     throw new Error('Local TTS sidecar batch frame header is missing sampleRate/lengths.');
   }
+  /* Optional perf fields (plan 127 live per-batch RTF) — older sidecars omit
+     them, so treat a non-finite value as "not reported". */
+  const genMs = Number(header.genMs);
+  const audioMs = Number(header.audioMs);
 
   const pcms: Buffer[] = [];
   let off = nl + 1;
@@ -227,7 +236,12 @@ function parseBatchFrame(buf: Buffer): { sampleRate: number; pcms: Buffer[] } {
         `got ${buf.length - (nl + 1)}).`,
     );
   }
-  return { sampleRate, pcms };
+  return {
+    sampleRate,
+    pcms,
+    genMs: Number.isFinite(genMs) ? genMs : undefined,
+    audioMs: Number.isFinite(audioMs) ? audioMs : undefined,
+  };
 }
 
 function parseRateFromMime(mime: string): number {
