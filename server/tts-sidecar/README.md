@@ -81,6 +81,64 @@ Run `nvidia-smi` while a synth is in flight — `python.exe` should appear
 with ~2–3 GB of VRAM and >50% GPU-Util. If it doesn't, the venv still has
 the CPU wheel; re-run the uninstall + install above.
 
+### GPU clock / power floor (keep the card from down-clocking)
+
+Sustained TTS decode fires many tiny GPU kernels with short CPU gaps
+between them. On a laptop / consumer GPU the clock governor reads that
+gappy load as "idle" and parks the SM clock low (we've seen ~400 MHz on a
+3105 MHz-capable card during decode), which slows compute-bound engines.
+The settings below pin a performance floor so the card stays clocked up.
+Do them once per dev box — they're baseline hygiene for any sustained GPU
+compute, not Qwen-specific.
+
+1. **Windows power plan → High performance.** Balanced lets the OS
+   down-clock aggressively. Set High performance:
+
+   ```powershell
+   # SCHEME_MIN is the built-in "High performance" plan.
+   powercfg /setactive SCHEME_MIN
+   # If it's missing on Windows 11 (some SKUs hide it), recreate it first:
+   #   powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+   # Confirm which plan is active:
+   powercfg /getactivescheme
+   ```
+
+2. **NVIDIA Control Panel → Manage 3D settings → Power management mode →
+   "Prefer maximum performance".** Set it globally, or per-program for
+   `python.exe` (the sidecar interpreter) under the Program Settings tab.
+   GUI-only toggle — no stable CLI equivalent on GeForce.
+
+3. **Lock the GPU clock floor (optional, admin shell).** `nvidia-smi
+   -lgc <min>,<max>` pins the SM clock between min and max so it can't sag
+   during the gappy decode:
+
+   ```powershell
+   # Floor 2100 MHz, ceiling 3105 MHz (values are this 4070's range —
+   # check yours with: nvidia-smi -q -d SUPPORTED_CLOCKS).
+   nvidia-smi -lgc 2100,3105
+   # Or pin flat at max:
+   #   nvidia-smi -lgc 3105,3105
+   # Revert to the driver default when done:
+   nvidia-smi -rgc
+   ```
+
+   Verify it holds during a synth — the `sm` clock should stay near the
+   floor instead of dropping:
+
+   ```powershell
+   nvidia-smi dmon -s pc   # live `sm` clock + `pwr` columns
+   ```
+
+**Honest caveat — this did NOT speed up Qwen on our box.** Qwen's
+autoregressive decode is *dispatch-bound* (CPU-launch-latency-bound), not
+clock-bound: the GPU finishes each tiny kernel fast and then waits on the
+next launch, so forcing the clock high (2100 → 3105) left the measured RTF
+unchanged (see `../../docs/tts-performance.md`). Set the floor anyway — it
+removes clock-sag as a variable and helps the *compute-bound* engines
+(Coqui XTTS, Kokoro) — but the path past Qwen's dispatch-bound ceiling is
+batching + the blocked CUDA-graph fork (`docs/features/129-qwen-decode-cuda-graph-spike.md`),
+not clocks.
+
 ### Optional: DeepSpeed (extra ~1.5–2× on top of CUDA + fp16)
 
 DeepSpeed fuses the kernel launches in XTTS's autoregressive GPT decoder,

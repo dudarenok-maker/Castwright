@@ -153,6 +153,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 
 - [30 — Global model-control affordance](30-global-model-control.md) — Hoist the TTS pill into the top bar once a third surface needs JIT warm. Pairs with the JIT auto-load helper in `src/lib/play-sample-with-auto-load.ts`.
 - [126 — Analysis-time cross-book reuse linking](126-analysis-time-reuse-linking.md) — `deferred` (backlog `srv-13`). Make "reused" continuity (`matchedFrom`/`voiceId`/`voiceState`) durable: establish it server-side at analysis (not just the client confirm-stage `applyVoiceMatches`) and preserve it across reparse (which today deletes `cast.json`). Reuses `scanSeriesCharactersForBookId` + the `voice-match.ts` matchers; the durable form of the one-time `scripts/repair-series-reuse.mjs`.
+- [129 — Qwen decode CUDA-graph / static-cache spike](129-qwen-decode-cuda-graph-spike.md) — `deferred` (backlog `side-7`). The only path past the dispatch-bound RTF ceiling to sub-1, but blocked: `qwen_tts` has no static cache + a nested per-step `code_predictor.generate()`. **Probe-gated**: profile the batch-16 decode loop FIRST (batch-16 may already be ~compute-bound, leaving graphs nothing to capture); only then audit the nested loop; only then consider the 2–5-day static-cache fork. Post-1.5.0, after length-bucketing (plan 128).
 
 ## Status legend
 
