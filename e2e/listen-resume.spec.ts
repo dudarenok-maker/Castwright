@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { waitForListenViewReady } from './helpers';
 
 /**
  * Browser-level coverage for plan 47 listen-progress.
@@ -112,9 +113,10 @@ test.describe('listen-progress resume', () => {
      gate keys on currentTrack, not on the audio playhead. */
   test('hides the Resume pill once the bookmarked chapter starts playing', async ({ page }) => {
     await page.goto('/#/books/sb/listen');
-    await expect(page.getByRole('heading', { name: /Solway Bay/i, level: 1 })).toBeVisible({
-      timeout: 10_000,
-    });
+    /* Wait for the chapters slice to hydrate (Play-from-start enabled) so
+       the row's play handler is wired before we click — otherwise the
+       click can land pre-hydration and currentTrack never updates. */
+    await waitForListenViewReady(page, /Solway Bay/i);
 
     await page.evaluate(async () => {
       const store = (
@@ -134,8 +136,14 @@ test.describe('listen-progress resume', () => {
     const chapter1 = page.getByTestId('chapter-row-1');
     await expect(chapter1.getByText(/Resume at/i)).toBeVisible({ timeout: 3_000 });
 
-    /* Start playback from this chapter's row → pill vanishes. */
+    /* Start playback from this chapter's row. Assert the button flips to
+       "Pause chapter 1" first — that proves currentTrack propagated and
+       isPlaying is true (the actionable gate, same pattern as
+       listen-playback.spec) — then the pill must be gone. */
     await chapter1.getByRole('button', { name: /Play chapter 1/i }).click();
+    await expect(chapter1.getByRole('button', { name: /Pause chapter 1/i })).toBeVisible({
+      timeout: 5_000,
+    });
     await expect(chapter1.getByText(/Resume at/i)).not.toBeVisible();
   });
 });
