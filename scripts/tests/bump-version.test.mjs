@@ -16,6 +16,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+// Pure helper from the script (import is inert — the script's procedure is
+// behind an import.meta-main guard, so loading it here doesn't run a release).
+import { pickWorkflowRun } from '../bump-version.mjs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -115,6 +118,7 @@ test('bump-version --dry-run prints the plan and does not mutate', () => {
     const out = runBump(dir, ['--level', 'minor', '--dry-run']);
     assert.equal(out.status, 0, out.stderr);
     assert.match(out.stdout, /\[PLAN\] bump 1\.0\.0 -> 1\.1\.0/);
+    assert.match(out.stdout, /cross-OS gate: ON/);
     assert.match(out.stdout, /DRY-RUN/);
 
     // Nothing mutated.
@@ -130,7 +134,7 @@ test('bump-version --dry-run prints the plan and does not mutate', () => {
 test('bump-version --level patch advances both versions, commits, tags', () => {
   const dir = setupRepo('1.2.3');
   try {
-    const out = runBump(dir, ['--level', 'patch']);
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
     assert.equal(out.status, 0, out.stderr);
     assert.equal(readVersion(dir, 'package.json'), '1.2.4');
     assert.equal(readVersion(dir, 'server/package.json'), '1.2.4');
@@ -159,7 +163,7 @@ test('bump-version --level patch advances both versions, commits, tags', () => {
 test('bump-version --level minor zeros the patch field', () => {
   const dir = setupRepo('2.4.7');
   try {
-    const out = runBump(dir, ['--level', 'minor']);
+    const out = runBump(dir, ['--level', 'minor', '--skip-cross-os']);
     assert.equal(out.status, 0, out.stderr);
     assert.equal(readVersion(dir, 'package.json'), '2.5.0');
     assert.equal(readVersion(dir, 'server/package.json'), '2.5.0');
@@ -171,7 +175,7 @@ test('bump-version --level minor zeros the patch field', () => {
 test('bump-version --level major zeros minor + patch', () => {
   const dir = setupRepo('3.4.5');
   try {
-    const out = runBump(dir, ['--level', 'major']);
+    const out = runBump(dir, ['--level', 'major', '--skip-cross-os']);
     assert.equal(out.status, 0, out.stderr);
     assert.equal(readVersion(dir, 'package.json'), '4.0.0');
     assert.equal(readVersion(dir, 'server/package.json'), '4.0.0');
@@ -192,7 +196,7 @@ test('bump-version refuses lockstep drift', () => {
     gitExec( ['add', 'server/package.json'], { cwd: dir });
     gitExec( ['commit', '-q', '-m', 'drift'], { cwd: dir });
 
-    const out = runBump(dir, ['--level', 'patch']);
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
     assert.notEqual(out.status, 0);
     assert.match(out.stderr, /Lockstep invariant violated/);
   } finally {
@@ -209,7 +213,7 @@ test('bump-version --notes-file uses file content as the tag annotation', () => 
        (Desktop, Notes app), passes the path with --notes-file. */
     const notes = resolve(tmpdir(), `bump-notes-${process.pid}-${Date.now()}.md`);
     writeFileSync(notes, '# v1.0.1\n\nFixes:\n- the bug\n');
-    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes]);
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
     rmSync(notes, { force: true });
     assert.equal(out.status, 0, out.stderr);
 
@@ -239,7 +243,7 @@ test('bump-version refuses a dirty tree (unless --dry-run)', () => {
   const dir = setupRepo('1.0.0');
   try {
     writeFileSync(resolve(dir, 'package.json'), '{"name":"fixture-root","version":"1.0.0","x":1}');
-    const out = runBump(dir, ['--level', 'patch']);
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
     assert.notEqual(out.status, 0);
     assert.match(out.stderr, /Working tree is not clean/);
   } finally {
@@ -269,7 +273,7 @@ test('polluted GIT_* env cannot misdirect subprocess from throwaway repo', () =>
 
     const notes = resolve(tmpdir(), `bump-notes-leak-${process.pid}-${Date.now()}.md`);
     writeFileSync(notes, '# v1.0.1\n\nFixes:\n- the leak\n');
-    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes]);
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
     rmSync(notes, { force: true });
     assert.equal(out.status, 0, out.stderr);
 
@@ -312,7 +316,7 @@ test('bump-version preserves ## section headers in the tag annotation', () => {
         '\n## Engineering\n' +
         '\n- Mechanical detail.\n',
     );
-    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes]);
+    const out = runBump(dir, ['--level', 'patch', '--notes-file', notes, '--skip-cross-os']);
     rmSync(notes, { force: true });
     assert.equal(out.status, 0, out.stderr);
 
@@ -326,4 +330,79 @@ test('bump-version preserves ## section headers in the tag annotation', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+/* Plan 127 — cross-OS gate. The throwaway repo has no `gh` and no remote, so
+   the gate-on path can't run here; --skip-cross-os reverts to the local-only
+   flow and is what every post-state test above passes. This pins that the
+   skip prints its notice AND still produces the bump + tag. */
+test('bump-version --skip-cross-os skips the gate and still bumps + tags', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[SKIP\] cross-OS gate skipped/);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
+    const tags = gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
+    assert.equal(tags, 'v1.0.1');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* Plan 127 — pickWorkflowRun is the pure run-discovery the gate uses to map a
+   `gh workflow run` dispatch to the run it must `gh run watch`. It keys on the
+   head SHA cross-OS is validating + a workflow_dispatch event + a freshness
+   window, so it can't latch onto the weekly cron or a stale/concurrent run. */
+const PICK_SHA = 'abc123def456';
+const PICK_NOW = Date.UTC(2026, 4, 28, 12, 0, 0); // fixed dispatch instant
+function mkRun(over = {}) {
+  return {
+    databaseId: 111,
+    headSha: PICK_SHA,
+    event: 'workflow_dispatch',
+    status: 'queued',
+    conclusion: null,
+    createdAt: new Date(PICK_NOW + 1000).toISOString(), // just after dispatch
+    ...over,
+  };
+}
+
+test('pickWorkflowRun picks the fresh head-SHA workflow_dispatch run', () => {
+  assert.equal(pickWorkflowRun([mkRun()], { headSha: PICK_SHA, sinceMs: PICK_NOW }), 111);
+});
+
+test('pickWorkflowRun ignores a run on a different head SHA', () => {
+  assert.equal(
+    pickWorkflowRun([mkRun({ headSha: 'othersha' })], { headSha: PICK_SHA, sinceMs: PICK_NOW }),
+    null,
+  );
+});
+
+test('pickWorkflowRun ignores non-workflow_dispatch events (e.g. the weekly cron)', () => {
+  assert.equal(
+    pickWorkflowRun([mkRun({ event: 'schedule' })], { headSha: PICK_SHA, sinceMs: PICK_NOW }),
+    null,
+  );
+});
+
+test('pickWorkflowRun ignores a stale run created before the dispatch window', () => {
+  const stale = mkRun({ createdAt: new Date(PICK_NOW - 60_000).toISOString() });
+  assert.equal(pickWorkflowRun([stale], { headSha: PICK_SHA, sinceMs: PICK_NOW }), null);
+});
+
+test('pickWorkflowRun tolerates a small clock skew (timestamp just before sinceMs)', () => {
+  const skewed = mkRun({ databaseId: 222, createdAt: new Date(PICK_NOW - 5000).toISOString() });
+  assert.equal(pickWorkflowRun([skewed], { headSha: PICK_SHA, sinceMs: PICK_NOW }), 222);
+});
+
+test('pickWorkflowRun picks the newest among multiple matches', () => {
+  const older = mkRun({ databaseId: 1, createdAt: new Date(PICK_NOW + 1000).toISOString() });
+  const newer = mkRun({ databaseId: 2, createdAt: new Date(PICK_NOW + 9000).toISOString() });
+  assert.equal(pickWorkflowRun([older, newer], { headSha: PICK_SHA, sinceMs: PICK_NOW }), 2);
+});
+
+test('pickWorkflowRun returns null for empty or non-array input', () => {
+  assert.equal(pickWorkflowRun([], { headSha: PICK_SHA, sinceMs: PICK_NOW }), null);
+  assert.equal(pickWorkflowRun(null, { headSha: PICK_SHA, sinceMs: PICK_NOW }), null);
 });
