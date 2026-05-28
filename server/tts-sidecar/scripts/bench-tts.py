@@ -79,6 +79,32 @@ def synth_once(url: str, engine: str, model: str, voice: str, text: str):
     return wall_s, audio_s, rtf
 
 
+def synth_batch_once(url: str, engine: str, model: str, items: list[dict]):
+    """POST one /synthesize-batch call (N items in ONE batched forward — the
+    real Qwen production path). Parses the length-prefixed binary frame
+    (`{"sampleRate","lengths","genMs","audioMs"}\\n<pcm…>`).
+
+    Returns (wall_s, audio_s, rtf, gen_ms, audio_ms): `rtf` is the END-TO-END
+    HTTP wall ÷ produced audio; `gen_ms`/`audio_ms` are the sidecar's own
+    forward-compute timing from the frame header, so `gen_ms/audio_ms` is the
+    PURE-COMPUTE RTF (no HTTP / queue / dispatch-gap overhead) for comparison."""
+    payload = json.dumps({"engine": engine, "model": model, "items": items}).encode("utf-8")
+    req = urllib.request.Request(
+        url, data=payload, headers={"Content-Type": "application/json"}
+    )
+    t0 = time.perf_counter()
+    with urllib.request.urlopen(req) as resp:
+        frame = resp.read()
+    wall_s = time.perf_counter() - t0
+    nl = frame.index(b"\n")
+    header = json.loads(frame[:nl].decode("utf-8"))
+    rate = int(header.get("sampleRate", 24000))
+    lengths = header.get("lengths", [])
+    audio_s = (sum(lengths) / 2) / rate if rate > 0 else 0.0
+    rtf = wall_s / audio_s if audio_s > 0 else 0.0
+    return wall_s, audio_s, rtf, float(header.get("genMs", 0.0)), float(header.get("audioMs", 0.0))
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--engine", required=True, choices=sorted(DEFAULT_MODELS))
@@ -98,7 +124,17 @@ def main(argv: list[str]) -> int:
         "--concurrency", type=int, default=1,
         help="parallel in-flight requests (default 1 = serial). Use 2/4 to "
         "measure whether more workers help — the global GPU semaphore "
-        "(GPU_VRAM_BUDGET) still caps real concurrency.",
+        "(GPU_VRAM_BUDGET) still caps real concurrency. In --batch mode this "
+        "is the number of concurrent /synthesize-batch calls = the queue's "
+        "`generationWorkers` analogue (post-thread-safety-fix the Qwen forward "
+        "serialises, so >1 should NOT raise aggregate throughput — that's the "
+        "test).",
+    )
+    p.add_argument(
+        "--batch", type=int, default=0,
+        help="Qwen ONLY: items per /synthesize-batch call (the real production "
+        "path). 0 (default) = single /synthesize mode. e.g. --batch 8 / 16 to "
+        "sweep QWEN_BATCH_SIZE; each call packs N cycled sentences on --voice.",
     )
     args = p.parse_args(argv)
 
@@ -107,8 +143,61 @@ def main(argv: list[str]) -> int:
     print(
         f"bench: engine={args.engine} model={model} voice={args.voice} "
         f"sentences={len(DEFAULT_SENTENCES)} repeat={args.repeat} "
-        f"concurrency={args.concurrency} url={args.url}"
+        f"concurrency={args.concurrency} batch={args.batch} url={args.url}"
     )
+
+    # ── batch mode: the real Qwen production path (/synthesize-batch) ─────────
+    if args.batch >= 1:
+        batch_url = args.url.replace("/synthesize", "/synthesize-batch")
+        items = [
+            {"voice": args.voice, "text": DEFAULT_SENTENCES[i % len(DEFAULT_SENTENCES)]}
+            for i in range(args.batch)
+        ]
+        ncalls = args.repeat  # in batch mode --repeat = number of batched calls
+        print(f"  batch: {args.batch} items/call x {ncalls} call(s) -> {batch_url}")
+
+        def run_batch(_i: int):
+            try:
+                return synth_batch_once(batch_url, args.engine, model, items)
+            except urllib.error.HTTPError as e:
+                print(f"  HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
+                return None
+            except urllib.error.URLError as e:
+                print(f"  connection failed: {e}. Is the sidecar running at {batch_url}?")
+                return None
+
+        wall0 = time.perf_counter()
+        if args.concurrency <= 1:
+            results = [run_batch(i) for i in range(ncalls)]
+        else:
+            with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+                results = list(pool.map(run_batch, range(ncalls)))
+        total_wall = time.perf_counter() - wall0
+
+        ok = [r for r in results if r is not None]
+        if not ok:
+            print("no successful batch calls — aborting.")
+            return 1
+        e2e = [r[2] for r in ok]
+        walls = [r[0] for r in ok]
+        total_audio = sum(r[1] for r in ok)
+        gen_ms = sum(r[3] for r in ok)
+        aud_ms = sum(r[4] for r in ok)
+        compute_rtf = (gen_ms / aud_ms) if aud_ms > 0 else 0.0
+        print(
+            f"\n  batched calls={len(ok)}/{ncalls}  items/call={args.batch}  "
+            f"per-call wall: mean={statistics.mean(walls):.1f}s median={statistics.median(walls):.1f}s"
+        )
+        print(
+            f"  end-to-end RTF (wall/audio): mean={statistics.mean(e2e):.2f} "
+            f"median={statistics.median(e2e):.2f} min={min(e2e):.2f} max={max(e2e):.2f}"
+        )
+        print(f"  sidecar compute RTF (sum-genMs/sum-audioMs): {compute_rtf:.2f}")
+        print(
+            f"  throughput: {total_audio:.1f}s audio in {total_wall:.1f}s wall "
+            f"= {total_audio / total_wall:.2f}x realtime aggregate (concurrency={args.concurrency})"
+        )
+        return 0
 
     def run(text: str):
         try:
