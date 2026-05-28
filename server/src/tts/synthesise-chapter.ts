@@ -189,6 +189,13 @@ export interface SynthesiseChapterOpts {
     backoffMs: number;
     reason: string;
   }) => void;
+  /** Notification on each completed Qwen BATCH (plan 127 live RTF). `genMs` is
+      the sidecar's forward-compute wall for the batch and `audioMs` the audio
+      it produced, so the caller can record a per-batch RTF (genMs ÷ audioMs)
+      and surface a live throughput readout — far more responsive than the
+      per-chapter rollup. Only fires when the sidecar reported the perf fields;
+      single-group (non-batched) work does not fire it. */
+  onBatchComplete?: (e: { batchSize: number; genMs: number; audioMs: number }) => void;
   /** Optional abort signal — checked between groups and forwarded to the
       provider so an in-flight TTS call can be cancelled mid-call. Used by
       the per-bookId server mutex to stop a stale generation handler when a
@@ -326,6 +333,7 @@ export async function synthesiseChapter(
     onGroupStart,
     onGroupComplete,
     onGroupRetry,
+    onBatchComplete,
     signal,
     chapterTitleNarration,
     narratorCharacterId = 'narrator',
@@ -559,7 +567,7 @@ export async function synthesiseChapter(
       const { voiceName } = resolveGroup(g);
       return { text: normaliseForTts(g.text), voiceName };
     });
-    return withHeartbeat(lead, () =>
+    const out = await withHeartbeat(lead, () =>
       withTtsRetry(() => batchFn.call(route.provider, { items, modelKey: route.modelKey, signal }), {
         signal,
         onRetry: (info) =>
@@ -572,6 +580,12 @@ export async function synthesiseChapter(
           }),
       }),
     );
+    /* Live per-batch RTF beacon (plan 127). Only when the sidecar reported its
+       compute timing; a zero/absent audioMs means "not reported", skip. */
+    if (out.genMs != null && out.audioMs != null && out.audioMs > 0) {
+      onBatchComplete?.({ batchSize: batchGroups.length, genMs: out.genMs, audioMs: out.audioMs });
+    }
+    return out;
   }
 
   /* Body dispatch — bounded-concurrency worker pool over WORK ITEMS (plan 107

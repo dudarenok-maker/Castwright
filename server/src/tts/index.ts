@@ -47,6 +47,11 @@ export interface SynthesizeBatchOutput {
   pcms: Buffer[];
   /** Single sample rate shared by the whole batch (one batched forward). */
   sampleRate: number;
+  /** Sidecar's forward-compute wall for this batch, ms. Drives live per-batch
+      RTF telemetry (plan 127). Undefined if the sidecar didn't report it. */
+  genMs?: number;
+  /** Total audio the batch produced, ms (the RTF denominator). */
+  audioMs?: number;
 }
 
 export interface TtsProvider {

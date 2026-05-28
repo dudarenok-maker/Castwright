@@ -13,24 +13,34 @@ const DEFAULT_POLL_MS = 4000;
 
 /* Dev-only top-bar pill. Serves two purposes now: it's still the plan-86
    worktrees-dashboard link, AND a live generation-RTF readout. While a book
-   renders it shows the rolling synth-wall ÷ audio figure from
-   GET /api/generation/stats, so the user can eyeball generation speed without
-   grepping logs. Idle (nothing generating) → it's just the "wt" link.
+   renders it shows the LIVE per-batch RTF from GET /api/generation/stats
+   (`liveBatchRtf`, updated as each Qwen batch lands ~every batch), falling back
+   to the per-chapter rolling figure (`rtf`) when no batch is recent — so the
+   number moves mid-chapter, not just at chapter boundaries. Idle (nothing
+   generating) → it's just the "wt" link.
 
-   RTF convention matches the sidecar logs: synth-wall ÷ audio, so < 1 is
+   RTF convention matches the sidecar logs: wall ÷ audio, so < 1 is
    faster-than-realtime. Only mounted in DEV builds (see top-bar.tsx), so the
    4 s poll never runs in production. */
 export function WorktreesRtfPill({ onClick, active, pollMs = DEFAULT_POLL_MS }: Props) {
   const [rtf, setRtf] = useState<number | null>(null);
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
         const stats = await api.getGenerationStats();
-        if (alive) setRtf(stats.rtf);
+        if (!alive) return;
+        // Prefer the live per-batch figure; fall back to the per-chapter rollup.
+        const next = stats.liveBatchRtf ?? stats.rtf;
+        setRtf(next);
+        setLive(stats.liveBatchRtf != null);
       } catch {
-        if (alive) setRtf(null);
+        if (alive) {
+          setRtf(null);
+          setLive(false);
+        }
       }
     };
     void tick();
@@ -43,7 +53,7 @@ export function WorktreesRtfPill({ onClick, active, pollMs = DEFAULT_POLL_MS }: 
 
   const generating = rtf != null;
   const label = generating
-    ? `Worktrees (dev) · live generation RTF ${rtf.toFixed(2)} — synth-wall ÷ audio (<1 = faster than realtime)`
+    ? `Worktrees (dev) · ${live ? 'live per-batch' : 'per-chapter'} generation RTF ${rtf.toFixed(2)} — wall ÷ audio (<1 = faster than realtime)`
     : 'Worktrees (dev)';
 
   return (
