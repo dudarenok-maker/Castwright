@@ -153,13 +153,27 @@ export interface SynthesiseChapterOpts {
       goes silent and the UI's 30s "Worker has gone quiet" banner fires for
       what is actually healthy in-progress work. Letting the route handler
       emit a "synthesising group N" tick here resets the client-side stall
-      timer at each group boundary. */
-  onGroupStart?: (e: { group: SentenceGroup; totalGroups: number; accumulatedSec: number }) => void;
-  /** Notification on each group completion. Optional. */
+      timer at each group boundary.
+
+      `completed` is the count of groups finished so far at fire time (a single
+      monotonic counter shared by every in-flight worker). The route reports the
+      "line N of M" / progress bar from THIS, not from `group.index` — under
+      parallel dispatch (poolWidth > 1) + Qwen batching, group.index is the
+      position of whichever item happens to tick last and bounces backward; the
+      shared completed count never regresses. See plan 107 / 113. */
+  onGroupStart?: (e: {
+    group: SentenceGroup;
+    totalGroups: number;
+    accumulatedSec: number;
+    completed: number;
+  }) => void;
+  /** Notification on each group completion. Optional. `completed` is the
+      post-increment count of finished groups (monotonic) — see `onGroupStart`. */
   onGroupComplete?: (e: {
     group: SentenceGroup;
     totalGroups: number;
     accumulatedSec: number;
+    completed: number;
   }) => void;
   /** Notification fired before each auto-retry sleep when the provider
       throws a transient error. `attempt` is the 1-indexed attempt
@@ -465,6 +479,10 @@ export async function synthesiseChapter(
         group: tickGroup,
         totalGroups: groups.length,
         accumulatedSec: pcmDurationSec(runningBytes, sampleRate),
+        /* Read the shared counter at fire time — the heartbeat fires while the
+           call (and any sibling in-flight item) runs, so this is the live
+           "done so far" value, identical for every concurrent worker. */
+        completed: completedCount,
       });
     fireGroupStart();
     let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -589,6 +607,7 @@ export async function synthesiseChapter(
       group,
       totalGroups: groups.length,
       accumulatedSec: 0, // recomputed deterministically in the index-order pass.
+      completed: completedCount,
     });
   };
 
