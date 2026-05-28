@@ -4,7 +4,7 @@
    widens the result transparently. */
 
 import { describe, expect, it } from 'vitest';
-import { selectEnginesInUse } from './engines-in-use-selector';
+import { selectEnginesInUse, selectDefaultTtsEngine } from './engines-in-use-selector';
 import type { RootState } from './index';
 import type { Character } from '../lib/types';
 
@@ -81,5 +81,31 @@ describe('selectEnginesInUse', () => {
       charWithEngine('halloran', 'kokoro'),
     ]);
     expect(selectEnginesInUse(state)).toEqual(new Set(['kokoro']));
+  });
+});
+
+describe('selectDefaultTtsEngine', () => {
+  /* The default/primary engine, independent of any loaded book's cast — the
+     top bar keeps this engine's pill reachable on book-less views. */
+  it('maps kokoro-v1 → kokoro', () => {
+    expect(selectDefaultTtsEngine(makeState('kokoro-v1'))).toBe('kokoro');
+  });
+
+  it('maps a Qwen key → qwen', () => {
+    expect(selectDefaultTtsEngine(makeState('qwen3-tts-0.6b'))).toBe('qwen');
+  });
+
+  it('maps coqui-xtts-v2 → coqui (and folds piper into coqui)', () => {
+    expect(selectDefaultTtsEngine(makeState('coqui-xtts-v2'))).toBe('coqui');
+    expect(selectDefaultTtsEngine(makeState('piper-en-amy'))).toBe('coqui');
+  });
+
+  it('maps a Gemini key → gemini (cloud, no pill)', () => {
+    expect(selectDefaultTtsEngine(makeState('gemini-2.5-flash'))).toBe('gemini');
+  });
+
+  it('returns null when defaultTtsModelKey has not hydrated yet', () => {
+    const empty = { account: { defaultTtsModelKey: undefined } } as unknown as RootState;
+    expect(selectDefaultTtsEngine(empty)).toBeNull();
   });
 });

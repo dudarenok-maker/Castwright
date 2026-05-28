@@ -42,6 +42,11 @@ The pill renders only on book-context stages (`analysing` / `confirm` /
 `ready`) — Books and Upload stages skip it since TTS isn't meaningful
 without a manuscript.
 
+> **Amended 2026-05-29** — see "Shipped: default-engine pill reachable
+> without a book" below. The book-context gate now applies only to the
+> _per-character_ pills (e.g. a Qwen-pinned cast member); the
+> _default/primary_ engine pill is reachable on every view.
+
 ## Shipped in G1 (single poll, consolidated state)
 
 Plan-30 v1 ran two `useTtsLifecycle` instances in parallel — Layout's
@@ -64,6 +69,43 @@ and the banner is shared.
 mounted outside a Layout (e.g. the cross-book title regression test in
 `src/routes/index.test.tsx`). Real call sites always come through
 Layout, so the fallback is never user-reachable.
+
+## Shipped: default-engine pill reachable without a book (2026-05-29)
+
+The original v1 gate (`showGlobalTtsPill` → `analysing | confirm | ready`)
+hid the entire TTS pill cluster on book-less views, so the Status popover's
+**TTS engines** section showed a dead-end *"TTS controls appear once a
+manuscript is open."* A user who wanted to pre-load the default TTS model
+right after launch — before opening any book — had no Load button to click.
+
+The gate is now split in `src/components/layout.tsx`:
+
+- The **default/primary engine** (derived from `account.defaultTtsModelKey`
+  via the new `selectDefaultTtsEngine` selector in
+  `src/store/engines-in-use-selector.ts`) is **always** in the
+  `enginesToShow` set — its Load/Stop pill is reachable on every view,
+  with or without a book open. Gemini contributes no pill (cloud, no VRAM
+  to free), so a Gemini default leaves the cluster empty and the fallback
+  text remains.
+- The **per-character additions** from `selectEnginesInUse` (e.g. a Qwen
+  pill surfaced because a cast member is pinned to Qwen) are unioned in
+  **only** when a book is open (`showGlobalTtsPill`), exactly as before —
+  they depend on a loaded book's cast and make no sense globally.
+
+`showTtsControls = enginesToShow.size > 0` now gates the pill cluster, the
+Status-pill visibility (so the popover is reachable on book-less views),
+and the `TtsNoticeBanner` (so a Load error / analyzer-eviction triggered
+from a book-less view still surfaces).
+
+This does **not** violate the button-driven invariant below: nothing
+auto-loads — the user still clicks Load. It only makes that Load button
+reachable earlier.
+
+Tests: `src/store/engines-in-use-selector.test.ts`
+(`selectDefaultTtsEngine` mapping cases), `src/components/layout.test.tsx`
+(default Kokoro pill renders on the Books view; per-character Qwen pill
+stays gated), and `e2e/default-tts-pill-no-book.spec.ts` (browser golden
+path: Status popover on the library view surfaces the Kokoro control).
 
 ## When to extend the pattern
 
@@ -107,8 +149,12 @@ parallel state to keep in sync.
    `playSampleWithAutoLoad` fires its own warm; once complete, both
    pills flip to "ready" on their next poll. The top-bar pill is
    additive UX, not a precondition for sample playback.
-5. **Stages without book context**: navigate to `/books` → top-bar pill
-   disappears (no manuscript = no TTS need). Open a book → reappears.
+5. **Stages without book context**: navigate to `/books` → the
+   **default-engine** pill (e.g. Kokoro) stays reachable via the Status
+   popover so the model can be pre-loaded before opening a book. Only the
+   per-character pills (e.g. a Qwen pill from a pinned cast member)
+   disappear; they reappear once a book whose cast uses them is open. (A
+   Gemini default shows no pill at all — cloud engine, nothing to load.)
 
 ## Out of scope (don't smuggle into a B4 follow-up)
 
