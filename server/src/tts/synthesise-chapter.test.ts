@@ -1448,6 +1448,51 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     }
   });
 
+  it('fires onBatchComplete with the sidecar perf (genMs/audioMs) for live RTF', async () => {
+    const provider: TtsProvider = {
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        return { pcm: Buffer.alloc(input.text.length * 2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+      async synthesizeBatch({ items }: SynthesizeBatchInput): Promise<SynthesizeBatchOutput> {
+        return {
+          pcms: items.map((it) => Buffer.alloc(it.text.length * 2)),
+          sampleRate: 24000,
+          genMs: 1234,
+          audioMs: 567,
+        };
+      },
+    };
+    const batches: { batchSize: number; genMs: number; audioMs: number }[] = [];
+    await synthesiseChapter({
+      sentences: MIXED_SENTENCES,
+      cast: QWEN_CAST,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      onBatchComplete: (e) => batches.push(e),
+    });
+    /* groups[1..4] land as ONE batch (groups[0] is the up-front anchor single,
+       which does not fire onBatchComplete). */
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toMatchObject({ batchSize: 4, genMs: 1234, audioMs: 567 });
+  });
+
+  it('does not fire onBatchComplete when the sidecar omits perf fields (older sidecar)', async () => {
+    const provider = makeBatchProvider(); // batch output carries no genMs/audioMs
+    const batches: unknown[] = [];
+    await synthesiseChapter({
+      sentences: MIXED_SENTENCES,
+      cast: QWEN_CAST,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      onBatchComplete: (e) => batches.push(e),
+    });
+    expect(batches).toHaveLength(0);
+  });
+
   it('keeps non-Qwen sentences one-per-call while batching the Qwen ones (mixed-engine chapter)', async () => {
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator' }, // default engine (qwen)
