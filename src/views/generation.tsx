@@ -58,8 +58,8 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import {
   characterLinePositionsByChapter,
+  characterRowProgress,
   characterStatsByChapter,
-  linesDoneAt,
   overallProgress,
   sentencesPerChapter,
 } from '../lib/generation-progress';
@@ -1213,28 +1213,19 @@ function ChapterRow({
               const c = findChar(cid);
               const stat = charStats?.[cid];
               /* Derive real per-character completion from the manuscript line
-                 positions and the chapter's currentLine. The slice's `status`
-                 only tells us who's *currently* speaking, not how much of each
-                 character's share has been synthesised — without this fix, by
-                 line 13 of 82 three characters showed full-green "Done" bars
-                 because they had each spoken once before the narrator took
-                 over. `done`-by-derivation respects the slice when synthesis
-                 is finished (status='done' or chapter.state='done') and
-                 otherwise reflects how many of this character's lines are
-                 already behind us. */
+                 positions and the chapter's currentLine — NOT from the slice's
+                 per-character `status`, which only tracks who's *currently*
+                 speaking and goes stale at `'done'` across a regenerate (a
+                 hydrate re-seeds the rendered chapter's cast as done, and only
+                 the live speaker gets un-done'd). See characterRowProgress. */
               const linesTotal = stat?.lines ?? 0;
-              const positions = charPositions?.[cid];
-              const derivedDone =
-                chapter.state === 'done' || status === 'done'
-                  ? linesTotal
-                  : status === 'skipped'
-                    ? 0
-                    : linesDoneAt(positions, chapter.currentLine ?? 0);
-              const fraction = linesTotal > 0 ? Math.min(1, derivedDone / linesTotal) : 0;
-              const fullyDone =
-                status === 'done' ||
-                chapter.state === 'done' ||
-                (linesTotal > 0 && derivedDone >= linesTotal);
+              const { derivedDone, fraction, fullyDone } = characterRowProgress({
+                chapterState: chapter.state,
+                status,
+                linesTotal,
+                positions: charPositions?.[cid],
+                currentLine: chapter.currentLine ?? 0,
+              });
               return (
                 <div
                   key={cid}
