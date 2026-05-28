@@ -859,7 +859,7 @@ function SidebarPanels({
               onChange={(e) => setChapterFilter(e.target.value)}
               placeholder="Filter chapters…"
               aria-label="Filter chapters"
-              className="w-full rounded-lg border border-ink/10 bg-canvas/40 pl-8 pr-2 py-1.5 text-xs focus:outline-none focus:border-peach"
+              className="w-full rounded-lg border border-ink/10 bg-white pl-8 pr-2 py-1.5 text-xs text-ink placeholder:text-ink/40 focus:outline-none focus:border-peach"
             />
           </label>
         </div>

@@ -134,7 +134,7 @@ export function CastView({
   const effectiveEngineFor = (c: Character): TtsEngine => c.ttsEngine ?? ttsEngine;
 
   async function playSampleFor(c: Character, voice: Voice | undefined) {
-    const sampleVoiceId = sampleScopeFor(c, voice);
+    const sampleVoiceId = sampleScopeFor(c);
     const effectiveEngine = effectiveEngineFor(c);
     const effectiveModelKey = sampleModelKeyForEngine(effectiveEngine, ttsModelKey);
     /* Server appends a hash of (text, voiceName) to the cached filename so
@@ -399,7 +399,7 @@ export function CastView({
             const voice = findVoiceForCharacter(c, library);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
-            const sampleVoiceId = sampleScopeFor(c, voice);
+            const sampleVoiceId = sampleScopeFor(c);
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
               effectiveEngineFor(c),
               ttsModelKey,
@@ -522,7 +522,7 @@ export function CastView({
                   ))}
                 </span>
                 <span>
-                  <StatusPill c={c} voice={voice} />
+                  <StatusPill c={c} voice={voice} projectEngine={ttsEngine} />
                 </span>
                 <span
                   onClick={(e) => e.stopPropagation()}
@@ -587,7 +587,7 @@ export function CastView({
             const voice = findVoiceForCharacter(c, library);
             const ttsVoice = resolveDisplayTtsVoice(c, voice, ttsEngine);
             const isDropTarget = dropTargetCharId === c.id;
-            const sampleVoiceId = sampleScopeFor(c, voice);
+            const sampleVoiceId = sampleScopeFor(c);
             const samplePrefix = `/audio/voices/${encodeURIComponent(sampleVoiceId)}-${sampleModelKeyForEngine(
               effectiveEngineFor(c),
               ttsModelKey,
@@ -720,7 +720,7 @@ export function CastView({
                 )}
                 <div className="flex items-center justify-between gap-3">
                   <span>
-                    <StatusPill c={c} voice={voice} />
+                    <StatusPill c={c} voice={voice} projectEngine={ttsEngine} />
                   </span>
                   <button
                     type="button"
@@ -959,8 +959,19 @@ function resolveDisplayTtsVoice(
    small Reused badge whenever the voice was matched from a prior book — so a
    reused Qwen voice reads "Generated · Reused" instead of collapsing to a lone
    "Reused" pill. See src/lib/voice-status.ts for the resolution rules. */
-function StatusPill({ c, voice }: { c: Character; voice: Voice | undefined }) {
-  const { lifecycle, reused } = resolveVoiceStatus(c, voice);
+function StatusPill({
+  c,
+  voice,
+  projectEngine,
+}: {
+  c: Character;
+  voice: Voice | undefined;
+  projectEngine: TtsEngine;
+}) {
+  /* Effective engine = the character's own override folded over the project
+     default — so a default-engine character on a Qwen project follows the Qwen
+     lifecycle (e.g. "Needs voice"), not a stale preset `voiceState` pill. */
+  const { lifecycle, reused } = resolveVoiceStatus(c, voice, c.ttsEngine ?? projectEngine);
   if (!lifecycle && !reused) return null;
   return (
     <span className="inline-flex items-center gap-1.5 flex-wrap">
