@@ -270,13 +270,12 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 
 ### Engine, sidecar & analyzer
 
-#### `side-6` — Qwen batch length-bucketing (cut padding waste)
+#### `side-6` — Qwen batch length-bucketing: measure the RTF win (mechanism shipped)
 
-Plan: [`128-qwen-batch-length-bucketing.md`](features/128-qwen-batch-length-bucketing.md).
+Plan: [`128-qwen-batch-length-bucketing.md`](features/128-qwen-batch-length-bucketing.md) — `active`.
 
-- _What:_ Sort the batchable Qwen groups by sentence length before slicing into `QWEN_BATCH_SIZE`-capped `/synthesize-batch` calls (`synthesise-chapter.ts`), so each batched forward decodes to a tight max-length. A batch decodes to its LONGEST item; mixed-length batches waste compute padding the short ones. Output-preserving (per-item prompts + scatter-back by `group.index` → byte-identical audio regardless of batch composition).
-- _Why:_ measured 2026-05-29 — real-prose batch-16 RTF ~1.3–2.0 single-worker vs ~0.80 on uniform sentences; padding is much of that gap. The top realistic per-chapter RTF lever short of the blocked static-cache/CUDA-graphs fork (~10–30% on high-variance chapters; the dispatch-bound ceiling remains).
-- _Acceptance:_ byte-identical output bucketed vs not (vitest); a measured RTF row in `docs/tts-performance.md`; a kill-switch to revert to index-order batching.
+- _Done (plan 128, 2026-05-29):_ the `synthesise-chapter.ts` sort (`QWEN_BATCH_BUCKET`, default ON, kill-switch `=0`), the byte-identity + spread + kill-switch vitest coverage, and the `bench-tts.py --bucket` A/B harness all shipped. Output-preserving (per-item prompts + scatter-back by `group.index`), proven byte-identical by test.
+- _Remaining:_ run the bucketed-vs-unbucketed batch-16 measurement on a live sidecar (reboot first per the perf-baseline practice) and record the row in `docs/tts-performance.md`; then flip plan 128 to `stable` and archive it. Expected ~10–30% off per-chapter RTF on high-variance chapters; the dispatch-bound ceiling remains.
 
 #### `side-7` — Qwen decode CUDA-graph / static-cache spike (probe-gated)
 
