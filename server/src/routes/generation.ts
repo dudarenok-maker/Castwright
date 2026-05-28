@@ -739,34 +739,33 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
            This job owns its own `synthesiseChapter` call, so its heartbeat
            is independent of any concurrent chapter's job. */
-        onGroupStart: ({ group, totalGroups }) => {
-          const firstSentenceId = group.sentenceIds[0];
-          const positional = sentences.findIndex((s) => s.id === firstSentenceId);
-          /* progress reports the lower bound for this group — group.index/totalGroups
-             rather than (index+1)/total — so the bar doesn't visibly snap forward
-             at start and then sit still while the call runs. */
-          const progress = Math.min(0.99, group.index / Math.max(1, totalGroups));
+        onGroupStart: ({ group, totalGroups, completed }) => {
+          /* currentLine / progress report the COUNT of groups finished so far,
+             NOT this group's narrative position. Under parallel dispatch
+             (poolWidth > 1) + Qwen batching the in-flight items tick at
+             different positions and the heartbeat re-fires them, so a
+             position-based currentLine ping-pongs backward (the "17 ↔ 25,
+             stalled" bug). `completed` is a single monotonic counter shared by
+             every concurrent worker, so it only ever climbs. group.characterId
+             still drives the active-speaker highlight. */
+          const progress = Math.min(0.99, completed / Math.max(1, totalGroups));
           const tick = {
             chapterId: chapter.id,
             characterId: group.characterId,
             progress,
-            currentLine: positional >= 0 ? positional + 1 : group.index + 1,
+            currentLine: completed,
             totalLines,
           };
           job.lastProgressTick = tick;
           broadcast(job, { type: 'progress', ...tick });
         },
-        onGroupComplete: ({ group, totalGroups }) => {
-          const progress = Math.min(0.99, (group.index + 1) / totalGroups);
-          const lastSentenceId = group.sentenceIds[group.sentenceIds.length - 1];
-          /* currentLine is positional; clamp to sentences.length so the UI's
-             "line N of M" reads naturally even when sentence ids aren't 1..N. */
-          const positional = sentences.findIndex((s) => s.id === lastSentenceId);
+        onGroupComplete: ({ group, totalGroups, completed }) => {
+          const progress = Math.min(0.99, completed / Math.max(1, totalGroups));
           const tick = {
             chapterId: chapter.id,
             characterId: group.characterId,
             progress,
-            currentLine: positional >= 0 ? positional + 1 : group.index + 1,
+            currentLine: completed,
             totalLines,
           };
           job.lastProgressTick = tick;
