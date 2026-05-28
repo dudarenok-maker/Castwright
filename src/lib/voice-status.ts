@@ -3,20 +3,26 @@
    `voiceState`-driven pill collapsed them, so "Reused" hid "Generated"):
 
      1. `lifecycle` — the primary status pill ("tag"): the engine-aware
-        Designed / Generated / Tuned / Locked / Matched state.
+        Designed / Generated / Tuned / Locked / Matched / Needs-voice state.
      2. `reused` — a provenance flag rendered as a small badge beside the
         pill, true whenever this character's voice was matched/reused from a
         prior book in the series.
 
    Consumed by the cast view's Status column (`StatusPill`) and the profile
-   drawer's Voice-profile header so both surfaces agree. The Qwen branch
-   mirrors `resolveDisplayTtsVoice` in `src/views/cast.tsx`: a reused character
-   carries its bespoke Qwen voice on the matched library `Voice`, not on its
-   own `ttsEngine`/`overrideTtsVoices`, so the lifecycle must look at the
-   matched voice too — otherwise a reused Qwen character reads "Matched"
-   instead of "Designed/Generated". */
+   drawer's Voice-profile header so both surfaces agree.
 
-import type { Character, Voice } from './types';
+   The caller passes the character's EFFECTIVE engine — its per-character
+   `ttsEngine` override folded over the project default (cast view) / the live
+   engine-picker choice (drawer). This matters because a DEFAULT-engine
+   character on a Qwen project still synthesises via Qwen, so it follows the
+   bespoke design → generate lifecycle (Needs voice → Designed → Generated),
+   not the preset `voiceState` pill — without the effective engine the resolver
+   can't tell a Qwen project's undesigned character ("Needs voice") from an
+   auto-assigned preset one ("Matched"). The Qwen branch also fires when the
+   matched library `voice` itself resolves to Qwen (a reused character carries
+   its bespoke voice on the matched `Voice`, not its own fields). */
+
+import type { Character, Voice, TtsEngine } from './types';
 
 export type StatusPillColor = 'success' | 'warning' | 'library' | 'neutral';
 
@@ -31,19 +37,15 @@ export interface VoiceStatusBadges {
   reused: boolean;
 }
 
-/* Does this character resolve to a bespoke Qwen voice? Either it's pinned to
-   the Qwen engine per-character, OR it reused a library voice that itself
-   resolves to Qwen (the reuse path leaves `ttsEngine` unset on the character
-   and carries the Qwen voice on the matched Voice). */
-function resolvesToQwen(c: Character, voice: Voice | undefined): boolean {
-  return c.ttsEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen';
-}
-
 function resolveLifecyclePill(
   c: Character,
   voice: Voice | undefined,
+  effectiveEngine: TtsEngine,
 ): { label: string; color: StatusPillColor } | null {
-  if (resolvesToQwen(c, voice)) {
+  /* Qwen lifecycle when the character synthesises via Qwen (its own override
+     OR the project default — both folded into `effectiveEngine`), OR when the
+     matched library voice itself resolves to Qwen. */
+  if (effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen') {
     const hasVoice = !!c.overrideTtsVoices?.qwen?.name || voice?.ttsVoice?.provider === 'qwen';
     if (!hasVoice) return { label: 'Needs voice', color: 'warning' };
     if (voice?.generated) return { label: 'Generated', color: 'success' };
@@ -65,9 +67,13 @@ function resolveLifecyclePill(
   }
 }
 
-export function resolveVoiceStatus(c: Character, voice: Voice | undefined): VoiceStatusBadges {
+export function resolveVoiceStatus(
+  c: Character,
+  voice: Voice | undefined,
+  effectiveEngine: TtsEngine,
+): VoiceStatusBadges {
   return {
-    lifecycle: resolveLifecyclePill(c, voice),
+    lifecycle: resolveLifecyclePill(c, voice, effectiveEngine),
     reused: !!c.matchedFrom,
   };
 }

@@ -267,7 +267,7 @@ export function SearchablePicker<T>({
               }}
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
-              className="w-full rounded-lg border border-ink/10 bg-canvas/40 pl-7 pr-2 py-1.5 text-xs focus:outline-none focus:border-peach"
+              className="w-full rounded-lg border border-ink/10 bg-white pl-7 pr-2 py-1.5 text-xs text-ink placeholder:text-ink/40 focus:outline-none focus:border-peach"
             />
           </label>
         </div>
