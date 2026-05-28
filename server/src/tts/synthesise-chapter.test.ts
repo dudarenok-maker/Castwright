@@ -1405,6 +1405,10 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       modelKey: 'qwen3-tts-0.6b',
       engine: 'qwen',
       qwenBatchSize: 8,
+      /* Pin index-order composition so the voiceName-order assertion below is
+         deterministic — length-bucketing (default ON, plan 128) reorders batch
+         items by length; that path has its own coverage further down. */
+      qwenBatchBucket: false,
     });
 
     /* The headline guarantee: batching changes throughput, not output. */
@@ -1664,5 +1668,122 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /* ── Length-bucketing (plan 128) ────────────────────────────────────────
+     A high-variance chapter whose sentences alternate short/long in narrative
+     order. groups[0] is the up-front anchor (single); groups[1..8] are the
+     batchable body. With batchSize 2 that's 4 batches: index-order batching
+     pairs each short with a long (max per-batch spread); length-bucketing
+     groups the shorts together and the longs together (min spread). */
+  const long = (n: number) =>
+    `A deliberately long sentence number ${n} engineered to be the decode long-pole in whatever batch it lands in.`;
+  const VARIED_SENTENCES = [
+    sentence(1, 'narrator', 'Anchor sentence sets the sample rate.'),
+    sentence(2, 'narrator', 'Hi.'),
+    sentence(3, 'biana', long(3)),
+    sentence(4, 'narrator', 'Yo!'),
+    sentence(5, 'biana', long(5)),
+    sentence(6, 'narrator', 'Ok.'),
+    sentence(7, 'biana', long(7)),
+    sentence(8, 'narrator', 'Go.'),
+    sentence(9, 'biana', long(9)),
+  ];
+  const batchSpreads = (p: ReturnType<typeof makeBatchProvider>): number[] =>
+    p.batchCalls.map((c) => {
+      const lens = c.items.map((i) => i.text.length);
+      return Math.max(...lens) - Math.min(...lens);
+    });
+  const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+  it('produces byte-identical audio with bucketing ON vs OFF (output-preserving)', async () => {
+    const onP = makeBatchProvider();
+    const on = await synthesiseChapter({
+      sentences: VARIED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: onP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 2,
+      qwenBatchBucket: true,
+    });
+    const offP = makeBatchProvider();
+    const off = await synthesiseChapter({
+      sentences: VARIED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: offP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 2,
+      qwenBatchBucket: false,
+    });
+
+    /* Headline guarantee: which batch a sentence lands in never changes its
+       audio (per-sentence prompts) nor the concat order (index scatter-back). */
+    expect(on.pcm.equals(off.pcm)).toBe(true);
+    expect(on.sampleRate).toBe(off.sampleRate);
+    expect(on.durationSec).toBe(off.durationSec);
+    expect(on.segments).toEqual(off.segments);
+    /* Same batch *count* either way — only the composition differs. */
+    expect(onP.batchCalls).toHaveLength(offP.batchCalls.length);
+  });
+
+  it('shrinks the per-batch length spread when bucketing (the mechanism)', async () => {
+    const onP = makeBatchProvider();
+    await synthesiseChapter({
+      sentences: VARIED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: onP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 2,
+      qwenBatchBucket: true,
+    });
+    const offP = makeBatchProvider();
+    await synthesiseChapter({
+      sentences: VARIED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: offP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 2,
+      qwenBatchBucket: false,
+    });
+    /* Bucketing packs similar lengths together → tighter max-length per batch,
+       which is exactly the padding-waste the plan targets. */
+    expect(mean(batchSpreads(onP))).toBeLessThan(mean(batchSpreads(offP)));
+  });
+
+  it('kill-switch (bucketing OFF) keeps index-order batch composition', async () => {
+    const offP = makeBatchProvider();
+    await synthesiseChapter({
+      sentences: VARIED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: offP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 2,
+      qwenBatchBucket: false,
+    });
+    /* Flatten the batched items in call order; OFF must reproduce the body
+       sentences in narrative order (groups[1..8] — anchor excluded). */
+    const flatTexts = offP.batchCalls.flatMap((c) => c.items.map((i) => i.text));
+    expect(flatTexts).toEqual(VARIED_SENTENCES.slice(1).map((s) => s.text));
+
+    /* ON instead emits length-homogeneous batches (shorts paired with shorts,
+       longs with longs) — proves the default flips the composition. (Batch
+       *dispatch* order stays index-sorted via the work-item sort, so it's the
+       per-batch tightness, not a global sort, that bucketing guarantees.) */
+    const onP = makeBatchProvider();
+    await synthesiseChapter({
+      sentences: VARIED_SENTENCES,
+      cast: QWEN_CAST,
+      provider: onP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 2,
+      qwenBatchBucket: true,
+    });
+    expect(batchSpreads(onP)).toEqual([0, 0, 0, 0]);
   });
 });
