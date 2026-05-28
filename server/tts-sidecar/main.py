@@ -738,6 +738,16 @@ class QwenEngine(Engine):
         # engine instance, separate lock). Batching — not concurrency — is the
         # throughput lever on a single autoregressive model anyway.
         self._synth_lock = threading.Lock()
+        # Serialises the COLD model load. `_ensure_base_loaded` runs on
+        # asyncio.to_thread worker threads (both the synth path and the /load
+        # route offload it there), so a plain threading.Lock — NOT the asyncio
+        # `_load_lock` above, which a worker thread can't acquire — is what makes
+        # the load single-flight. Without it, two workers that both observe
+        # `_base is None` on a cold start each call `from_pretrained` +
+        # `.to(device)`, and the racing loads leave the model in a half-cast
+        # dtype state → every later forward dies with "expected mat1 and mat2 to
+        # have the same dtype, float != BFloat16". Double-checked inside.
+        self._base_load_lock = threading.Lock()
         # Monotonic timestamp of the last voice-design activity. The startup
         # idle watchdog frees the heavy transient VoiceDesign model once this
         # goes stale (QWEN_DESIGN_IDLE_TTL), so a cast-review session's rapid
@@ -832,10 +842,18 @@ class QwenEngine(Engine):
         return model
 
     def _ensure_base_loaded(self) -> None:
-        if self._base is None:
-            log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
-            self._base = self._load_qwen_model(self.BASE_MODEL)
-            log.info("Qwen Base loaded.")
+        # Fast path: already loaded, no lock needed (the assignment below is the
+        # only writer and it publishes a fully-built model).
+        if self._base is not None:
+            return
+        # Single-flight the cold load — see `_base_load_lock`. Double-checked so
+        # the loser of the race returns the winner's model instead of loading a
+        # second copy (which would corrupt the dtype state).
+        with self._base_load_lock:
+            if self._base is None:
+                log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
+                self._base = self._load_qwen_model(self.BASE_MODEL)
+                log.info("Qwen Base loaded.")
 
     def _ensure_design_loaded(self) -> None:
         if self._design is None:
