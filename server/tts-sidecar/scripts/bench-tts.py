@@ -24,6 +24,11 @@ sidecar. Run it by hand against a live sidecar:
   # Kokoro reference point:
   python scripts/bench-tts.py --engine kokoro --voice af_heart
 
+  # length-bucketing A/B (plan 128) — same sentences, batch composition differs:
+  python scripts/bench-tts.py --engine qwen --voice <id> --batch 16 --bucket 0
+  python scripts/bench-tts.py --engine qwen --voice <id> --batch 16 --bucket 1
+  #   compare the "sidecar compute RTF" lines; bucket 1 should be lower.
+
 Stdlib only (urllib + concurrent.futures) so it runs in any venv.
 """
 
@@ -49,6 +54,32 @@ DEFAULT_SENTENCES = [
     "before the floor gave way.",
     "Morning came grey and reluctant, and with it the slow understanding "
     "that nothing about the journey ahead would be simple.",
+]
+
+# High-variance prose for the length-bucketing benchmark (plan 128): a wide
+# spread from one-word beats to long multi-clause sentences. A batched forward
+# decodes for as many steps as its LONGEST item, so mixing these in one batch
+# wastes most of the decode padding the short ones. --bucket 1 sorts the pool
+# by length before slicing (similar lengths share a batch → tight max-length);
+# --bucket 0 interleaves short/long for the worst-case spread. Same sentences
+# either way, so the only variable is batch composition.
+HIGH_VARIANCE_SENTENCES = [
+    "Yes.",
+    "No.",
+    "Run!",
+    "Wait.",
+    "She stopped.",
+    "He looked back once.",
+    "The corridor was longer than she remembered.",
+    "Somewhere below, a door closed with a sound like a held breath.",
+    "He had spent the better part of a decade learning to ignore exactly "
+    "the kind of warning his instincts were now screaming at him.",
+    "She had always known, somewhere beneath the certainty she wore like "
+    "armour, that the answer would cost her far more than she had ever once "
+    "been willing to admit she might be prepared to pay.",
+    "The map was wrong in a dozen small ways, each one survivable on its "
+    "own, but together they added up to a route that led somewhere no one "
+    "in the expedition had ever intended, or wanted, to go.",
 ]
 
 # Default sidecar model key per engine (matches canonicalModelKeyForEngine
@@ -134,7 +165,16 @@ def main(argv: list[str]) -> int:
         "--batch", type=int, default=0,
         help="Qwen ONLY: items per /synthesize-batch call (the real production "
         "path). 0 (default) = single /synthesize mode. e.g. --batch 8 / 16 to "
-        "sweep QWEN_BATCH_SIZE; each call packs N cycled sentences on --voice.",
+        "sweep QWEN_BATCH_SIZE. Draws from the high-variance pool and slices it "
+        "into --repeat batches (see --bucket).",
+    )
+    p.add_argument(
+        "--bucket", type=int, default=0, choices=(0, 1),
+        help="Qwen --batch mode ONLY (plan 128 length-bucketing): 0 (default) "
+        "interleaves short/long sentences for the worst-case per-batch length "
+        "spread; 1 sorts the pool by length before slicing so each batch is "
+        "length-tight. Run both and compare the sidecar compute RTF — the gap "
+        "is the padding waste bucketing removes. Mirrors QWEN_BATCH_BUCKET.",
     )
     args = p.parse_args(argv)
 
@@ -143,20 +183,48 @@ def main(argv: list[str]) -> int:
     print(
         f"bench: engine={args.engine} model={model} voice={args.voice} "
         f"sentences={len(DEFAULT_SENTENCES)} repeat={args.repeat} "
-        f"concurrency={args.concurrency} batch={args.batch} url={args.url}"
+        f"concurrency={args.concurrency} batch={args.batch} bucket={args.bucket} "
+        f"url={args.url}"
     )
 
     # ── batch mode: the real Qwen production path (/synthesize-batch) ─────────
     if args.batch >= 1:
         batch_url = args.url.replace("/synthesize", "/synthesize-batch")
-        items = [
-            {"voice": args.voice, "text": DEFAULT_SENTENCES[i % len(DEFAULT_SENTENCES)]}
-            for i in range(args.batch)
-        ]
         ncalls = args.repeat  # in batch mode --repeat = number of batched calls
-        print(f"  batch: {args.batch} items/call x {ncalls} call(s) -> {batch_url}")
 
-        def run_batch(_i: int):
+        # Build a pool of `batch * ncalls` high-variance sentences, then order
+        # it per --bucket and slice into `ncalls` batches of `batch` items.
+        total = args.batch * ncalls
+        sentence_pool = [
+            HIGH_VARIANCE_SENTENCES[i % len(HIGH_VARIANCE_SENTENCES)] for i in range(total)
+        ]
+        if args.bucket:
+            # Bucketed: similar lengths adjacent → each contiguous slice is tight.
+            sentence_pool.sort(key=len)
+        else:
+            # Anti-bucketed: interleave shortest/longest so every slice straddles
+            # the full length range (the worst case bucketing fixes).
+            by_len = sorted(sentence_pool, key=len)
+            lo, hi = 0, len(by_len) - 1
+            woven = []
+            while lo <= hi:
+                woven.append(by_len[lo])
+                lo += 1
+                if lo <= hi:
+                    woven.append(by_len[hi])
+                    hi -= 1
+            sentence_pool = woven
+        batches = [sentence_pool[i * args.batch : (i + 1) * args.batch] for i in range(ncalls)]
+        spreads = [max(map(len, b)) - min(map(len, b)) for b in batches]
+        print(f"  batch: {args.batch} items/call x {ncalls} call(s) -> {batch_url}")
+        print(
+            f"  per-batch char-length spread (max-min): "
+            f"mean={statistics.mean(spreads):.0f} min={min(spreads)} max={max(spreads)} "
+            f"({'bucketed' if args.bucket else 'interleaved'})"
+        )
+
+        def run_batch(i: int):
+            items = [{"voice": args.voice, "text": t} for t in batches[i]]
             try:
                 return synth_batch_once(batch_url, args.engine, model, items)
             except urllib.error.HTTPError as e:
