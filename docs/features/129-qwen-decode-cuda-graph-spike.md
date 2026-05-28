@@ -76,7 +76,7 @@ This is a **spike**: the deliverable of Probes 1–2 is a measurement + a go/no-
 
 ## Out of scope
 
-- **Length-bucketing** (plan 128 / `side-6`) — the realistic, output-preserving lever that ships *first*; this spike is the fallback only after that's banked.
+- **Length-bucketing** (plan 128 / `side-6`) — the realistic, output-preserving lever, **mechanism shipped 2026-05-29** (`QWEN_BATCH_BUCKET`, default ON); this spike is the fallback only after that win is measured and banked.
 - `GEN_WORKERS` / `QWEN_BATCH_SIZE` tuning — separate, already-landed knobs.
 - Any non-Qwen engine (Kokoro / Coqui / Gemini are untouched).
 
