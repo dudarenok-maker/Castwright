@@ -156,6 +156,7 @@ When a plan reaches **stable** AND has a filled **Ship notes** section, move it 
 ### M. Deferred / future work
 
 - [30 — Global model-control affordance](30-global-model-control.md) — Hoist the TTS pill into the top bar once a third surface needs JIT warm. Pairs with the JIT auto-load helper in `src/lib/play-sample-with-auto-load.ts`.
+- [126 — Analysis-time cross-book reuse linking](126-analysis-time-reuse-linking.md) — `deferred` (backlog `srv-13`). Make "reused" continuity (`matchedFrom`/`voiceId`/`voiceState`) durable: establish it server-side at analysis (not just the client confirm-stage `applyVoiceMatches`) and preserve it across reparse (which today deletes `cast.json`). Reuses `scanSeriesCharactersForBookId` + the `voice-match.ts` matchers; the durable form of the one-time `scripts/repair-series-reuse.mjs`.
 
 ## Status legend
 
