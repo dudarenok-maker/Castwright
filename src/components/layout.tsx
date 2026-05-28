@@ -42,7 +42,11 @@ import {
 import { ModelControlPill } from './ModelControlPill';
 import { TtsNoticeBanner } from './tts-notice-banner';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
-import { selectEnginesInUse } from '../store/engines-in-use-selector';
+import {
+  selectEnginesInUse,
+  selectDefaultTtsEngine,
+  type EngineFamily,
+} from '../store/engines-in-use-selector';
 import { useTheme } from '../lib/use-theme';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { MiniPlayer } from './mini-player';
@@ -782,6 +786,20 @@ export function Layout() {
      per-character `ttsEngine` overrides (see selectEnginesInUse).
      Gemini has no Stop pill (cloud, no VRAM to free). */
   const enginesInUse = useAppSelector(selectEnginesInUse);
+  /* The user-wide default/primary engine. Its Load/Stop pill stays reachable
+     on every view (incl. book-less ones like Books home) so the model can be
+     pre-loaded right after launch — whereas the per-character additions in
+     `enginesInUse` (e.g. a Qwen-pinned cast member) only surface once a book
+     is open. Gemini has no pill (cloud, no VRAM to free), so a Gemini default
+     contributes nothing here and the popover keeps its fallback text. */
+  const defaultEngine = useAppSelector(selectDefaultTtsEngine);
+  const enginesToShow = (() => {
+    const set = new Set<EngineFamily>();
+    if (defaultEngine && defaultEngine !== 'gemini') set.add(defaultEngine);
+    if (showGlobalTtsPill) for (const e of enginesInUse) set.add(e);
+    return set;
+  })();
+  const showTtsControls = enginesToShow.size > 0;
   /* GPU semaphore badge — prefixes the TTS pill cluster with
      "GPU busy · N waiting ·" when this session is waiting behind another
      session's analyzer / sidecar call. Worded to NOT collide with the
@@ -793,7 +811,7 @@ export function Layout() {
      sessions don't thrash an 8 GB GPU's VRAM. */
   const gpuQueueDepth = ttsLifecycle.gpuQueueDepth;
   const showGpuQueueBadge = typeof gpuQueueDepth === 'number' && gpuQueueDepth > 0;
-  const ttsPillElement = showGlobalTtsPill ? (
+  const ttsPillElement = showTtsControls ? (
     <span className="inline-flex items-center gap-2 flex-wrap">
       {showGpuQueueBadge && (
         <span
@@ -803,7 +821,7 @@ export function Layout() {
           GPU busy · {gpuQueueDepth} waiting ·
         </span>
       )}
-      {enginesInUse.has('kokoro') && (
+      {enginesToShow.has('kokoro') && (
         <ModelControlPill
           kind="tts"
           engineLabel="Kokoro"
@@ -817,7 +835,7 @@ export function Layout() {
           }}
         />
       )}
-      {enginesInUse.has('coqui') && (
+      {enginesToShow.has('coqui') && (
         <ModelControlPill
           kind="tts"
           engineLabel="Coqui XTTS"
@@ -831,7 +849,7 @@ export function Layout() {
           }}
         />
       )}
-      {enginesInUse.has('qwen') && (
+      {enginesToShow.has('qwen') && (
         <ModelControlPill
           kind="tts"
           engineLabel="Qwen"
@@ -958,17 +976,17 @@ export function Layout() {
      compact Status pill renders. Computed inline (not memoised) so the
      per-second forceClockTick above keeps the "stalled" rung fresh against
      Date.now(), same as the pill IIFEs. `anyModelLoading` only counts engines
-     the current book actually uses. */
+     whose pill is actually shown. */
   const anyModelLoading = (['kokoro', 'coqui', 'qwen'] as const).some(
-    (e) => enginesInUse.has(e) && ttsLifecycle[e].state === 'loading',
+    (e) => enginesToShow.has(e) && ttsLifecycle[e].state === 'loading',
   );
-  /* Show the Status pill whenever there's a book in scope (so the TTS
-     model controls are always reachable) OR there's cross-book activity /
-     pending revisions to surface. On an idle global view (Books / Voices /
-     Change log with nothing running) the pill is hidden — matching the
-     pre-120 empty cluster — so the workspace doesn't show a dead pill. */
+  /* Show the Status pill whenever a TTS model control is shown (so the default
+     engine's Load/Stop is always reachable, even on book-less views) OR there's
+     cross-book activity / pending revisions to surface. On a fully idle global
+     view with no pill to show (e.g. a Gemini default), the pill stays hidden so
+     the workspace doesn't show a dead pill. */
   const showStatus =
-    showGlobalTtsPill ||
+    showTtsControls ||
     analysisPill !== null ||
     generationPill !== null ||
     pending.length > 0;
@@ -1023,8 +1041,8 @@ export function Layout() {
           top-bar pill is visible on every stage that shows the pill —
           previously these only surfaced in generation.tsx, so a top-bar Load
           error silently reverted the pill to idle. Gated on the same flag as
-          the pill itself. */}
-      {showGlobalTtsPill && (
+          the pill itself, so notices from a book-less Load also surface. */}
+      {showTtsControls && (
         <TtsNoticeBanner
           evictionNotice={ttsLifecycle.evictionNotice}
           loadErrorNotice={ttsLifecycle.loadErrorNotice}
