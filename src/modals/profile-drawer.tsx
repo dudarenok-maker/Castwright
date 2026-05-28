@@ -534,6 +534,16 @@ export function ProfileDrawer({
           }
         },
       });
+      /* Optimistically advance the Qwen lifecycle pill Designed → Sampled —
+         the drawer header reads the same resolveVoiceStatus as the cast row.
+         Keyed on the store voice id (matching the cast-view dispatch). */
+      if (effectiveEngine === 'qwen') {
+        dispatch(
+          voicesActions.markSampled({
+            voiceId: voice?.id ?? character.voiceId ?? character.id,
+          }),
+        );
+      }
     } catch (err) {
       setSampleError((err as Error).message);
     } finally {

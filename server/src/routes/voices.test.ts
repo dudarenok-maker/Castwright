@@ -324,6 +324,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
   const Q_AUTHOR = 'Qwen Author';
   const Q_SERIES = 'Qwen Series';
   const Q_TITLE = 'Qwen Book';
+  let sampleCacheDir: string;
 
   beforeAll(() => {
     const bookDir = join(workspaceRoot, 'books', Q_AUTHOR, Q_SERIES, Q_TITLE);
@@ -411,6 +412,19 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
         },
       }),
     );
+
+    /* Point the voice-sample cache at a temp dir and drop a Marlow audition
+       (`<scope>-qwen3-tts-0.6b-<hash>.mp3`, scope = voiceId v_Marlow) so the
+       aggregator stamps `sampled` on Marlow — designed + auditioned but never
+       rendered. No file for Bo/Marcus → they stay un-sampled. */
+    sampleCacheDir = join(workspaceRoot, 'sample-cache');
+    mkdirSync(sampleCacheDir, { recursive: true });
+    process.env.VOICE_SAMPLE_AUDIO_DIR = sampleCacheDir;
+    writeFileSync(join(sampleCacheDir, 'v_Marlow-qwen3-tts-0.6b-deadbeef.mp3'), 'fake-mp3');
+  });
+
+  afterAll(() => {
+    delete process.env.VOICE_SAMPLE_AUDIO_DIR;
   });
 
   it('marks a designed Qwen voice generated when it appears in a rendered snapshot', async () => {
@@ -441,6 +455,30 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
     const res = await request(app).get('/api/voices?engine=coqui');
     const Oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_Oduvan');
     expect(Oduvan.generated).toBeUndefined();
+  });
+
+  it('marks a designed Qwen voice sampled when a cached audition exists (not yet generated)', async () => {
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const Marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_Marlow');
+    expect(Marlow.sampled).toBe(true);
+    expect(Marlow.generated).toBeFalsy(); // sampled is the tier below generated
+  });
+
+  it('leaves a designed Qwen voice with no cached audition un-sampled', async () => {
+    /* Bo is undesigned and Marcus is Coqui — but more directly: no
+       `v_bo`/`v_marcus` sample file was dropped, so neither is sampled. */
+    const res = await request(app).get('/api/voices?engine=qwen');
+    const bo = res.body.voices.find((v: { id: string }) => v.id === 'v_bo');
+    expect(bo.sampled).toBeFalsy();
+  });
+
+  it('does not stamp sampled when the engine is not Qwen', async () => {
+    /* The sample-cache scan only runs for the Qwen engine query — the preset
+       path stays byte-for-byte unchanged even though a v_Marlow audition file
+       exists on disk. */
+    const res = await request(app).get('/api/voices?engine=coqui');
+    const Marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_Marlow');
+    expect(Marlow.sampled).toBeUndefined();
   });
 });
 

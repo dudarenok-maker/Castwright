@@ -12,7 +12,8 @@ import { test, expect } from '@playwright/test';
  * level golden-path spec on top of the Vitest coverage.
  *
  * Mock fixtures (src/mocks/voices.ts): Bramble (no designed voice), Thistle
- * (designed, not generated), Finch (designed + generated).
+ * (designed, not generated), Wren (designed + sampled), Finch (designed +
+ * generated).
  */
 
 test.describe('Qwen status sections on #/voices', () => {
@@ -38,11 +39,13 @@ test.describe('Qwen status sections on #/voices', () => {
        TTS sub-line (e.g. "TTS · qwen-thistle") substring-matching the name. */
     await expect(needs.getByText('Bramble', { exact: true })).toBeVisible();
 
-    /* Designed voices bucket together, each carrying a Designed / Generated
-       badge driven by Voice.generated. */
+    /* Designed voices bucket together, each carrying a Designed / Sampled /
+       Generated badge driven by Voice.sampled / Voice.generated. */
     await expect(designed.getByText('Thistle', { exact: true })).toBeVisible();
+    await expect(designed.getByText('Wren', { exact: true })).toBeVisible();
     await expect(designed.getByText('Finch', { exact: true })).toBeVisible();
     await expect(designed.getByText('Generated', { exact: true })).toBeVisible();
+    await expect(designed.getByText('Sampled', { exact: true })).toBeVisible();
     await expect(designed.getByText('Designed', { exact: true })).toBeVisible();
 
     /* No "Audition base voice" button on a Qwen section (a status bucket is

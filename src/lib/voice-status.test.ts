@@ -113,6 +113,30 @@ describe('resolveVoiceStatus — Qwen lifecycle', () => {
     });
   });
 
+  it('reads "Sampled" for a designed Qwen voice with a cached audition but no rendered chapter', () => {
+    const c = char({ overrideTtsVoices: { qwen: { name: 'qwen-x' } } });
+    expect(resolveVoiceStatus(c, voice({ sampled: true }), QWEN).lifecycle).toEqual({
+      label: 'Sampled',
+      color: 'peach',
+    });
+  });
+
+  it('lets "Generated" outrank "Sampled" when both flags are set', () => {
+    const c = char({ overrideTtsVoices: { qwen: { name: 'qwen-x' } } });
+    expect(
+      resolveVoiceStatus(c, voice({ sampled: true, generated: true }), QWEN).lifecycle,
+    ).toEqual({ label: 'Generated', color: 'success' });
+  });
+
+  it('keeps "Needs voice" ahead of a stray sample flag on an undesigned voice', () => {
+    /* A sample file could exist for a scope whose voice was later un-designed;
+       the design gate still wins so the row reads "Needs voice", not "Sampled". */
+    expect(resolveVoiceStatus(char({}), voice({ sampled: true }), QWEN).lifecycle).toEqual({
+      label: 'Needs voice',
+      color: 'warning',
+    });
+  });
+
   it('treats a REUSED voice whose matched Voice is Qwen as a Qwen lifecycle even when the effective engine is a preset', () => {
     /* The reuse path leaves the character's own ttsEngine/override empty and
        carries the Qwen voice on the matched Voice — so the Qwen branch must
