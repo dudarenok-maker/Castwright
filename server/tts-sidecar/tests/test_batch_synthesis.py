@@ -45,6 +45,26 @@ if str(SIDECAR_ROOT) not in sys.path:
 import main  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _poison_safety(monkeypatch):
+    """Stub the poison-exit timer so a CUDA-poison test can't os._exit(42) and
+    kill the suite, and reset the process poison flag between cases (it's a
+    module global that outlives a TestClient and would otherwise fast-fail
+    later batch tests with a 503)."""
+
+    class _NoOpTimer:
+        def __init__(self, *a: Any, **k: Any) -> None:
+            pass
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", _NoOpTimer)
+    main._reset_poison_for_test()
+    yield
+    main._reset_poison_for_test()
+
+
 # ── encode / recover through the real float -> int16 conversion ──────────
 #
 # main._float_audio_to_int16_le clips to [-1, 1], scales by 32767, truncates to
@@ -599,3 +619,39 @@ def test_ensure_base_loaded_single_flights_concurrent_cold_loads(
 
     assert load_count == 1, f"cold load raced: {load_count} concurrent loads (want 1)"
     assert engine._base is not None
+
+
+def test_route_batch_cuda_error_poisons_and_503s(qwen_batch_runtime, monkeypatch) -> None:
+    """Regression (sidecar-poison-fence-all-engines): a CUDA error inside the
+    batched forward must flag process poison, return 503 (not a plain 500), and
+    schedule the supervised exit — exactly like /synthesize. The batch route
+    previously returned a bare 500 with no poison handling, so a Qwen batch CUDA
+    error wedged the whole run."""
+    timer_calls: list[tuple[float, Any]] = []
+
+    class _FakeTimer:
+        def __init__(self, delay: float, fn: Any) -> None:
+            timer_calls.append((delay, fn))
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", _FakeTimer)
+
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+
+    def _boom(*_a: Any, **_k: Any):
+        raise RuntimeError("CUDA error: unknown error")
+
+    monkeypatch.setattr(engine._base, "generate_voice_clone", _boom)
+
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={"engine": "qwen", "model": "0.6b", "items": [{"voice": "a", "text": "hi"}]},
+    )
+    assert resp.status_code == 503
+    assert resp.json().get("poisoned") is True
+    assert main._process_poisoned is True
+    assert len(timer_calls) == 1  # batched CUDA error scheduled the supervised exit
