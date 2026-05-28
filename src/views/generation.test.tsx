@@ -428,7 +428,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
     { id: 20, chapterId: 2, characterId: 'narrator', text: 'closer' },
   ];
 
-  function renderScenario() {
+  function renderScenario(characterStatuses?: Chapter['characters']) {
     const liveChapter: Chapter = {
       id: 2,
       title: 'DAY ONE',
@@ -440,7 +440,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
       /* Slice state mirrors what applyGenerationTick produces after the fix:
          narrator is the active speaker, everyone who's spoken before is
          back at 'queued'. Pre-fix they'd all have been 'done' here. */
-      characters: {
+      characters: characterStatuses ?? {
         narrator: 'in_progress',
         Marlow: 'queued',
         ro: 'queued',
@@ -503,6 +503,21 @@ describe('GenerationView — per-character progress is derived from the manuscri
     /* Oduvan: positions [7, 15, 18, 19] → 1 of 4 done. */
     expect(screen.getByText('1/4 done')).toBeInTheDocument();
     /* The lie was the full-green "Done" bar for any of these three. */
+    expect(screen.queryByText(/^Done$/)).not.toBeInTheDocument();
+  });
+
+  it('resets per-character rows when regenerating, ignoring stale "done" statuses', () => {
+    /* Regenerate-of-a-rendered-chapter case: a hydrate re-seeded every cast
+       member as 'done' from the on-disk audio, and applyGenerationTick has so
+       far only un-done'd the live narrator. The rows must still derive from
+       currentLine=13 + positions, not the stale 'done' — Marlow/ro/Oduvan show
+       fractional progress, never a full-green "Done". */
+    renderScenario({ narrator: 'in_progress', Marlow: 'done', ro: 'done', Oduvan: 'done' });
+    fireEvent.click(screen.getByText('DAY ONE'));
+    expect(screen.getByText('1/3 done')).toBeInTheDocument();
+    expect(screen.getByText('1/2 done')).toBeInTheDocument();
+    expect(screen.getByText('1/4 done')).toBeInTheDocument();
+    /* No row may render the bare "Done" label while the chapter is mid-regen. */
     expect(screen.queryByText(/^Done$/)).not.toBeInTheDocument();
   });
 });

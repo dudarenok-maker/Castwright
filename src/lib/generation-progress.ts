@@ -75,6 +75,41 @@ export function linesDoneAt(positions: number[] | undefined, currentLine: number
   return lo;
 }
 
+/** Per-character row completion for the Generate view's expanded chapter card.
+
+   The slice's per-character `status` field is NOT a reliable completion
+   signal during an in-progress chapter: a regenerate re-streams a chapter
+   whose audio still exists on disk, so `hydrateFromBookState` can re-seed
+   every cast member as `'done'`, and `applyGenerationTick` only un-`'done'`s
+   the *currently speaking* character. Trusting `status === 'done'` therefore
+   left previously-rendered speakers pinned at a full-green "Done" bar until
+   their first line of the new run — the regenerate stale-Done bug.
+
+   Real completion derives from `chapter.currentLine` + the character's
+   manuscript line positions. We only honor the slice when the WHOLE chapter
+   is finished (`chapterState === 'done'`, which `chapter_complete` sets atomically
+   with every character's `'done'`); otherwise we count lines behind the playhead.
+   `linesDoneAt` returns 0 for `currentLine <= 0`, so a fresh/just-regenerated
+   run reads as zero for everyone. */
+export function characterRowProgress(args: {
+  chapterState: Chapter['state'];
+  status: string;
+  linesTotal: number;
+  positions: number[] | undefined;
+  currentLine: number;
+}): { derivedDone: number; fraction: number; fullyDone: boolean } {
+  const { chapterState, status, linesTotal, positions, currentLine } = args;
+  const chapterDone = chapterState === 'done';
+  const derivedDone = chapterDone
+    ? linesTotal
+    : status === 'skipped'
+      ? 0
+      : linesDoneAt(positions, currentLine);
+  const fraction = linesTotal > 0 ? Math.min(1, derivedDone / linesTotal) : 0;
+  const fullyDone = chapterDone || (linesTotal > 0 && derivedDone >= linesTotal);
+  return { derivedDone, fraction, fullyDone };
+}
+
 export function countWords(text: string): number {
   const stripped = text.replace(/\[[^\]]*\]/g, ' ');
   const m = stripped.match(/\S+/g);
