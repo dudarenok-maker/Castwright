@@ -4183,6 +4183,18 @@ const real = {
     }
     return res.json();
   },
+  /* Live generation throughput for the dev top-bar RTF pill (GET
+     /api/generation/stats). Fields are all-null when idle. */
+  getGenerationStats: async (): Promise<GenerationStatsResponse> => {
+    const res = await fetch('/api/generation/stats');
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(
+        `Generation stats fetch failed (${res.status}): ${detail || res.statusText}`,
+      );
+    }
+    return res.json();
+  },
 };
 
 const mock = {
@@ -4291,7 +4303,39 @@ const mock = {
   }> => {
     return { worktrees: [] };
   },
+  /* Mock has no real generation pipeline — always idle. */
+  getGenerationStats: async (): Promise<GenerationStatsResponse> => ({
+    chapters: 0,
+    audioSec: 0,
+    synthSec: 0,
+    rtf: null,
+    xRealtime: null,
+    chaptersPerHour: null,
+    last: null,
+    updatedAt: null,
+  }),
 };
+
+/** Live generation-throughput snapshot — mirrors the server's
+    `generation-stats` accumulator. Backs the dev top-bar RTF pill. */
+export interface GenerationStatsResponse {
+  chapters: number;
+  audioSec: number;
+  synthSec: number;
+  /** synth-wall ÷ audio over the rolling window (< 1 = faster than realtime). */
+  rtf: number | null;
+  /** audio ÷ synth-wall — the "Nx realtime" figure. */
+  xRealtime: number | null;
+  chaptersPerHour: number | null;
+  last: {
+    chapterId: number | string;
+    rtf: number;
+    audioSec: number;
+    synthSec: number;
+    at: string;
+  } | null;
+  updatedAt: string | null;
+}
 
 export const api = USE_MOCKS ? mock : real;
 export type Api = typeof api;
