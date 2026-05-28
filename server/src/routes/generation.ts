@@ -63,6 +63,7 @@ import {
 } from '../tts/synthesise-chapter.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
+import { ensureSidecarEngineReady } from '../tts/ensure-sidecar-loaded.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 
 export const generationRouter = Router();
@@ -707,6 +708,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          for callers that haven't opted in. */
       const chapterTitleNarration =
         buildChapterTitleNarration({ id: chapter.id, title: chapter.title }) ?? undefined;
+      /* Preload gate: confirm the engine's sidecar model is resident BEFORE any
+         synth leaves, so a cold start pauses here instead of N queue workers
+         racing the lazy load. Idempotent + best-effort (the sidecar
+         `_base_load_lock` is the correctness guarantee; this is the explicit
+         "wait until ready" on top). Honours the run abort. */
+      await ensureSidecarEngineReady(engine, controller.signal);
       /* Wall around the synth phase only (all TTS — title beat + body groups;
          encode/disk happens after and is excluded) — drives the RTF rollup +
          the dev top-bar throughput pill. */
