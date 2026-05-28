@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # Qwen batch length-bucketing
 
-> Status: draft (proposal — not implemented)
+> Status: active (mechanism + automated coverage + bench harness shipped 2026-05-29; the real-chapter RTF measurement row is the remaining acceptance step before `stable`)
 > Key files: `server/src/tts/synthesise-chapter.ts` (the work-item partition), `server/tts-sidecar/scripts/bench-tts.py` (measurement)
 > URL surface: none (internal synthesis-pipeline change)
 > OpenAPI ops: none
@@ -55,4 +55,11 @@ The 2026-05-29 measurements (`docs/tts-performance.md`) show real-prose batch-16
 
 ## Ship notes
 
-(Filled when shipped.)
+**2026-05-29 — mechanism + tests + bench shipped** (`feat/server-plan-128`).
+
+- `synthesise-chapter.ts`: `QWEN_BATCH_BUCKET` module const (env, default ON) + a per-call `qwenBatchBucket` opt; the batchable Qwen groups are sorted by `normaliseForTts(group.text).length` (tie-break `group.index`, lengths memoised) **before** the `batchSize` slice loop. The downstream work-item sort, scatter-back, and index-order concat are untouched — output is byte-identical to index-order batching.
+- Kill-switch: `QWEN_BATCH_BUCKET=0` (or `false`) reverts; documented in `server/.env.example`.
+- Vitest (`synthesise-chapter.test.ts`): byte-identity ON vs OFF, per-batch length-spread shrinks when bucketed, and the kill-switch reproduces index-order composition. The pre-existing size-8-vs-1 test was pinned to `qwenBatchBucket: false` (its voiceName-order assertion is index-order specific).
+- `bench-tts.py`: `HIGH_VARIANCE_SENTENCES` pool + `--bucket {0,1}` (sort-by-length vs interleave); prints the per-batch char-length spread.
+
+**Outstanding before `stable`:** run the bucketed-vs-unbucketed batch-16 measurement on a live sidecar (reboot first) and record the row in `docs/tts-performance.md`; then flip `status: stable` and `git mv` to `archive/`.

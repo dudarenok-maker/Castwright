@@ -27,6 +27,19 @@ const QWEN_BATCH_SIZE = (() => {
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 4;
 })();
 
+/* Length-bucketing (plan 128). A batched Qwen forward decodes for as many
+   steps as the LONGEST item in the batch, padding the shorter ones; so a
+   batch's compute is `max_length × per_step` while its audio is `Σ length_i`.
+   Sorting the batchable groups by length before slicing packs similar-length
+   sentences together → each batch decodes to a tight `max ≈ avg`, maximising
+   audio-produced-per-step. Output-preserving (per-sentence prompts + index
+   scatter-back), so audio is byte-identical regardless of batch composition.
+   Default ON; `QWEN_BATCH_BUCKET=0` (or `false`) reverts to index-order. */
+const QWEN_BATCH_BUCKET = (() => {
+  const raw = String(process.env.QWEN_BATCH_BUCKET ?? '').toLowerCase();
+  return raw !== '0' && raw !== 'false';
+})();
+
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
     — description/role/gender/ageRange/tone/evidence — are what drives
@@ -258,6 +271,13 @@ export interface SynthesiseChapterOpts {
       splitting without touching process env. Clamped to >= 1. Only Qwen
       sentences are ever batched — see the dispatch partition below. */
   qwenBatchSize?: number;
+  /** Length-bucketing (plan 128): sort batchable Qwen groups by their
+      normalised text length before slicing into batches, so similar-length
+      sentences share a batch and the batched forward decodes to a tight
+      max-length (less padding waste). Defaults to `QWEN_BATCH_BUCKET` (env
+      `QWEN_BATCH_BUCKET`, default ON). Output-preserving — set `false` for the
+      index-order baseline (tests assert byte-identity ON vs OFF). */
+  qwenBatchBucket?: boolean;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -342,6 +362,7 @@ export async function synthesiseChapter(
     sentenceConcurrency = gpuSemaphore.maxConcurrency,
     groupHeartbeatMs = 10_000,
     qwenBatchSize = QWEN_BATCH_SIZE,
+    qwenBatchBucket = QWEN_BATCH_BUCKET,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -650,7 +671,10 @@ export async function synthesiseChapter(
      are ordered by their first group's index so dispatch is deterministic;
      scatter-back is by `group.index`, so the final concat order is unaffected
      either way. `batchSize === 1` makes every batch a singleton — the per-call
-     kill-switch. */
+     kill-switch. When `qwenBatchBucket` is on (plan 128) the collected
+     `batchable` list is sorted by normalised-text length before slicing, so
+     similar-length sentences share a batch (less padding waste); this only
+     changes which groups co-occur in a batch, not the concat order. */
   const batchSize = Math.max(1, Math.floor(qwenBatchSize));
   type WorkItem =
     | { kind: 'single'; group: SentenceGroup }
@@ -665,6 +689,15 @@ export async function synthesiseChapter(
     const group = groups[i];
     if (batchSize > 1 && isBatchable(group)) batchable.push(group);
     else workItems.push({ kind: 'single', group });
+  }
+  /* Length-bucketing (plan 128): order batchable groups by the length of the
+     EXACT string fed to the model (`normaliseForTts(group.text)` — see
+     `synthBatch`), tie-break by `group.index` for determinism. Precompute the
+     length once per group so the sort comparator doesn't re-run normalisation.
+     Output-preserving: scatter-back below is by `group.index`. */
+  if (qwenBatchBucket && batchable.length > 1) {
+    const lenOf = new Map(batchable.map((g) => [g, normaliseForTts(g.text).length]));
+    batchable.sort((a, b) => lenOf.get(a)! - lenOf.get(b)! || a.index - b.index);
   }
   for (let i = 0; i < batchable.length; i += batchSize) {
     const slice = batchable.slice(i, i + batchSize);
