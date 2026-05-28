@@ -32,6 +32,7 @@ owner: null
 - The dispatch partition in `synthesiseChapter` (`server/src/tts/synthesise-chapter.ts`) only batches a group when `route.engine === 'qwen'` AND the resolved provider exposes `synthesizeBatch`; the up-front anchor group is always a single call; each batched chunk is scattered to its OWN `results[group.index]` slot.
 - `_load_voice_prompt` returns `(prompt, lang, cache_hit)` and is shared by `synthesize` + `synthesize_batch` so they can't drift (and the batch path inherits the plan-112 prompt cache).
 - `synthesize` / `synthesize_batch` / `design_voice` run `generate_voice_clone` (and the design forwards) under the per-engine `_synth_lock` (`server/tts-sidecar/main.py`). The Base forward is **not thread-safe**, so this serialises same-engine GPU forwards; a concurrent Kokoro synth still runs in parallel (separate engine instance + lock). See the concurrency-safety fix below.
+- `_ensure_base_loaded` single-flights the COLD load under `_base_load_lock` (a `threading.Lock`, double-checked) (`server/tts-sidecar/main.py`). It runs on `asyncio.to_thread` worker threads (both the synth path and `/load` offload it), so two workers that both observe a cold `_base` on the first synth after a restart must NOT both `from_pretrained` — the racing loads leave the model half-cast (`float != BFloat16` on every later forward). The asyncio `_load_lock` only serialises concurrent `/load` HTTP calls, NOT the synth-path lazy load, so the threading lock is the actual guarantee.
 
 ## Test plan
 
@@ -42,6 +43,7 @@ owner: null
 - Vitest server (`server/src/tts/sidecar.test.ts`) — the shared error-classification helpers are exercised through `synthesize`; `synthesizeBatch` reuses them unchanged.
 - Vitest frontend (`src/views/generation.test.tsx`) — the "Worker has gone quiet" banner copy now sets the batched-synthesis expectation.
 - `test_synthesize_batch_serialises_concurrent_forwards` — two concurrent batches of DIFFERENT sizes must not overlap inside the model forward (regression for the `8 vs 7` race). Instruments the fake forward to flag concurrent entry; fails without `_synth_lock` (`max_concurrent=2`), passes with it.
+- `test_ensure_base_loaded_single_flights_concurrent_cold_loads` — 8 threads released by a barrier call `_ensure_base_loaded` against a cold `_base` with a slow counting loader; must load **exactly once**. Fails without `_base_load_lock` (`8 concurrent loads` → the `float != BFloat16` dtype-corruption race that 500'd every batch after a restart), passes with it.
 
 ### Manual acceptance walkthrough (real GPU — replaces the deferred spike)
 
