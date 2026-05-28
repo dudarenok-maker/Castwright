@@ -1,6 +1,6 @@
 ---
 status: stable
-shipped: null
+shipped: 2026-05-27
 owner: null
 ---
 
@@ -51,5 +51,5 @@ owner: null
 
 ## Ship notes
 
-- Shipped: _pending merge_ — branch `fix/server-shared-user-settings`.
+- Shipped 2026-05-27 via PR #294 (`71e97f8`) on branch `fix/server-shared-user-settings`.
 - The one-time migration carries the existing `server/user-settings.json` forward on first read; the legacy file is left in place as a rollback safety net (gitignored, harmless).
