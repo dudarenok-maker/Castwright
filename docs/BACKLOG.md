@@ -278,6 +278,16 @@ Plan: [`128-qwen-batch-length-bucketing.md`](features/128-qwen-batch-length-buck
 - _Why:_ measured 2026-05-29 — real-prose batch-16 RTF ~1.3–2.0 single-worker vs ~0.80 on uniform sentences; padding is much of that gap. The top realistic per-chapter RTF lever short of the blocked static-cache/CUDA-graphs fork (~10–30% on high-variance chapters; the dispatch-bound ceiling remains).
 - _Acceptance:_ byte-identical output bucketed vs not (vitest); a measured RTF row in `docs/tts-performance.md`; a kill-switch to revert to index-order batching.
 
+#### `side-7` — Qwen decode CUDA-graph / static-cache spike (probe-gated)
+
+Plan: [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-graph-spike.md). The blocked "open lever 5" in `docs/tts-performance.md`, now scoped. Source: net-new (2026-05-29), filed from the v1.5.0 generation-perf session.
+
+- _What:_ Two cheap probes gate a possible static-cache fork — do NOT fork on a hunch. **Probe 1** (~1–2 h): profile the batch-16 decode loop (`torch.profiler` / `nvidia-smi dmon`) to settle whether the BATCHED forward is still launch-bound (CUDA graphs would help) or already ~compute-bound (graphs are a dead end — `QWEN_BATCH_SIZE=16` already amortizes per-launch overhead 16×, which is why the clean bench hits RTF 0.80). **Probe 2** (only if launch-bound): audit the nested per-step `code_predictor.generate()` in `qwen_tts` for fixed-vs-variable token count + CPU sync points (`.item()`/`.cpu()`/python branches → graph-breaks). Only if BOTH green: fork `qwen_tts` for a static KV cache + `torch.compile(mode="reduce-overhead")`, behind an env kill-switch + a byte-identical-audio regression test.
+- _Acceptance:_ Probe 1 records a kernel/CPU/idle-gap split + a go/no-go line in `docs/tts-performance.md`; if compute-bound the item closes with that note (we're at the model's floor). If the fork ever lands: byte-identical PCM compiled vs un-compiled (pytest), kill-switch reverts to the un-compiled path, `_synth_lock` serialisation preserved.
+- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine` synth + `synthesize_batch`), the installed `qwen_tts` package (read-only — `generate_voice_clone` + nested `code_predictor.generate()`), `server/tts-sidecar/scripts/bench-tts.py`, `docs/tts-performance.md` (open lever 5).
+- _Depends on:_ length-bucketing (`side-6`) banked first — this is the fallback past it once the cheaper output-preserving lever is exhausted. Last resort.
+- _Benefit (user / technical):_ the only path past the dispatch-bound ~1–2 RTF floor toward sub-1 (Kokoro-class) Qwen speed; the probe gate means the 2–5-day, correctness-risky, maintenance-heavy fork is only attempted if a measurement proves it can actually pay off — not on the serial-path hunch.
+
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
