@@ -20,6 +20,7 @@ import {
   writeUserSettings,
   writeGeminiApiKey,
   getResolvedGeminiApiKey,
+  getResolvedGenerationWorkers,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
@@ -39,6 +40,14 @@ function envDerived(settings: UserSettings): UserSettingsResponse {
   return {
     ...(rest as Omit<UserSettings, 'geminiApiKey'>),
     apiKeyStatus: getResolvedGeminiApiKey() ? 'set' : 'unset',
+    /* Surface the ENV-resolved worker count (GEN_WORKERS env > account setting >
+       default 2), mirroring apiKeyStatus. The client queue-dispatcher reads
+       `account.generationWorkers` from this response, so without this overlay
+       the GEN_WORKERS env never reaches the dispatcher and can't cap concurrency
+       — it was a deploy knob that did nothing. When the env is unset,
+       getResolvedGenerationWorkers() returns the on-disk account value, so the
+       Account-tab UI is unchanged. */
+    generationWorkers: getResolvedGenerationWorkers(),
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
   };

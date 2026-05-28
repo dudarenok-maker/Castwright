@@ -64,6 +64,7 @@ beforeEach(() => {
   }
   resetCache();
   delete process.env.GEMINI_API_KEY;
+  delete process.env.GEN_WORKERS;
 });
 
 describe('user-settings router', () => {
@@ -83,6 +84,21 @@ describe('user-settings router', () => {
     expect(res.body.workspaceDirOverride).toBeNull();
     /* Minor-cast fold default — see server/src/analyzer/fold-minor-cast.ts. */
     expect(res.body.minorCastMinLines).toBe(3);
+  });
+
+  it('GET reflects the GEN_WORKERS env override in generationWorkers (deploy knob reaches the client)', async () => {
+    /* The client queue-dispatcher reads `account.generationWorkers` from this
+       response to cap concurrency. Without the env overlay the GEN_WORKERS
+       deploy knob never reached it. */
+    const def = await request(app).get('/api/user/settings');
+    expect(def.body.generationWorkers).toBe(2); // no env → on-disk/default
+
+    process.env.GEN_WORKERS = '1';
+    resetCache();
+    const withEnv = await request(app).get('/api/user/settings');
+    expect(withEnv.body.generationWorkers).toBe(1); // env wins → dispatcher caps at 1
+
+    delete process.env.GEN_WORKERS;
   });
 
   it('PUT round-trips minorCastMinLines and rejects out-of-range values', async () => {
