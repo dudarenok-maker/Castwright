@@ -2117,6 +2117,8 @@ export interface components {
             pinned?: boolean;
             /** @description True when this voiceId has rendered chapter audio at least once. Populated only for bespoke Qwen voices (the server scans rendered segments for the resolved voiceId when the engine query is 'qwen'); preset voices omit it. Drives the Voices view's "Designed" vs "Generated" split and the cast Status column. Cross-book: true if rendered in any book carrying this voiceId. Absent ⇒ not generated / not applicable. */
             generated?: boolean;
+            /** @description True when a 12s audition has been synthesised for this voiceId — the lifecycle tier between "Designed" and "Generated". Populated only for bespoke Qwen voices (the server checks the voice-sample cache for a `<scope>-qwen3-tts-0.6b-*.mp3` file when the engine query is 'qwen'); preset voices omit it. Drives the new "Sampled" cast Status pill / Voices badge. Cross-book like `generated`; a `generated` voice outranks it. Absent ⇒ not sampled / not applicable. */
+            sampled?: boolean;
             ttsVoice: components["schemas"]["TtsVoiceAssignment"];
             /**
              * @description User-set TTS voice overrides per engine. Each entry pins a
