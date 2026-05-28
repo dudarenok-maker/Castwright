@@ -9,12 +9,14 @@ import {
   listenProgressSlice,
   listenProgressActions,
   selectListenProgress,
+  selectLivePlaybackFor,
   type ListenMarker,
   type ListenProgressRecord,
   type ListenProgressState,
+  type LivePlayback,
 } from './listen-progress-slice';
 
-const empty = (): ListenProgressState => ({ byBook: {}, pendingSeek: null });
+const empty = (): ListenProgressState => ({ byBook: {}, pendingSeek: null, livePlayback: null });
 
 const sample: ListenProgressRecord = {
   chapterId: 3,
@@ -45,6 +47,7 @@ describe('listenProgressSlice — hydrate', () => {
     const start: ListenProgressState = {
       byBook: { b1: sample, b2: { ...sample, chapterId: 5 } },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(
       start,
@@ -67,7 +70,11 @@ describe('listenProgressSlice — update', () => {
   });
 
   it('overwrites the prior chapterId / currentSec for the same book', () => {
-    const start: ListenProgressState = { byBook: { b1: sample }, pendingSeek: null };
+    const start: ListenProgressState = {
+      byBook: { b1: sample },
+      pendingSeek: null,
+      livePlayback: null,
+    };
     const next = listenProgressSlice.reducer(
       start,
       listenProgressActions.update({ bookId: 'b1', chapterId: 9, currentSec: 99 }),
@@ -90,7 +97,11 @@ describe('listenProgressSlice — update', () => {
   });
 
   it('leaves entries for other books intact', () => {
-    const start: ListenProgressState = { byBook: { b1: sample }, pendingSeek: null };
+    const start: ListenProgressState = {
+      byBook: { b1: sample },
+      pendingSeek: null,
+      livePlayback: null,
+    };
     const next = listenProgressSlice.reducer(
       start,
       listenProgressActions.update({ bookId: 'b2', chapterId: 1, currentSec: 2 }),
@@ -105,6 +116,7 @@ describe('listenProgressSlice — clear', () => {
     const start: ListenProgressState = {
       byBook: { b1: sample, b2: { ...sample, chapterId: 11 } },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(start, listenProgressActions.clear({ bookId: 'b1' }));
     expect(next.byBook.b1).toBeUndefined();
@@ -114,17 +126,17 @@ describe('listenProgressSlice — clear', () => {
 
 describe('selectListenProgress', () => {
   it('returns the record for the given book when present', () => {
-    const state = { listenProgress: { byBook: { b1: sample }, pendingSeek: null } };
+    const state = { listenProgress: { byBook: { b1: sample }, pendingSeek: null, livePlayback: null } };
     expect(selectListenProgress('b1')(state)).toEqual(sample);
   });
 
   it('returns null when the book has no entry', () => {
-    const state = { listenProgress: { byBook: {}, pendingSeek: null } };
+    const state = { listenProgress: { byBook: {}, pendingSeek: null, livePlayback: null } };
     expect(selectListenProgress('b1')(state)).toBeNull();
   });
 
   it('returns null when bookId is null (pre-ready stages have no active book)', () => {
-    const state = { listenProgress: { byBook: { b1: sample }, pendingSeek: null } };
+    const state = { listenProgress: { byBook: { b1: sample }, pendingSeek: null, livePlayback: null } };
     expect(selectListenProgress(null)(state)).toBeNull();
   });
 
@@ -158,7 +170,11 @@ describe('listenProgressSlice — plan 53 playbackRate', () => {
   });
 
   it('setPlaybackRate writes onto an existing record without losing position', () => {
-    const start: ListenProgressState = { byBook: { b1: sample }, pendingSeek: null };
+    const start: ListenProgressState = {
+      byBook: { b1: sample },
+      pendingSeek: null,
+      livePlayback: null,
+    };
     const next = listenProgressSlice.reducer(
       start,
       listenProgressActions.setPlaybackRate({ bookId: 'b1', playbackRate: 1.75 }),
@@ -182,6 +198,7 @@ describe('listenProgressSlice — plan 53 playbackRate', () => {
     const start: ListenProgressState = {
       byBook: { b1: { ...sample, playbackRate: 1.5 } },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(
       start,
@@ -195,7 +212,11 @@ describe('listenProgressSlice — plan 53 playbackRate', () => {
 
 describe('listenProgressSlice — plan 53 markers', () => {
   it('addMarker appends to the markers array', () => {
-    const start: ListenProgressState = { byBook: { b1: sample }, pendingSeek: null };
+    const start: ListenProgressState = {
+      byBook: { b1: sample },
+      pendingSeek: null,
+      livePlayback: null,
+    };
     const next = listenProgressSlice.reducer(
       start,
       listenProgressActions.addMarker({ bookId: 'b1', marker: marker() }),
@@ -207,6 +228,7 @@ describe('listenProgressSlice — plan 53 markers', () => {
     const start: ListenProgressState = {
       byBook: { b1: { ...sample, markers: [marker({ id: 'mk_a' })] } },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(
       start,
@@ -237,6 +259,7 @@ describe('listenProgressSlice — plan 53 markers', () => {
         },
       },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(
       start,
@@ -256,6 +279,7 @@ describe('listenProgressSlice — plan 53 markers', () => {
     const start: ListenProgressState = {
       byBook: { b1: { ...sample, markers: [marker({ id: 'mk_a' })] } },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(
       start,
@@ -274,6 +298,7 @@ describe('listenProgressSlice — plan 53 markers', () => {
         b1: { ...sample, markers: [marker({ id: 'mk_a' }), marker({ id: 'mk_b' })] },
       },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(
       start,
@@ -286,6 +311,7 @@ describe('listenProgressSlice — plan 53 markers', () => {
     const start: ListenProgressState = {
       byBook: { b1: { ...sample, markers: [marker()] } },
       pendingSeek: null,
+      livePlayback: null,
     };
     const next = listenProgressSlice.reducer(
       start,
@@ -331,5 +357,76 @@ describe('listenProgressSlice — plan 53 pendingSeek (marker-click → mini-pla
       listenProgressActions.consumeSeek({ requestId: id }),
     );
     expect(cleared.pendingSeek).toBeNull();
+  });
+});
+
+describe('listenProgressSlice — plan 125 livePlayback (mini-player → listen row)', () => {
+  const live = (over: Partial<LivePlayback> = {}): LivePlayback => ({
+    bookId: 'b1',
+    chapterId: 3,
+    currentSec: 44.4,
+    durationSec: 44.8,
+    ...over,
+  });
+
+  it('setLivePlayback stores the record', () => {
+    const next = listenProgressSlice.reducer(empty(), listenProgressActions.setLivePlayback(live()));
+    expect(next.livePlayback).toEqual(live());
+  });
+
+  it('setLivePlayback replaces the prior live record each tick', () => {
+    const first = listenProgressSlice.reducer(
+      empty(),
+      listenProgressActions.setLivePlayback(live({ currentSec: 10 })),
+    );
+    const second = listenProgressSlice.reducer(
+      first,
+      listenProgressActions.setLivePlayback(live({ currentSec: 11 })),
+    );
+    expect(second.livePlayback?.currentSec).toBe(11);
+  });
+
+  it('clearLivePlayback nulls the live record', () => {
+    const start: ListenProgressState = { byBook: {}, pendingSeek: null, livePlayback: live() };
+    const next = listenProgressSlice.reducer(start, listenProgressActions.clearLivePlayback());
+    expect(next.livePlayback).toBeNull();
+  });
+
+  it('does not touch the persisted resume bookmark (byBook) — live is ephemeral', () => {
+    const start: ListenProgressState = { byBook: { b1: sample }, pendingSeek: null, livePlayback: null };
+    const next = listenProgressSlice.reducer(start, listenProgressActions.setLivePlayback(live()));
+    expect(next.byBook.b1).toEqual(sample);
+  });
+
+  describe('selectLivePlaybackFor', () => {
+    const state = { listenProgress: { byBook: {}, pendingSeek: null, livePlayback: live() } };
+
+    it('returns the stored record for the matching book + chapter', () => {
+      expect(selectLivePlaybackFor('b1', 3)(state)).toEqual(live());
+    });
+
+    it('returns the SAME reference (stable identity drives single-row re-render)', () => {
+      expect(selectLivePlaybackFor('b1', 3)(state)).toBe(state.listenProgress.livePlayback);
+    });
+
+    it('returns null for a different chapter', () => {
+      expect(selectLivePlaybackFor('b1', 4)(state)).toBeNull();
+    });
+
+    it('returns null for a different book', () => {
+      expect(selectLivePlaybackFor('b2', 3)(state)).toBeNull();
+    });
+
+    it('returns null when nothing is playing', () => {
+      expect(
+        selectLivePlaybackFor('b1', 3)({
+          listenProgress: { byBook: {}, pendingSeek: null, livePlayback: null },
+        }),
+      ).toBeNull();
+    });
+
+    it('returns null defensively when the slice is absent', () => {
+      expect(selectLivePlaybackFor('b1', 3)({})).toBeNull();
+    });
   });
 });

@@ -11,11 +11,11 @@
    mislead the user. */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { ListenPlayerRegion } from './listen-player-region';
-import { listenProgressSlice } from '../../store/listen-progress-slice';
+import { listenProgressSlice, listenProgressActions } from '../../store/listen-progress-slice';
 import type { Chapter, ChapterLoudness } from '../../lib/types';
 
 function makeStore() {
@@ -159,5 +159,84 @@ describe('ListenPlayerRegion — chapter-list virtualisation threshold (plan 93)
   it('switches to the virtualised container at or above the threshold', () => {
     renderRegion(manyChapters(60));
     expect(screen.getByTestId('listen-chapters-virtual-container')).toBeInTheDocument();
+  });
+});
+
+/* Plan 125 — the playing row mirrors the mini-player's real playhead
+   (elapsed + total, matched to the second) instead of a decorative
+   animation, and the "Resume at" pill is suppressed on the actively-
+   playing chapter while still showing on other bookmarked rows. */
+describe('ListenPlayerRegion — live row sync + pill-hidden-while-playing (plan 125)', () => {
+  function renderPlaying(
+    store: ReturnType<typeof makeStore>,
+    chapters: Chapter[],
+    currentTrack: number | null,
+  ) {
+    return render(
+      <Provider store={store}>
+        <ListenPlayerRegion
+          bookId="test-book"
+          chapters={chapters}
+          listenable={chapters.filter((c) => !c.excluded)}
+          characters={[]}
+          currentTrack={currentTrack}
+          onPlayChapter={vi.fn()}
+          onRegenerate={vi.fn()}
+          onSeekMarker={vi.fn()}
+          onDeleteMarker={vi.fn()}
+        />
+      </Provider>,
+    );
+  }
+
+  it('the playing row shows live elapsed / total matching the player to the second', () => {
+    const store = makeStore();
+    /* currentSec 44.4 → formatTime "0:44"; durationSec 44.8 → "0:44" (PCM-
+       exact total the player displays, distinct from the "00:45" metadata). */
+    store.dispatch(
+      listenProgressActions.setLivePlayback({
+        bookId: 'test-book',
+        chapterId: 1,
+        currentSec: 44.4,
+        durationSec: 44.8,
+      }),
+    );
+    renderPlaying(store, [makeChapter(1, { duration: '00:45' })], 1);
+    expect(screen.getByTestId('chapter-row-1')).toHaveTextContent('0:44 / 0:44');
+  });
+
+  it('hides the Resume pill on the actively-playing chapter', () => {
+    const store = makeStore();
+    store.dispatch(
+      listenProgressActions.hydrate({
+        bookId: 'test-book',
+        progress: { chapterId: 1, currentSec: 30, updatedAt: '2026-05-28T00:00:00.000Z' },
+      }),
+    );
+    store.dispatch(
+      listenProgressActions.setLivePlayback({
+        bookId: 'test-book',
+        chapterId: 1,
+        currentSec: 44,
+        durationSec: 45,
+      }),
+    );
+    renderPlaying(store, [makeChapter(1)], 1);
+    const row = screen.getByTestId('chapter-row-1');
+    expect(within(row).queryByText(/Resume at/i)).toBeNull();
+  });
+
+  it('still shows the Resume pill on a bookmarked row that is NOT playing', () => {
+    const store = makeStore();
+    store.dispatch(
+      listenProgressActions.hydrate({
+        bookId: 'test-book',
+        progress: { chapterId: 2, currentSec: 30, updatedAt: '2026-05-28T00:00:00.000Z' },
+      }),
+    );
+    /* Chapter 1 is playing; chapter 2 is bookmarked + idle → pill stays. */
+    renderPlaying(store, [makeChapter(1), makeChapter(2)], 1);
+    const row2 = screen.getByTestId('chapter-row-2');
+    expect(within(row2).getByText(/Resume at/i)).toBeInTheDocument();
   });
 });

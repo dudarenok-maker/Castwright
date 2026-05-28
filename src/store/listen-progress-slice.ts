@@ -61,14 +61,37 @@ export interface PendingSeek {
   requestId: number;
 }
 
+/* Plan 125 — ephemeral live playhead, published by the mini-player so the
+   Listen view's chapter row can mirror the real audio position (elapsed +
+   waveform) instead of running a decorative animation. Distinct from the
+   persisted resume bookmark (`byBook`): never written to disk, holds the
+   PCM-exact `durationSec` the player displays, and only one chapter plays
+   globally (one <audio> element) so a single record suffices. */
+export interface LivePlayback {
+  bookId: string;
+  chapterId: number;
+  currentSec: number;
+  /* Resolved total the mini-player renders (server PCM-exact durationSec, or
+     parseDuration(chapter.duration) fallback) — lets the row match the
+     player's total to the second. */
+  durationSec: number;
+}
+
 export interface ListenProgressState {
   byBook: Record<string, ListenProgressRecord>;
   /* Plan 53 — one-shot seek request consumed by the mini-player.
      Null between requests. */
   pendingSeek: PendingSeek | null;
+  /* Plan 125 — ephemeral live playhead (see LivePlayback). Null when
+     nothing is playing. */
+  livePlayback: LivePlayback | null;
 }
 
-const initialState: ListenProgressState = { byBook: {}, pendingSeek: null };
+const initialState: ListenProgressState = {
+  byBook: {},
+  pendingSeek: null,
+  livePlayback: null,
+};
 
 /* Default playback rate when the record omits the field (pre-plan-53
    data on disk, or a brand-new book that hasn't picked a rate yet). */
@@ -219,6 +242,18 @@ export const listenProgressSlice = createSlice({
     consumeSeek: (s, a: PayloadAction<{ requestId: number }>) => {
       if (s.pendingSeek?.requestId === a.payload.requestId) s.pendingSeek = null;
     },
+    /* Plan 125 — publish the live playhead from the mini-player's
+       throttled onTimeUpdate. Replaces the whole record each tick (the
+       selector hands the stored reference to the matching row, so only
+       that row re-renders; non-matching rows get a stable null). */
+    setLivePlayback: (s, a: PayloadAction<LivePlayback>) => {
+      s.livePlayback = a.payload;
+    },
+    /* Plan 125 — drop the live playhead on player teardown / chapter
+       switch so a stale entry can't outlive the audio element. */
+    clearLivePlayback: (s) => {
+      s.livePlayback = null;
+    },
   },
 });
 
@@ -244,4 +279,17 @@ export const selectPendingSeek =
     const ps = s.listenProgress?.pendingSeek;
     if (!ps || ps.bookId !== bookId) return null;
     return ps;
+  };
+
+/* Plan 125 — narrowed live-playhead selector. Returns the STORED record
+   reference (stable across unrelated dispatches; changes only when
+   setLivePlayback fires) when it points at this exact book + chapter,
+   else a stable null. The narrowing is what keeps the per-tick re-render
+   confined to the single playing row. */
+export const selectLivePlaybackFor =
+  (bookId: string | null, chapterId: number) =>
+  (s: { listenProgress?: ListenProgressState }): LivePlayback | null => {
+    const lp = s.listenProgress?.livePlayback;
+    if (!bookId || !lp || lp.bookId !== bookId || lp.chapterId !== chapterId) return null;
+    return lp;
   };
