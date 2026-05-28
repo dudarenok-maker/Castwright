@@ -4313,6 +4313,10 @@ const mock = {
     chaptersPerHour: null,
     last: null,
     updatedAt: null,
+    liveBatchRtf: null,
+    lastBatchRtf: null,
+    batchesInWindow: 0,
+    batchUpdatedAt: null,
   }),
 };
 
@@ -4335,6 +4339,13 @@ export interface GenerationStatsResponse {
     at: string;
   } | null;
   updatedAt: string | null;
+  /** Aggregate rtf over the recent-batch window — the LIVE figure that moves
+      mid-chapter (< 1 = faster than realtime). null when no batch is recent. */
+  liveBatchRtf: number | null;
+  /** The single most-recent batch's rtf. */
+  lastBatchRtf: number | null;
+  batchesInWindow: number;
+  batchUpdatedAt: string | null;
 }
 
 export const api = USE_MOCKS ? mock : real;
