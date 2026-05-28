@@ -1208,8 +1208,9 @@ interface QwenStatusGroup {
    single-member sections. Instead bucket Qwen voices by design status:
      - 'none'     → ttsVoice.name empty (no designed voiceId) → "Needs a voice"
      - 'designed' → has a designed voiceId → "Designed voices"
-   In "Designed voices" each card carries a Designed / Generated badge driven
-   by `voice.generated`. Same tab filter + series → book nesting as
+   In "Designed voices" each card carries a Designed / Sampled / Generated
+   badge driven by `voice.sampled` / `voice.generated`. Same tab filter +
+   series → book nesting as
    buildFamilies; "Needs a voice" sorts first so action-needed is at the top. */
 function buildQwenStatusGroups(library: Voice[], tab: Tab): QwenStatusGroup[] {
   const filtered = library.filter((v) => {
@@ -1424,7 +1425,7 @@ interface QwenSectionProps {
    voices", each nested series → book → character. No "Audition base voice"
    (a status bucket is not one voice) and no ⚠ duplicate pill (unique Qwen
    voiceIds never share a base voice). The "Designed voices" cards carry a
-   Designed / Generated badge. */
+   Designed / Sampled / Generated badge. */
 function QwenStatusSection({
   group,
   draggingVoiceId,
@@ -1499,6 +1500,8 @@ function QwenStatusSection({
                             group.status === 'designed' ? (
                               v.generated ? (
                                 <Pill color="success">Generated</Pill>
+                              ) : v.sampled ? (
+                                <Pill color="peach">Sampled</Pill>
                               ) : (
                                 <Pill color="library">Designed</Pill>
                               )

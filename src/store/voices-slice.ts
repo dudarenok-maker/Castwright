@@ -39,6 +39,15 @@ export const voicesSlice = createSlice({
       const v = s.voices.find((v) => v.id === a.payload.voiceId);
       if (v) v.pinned = a.payload.pinned || undefined;
     },
+    /* Optimistic "Sampled" flip. Fired after a successful 12s audition synth
+       so the Qwen Status pill advances Designed → Sampled immediately — the
+       library only re-hydrates on book/stage/engine/genProgress change, none
+       of which a sample triggers. The next GET /api/voices confirms it from
+       the on-disk sample cache. */
+    markSampled: (s, a: PayloadAction<{ voiceId: string }>) => {
+      const v = s.voices.find((v) => v.id === a.payload.voiceId);
+      if (v) v.sampled = true;
+    },
     /* Optimistic override write. The matching PUT /api/voices/:id/override
        fires from the view; we leave the `ttsVoice` field untouched here
        because the engine-aware resolution lives server-side — the next

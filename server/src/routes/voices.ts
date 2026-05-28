@@ -49,6 +49,13 @@ import {
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { collectRenderedQwenVoiceNames } from '../audio/segments-io.js';
+import { listVoiceSampleFiles } from '../tts/voice-sample-cache.js';
+
+/* The single model key the bespoke Qwen engine synthesises under (mirror of
+   the frontend's QWEN_MODEL_KEY / sampleModelKeyForEngine). Cached auditions
+   are named `<scope>-qwen3-tts-0.6b-<hash>.mp3`, so the `sampled` scan anchors
+   on this literal. Revisit if a second Qwen synth key is ever added. */
+const QWEN_SAMPLE_MODEL_KEY = 'qwen3-tts-0.6b';
 
 export const voicesRouter = Router();
 
@@ -82,6 +89,15 @@ interface DerivedVoice {
       carries this voiceId — for the dominant single-book character that
       equals "rendered in this book". */
   generated?: boolean;
+  /** True when a 12s audition has been synthesised for this voice — the
+      lifecycle tier between "Designed" and "Generated". Populated only for
+      bespoke Qwen voices (the engine query is 'qwen') by checking the
+      voice-sample cache for a `<scope>-qwen3-tts-0.6b-*.mp3` file, where
+      `scope = voiceId ?? char-<characterId>` (the same scope the player +
+      design route cache under). Cross-book like `generated`; preset voices
+      omit it. A `generated` voice outranks `sampled` at the presentation
+      layer. */
+  sampled?: boolean;
   ttsVoice: TtsVoiceAssignment;
   /** Per-engine user-set voice overrides. The `ttsVoice` field above
       resolves to the slot matching the query's `engine`; this map is
@@ -179,6 +195,17 @@ async function aggregateVoices(
      usedIn aggregates across every book that contains the same voiceId). */
   const acc = new Map<string, DerivedVoice & { books: Set<string> }>();
 
+  /* The voice-sample cache is workspace-global (not per-book), so read it
+     once. Empty for preset engines — the `sampled` lifecycle tier is
+     Qwen-only, matching the `generated` invariant. A character has been
+     "Sampled" when a `<scope>-qwen3-tts-0.6b-*.mp3` audition exists, where
+     `scope = voiceId ?? char-<characterId>`. */
+  const sampleFiles = engine === 'qwen' ? listVoiceSampleFiles() : [];
+  const hasCachedQwenSample = (sampleScope: string): boolean => {
+    const prefix = `${sampleScope}-${QWEN_SAMPLE_MODEL_KEY}-`;
+    return sampleFiles.some((f) => f.startsWith(prefix));
+  };
+
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
@@ -203,6 +230,10 @@ async function aggregateVoices(
           const c = normaliseCastCharacter(rawC);
           const id = c.voiceId ?? c.id;
           if (!id) continue;
+          /* The sample-cache scope keys on `char-<id>` (not bare `<id>`) for a
+             voiceId-less character — matching the frontend's sampleScopeFor —
+             so it can diverge from `id` above. Compute it explicitly. */
+          const sampleScope = c.voiceId ?? `char-${c.id}`;
           const overrideMap = c.overrideTtsVoices ?? null;
           const overrideForEngine = overrideMap?.[engine] ?? null;
           const legacyShape = overrideForEngine ? { engine, name: overrideForEngine.name } : null;
@@ -218,6 +249,12 @@ async function aggregateVoices(
               renderedQwenNames.has(existing.ttsVoice.name)
             ) {
               existing.generated = true;
+            }
+            /* Likewise promote to sampled if any book carrying this voiceId
+               has a cached audition (sample cache is global, so the scope
+               matches regardless of which book first seeded the entry). */
+            if (!existing.sampled && hasCachedQwenSample(sampleScope)) {
+              existing.sampled = true;
             }
             /* Promote to 'current' if any book containing this voice is the
                currently-open one. */
@@ -278,6 +315,7 @@ async function aggregateVoices(
             reusable: isNarratorId(id, c.name) || undefined,
             pinned: pinned.has(id) || undefined,
             generated: renderedQwenNames.has(ttsVoice.name) || undefined,
+            sampled: hasCachedQwenSample(sampleScope) || undefined,
             ttsVoice,
             overrideTtsVoices: overrideMap,
             overrideTtsVoice: legacyShape,
