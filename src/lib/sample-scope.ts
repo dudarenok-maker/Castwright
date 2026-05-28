@@ -14,14 +14,18 @@
 
    Keying on the persisted `character.voiceId` (the identity a matched voice
    resolves to anyway) removes the timing dependency: design-time and
-   play-time agree by construction. `voice?.id` stays first so an explicitly
-   resolved voice still wins; the `char-<id>` namespace is the fallback for
-   characters with no voiceId, keeping their per-character samples distinct
-   from library-voice samples. Mirrors the `voice?.id ?? character.voiceId ??
-   id` identity already used for the override API in profile-drawer.tsx. */
-export function sampleScopeFor(
-  character: { id: string; voiceId?: string | null },
-  voice?: { id: string } | null,
-): string {
-  return voice?.id ?? character.voiceId ?? `char-${character.id}`;
+   play-time agree by construction. The `char-<id>` namespace is the fallback
+   for characters with no voiceId, keeping their per-character samples distinct
+   from library-voice samples.
+
+   It deliberately does NOT consult the resolved library `voice`: the earlier
+   "`voice?.id ?? character.voiceId ?? …`" form still flipped for a character
+   with NO `voiceId` (e.g. a freshly-designed Qwen voice), because
+   `findVoiceForCharacter` resolves a same-id library entry by play-time but
+   not by design-time — so the audition cached under `char-Wren` was re-synth-
+   ised under `Wren`. When `voiceId` IS set it equals the matched `voice.id`
+   anyway, so dropping `voice` loses nothing and makes the scope stable for
+   both cases. */
+export function sampleScopeFor(character: { id: string; voiceId?: string | null }): string {
+  return character.voiceId ?? `char-${character.id}`;
 }
