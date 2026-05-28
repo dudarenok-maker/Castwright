@@ -1,6 +1,47 @@
 import { defineConfig, loadEnv, type PluginOption } from 'vite';
 import react from '@vitejs/plugin-react';
 import mkcert from 'vite-plugin-mkcert';
+import { execSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+// Plan 124 — build-version footer. Capture version + git provenance ONCE here
+// (this callback runs at vite start / per `vite build`) and inject them as
+// compile-time constants via `define` below, read by src/lib/build-info.ts.
+// Each git call is isolated in its own try/catch so a build from a tarball
+// without a `.git` dir degrades to sentinels ('unknown' / 'local') instead of
+// throwing. NOTE: on the dev server these are frozen at vite-start — commit
+// while `npm run dev` is running and the footer keeps the old SHA until you
+// restart Vite (HMR does not re-run this config). `vite build` is always fresh.
+function gitOutput(cmd: string): string | null {
+  try {
+    return execSync(cmd, {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf8',
+      windowsHide: true,
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function buildInfoConstants() {
+  const version = (createRequire(import.meta.url)('./package.json') as { version: string }).version;
+  const gitSha = gitOutput('git rev-parse --short HEAD') ?? 'unknown';
+  const gitBranch = gitOutput('git rev-parse --abbrev-ref HEAD') ?? 'local';
+  const status = gitOutput('git status --porcelain');
+  const gitDirty = status === null ? false : status.length > 0;
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, '0');
+  const mm = String(now.getMinutes()).padStart(2, '0');
+  const buildTime = `${hh}:${mm}`;
+  return {
+    __APP_VERSION__: JSON.stringify(version),
+    __GIT_SHA__: JSON.stringify(gitSha),
+    __GIT_BRANCH__: JSON.stringify(gitBranch),
+    __GIT_DIRTY__: JSON.stringify(gitDirty), // boolean literal true/false
+    __BUILD_TIME__: JSON.stringify(buildTime),
+  };
+}
 
 // Vite config — replaces the manual <script> tag ordering in index.html.
 // Vite resolves ESM imports, transpiles JSX/TSX via SWC, serves HMR.
@@ -28,6 +69,8 @@ export default defineConfig(({ mode }) => {
   return {
     plugins,
     root: '.',
+    // Plan 124 — compile-time build-version constants (see buildInfoConstants).
+    define: buildInfoConstants(),
     server: {
       // Bind to IPv4 loopback by default. Vite 5 defaults to host:'localhost',
       // and on Node 18+ that resolves to ::1 (IPv6) only — Chrome on Windows
