@@ -51,6 +51,11 @@ def _stub_poison_exit_timer(monkeypatch):
             pass
 
     monkeypatch.setattr(main.threading, "Timer", _NoOpTimer)
+    # Poison state is a MODULE global that outlives a TestClient, so clear it
+    # before each case (the fence + exit are now process-wide, not per-engine).
+    main._reset_poison_for_test()
+    yield
+    main._reset_poison_for_test()
 
 
 @pytest.fixture
@@ -175,8 +180,8 @@ def test_synthesize_schedules_process_exit_on_cuda_assert(monkeypatch) -> None:
             json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "hi"},
         )
     assert r.status_code == 503
-    assert engine._poisoned is True
-    assert engine._exit_scheduled is True
+    assert main._process_poisoned is True
+    assert main._poison_exit_scheduled is True
     # Exactly one timer scheduled; the delay matches the configured ms.
     assert len(timer_calls) == 1
     delay, _fn = timer_calls[0]
@@ -250,9 +255,12 @@ def test_synthesize_flags_engine_as_poisoned_on_cuda_assert(monkeypatch) -> None
     body = r.json()
     assert body.get("poisoned") is True
     assert "device-side assert" in body["detail"].lower()
-    # Engine must self-flag so cross-request fence works on call #2.
-    assert engine._poisoned is True
-    assert engine._poison_reason is not None and "device-side assert" in engine._poison_reason
+    # Process must self-flag so the cross-request fence works on call #2.
+    assert main._process_poisoned is True
+    assert (
+        main._process_poison_reason is not None
+        and "device-side assert" in main._process_poison_reason
+    )
 
 
 def test_synthesize_fast_fails_503_when_engine_already_poisoned(monkeypatch) -> None:
@@ -272,9 +280,10 @@ def test_synthesize_fast_fails_503_when_engine_already_poisoned(monkeypatch) -> 
             return super().synthesize(model, voice, text)
 
     engine = _SpyEngine()
-    engine._poisoned = True
-    engine._poison_reason = "CUDA error: device-side assert triggered (synthetic)"
     monkeypatch.setitem(main.ENGINES, "coqui", engine)
+    # Process already poisoned by a prior request's CUDA error.
+    main._process_poisoned = True
+    main._process_poison_reason = "CUDA error: device-side assert triggered (synthetic)"
 
     with TestClient(main.app) as client:
         r = client.post(
@@ -297,15 +306,51 @@ def test_health_reports_poisoned_flag(monkeypatch) -> None:
     engine = _FakeEngine()
     engine._tts = object()  # sentinel: model is "loaded"
     engine._resolved_device = "cuda"
-    engine._poisoned = True
-    engine._poison_reason = "CUDA error: device-side assert triggered"
     monkeypatch.setitem(main.ENGINES, "coqui", engine)
+    main._process_poisoned = True
+    main._process_poison_reason = "CUDA error: device-side assert triggered"
     with TestClient(main.app) as client:
         r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
     assert body["poisoned"] is True
     assert "device-side assert" in body["poison_reason"]
+
+
+def test_synthesize_poison_fence_fires_for_non_coqui_engine(monkeypatch) -> None:
+    """Regression (sidecar-poison-fence-all-engines): the poison fence + supervised
+    exit were gated `isinstance(engine, CoquiEngine)`, so a QWEN CUDA error
+    returned a plain 500, NEVER self-exited, and the sidecar wedged — every retry
+    re-hit the dead context (627 such failures over 2 days). ANY engine's
+    context-fatal CUDA error must flag process poison, return 503, and schedule
+    the supervised exit."""
+    timer_calls: list[tuple[float, Any]] = []
+
+    class _FakeTimer:
+        def __init__(self, delay: float, fn: Any) -> None:
+            timer_calls.append((delay, fn))
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(main.threading, "Timer", _FakeTimer)
+
+    class _CudaQwen(_FakeEngine):
+        def synthesize(self, model: str, voice: str, text: str):
+            # The exact error seen in the wild — note: NOT "device-side assert".
+            raise RuntimeError("CUDA error: unknown error")
+
+    monkeypatch.setitem(main.ENGINES, "qwen", _CudaQwen())
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/synthesize",
+            json={"engine": "qwen", "model": "0.6b", "voice": "qwen-narrator", "text": "Chapter One."},
+        )
+    assert r.status_code == 503
+    assert r.json().get("poisoned") is True
+    assert main._process_poisoned is True
+    # The Qwen error scheduled the supervised exit — was the whole bug.
+    assert len(timer_calls) == 1
 
 
 # ── /synthesize wire format ──────────────────────────────────────────────
