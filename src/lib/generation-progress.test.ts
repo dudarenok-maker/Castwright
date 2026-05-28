@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   characterLinePositionsByChapter,
+  characterRowProgress,
   characterStatsByChapter,
   countWords,
   linesDoneAt,
@@ -214,5 +215,91 @@ describe('overallProgress — the 3/7-done-shows-4 % regression', () => {
       makeChapter(2, { excluded: true, progress: 1 }),
     ];
     expect(overallProgress(chapters, { 1: 100, 2: 100 })).toBe(0);
+  });
+});
+
+describe('characterRowProgress — the regenerate stale-Done regression', () => {
+  /* The bug: regenerating a previously-rendered chapter left each cast row at
+     a full-green "Done" bar until that character's first sentence of the new
+     run. Cause: a hydrate re-seeds the on-disk chapter's cast as `'done'`, and
+     applyGenerationTick only un-done's the live speaker — so the slice's
+     per-character `status` stays stale at `'done'` while the chapter is
+     in_progress. Completion must derive from currentLine + line positions, not
+     that status. positions [14, 17] = a speaker whose lines are all still ahead
+     of the line-13 playhead. */
+
+  it('ignores a stale per-character status="done" while the chapter is in_progress', () => {
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'done',
+      linesTotal: 2,
+      positions: [14, 17],
+      currentLine: 13,
+    });
+    expect(r).toEqual({ derivedDone: 0, fraction: 0, fullyDone: false });
+  });
+
+  it('reads as zero for everyone at the start of a (re)generation (currentLine=0)', () => {
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'done',
+      linesTotal: 9,
+      positions: [3, 20, 41],
+      currentLine: 0,
+    });
+    expect(r.derivedDone).toBe(0);
+    expect(r.fullyDone).toBe(false);
+  });
+
+  it('marks a row done by derivation once all its lines are behind the playhead', () => {
+    /* The legitimately-done-early speaker (e.g. Mr. Marrow by line 80): all
+       five lines precede the playhead, so the row is correctly "Done" even
+       though the chapter is still in_progress. */
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'queued',
+      linesTotal: 5,
+      positions: [2, 9, 14, 22, 30],
+      currentLine: 80,
+    });
+    expect(r.derivedDone).toBe(5);
+    expect(r.fraction).toBe(1);
+    expect(r.fullyDone).toBe(true);
+  });
+
+  it('shows partial progress for a non-active speaker mid-run', () => {
+    /* Wren at line 80: positions [10, 41, 75, 90, ...], 3 of 9 behind. */
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'queued',
+      linesTotal: 9,
+      positions: [10, 41, 75, 90, 101, 120, 140, 160, 175],
+      currentLine: 80,
+    });
+    expect(r.derivedDone).toBe(3);
+    expect(r.fraction).toBeCloseTo(3 / 9, 5);
+    expect(r.fullyDone).toBe(false);
+  });
+
+  it('honors the slice only when the WHOLE chapter is done (chapter_complete)', () => {
+    const r = characterRowProgress({
+      chapterState: 'done',
+      status: 'done',
+      linesTotal: 7,
+      positions: [1, 2, 3],
+      currentLine: 0,
+    });
+    expect(r).toEqual({ derivedDone: 7, fraction: 1, fullyDone: true });
+  });
+
+  it('treats a skipped character as zero-done with no false completion', () => {
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'skipped',
+      linesTotal: 0,
+      positions: undefined,
+      currentLine: 50,
+    });
+    expect(r).toEqual({ derivedDone: 0, fraction: 0, fullyDone: false });
   });
 });
