@@ -554,3 +554,48 @@ def test_synthesize_batch_serialises_concurrent_forwards(qwen_batch_runtime, mon
         f"Base forwards overlapped (max_concurrent={state['max_concurrent']}) — "
         "_synth_lock is not serialising same-engine synthesis"
     )
+
+
+def test_ensure_base_loaded_single_flights_concurrent_cold_loads(
+    qwen_batch_runtime, monkeypatch
+) -> None:
+    """Regression (sidecar-qwen-cold-load-race): `_ensure_base_loaded` ran
+    UNLOCKED, so two synth workers that both observed a cold `_base` on the first
+    synth after a sidecar restart each loaded the Base model. The racing loads
+    left the model in a half-cast dtype state and every later forward died with
+    "expected mat1 and mat2 to have the same dtype, float != BFloat16" (199 such
+    500s in the wild). The threading lock + double-check must collapse N racing
+    callers to exactly ONE load."""
+    import threading
+    import time
+
+    engine = qwen_batch_runtime["engine"]
+    engine._base = None
+
+    load_count = 0
+    count_guard = threading.Lock()
+
+    def slow_load(model_id):
+        nonlocal load_count
+        with count_guard:
+            load_count += 1
+        time.sleep(0.05)  # widen the race window so a missing lock double-loads
+        return object()  # stand-in model
+
+    monkeypatch.setattr(engine, "_load_qwen_model", slow_load)
+
+    # Release all callers at once for maximal contention on the cold check.
+    barrier = threading.Barrier(8)
+
+    def call():
+        barrier.wait()
+        engine._ensure_base_loaded()
+
+    threads = [threading.Thread(target=call) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert load_count == 1, f"cold load raced: {load_count} concurrent loads (want 1)"
+    assert engine._base is not None
