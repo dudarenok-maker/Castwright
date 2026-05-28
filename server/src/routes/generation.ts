@@ -62,7 +62,7 @@ import {
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
-import { recordChapterThroughput } from '../tts/generation-stats.js';
+import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 
 export const generationRouter = Router();
@@ -775,6 +775,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           };
           job.lastProgressTick = tick;
           broadcast(job, { type: 'progress', ...tick });
+        },
+        /* Live per-batch RTF (plan 127). Each completed Qwen batch feeds the
+           rolling live-batch window so the dev pill shows throughput that moves
+           mid-chapter, not just the per-chapter rollup below. */
+        onBatchComplete: ({ genMs, audioMs }) => {
+          recordBatchThroughput({ genMs, audioMs });
         },
       });
 

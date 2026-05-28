@@ -410,6 +410,25 @@ def test_route_frames_length_prefixed_binary(qwen_batch_runtime) -> None:
     assert _read_sample(chunks[1], 1) == refs["b"]
 
 
+def test_route_header_carries_batch_perf(qwen_batch_runtime) -> None:
+    """The frame header must carry genMs/audioMs (additive to sampleRate/lengths)
+    so the server can surface a LIVE per-batch RTF as each batch lands — the
+    per-chapter rollup is too coarse to act on."""
+    engine = qwen_batch_runtime["engine"]
+    _design(engine, "a")
+    client = TestClient(main.app)
+    resp = client.post(
+        "/synthesize-batch",
+        json={"engine": "qwen", "model": "0.6b", "items": [{"voice": "a", "text": "Hello there."}]},
+    )
+    assert resp.status_code == 200
+    header, _chunks = _parse_frame(resp.content)
+    assert "genMs" in header and "audioMs" in header
+    assert isinstance(header["genMs"], (int, float)) and header["genMs"] >= 0
+    # The fake wav has samples → non-zero audio duration.
+    assert isinstance(header["audioMs"], (int, float)) and header["audioMs"] > 0
+
+
 def test_route_rejects_non_qwen_engine(qwen_batch_runtime) -> None:
     client = TestClient(main.app)
     resp = client.post(

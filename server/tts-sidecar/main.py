@@ -142,12 +142,25 @@ class SynthBatchResult:
     single sample rate the model produced. Qwen-only — `generate_voice_clone`
     runs the N sequences in one batched forward, so the whole batch shares a
     rate. The /synthesize-batch route frames these as a length-prefixed binary
-    body (header line + concatenated PCM)."""
-    __slots__ = ("pcms", "sample_rate")
+    body (header line + concatenated PCM).
 
-    def __init__(self, pcms: list[bytes], sample_rate: int) -> None:
+    gen_ms / audio_ms are the batch's forward-compute wall and the total audio
+    it produced — the server reads them off the frame header to surface a LIVE
+    per-batch RTF (gen_ms ÷ audio_ms) while a chapter renders, instead of only a
+    per-chapter summary."""
+    __slots__ = ("pcms", "sample_rate", "gen_ms", "audio_ms")
+
+    def __init__(
+        self,
+        pcms: list[bytes],
+        sample_rate: int,
+        gen_ms: float = 0.0,
+        audio_ms: float = 0.0,
+    ) -> None:
         self.pcms = pcms
         self.sample_rate = sample_rate
+        self.gen_ms = gen_ms
+        self.audio_ms = audio_ms
 
 
 class Engine:
@@ -1200,7 +1213,9 @@ class QwenEngine(Engine):
             gen_ms, audio_ms, (gen_ms / audio_ms if audio_ms > 0 else 0.0),
         )
         pcms = [_float_audio_to_int16_le(w) for w in wavs]
-        return SynthBatchResult(pcms=pcms, sample_rate=int(sr))
+        return SynthBatchResult(
+            pcms=pcms, sample_rate=int(sr), gen_ms=gen_ms, audio_ms=audio_ms
+        )
 
 
 ENGINES: dict[str, Engine] = {
@@ -1784,8 +1799,16 @@ async def synthesize_batch(req: Request) -> Response:
 
     import json as _json
 
+    # genMs/audioMs ride in the header so the server can surface a LIVE per-batch
+    # RTF (gen_ms ÷ audio_ms) as each batch lands — the per-chapter rollup is too
+    # coarse to act on. Additive keys; older clients ignore them.
     header = _json.dumps(
-        {"sampleRate": result.sample_rate, "lengths": [len(p) for p in result.pcms]},
+        {
+            "sampleRate": result.sample_rate,
+            "lengths": [len(p) for p in result.pcms],
+            "genMs": round(result.gen_ms, 1),
+            "audioMs": round(result.audio_ms, 1),
+        },
         separators=(",", ":"),
     )
     frame = header.encode("utf-8") + b"\n" + b"".join(result.pcms)
