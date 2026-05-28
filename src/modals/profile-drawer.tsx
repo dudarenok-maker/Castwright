@@ -391,7 +391,7 @@ export function ProfileDrawer({
      character-derived stub so brand-new (unmatched) characters can still
      preview their attributes. Server file is namespaced `char-<id>` for
      character samples to keep them separate from library voice samples. */
-  const sampleVoiceId = sampleScopeFor(character, voice);
+  const sampleVoiceId = sampleScopeFor(character);
   /* Recompute against the *edited* identity so the displayed TTS voice
      updates live as the user changes the dropdowns. Saving the drawer
      persists these values; until then the recompute is local-only. */
@@ -686,7 +686,7 @@ export function ProfileDrawer({
                     cast view's Status column so the two surfaces agree (a
                     reused Qwen voice shows "Designed/Generated · Reused"). */}
                 {(() => {
-                  const { lifecycle, reused } = resolveVoiceStatus(character, voice);
+                  const { lifecycle, reused } = resolveVoiceStatus(character, voice, effectiveEngine);
                   return (
                     <>
                       {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
