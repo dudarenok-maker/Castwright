@@ -518,6 +518,64 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
   });
 });
 
+describe('Layout — default-engine TTS pill reachable without an open book', () => {
+  /* The default/primary engine's Load/Stop pill must be reachable on book-less
+     views (Books home) so the model can be pre-loaded right after launch. The
+     per-character Qwen pill, by contrast, stays gated behind an open book. */
+  it('shows the default Kokoro pill in the Status popover on the Books view (no book open)', async () => {
+    const store = makeStore();
+    /* Pin the default engine deterministically (the account slice seeds this,
+       but make the test independent of hydration). Stay on the initial
+       'books' stage — no openBook dispatch. */
+    store.dispatch(accountSlice.actions.setDefaultTtsModelKey('kokoro-v1'));
+
+    const { findByTestId, findByRole, queryByText } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* The Status pill renders even with no book in scope because a default
+       TTS control is now available; open it to reach the TTS section. */
+    fireEvent.click(await findByTestId('status-pill'));
+    expect(await findByRole('group', { name: /^Kokoro / })).toBeTruthy();
+    /* The dead-end fallback must NOT render — the control is reachable. */
+    expect(queryByText(/TTS controls appear once a manuscript is open/i)).toBeNull();
+  });
+
+  it('keeps the per-character Qwen pill gated behind an open book', async () => {
+    const store = makeStore();
+    store.dispatch(accountSlice.actions.setDefaultTtsModelKey('kokoro-v1'));
+    /* A Qwen-pinned character exists in the cast slice, but we're on the
+       book-less 'books' stage — the Qwen pill (a per-character signal) must
+       stay hidden while the default Kokoro pill still shows. */
+    store.dispatch(
+      castSlice.actions.setCharacters([
+        { id: 'narrator', name: 'Narrator', role: 'Observer', color: 'narrator' },
+        { id: 'halloran', name: 'Halloran', role: 'Captain', color: 'halloran', ttsEngine: 'qwen' },
+      ] as never),
+    );
+
+    const { findByTestId, findByRole, queryByRole } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    fireEvent.click(await findByTestId('status-pill'));
+    expect(await findByRole('group', { name: /^Kokoro / })).toBeTruthy();
+    expect(queryByRole('group', { name: /^Qwen / })).toBeNull();
+  });
+});
+
 describe('Layout — voices re-hydrate as generation renders chapters', () => {
   /* Regression: a bespoke Qwen voice's `generated` flag (cast Status column:
      "Designed" vs "Generated") is derived server-side from rendered segments.
