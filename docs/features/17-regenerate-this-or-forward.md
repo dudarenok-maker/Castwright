@@ -6,7 +6,7 @@
 > OpenAPI ops: indirect — drives `POST /api/books/:bookId/generation` (often with subset + `force: true`)
 
 > **Per-character / profile-change regeneration moved to
-> [114-profile-regen-preview.md](114-profile-regen-preview.md).** The old
+> [114-profile-regen-preview.md](archive/114-profile-regen-preview.md).** The old
 > "Character regen re-synthesises only that character's lines" model was
 > removed — there is no per-character synthesis (the server always re-renders
 > the whole chapter). `CharacterRegenerateModal` is now the profile-change
@@ -41,6 +41,6 @@ Run `VITE_USE_MOCKS=true`, navigate to a book in `ready` state.
 
 ## Out of scope
 
-- Per-character / profile-change regeneration + the A/B preview gate — see [114-profile-regen-preview.md](114-profile-regen-preview.md).
+- Per-character / profile-change regeneration + the A/B preview gate — see [114-profile-regen-preview.md](archive/114-profile-regen-preview.md).
 - Multi-character bulk regen — removed; see archived [11-batch-character-regenerate.md](archive/11-batch-character-regenerate.md).
 - Re-running with a different model key per regen (regen uses the current `ui.ttsModelKey`).
