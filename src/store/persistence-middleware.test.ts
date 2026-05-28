@@ -128,6 +128,31 @@ describe('persistenceMiddleware — payload shape', () => {
     });
   });
 
+  it('persists a manual continuity link (applyManualMatch) the same as auto-reuse', async () => {
+    /* link-prior stamps matchedFrom/voiceId on the source character; without
+       this persist the matchedFrom lived only in redux and reverted on
+       reload, so the Reused badge + merge-picker suppression silently broke. */
+    const next = vi.fn((x) => x);
+    const state = baseState({ cast: { characters: [{ id: 'Wren', matchedFrom: { bookId: 'b0' } }] } });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyManualMatch' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'Wren', matchedFrom: { bookId: 'b0' } }] },
+    });
+  });
+
+  it('persists the full cast on applyAddAlias so the alias is the authoritative last write', async () => {
+    const next = vi.fn((x) => x);
+    const state = baseState({ cast: { characters: [{ id: 'Castor', aliases: ['Castor'] }] } });
+    persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyAddAlias' });
+    await advance(500);
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'Castor', aliases: ['Castor'] }] },
+    });
+  });
+
   it('sends both pending + drift for revisions actions', async () => {
     const next = vi.fn((x) => x);
     /* Each drift event carries its own bookId so the persist filter can
