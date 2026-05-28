@@ -186,6 +186,20 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       ttsVoice: qwenTts('qwen-thistle', 'Designed voice'),
     }),
     withGradient({
+      id: 'v_wren',
+      character: 'Wren',
+      bookTitle: 'The Northern Star',
+      bookId: 'ns',
+      bookSeries: 'Northern Coast Trilogy',
+      attributes: ['Female', 'Soft', 'Young'],
+      usedIn: 1,
+      source: 'current',
+      overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
+      sampled: true,
+      // designed AND auditioned but not yet rendered → "Designed voices" with a Sampled badge
+      ttsVoice: qwenTts('qwen-wren', 'Designed voice'),
+    }),
+    withGradient({
       id: 'v_finch',
       character: 'Finch',
       bookTitle: 'Solway Bay',
