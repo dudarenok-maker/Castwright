@@ -127,6 +127,27 @@ The true per-chapter number through the full server pipeline (per-character voic
 
 **Before the fix, ~2 of 3 runs 500'd** with `size of tensor a (8) must match tensor b (7)` (concurrent different-size batches racing the non-thread-safe forward). After the fix: **3/3 clean** for both backends, SDPA marginally faster, both stable. So end-to-end batch-8 is **~RTF 1.15–1.2** — a ~10 h-audio novel ≈ **~11–12 h** (overnight), not the ~40 h the original contention-confounded run implied.
 
+### Qwen3-TTS 0.6B — batch-size sweep + worker/clock diagnosis — 2026-05-28
+
+Driven by a live full-book run reading **RTF ~3.5–5** while the 2026-05-26 clean benchmark says batch-8 ≈ **1.15–1.28**. The gap is **conditions, not the model** — proven below. Measured on the deploy box's **live `:9000` sidecar** (Kokoro + Qwen co-resident, VRAM ~3.8 GB — the real config, not the dedicated 0.8 GB bench sidecar), GPU otherwise idle (queue paused), Windows power plan = **High performance** (changed from Balanced this session). `qwen-narrator`, real prose, `bench-tts.py --batch N --concurrency M` (new `--batch` mode POSTs `/synthesize-batch` and reads the frame's `genMs`/`audioMs`; end-to-end RTF == sidecar compute RTF here, so HTTP overhead is negligible). 4 calls/cell (call #1 warms).
+
+| Path | RTF (median) | Aggregate | Note |
+|---|---|---|---|
+| `/synthesize-batch` **B=8, 1 stream** | **1.28** (1.17–1.41) | 0.78× | reproduces the 2026-05-26 clean B=8 (1.28) exactly — model + batch path are fine |
+| `/synthesize-batch` **B=16, 1 stream** | **0.80** (0.74–0.90) | 1.25× | **bigger batch ~halves RTF** — faster-than-realtime; dispatch amortised over 2× the sequences |
+| `/synthesize-batch` **B=8, 2 streams** | **2.00** (1.16–2.32) | 0.88× | concurrency=2 (the `generationWorkers`/`GPU_VRAM_BUDGET=2` analogue): per-call RTF **doubles** (lock-serialised forward → 2nd stream waits) for only **+13%** aggregate |
+
+**Why live (~3.5) ≠ benchmark (~1.3) — it's the pathway, not the data/style:**
+
+- **`QWEN_BATCH_SIZE=8` vs `16`** — B16 is 0.80 vs B8's 1.28. The biggest free lever; raise it (VRAM-permitting — B16 stayed well within 8 GB here).
+- **`generationWorkers=2`** — the Qwen forward is serialised (`_synth_lock`, plan 113's concurrent-batch-race fix), so a 2nd same-book Qwen worker can't parallelise. It **doubles per-chapter RTF (1.28→2.00)** — exactly what the live per-chapter telemetry reads — for a marginal +13% aggregate. **The serialisation didn't slow the forward** (the 1.15 benchmark already includes the lock); the 2nd worker's lock-wait + hand-off gaps do. For single-book Qwen, `generationWorkers=1` is faster *per chapter* and barely slower in aggregate.
+- **Single-`/synthesize` path elements** — `synthesiseChapter` runs the **title beat** and the **anchor group** as single `/synthesize` calls (RTF ~3–8, the slow non-batched path), pulling each chapter's average up. (These are the exact narrator single-synths that triggered the CUDA crashes this session.)
+- **Clock-sag** — `nvidia-smi dmon` during the *live* run showed the SM clock parked at **375–615 MHz (vs 3105 capable)**, 9–14 W, sm 20–37% — the GPU never boosts because gappy generation (MP3 assembly, voice loads, worker hand-offs) looks like light load. The back-to-back bench keeps it busy enough to boost. Balanced→High-performance moved live 5→~3.5; a hard clock lock (`nvidia-smi -lgc`, elevated) is the next isolation test (**pending**).
+
+**CUDA graphs / `torch.compile(mode="reduce-overhead")` is BLOCKED at the library level:** `qwen_tts` declares `_supports_static_cache = False` and uses a growing `DynamicCache` (`modeling_qwen3_tts.py:476/509/1083`); CUDA graphs need static per-step shapes (a fixed `StaticCache`). The talker also runs a **nested `code_predictor.generate()` inside every decode step** (line 1671). Using CUDA graphs would require **forking `qwen_tts` to add static-cache support to both the talker and its code predictor** — large, risky. **Batching + worker-count + clocks are the realistic levers; the CUDA-graphs fork is a last resort.**
+
+**Recommended deploy config (to validate end-to-end):** `QWEN_BATCH_SIZE=16`, `generationWorkers=1` for a single Qwen-heavy book (keep 2 only for cross-engine Kokoro+Qwen coexistence), Windows High-performance + NVIDIA "prefer max performance" for the sidecar `python.exe`. Predicted full-pipeline chapter RTF ≈ ~1 — **needs a real `POST /api/books/:id/generation` run to confirm** (title-beat/anchor single-synths mean it won't be exactly the 0.80 micro-number).
+
 ### Kokoro v1 — 4070 — _TODO_
 
 Not yet benchmarked here. Expected sub-1 RTF on GPU. Run `bench-tts.py --engine kokoro --voice af_heart` and add a row as the reference point.
