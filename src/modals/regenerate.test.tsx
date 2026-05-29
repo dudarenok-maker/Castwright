@@ -72,3 +72,31 @@ describe('RegenerateModal — forward ETA reflects actual affected count', () =>
     expect(screen.getByText(/for 1 chapter\b/)).toBeInTheDocument();
   });
 });
+
+describe('RegenerateModal — ETA scales with audio duration × RTF', () => {
+  /* Previously the single-chapter ETA was the hardcoded string "≈3 min"
+     regardless of the chapter's length. Generation wall-clock tracks the
+     real-time factor (~2.5), so a 10-minute chapter takes ~25 min, not 3. */
+  const tenMin: Chapter = { ...chapter, duration: '10:00' };
+
+  it('derives the single-chapter ETA from the chapter duration (≈25 min for 10:00)', () => {
+    render(<RegenerateModal chapter={tenMin} onClose={() => {}} onConfirm={() => {}} />);
+    expect(screen.getByText('≈25 min')).toBeInTheDocument();
+    expect(screen.queryByText('≈3 min')).not.toBeInTheDocument();
+  });
+
+  it('derives the forward ETA from forwardDurationSec, not a flat per-chapter number', () => {
+    render(
+      <RegenerateModal
+        chapter={tenMin}
+        defaultScope="forward"
+        forwardCount={3}
+        /* 3 × 10:00 = 1800s → 1800 × 2.5 = 4500s = 75 min → "1h 15m". */
+        forwardDurationSec={1800}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    expect(screen.getByText('≈1h 15m for 3 chapters')).toBeInTheDocument();
+  });
+});

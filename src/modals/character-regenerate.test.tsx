@@ -72,4 +72,24 @@ describe('CharacterRegenerateModal', () => {
     expect(screen.getByTestId('regen-character-all')).toBeDisabled();
     expect(screen.getByTestId('regen-character-preview')).toBeDisabled();
   });
+
+  it('estimates the ETA from the affected chapters audio duration × RTF', () => {
+    /* Marlow speaks in ch1 + ch4, each 10:00 → 1200s × 2.5 = 3000s = 50 min. */
+    render(
+      <CharacterRegenerateModal character={Marlow} chapters={chapters} onClose={() => {}} onConfirm={() => {}} />,
+    );
+    expect(screen.getByText('≈50 min')).toBeInTheDocument();
+  });
+
+  it('shows "—" for the ETA when the character speaks in no chapters', () => {
+    render(
+      <CharacterRegenerateModal
+        character={Marlow}
+        chapters={[ch(2, { narrator: 'done' })]}
+        onClose={() => {}}
+        onConfirm={() => {}}
+      />,
+    );
+    expect(screen.getByText('—')).toBeInTheDocument();
+  });
 });

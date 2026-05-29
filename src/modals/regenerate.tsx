@@ -3,6 +3,8 @@ import { IconRefresh, IconClose, IconClock } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { REGEN_REASONS } from '../data/regen-reasons';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
+import { parseDuration, formatHours } from '../lib/time';
+import { estimateGenMinutes } from '../lib/generation-progress';
 import type { Chapter } from '../lib/types';
 
 export type RegenScope = 'this' | 'forward';
@@ -18,16 +20,20 @@ interface Props {
       this chapter plus every later one. Defaults to 1 so callers that forget
       to pass it get a sensible (if unhelpful) ETA rather than a stale "4". */
   forwardCount?: number;
+  /** Combined audio seconds of the forward set (this chapter + every later
+      one). The ETA is `audioSec × TARGET_RTF`, so we need the real durations,
+      not just the count. Falls back to a uniform-length guess off this
+      chapter when the caller omits it. */
+  forwardDurationSec?: number;
   onClose: () => void;
   onConfirm: (args: { reason: string; scope: RegenScope; note: string }) => void;
 }
-
-const MINUTES_PER_CHAPTER = 3.5;
 
 export function RegenerateModal({
   chapter,
   defaultScope = 'this',
   forwardCount = 1,
+  forwardDurationSec,
   onClose,
   onConfirm,
 }: Props) {
@@ -35,9 +41,15 @@ export function RegenerateModal({
   const [scope, setScope] = useState<RegenScope>(defaultScope);
   const [note, setNote] = useState('');
   if (!chapter) return null;
-  const forwardMinutes = Math.max(1, Math.round(forwardCount * MINUTES_PER_CHAPTER));
+  /* Generation wall-clock tracks the real-time factor: it takes ~RTF seconds
+     to synthesise one second of finished audio. So the ETA scales with the
+     chapter's audio length, not a flat per-chapter constant. */
+  const thisSec = parseDuration(chapter.duration);
+  const forwardSec = forwardDurationSec ?? thisSec * forwardCount;
+  const minutes = estimateGenMinutes(scope === 'this' ? thisSec : forwardSec);
+  const etaTime = minutes < 60 ? `${minutes} min` : formatHours(minutes);
   const forwardChaptersLabel = `${forwardCount} chapter${forwardCount === 1 ? '' : 's'}`;
-  const eta = scope === 'this' ? '≈3 min' : `≈${forwardMinutes} min for ${forwardChaptersLabel}`;
+  const eta = scope === 'this' ? `≈${etaTime}` : `≈${etaTime} for ${forwardChaptersLabel}`;
   return (
     <>
       <div onClick={onClose} className="fixed inset-0 bg-ink/40 z-50 fade-in" />
