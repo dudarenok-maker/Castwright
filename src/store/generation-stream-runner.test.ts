@@ -195,6 +195,37 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(runner.takeChapterFailure('b1', 1)).toBeNull();
   });
 
+  it('surfaces a `warning` tick as a toast (Qwen→Kokoro downgrade is never silent)', () => {
+    /* Regression for the 2026-05-29 stale-build incident: the runner had no
+       `warning` branch, so the server's downgrade advisory was dropped and a
+       whole book rendered in the wrong voices unnoticed. */
+    const { store, runner } = makeRunner();
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
+    onTickFor('b1', 1)({
+      type: 'warning',
+      code: 'qwen_unavailable_kokoro_fallback',
+      message: 'Qwen is unavailable, so every Qwen character will render in Kokoro …',
+    } as unknown as GenerationTick);
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe('warn');
+    expect(toasts[0].message).toMatch(/Kokoro/);
+    expect(toasts[0].dedupeKey).toBe('generation-warning:qwen_unavailable_kokoro_fallback');
+  });
+
+  it('dedupes identical `warning` ticks by code (per-chapter streams do not stack toasts)', () => {
+    const { store, runner } = makeRunner();
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
+    const warn = {
+      type: 'warning',
+      code: 'qwen_unavailable_kokoro_fallback',
+      message: 'Qwen unavailable — falling back to Kokoro.',
+    } as unknown as GenerationTick;
+    onTickFor('b1', 1)(warn);
+    onTickFor('b1', 1)(warn);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+
   it('refreshes the viewed book’s snapshot from rows on a progress tick', () => {
     const { store, runner } = makeRunner();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
