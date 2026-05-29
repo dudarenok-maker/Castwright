@@ -562,7 +562,10 @@ function ReadyViewSwitch({
           setCurrentChapterId={(id) => dispatch(uiActions.setCurrentChapterId(id))}
           sentencesFromStore={manuscript.sentences}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
-          onStartGenerating={() => dispatch(uiActions.changeView('generate'))}
+          onStartGenerating={() => {
+            dispatch(uiActions.changeView('generate'));
+            dispatch(uiActions.requestStartGeneration());
+          }}
           priorRoster={priorRoster}
           onAddFromSeriesRoster={async (entry) => {
             try {

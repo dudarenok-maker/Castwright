@@ -377,6 +377,16 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
 
+#### `fe-17` — "Resume generation" button on the Generate view
+
+Source: net-new (2026-05-29). Plan 137 deferred follow-up.
+
+- _What:_ Plan 137 made auto-enqueue fire ONLY on the explicit "Approve cast & start generating" CTA, so opening / re-opening a book never restarts generation. That leaves no in-view affordance to deliberately continue a book whose run was interrupted (queue drained server-side, some chapters still `queued`). Add a "Resume generation" button on the Generate view that dispatches the same `uiActions.requestStartGeneration()` intent, so a user can restart with one click without round-tripping back to the manuscript CTA. Show it only when the viewed book has `queued` chapters and nothing is currently in flight.
+- _Acceptance:_ Open a book with some unfinished (`queued`) chapters and no live run on the Generate view → a "Resume generation" button appears; clicking it enqueues the remaining chapters and generation begins. While a run is live (or all chapters done) the button is hidden. Opening the book still never auto-starts (plan 137 invariant holds). New Vitest asserts the button dispatches `requestStartGeneration`; a Playwright case covers the resume click.
+- _Key files:_ `src/views/generation.tsx` (the button + visibility predicate off `chapters` state); `src/store/ui-slice.ts` (reuse `requestStartGeneration`, no new action).
+- _Depends on:_ plan 137 shipped.
+- _Benefit (user):_ a deliberate one-click recovery path for interrupted runs, without re-auto-starting on every open — keeps the plan-137 "never auto-start" guarantee while restoring an explicit resume.
+
 #### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
 
 Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
