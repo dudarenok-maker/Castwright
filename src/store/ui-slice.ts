@@ -345,14 +345,23 @@ export const uiSlice = createSlice({
        leave the value alone for the rest of the session. */
     const applyAccountDefaults = (
       s: UiState,
-      payload: { defaultAnalysisModel: string; defaultTtsModelKey: TtsModelKey },
+      payload: {
+        defaultAnalysisModel: string;
+        defaultTtsModelKey: TtsModelKey;
+        resolvedTtsModelKey?: TtsModelKey;
+      },
     ) => {
       if (!s.selectedModelExplicit && payload.defaultAnalysisModel) {
         s.selectedModel = payload.defaultAnalysisModel;
       }
-      const validKey = TTS_MODEL_OPTIONS.some((m) => m.id === payload.defaultTtsModelKey);
+      /* Seed the session engine from the RESOLVED key (Qwen-when-installed),
+         not the stored default — so a box with Qwen installed defaults to
+         bespoke voices. Fall back to the stored key for an older server that
+         doesn't send resolvedTtsModelKey. */
+      const seedKey = payload.resolvedTtsModelKey ?? payload.defaultTtsModelKey;
+      const validKey = TTS_MODEL_OPTIONS.some((m) => m.id === seedKey);
       if (!s.ttsModelKeyExplicit && validKey) {
-        s.ttsModelKey = payload.defaultTtsModelKey;
+        s.ttsModelKey = seedKey;
       }
     };
     builder

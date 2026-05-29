@@ -6,7 +6,11 @@
 
 import { Router, type Request, type Response } from 'express';
 import { getCachedCatalogAudit, runCatalogAudit } from '../tts/coqui-catalog-audit.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import {
+  getResolvedSidecarUrl,
+  setLastKnownQwenInstallState,
+  type QwenInstallState,
+} from '../workspace/user-settings.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -48,8 +52,6 @@ interface SidecarHealthBody {
   device?: string | null;
 }
 
-export type QwenInstallState = 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
-
 const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
   'not-installed',
   'weights-missing',
@@ -82,6 +84,13 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       });
     }
     const body = (await response.json().catch(() => ({}))) as SidecarHealthBody;
+    const qwenInstallState = normaliseQwenInstallState(body.qwen_install_state);
+    /* Feed the in-process cache getResolvedTtsModelKey reads synchronously, so
+       the conditional Qwen-when-installed default tracks reality on every poll
+       without that resolver having to block on a sidecar fetch. Only updated on
+       a reachable response — an unreachable poll leaves the last-known state
+       intact (a transient timeout shouldn't downgrade a known-ready Qwen). */
+    setLastKnownQwenInstallState(qwenInstallState);
     return res.json({
       status: 'reachable',
       url,
@@ -95,7 +104,7 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       qwenLoading: body.qwen_loading === true,
       qwenPackageInstalled: body.qwen_package_installed === true,
       qwenWeightsPresent: body.qwen_weights_present === true,
-      qwenInstallState: normaliseQwenInstallState(body.qwen_install_state),
+      qwenInstallState: qwenInstallState,
       device: typeof body.device === 'string' ? body.device : null,
     });
   } catch (e) {
