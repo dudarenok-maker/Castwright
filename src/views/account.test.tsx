@@ -568,6 +568,53 @@ describe('AccountView — eager-load Kokoro', () => {
   });
 });
 
+describe('AccountView — engine-aware eager-load toggle', () => {
+  it('shows the Qwen eager-load toggle (not Kokoro) when Qwen is the default engine', () => {
+    renderView({ defaultTtsEngine: 'local', defaultTtsModelKey: 'qwen3-tts-0.6b' });
+    expect(screen.getByTestId('account-eager-load-qwen')).toBeInTheDocument();
+    expect(screen.queryByTestId('account-eager-load-kokoro')).toBeNull();
+    expect(screen.getByText(/eager-load qwen at startup/i)).toBeInTheDocument();
+  });
+
+  it('shows the Kokoro eager-load toggle when a non-Qwen engine is the default', () => {
+    renderView({ defaultTtsModelKey: 'kokoro-v1' });
+    expect(screen.getByTestId('account-eager-load-kokoro')).toBeInTheDocument();
+    expect(screen.queryByTestId('account-eager-load-qwen')).toBeNull();
+  });
+
+  it('reflects the persisted eagerLoadQwen value in the Qwen toggle', () => {
+    renderView({ defaultTtsModelKey: 'qwen3-tts-0.6b', eagerLoadQwen: false });
+    const checkbox = screen.getByTestId('account-eager-load-qwen') as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+    expect(screen.getByText(/warms on demand on first synth/i)).toBeInTheDocument();
+  });
+
+  it('shows the restart-sidecar pill as soon as the Qwen toggle is flipped', async () => {
+    const user = userEvent.setup();
+    renderView({ defaultTtsModelKey: 'qwen3-tts-0.6b', eagerLoadQwen: true });
+    expect(screen.queryByText(/restart the sidecar to apply this change/i)).toBeNull();
+    await user.click(screen.getByTestId('account-eager-load-qwen'));
+    expect(screen.getByText(/restart the sidecar to apply this change/i)).toBeInTheDocument();
+  });
+
+  it('round-trips eagerLoadQwen=false through the Save patch', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      defaultTtsModelKey: 'qwen3-tts-0.6b',
+      eagerLoadQwen: false,
+    });
+    const user = userEvent.setup();
+    renderView({ defaultTtsModelKey: 'qwen3-tts-0.6b', eagerLoadQwen: true });
+    await user.click(screen.getByTestId('account-eager-load-qwen'));
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+    const [patch] = (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(patch.eagerLoadQwen).toBe(false);
+  });
+});
+
 describe('AccountView — Models card (plan 61)', () => {
   it('renders the Models section with the in-app Ollama install card', async () => {
     /* The OllamaInstall component fires /api/ollama/detect on mount —
