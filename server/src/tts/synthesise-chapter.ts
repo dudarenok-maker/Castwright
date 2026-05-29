@@ -116,6 +116,12 @@ export interface ChapterSegment {
       sentences leave this field undefined so the on-disk segments.json
       shape stays backwards-compatible with pre-title chapters. */
   kind?: 'title';
+  /** Engine this segment ACTUALLY rendered in when it differs from the
+      character's configured engine — set to `'kokoro'` when a Qwen character
+      with no designed voice (or an unavailable Qwen engine) fell back to
+      Kokoro. Undefined = rendered in the configured engine. Drives the
+      "Fallback (Kokoro)" status in the UI. */
+  renderedFallbackEngine?: TtsEngine;
 }
 
 /** Silence padding bookending the spoken chapter-title narration. Each chapter
@@ -160,6 +166,12 @@ export interface SynthesiseChapterOpts {
       to pre-108). The caller (generation.ts) builds + caches one provider per
       engine so a mixed-engine chapter never reconstructs providers per group. */
   resolveForEngine?: (engine: TtsEngine) => { provider: TtsProvider; modelKey: TtsModelKey };
+  /** When true, the Qwen engine is unavailable for this run (not installed, or
+      its load failed) — every Qwen-routed character falls back to Kokoro
+      instead of hard-failing, exactly as an undesigned-voice character does.
+      Requires `resolveForEngine` (to obtain the Kokoro provider). Default
+      false. */
+  qwenUnavailable?: boolean;
   /** Notification fired *before* each group's TTS call starts. Needed because
       a single group can be a multi-minute call on CPU (e.g. a long narrator
       block folded into one synth), and without a tick at the start the SSE
@@ -350,6 +362,7 @@ export async function synthesiseChapter(
     modelKey,
     engine,
     resolveForEngine,
+    qwenUnavailable = false,
     onGroupStart,
     onGroupComplete,
     onGroupRetry,
@@ -378,6 +391,32 @@ export async function synthesiseChapter(
       return { engine: charEngine, provider: r.provider, modelKey: r.modelKey };
     }
     return { engine: charEngine, provider, modelKey };
+  };
+
+  type Route = { engine: TtsEngine; provider: TtsProvider; modelKey: TtsModelKey };
+
+  /* Qwen → Kokoro graceful fallback. A Qwen route renders in Kokoro instead of
+     hard-failing the chapter when the character has NO designed voice (empty
+     voiceName) OR the Qwen engine is unavailable this run (`qwenUnavailable`).
+     Reuses pickVoiceForEngine('kokoro', …) — same deterministic profile-voice
+     inference every other Kokoro character gets — and reports the engine
+     actually used so the segment can be stamped (UI "Fallback (Kokoro)").
+     A no-op (returns the route unchanged) when the route isn't Qwen, the voice
+     is designed + Qwen is available, or no Kokoro provider can be resolved. */
+  const applyQwenFallback = (
+    c: CastCharacter,
+    route: Route,
+    voiceName: string,
+  ): { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine } => {
+    const needsFallback =
+      route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
+    if (!needsFallback || !resolveForEngine) return { route, voiceName };
+    const kokoro = resolveForEngine('kokoro');
+    return {
+      route: { engine: 'kokoro', provider: kokoro.provider, modelKey: kokoro.modelKey },
+      voiceName: pickVoiceForEngine('kokoro', toVoiceLike(c), buildHintFromCast(c)),
+      renderedFallbackEngine: 'kokoro',
+    };
   };
 
   const castById = new Map(cast.map((c) => [c.id, c]));
@@ -418,12 +457,18 @@ export async function synthesiseChapter(
        usually the default (Kokoro) since the narrator rarely carries a bespoke
        per-character engine. routeFor honours an explicit narrator ttsEngine if
        one is set. */
-    const titleRoute = routeFor(narratorChar);
-    const narratorVoice = pickVoiceForEngine(
-      titleRoute.engine,
+    const baseTitleRoute = routeFor(narratorChar);
+    const baseNarratorVoice = pickVoiceForEngine(
+      baseTitleRoute.engine,
       toVoiceLike(narratorChar),
       buildHintFromCast(narratorChar),
     );
+    /* Title beat gets the same Qwen→Kokoro fallback — a Qwen narrator with no
+       designed voice (or an unavailable Qwen engine) must not fail the whole
+       chapter at its very first synth. */
+    const titleFb = applyQwenFallback(narratorChar, baseTitleRoute, baseNarratorVoice);
+    const titleRoute = titleFb.route;
+    const narratorVoice = titleFb.voiceName;
 
     onTitleStart?.();
 
@@ -458,6 +503,7 @@ export async function synthesiseChapter(
       startSec: titleStartSec,
       endSec: titleEndSec,
       kind: 'title',
+      renderedFallbackEngine: titleFb.renderedFallbackEngine,
     });
 
     onTitleComplete?.({ accumulatedSec: titleEndSec });
@@ -470,19 +516,23 @@ export async function synthesiseChapter(
      `pickVoiceForEngine` runs at most once per group even though both consult
      it. Mixed engines reassemble cleanly because the index-order concat below
      resamples any per-engine sample-rate mismatch to the chapter anchor. */
-  type GroupRoute = { route: ReturnType<typeof routeFor>; voiceName: string };
+  type GroupRoute = { route: Route; voiceName: string; renderedFallbackEngine?: TtsEngine };
   const resolvedByIndex = new Map<number, GroupRoute>();
   const resolveGroup = (group: SentenceGroup): GroupRoute => {
     const cached = resolvedByIndex.get(group.index);
     if (cached) return cached;
     const character = castById.get(group.characterId) ?? { id: group.characterId };
-    const route = routeFor(character);
-    const voiceName = pickVoiceForEngine(
-      route.engine,
+    const baseRoute = routeFor(character);
+    const baseVoice = pickVoiceForEngine(
+      baseRoute.engine,
       toVoiceLike(character),
       buildHintFromCast(character),
     );
-    const r = { route, voiceName };
+    /* Resolve once (used by both the batchability partition AND the synth
+       call), so the fallback is decided in one place — the partition then
+       sees the post-fallback Kokoro engine and routes the group as a Kokoro
+       single item, not a Qwen batch item. */
+    const r = applyQwenFallback(character, baseRoute, baseVoice);
     resolvedByIndex.set(group.index, r);
     return r;
   };
@@ -774,6 +824,7 @@ export async function synthesiseChapter(
       sentenceIds: group.sentenceIds.slice(),
       startSec,
       endSec,
+      renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
     });
   }
   void completedCount;

@@ -173,9 +173,11 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 
 ## Switching TTS to Qwen3-TTS (v1.5.0, bespoke per-character voices)
 
-Qwen3-TTS designs a unique voice per character from the cast persona instead of picking from a preset catalogue — only two English Qwen speakers exist upstream, so the app caches each designed voice's embedding and reuses it across the book and series for vocal consistency. This is the v1.5.0 headline TTS engine and is **NOT** auto-downloaded with the Kokoro / Coqui paths — it needs a one-time bootstrap of the Python package + model weights before you can pick it in the app.
+Qwen3-TTS designs a unique voice per character from the cast persona instead of picking from a preset catalogue — only two English Qwen speakers exist upstream, so the app caches each designed voice's embedding and reuses it across the book and series for vocal consistency. This is the v1.5.0 headline TTS engine and **becomes the default for new books once it's installed** (until then, and on any box without it, books render in Kokoro). It is **NOT** auto-downloaded with the Kokoro / Coqui paths — it needs a one-time install of the Python package + model weights (~5 GB).
 
-1. **Install the engine.** From the extracted folder, with the sidecar venv already bootstrapped (step 2 of the per-OS install above):
+**Recommended — install in-app (no terminal).** Start the app, open **Account → Models**, and click **Install Qwen3-TTS** on the Qwen card. It downloads the Base + VoiceDesign models in the background with live progress; when it finishes, new books default to Qwen. The CLI below stays available for scripted / offline / CI setups and is equivalent.
+
+1. **Install the engine (CLI alternative).** From the extracted folder, with the sidecar venv already bootstrapped (step 2 of the per-OS install above):
 
    ```sh
    node server/tts-sidecar/scripts/install-qwen3.mjs
@@ -247,7 +249,7 @@ Your workspace (`WORKSPACE_DIR` from `server/.env`) is separate from the install
 
 ### v1.4.0 → v1.5.0 notes
 
-- **Qwen3-TTS is the new headline TTS engine** but is NOT auto-installed by the per-OS steps above. Existing books continue to render through Kokoro / Coqui / Gemini unchanged. To opt a book into Qwen3, follow the "Switching TTS to Qwen3-TTS" section above — `node server/tts-sidecar/scripts/install-qwen3.mjs` is the one-time bootstrap.
+- **Qwen3-TTS is the new headline TTS engine and becomes the DEFAULT for new books once it's installed** (resolved live — a box without Qwen keeps defaulting to Kokoro, and an explicit engine pick in Account is always honoured). It is NOT auto-installed by the per-OS steps above; install it in one click from **Account → Models** (or via `node server/tts-sidecar/scripts/install-qwen3.mjs`). Existing books continue to render through their current engine unchanged. **Graceful fallback:** a Qwen book whose character has no designed voice — or any Qwen render when the engine isn't installed/loaded — renders that character in Kokoro instead of failing, shown as a "Fallback (Kokoro)" status.
 - **Per-character TTS engine.** Cast members now carry a per-engine `overrideTtsVoices: { coqui?, kokoro?, gemini?, qwen? }` map; legacy single-field `overrideTtsVoice` rows migrate lazily on read, so books from v1.4.0 keep their voice assignments when you flip a project's engine — no re-cast required.
 - **Persisted generation queue** at `<workspace>/.queue.json`. No migration: the file is created on first enqueue post-upgrade; in-progress generations pre-1.5.0 just finish.
 - **New optional env knobs** in `server/.env` (all have safe defaults — leave unset to keep the v1.4.0 behaviour):

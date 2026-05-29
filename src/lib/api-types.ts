@@ -1371,12 +1371,33 @@ export interface components {
              */
             defaultTtsEngine: "local" | "gemini";
             /**
-             * @description TTS model key from src/lib/tts-models.ts. Used as the initial
-             *     value of ui.ttsModelKey when a book has no persisted TTS-model
-             *     choice (seed-only). Default for new accounts is `kokoro-v1`.
+             * @description STORED TTS model key from src/lib/tts-models.ts — what the Account
+             *     picker shows and round-trips. Default for new accounts is
+             *     `kokoro-v1`. The EFFECTIVE engine the session seeds from is
+             *     `resolvedTtsModelKey` (Qwen-when-installed) — do NOT seed from this
+             *     field directly.
              * @enum {string}
              */
             defaultTtsModelKey: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * @description True once the user has DELIBERATELY chosen their default TTS model
+             *     (set automatically server-side when a PUT changes
+             *     `defaultTtsModelKey`). When false/undefined the server is free to
+             *     resolve the default to Qwen if it's installed; an explicit choice
+             *     is always honoured verbatim. Optional so legacy settings load
+             *     unchanged.
+             */
+            defaultTtsModelKeyExplicit?: boolean;
+            /**
+             * @description READ-ONLY effective default after the Qwen-when-installed
+             *     resolution: equals `defaultTtsModelKey` when the user made an
+             *     explicit choice, else `qwen3-tts-0.6b` when Qwen is installed, else
+             *     `kokoro-v1`. The frontend seeds `ui.ttsModelKey` from THIS so a box
+             *     with Qwen installed defaults to bespoke voices without mutating the
+             *     stored key.
+             * @enum {string}
+             */
+            resolvedTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             /**
              * @description Overrides the LOCAL_TTS_URL env var. Re-read on every request
              *     by the sidecar provider + health probe.
@@ -1544,6 +1565,14 @@ export interface components {
             defaultTtsEngine?: "local" | "gemini";
             /** @enum {string} */
             defaultTtsModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * @description Set by the Account view to true when the user deliberately picks a
+             *     default TTS model that differs from the resolved (Qwen-when-installed)
+             *     default — pins their choice so the server stops preferring Qwen.
+             *     The server also auto-latches this on any genuine change to
+             *     defaultTtsModelKey.
+             */
+            defaultTtsModelKeyExplicit?: boolean;
             sidecarUrl?: string;
             /** @enum {string} */
             analysisEngine?: "local" | "gemini";

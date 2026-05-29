@@ -34,6 +34,7 @@ import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { StaleAudioBanner } from '../components/stale-audio-banner';
+import { QwenStatusNotice } from '../components/qwen-status-notice';
 
 interface Props {
   characters: Character[];
@@ -334,7 +335,8 @@ export function CastView({
     <div
       className={`max-w-[1500px] mx-auto px-4 md:px-6 py-6 md:py-10 lg:grid ${showLibrary ? 'lg:grid-cols-[1fr_360px]' : 'lg:grid-cols-1'} gap-6 relative ${draggingVoiceId ? 'dragging-voice' : ''}`}
     >
-      <div className="lg:col-span-full -mb-2">
+      <div className="lg:col-span-full -mb-2 space-y-2">
+        <QwenStatusNotice />
         <StaleAudioBanner />
       </div>
       {/* Plan 81 wave 4 — sticky assignment-mode banner. Visible whenever

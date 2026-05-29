@@ -165,10 +165,17 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   const logDir = join(repoRoot, 'logs');
   const runDir = join(repoRoot, '.run');
 
+  /* When Qwen is the effective default engine, hot-preload Qwen Base at boot
+     and keep Kokoro LAZY: Kokoro is the on-demand fallback for undesigned
+     characters and warms in ~1 s at the first fallback render, so eager-loading
+     it too would just hog ~1 GB. Non-Qwen default → Qwen stays off and Kokoro
+     honours the eagerLoadKokoro toggle exactly as before. */
+  const isQwenDefault = modelKey === 'qwen3-tts-0.6b';
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
-    PRELOAD_KOKORO: eagerLoadKokoro ? '1' : '0',
+    PRELOAD_QWEN: isQwenDefault ? '1' : '0',
+    PRELOAD_KOKORO: isQwenDefault ? '0' : eagerLoadKokoro ? '1' : '0',
     /* Park the Qwen designed-voice embedding cache in the per-workspace
        tree (sibling to voices.json), not the sidecar's __file__-relative
        dir. A sidecar restart / cwd change / workspace move can't orphan a
