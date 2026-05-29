@@ -19,6 +19,7 @@ import {
   saveGeminiApiKey,
 } from '../store/account-slice';
 import { OllamaInstall } from '../components/ollama-install';
+import { QwenInstall } from '../components/qwen-install';
 import { ModelPullStatus } from '../components/model-pull-status';
 
 /* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS.
@@ -1016,23 +1017,15 @@ bash server/tts-sidecar/scripts/install-coqui.sh`}</pre>
           </p>
         </div>
 
-        <div>
-          <h3 className="text-sm font-medium text-ink">Qwen3-TTS 0.6B (optional TTS engine)</h3>
-          <p className="mt-1 text-xs text-ink/55">
-            Qwen3-TTS adds a second local engine that coexists with Kokoro. Pre-fetch the weights
-            (~1.8 GB) via:
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-ink">Qwen3-TTS (bespoke per-character voices)</h3>
+          <p className="text-xs text-ink/55">
+            Qwen3-TTS designs a unique voice per character — the headline TTS engine. Install it
+            here to make it the default for new books; the CLI
+            (`node server/tts-sidecar/scripts/install-qwen3.mjs`) stays available for scripted /
+            offline setups.
           </p>
-          <pre
-            data-testid="account-qwen-install-cmd"
-            className="mt-2 rounded-xl bg-ink/[0.04] p-3 text-xs font-mono text-ink/80 overflow-x-auto"
-          >{`# Windows
-pwsh server/tts-sidecar/scripts/install-qwen3.ps1
-
-# macOS / Linux
-node server/tts-sidecar/scripts/install-qwen3.mjs`}</pre>
-          <p className="mt-2 text-xs text-ink/55">
-            One-shot pre-fetch is optional; the sidecar downloads on first use.
-          </p>
+          <QwenInstall />
         </div>
       </div>
     </section>
