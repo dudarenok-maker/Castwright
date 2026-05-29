@@ -166,6 +166,31 @@ Forcing the clock higher did **not** improve RTF and util stayed ~15% — the GP
 
 **Corrected realistic number:** single-worker, batch-16, real-prose chapters land **~2** RTF on this box (dispatch-bound + per-batch padding-to-longest-sentence), **not ~1**. The 0.80/1.15 bench figures were optimistic (short, uniform, back-to-back sentences). **Qwen bespoke ≈ overnight render; Kokoro stays the book-length workhorse.** The remaining realistic lever short of the (blocked) static-cache/CUDA-graphs fork is **length-bucketing** batches (group similar-length sentences to cut padding waste) — **shipped 2026-05-29 (plan 128, default ON via `QWEN_BATCH_BUCKET`)**; the bucketed-vs-unbucketed batch-16 measurement row is still TODO below (run `bench-tts.py --batch 16 --bucket 0` then `--bucket 1`).
 
+### Qwen3-TTS 0.6B — token-budget batching live A/B — 2026-05-29 ⚠️ INCONCLUSIVE (re-run after plan 137)
+
+Tested plan 136 token-budget batching live on "The Hollow Tide" CH 10 "EIGHT" (217 lines, 7 speakers — dialogue-dense) at three configs: `32/2400`, `64/4800`, `64/3600` (`QWEN_BATCH_SIZE`/`QWEN_BATCH_TOKEN_BUDGET`).
+
+**The per-batch / aggregate RTF numbers are NOT trustworthy** — two confounds:
+1. **`tsx watch` restart churn** — editing repo files / switching branches mid-run reloaded the server, tearing down the sidecar and re-running the chapter.
+2. **The plan-137 fetch-timeout bug** — cap-64 batches ran 400–454 s, blowing undici's 300 s `headersTimeout` → retry loop → re-synthesis. Net: **473 synthesized items for a 217-line chapter (~2.2×)**, repeated `text_len`s, no chapter ever finished. Aggregate RTF drifted 1.3→2.0 as the loop accumulated — junk.
+
+**What IS reliable (VRAM is unaffected by the churn) — peak `nvidia-smi memory.used` during decode, 8 GB 4070 Laptop:**
+
+| `QWEN_BATCH_TOKEN_BUDGET` | peak VRAM | headroom |
+|---|---|---|
+| 2400 | 3921 MiB | ample (~52%) |
+| **3600** | **5631 MiB (69%)** | comfortable |
+| 4800 | 6873 MiB (84%) | **too hot — avoid** |
+
+**Qualitative findings (direction trustworthy, magnitudes not):**
+- Prose / large-payload batches synth fast (~0.6–1.1) — width helps here.
+- **Ultra-short dialogue (avg ~12–30 chars) stayed ~2.3–3.8 regardless of cap (32 *or* 64).** It's **padding-bound, not width-bound**: a batch decodes to its longest item, so a bucket of tiny same-speaker lines wastes most decode steps for little audio. A *wider* cap (64) was a **wash-to-worse** — a 64-wide bucket spans more length variance → more padding.
+- ⇒ **Batch width is not the dialogue lever.** The real lever is **coalescing consecutive same-speaker short lines** ([`side-10`](../BACKLOG.md)). Keep the cap modest.
+
+**Next clean A/B (do after plan 137 is live + a reboot, repo untouched during the run):**
+- Recommended start config: **`QWEN_BATCH_SIZE=32`, `QWEN_BATCH_TOKEN_BUDGET=3600`** — dialogue-safe cap (batches finish well under any timeout), VRAM ~69% with headroom for long batches to pack a bit wider than 2400.
+- Compare fixed-16 (`QWEN_BATCH_TOKEN_BUDGET=0 QWEN_BATCH_SIZE=16`) vs `32/3600`, **same CH 10**, ffprobe-confirmed audio seconds, on a chapter that now actually **completes** (segment count should == sentence count). Record the row here, then flip plan 136 to `stable`.
+
 ### Kokoro v1 — 4070 — _TODO_
 
 Not yet benchmarked here. Expected sub-1 RTF on GPU. Run `bench-tts.py --engine kokoro --voice af_heart` and add a row as the reference point.
@@ -178,6 +203,6 @@ Not yet benchmarked here. Expected sub-1 RTF on GPU. Run `bench-tts.py --engine 
 4. **`x_vector_only_mode=True`** ([`side-4`](BACKLOG.md)) — drop the ICL prefix; speed vs. fidelity A/B.
 5. **Static-cache fork → CUDA graphs / `torch.compile`** ([`side-7`](BACKLOG.md), [plan 129](features/129-qwen-decode-cuda-graph-spike.md)) — the only path past the dispatch-bound ceiling to ~1, but BLOCKED: `qwen_tts` `_supports_static_cache=False` + DynamicCache + nested per-step `code_predictor.generate()`. Large/risky fork of the talker + code predictor. **Probe-gated** (now scoped in plan 129): profile the batch-16 decode loop FIRST — batch-16 already amortizes launch overhead 16× (clean bench RTF 0.80), so the batched forward may already be ~compute-bound, leaving CUDA graphs nothing to capture. Only fork if Probe 1 shows it's still launch-bound AND Probe 2 shows the nested loop is graph-able. Last resort, after length-bucketing (1).
 6. ~~**flash-attn** wheel on Windows~~ — **measured 2026-05-26: FA2 ≈ SDPA (modest + noisy); SDPA stays default, FA2 opt-in** (plan 115 / `side-5` resolved).
-7. **Token-budget packing** (plan 136, [`side-9`](BACKLOG.md)) — the next batch-composition lever after length-bucketing (1): variable batch width driven by `width × maxLen ≤ budget`, so short/dialogue batches pack WIDE (toward the cap) where fixed-width left them narrower than VRAM allows — exactly the batches that read RTF 3–4 on the 2026-05-29 dialogue-dense chapter (mean ~2.4). **MECHANISM SHIPPED 2026-05-29** (`synthesise-chapter.ts` packer, `QWEN_BATCH_TOKEN_BUDGET` env, default OFF, output-preserving). **TODO: record the A/B row** — same chapter, reboot first, ffprobe audio seconds, `nvidia-smi` peak VRAM: fixed-16 (`QWEN_BATCH_TOKEN_BUDGET=0 QWEN_BATCH_SIZE=16`) vs fixed-24 vs token-budget (`QWEN_BATCH_TOKEN_BUDGET=2400 QWEN_BATCH_SIZE=32`); then flip plan 136 to `stable`. Expected: short batches widen to ~32, mean RTF toward ~1; the dispatch-bound floor (5/`side-7`) remains the ceiling.
+7. **Token-budget packing** (plan 136, [`side-9`](BACKLOG.md)) — the next batch-composition lever after length-bucketing (1): variable batch width driven by `width × maxLen ≤ budget`, so short/dialogue batches pack WIDE (toward the cap) where fixed-width left them narrower than VRAM allows — exactly the batches that read RTF 3–4 on the 2026-05-29 dialogue-dense chapter (mean ~2.4). **MECHANISM SHIPPED 2026-05-29** (`synthesise-chapter.ts` packer, `QWEN_BATCH_TOKEN_BUDGET` env, default OFF, output-preserving). **First live A/B (2026-05-29) was INCONCLUSIVE** — confounded by `tsx watch` restart churn + the plan-137 fetch-timeout bug (cap-64 batches >300 s never finished); see the dedicated record above. **Re-run after plan 137 is live + a reboot**, repo untouched: fixed-16 (`QWEN_BATCH_TOKEN_BUDGET=0 QWEN_BATCH_SIZE=16`) vs **`QWEN_BATCH_TOKEN_BUDGET=3600 QWEN_BATCH_SIZE=32`** (the corrected config — 64 is a wash-to-worse on dialogue + ran VRAM hot), same chapter, ffprobe audio + `nvidia-smi` peak; then flip plan 136 to `stable`. The width lever helps prose, not dialogue — the dialogue lever is short-line coalescing (`side-10`); the dispatch-bound floor (5/`side-7`) remains the ceiling.
 7. **Quantization** (int8/fp8) of the 0.6B base.
 8. ~~**Clean full-pipeline re-measure**~~ — **done 2026-05-26** (end-to-end record above: batch-8 ~RTF 1.15–1.2; surfaced + fixed the concurrent-batch race, plan 113).
