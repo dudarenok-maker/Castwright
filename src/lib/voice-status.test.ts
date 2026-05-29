@@ -6,7 +6,7 @@
    lifecycle ("Needs voice" when undesigned), not a stale preset pill. */
 
 import { describe, it, expect } from 'vitest';
-import { resolveVoiceStatus } from './voice-status';
+import { resolveVoiceStatus, statusFilterKeys } from './voice-status';
 import type { Character, Voice, TtsEngine } from './types';
 
 function char(partial: Partial<Character>): Character {
@@ -182,5 +182,33 @@ describe('resolveVoiceStatus — Reused badge (provenance)', () => {
     const status = resolveVoiceStatus(c, v, QWEN);
     expect(status.lifecycle).toEqual({ label: 'Generated', color: 'success' });
     expect(status.reused).toBe(true);
+  });
+});
+
+describe('statusFilterKeys — cast-view filter keys', () => {
+  it('keys an undesigned Qwen character as "Needs voice"', () => {
+    expect(statusFilterKeys(char({}), undefined, QWEN)).toEqual(['Needs voice']);
+  });
+
+  it('keys a generated Qwen voice as "Generated"', () => {
+    const c = char({ overrideTtsVoices: { qwen: { name: 'qwen-x' } } });
+    expect(statusFilterKeys(c, voice({ generated: true }), QWEN)).toEqual(['Generated']);
+  });
+
+  it('keys a preset matched character as "Matched"', () => {
+    expect(statusFilterKeys(char({ voiceState: 'generated' }), undefined, KOKORO)).toEqual([
+      'Matched',
+    ]);
+  });
+
+  it('keys a stateless preset row as "Unset"', () => {
+    expect(statusFilterKeys(char({}), undefined, KOKORO)).toEqual(['Unset']);
+  });
+
+  it('appends "Reused" when the voice was matched from a prior book', () => {
+    expect(statusFilterKeys(char({ voiceState: 'generated', matchedFrom }), undefined, KOKORO)).toEqual([
+      'Matched',
+      'Reused',
+    ]);
   });
 });
