@@ -4,6 +4,8 @@ import { Avatar } from '../components/primitives';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { REGEN_REASONS } from '../data/regen-reasons';
+import { parseDuration, formatHours } from '../lib/time';
+import { estimateGenMinutes } from '../lib/generation-progress';
 import type { Character, Chapter, CharColor } from '../lib/types';
 
 interface Props {
@@ -40,8 +42,12 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
   const previewChapter = speakingChapters[0] ?? null;
   const n = speakingChapters.length;
 
-  const lines = character.lines ?? 0;
-  const eta = lines > 0 ? `≈${Math.max(1, Math.round(lines / 60))} min` : '—';
+  /* Each affected chapter is re-rendered in full, so the wall-clock estimate
+     is the combined audio length of those chapters × the target RTF — the
+     same model the chapter Regenerate modal uses. */
+  const totalSec = speakingChapters.reduce((acc, ch) => acc + parseDuration(ch.duration), 0);
+  const minutes = estimateGenMinutes(totalSec);
+  const eta = n > 0 ? `≈${minutes < 60 ? `${minutes} min` : formatHours(minutes)}` : '—';
 
   const fire = (preview: boolean) =>
     onConfirm({ characterId: character.id, chapterIds, reason, note, preview });

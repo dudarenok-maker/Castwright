@@ -6,9 +6,11 @@ import {
   characterRowProgress,
   characterStatsByChapter,
   countWords,
+  estimateGenMinutes,
   linesDoneAt,
   overallProgress,
   sentencesPerChapter,
+  TARGET_RTF,
 } from './generation-progress';
 import type { Chapter, Sentence } from './types';
 
@@ -41,6 +43,24 @@ describe('countWords', () => {
   it('returns 0 for empty / whitespace-only strings', () => {
     expect(countWords('')).toBe(0);
     expect(countWords('   ')).toBe(0);
+  });
+});
+
+describe('estimateGenMinutes — RTF-based regenerate ETA', () => {
+  it('scales generation minutes by the target RTF', () => {
+    /* 600s of audio × 2.5 = 1500s = 25 min. */
+    expect(estimateGenMinutes(600)).toBe(Math.round((600 * TARGET_RTF) / 60));
+    expect(estimateGenMinutes(600)).toBe(25);
+  });
+
+  it('rounds to the nearest minute', () => {
+    /* 45s × 2.5 = 112.5s = 1.875 min → 2. */
+    expect(estimateGenMinutes(45)).toBe(2);
+  });
+
+  it('floors at 1 minute so a tiny chapter never reads as "0 min"', () => {
+    expect(estimateGenMinutes(1)).toBe(1);
+    expect(estimateGenMinutes(0)).toBe(1);
   });
 });
 

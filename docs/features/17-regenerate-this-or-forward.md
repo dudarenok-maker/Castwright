@@ -1,7 +1,7 @@
 # Regenerate (this or forward)
 
 > Status: stable
-> Key files: `src/modals/regenerate.tsx`, `src/store/chapters-slice.ts` (`regenerateChapter`, `regenerateChapterIds`), `src/store/ui-slice.ts` (`setRegenChapter`, `setRegenInitialScope`)
+> Key files: `src/modals/regenerate.tsx`, `src/modals/character-regenerate.tsx`, `src/lib/generation-progress.ts` (`TARGET_RTF`, `estimateGenMinutes`), `src/lib/time.ts` (`parseDuration`), `src/store/chapters-slice.ts` (`regenerateChapter`, `regenerateChapterIds`), `src/store/ui-slice.ts` (`setRegenChapter`, `setRegenInitialScope`)
 > URL surface: modal overlay, no URL component
 > OpenAPI ops: indirect — drives `POST /api/books/:bookId/generation` (often with subset + `force: true`)
 
@@ -28,6 +28,7 @@ opt-in preview).
 - Both confirm and cancel are flat overlays (not stage-guarded); cancel never enqueues.
 - `chaptersActions.regenerateChapter` takes scope + chapter id and expands `'forward'` into the chapter id list; `regenerateChapterIds` flips an explicit chapter-id list (head → `in_progress`, rest → `queued`). Every regen enqueues whole-chapter entries (`scope:'this'`) — there is no `scope:'character'` producer anymore (plan 114).
 - A successful chapter regen overwrites the chapter's `audioModelKey` / `audioRenderedAt` stamp with the active engine (see plan 35). So regenerating a drifted chapter clears its drift caption + banner contribution automatically — no separate "clear drift" affordance is needed.
+- **ETA derives from audio duration × target RTF**, not a flat per-chapter constant. TTS generation wall-clock tracks the real-time factor (`generation_time ≈ audio_seconds × TARGET_RTF`, `TARGET_RTF = 2.5` in `src/lib/generation-progress.ts`, tunable). The chapter modal estimates from `chapter.duration` (scope `'this'`) or the summed forward-set duration passed as `forwardDurationSec` (scope `'forward'`); the character modal (`character-regenerate.tsx`) sums the duration of every chapter the character speaks in. All three go through `estimateGenMinutes(audioSec)` (rounds to the nearest minute, floors at 1) and render minutes under 60 as `"N min"`, longer as `formatHours` (`"Xh Ym"`). Durations are parsed with `parseDuration`, which accepts both `MM:SS` and `HH:MM:SS`.
 
 ## Acceptance walkthrough
 
