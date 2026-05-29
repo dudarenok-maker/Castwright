@@ -61,13 +61,15 @@ test.describe('Account — dual-model TTS flag', () => {
 });
 
 test.describe('Account — Qwen install card', () => {
-  test('renders the cross-platform Qwen3-TTS install snippet', async ({ page }) => {
+  test('renders the in-app Qwen3-TTS installer card', async ({ page }) => {
     await page.goto('/#/account');
     await waitForRouteReady(page);
 
-    const pre = page.getByTestId('account-qwen-install-cmd');
-    await expect(pre).toBeVisible();
-    await expect(pre).toContainText('install-qwen3.ps1');
-    await expect(pre).toContainText('install-qwen3.mjs');
+    /* The display-only snippet was replaced by the one-click QwenInstall
+       component. With no reachable /api/qwen/detect in mock mode the probe
+       stays unresolved, so the default "not installed" card renders with the
+       Install action. */
+    await expect(page.getByTestId('qwen-install-not-detected')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Install Qwen3-TTS/i })).toBeVisible();
   });
 });
