@@ -244,6 +244,10 @@ describe('user-settings router', () => {
          a valid persistence probe even though the UI pairs Qwen with the
          `local` engine. */
       defaultTtsModelKey: 'qwen3-tts-0.6b',
+      /* true matches the auto-latch: changing defaultTtsModelKey from the
+         factory default marks it explicit server-side, so the echo + disk
+         both carry true regardless of what we send. */
+      defaultTtsModelKeyExplicit: true,
       sidecarUrl: 'http://localhost:9100',
       analysisEngine: 'local',
       ollamaUrl: 'http://localhost:11500',
