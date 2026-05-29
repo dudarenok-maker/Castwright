@@ -44,6 +44,7 @@ import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
+import { linkSeriesReuseAtAnalysis } from '../workspace/series-reuse-link.js';
 import {
   normaliseForMatch as normaliseForMatchShared,
   matchQuoteInSource,
@@ -2287,6 +2288,25 @@ export async function runMainAnalyzerJob(
           log(0, msg),
         );
         const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg));
+        /* Plan 126 Facet A — establish cross-book reuse links server-side.
+           Match each new character against prior same-series confirmed cast
+           and stamp `matchedFrom` + a unified `voiceId` + `voiceState:'reused'`
+           (+ aliases + denormalised bespoke voice) so continuity is
+           authoritative at analysis time, not dependent on the client reaching
+           a confirm page. No-op for standalone / earliest-in-series books.
+           Mutates `characters` in place so both stage1 and the on-disk cast
+           below carry the links. Failure is non-fatal — a reuse-link error
+           must never abort an otherwise-good analysis. */
+        if (recordRef.bookId) {
+          try {
+            const linked = await linkSeriesReuseAtAnalysis(recordRef.bookId, characters);
+            if (linked > 0) {
+              log(0, `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`);
+            }
+          } catch (linkErr) {
+            console.warn('[analysis] series reuse-link pass failed', linkErr);
+          }
+        }
         stage1 = {
           characters,
           /* Carry the parser's chapter list verbatim — Phase 0a deliberately
