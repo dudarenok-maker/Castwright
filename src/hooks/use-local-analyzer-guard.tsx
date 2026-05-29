@@ -19,7 +19,7 @@
        </>
      );
 
-   Pairs with docs/features/31-sticky-generation.md.
+   Pairs with docs/features/archive/31-sticky-generation.md.
 
    Reverse direction (D2 in plan 32): the symmetric guard — gate
    TTS-start callsites when a local analysis is alive — lives in
@@ -31,7 +31,7 @@
    `src/views/generation.tsx` and at the three regenerate-modal
    onConfirm callbacks in `src/components/layout.tsx`. The implicit
    reconcile-driven generation start is intentionally NOT gated; see
-   docs/features/32-sticky-analysis.md for the rationale. */
+   docs/features/archive/32-sticky-analysis.md for the rationale. */
 
 import { useState, type ReactNode } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';

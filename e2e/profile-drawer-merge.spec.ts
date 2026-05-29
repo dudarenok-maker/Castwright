@@ -7,7 +7,7 @@
  *
  * Same cold-boot → upload → analysing → confirm walk as the sibling
  * spec so the test is self-contained. Wall-clock budget: ~16 s warm.
- * Pairs with docs/features/10-profile-drawer.md "Merge / downgrade
+ * Pairs with docs/features/archive/10-profile-drawer.md "Merge / downgrade
  * controls" + the searchable-picker bullet added with this change.
  */
 

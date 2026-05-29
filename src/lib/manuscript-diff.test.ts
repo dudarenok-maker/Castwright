@@ -1,4 +1,4 @@
-// Pairs with docs/features/74-manuscript-diff-on-reupload.md
+// Pairs with docs/features/archive/74-manuscript-diff-on-reupload.md
 
 import { describe, it, expect } from 'vitest';
 import {

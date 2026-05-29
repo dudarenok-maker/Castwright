@@ -1,5 +1,5 @@
 /* BookLibraryView — three-state render: skeleton / empty / populated.
-   Pairs with docs/features/21-book-library.md (Loading affordance section). */
+   Pairs with docs/features/archive/21-book-library.md (Loading affordance section). */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';

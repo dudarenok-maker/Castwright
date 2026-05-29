@@ -159,7 +159,7 @@ export interface ChapterSegment {
     [body sentences]`. Defaults match standard audiobook chapter breaks —
     3.0 s of total padding is enough for the listener to register the
     boundary without dragging. Tuned together with the documented invariant
-    in `docs/features/28-chapter-audio-format.md`; adjust both at once. */
+    in `docs/features/archive/28-chapter-audio-format.md`; adjust both at once. */
 const CHAPTER_LEAD_SILENCE_SEC = 1.5;
 const CHAPTER_POST_TITLE_SILENCE_SEC = 1.5;
 

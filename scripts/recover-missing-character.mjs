@@ -9,13 +9,13 @@
    minLines: 3) then drops anyone who did slip through with <3 attributed
    lines. The combined effect: an entire category of named characters
    silently absent from the cast roster. Concrete example caught in
-   docs/features/96-recover-missing-character.md: Sela (Brann's goblin
+   docs/features/archive/96-recover-missing-character.md: Sela (Brann's goblin
    bodyguard) and Garrow (Wren's goblin bodyguard) both missing from
    Saltgrave's cast.json across all ~65 Phase 0a stage1 outputs.
 
    This script lets the user manually fill the gap WITHOUT re-running Phase 0a
    (which would just miss them again for the same reason). Layer 2 in
-   docs/features/97-narrator-only-named-characters.md fixes the analyzer to
+   docs/features/archive/97-narrator-only-named-characters.md fixes the analyzer to
    stop dropping them in future books.
 
    Usage:

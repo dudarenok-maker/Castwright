@@ -1,4 +1,4 @@
-/* Pairs with docs/features/32-sticky-analysis.md.
+/* Pairs with docs/features/archive/32-sticky-analysis.md.
 
    Pre-D1 this file pinned only the pause-bridge: setPaused →
    api.pauseAnalysis. D1 grew the middleware into a full reconcile

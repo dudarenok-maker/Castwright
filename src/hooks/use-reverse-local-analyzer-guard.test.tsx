@@ -7,7 +7,7 @@
      - Title fallback chain: body uses the snapshot's bookTitle when set,
        else the library entry, else the bookId.
 
-   Pairs with docs/features/32-sticky-analysis.md (D2). */
+   Pairs with docs/features/archive/32-sticky-analysis.md (D2). */
 
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';

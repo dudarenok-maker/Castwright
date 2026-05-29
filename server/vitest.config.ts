@@ -6,7 +6,7 @@ import { defineConfig } from 'vitest/config';
    subprocess spawn + libmp3lame init costs a few hundred ms cold.
 
    Pool concurrency is capped (maxForks=2) and one retry is allowed: see
-   docs/features/45-vitest-pool-tuning.md for the rationale. The default
+   docs/features/archive/45-vitest-pool-tuning.md for the rationale. The default
    forks pool grows to N=logical-CPUs (16+ on dev boxes); with subprocess-
    spawning tests (ffmpeg, supertest servers, sidecar mocks) that exhausts
    pipe/handle budgets and one worker dies mid-suite ("Worker exited

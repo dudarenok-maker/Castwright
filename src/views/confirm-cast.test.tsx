@@ -1,7 +1,7 @@
 /* ConfirmCastView — verifies that a character carrying matchedFrom from
    the voice-match response renders the "Matched · N%" pill and lands in
    the "Reuse" decision tile by default. Pairs with
-   docs/features/09-voice-match-pipeline.md. */
+   docs/features/archive/09-voice-match-pipeline.md. */
 
 import { describe, it, expect, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';

@@ -1,5 +1,5 @@
 /* ConfirmMetadataView — Book # input behaviour and Submit gating.
-   Pairs with docs/features/03-import-confirm-metadata.md. */
+   Pairs with docs/features/archive/03-import-confirm-metadata.md. */
 
 import { describe, it, expect } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';

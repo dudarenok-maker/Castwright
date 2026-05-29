@@ -10,7 +10,7 @@ See CONTRIBUTING.md "Pull requests" for the full spec.
 
 <!--
 1-3 sentences: what changes, why. If a regression plan under docs/features/ applies,
-link it here (e.g. "Implements docs/features/44-pr-hygiene.md."). If this PR fills
+link it here (e.g. "Implements docs/features/archive/44-pr-hygiene.md."). If this PR fills
 in a plan's Ship notes, say so.
 -->
 
