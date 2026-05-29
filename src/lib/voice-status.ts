@@ -42,11 +42,19 @@ function resolveLifecyclePill(
   c: Character,
   voice: Voice | undefined,
   effectiveEngine: TtsEngine,
+  renderedFallbackEngine?: string | null,
 ): { label: string; color: StatusPillColor } | null {
   /* Qwen lifecycle when the character synthesises via Qwen (its own override
      OR the project default — both folded into `effectiveEngine`), OR when the
      matched library voice itself resolves to Qwen. */
   if (effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen') {
+    /* Render-time fact wins: if this character's last render actually fell back
+       to Kokoro (no designed voice, or Qwen was unavailable), say so — it
+       outranks the design-lifecycle labels because it's what the listener
+       hears right now. */
+    if (renderedFallbackEngine === 'kokoro') {
+      return { label: 'Fallback (Kokoro)', color: 'warning' };
+    }
     const hasVoice = !!c.overrideTtsVoices?.qwen?.name || voice?.ttsVoice?.provider === 'qwen';
     if (!hasVoice) return { label: 'Needs voice', color: 'warning' };
     if (voice?.generated) return { label: 'Generated', color: 'success' };
@@ -75,9 +83,15 @@ export function resolveVoiceStatus(
   c: Character,
   voice: Voice | undefined,
   effectiveEngine: TtsEngine,
+  /** Engine this character ACTUALLY rendered in last generation, when it
+      differs from its configured engine (from the segments/characterSnapshots
+      `renderedFallbackEngine`). `'kokoro'` surfaces the "Fallback (Kokoro)"
+      pill. Omit when no render metadata is available — the design-lifecycle
+      pill renders as before. */
+  renderedFallbackEngine?: string | null,
 ): VoiceStatusBadges {
   return {
-    lifecycle: resolveLifecyclePill(c, voice, effectiveEngine),
+    lifecycle: resolveLifecyclePill(c, voice, effectiveEngine, renderedFallbackEngine),
     reused: !!c.matchedFrom,
   };
 }

@@ -42,11 +42,8 @@ async function poll(app: express.Express, id: string, until: (s: string) => bool
   throw new Error('poll timed out');
 }
 
-let state: QwenInstallState;
-
 beforeEach(() => {
   _resetUserSettingsCache();
-  state = 'not-installed';
 });
 
 afterEach(() => {
