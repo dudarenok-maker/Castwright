@@ -8,7 +8,10 @@
                                                PRELOAD_COQUI=1.
    5. eagerLoadKokoro=true  → env has PRELOAD_KOKORO=1.
    6. eagerLoadKokoro=false → env has PRELOAD_KOKORO=0.
-   7. handle.kill() on win32 shells out to `taskkill /T /F /PID`. */
+   7. Qwen default + eagerLoadQwen=true  → PRELOAD_QWEN=1, Kokoro forced lazy.
+   8. Qwen default + eagerLoadQwen=false → PRELOAD_QWEN=0 (warm on demand).
+   9. eagerLoadQwen is ignored under a non-Qwen default (Qwen stays off).
+   10. handle.kill() on win32 shells out to `taskkill /T /F /PID`. */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
@@ -60,6 +63,7 @@ describe('spawnSidecar', () => {
       autoStart: false,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -80,6 +84,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -98,6 +103,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -127,6 +133,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: false,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -148,6 +155,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'coqui-xtts-v2',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -162,14 +170,15 @@ describe('spawnSidecar', () => {
   });
 
   it('hot-preloads Qwen and keeps Kokoro lazy when the default model is qwen3-tts-0.6b', async () => {
-    /* Qwen-default: PRELOAD_QWEN=1 (hot at boot) + PRELOAD_KOKORO=0 even though
-       eagerLoadKokoro=true — Kokoro is the on-demand fallback engine (warms
-       ~1 s at the first fallback render), so eager-loading it too would just
-       hog ~1 GB. */
+    /* Qwen-default + eagerLoadQwen=true: PRELOAD_QWEN=1 (hot at boot) +
+       PRELOAD_KOKORO=0 even though eagerLoadKokoro=true — Kokoro is the
+       on-demand fallback engine (warms ~1 s at the first fallback render),
+       so eager-loading it too would just hog ~1 GB. */
     const handle = await spawnSidecar({
       autoStart: true,
       modelKey: 'qwen3-tts-0.6b',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -184,11 +193,53 @@ describe('spawnSidecar', () => {
     expect(options.env.PRELOAD_COQUI).toBe('0');
   });
 
+  it('keeps Qwen lazy when the default is qwen3-tts-0.6b but eagerLoadQwen is false', async () => {
+    /* Qwen-default + eagerLoadQwen=false: PRELOAD_QWEN=0 so Qwen warms on
+       demand on the first synth, reclaiming that VRAM at boot. Kokoro stays
+       the forced-lazy fallback regardless. */
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'qwen3-tts-0.6b',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: false,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+
+    expect(handle).not.toBeNull();
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.env.PRELOAD_QWEN).toBe('0');
+    expect(options.env.PRELOAD_KOKORO).toBe('0');
+  });
+
+  it('ignores eagerLoadQwen when the default engine is not Qwen', async () => {
+    /* eagerLoadQwen only governs PRELOAD_QWEN under a Qwen default — a
+       Kokoro default leaves Qwen off and honours eagerLoadKokoro for Kokoro. */
+    await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: false,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.env.PRELOAD_QWEN).toBe('0');
+    expect(options.env.PRELOAD_KOKORO).toBe('1');
+  });
+
   it('leaves PRELOAD_QWEN=0 for a non-Qwen default', async () => {
     await spawnSidecar({
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -213,6 +264,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -241,6 +293,7 @@ describe('spawnSidecar', () => {
       autoStart: true,
       modelKey: 'kokoro-v1',
       eagerLoadKokoro: true,
+      eagerLoadQwen: true,
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
@@ -279,6 +332,7 @@ describe('spawnSidecar', () => {
         autoStart: true,
         modelKey: 'kokoro-v1',
         eagerLoadKokoro: true,
+        eagerLoadQwen: true,
         repoRoot,
         spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
         probeFn,
