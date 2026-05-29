@@ -1,7 +1,8 @@
 /* Integration test for the plan-111 queue-driven generation chain: both
  * middlewares + the shared runner + a stateful mock queue. Proves the override
- * replacement works end-to-end — work appears → enqueue-on-work enqueues → the
- * dispatcher claims + opens a stream — and the no-loop invariant holds. */
+ * replacement works end-to-end — user clicks start → requestStartGeneration
+ * enqueues → the dispatcher claims + opens a stream — and the no-loop invariant
+ * holds. */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
@@ -120,17 +121,19 @@ async function flush(): Promise<void> {
 }
 
 describe('queue-driven generation integration (plan 111)', () => {
-  it('work appearing on the viewed book auto-enqueues and the dispatcher opens one stream PER chapter', async () => {
+  it('explicit start enqueues the viewed book and the dispatcher opens one stream PER chapter', async () => {
     const { store } = makeStore();
     /* Cold-boot: queue loaded empty. */
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
-    /* Analysis lands queued chapters → enqueue-on-work fires on setChapters. */
     store.dispatch(chaptersSlice.actions.setChapters([ch(1, 'done'), ch(2), ch(3)]));
+    /* The user clicks "Approve cast & start generating" (plan 137 — the only
+       action that enqueues). Until this fires, opening + seeding never queues. */
+    store.dispatch(uiSlice.actions.requestStartGeneration());
     await flush();
 
-    /* enqueue-on-work enqueued chapters 2 + 3; under queue-sole concurrency
+    /* explicit-start enqueued chapters 2 + 3; under queue-sole concurrency
        (N=2 default) the dispatcher opens ONE stream PER chapter. */
     expect(streamGenerationMock).toHaveBeenCalledTimes(2);
     const calls = streamGenerationMock.mock.calls.map(
@@ -147,6 +150,7 @@ describe('queue-driven generation integration (plan 111)', () => {
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     store.dispatch(chaptersSlice.actions.setChapters([ch(1), ch(2)]));
+    store.dispatch(uiSlice.actions.requestStartGeneration());
     await flush();
     /* One stream per chapter (N=2 default fills both). */
     expect(streamGenerationMock).toHaveBeenCalledTimes(2);

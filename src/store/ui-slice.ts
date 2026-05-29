@@ -208,6 +208,13 @@ export const uiSlice = createSlice({
       if (s.stage.kind !== 'ready') return;
       s.stage.view = a.payload;
     },
+    /* Pure-signal intent: "the user explicitly asked to START generating this
+       book" (dispatched by the "Approve cast & start generating" button). Holds
+       no state and never persists — it exists solely so the generation-stream
+       middleware can auto-enqueue the book's queued chapters on this ONE action
+       and never on a passive open/hydrate/view-switch. See
+       docs/features/137-reopen-never-auto-enqueues.md. */
+    requestStartGeneration: () => {},
     setCurrentChapterId: (s, a: PayloadAction<number>) => {
       if (s.stage.kind !== 'ready') return;
       s.stage.currentChapterId = a.payload;
