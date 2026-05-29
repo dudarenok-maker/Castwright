@@ -36,12 +36,19 @@
  *     queued/in_progress rows).
  *   - Same-book no-abort: each chapter rides its own forced request keyed
  *     `${bookId}::${chapterId}` server-side, so two same-book chapters never
- *     abort each other. */
+ *     abort each other.
+ *
+ * srv-11 — consecutive-failure circuit breaker: a per-book in-memory streak
+ *   counts back-to-back IDENTICAL chapter-failure reasons; crossing the
+ *   threshold (3) pauses the queue + toasts the book + reason so a wedged
+ *   sidecar can't burn the whole queue. A differing reason or a success resets
+ *   the streak. */
 
 import type { Middleware, MiddlewareAPI } from '@reduxjs/toolkit';
 import { chaptersActions, type ChaptersState } from './chapters-slice';
 import { queueActions, type QueueState } from './queue-slice';
-import { completeQueueEntry, startQueueEntry } from './queue-thunks';
+import { completeQueueEntry, setQueuePaused, startQueueEntry } from './queue-thunks';
+import { notificationsActions } from './notifications-slice';
 import type { UiState } from './ui-slice';
 import type { AppDispatch } from './index';
 import type { StreamRunner } from './generation-stream-runner';
@@ -57,6 +64,14 @@ interface DispatcherRootState {
 
 const DEFAULT_WORKERS = 2;
 
+/* srv-11 — consecutive-IDENTICAL-failure circuit breaker. When a single book's
+   chapters fail repeatedly with the SAME error reason this many times in a row,
+   the dispatcher pauses the queue and surfaces a toast naming the book + the
+   repeated error — so a wedged sidecar / bad config can't burn through every
+   queued chapter producing the identical failure. A differing reason or a
+   success resets the streak. */
+const CONSECUTIVE_FAILURE_THRESHOLD = 3;
+
 export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middleware {
   return (storeApi: MiddlewareAPI) => {
     /* Entries the dispatcher has opened a stream for, mapped to their
@@ -71,6 +86,16 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
        chapter's entry, still present in the snapshot, would otherwise be
        picked up and re-generated. Pruned once the snapshot catches up. */
     const completed = new Set<string>();
+
+    /* srv-11 — per-book consecutive-IDENTICAL-failure streak. `count` only
+       grows while the SAME error reason repeats back-to-back for a book; a
+       differing reason resets it to 1 (and records the new reason), and a
+       success clears the book's entry entirely. Crossing
+       CONSECUTIVE_FAILURE_THRESHOLD pauses the queue + toasts once. In-memory
+       by design: a reload naturally resets the streak (and failed entries
+       already persist as `failed`+`errorReason`), so there's nothing worth
+       surviving a restart. */
+    const failureStreakByBook = new Map<string, { reason: string; count: number }>();
 
     const dispatch = storeApi.dispatch as AppDispatch;
 
@@ -109,6 +134,35 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
             ).catch(() => {
               /* Best-effort — the next snapshot reconciles. */
             });
+
+            /* srv-11 — track the consecutive-IDENTICAL-failure streak for this
+               book. Only a repeated identical reason trips the breaker; a
+               differing reason resets the count to 1 + records the new reason. */
+            const streak = failureStreakByBook.get(bookId);
+            if (streak && streak.reason === failure) {
+              streak.count += 1;
+            } else {
+              failureStreakByBook.set(bookId, { reason: failure, count: 1 });
+            }
+            const current = failureStreakByBook.get(bookId)!;
+            if (current.count >= CONSECUTIVE_FAILURE_THRESHOLD) {
+              /* Trip: pause the queue (no per-book pause exists — the queue
+                 pause flag is global) and toast naming the book + the repeated
+                 error so the user knows which run wedged and why. Reset the
+                 streak so a Resume doesn't immediately re-trip on the same
+                 already-counted failures. */
+              failureStreakByBook.delete(bookId);
+              void dispatch(setQueuePaused(true)).catch(() => {
+                /* Best-effort — the toast still surfaces the problem. */
+              });
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'error',
+                  message: `Paused the queue — book "${bookId}" failed ${CONSECUTIVE_FAILURE_THRESHOLD} times in a row: ${failure}`,
+                  dedupeKey: `queue-failure-breaker:${bookId}`,
+                }),
+              );
+            }
           } else {
             /* Completion removal, NOT a user cancel: the entry is in_progress
                by now (we POSTed /start on claim), so DELETE would 409.
@@ -116,6 +170,8 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                re-claim it before the snapshot catches up. Idempotent for an
                already-gone id; the next /api/queue snapshot reconciles. */
             completed.add(entryId);
+            /* srv-11 — a successful chapter resets the book's failure streak. */
+            failureStreakByBook.delete(bookId);
             void dispatch(completeQueueEntry(entryId)).catch(() => {
               /* Best-effort — the next snapshot reconciles. */
             });
