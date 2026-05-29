@@ -915,3 +915,111 @@ describe('CastView row ordering — wired into render', () => {
     expect(order).toEqual(['Alpha', 'Zeta', 'Unknown male']);
   });
 });
+
+describe('CastView status filter', () => {
+  /* The chip row under the search box lets the user isolate cast members by
+     voice-matching status (multi-select, OR) so a growing cast doesn't hide
+     characters still on a default voice. Statuses are resolved the same way
+     the row pills are (statusFilterKeys → resolveVoiceStatus), so a chip's
+     count always equals its filtered row count. */
+
+  /* Default project engine is kokoro (preset), so narrator + sweeney both
+     resolve to "Matched"; narrator additionally carries the Reused badge. */
+  const ghost: Character = {
+    id: 'ghost',
+    name: 'Ghost',
+    role: 'Apparition',
+    color: 'mentor',
+    lines: 3,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'qwen', // Qwen with no designed voice ⇒ "Needs voice"
+  };
+  const blank: Character = {
+    id: 'blank',
+    name: 'Blank',
+    role: 'Extra',
+    color: 'mentor',
+    lines: 1,
+    scenes: 1,
+    attributes: [], // no voiceState, no voiceId ⇒ "Unset"
+  };
+
+  function renderFilterView() {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    return render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, sweeney, ghost, blank]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  const filterGroup = () => screen.getByRole('group', { name: 'Filter by voice status' });
+  const chip = (label: RegExp) => within(filterGroup()).getByRole('button', { name: label });
+  const isPresent = (name: string) => {
+    try {
+      rowFor(name);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it('renders one chip per present status with its live count', () => {
+    renderFilterView();
+    expect(chip(/^Needs voice/).textContent).toContain('1');
+    expect(chip(/^Matched/).textContent).toContain('2'); // narrator + sweeney
+    expect(chip(/^Unset/).textContent).toContain('1');
+    expect(chip(/^Reused/).textContent).toContain('1'); // narrator only
+  });
+
+  it('filters to a single status when one chip is active', () => {
+    renderFilterView();
+    fireEvent.click(chip(/^Needs voice/));
+    expect(isPresent('Ghost')).toBe(true);
+    expect(isPresent('Narrator')).toBe(false);
+    expect(isPresent('Mr. Sweeney')).toBe(false);
+    expect(isPresent('Blank')).toBe(false);
+  });
+
+  it('unions rows across statuses when multiple chips are active (OR)', () => {
+    renderFilterView();
+    fireEvent.click(chip(/^Needs voice/));
+    fireEvent.click(chip(/^Matched/));
+    expect(isPresent('Ghost')).toBe(true); // Needs voice
+    expect(isPresent('Narrator')).toBe(true); // Matched
+    expect(isPresent('Mr. Sweeney')).toBe(true); // Matched
+    expect(isPresent('Blank')).toBe(false); // Unset — excluded
+  });
+
+  it('isolates reused characters via the Reused chip', () => {
+    renderFilterView();
+    fireEvent.click(chip(/^Reused/));
+    expect(isPresent('Narrator')).toBe(true);
+    expect(isPresent('Ghost')).toBe(false);
+    expect(isPresent('Mr. Sweeney')).toBe(false);
+    expect(isPresent('Blank')).toBe(false);
+  });
+
+  it('Clear resets to showing every character', () => {
+    renderFilterView();
+    fireEvent.click(chip(/^Needs voice/));
+    expect(isPresent('Narrator')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(isPresent('Ghost')).toBe(true);
+    expect(isPresent('Narrator')).toBe(true);
+    expect(isPresent('Mr. Sweeney')).toBe(true);
+    expect(isPresent('Blank')).toBe(true);
+    /* Clear disappears once no filter is active. */
+    expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
+  });
+});
