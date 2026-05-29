@@ -412,6 +412,29 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const qwenInUse = requiredEngines.has('qwen');
   const qwenState = getLastKnownQwenInstallState();
   const qwenUnavailable = qwenInUse && qwenState !== 'ready' && qwenState !== 'loaded';
+  /* NEVER silently downgrade a Qwen book to Kokoro. When the whole cast's Qwen
+     characters are about to render in the wrong engine (wrong voices) because
+     Qwen reads unavailable, say so loudly — server log + a UI warning toast
+     (surfaced by generation-stream-runner). The most common trigger is a stale
+     sidecar whose /health predates qwen_install_state; deriveQwenInstallState
+     (sidecar-health.ts) now blocks that specific cause, but a genuinely
+     uninstalled / weights-missing / load-failed Qwen still lands here, and that
+     downgrade must be visible, not silent. (Stale-build incident, 2026-05-29 —
+     docs/features/135-qwen-loud-fallback.md.) */
+  if (qwenUnavailable) {
+    const message =
+      `Qwen is unavailable (install-state: ${qwenState}), so every Qwen character ` +
+      `will render in Kokoro — generic fallback voices, NOT the designed Qwen ` +
+      `voices. Check the TTS sidecar (a stale or unloaded sidecar is the usual ` +
+      `cause), then regenerate affected chapters.`;
+    console.warn(`[generation] ${message}`);
+    send({
+      type: 'warning',
+      code: 'qwen_unavailable_kokoro_fallback',
+      message,
+      qwenInstallState: qwenState,
+    });
+  }
   if (requiredEngines.size > 1 && !getCachedUserSettings().dualModelEnabled) {
     const list = [...requiredEngines].sort().join(' + ');
     const message =

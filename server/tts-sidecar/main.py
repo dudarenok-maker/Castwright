@@ -43,6 +43,15 @@ from fastapi.responses import JSONResponse
 LOG_FORMAT = "%(asctime)s.%(msecs)03d [sidecar] %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
+# Sidecar /health protocol version. The Node server reads this at startup to
+# decide whether an already-listening sidecar is the CURRENT build before it
+# reuses it (spawn-sidecar.ts). A stale process (running an older main.py)
+# either omits this field entirely or reports a lower number — the server then
+# replaces it instead of silently trusting it. BUMP this whenever a /health or
+# wire-protocol change makes an older sidecar incompatible with the current
+# server. (Plan 135 / side-8 — stale-sidecar incident 2026-05-29.)
+SIDECAR_PROTOCOL_VERSION = 1
+
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
@@ -1517,6 +1526,7 @@ def health() -> dict[str, Any]:
     qwen_install_state = _qwen_install_state(qwen_loaded)
     return {
         "ok": True,
+        "protocol_version": SIDECAR_PROTOCOL_VERSION,
         "engines": sorted(ENGINES.keys()),
         "model_loaded": model_loaded,
         "loading": loading,
