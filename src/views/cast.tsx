@@ -21,13 +21,16 @@ import {
 import { resolveVoiceStatus, statusFilterKeys, type StatusPillColor } from '../lib/voice-status';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
 import type { Character, Voice, DriftEvent, CharColor, TtsModelKey, TtsEngine } from '../lib/types';
-import type { TtsVoiceAssignment } from '../lib/tts-voice-mapping';
 import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
-import { resolveTtsVoiceForCharacter, sampleModelKeyForEngine } from '../lib/tts-voice-mapping';
+import {
+  resolveDisplayTtsVoice,
+  resolveTtsVoiceForCharacter,
+  sampleModelKeyForEngine,
+} from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
@@ -1047,19 +1050,8 @@ function ttsLabel(key: TtsModelKey): string {
   return TTS_MODEL_OPTIONS.find((o) => o.id === key)?.label ?? key;
 }
 
-/* Engine-aware row-label resolver. A library voice's preset descriptor
-   normally wins, but a character pinned to the bespoke Qwen engine
-   (plan 108) must show its designed/Qwen line, not the project Kokoro/Coqui
-   preset — so Qwen overrides any matched library voice. Preset engines keep
-   the matched library voice (or the project-engine stub) exactly as before. */
-function resolveDisplayTtsVoice(
-  c: Character,
-  voice: Voice | undefined,
-  projectEngine: TtsEngine,
-): TtsVoiceAssignment {
-  if (c.ttsEngine === 'qwen') return resolveTtsVoiceForCharacter(c, 'qwen');
-  return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
-}
+/* resolveDisplayTtsVoice now lives in ../lib/tts-voice-mapping (pure + testable
+   without booting the view/router). */
 
 /* Engine-aware Status display (plan 117 + reused-badge split). Renders two
    ORTHOGONAL markers via `resolveVoiceStatus`: the lifecycle pill (Needs voice
