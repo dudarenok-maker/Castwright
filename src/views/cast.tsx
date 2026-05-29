@@ -1,10 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   IconLink,
   IconAlertTri,
   IconChevR,
   IconSearch,
-  IconFilter,
   IconCheck,
   IconPlay,
   IconPause,
@@ -19,7 +18,7 @@ import {
   VoiceSwatch,
   ReusedBadge,
 } from '../components/primitives';
-import { resolveVoiceStatus } from '../lib/voice-status';
+import { resolveVoiceStatus, statusFilterKeys, type StatusPillColor } from '../lib/voice-status';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
 import type { Character, Voice, DriftEvent, CharColor, TtsModelKey, TtsEngine } from '../lib/types';
 import type { TtsVoiceAssignment } from '../lib/tts-voice-mapping';
@@ -65,6 +64,22 @@ export function compareCastRows(a: Character, b: Character): number {
   return a.name.localeCompare(b.name);
 }
 
+/* Canonical order for the status-filter chips — lifecycle labels (engine
+   order: Qwen design → preset states), then 'Unset', then the 'Reused'
+   provenance chip last. Absent statuses are skipped, so a given cast only
+   shows chips for the statuses it actually contains. */
+const CHIP_ORDER = [
+  'Needs voice',
+  'Designed',
+  'Sampled',
+  'Generated',
+  'Matched',
+  'Tuned',
+  'Locked',
+  'Unset',
+  'Reused',
+];
+
 export function CastView({
   characters,
   setCharacters,
@@ -76,6 +91,10 @@ export function CastView({
   onShowDrift,
 }: Props) {
   const [query, setQuery] = useState('');
+  /* Voice-matching status filter (multi-select, OR). Each entry is a key
+     emitted by `statusFilterKeys` — a lifecycle label ('Needs voice',
+     'Generated', …), 'Unset', or 'Reused'. Empty = show all. */
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
   /* Plan 81 wave 3 — the same showLibrary state drives the desktop
      aside (default visible) AND the mobile/tablet bottom-sheet
      (default hidden — opens on Library-pill tap). Lazy init on
@@ -119,9 +138,6 @@ export function CastView({
       return next;
     });
 
-  const filtered = characters
-    .filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
-    .sort(compareCastRows);
   const toggleSelect = (id: string) =>
     setSelectedCharIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
@@ -134,6 +150,52 @@ export function CastView({
      model key, so the sample/Stop-detection prefix must use the Qwen key for
      a Qwen-pinned character. */
   const effectiveEngineFor = (c: Character): TtsEngine => c.ttsEngine ?? ttsEngine;
+
+  /* Status-filter keys for a character, resolved the SAME way the row's
+     StatusPill resolves its labels (matched library voice + effective engine)
+     so the chips and the rows can't disagree. */
+  const statusKeysFor = (c: Character): string[] =>
+    statusFilterKeys(c, findVoiceForCharacter(c, library), effectiveEngineFor(c));
+
+  /* Chip buckets: one per status actually present in the cast, with its live
+     count and pill color, ordered canonically. Built off the same resolver as
+     the rows so a chip's count always equals its filtered row count. */
+  const statusBuckets = useMemo(() => {
+    const tally = new Map<string, { color: StatusPillColor; count: number }>();
+    for (const c of characters) {
+      const { lifecycle, reused } = resolveVoiceStatus(
+        c,
+        findVoiceForCharacter(c, library),
+        c.ttsEngine ?? ttsEngine,
+      );
+      const lifecycleKey = lifecycle?.label ?? 'Unset';
+      const lifecycleColor: StatusPillColor = lifecycle?.color ?? 'neutral';
+      tally.set(lifecycleKey, {
+        color: lifecycleColor,
+        count: (tally.get(lifecycleKey)?.count ?? 0) + 1,
+      });
+      if (reused) {
+        tally.set('Reused', { color: 'library', count: (tally.get('Reused')?.count ?? 0) + 1 });
+      }
+    }
+    return CHIP_ORDER.filter((key) => tally.has(key)).map((key) => ({
+      key,
+      color: tally.get(key)!.color,
+      count: tally.get(key)!.count,
+    }));
+  }, [characters, library, ttsEngine]);
+
+  const toggleStatusFilter = (key: string) =>
+    setStatusFilters((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+
+  const filtered = characters
+    .filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
+    .filter(
+      (c) => statusFilters.length === 0 || statusKeysFor(c).some((k) => statusFilters.includes(k)),
+    )
+    .sort(compareCastRows);
 
   async function playSampleFor(c: Character, voice: Voice | undefined) {
     const sampleVoiceId = sampleScopeFor(c);
@@ -383,14 +445,49 @@ export function CastView({
               className="w-full min-h-[44px] pl-11 pr-4 py-2.5 rounded-full bg-white border border-ink/10 text-sm focus:outline-none focus:border-ink/30"
             />
           </div>
-          <button
-            aria-label="Filter characters"
-            className="min-h-[44px] min-w-[44px] px-3 sm:px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center justify-center gap-2 shrink-0"
-          >
-            <IconFilter className="w-4 h-4" />
-            <span className="hidden sm:inline">Filter</span>
-          </button>
         </div>
+
+        {/* Status filter — one toggle chip per status present in the cast, with
+            its live count. Multi-select OR: a row shows if it matches any
+            active chip. Filters both the desktop table and the mobile cards
+            (both iterate `filtered`). */}
+        {statusBuckets.length > 0 && (
+          <div
+            className="flex items-center gap-2 mb-4 flex-wrap"
+            role="group"
+            aria-label="Filter by voice status"
+          >
+            {statusBuckets.map((b) => {
+              const active = statusFilters.includes(b.key);
+              return (
+                <button
+                  key={b.key}
+                  onClick={() => toggleStatusFilter(b.key)}
+                  aria-pressed={active}
+                  className={`min-h-[44px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
+                    active
+                      ? 'bg-ink text-canvas'
+                      : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/[0.04]'
+                  }`}
+                >
+                  <span>{b.key}</span>
+                  <span className={`tabular-nums ${active ? 'text-canvas/70' : 'text-ink/40'}`}>
+                    {b.count}
+                  </span>
+                </button>
+              );
+            })}
+            {statusFilters.length > 0 && (
+              <button
+                onClick={() => setStatusFilters([])}
+                className="min-h-[44px] sm:min-h-0 inline-flex items-center gap-1 px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium text-ink/60 hover:text-ink"
+              >
+                <IconClose className="w-3.5 h-3.5" />
+                Clear
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Plan 81 wave 3 — md:+ table layout (legacy, unchanged contract). */}
         <div className="hidden md:block bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
