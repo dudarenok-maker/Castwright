@@ -40,6 +40,10 @@ import type { BookStateJson } from '../workspace/scan.js';
 import { resolveVoiceAssignment, type TtsVoiceAssignment } from '../tts/voice-mapping.js';
 import { gradientForTtsVoice } from '../tts/voice-palette.js';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
+import {
+  createWorkspaceCastLoader,
+  hydrateCastReusedVoices,
+} from '../tts/hydrate-reused-voice-workspace.js';
 import type { TtsEngine } from '../tts/index.js';
 import {
   listBaseVoices,
@@ -195,6 +199,11 @@ async function aggregateVoices(
      usedIn aggregates across every book that contains the same voiceId). */
   const acc = new Map<string, DerivedVoice & { books: Set<string> }>();
 
+  /* One memoised cast loader for reused-voice hydration, shared across every
+     book scanned below so each source book's cast.json is read at most once
+     (many reused characters across the series resolve to the same source). */
+  const reuseLoader = createWorkspaceCastLoader();
+
   /* The voice-sample cache is workspace-global (not per-book), so read it
      once. Empty for preset engines — the `sampled` lifecycle tier is
      Qwen-only, matching the `generated` invariant. A character has been
@@ -214,6 +223,16 @@ async function aggregateVoices(
         if (!state || !state.castConfirmed) continue;
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
+
+        /* Hydrate reused characters' bespoke voice from their source book so the
+           ttsVoice assignment below reflects the DESIGNED voice, not the empty
+           "no voice designed yet" stub. A reused Qwen character carries only
+           voiceId + matchedFrom on disk; this folds the source book's
+           ttsEngine + overrideTtsVoices onto it (no-op for non-reused or
+           already-designed characters). Mirrors the same hydration the
+           generation path applies, so the cast view and what actually renders
+           agree. */
+        cast.characters = await hydrateCastReusedVoices(cast.characters, reuseLoader);
 
         /* For the Qwen engine, collect which designed voiceIds actually
            rendered audio in this book (scanning the per-chapter segments).
