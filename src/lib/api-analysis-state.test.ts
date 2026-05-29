@@ -5,7 +5,7 @@
    the 404→null short-circuit, the non-200→throw branch, and the
    pass-through of the response body. Layout integration is
    exercised end-to-end via the acceptance walkthrough in
-   docs/features/32-sticky-analysis.md. */
+   docs/features/archive/32-sticky-analysis.md. */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api } from './api';

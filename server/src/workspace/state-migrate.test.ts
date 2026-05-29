@@ -1,4 +1,4 @@
-/* Pairs with docs/features/27-book-state-persistence.md.
+/* Pairs with docs/features/archive/27-book-state-persistence.md.
  *
  * Pins the migration seam contract: CURRENT_STATE_SCHEMA is 1 today;
  * legacy files without the field load as v1; explicitly v1-stamped

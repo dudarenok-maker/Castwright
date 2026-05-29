@@ -987,7 +987,7 @@ describe('book-state router — state slice series-membership + on-disk rename',
 /* Cold-boot rehydration for the AnalysisPill across browser reload +
    server restart. The endpoint reads from .audiobook/analysis-state.json
    (written by analysis.ts at phase boundaries and on terminal events).
-   See docs/features/32-sticky-analysis.md "Cold-boot rehydration". */
+   See docs/features/archive/32-sticky-analysis.md "Cold-boot rehydration". */
 describe('book-state router — GET /:bookId/analysis/state', () => {
   const COLD_BOOT_AUTHOR = 'ColdBoot Author';
   const COLD_BOOT_SERIES = 'Standalones';

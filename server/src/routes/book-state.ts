@@ -347,7 +347,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       Resume to re-attach.
    4. Else 404 (no rehydratable state).
 
-   See docs/features/32-sticky-analysis.md "Cold-boot rehydration"
+   See docs/features/archive/32-sticky-analysis.md "Cold-boot rehydration"
    for the full invariant set. */
 bookStateRouter.get('/:bookId/analysis/state', async (req: Request, res: Response) => {
   try {

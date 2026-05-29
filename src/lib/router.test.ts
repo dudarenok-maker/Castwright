@@ -1,4 +1,4 @@
-// Pairs with docs/features/01-hash-router.md
+// Pairs with docs/features/archive/01-hash-router.md
 
 import { describe, expect, it } from 'vitest';
 import { stageToHash, stageEqual } from './router';

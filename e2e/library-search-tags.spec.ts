@@ -10,7 +10,7 @@ import { test, expect } from '@playwright/test';
  *   - cc (Carrick's Compass)  → []
  *   - ts (Twilight Stations)  → ['favourite']
  *
- * Pairs with docs/features/73-library-search-tags.md.
+ * Pairs with docs/features/archive/73-library-search-tags.md.
  *
  * Each card carries `data-testid="book-meta-strip-<bookId>"` (plan 9
  * always-visible metadata strip), which we use as the per-card visibility

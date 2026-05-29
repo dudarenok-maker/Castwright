@@ -5,7 +5,7 @@
  * surfaces the changed sentence → click Apply → modal closes + slice
  * commits.
  *
- * Pairs with docs/features/74-manuscript-diff-on-reupload.md. */
+ * Pairs with docs/features/archive/74-manuscript-diff-on-reupload.md. */
 
 import { test, expect, type Page } from '@playwright/test';
 

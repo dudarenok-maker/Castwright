@@ -1,5 +1,5 @@
 /* Unit tests for the dropped-quotes ledger module. Pairs with
-   docs/features/04-analysing-view-progress.md — the panel under the
+   docs/features/archive/04-analysing-view-progress.md — the panel under the
    cast preview reads from the file these helpers produce. */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';

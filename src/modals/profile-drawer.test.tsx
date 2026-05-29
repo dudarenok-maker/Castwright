@@ -1,4 +1,4 @@
-// Pairs with docs/features/10-profile-drawer.md
+// Pairs with docs/features/archive/10-profile-drawer.md
 
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';

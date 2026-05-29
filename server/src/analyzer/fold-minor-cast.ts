@@ -61,7 +61,7 @@ export interface FoldOptions {
       the protection: bodyguards / mentors / family who are mentioned
       heavily in narration but rarely quote dialogue (e.g. Sela and
       Garrow in Lost Cities Saltgrave — see
-      docs/features/97-narrator-only-named-characters.md) would
+      docs/features/archive/97-narrator-only-named-characters.md) would
       otherwise be silently dropped or bucketed into
       unknown-male/female. */
   protectedRoles?: string[];

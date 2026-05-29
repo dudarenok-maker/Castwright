@@ -1,4 +1,4 @@
-// Pairs with docs/features/22-voice-library.md
+// Pairs with docs/features/archive/22-voice-library.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, render, screen, fireEvent, within, waitFor } from '@testing-library/react';

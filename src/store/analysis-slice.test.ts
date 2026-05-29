@@ -1,4 +1,4 @@
-/* Pairs with docs/features/32-sticky-analysis.md.
+/* Pairs with docs/features/archive/32-sticky-analysis.md.
 
    The analysis slice is intentionally narrow: an out-of-band snapshot for
    the (future B3) AnalysisPill, plus a paused/halted flag that the

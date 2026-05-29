@@ -1,4 +1,4 @@
-/* Pairs with docs/features/27-book-state-persistence.md.
+/* Pairs with docs/features/archive/27-book-state-persistence.md.
 
    Pins the per-book hydration effect's revisions branch: when the user
    lands on a book stage and `getBookState` resolves with a `revisions`

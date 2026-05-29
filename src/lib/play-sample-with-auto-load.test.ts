@@ -1,4 +1,4 @@
-/* Pairs with docs/features/10-profile-drawer.md — the JIT TTS load path
+/* Pairs with docs/features/archive/10-profile-drawer.md — the JIT TTS load path
    triggered by the profile-drawer / cast-row Play button. */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';

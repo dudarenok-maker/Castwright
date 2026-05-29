@@ -1,4 +1,4 @@
-/* Pairs with docs/features/35-engine-drift-detection.md and the
+/* Pairs with docs/features/archive/35-engine-drift-detection.md and the
    drift-report-fidelity plan.
 
    Covers:

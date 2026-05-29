@@ -1,4 +1,4 @@
-/* Pairs with docs/features/32-audiobook-export.md.
+/* Pairs with docs/features/archive/32-audiobook-export.md.
 
    Covers the modal's job lifecycle: open, render both tabs, submit,
    poll a job through in_progress → done, and surface a 409

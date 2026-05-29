@@ -1,5 +1,5 @@
-// Pairs with docs/features/02-upload-paste-or-file.md (existing path)
-//       AND docs/features/74-manuscript-diff-on-reupload.md (new path).
+// Pairs with docs/features/archive/02-upload-paste-or-file.md (existing path)
+//       AND docs/features/archive/74-manuscript-diff-on-reupload.md (new path).
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
