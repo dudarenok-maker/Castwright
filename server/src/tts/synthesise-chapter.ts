@@ -19,12 +19,14 @@ import { gpuSemaphore } from '../gpu/semaphore.js';
 /* How many Qwen sentences to pack into one batched `generate_voice_clone`
    call (plan 112 — true batching). Read once at module load; `=1` is an
    instant per-call kill-switch (every Qwen sentence becomes a single synth,
-   byte-identical to pre-112). Default is conservative (we ship without a VRAM
-   spike) — raise it once you've observed headroom on the box. Only Qwen
+   byte-identical to pre-112). When `QWEN_BATCH_TOKEN_BUDGET` is on (the default
+   now), this is the HARD width cap the token budget clamps to. Default 32 —
+   adopted 2026-05-30 after the plan-136 live A/B on the 8 GB box (cap 32 /
+   budget 3600); lower it (or the budget) if a smaller card OOMs. Only Qwen
    batches; Coqui/Kokoro/Gemini sentences always synth one-per-call. */
 const QWEN_BATCH_SIZE = (() => {
   const raw = Number(process.env.QWEN_BATCH_SIZE);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 4;
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 32;
 })();
 
 /* Length-bucketing (plan 128). A batched Qwen forward decodes for as many
@@ -51,13 +53,22 @@ const QWEN_BATCH_BUCKET = (() => {
    the next (ascending-length-sorted) item while `(count+1) × candidateMaxLen
    <= budget`, so short batches pack wide (lower RTF via dispatch amortisation)
    and long batches stay narrow (no OOM). Units = normalised-text chars.
-   `QWEN_BATCH_SIZE` stays the HARD width cap. UNSET / 0 = exact fixed-width
-   behaviour (kill-switch + back-compat). Output-preserving (per-item prompts +
-   index scatter-back), same as plan 128. */
-const QWEN_BATCH_TOKEN_BUDGET = (() => {
-  const raw = Number(process.env.QWEN_BATCH_TOKEN_BUDGET);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
-})();
+   `QWEN_BATCH_SIZE` stays the HARD width cap. UNSET = the shipped default
+   (3600, adopted 2026-05-30 after the plan-136 live A/B); an explicit `0` is
+   the fixed-width kill-switch + back-compat path. Output-preserving (per-item
+   prompts + index scatter-back), same as plan 128. */
+export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET = 3600;
+
+/** Resolve `QWEN_BATCH_TOKEN_BUDGET`. Unset / empty → the shipped default
+    (token-budget packing ON); an explicit `0` (or a non-positive / non-numeric
+    value) → `0` = OFF, the fixed-width kill-switch. Exported for unit coverage
+    so the unset-vs-0 distinction stays pinned. */
+export function resolveQwenTokenBudget(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === '') return DEFAULT_QWEN_BATCH_TOKEN_BUDGET;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+const QWEN_BATCH_TOKEN_BUDGET = resolveQwenTokenBudget(process.env.QWEN_BATCH_TOKEN_BUDGET);
 
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
@@ -297,7 +308,7 @@ export interface SynthesiseChapterOpts {
   groupHeartbeatMs?: number;
   /** How many Qwen sentences to pack per batched synth call (plan 112).
       Defaults to the module-level `QWEN_BATCH_SIZE` (env `QWEN_BATCH_SIZE`,
-      default 4). `=1` disables batching (every Qwen sentence is its own
+      default 32). `=1` disables batching (every Qwen sentence is its own
       call). Mainly an explicit value for tests, which exercise packing /
       splitting without touching process env. Clamped to >= 1. Only Qwen
       sentences are ever batched — see the dispatch partition below. */
@@ -313,8 +324,8 @@ export interface SynthesiseChapterOpts {
       normalised-text chars; the packer fills each batch while
       `(count+1) × candidateMaxLen <= qwenBatchTokenBudget` AND
       `count+1 <= qwenBatchSize` (the hard width cap). Defaults to the
-      module-level `QWEN_BATCH_TOKEN_BUDGET` (env, default 0 = OFF). `0` (or
-      unset) falls back to EXACT fixed-width slicing — the kill-switch and the
+      module-level `QWEN_BATCH_TOKEN_BUDGET` (env, default 3600). An explicit
+      `0` falls back to EXACT fixed-width slicing — the kill-switch and the
       back-compat contract. Relies on `qwenBatchBucket` (the ascending length
       sort) being on, which it is by default; with bucketing off the packer
       still runs but tracks a per-batch running max so the proxy stays a true
