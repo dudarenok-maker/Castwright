@@ -40,6 +40,25 @@ const QWEN_BATCH_BUCKET = (() => {
   return raw !== '0' && raw !== 'false';
 })();
 
+/* Token-budget packing (plan 136). A batched Qwen forward decodes to its
+   LONGEST item and pads the rest, so its VRAM/compute proxy is
+   `count × maxLenInBatch`, not `count`. Fixed-width slicing (plan 113) caps
+   only `count`, so a batch of long sentences costs far more than a batch of
+   short ones at the same width — forcing a conservative width that leaves
+   short/dialogue batches narrower than VRAM allows (exactly where RTF is
+   worst, since the per-batch dispatch cost is amortised over little audio).
+   This knob switches the packer to a VARIABLE-width greedy fill: keep adding
+   the next (ascending-length-sorted) item while `(count+1) × candidateMaxLen
+   <= budget`, so short batches pack wide (lower RTF via dispatch amortisation)
+   and long batches stay narrow (no OOM). Units = normalised-text chars.
+   `QWEN_BATCH_SIZE` stays the HARD width cap. UNSET / 0 = exact fixed-width
+   behaviour (kill-switch + back-compat). Output-preserving (per-item prompts +
+   index scatter-back), same as plan 128. */
+const QWEN_BATCH_TOKEN_BUDGET = (() => {
+  const raw = Number(process.env.QWEN_BATCH_TOKEN_BUDGET);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+})();
+
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
     — description/role/gender/ageRange/tone/evidence — are what drives
@@ -290,6 +309,18 @@ export interface SynthesiseChapterOpts {
       `QWEN_BATCH_BUCKET`, default ON). Output-preserving — set `false` for the
       index-order baseline (tests assert byte-identity ON vs OFF). */
   qwenBatchBucket?: boolean;
+  /** Token-budget packing (plan 136). The soft VRAM/compute budget in
+      normalised-text chars; the packer fills each batch while
+      `(count+1) × candidateMaxLen <= qwenBatchTokenBudget` AND
+      `count+1 <= qwenBatchSize` (the hard width cap). Defaults to the
+      module-level `QWEN_BATCH_TOKEN_BUDGET` (env, default 0 = OFF). `0` (or
+      unset) falls back to EXACT fixed-width slicing — the kill-switch and the
+      back-compat contract. Relies on `qwenBatchBucket` (the ascending length
+      sort) being on, which it is by default; with bucketing off the packer
+      still runs but tracks a per-batch running max so the proxy stays a true
+      upper bound. Mainly an explicit value for tests, which drive packing
+      without touching process env. */
+  qwenBatchTokenBudget?: number;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -376,6 +407,7 @@ export async function synthesiseChapter(
     groupHeartbeatMs = 10_000,
     qwenBatchSize = QWEN_BATCH_SIZE,
     qwenBatchBucket = QWEN_BATCH_BUCKET,
+    qwenBatchTokenBudget = QWEN_BATCH_TOKEN_BUDGET,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -740,20 +772,55 @@ export async function synthesiseChapter(
     if (batchSize > 1 && isBatchable(group)) batchable.push(group);
     else workItems.push({ kind: 'single', group });
   }
-  /* Length-bucketing (plan 128): order batchable groups by the length of the
-     EXACT string fed to the model (`normaliseForTts(group.text)` — see
-     `synthBatch`), tie-break by `group.index` for determinism. Precompute the
-     length once per group so the sort comparator doesn't re-run normalisation.
-     Output-preserving: scatter-back below is by `group.index`. */
+  /* Model-side length (`normaliseForTts(group.text).length` — the EXACT string
+     fed to the model, see `synthBatch`) precomputed once per batchable group.
+     Shared by BOTH the length-bucketing sort (plan 128) and the token-budget
+     packer (plan 136), so normalisation runs at most once per group. */
+  const lenOf = new Map(batchable.map((g) => [g, normaliseForTts(g.text).length]));
+  /* Length-bucketing (plan 128): order batchable groups by model-side length,
+     tie-break by `group.index` for determinism. Output-preserving: scatter-back
+     below is by `group.index`. */
   if (qwenBatchBucket && batchable.length > 1) {
-    const lenOf = new Map(batchable.map((g) => [g, normaliseForTts(g.text).length]));
     batchable.sort((a, b) => lenOf.get(a)! - lenOf.get(b)! || a.index - b.index);
   }
-  for (let i = 0; i < batchable.length; i += batchSize) {
-    const slice = batchable.slice(i, i + batchSize);
+  const pushBatch = (slice: SentenceGroup[]): void => {
     workItems.push(
       slice.length === 1 ? { kind: 'single', group: slice[0] } : { kind: 'batch', groups: slice },
     );
+  };
+  const tokenBudget = Math.floor(qwenBatchTokenBudget);
+  if (tokenBudget <= 0) {
+    /* Fixed-width slicing (plans 113/128) — the back-compat path and the
+       kill-switch (`QWEN_BATCH_TOKEN_BUDGET` unset/0). Byte-for-byte the
+       pre-136 loop. */
+    for (let i = 0; i < batchable.length; i += batchSize) {
+      pushBatch(batchable.slice(i, i + batchSize));
+    }
+  } else {
+    /* Token-budget packing (plan 136): greedily fill each batch while
+       `count × maxLenInBatch <= tokenBudget` AND `count <= batchSize` (the
+       hard width cap). `batchable` is ascending-length-sorted when bucketing is
+       on, so the candidate is normally the batch's new max; we track a running
+       max so the `count × maxLen` VRAM/compute proxy stays a true upper bound
+       even when bucketing is off. A single item that alone exceeds the budget
+       forms its own batch (the `current.length > 0` guard never closes an empty
+       batch). Output-preserving: scatter-back is still by `group.index`. */
+    let current: SentenceGroup[] = [];
+    let currentMax = 0;
+    for (const g of batchable) {
+      const candLen = lenOf.get(g)!;
+      let candMax = Math.max(currentMax, candLen);
+      const nextCount = current.length + 1;
+      if (current.length > 0 && (nextCount * candMax > tokenBudget || nextCount > batchSize)) {
+        pushBatch(current);
+        current = [];
+        currentMax = 0;
+        candMax = candLen;
+      }
+      current.push(g);
+      currentMax = candMax;
+    }
+    if (current.length > 0) pushBatch(current);
   }
   const firstIndexOf = (item: WorkItem): number =>
     item.kind === 'single' ? item.group.index : item.groups[0].index;
