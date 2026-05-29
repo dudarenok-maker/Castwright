@@ -59,7 +59,7 @@ Define success criteria, then loop until verified.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
 - `npm run test:server` — Vitest single-run for the server (parallel, excludes the 5 hot files routed to `test:server-slow`).
-- `npm run test:server-slow` — Vitest single-run for 5 timeout-prone server test files (analyzer/gemini + 4 routes test files), pinned to one fork via `server/vitest.config.slow.ts`. Runs in pre-push `verify` after `test:server`; not in `verify:fast` pre-commit. See `docs/features/45-vitest-pool-tuning.md` for the rationale.
+- `npm run test:server-slow` — Vitest single-run for 5 timeout-prone server test files (analyzer/gemini + 4 routes test files), pinned to one fork via `server/vitest.config.slow.ts`. Runs in pre-push `verify` after `test:server`; not in `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
   `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
@@ -88,7 +88,7 @@ Define success criteria, then loop until verified.
     (`server/src/analyzer/rate-limit.ts`) so retries can't compound into
     429/500 storms. See `server/.env.example` for `GEMINI_RPM_*` /
     `GEMINI_TPM_*` / `GEMINI_RPD_*` overrides and
-    [docs/features/06-analyzer-gemini.md](docs/features/06-analyzer-gemini.md)
+    [docs/features/archive/06-analyzer-gemini.md](docs/features/archive/06-analyzer-gemini.md)
     for the limits table.
 
 ## Layout
@@ -157,7 +157,7 @@ Harnesses (five tiers):
 Canonical end-to-end manuscript for full-pipeline regression:
 `C:\Users\dudar\Downloads\the Coalfall Commission.txt` (do not commit — copyrighted).
 Cite this file from any regression plan that needs an e2e run rather than
-inventing fresh fixtures. See `docs/features/28-chapter-audio-format.md` for
+inventing fresh fixtures. See `docs/features/archive/28-chapter-audio-format.md` for
 the canonical recipe.
 
 ## The backlog
@@ -285,7 +285,7 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   `<type>(<scope>): <subject>` convention (with `chore: <subject>` as the
   no-scope catch-all). Merge / Revert / fixup! / squash! commits are exempt.
   Full spec lives in [CONTRIBUTING.md](CONTRIBUTING.md); regression plan is
-  [docs/features/38-branching-and-commit-convention.md](docs/features/38-branching-and-commit-convention.md).
+  [docs/features/archive/38-branching-and-commit-convention.md](docs/features/archive/38-branching-and-commit-convention.md).
 - **pre-commit** (`.husky/pre-commit`): runs `npm run verify:fast` —
   validator unit tests + frontend + server tests. Sub-5s on a warm cache.
   Refuses the commit if any spec is red. Sidecar (pytest), Pester scripts,
@@ -360,7 +360,7 @@ the regression plan under `docs/features/` when one applies. Merges use the
 "Create a merge commit" button (squash / rebase merge are disabled at the
 repo level) and the head branch is auto-deleted on merge. Full spec:
 [CONTRIBUTING.md "Pull requests"](CONTRIBUTING.md#pull-requests). Regression
-plan: [docs/features/44-pr-hygiene.md](docs/features/44-pr-hygiene.md).
+plan: [docs/features/archive/44-pr-hygiene.md](docs/features/archive/44-pr-hygiene.md).
 
 **Open PRs as draft and verify once (CI-cost default).** `verify.yml` skips
 draft PRs entirely (`if: draft == false`) and re-fires the moment a draft is
