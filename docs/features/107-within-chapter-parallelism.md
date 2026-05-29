@@ -8,7 +8,7 @@ owner: null
 
 > Status: active
 > Key files: `server/src/tts/synthesise-chapter.ts`, `server/src/gpu/semaphore.ts`, `server/src/tts/sidecar.ts`
-> URL surface: indirect — `POST /api/books/{id}/generate` SSE stream (see [16-generation-stream.md](16-generation-stream.md))
+> URL surface: indirect — `POST /api/books/{id}/generate` SSE stream (see [16-generation-stream.md](archive/16-generation-stream.md))
 > OpenAPI ops: none (server-internal synth pipeline)
 
 Stacks on [87 — Parallel chapter synthesis](archive/87-parallel-chapter-synth.md) (bounded worker pool *across* chapters) and references [70d — Per-sentence synth](70d-per-sentence-synth-and-tag-strip.md) (one group per sentence). Plan 87 parallelised chapters; this plan parallelises the sentence groups *within* a single chapter.
