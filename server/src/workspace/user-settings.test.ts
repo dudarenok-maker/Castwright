@@ -299,6 +299,51 @@ describe('userSettingsSchema — eagerLoadKokoro', () => {
   });
 });
 
+describe('userSettingsSchema — eagerLoadQwen', () => {
+  it('defaults to true on a fresh user-settings document', () => {
+    expect(DEFAULT_USER_SETTINGS.eagerLoadQwen).toBe(true);
+  });
+
+  it('accepts true and false', () => {
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadQwen: true }).eagerLoadQwen,
+    ).toBe(true);
+    expect(
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadQwen: false }).eagerLoadQwen,
+    ).toBe(false);
+  });
+
+  it("rejects non-boolean values such as 'yes'", () => {
+    expect(() =>
+      userSettingsSchema.parse({ ...DEFAULT_USER_SETTINGS, eagerLoadQwen: 'yes' }),
+    ).toThrow();
+  });
+
+  it('treats the field as optional — legacy settings files without it parse cleanly', () => {
+    const { eagerLoadQwen: _eagerLoadQwen, ...legacy } = DEFAULT_USER_SETTINGS;
+    const parsed = userSettingsSchema.parse(legacy);
+    expect(parsed.eagerLoadQwen).toBeUndefined();
+  });
+
+  it('round-trips through writeUserSettings + readUserSettings', async () => {
+    const mod = await import('./user-settings.js');
+    mod._resetUserSettingsCache();
+    const before = await mod.readUserSettings();
+    try {
+      const updated = await mod.writeUserSettings({ eagerLoadQwen: false });
+      expect(updated.eagerLoadQwen).toBe(false);
+      mod._resetUserSettingsCache();
+      const reread = await mod.readUserSettings();
+      expect(reread.eagerLoadQwen).toBe(false);
+    } finally {
+      await mod.writeUserSettings({
+        eagerLoadQwen: before.eagerLoadQwen ?? true,
+      });
+      mod._resetUserSettingsCache();
+    }
+  });
+});
+
 describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
   it("defaults to 'search' on a fresh user-settings document", () => {
     expect(DEFAULT_USER_SETTINGS.coverPickerDefaultTab).toBe('search');
