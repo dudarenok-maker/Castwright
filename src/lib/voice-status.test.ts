@@ -86,6 +86,16 @@ describe('resolveVoiceStatus — Qwen lifecycle', () => {
     });
   });
 
+  it('reads "Fallback (Kokoro)" when the character actually rendered in Kokoro', () => {
+    /* Render-time fact outranks the design lifecycle: a Qwen character that
+       fell back to Kokoro (undesigned voice, or Qwen unavailable) shows the
+       fallback pill rather than "Needs voice" / "Designed". */
+    expect(resolveVoiceStatus(char({}), undefined, QWEN, 'kokoro').lifecycle).toEqual({
+      label: 'Fallback (Kokoro)',
+      color: 'warning',
+    });
+  });
+
   it('reads "Needs voice" for a DEFAULT-engine character on a Qwen project (the Lady Thorne bug)', () => {
     /* Effective engine is the project default (Qwen) even though the character
        carries no per-character `ttsEngine`. A stale preset pill ("Matched")
