@@ -289,13 +289,6 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 
 ### Engine, sidecar & analyzer
 
-#### `side-6` — Qwen batch length-bucketing: measure the RTF win (mechanism shipped)
-
-Plan: [`128-qwen-batch-length-bucketing.md`](features/128-qwen-batch-length-bucketing.md) — `active`.
-
-- _Done (plan 128, 2026-05-29):_ the `synthesise-chapter.ts` sort (`QWEN_BATCH_BUCKET`, default ON, kill-switch `=0`), the byte-identity + spread + kill-switch vitest coverage, and the `bench-tts.py --bucket` A/B harness all shipped. Output-preserving (per-item prompts + scatter-back by `group.index`), proven byte-identical by test.
-- _Remaining:_ run the bucketed-vs-unbucketed batch-16 measurement on a live sidecar (reboot first per the perf-baseline practice) and record the row in `docs/tts-performance.md`; then flip plan 128 to `stable` and archive it. Expected ~10–30% off per-chapter RTF on high-variance chapters; the dispatch-bound ceiling remains.
-
 #### `side-7` — Qwen decode CUDA-graph / static-cache spike (probe-gated)
 
 Plan: [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-graph-spike.md). The blocked "open lever 5" in `docs/tts-performance.md`, now scoped. Source: net-new (2026-05-29), filed from the v1.5.0 generation-perf session.
@@ -303,22 +296,12 @@ Plan: [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-grap
 - _What:_ Two cheap probes gate a possible static-cache fork — do NOT fork on a hunch. **Probe 1** (~1–2 h): profile the batch-16 decode loop (`torch.profiler` / `nvidia-smi dmon`) to settle whether the BATCHED forward is still launch-bound (CUDA graphs would help) or already ~compute-bound (graphs are a dead end — `QWEN_BATCH_SIZE=16` already amortizes per-launch overhead 16×, which is why the clean bench hits RTF 0.80). **Probe 2** (only if launch-bound): audit the nested per-step `code_predictor.generate()` in `qwen_tts` for fixed-vs-variable token count + CPU sync points (`.item()`/`.cpu()`/python branches → graph-breaks). Only if BOTH green: fork `qwen_tts` for a static KV cache + `torch.compile(mode="reduce-overhead")`, behind an env kill-switch + a byte-identical-audio regression test.
 - _Acceptance:_ Probe 1 records a kernel/CPU/idle-gap split + a go/no-go line in `docs/tts-performance.md`; if compute-bound the item closes with that note (we're at the model's floor). If the fork ever lands: byte-identical PCM compiled vs un-compiled (pytest), kill-switch reverts to the un-compiled path, `_synth_lock` serialisation preserved.
 - _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine` synth + `synthesize_batch`), the installed `qwen_tts` package (read-only — `generate_voice_clone` + nested `code_predictor.generate()`), `server/tts-sidecar/scripts/bench-tts.py`, `docs/tts-performance.md` (open lever 5).
-- _Depends on:_ length-bucketing (`side-6`) banked first — this is the fallback past it once the cheaper output-preserving lever is exhausted. Last resort.
+- _Depends on:_ length-bucketing + token-budget packing (plans 128/136, shipped 2026-05-30 at the 32/3600 default) banked first — this is the fallback past them once the cheaper output-preserving levers are exhausted. Last resort.
 - _Benefit (user / technical):_ the only path past the dispatch-bound ~1–2 RTF floor toward sub-1 (Kokoro-class) Qwen speed; the probe gate means the 2–5-day, correctness-risky, maintenance-heavy fork is only attempted if a measurement proves it can actually pay off — not on the serial-path hunch.
-
-#### `side-9` — Qwen token-budget batching: run the live width A/B, record + flip to `stable`
-
-Plan: [`136-qwen-token-budget-batching.md`](features/136-qwen-token-budget-batching.md) — `active`. Source: net-new (2026-05-29), filed from the generation-perf session that measured a dialogue-dense chapter at mean RTF ~2.4.
-
-- _Done (plan 136, 2026-05-29):_ the variable-width token-budget packer in `synthesise-chapter.ts` (`QWEN_BATCH_TOKEN_BUDGET` env, default `0` = exact fixed-width fallback; `QWEN_BATCH_SIZE` becomes the hard width cap), the 5-case vitest coverage (output-preserving, per-batch `width×maxLen ≤ budget` invariant, kill-switch, over-budget singleton, determinism), and the `.env.example` docs all shipped. Output-preserving (per-item prompts + scatter-back by `group.index`), proven byte-identical by test.
-- _Remaining:_ run the fixed-16 vs fixed-24 vs token-budget (budget 2400 / cap 32) A/B on a live sidecar (reboot first per the perf-baseline practice) on the **same** chapter that read ~2.4, ffprobe-confirmed audio seconds; record the row in `docs/tts-performance.md` + watch peak VRAM (`nvidia-smi`) for OOM; then flip plan 136 to `stable` and archive it.
-- _Composes with `side-6`:_ this is the next batch-composition lever after length-bucketing (it depends on the same ascending sort) — not a replacement. Shares the live-bench acceptance gate. Expected: short/dialogue batches widen toward the cap → dispatch amortisation → per-chapter RTF toward ~1; the dispatch-bound floor (`side-7`) remains the ceiling.
-- _Benefit (user / technical):_ pulls the mean RTF down on dialogue-dense chapters (where fixed-width leaves short batches narrower than VRAM allows) without any quality change; the `width×maxLen ≤ budget` invariant lets short batches exceed the old flat width while structurally bounding the long-tail batch below the proven 8 GB envelope.
-- _Live finding (2026-05-29):_ the A/B could NOT complete at cap 64 — batches ran 400–454 s, blowing the 300 s sidecar fetch timeout (the [plan 137](features/137-sidecar-fetch-timeout.md) bug) → retry loop → "sidecar not running". Re-run the A/B **after 137 merges**. Even so, the partial data showed **wide caps are a wash-to-worse on dialogue-dense chapters** (a 64-wide bucket spans more length variance → more padding waste; ultra-short batches stayed RTF ~3). The width lever helps prose, not dialogue — so keep the default cap modest (≤32-ish) and treat **short-line coalescing** (`side-10`) as the real dialogue lever.
 
 #### `side-10` — Coalesce consecutive same-speaker short lines before batching
 
-Source: net-new (2026-05-29), from the plan-136 A/B. The dominant RTF drag on dialogue-dense chapters is **padding waste**: a batch decodes to its longest item, so a bucket of ultra-short same-speaker lines (avg ~12–30 chars) wastes most decode steps and produces little audio (measured RTF ~3 even at cap 64). Length-bucketing (`side-6`) and token-budget width (`side-9`) both fail to fix this because the items are inherently tiny.
+Source: net-new (2026-05-29), from the plan-136 A/B. The dominant RTF drag on dialogue-dense chapters is **padding waste**: a batch decodes to its longest item, so a bucket of ultra-short same-speaker lines (avg ~12–30 chars) wastes most decode steps and produces little audio (measured RTF ~3 even at cap 64). Length-bucketing + token-budget width (plans 128/136, shipped 2026-05-30) both fail to fix this because the items are inherently tiny.
 
 - _What:_ merge runs of consecutive **same-character** short sentences into one synth item (one prompt, one decode) before the batch packer, so each item carries more audio per decode step. Must stay output-equivalent enough for captions/timing — sentence-level segment boundaries map to `sentenceIds`, so a merged item would need to either keep per-sentence timing (split the returned audio) or accept coarser sentence captions for merged runs. Quality risk: prosody across a merged boundary differs from separate synth+concat (NOT byte-identical — unlike bucketing/token-budget).
 - _Key files:_ `server/src/tts/synthesise-chapter.ts` (group construction / the batchable partition), `synthesise-chapter.test.ts`.
