@@ -220,8 +220,8 @@ repo via git worktrees with non-colliding ports:
   (exit 2) or verify failure (exit 3) with a copy-pasteable follow-up.
   Idempotent; `--dry-run` previews without mutating.
 
-See [`docs/features/86-worktree-dashboard.md`](docs/features/86-worktree-dashboard.md),
-[`docs/features/85-wt-merge-helper.md`](docs/features/85-wt-merge-helper.md),
+See [`docs/features/archive/86-worktree-dashboard.md`](docs/features/archive/86-worktree-dashboard.md),
+[`docs/features/archive/85-wt-merge-helper.md`](docs/features/archive/85-wt-merge-helper.md),
 and [`CONTRIBUTING.md` "Parallel agents"](CONTRIBUTING.md#parallel-agents)
 for the full workflow.
 
