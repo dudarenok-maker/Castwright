@@ -297,6 +297,15 @@ Plan: [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-grap
 - _Depends on:_ length-bucketing (`side-6`) banked first — this is the fallback past it once the cheaper output-preserving lever is exhausted. Last resort.
 - _Benefit (user / technical):_ the only path past the dispatch-bound ~1–2 RTF floor toward sub-1 (Kokoro-class) Qwen speed; the probe gate means the 2–5-day, correctness-risky, maintenance-heavy fork is only attempted if a measurement proves it can actually pay off — not on the serial-path hunch.
 
+#### `side-9` — Qwen token-budget batching: run the live width A/B, record + flip to `stable`
+
+Plan: [`136-qwen-token-budget-batching.md`](features/136-qwen-token-budget-batching.md) — `active`. Source: net-new (2026-05-29), filed from the generation-perf session that measured a dialogue-dense chapter at mean RTF ~2.4.
+
+- _Done (plan 136, 2026-05-29):_ the variable-width token-budget packer in `synthesise-chapter.ts` (`QWEN_BATCH_TOKEN_BUDGET` env, default `0` = exact fixed-width fallback; `QWEN_BATCH_SIZE` becomes the hard width cap), the 5-case vitest coverage (output-preserving, per-batch `width×maxLen ≤ budget` invariant, kill-switch, over-budget singleton, determinism), and the `.env.example` docs all shipped. Output-preserving (per-item prompts + scatter-back by `group.index`), proven byte-identical by test.
+- _Remaining:_ run the fixed-16 vs fixed-24 vs token-budget (budget 2400 / cap 32) A/B on a live sidecar (reboot first per the perf-baseline practice) on the **same** chapter that read ~2.4, ffprobe-confirmed audio seconds; record the row in `docs/tts-performance.md` + watch peak VRAM (`nvidia-smi`) for OOM; then flip plan 136 to `stable` and archive it.
+- _Composes with `side-6`:_ this is the next batch-composition lever after length-bucketing (it depends on the same ascending sort) — not a replacement. Shares the live-bench acceptance gate. Expected: short/dialogue batches widen toward the cap → dispatch amortisation → per-chapter RTF toward ~1; the dispatch-bound floor (`side-7`) remains the ceiling.
+- _Benefit (user / technical):_ pulls the mean RTF down on dialogue-dense chapters (where fixed-width leaves short batches narrower than VRAM allows) without any quality change; the `width×maxLen ≤ budget` invariant lets short batches exceed the old flat width while structurally bounding the long-tail batch below the proven 8 GB envelope.
+
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
 
 Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
