@@ -4,7 +4,9 @@ shipped: null
 owner: null
 ---
 
-# 131 — Code-statistics tooling (`npm run stats`) + engineering-notes block
+# 132 — Code-statistics tooling (`npm run stats`) + engineering-notes block
+
+> Renumbered 131 → 132 (2026-05-29): plan 131 collided with `131-cast-status-filter.md` (both landed on `main` from parallel sessions). This tooling doc moved to 132; the cast-status-filter feature keeps 131.
 
 > Status: stable
 > Key files: `scripts/code-stats.mjs`, `scripts/bump-version.mjs`, `docs/project-narrative.md`, `package.json`
