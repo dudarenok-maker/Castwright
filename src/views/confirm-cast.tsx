@@ -6,6 +6,7 @@ import type { Character, Voice, CharColor } from '../lib/types';
 import { useAppSelector } from '../store';
 import { engineForModelKey } from '../lib/tts-models';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { QwenStatusNotice } from '../components/qwen-status-notice';
 
 interface OverrideArgs {
   sourceCharacterId: string;
@@ -181,6 +182,9 @@ export function ConfirmCastView({
     <div className="relative min-h-[calc(100vh-64px)] py-6 sm:py-12 px-4 sm:px-6">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-40 pointer-events-none" />
       <div className="relative max-w-3xl mx-auto">
+        <div className="mb-4">
+          <QwenStatusNotice />
+        </div>
         <div className="text-center mb-6 sm:mb-10">
           <SectionLabel>Cast confirmation</SectionLabel>
           <div className="mt-5">

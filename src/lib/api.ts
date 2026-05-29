@@ -3296,6 +3296,17 @@ export interface SidecarHealth {
   kokoroLoading?: boolean;
   qwenLoaded?: boolean;
   qwenLoading?: boolean;
+  /* Qwen install-state, distinct from load-state (qwenLoaded). Drives the
+     conditional default (Qwen-when-installed) + the install-check warning:
+     - 'not-installed'   — qwen_tts pip package absent
+     - 'weights-missing' — package present, Base weights not yet downloaded
+     - 'ready'           — package + weights present, model not resident
+     - 'loaded'          — Base model resident in VRAM
+     An older sidecar omits the field; the Node proxy normalises absence to
+     'not-installed' so a stale build never reports Qwen as usable. */
+  qwenPackageInstalled?: boolean;
+  qwenWeightsPresent?: boolean;
+  qwenInstallState?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
   device?: string | null;
 }
 
@@ -3435,6 +3446,10 @@ async function realGetSidecarHealth(): Promise<SidecarHealth> {
    stays consistent under VITE_USE_MOCKS=true. */
 const MOCK_USER_SETTINGS: UserSettings = {
   ...FRONTEND_ACCOUNT_DEFAULTS,
+  /* Mock resolves to the stored Kokoro default so the broad mock/e2e suite's
+     engine assumptions are unchanged; tests exercising the Qwen-default seed
+     override this fixture (or getUserSettings) directly. */
+  resolvedTtsModelKey: FRONTEND_ACCOUNT_DEFAULTS.defaultTtsModelKey,
   apiKeyStatus: 'unset',
   workspaceRoot: '(mock)/audiobook-workspace',
   workspaceSource: 'default',
@@ -3877,6 +3892,12 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
     kokoroLoading: false,
     qwenLoaded: MOCK_SIDECAR_QWEN_LOADED,
     qwenLoading: false,
+    qwenInstallState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : MOCK_SIDECAR_QWEN_INSTALL_STATE,
+    qwenPackageInstalled: MOCK_SIDECAR_QWEN_INSTALL_STATE !== 'not-installed',
+    qwenWeightsPresent:
+      MOCK_SIDECAR_QWEN_LOADED ||
+      MOCK_SIDECAR_QWEN_INSTALL_STATE === 'ready' ||
+      MOCK_SIDECAR_QWEN_INSTALL_STATE === 'loaded',
     device:
       MOCK_SIDECAR_MODEL_LOADED || MOCK_SIDECAR_KOKORO_LOADED || MOCK_SIDECAR_QWEN_LOADED
         ? 'cuda'
@@ -3894,6 +3915,11 @@ let MOCK_SIDECAR_KOKORO_LOADED = true;
 /* Qwen starts unloaded under mocks — it's a button-driven bespoke engine
    like Coqui (no eager preload), so the Qwen pill begins at 'idle'. */
 let MOCK_SIDECAR_QWEN_LOADED = false;
+/* Mocks pretend Qwen IS installed ('ready') so the conditional default
+   resolves to Qwen and the Qwen-default path is exercisable; tests that want
+   the not-installed promo/warning stub getSidecarHealth directly. */
+const MOCK_SIDECAR_QWEN_INSTALL_STATE: 'not-installed' | 'weights-missing' | 'ready' | 'loaded' =
+  'ready';
 let MOCK_OLLAMA_MODEL_LOADED = false;
 
 async function realLoadSidecar(

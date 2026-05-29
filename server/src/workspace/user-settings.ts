@@ -82,6 +82,13 @@ export const userSettingsSchema = z.object({
   defaultAnalysisModel: z.string().min(1).max(120),
   defaultTtsEngine: z.enum(TTS_ENGINE_VALUES),
   defaultTtsModelKey: z.enum(TTS_MODEL_KEY_VALUES),
+  /* Has the user DELIBERATELY chosen their default TTS model (vs. sitting on
+     the factory default)? Set true automatically by writeUserSettings when a
+     PUT changes defaultTtsModelKey. When false/undefined, getResolvedTtsModelKey
+     prefers Qwen IF it's installed (else the factory Kokoro) so a box with Qwen
+     present defaults to bespoke voices — WITHOUT overriding anyone who
+     explicitly picked an engine. Optional so legacy files load unchanged. */
+  defaultTtsModelKeyExplicit: z.boolean().optional(),
   sidecarUrl: z.string().min(1).max(2000),
   /* Analyzer dispatch. `local` routes through OllamaAnalyzer (with Gemini
      as automatic fallback iff GEMINI_API_KEY is set and the local daemon
@@ -187,6 +194,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      30-voice catalog and zero-shot cloning. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   defaultTtsModelKey: 'kokoro-v1',
+  /* Factory default = "no explicit choice yet" → getResolvedTtsModelKey is
+     free to prefer Qwen when it's installed. Becomes true the moment a PUT
+     changes the model. */
+  defaultTtsModelKeyExplicit: false,
   sidecarUrl: 'http://localhost:9000',
   /* Gemini matches the analysis-model default. Picking 'local' falls
      through to the Ollama daemon — kept as an opt-in for users who
@@ -279,6 +290,16 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, ...validated };
+    /* A genuine change to the default TTS model is an explicit user choice —
+       latch the sentinel so getResolvedTtsModelKey honours it instead of
+       preferring Qwen. (GET returns the STORED key, so a no-op round-trip
+       sends the same value back and never trips this.) */
+    if (
+      validated.defaultTtsModelKey !== undefined &&
+      validated.defaultTtsModelKey !== current.defaultTtsModelKey
+    ) {
+      merged.defaultTtsModelKeyExplicit = true;
+    }
     await writeJsonAtomic(USER_SETTINGS_PATH, merged);
     cached = merged;
     return merged;
@@ -364,6 +385,45 @@ export function getResolvedGenerationWorkers(): number {
   return DEFAULT_USER_SETTINGS.generationWorkers ?? 2;
 }
 
+export type QwenInstallState = 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
+
+/* Last Qwen install-state the sidecar /health proxy observed. Updated on every
+   reachable health poll (and the Qwen-install recheck) so getResolvedTtsModelKey
+   can read it synchronously without blocking on a sidecar fetch. Starts
+   'not-installed' so a cold boot (before the first poll) never optimistically
+   defaults to a Qwen that can't synthesise. */
+let lastKnownQwenInstallState: QwenInstallState = 'not-installed';
+
+export function setLastKnownQwenInstallState(state: QwenInstallState): void {
+  lastKnownQwenInstallState = state;
+}
+
+export function getLastKnownQwenInstallState(): QwenInstallState {
+  return lastKnownQwenInstallState;
+}
+
+/** Resolve the EFFECTIVE default TTS model key (Qwen-when-installed, else
+    Kokoro). Resolution chain:
+      1. If the user EXPLICITLY chose a default (defaultTtsModelKeyExplicit),
+         honour their stored choice verbatim.
+      2. Else if Qwen is installed (last-known install-state ready|loaded),
+         prefer qwen3-tts-0.6b — its bespoke per-character voices are the
+         headline engine.
+      3. Else the FACTORY default kokoro-v1 — deliberately NOT the stored value,
+         so a key polluted by a GET→PUT round-trip can't strand a non-explicit
+         user on a Qwen that isn't installed.
+    Read synchronously from the in-process cache; never blocks on a sidecar. */
+export function getResolvedTtsModelKey(): UserSettings['defaultTtsModelKey'] {
+  const c = cached;
+  if (c?.defaultTtsModelKeyExplicit) {
+    return c.defaultTtsModelKey;
+  }
+  if (lastKnownQwenInstallState === 'ready' || lastKnownQwenInstallState === 'loaded') {
+    return 'qwen3-tts-0.6b';
+  }
+  return 'kokoro-v1';
+}
+
 /** Hardcoded Ollama tag used as the terminal fallback in
     getResolvedOllamaModel. Cannot be derived from
     DEFAULT_USER_SETTINGS.defaultAnalysisModel any more — that default
@@ -441,4 +501,5 @@ export function getResolvedGeminiApiKey(): string | null {
 export function _resetUserSettingsCache(): void {
   cached = null;
   writeChain = Promise.resolve();
+  lastKnownQwenInstallState = 'not-installed';
 }
