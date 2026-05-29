@@ -1522,9 +1522,22 @@ export interface components {
              *     with `PRELOAD_KOKORO=0` and Kokoro warms on demand on the first
              *     synth that needs it (or via POST /load) — for Qwen-primary
              *     users who want the ~1 GB VRAM back. Takes effect on the next
-             *     sidecar restart.
+             *     sidecar restart. Only governs the sidecar when Kokoro (or Coqui)
+             *     is the resolved default engine; under a Qwen default Kokoro is
+             *     always the on-demand fallback and `eagerLoadQwen` takes over.
              */
             eagerLoadKokoro?: boolean;
+            /**
+             * @description When true (default), and Qwen3-TTS is the resolved default
+             *     engine, the Node server spawns the TTS sidecar with
+             *     `PRELOAD_QWEN=1`, so Qwen's Base synth model eager-loads at
+             *     sidecar startup. When false, the sidecar is spawned with
+             *     `PRELOAD_QWEN=0` and Qwen warms on demand on the first synth
+             *     that needs it. Only takes effect when Qwen is the default engine
+             *     (otherwise Qwen stays off and Kokoro is the on-demand fallback).
+             *     Takes effect on the next sidecar restart.
+             */
+            eagerLoadQwen?: boolean;
             /**
              * @description Number of chapters the generation queue synthesises concurrently
              *     (queue-worker concurrency). Default 2. Pulled from the flat queue
@@ -1590,6 +1603,7 @@ export interface components {
             analyzerPhase1MinLagChapters?: number | null;
             dualModelEnabled?: boolean;
             eagerLoadKokoro?: boolean;
+            eagerLoadQwen?: boolean;
             generationWorkers?: number;
         };
         LibraryResponse: {

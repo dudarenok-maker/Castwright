@@ -299,6 +299,7 @@ const listenerCallback = () => {
       /* Resolved (Qwen-when-installed) key — drives PRELOAD_QWEN vs Kokoro. */
       modelKey: getResolvedTtsModelKey(),
       eagerLoadKokoro: settings.eagerLoadKokoro ?? true,
+      eagerLoadQwen: settings.eagerLoadQwen ?? true,
       repoRoot: bootRepoRoot,
     });
   })();

@@ -34,8 +34,14 @@ export interface SpawnSidecarOpts {
   /* When true (default), the spawned sidecar gets PRELOAD_KOKORO=1 and
      eager-loads Kokoro at startup. When false (Qwen-primary users who
      want the ~1 GB VRAM back), PRELOAD_KOKORO=0 and Kokoro warms on
-     demand on first synth. */
+     demand on first synth. Only honoured when Kokoro/Coqui is the default
+     engine; under a Qwen default Kokoro is always the on-demand fallback. */
   eagerLoadKokoro: boolean;
+  /* When true (default) AND Qwen is the default engine, the spawned sidecar
+     gets PRELOAD_QWEN=1 and eager-loads Qwen Base at startup. When false,
+     PRELOAD_QWEN=0 and Qwen warms on demand on first synth. No effect unless
+     Qwen is the default engine. */
+  eagerLoadQwen: boolean;
   repoRoot: string;
   /* Override-points for tests. */
   port?: number;
@@ -142,6 +148,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     autoStart,
     modelKey,
     eagerLoadKokoro,
+    eagerLoadQwen,
     repoRoot,
     port = DEFAULT_PORT,
     host = DEFAULT_HOST,
@@ -165,16 +172,16 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   const logDir = join(repoRoot, 'logs');
   const runDir = join(repoRoot, '.run');
 
-  /* When Qwen is the effective default engine, hot-preload Qwen Base at boot
-     and keep Kokoro LAZY: Kokoro is the on-demand fallback for undesigned
-     characters and warms in ~1 s at the first fallback render, so eager-loading
-     it too would just hog ~1 GB. Non-Qwen default → Qwen stays off and Kokoro
-     honours the eagerLoadKokoro toggle exactly as before. */
+  /* The default engine honours its own eager-load toggle; the non-default
+     engine always stays LAZY as the on-demand fallback (it warms in ~1 s at
+     the first fallback render, so eager-loading it too would just hog VRAM).
+     Qwen default → PRELOAD_QWEN follows eagerLoadQwen, Kokoro forced off.
+     Kokoro/Coqui default → PRELOAD_QWEN off, Kokoro follows eagerLoadKokoro. */
   const isQwenDefault = modelKey === 'qwen3-tts-0.6b';
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
-    PRELOAD_QWEN: isQwenDefault ? '1' : '0',
+    PRELOAD_QWEN: isQwenDefault ? (eagerLoadQwen ? '1' : '0') : '0',
     PRELOAD_KOKORO: isQwenDefault ? '0' : eagerLoadKokoro ? '1' : '0',
     /* Park the Qwen designed-voice embedding cache in the per-workspace
        tree (sibling to voices.json), not the sidecar's __file__-relative
@@ -242,7 +249,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   }
 
   log(
-    `[sidecar] spawned pid=${pid} (PRELOAD_COQUI=${env.PRELOAD_COQUI}, PRELOAD_KOKORO=${env.PRELOAD_KOKORO}, modelKey=${modelKey})`,
+    `[sidecar] spawned pid=${pid} (PRELOAD_COQUI=${env.PRELOAD_COQUI}, PRELOAD_QWEN=${env.PRELOAD_QWEN}, PRELOAD_KOKORO=${env.PRELOAD_KOKORO}, modelKey=${modelKey})`,
   );
 
   /* If the child exits on its own (e.g. start.ps1 venv check failed),

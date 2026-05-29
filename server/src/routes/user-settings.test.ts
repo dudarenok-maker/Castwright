@@ -264,6 +264,7 @@ describe('user-settings router', () => {
       /* The user's other reported field — eager-load off for a Qwen-primary
          setup. */
       eagerLoadKokoro: false,
+      eagerLoadQwen: false,
       generationWorkers: 4,
     };
 
