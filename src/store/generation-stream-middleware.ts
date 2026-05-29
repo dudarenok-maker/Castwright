@@ -59,24 +59,17 @@ function bookIdFromState(s: StreamableRootState): string | null {
   return stage.bookId ?? null;
 }
 
-/* Triggers that mean "work may have appeared for the viewed book" — the slice
-   was seeded from disk / analysis, the user navigated views, a book was opened,
-   or the queue snapshot changed. `enqueueOnWork` itself gates on the Generate
-   view, so a trigger that fires at analysis/confirm time (hydrateFromAnalysis,
-   confirmCast) is a no-op until the user reaches Generate. NOT the regen actions
-   (those enqueue explicitly via their callsites) and NOT applyGenerationTick
-   (the runner self-drives ticks). */
-const ENQUEUE_TRIGGER_TYPES = new Set<string>([
-  'chapters/setChapters',
-  'chapters/hydrateFromAnalysis',
-  'chapters/hydrateFromBookState',
-  'chapters/setCurrentBookId',
-  'queue/setSnapshot',
-  'ui/openBook',
-  'ui/hydrateFromUrl',
-  'ui/confirmCast',
-  'ui/changeView',
-]);
+/* The SINGLE action that may auto-enqueue a book's queued chapters: the explicit
+   "Approve cast & start generating" intent (`ui/requestStartGeneration`).
+   Deliberately NOT openBook / hydrateFromUrl / hydrateFromBookState / changeView /
+   confirmCast / setSnapshot — those all fire on a passive open or re-open, which
+   used to re-add every freshly-seeded 'queued' chapter and silently restart
+   generation ("opening a book auto-starts generation", plan 137). Generation
+   start is now an explicit user action, never a side effect of navigation. NOT
+   the regen actions either (those enqueue explicitly via their own callsites) and
+   NOT applyGenerationTick (the runner self-drives ticks). See
+   docs/features/137-reopen-never-auto-enqueues.md. */
+const ENQUEUE_TRIGGER_TYPES = new Set<string>(['ui/requestStartGeneration']);
 
 export function generationStreamMiddleware(getRunner: () => StreamRunner): Middleware {
   return (store) => {
@@ -89,13 +82,11 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
        it idempotent across repeated triggers. */
     const enqueueOnWork = (): void => {
       const after = store.getState() as StreamableRootState;
-      /* Generate-view gate (the fix for "book queues at analysis time"): only
-         auto-enqueue once the viewed book is on the Generate view — i.e. the
-         user clicked "Approve cast & start generating" (changeView → 'generate')
-         or reopened a book that was already generating (openBook sets its view
-         to 'generate'). hydrateFromAnalysis fires while the stage is still
-         'analysing', and confirmCast lands on the 'manuscript' review view, so
-         neither passes this gate — a freshly-analysed book waits for the user. */
+      /* Defence-in-depth Generate-view gate: only the viewed book on the Generate
+         view may enqueue. The `ui/requestStartGeneration` trigger already encodes
+         explicit user intent (the only entry in ENQUEUE_TRIGGER_TYPES), so this
+         guard is belt-and-braces — it keeps a stray dispatch from ever enqueuing
+         off the Generate view. */
       const stage = after.ui.stage;
       if (stage.kind !== 'ready' || stage.view !== 'generate') return;
       const stageBookId = bookIdFromState(after);

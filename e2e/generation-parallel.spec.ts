@@ -112,13 +112,14 @@ test.describe('parallel chapter generation (BACKLOG #26, plan 87)', () => {
     await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
 
-    /* Navigate to the Generate tab. confirmCast lands on view='manuscript';
-       the user clicks "Generate" in the top-bar tab strip to land on
-       `#/books/:bookId/generate`. The streamGeneration middleware opens
-       the SSE handle on ui/changeView when there's queued work — see
-       TRIGGER_TYPES in src/store/generation-stream-middleware.ts. */
+    /* Start generating. confirmCast lands on view='manuscript'; the user
+       clicks "Approve cast & start generating", which lands on
+       `#/books/:bookId/generate` AND dispatches ui/requestStartGeneration —
+       the only action that auto-enqueues the queued chapters (plan 137; merely
+       navigating to the Generate view no longer enqueues). enqueueOnWork then
+       fills the queue and the K=2 dispatcher opens two streams. */
     const bookId = await getBookId(page);
-    await page.getByRole('button', { name: /^Generate$/ }).click();
+    await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
     await expect(page).toHaveURL(new RegExp(`#/books/${bookId}/generate`), { timeout: 5_000 });
 
     /* Poll for the parallel-SSE proof: chapter 2's first in_progress
