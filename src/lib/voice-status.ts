@@ -55,7 +55,16 @@ function resolveLifecyclePill(
     if (renderedFallbackEngine === 'kokoro') {
       return { label: 'Fallback (Kokoro)', color: 'warning' };
     }
-    const hasVoice = !!c.overrideTtsVoices?.qwen?.name || voice?.ttsVoice?.provider === 'qwen';
+    /* "Has a voice" means a real designed voiceId resolves — the character's own
+       qwen override OR a matched library Voice that actually carries a name. A
+       reused voice whose matched Voice resolves to the qwen provider but has an
+       EMPTY name (the designed voiceId was never linked or was lost to a
+       persistence bug) is NOT designed → "Needs voice", matching the row's
+       "No voice designed yet" sub-line. Checking only the provider let that
+       broken-link state mislabel itself "Designed". */
+    const hasVoice =
+      !!c.overrideTtsVoices?.qwen?.name ||
+      (voice?.ttsVoice?.provider === 'qwen' && !!voice.ttsVoice.name);
     if (!hasVoice) return { label: 'Needs voice', color: 'warning' };
     if (voice?.generated) return { label: 'Generated', color: 'success' };
     /* A synthesised 12s audition sits between bare design and rendered
