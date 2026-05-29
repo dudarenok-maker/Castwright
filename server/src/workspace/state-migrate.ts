@@ -16,7 +16,7 @@
  * edits the book.
  *
  * Rename-vs-add policy (documented in
- * docs/features/27-book-state-persistence.md):
+ * docs/features/archive/27-book-state-persistence.md):
  *   - Adding an OPTIONAL field is backwards-compatible. No schema bump.
  *     The old reader ignores the new field; the new writer keeps writing
  *     it. This is the common case.
@@ -25,7 +25,7 @@
  *     widening) breaks readers. Bump CURRENT_STATE_SCHEMA and add a
  *     migration branch below.
  *
- * Pairs with docs/features/27-book-state-persistence.md. */
+ * Pairs with docs/features/archive/27-book-state-persistence.md. */
 
 import type { BookStateJson } from './scan.js';
 import { writeJsonAtomic, readJsonWithRecovery } from './state-io.js';

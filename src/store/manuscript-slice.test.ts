@@ -1,4 +1,4 @@
-// Pairs with docs/features/12-manuscript-view.md
+// Pairs with docs/features/archive/12-manuscript-view.md
 
 import { describe, expect, it } from 'vitest';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';

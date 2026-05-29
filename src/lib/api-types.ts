@@ -1961,7 +1961,7 @@ export interface components {
              *     frontend can update `chapter.audioModelKey` without waiting
              *     for a state.json reload (which would otherwise let an
              *     engine-drift badge appear only after page navigation). See
-             *     `docs/features/35-engine-drift-detection.md`.
+             *     `docs/features/archive/35-engine-drift-detection.md`.
              * @enum {string}
              */
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
@@ -2576,7 +2576,7 @@ export interface components {
              *     segments file for legacy chapters. Absent on never-rendered
              *     chapters. The frontend compares against the project's
              *     current `ui.ttsModelKey` to surface engine-drift badges (see
-             *     `docs/features/35-engine-drift-detection.md`).
+             *     `docs/features/archive/35-engine-drift-detection.md`).
              * @enum {string}
              */
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";

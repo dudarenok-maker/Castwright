@@ -1,4 +1,4 @@
-// Pairs with docs/features/16-generation-stream.md
+// Pairs with docs/features/archive/16-generation-stream.md
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
