@@ -113,7 +113,7 @@ The helper is idempotent (safe to re-run on a partially-merged integration
 branch — it skips branches whose merge commit is already present), aborts on
 the first conflict (exit 2) or verify failure (exit 3) with a suggested
 follow-up command that drops the offending branch, and supports `--dry-run`
-for a plan-only preview. See `docs/features/85-wt-merge-helper.md` for the
+for a plan-only preview. See `docs/features/archive/85-wt-merge-helper.md` for the
 full contract.
 
 ### Running multiple Claude Code conversations
@@ -265,7 +265,7 @@ and the bypassed commit will need fixing before any PR is reviewed.
 
 Every change that lands on `main` goes through a GitHub PR. The template, the
 title gate, and the merge-button policy together codify what PRs #1-#4 already
-do by hand. See [docs/features/44-pr-hygiene.md](docs/features/44-pr-hygiene.md)
+do by hand. See [docs/features/archive/44-pr-hygiene.md](docs/features/archive/44-pr-hygiene.md)
 for the regression plan and rationale.
 
 ### PR title
@@ -294,7 +294,7 @@ Two required sections:
 
 1. **`## Summary`** — 1-3 sentences: what changes, why. If a regression plan
    under `docs/features/` applies, link it here (e.g. _"Implements
-   `docs/features/44-pr-hygiene.md`."_). If the PR fills a plan's Ship notes,
+   `docs/features/archive/44-pr-hygiene.md`."_). If the PR fills a plan's Ship notes,
    say so.
 2. **`## Test plan`** — checklist of what was run and what reviewers should
    look at. Always start with `- [ ] npm run verify — green` (the pre-push
@@ -419,7 +419,7 @@ minutes. The bumper now fires + blocks on it before tagging, so a cross-OS break
 can't ship — without re-paying the matrix on every PR. `release.yml` then runs
 `verify:quick` on Ubuntu against the tagged commit and publishes the
 platform-independent zip + SHA-256 using the tag annotation as the body. Full spec:
-[`docs/features/127-release-cross-os-gate.md`](docs/features/127-release-cross-os-gate.md)
+[`docs/features/archive/127-release-cross-os-gate.md`](docs/features/archive/127-release-cross-os-gate.md)
 + [`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
 
 **Invariants the bumper enforces** — read these before you bypass it:
