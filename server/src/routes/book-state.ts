@@ -44,9 +44,33 @@ import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
+import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
+import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 export const bookStateRouter = Router();
+
+/* Denormalise the bespoke (qwen) voice onto any REUSED character before the
+   cast persist (srv-14). The auto-match apply path stamps `matchedFrom` +
+   `voiceId` + `voiceState:'reused'` on the frontend, then persists through this
+   generic PUT — but it never copies the source character's designed voice
+   (`ttsEngine` + `overrideTtsVoices.qwen`). Without it, the on-disk cast.json
+   resolves to '' at generation and falls back to Kokoro until read-time
+   hydration patches it. Stamping here (via the shared `resolveReusedVoiceFields`
+   chain-walker that cast-link-prior already uses) makes cast.json self-complete
+   after an auto-match — belt-and-suspenders alongside runtime hydration.
+
+   No-op for any character that already owns a qwen voice, isn't a reuse, or
+   whose source can't be resolved. Tolerates a non-cast-shaped patch (returns it
+   untouched) so the funnel stays generic. */
+async function denormaliseCastReusedVoices(patch: unknown): Promise<unknown> {
+  if (!patch || typeof patch !== 'object' || !Array.isArray((patch as { characters?: unknown }).characters)) {
+    return patch;
+  }
+  const cast = patch as { characters: ReuseHydratable[] };
+  const characters = await hydrateCastReusedVoices(cast.characters);
+  return { ...cast, characters };
+}
 
 /* Non-destructive title-only refresh. Invoked transparently from the
    book-state GET so users open a book and see real chapter names
@@ -410,7 +434,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const { bookDir, state } = located;
     switch (body.slice) {
       case 'cast':
-        await writeJsonAtomic(castJsonPath(bookDir), body.patch);
+        await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(body.patch));
         break;
       case 'manuscript':
         await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), body.patch);
