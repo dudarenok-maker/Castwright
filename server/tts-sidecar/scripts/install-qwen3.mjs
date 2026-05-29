@@ -161,7 +161,14 @@ function main() {
   // engine doesn't set HF_HOME, so it ignored that copy and re-downloaded on
   // first use — a ~6-min cold stall. Aligning on the default cache fixes it;
   // the multi-GB weights live outside the repo, so the release zip is unaffected.)
-  const env = {};
+  // Silence the Hugging Face Hub symlink warning during the model prefetch.
+  // On a clean Windows box without Developer Mode, HF Hub can't create cache
+  // symlinks and prints a multi-line scary-looking warning on every download —
+  // benign here (the cache falls back to file copies, which works fine), so we
+  // suppress it rather than ask deployers to flip a Windows setting. The sidecar
+  // sets the same flag at runtime (warning_filters.py) so it can't reappear at
+  // first model load.
+  const env = { HF_HUB_DISABLE_SYMLINKS_WARNING: '1' };
   if (FORCE_CPU) env.QWEN_DEVICE = 'cpu';
 
   step('Installing qwen-tts (pulls torch + soundfile)...');

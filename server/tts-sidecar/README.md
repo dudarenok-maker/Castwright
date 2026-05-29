@@ -484,6 +484,24 @@ model-load line: `Qwen model=… attn_implementation=flash_attention_2`.
 > [docs/tts-performance.md](../../docs/tts-performance.md). Re-measure on your GPU
 > with `scripts/bench-tts.py` (below) if you want to confirm.
 
+## Suppressed startup warnings
+
+A clean Windows install + first Qwen model load print a few alarming-looking
+warnings that are all no-ops here. We suppress them so a deployer's console only
+shows warnings they must act on. Setup lives in `warning_filters.py`
+(`configure_warning_filters()`, called from `main.py` at startup) and, for the
+install prefetch subprocess, in `scripts/install-qwen3.mjs`.
+
+| Warning | Why it's benign | How it's suppressed |
+|---|---|---|
+| HF Hub `...cache-system uses symlinks...` | Windows without Developer Mode can't create cache symlinks; HF Hub transparently falls back to file copies. | `HF_HUB_DISABLE_SYMLINKS_WARNING=1` — set in both the install subprocess env and the sidecar runtime env. We do **not** set `HF_HOME`/`HF_HUB_CACHE` (the engine ignores them, so the cache stays at its default location). |
+| `SoX could not be found!` | A transitive torchaudio/coqui probe for the optional SoX backend. We do all audio I/O via soundfile + ffmpeg, so SoX is never used. | Message-scoped `warnings.filterwarnings` (narrowest scope — other `UserWarning`s still surface). |
+| transformers `flash-attn is not installed` banner | SDPA is the correct default attention impl (see **FlashAttention-2** above); FA2 is an opt-in accelerator, not a missing requirement. | Message-scoped `warnings.filterwarnings`. Deployers who install the FA2 wheel silence it the upstream way regardless. |
+
+Everything else stays visible by design — CUDA poison / OOM detail, model-load
+failures, and the FA2-install warnings (which point at a retry action) are all
+actionable and must reach the deployer.
+
 ## Benchmarking
 
 `scripts/bench-tts.py` measures per-call wall time and real-time factor
