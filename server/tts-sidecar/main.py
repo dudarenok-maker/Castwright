@@ -1398,6 +1398,71 @@ async def _preload_default_engines() -> None:
         log.info("PRELOAD_QWEN is not set — Qwen warms on demand via POST /load.")
 
 
+def _qwen_package_installed() -> bool:
+    """True if the `qwen_tts` package is importable WITHOUT importing it (no
+    torch pull, no weight load). Cheap enough to call on every /health poll."""
+    try:
+        import importlib.util
+
+        return importlib.util.find_spec("qwen_tts") is not None
+    except Exception:
+        # A broken/partial install can make find_spec raise — treat as absent.
+        return False
+
+
+def _qwen_hub_cache_dir() -> str:
+    """Resolve the Hugging Face hub cache the same way huggingface_hub does, so
+    the weights probe looks exactly where QwenEngine.from_pretrained downloads
+    to: HF_HUB_CACHE → HF_HOME/hub → $XDG_CACHE_HOME/huggingface/hub →
+    ~/.cache/huggingface/hub. (install-qwen3.mjs prefetches into this same
+    default cache — see its comment about an earlier HF_HOME bug.)"""
+    hub = os.environ.get("HF_HUB_CACHE")
+    if hub:
+        return hub
+    home = os.environ.get("HF_HOME")
+    if home:
+        return os.path.join(home, "hub")
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "huggingface", "hub")
+
+
+_QWEN_WEIGHT_SUFFIXES = (".safetensors", ".bin", ".gguf", ".pt")
+
+
+def _qwen_weights_present() -> bool:
+    """True if the Base model snapshot holds at least one real weight file in
+    the HF cache. Requires a weight blob (not just metadata) so a half-finished
+    download doesn't read as `ready`."""
+    repo_dir = os.path.join(
+        _qwen_hub_cache_dir(), "models--" + QwenEngine.BASE_MODEL.replace("/", "--")
+    )
+    snapshots = os.path.join(repo_dir, "snapshots")
+    if not os.path.isdir(snapshots):
+        return False
+    try:
+        for _root, _dirs, files in os.walk(snapshots):
+            for fname in files:
+                if fname.endswith(_QWEN_WEIGHT_SUFFIXES):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _qwen_install_state(qwen_loaded: bool) -> str:
+    """One of: 'not-installed' (pip package absent) | 'weights-missing'
+    (package present, Base weights not downloaded) | 'ready' (package + weights
+    present, not resident) | 'loaded' (Base model resident in memory). Side-
+    effect free + cheap so /health can compute it every poll."""
+    if qwen_loaded:
+        return "loaded"
+    if not _qwen_package_installed():
+        return "not-installed"
+    if not _qwen_weights_present():
+        return "weights-missing"
+    return "ready"
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
@@ -1444,6 +1509,12 @@ def health() -> dict[str, Any]:
     if isinstance(qwen, QwenEngine):
         qwen_loaded = qwen._base is not None
         qwen_loading = qwen._loading
+    # Install-state (distinct from load-state): lets the Node proxy tell
+    # "Qwen not installed" apart from "installed but cold", which drives the
+    # conditional default (Qwen-when-installed) + the install-check warning.
+    qwen_package_installed = _qwen_package_installed()
+    qwen_weights_present = _qwen_weights_present() if qwen_package_installed else False
+    qwen_install_state = _qwen_install_state(qwen_loaded)
     return {
         "ok": True,
         "engines": sorted(ENGINES.keys()),
@@ -1453,6 +1524,9 @@ def health() -> dict[str, Any]:
         "kokoro_loading": kokoro_loading,
         "qwen_loaded": qwen_loaded,
         "qwen_loading": qwen_loading,
+        "qwen_package_installed": qwen_package_installed,
+        "qwen_weights_present": qwen_weights_present,
+        "qwen_install_state": qwen_install_state,
         "device": device,
         "poisoned": poisoned,
         "poison_reason": poison_reason,
