@@ -155,8 +155,18 @@ export const userSettingsSchema = z.object({
      sidecar gets PRELOAD_KOKORO=0 and Kokoro warms on demand on first
      synth — for Qwen-primary users who want the ~1 GB VRAM back. Changing
      it re-spawns env on the next sidecar restart. Optional with a `true`
-     default so legacy user-settings.json files load unchanged. */
+     default so legacy user-settings.json files load unchanged. Only
+     governs the sidecar when Kokoro/Coqui is the resolved default engine;
+     under a Qwen default Kokoro is the on-demand fallback and
+     `eagerLoadQwen` takes over. */
   eagerLoadKokoro: z.boolean().optional(),
+  /* When true (default) AND Qwen3-TTS is the resolved default engine, the
+     spawned sidecar gets PRELOAD_QWEN=1 so Qwen's Base synth model eager-
+     loads at startup. When false, PRELOAD_QWEN=0 and Qwen warms on demand
+     on first synth. No effect unless Qwen is the default engine. Changing
+     it re-spawns env on the next sidecar restart. Optional with a `true`
+     default so legacy user-settings.json files load unchanged. */
+  eagerLoadQwen: z.boolean().optional(),
   /* Plan 111 — number of chapters the generation queue synthesises
      concurrently (queue-worker concurrency). Default 2. Queue/synthesis
      concurrency only; the process-global GPU semaphore (GPU_CONCURRENCY)
@@ -238,6 +248,11 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      on demand. Flip in lockstep with src/lib/account-defaults.ts
      FRONTEND_ACCOUNT_DEFAULTS. */
   eagerLoadKokoro: true,
+  /* On by default — when Qwen is the default engine the sidecar eager-loads
+     Qwen Base at startup. Qwen-primary users who want the synth model to
+     warm lazily turn this off. No effect under a Kokoro/Coqui default. Flip
+     in lockstep with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  eagerLoadQwen: true,
   /* Plan 111 — 2 concurrent generation workers by default (within-book
      fan-out today; cross-book once the worker pool lands). Flip in lockstep
      with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */

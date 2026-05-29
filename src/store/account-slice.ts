@@ -107,6 +107,13 @@ export const accountSlice = createSlice({
     setEagerLoadKokoro: (s, a: PayloadAction<boolean>) => {
       s.eagerLoadKokoro = a.payload;
     },
+    /* Eager-load Qwen Base at sidecar startup — when false the sidecar is
+       spawned with PRELOAD_QWEN=0 so Qwen warms on demand. Only governs the
+       sidecar when Qwen is the default engine. Toggled from the Account view's
+       TTS-sidecar card; takes effect on the next sidecar restart. */
+    setEagerLoadQwen: (s, a: PayloadAction<boolean>) => {
+      s.eagerLoadQwen = a.payload;
+    },
     /* Plan 111 — number of chapters the generation queue synthesises
        concurrently (1–4, default 2). Set from the Account view's TTS-sidecar
        card; read by the queue dispatcher. Queue/synthesis concurrency only —
