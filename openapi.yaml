@@ -2482,7 +2482,7 @@ components:
       properties:
         type:
           type: string
-          enum: [progress, chapter_assembling, chapter_complete, chapter_failed, idle, resume_from]
+          enum: [progress, chapter_assembling, chapter_complete, chapter_failed, idle, resume_from, warning]
           description: |
             `chapter_assembling` is emitted between the last per-group synthesis
             tick and `chapter_complete`, while the server concatenates the PCM,
@@ -2492,6 +2492,9 @@ components:
             (cold connect AND reconnect after `tsx watch` restart or server
             bounce) and carries a snapshot of completed chapter ids for the
             active queue entry so the reconnect doesn't replay completed work.
+            `warning` is a non-fatal advisory emitted at run setup (e.g. a
+            Qwen→Kokoro engine downgrade, or dual-model-off with a mixed cast) —
+            the run still proceeds; the frontend surfaces `message` as a toast.
             See plan `docs/features/102-global-queue-modal.md`.
         chapterId: { type: integer }
         characterId:
@@ -2546,6 +2549,18 @@ components:
             engine-drift badge appear only after page navigation). See
             `docs/features/35-engine-drift-detection.md`.
         errorReason: { type: string, nullable: true }
+        code:
+          type: string
+          description: |
+            Only on `warning` — a stable machine-readable warning code
+            (e.g. `qwen_unavailable_kokoro_fallback`,
+            `dual_model_off_multi_engine`). Lets the frontend dedupe and
+            route warnings without parsing `message`.
+        message:
+          type: string
+          description: |
+            Only on `warning` — the human-readable advisory text the
+            frontend surfaces as a toast.
         queueEntryId:
           type: string
           description: |

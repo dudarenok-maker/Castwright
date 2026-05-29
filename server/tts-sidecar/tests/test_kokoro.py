@@ -411,6 +411,18 @@ def test_health_reports_kokoro_load_state(kokoro_unloaded_client) -> None:
     assert "loading" in body
 
 
+def test_health_reports_protocol_version(kokoro_unloaded_client) -> None:
+    """/health must carry `protocol_version` (side-8): the Node server reads it
+    at startup to tell a CURRENT sidecar from a STALE one before reusing it. A
+    pre-side-8 build omits the field, which the server treats as stale and
+    replaces — so a regression that drops this field would silently re-enable
+    the stale-sidecar incident (a whole Qwen book falling back to Kokoro)."""
+    client, _engine = kokoro_unloaded_client
+    body = client.get("/health").json()
+    assert body["protocol_version"] == main.SIDECAR_PROTOCOL_VERSION
+    assert isinstance(body["protocol_version"], int)
+
+
 def test_load_kokoro_engine_warms_kokoro(kokoro_unloaded_client) -> None:
     """POST /load with `engine: 'kokoro'` warms the Kokoro engine specifically
     and leaves Coqui alone. The response is the same `{ status: 'ready' }`
