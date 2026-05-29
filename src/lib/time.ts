@@ -1,6 +1,8 @@
+/** Inverse of `formatDuration` — accepts both `MM:SS` and `HH:MM:SS`. Folds
+    the colon-separated segments base-60 so an hour-long chapter parses
+    correctly rather than dropping the seconds field. */
 export function parseDuration(s: string): number {
-  const [m, sec] = s.split(':').map(Number);
-  return m * 60 + sec;
+  return s.split(':').reduce((acc, seg) => acc * 60 + Number(seg), 0);
 }
 
 export function formatTime(totalSec: number): string {

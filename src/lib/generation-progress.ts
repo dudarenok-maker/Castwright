@@ -110,6 +110,18 @@ export function characterRowProgress(args: {
   return { derivedDone, fraction, fullyDone };
 }
 
+/** Target real-time factor: generation seconds per second of finished audio.
+    ~2 on the 4070 batch path; 2.5 bakes in dispatch overhead so the estimate
+    biases toward over- rather than under-promising. Tune here. */
+export const TARGET_RTF = 2.5;
+
+/** Estimated wall-clock generation minutes for `audioSec` seconds of audio at
+    the current target RTF, rounded to the nearest minute, floored at 1 so a
+    tiny chapter never reads as "0 min". */
+export function estimateGenMinutes(audioSec: number): number {
+  return Math.max(1, Math.round((audioSec * TARGET_RTF) / 60));
+}
+
 export function countWords(text: string): number {
   const stripped = text.replace(/\[[^\]]*\]/g, ' ');
   const m = stripped.match(/\S+/g);
