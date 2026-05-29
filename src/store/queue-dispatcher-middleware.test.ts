@@ -46,12 +46,19 @@ let fetchMock: ReturnType<typeof vi.fn>;
 /* Stateful server-queue mirror so a DELETE removes one entry (not the whole
    queue) and the returned snapshot stays consistent across drains. */
 let queueEntries: QueueEntry[] = [];
+/* Mirror the queue-global pause flag too, so a POST /api/queue/pause sticks
+   across subsequent snapshots (the breaker test asserts the queue STAYS
+   paused after it trips). */
+let queuePaused = false;
 
 beforeEach(() => {
   queueEntries = [];
+  queuePaused = false;
   fetchMock = vi.fn(async (url: string, init?: { method?: string; body?: string }) => {
     const u = String(url);
-    if (u.includes('/api/queue/enqueue')) {
+    if (u.endsWith('/api/queue/pause')) {
+      queuePaused = init?.body ? Boolean(JSON.parse(init.body).paused) : queuePaused;
+    } else if (u.includes('/api/queue/enqueue')) {
       const incoming = init?.body ? (JSON.parse(init.body).entries as QueueEntry[]) : [];
       queueEntries = [...queueEntries, ...incoming];
     } else if (init?.method === 'POST' && u.endsWith('/start')) {
@@ -74,7 +81,7 @@ beforeEach(() => {
       const id = u.split('/').pop();
       queueEntries = queueEntries.filter((e) => e.id !== id);
     }
-    return jsonResp({ entries: queueEntries, paused: false });
+    return jsonResp({ entries: queueEntries, paused: queuePaused });
   });
   vi.stubGlobal('fetch', fetchMock);
   streamGenerationMock.mockClear();
@@ -397,5 +404,113 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
     await flushMicro();
     expect(streamGenerationMock).not.toHaveBeenCalled();
+  });
+
+  /* srv-11 — consecutive-IDENTICAL-failure circuit breaker. Run one worker so
+     chapters fail strictly one at a time and the streak is deterministic. */
+  describe('consecutive-failure circuit breaker (srv-11)', () => {
+    /* Re-queue a failed entry so the single worker re-claims it and fails again,
+       mirroring a wedged book where every chapter trips the same error. */
+    function requeue(store: ReturnType<typeof makeStore>, id: string): void {
+      queueEntries = queueEntries.map((e) =>
+        e.id === id ? { ...e, status: 'queued', errorReason: null } : e,
+      );
+      store.dispatch(queueSlice.actions.setSnapshot({ entries: queueEntries, paused: false }));
+    }
+
+    const toasts = (store: ReturnType<typeof makeStore>) =>
+      store.getState().notifications.toasts;
+
+    it('does NOT trip on a single transient failure', async () => {
+      const store = makeStore(1);
+      seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+      await flushMicro();
+      failStream('book-A', 3, 'sidecar 500');
+      await flushMicro();
+
+      expect(store.getState().queue.paused).toBe(false);
+      expect(toasts(store).some((t) => t.dedupeKey?.startsWith('queue-failure-breaker'))).toBe(
+        false,
+      );
+    });
+
+    it('does NOT trip when consecutive failures carry DIFFERING reasons', async () => {
+      const store = makeStore(1);
+      seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+      await flushMicro();
+      /* Three failures, each a different reason → streak keeps resetting to 1. */
+      failStream('book-A', 3, 'sidecar 500');
+      await flushMicro();
+      requeue(store, 'a3');
+      await flushMicro();
+      failStream('book-A', 3, 'timeout');
+      await flushMicro();
+      requeue(store, 'a3');
+      await flushMicro();
+      failStream('book-A', 3, 'OOM');
+      await flushMicro();
+
+      expect(store.getState().queue.paused).toBe(false);
+      expect(toasts(store).some((t) => t.dedupeKey?.startsWith('queue-failure-breaker'))).toBe(
+        false,
+      );
+    });
+
+    it('trips after THRESHOLD identical failures → pauses queue + toasts the book + reason', async () => {
+      const store = makeStore(1);
+      seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+      await flushMicro();
+
+      /* Same reason three times in a row. */
+      for (let i = 0; i < 3; i++) {
+        failStream('book-A', 3, 'sidecar 500');
+        await flushMicro();
+        if (i < 2) {
+          requeue(store, 'a3');
+          await flushMicro();
+        }
+      }
+
+      expect(store.getState().queue.paused).toBe(true);
+      const tripped = toasts(store).find((t) =>
+        t.dedupeKey?.startsWith('queue-failure-breaker'),
+      );
+      expect(tripped).toBeDefined();
+      expect(tripped!.kind).toBe('error');
+      expect(tripped!.message).toContain('book-A');
+      expect(tripped!.message).toContain('sidecar 500');
+    });
+
+    it('resets the streak on a successful chapter so prior failures do not accumulate', async () => {
+      const store = makeStore(1);
+      seed(store, [entry({ id: 'a3', bookId: 'book-A', chapterId: 3 })]);
+      await flushMicro();
+
+      /* Same single chapter, single worker: fail, fail (re-queued + re-claimed),
+         then SUCCEED (reset), then fail once more. Streak peaks at 2 before the
+         success clears it, then climbs back to 1 — never 3 identical-in-a-row. */
+      failStream('book-A', 3, 'sidecar 500');
+      await flushMicro();
+      requeue(store, 'a3');
+      await flushMicro();
+      failStream('book-A', 3, 'sidecar 500');
+      await flushMicro();
+      requeue(store, 'a3');
+      await flushMicro();
+      /* This run succeeds — resets the book's streak. */
+      completeStream('book-A', 3);
+      await flushMicro();
+      /* Re-enqueue the (now done-pruned) chapter and fail it once more. */
+      queueEntries = [entry({ id: 'a3b', bookId: 'book-A', chapterId: 3 })];
+      store.dispatch(queueSlice.actions.setSnapshot({ entries: queueEntries, paused: false }));
+      await flushMicro();
+      failStream('book-A', 3, 'sidecar 500');
+      await flushMicro();
+
+      expect(store.getState().queue.paused).toBe(false);
+      expect(toasts(store).some((t) => t.dedupeKey?.startsWith('queue-failure-breaker'))).toBe(
+        false,
+      );
+    });
   });
 });
