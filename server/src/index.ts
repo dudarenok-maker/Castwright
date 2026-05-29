@@ -57,6 +57,7 @@ import { shareRouter, sharePublicRouter } from './routes/share.js';
 import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { ollamaHealthRouter } from './routes/ollama-health.js';
+import { qwenInstallRouter } from './routes/qwen-install.js';
 import { gpuQueueRouter } from './routes/gpu-queue.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
@@ -70,8 +71,11 @@ import {
   readUserSettings,
   getResolvedSidecarUrl,
   getResolvedAutoStartSidecar,
+  getResolvedTtsModelKey,
+  setLastKnownQwenInstallState,
 } from './workspace/user-settings.js';
 import { spawnSidecar, type SidecarHandle } from './tts/spawn-sidecar.js';
+import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 
 const app = express();
 
@@ -179,6 +183,7 @@ app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin
 app.use('/api/voices', voiceSampleRouter); // mounts POST /:voiceId/sample
 app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
 app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM analyzer)
+app.use('/api/qwen', qwenInstallRouter); // in-app Qwen3-TTS installer (detect/install/poll/recheck)
 app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inFlight for the top-bar pill)
 
 /* Production-mode frontend serving. Helper resolves whether to mount based
@@ -281,11 +286,20 @@ const listenerCallback = () => {
      will pick up the same sidecar once Kokoro/Coqui finishes loading. */
   void (async () => {
     const settings = await readUserSettings();
+    /* Seed the Qwen install-state from a Node-side disk probe BEFORE resolving
+       the default — the sidecar /health probe isn't available yet (we're about
+       to spawn it). This lets a box with Qwen installed hot-preload Qwen at
+       boot (PRELOAD_QWEN=1); a box without it spawns with Kokoro eager + Qwen
+       off, and the conditional default falls back to Kokoro. The /health poll
+       refreshes this continuously once the sidecar is up. */
+    const bootRepoRoot = resolve(__dirname, '..', '..');
+    setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
     sidecarHandle = await spawnSidecar({
       autoStart: getResolvedAutoStartSidecar(),
-      modelKey: settings.defaultTtsModelKey,
+      /* Resolved (Qwen-when-installed) key — drives PRELOAD_QWEN vs Kokoro. */
+      modelKey: getResolvedTtsModelKey(),
       eagerLoadKokoro: settings.eagerLoadKokoro ?? true,
-      repoRoot: resolve(__dirname, '..', '..'),
+      repoRoot: bootRepoRoot,
     });
   })();
 };

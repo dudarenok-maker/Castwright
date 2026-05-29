@@ -19,6 +19,7 @@ import {
   saveGeminiApiKey,
 } from '../store/account-slice';
 import { OllamaInstall } from '../components/ollama-install';
+import { QwenInstall } from '../components/qwen-install';
 import { ModelPullStatus } from '../components/model-pull-status';
 
 /* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS.
@@ -37,9 +38,12 @@ export function AccountView() {
   const [displayName, setDisplayName] = useState(account.displayName);
   const [defaultAnalysisModel, setDefaultAnalysisModel] = useState(account.defaultAnalysisModel);
   const [defaultTtsEngine, setDefaultTtsEngine] = useState<TtsEngineId>(account.defaultTtsEngine);
-  const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(
-    account.defaultTtsModelKey,
-  );
+  /* The picker shows the EFFECTIVE default (resolvedTtsModelKey, which is Qwen
+     on a box with Qwen installed), not the stored key — so the user sees what
+     books will actually use, and re-selecting a different engine is a real
+     change that pins it. Falls back to the stored key for an older server. */
+  const effectiveTtsModelKey = account.resolvedTtsModelKey ?? account.defaultTtsModelKey;
+  const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(effectiveTtsModelKey);
   const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
   const [analysisEngine, setAnalysisEngine] = useState<'local' | 'gemini'>(account.analysisEngine);
   const [ollamaUrl, setOllamaUrl] = useState(account.ollamaUrl);
@@ -84,7 +88,7 @@ export function AccountView() {
     setDisplayName(account.displayName);
     setDefaultAnalysisModel(account.defaultAnalysisModel);
     setDefaultTtsEngine(account.defaultTtsEngine);
-    setDefaultTtsModelKey(account.defaultTtsModelKey);
+    setDefaultTtsModelKey(account.resolvedTtsModelKey ?? account.defaultTtsModelKey);
     setSidecarUrl(account.sidecarUrl);
     setAnalysisEngine(account.analysisEngine);
     setOllamaUrl(account.ollamaUrl);
@@ -105,6 +109,7 @@ export function AccountView() {
     account.defaultAnalysisModel,
     account.defaultTtsEngine,
     account.defaultTtsModelKey,
+    account.resolvedTtsModelKey,
     account.sidecarUrl,
     account.analysisEngine,
     account.ollamaUrl,
@@ -152,7 +157,7 @@ export function AccountView() {
       displayName !== account.displayName ||
       defaultAnalysisModel !== account.defaultAnalysisModel ||
       defaultTtsEngine !== account.defaultTtsEngine ||
-      defaultTtsModelKey !== account.defaultTtsModelKey ||
+      defaultTtsModelKey !== effectiveTtsModelKey ||
       sidecarUrl !== account.sidecarUrl ||
       analysisEngine !== account.analysisEngine ||
       ollamaUrl !== account.ollamaUrl ||
@@ -173,6 +178,7 @@ export function AccountView() {
     defaultAnalysisModel,
     defaultTtsEngine,
     defaultTtsModelKey,
+    effectiveTtsModelKey,
     sidecarUrl,
     analysisEngine,
     ollamaUrl,
@@ -196,6 +202,14 @@ export function AccountView() {
       defaultAnalysisModel,
       defaultTtsEngine,
       defaultTtsModelKey,
+      /* Pin the user's choice (so the server stops preferring Qwen) only when
+         they picked something OTHER than the resolved default — saving an
+         unrelated field while the picker sits on the resolved default must not
+         silently disable Qwen-when-installed. Preserve a prior explicit pin. */
+      defaultTtsModelKeyExplicit:
+        defaultTtsModelKey !== effectiveTtsModelKey
+          ? true
+          : account.defaultTtsModelKeyExplicit,
       sidecarUrl,
       analysisEngine,
       ollamaUrl,
@@ -1003,23 +1017,15 @@ bash server/tts-sidecar/scripts/install-coqui.sh`}</pre>
           </p>
         </div>
 
-        <div>
-          <h3 className="text-sm font-medium text-ink">Qwen3-TTS 0.6B (optional TTS engine)</h3>
-          <p className="mt-1 text-xs text-ink/55">
-            Qwen3-TTS adds a second local engine that coexists with Kokoro. Pre-fetch the weights
-            (~1.8 GB) via:
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-ink">Qwen3-TTS (bespoke per-character voices)</h3>
+          <p className="text-xs text-ink/55">
+            Qwen3-TTS designs a unique voice per character — the headline TTS engine. Install it
+            here to make it the default for new books; the CLI
+            (`node server/tts-sidecar/scripts/install-qwen3.mjs`) stays available for scripted /
+            offline setups.
           </p>
-          <pre
-            data-testid="account-qwen-install-cmd"
-            className="mt-2 rounded-xl bg-ink/[0.04] p-3 text-xs font-mono text-ink/80 overflow-x-auto"
-          >{`# Windows
-pwsh server/tts-sidecar/scripts/install-qwen3.ps1
-
-# macOS / Linux
-node server/tts-sidecar/scripts/install-qwen3.mjs`}</pre>
-          <p className="mt-2 text-xs text-ink/55">
-            One-shot pre-fetch is optional; the sidecar downloads on first use.
-          </p>
+          <QwenInstall />
         </div>
       </div>
     </section>

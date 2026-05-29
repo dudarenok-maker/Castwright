@@ -6,7 +6,11 @@
 
 import { Router, type Request, type Response } from 'express';
 import { getCachedCatalogAudit, runCatalogAudit } from '../tts/coqui-catalog-audit.js';
-import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import {
+  getResolvedSidecarUrl,
+  setLastKnownQwenInstallState,
+  type QwenInstallState,
+} from '../workspace/user-settings.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -38,7 +42,29 @@ interface SidecarHealthBody {
      same single /health response so useTtsLifecycle stays on one poll. */
   qwen_loaded?: boolean;
   qwen_loading?: boolean;
+  /* Install-state (plan: Qwen-default). Distinct from load-state: tells
+     "package not pip-installed" / "installed, weights not downloaded" apart
+     from "ready" / "loaded". Absent on an older sidecar → treated as
+     'not-installed' below (never optimistically claim Qwen is usable). */
+  qwen_package_installed?: boolean;
+  qwen_weights_present?: boolean;
+  qwen_install_state?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
   device?: string | null;
+}
+
+const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
+  'not-installed',
+  'weights-missing',
+  'ready',
+  'loaded',
+];
+
+/* Normalise the sidecar's qwen_install_state. An old sidecar omits the field
+   entirely → 'not-installed' so a stale build never reports Qwen as ready. */
+function normaliseQwenInstallState(raw: unknown): QwenInstallState {
+  return QWEN_INSTALL_STATES.includes(raw as QwenInstallState)
+    ? (raw as QwenInstallState)
+    : 'not-installed';
 }
 
 sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
@@ -58,6 +84,13 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       });
     }
     const body = (await response.json().catch(() => ({}))) as SidecarHealthBody;
+    const qwenInstallState = normaliseQwenInstallState(body.qwen_install_state);
+    /* Feed the in-process cache getResolvedTtsModelKey reads synchronously, so
+       the conditional Qwen-when-installed default tracks reality on every poll
+       without that resolver having to block on a sidecar fetch. Only updated on
+       a reachable response — an unreachable poll leaves the last-known state
+       intact (a transient timeout shouldn't downgrade a known-ready Qwen). */
+    setLastKnownQwenInstallState(qwenInstallState);
     return res.json({
       status: 'reachable',
       url,
@@ -69,6 +102,9 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       kokoroLoading: body.kokoro_loading === true,
       qwenLoaded: body.qwen_loaded === true,
       qwenLoading: body.qwen_loading === true,
+      qwenPackageInstalled: body.qwen_package_installed === true,
+      qwenWeightsPresent: body.qwen_weights_present === true,
+      qwenInstallState: qwenInstallState,
       device: typeof body.device === 'string' ? body.device : null,
     });
   } catch (e) {

@@ -204,6 +204,31 @@ describe('uiSlice — seed defaults from account settings', () => {
     expect(next.ttsModelKey).toBe('gemini-2.5-flash');
   });
 
+  it('seeds ttsModelKey from resolvedTtsModelKey (Qwen-when-installed) over the stored default', () => {
+    /* The server resolves the effective default to Qwen when it's installed
+       while leaving the STORED defaultTtsModelKey on kokoro-v1; the session
+       must seed from the resolved key so a Qwen box defaults to bespoke voices. */
+    const start = baseState({ kind: 'books' });
+    const next = uiSlice.reducer(start, {
+      type: 'account/fetch/fulfilled',
+      payload: {
+        defaultAnalysisModel: 'gemini-3.1-flash-lite',
+        defaultTtsModelKey: 'kokoro-v1',
+        resolvedTtsModelKey: 'qwen3-tts-0.6b',
+      },
+    });
+    expect(next.ttsModelKey).toBe('qwen3-tts-0.6b');
+  });
+
+  it('falls back to the stored default when the server omits resolvedTtsModelKey', () => {
+    const start = baseState({ kind: 'books' });
+    const next = uiSlice.reducer(start, {
+      type: 'account/fetch/fulfilled',
+      payload: { defaultAnalysisModel: 'x', defaultTtsModelKey: 'coqui-xtts-v2' },
+    });
+    expect(next.ttsModelKey).toBe('coqui-xtts-v2');
+  });
+
   it('leaves an explicit user pick alone when account hydrates after', () => {
     let s = baseState({ kind: 'books' });
     s = uiSlice.reducer(s, uiActions.setSelectedModel('gemini-2.5-flash'));

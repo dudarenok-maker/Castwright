@@ -45,7 +45,7 @@ import {
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
-import { getCachedUserSettings } from '../workspace/user-settings.js';
+import { getCachedUserSettings, getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import {
   audioExtForFormat,
   encodePcmToAudio,
@@ -276,6 +276,11 @@ interface CharacterSnapshot {
       override-only change. Optional: segments written before plan 108 have no
       value → the detector treats it as "no signal" and falls back to voiceId. */
   resolvedVoiceName?: string;
+  /** Engine this character ACTUALLY rendered in when it differs from its
+      configured engine — `'kokoro'` when a Qwen character fell back (no
+      designed voice, or Qwen unavailable). Undefined = rendered in its
+      configured engine. Drives the "Fallback (Kokoro)" cast status. */
+  renderedFallbackEngine?: string;
   /** Attribute list captured at synthesis time. The drift detector
       compares this against the current cast's attributes — a non-empty
       symmetric difference fires a drift event because attributes drive
@@ -398,6 +403,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      mode avoids engine-swap latency. Advisory only — the run proceeds; the
      sidecar lazy-loads each engine on first use. */
   const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
+  /* Qwen→Kokoro fallback gate. When the cast routes anyone to Qwen but Qwen
+     isn't installed/loaded (last-known install-state), mark the engine
+     unavailable so synthesiseChapter falls those characters back to Kokoro
+     instead of hard-failing the chapter. (A character with a designed Qwen
+     voice on a healthy Qwen engine is unaffected — that fallback only fires on
+     an undesigned voice or an unavailable engine.) */
+  const qwenInUse = requiredEngines.has('qwen');
+  const qwenState = getLastKnownQwenInstallState();
+  const qwenUnavailable = qwenInUse && qwenState !== 'ready' && qwenState !== 'loaded';
   if (requiredEngines.size > 1 && !getCachedUserSettings().dualModelEnabled) {
     const list = [...requiredEngines].sort().join(' + ');
     const message =
@@ -714,6 +728,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          `_base_load_lock` is the correctness guarantee; this is the explicit
          "wait until ready" on top). Honours the run abort. */
       await ensureSidecarEngineReady(engine, controller.signal);
+      /* Warm Kokoro on demand when Qwen is in use: any Qwen character with no
+         designed voice (or an unavailable Qwen engine) falls back to Kokoro, so
+         the first fallback render shouldn't race a cold Kokoro load. Kokoro is
+         intentionally NOT eager-loaded at boot when Qwen is the default. */
+      if (qwenInUse) {
+        await ensureSidecarEngineReady('kokoro', controller.signal);
+      }
       /* Wall around the synth phase only (all TTS — title beat + body groups;
          encode/disk happens after and is excluded) — drives the RTF rollup +
          the dev top-bar throughput pill. */
@@ -725,6 +746,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         modelKey,
         engine,
         resolveForEngine,
+        qwenUnavailable,
         signal: controller.signal,
         chapterTitleNarration,
         narratorCharacterId: 'narrator',
@@ -856,6 +878,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          characters the drift detector cares about and avoids bloating the
          segments file with the full cast on tiny chapters. */
       const speakingIds = new Set(result.segments.map((s) => s.characterId));
+      /* Which characters actually fell back to Kokoro this render (any segment
+         of theirs stamped renderedFallbackEngine) — surfaced on the snapshot so
+         the cast/listen UI can show "Fallback (Kokoro)". */
+      const fallbackByChar = new Map<string, string>();
+      for (const s of result.segments) {
+        if (s.renderedFallbackEngine) fallbackByChar.set(s.characterId, s.renderedFallbackEngine);
+      }
       const characterSnapshots: Record<string, CharacterSnapshot> = {};
       for (const c of cast.characters) {
         if (!speakingIds.has(c.id)) continue;
@@ -878,6 +907,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           voiceId: c.voiceId,
           voiceEngine: charEngine,
           resolvedVoiceName: resolvedVoiceName || undefined,
+          renderedFallbackEngine: fallbackByChar.get(c.id),
           /* Sorted for stable comparison — the analyzer's attribute order
              isn't deterministic across runs, so without the sort an
              order-only change would look like drift to the detector. */

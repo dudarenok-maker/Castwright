@@ -21,6 +21,7 @@ import {
   writeGeminiApiKey,
   getResolvedGeminiApiKey,
   getResolvedGenerationWorkers,
+  getResolvedTtsModelKey,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
@@ -31,6 +32,12 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
   apiKeyStatus: 'set' | 'unset';
   workspaceRoot: string;
   workspaceSource: 'env' | 'default' | 'override';
+  /* The EFFECTIVE default TTS model after the Qwen-when-installed resolution
+     (getResolvedTtsModelKey). Distinct from the STORED `defaultTtsModelKey`
+     (which the Account picker shows + round-trips): the frontend seeds the
+     session engine from this so a fresh box with Qwen installed defaults to
+     Qwen, while the stored key stays Kokoro until the user explicitly picks. */
+  resolvedTtsModelKey: UserSettings['defaultTtsModelKey'];
 }
 
 function envDerived(settings: UserSettings): UserSettingsResponse {
@@ -48,6 +55,10 @@ function envDerived(settings: UserSettings): UserSettingsResponse {
        getResolvedGenerationWorkers() returns the on-disk account value, so the
        Account-tab UI is unchanged. */
     generationWorkers: getResolvedGenerationWorkers(),
+    /* Read-only effective default (Qwen-when-installed, else Kokoro). The
+       stored `defaultTtsModelKey` above is left untouched so the Account
+       picker shows what's saved and a no-op round-trip can't pollute it. */
+    resolvedTtsModelKey: getResolvedTtsModelKey(),
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
   };
