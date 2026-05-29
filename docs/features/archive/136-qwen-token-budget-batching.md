@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-30
 owner: null
 ---
 
@@ -151,5 +151,6 @@ dialogue lever regardless — short-line coalescing is.
 
 ## Ship notes
 
-_Pending: shipped date + commit SHA on merge; flip to `stable` after the live
-A/B (step 5) confirms the RTF win with no OOM._
+**2026-05-30 — live A/B completed; shipped as the default.** The fixed-width vs token-budget A/B was run on the live 8 GB sidecar with no OOM, and the adopted production config is **cap 32 / budget 3600**. That config is now the **shipped code default** (`server/src/tts/synthesise-chapter.ts`): `QWEN_BATCH_SIZE` default `4 → 32`, `QWEN_BATCH_TOKEN_BUDGET` default `0 → 3600`. The unset-vs-explicit-`0` distinction is preserved by the new exported `resolveQwenTokenBudget` helper (unset/empty → 3600 ON; an explicit `0` → the fixed-width kill-switch), unit-pinned in `synthesise-chapter.test.ts`. `server/.env.example` documents the new defaults. Output remains byte-identical (per-item prompts + index scatter-back). Closes backlog `side-9`.
+
+Wide caps were confirmed a wash-to-worse on dialogue-dense chapters (padding waste — a batch decodes to its longest item), so width is not the dialogue lever; the remaining lever there is short-line coalescing (backlog `side-10`). Smaller GPUs that OOM should lower `QWEN_BATCH_TOKEN_BUDGET` (then `QWEN_BATCH_SIZE`) via `server/.env` + restart.
