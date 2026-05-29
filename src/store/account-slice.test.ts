@@ -123,6 +123,13 @@ describe('accountSlice — granular setters', () => {
     expect(b.eagerLoadKokoro).toBe(true);
   });
 
+  it('setEagerLoadQwen toggles the Qwen eager-load flag', () => {
+    const a = accountSlice.reducer(undefined, accountActions.setEagerLoadQwen(false));
+    expect(a.eagerLoadQwen).toBe(false);
+    const b = accountSlice.reducer(a, accountActions.setEagerLoadQwen(true));
+    expect(b.eagerLoadQwen).toBe(true);
+  });
+
   it('setGenerationWorkers sets the queue-worker count', () => {
     const a = accountSlice.reducer(undefined, accountActions.setGenerationWorkers(4));
     expect(a.generationWorkers).toBe(4);
@@ -191,6 +198,27 @@ describe('accountSlice — eager-load Kokoro flag', () => {
     await store.dispatch(saveAccountSettings({ eagerLoadKokoro: false }));
     expect(putSpy).toHaveBeenCalledWith({ eagerLoadKokoro: false });
     expect(store.getState().account.eagerLoadKokoro).toBe(false);
+  });
+});
+
+describe('accountSlice — eager-load Qwen flag', () => {
+  it('hydrates eagerLoadQwen from the server fetch response', async () => {
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      eagerLoadQwen: false,
+    });
+    const store = makeStore();
+    await store.dispatch(fetchAccountSettings());
+    expect(store.getState().account.eagerLoadQwen).toBe(false);
+  });
+
+  it('round-trips eagerLoadQwen through saveAccountSettings', async () => {
+    const putSpy = api.putUserSettings as unknown as ReturnType<typeof vi.fn>;
+    putSpy.mockResolvedValue({ ...SERVER_FIXTURE, eagerLoadQwen: false });
+    const store = makeStore();
+    await store.dispatch(saveAccountSettings({ eagerLoadQwen: false }));
+    expect(putSpy).toHaveBeenCalledWith({ eagerLoadQwen: false });
+    expect(store.getState().account.eagerLoadQwen).toBe(false);
   });
 });
 
