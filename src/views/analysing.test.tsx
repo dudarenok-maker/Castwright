@@ -1,4 +1,4 @@
-// Pairs with docs/features/04-analysing-view-progress.md
+// Pairs with docs/features/archive/04-analysing-view-progress.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';

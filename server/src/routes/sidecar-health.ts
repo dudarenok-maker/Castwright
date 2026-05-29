@@ -79,7 +79,7 @@ function normaliseQwenInstallState(raw: unknown): QwenInstallState {
    getLastKnownQwenInstallState() and makes generation silently fall EVERY Qwen
    character back to Kokoro — wrong engine, wrong voices, no warning. A loaded
    model can never be "not installed", so honour it. (Stale-build incident,
-   2026-05-29 — see docs/features/135-qwen-loud-fallback.md.) */
+   2026-05-29 — see docs/features/archive/135-qwen-loud-fallback.md.) */
 function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
   if (body.qwen_loaded === true) return 'loaded';
   return normaliseQwenInstallState(body.qwen_install_state);

@@ -37,7 +37,7 @@
    dispatching the snapshot subset is intentional and idempotent: the
    slice's applyAnalysisSnapshotTick takes the latest tick.
 
-   Pairs with docs/features/32-sticky-analysis.md. */
+   Pairs with docs/features/archive/32-sticky-analysis.md. */
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, AnalysisError } from '../lib/api';

@@ -151,7 +151,7 @@ bodyguards / mentors / family on the roster even when their attributed
 line count would normally fold them into the unknown-male / unknown-female
 buckets. Without this signal, characters like Grizel and Sandor (Lost
 Cities Neverseen — see
-`docs/features/97-narrator-only-named-characters.md`) get silently
+`docs/features/archive/97-narrator-only-named-characters.md`) get silently
 erased from the cast at the post-stage-2 fold pass.
 
 If a character previously had dialogue in an earlier chapter (already on

@@ -2547,7 +2547,7 @@ components:
             frontend can update `chapter.audioModelKey` without waiting
             for a state.json reload (which would otherwise let an
             engine-drift badge appear only after page navigation). See
-            `docs/features/35-engine-drift-detection.md`.
+            `docs/features/archive/35-engine-drift-detection.md`.
         errorReason: { type: string, nullable: true }
         code:
           type: string
@@ -3430,7 +3430,7 @@ components:
             segments file for legacy chapters. Absent on never-rendered
             chapters. The frontend compares against the project's
             current `ui.ttsModelKey` to surface engine-drift badges (see
-            `docs/features/35-engine-drift-detection.md`).
+            `docs/features/archive/35-engine-drift-detection.md`).
         audioRenderedAt:
           type: string
           format: date-time
