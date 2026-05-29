@@ -188,7 +188,7 @@ handoffs). Sub-groups and the items within them are ranked top = highest priorit
 
 #### `fs-9` — Configurable chapter-title silence durations
 
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
+Source: [`28-chapter-audio-format.md`](features/archive/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
 
 - _What:_ Promote the two hard-coded constants `CHAPTER_LEAD_SILENCE_SEC = 1.5` and `CHAPTER_POST_TITLE_SILENCE_SEC = 1.5` in `server/src/tts/synthesise-chapter.ts` to a per-book setting on `state.json`. Surface in the Listen view's metadata editor (the same panel that already edits narratorCredit / genre / etc.) as a "Chapter break duration" slider with a small preset list (e.g. 0.5/1/1.5/2/3 s) for the leading + post-title legs. Generation route reads the per-book values and forwards into `synthesiseChapter` opts.
 - _Acceptance:_ Editing a book's silence durations and regenerating one chapter produces an MP3 whose leading + post-title silence matches the new setting (ffprobe / spectrogram). Default for legacy books stays 1.5 + 1.5. Existing chapter-audio-format paired tests stay green.
@@ -198,7 +198,7 @@ Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) foll
 
 #### `fs-10` — Render the chapter-title segment on the Listen view timeline
 
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
+Source: [`28-chapter-audio-format.md`](features/archive/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
 
 - _What:_ The new title segment in `segments.json` (kind: `'title'`, empty `sentenceIds[]`) is currently filtered out at the `ChapterAudio` API boundary in `server/src/routes/chapter-audio.ts` because the wire contract types `sentenceId` as a required integer. To surface the title on the listen-view timeline (a labelled "TITLE" pill anchored at the start of the chapter, ~3 s wide including silence), widen the API segment shape so `sentenceId` is optional and add an optional `kind?: 'title' | 'sentence'` discriminator, regenerate `src/lib/api-types.ts`, then teach `src/components/listen/listen-player-region.tsx` to render title-kind segments differently from sentence-kind segments.
 - _Acceptance:_ The listen view's chapter timeline shows a short "TITLE" pill at the head of each chapter rendered after this lands. Clicking it seeks to t=0. Pre-existing chapters whose `segments.json` has no title-kind row degrade gracefully (no title pill — same as today).
@@ -218,7 +218,7 @@ Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
 
 #### `fs-3` — Streaming audio for live playback during chapter generation
 
-Source: [`28-chapter-audio-format.md`](features/28-chapter-audio-format.md) follow-ups.
+Source: [`28-chapter-audio-format.md`](features/archive/28-chapter-audio-format.md) follow-ups.
 
 > **Re-prioritised Should → Could (2026-05-26):** generation now runs close to real-time speech speed (Qwen end-to-end ~RTF 1.15, Kokoro faster), so the wait a streaming player would hide is small — a chapter finishes about as fast as you could start listening to it stream. Worth doing for the "listen as it generates" polish, not for throughput.
 
@@ -326,7 +326,7 @@ Source: net-new (2026-05-29), from the plan-136 A/B. The dominant RTF drag on di
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
 
-Source: [`30-global-model-control.md`](features/30-global-model-control.md) "When to extend the pattern".
+Source: [`30-global-model-control.md`](features/archive/30-global-model-control.md) "When to extend the pattern".
 
 - _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) drives today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. Per the 2026-05-21 Kokoro-Stop-pill change, the hook now fans out per engine: it returns `{ coqui, kokoro, evictionNotice, loadErrorNotice, dismissNotices }` from a single /health probe. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
 - _Acceptance:_ The new surface reads `ttsLifecycle` from `useOutletContext<LayoutContext>()` (pattern from `generation.tsx`), picks the per-engine slot it cares about (`ttsLifecycle.coqui` / `ttsLifecycle.kokoro`), and renders the right pill via `ModelControlPill` with the matching `engineLabel`. No new `setInterval`, no new `/health` poll, no duplicated `evictionNotice` / `loadErrorNotice` state.
@@ -418,6 +418,16 @@ Source: net-new (2026-05-23). Surfaced during the plan-103 CI cost audit.
 - _Depends on:_ none.
 - _Benefit (technical):_ ~60 billed min/month freed on regen days; tidier workflow.
 
+#### `ops-6` — Refresh stale `docs/features/<NN>.md` path pointers in source comments
+
+Source: net-new (2026-05-29). Fallout from the plan-archiving sweep that moved ~56 shipped plans into `docs/features/archive/`. The rendered markdown links in `CLAUDE.md` / `CONTRIBUTING.md` / `README.md` / `BACKLOG.md` / `INDEX.md` were updated in that same PR, but plain-text "Pairs with `docs/features/<NN>-…md`" pointers in `.ts` / `.tsx` test + source comments, `openapi.yaml` description strings, and `skills/*.md` were intentionally left alone — editing them would have broken the doc-only CI fast-path and coupled unrelated scope into a docs PR.
+
+- _What:_ Sweep the non-doc tree for `docs/features/<NN>-…md` comment pointers to now-archived plans and rewrite them to `docs/features/archive/<NN>-…md`. Mechanical; group into one commit. (~40 files: see `git grep "docs/features/" -- '*.ts' '*.tsx' '*.mjs' openapi.yaml skills`.)
+- _Acceptance:_ `git grep "docs/features/[0-9]" -- '*.ts' '*.tsx' '*.mjs' openapi.yaml skills | grep -v archive/` returns only references to plans that are still top-level (active/deferred).
+- _Key files:_ assorted `*.test.ts(x)` + `server/src/**` comments, `openapi.yaml`, `skills/audiobook-character-detection-per-chapter.md`.
+- _Depends on:_ none.
+- _Benefit (technical):_ a dev following a "Pairs with …" pointer lands on the file instead of a 404; keeps the regression-plan ↔ test linkage navigable. Low urgency — the plans are findable by slug via `git grep`.
+
 #### `srv-4` — Track upstream-blocked deprecation chains (~~jsdom~~ · ~~archiver~~ · @google/genai)
 
 Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation audit in `~/.claude/plans/fancy-bouncing-lovelace.md`. Pure tracking item — no direct fix; we wait for upstream majors. Companion to the now-shipped ESLint 8 → 9 migration (plan 104) and the Multer 1 → 2 upgrade which cover the chains we could fix immediately.
@@ -475,7 +485,7 @@ Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
 
 #### `fs-8` — PocketBook Cloud direct upload OR `@pbsync.com` email gateway
 
-Source: [`32-audiobook-export.md`](features/32-audiobook-export.md) follow-ups.
+Source: [`32-audiobook-export.md`](features/archive/32-audiobook-export.md) follow-ups.
 
 - _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
 - _Acceptance:_ A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
@@ -504,35 +514,35 @@ Source: net-new (2026-05-26), plan 112. ICL mode drags the reference clip's code
 
 ### `ops-4` — Auto-install Ollama / auto-pull models
 
-Source: [`29-analyzer-ollama-local.md`](features/29-analyzer-ollama-local.md).
+Source: [`29-analyzer-ollama-local.md`](features/archive/29-analyzer-ollama-local.md).
 
 - _Why parked:_ installer + `ollama pull` are platform-specific and fragile under the OneDrive workspace path; the README addendum + explicit user opt-in is the v1 contract.
 - _Wake when:_ Ollama upstream ships a stable cross-platform headless installer, OR a CI / dev-container path needs one-command bring-up. Likely two separate items then.
 
 ### `srv-8` — Multi-model fan-out for Gemini analyzer
 
-Source: [`06-analyzer-gemini.md`](features/06-analyzer-gemini.md).
+Source: [`06-analyzer-gemini.md`](features/archive/06-analyzer-gemini.md).
 
 - _Why parked:_ one model per run keeps cost predictable and the SSE stream simple; A/B comparison today is two sequential runs.
 - _Wake when:_ a real product use case for "render the same chapter under two models side-by-side in one view" emerges. The audio-layer a/b audition (plan 20) covers the listening-side intent today.
 
 ### `fe-11` — Multi-tab catch-up race resilience
 
-Source: [`32-sticky-analysis.md`](features/32-sticky-analysis.md).
+Source: [`32-sticky-analysis.md`](features/archive/32-sticky-analysis.md).
 
 - _Why parked:_ disk `state.json` is authoritative + single-user-per-workspace, so two tabs on the same book never compete on writes. Tab B catches up by re-reading state on focus.
 - _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `srv-10` — both wake under the same trigger.
 
 ### `srv-9` — Multi-book parallel generation
 
-Source: [`16-generation-stream.md`](features/16-generation-stream.md).
+Source: [`16-generation-stream.md`](features/archive/16-generation-stream.md).
 
 - _Why parked:_ single 8 GB GPU can't hold two XTTS/Kokoro instances; the generation queue is serial per workspace by design.
 - _Wake when:_ either cloud TTS becomes the dominant generation path so VRAM is no longer the bottleneck, or the user adds a dedicated per-book GPU. Neither is on the v1 roadmap.
 
 ### `fs-12` — Voice creation from scratch
 
-Source: [`22-voice-library.md`](features/22-voice-library.md); _What_ revised 2026-05-26 for the Qwen voice-design engine.
+Source: [`22-voice-library.md`](features/archive/22-voice-library.md); _What_ revised 2026-05-26 for the Qwen voice-design engine.
 
 - _What (revised 2026-05-26):_ Qwen3-TTS (plan 108) already authors a bespoke per-character voice from a text persona (design → clone → cache the embedding → reuse for consistency), so "create a voice that exists in no catalog" is no longer hypothetical — it ships, scoped to a cast member. What's still missing is a _standalone_ library-voice authoring surface: design a voice from a persona (or a reference clip) as a first-class library entry not tied to one character, name + tag + pin it, reuse it across books, plus optional fine-tuning of an already-designed voice.
 - _Why parked:_ the per-character Qwen design flow covers the dominant need (give this character a distinct voice). A general-purpose voice-authoring studio (standalone named library entries, reference-clip cloning UI, fine-tune controls) is its own product surface beyond today's read-mostly library.
@@ -540,21 +550,21 @@ Source: [`22-voice-library.md`](features/22-voice-library.md); _What_ revised 20
 
 ### `fe-12` — Bulk pin / bulk delete in voice library
 
-Source: [`22-voice-library.md`](features/22-voice-library.md); revised 2026-05-26 for Qwen custom voices.
+Source: [`22-voice-library.md`](features/archive/22-voice-library.md); revised 2026-05-26 for Qwen custom voices.
 
 - _Why parked (under review 2026-05-26):_ the original "fewer than 50 entries (28 Kokoro + ~12 Coqui defaults), per-voice click is fast enough" premise is weakening. Qwen3-TTS (plan 108) designs a bespoke voice per character, so a heavy multi-book user accumulates many cached custom voices in the library — quickly past the ~50-entry comfort threshold. At that point bulk pin / bulk delete stops being a nicety and becomes the only sane way to curate. **Flagged to move up to Could (or Should) after a review of real library sizes once a few books have been (re)generated under Qwen.**
 - _Wake when:_ a real workspace's library crosses ~50 entries from accumulated Qwen-designed voices and per-voice curation gets painful — likely soon given the catalogue-wide Qwen regen, so review proactively rather than waiting for a complaint. No longer blocked on `fs-12`: Qwen's per-character design flow already produces the bulk-worthy entries.
 
 ### `fe-13` — Live `VITE_USE_MOCKS` toggle in running UI
 
-Source: [`23-mock-toggle.md`](features/23-mock-toggle.md).
+Source: [`23-mock-toggle.md`](features/archive/23-mock-toggle.md).
 
 - _Why parked:_ the mock layer swaps the entire `api` module at module-load via the env flag; flipping at runtime would need a different architecture (e.g. mock middleware around the api object).
 - _Wake when:_ demo / QA flow requires mid-session real↔mock flipping. Today rebuilding with `VITE_USE_MOCKS=true` takes 5 s — building the runtime toggle would cost more than the friction it removes.
 
 ### `srv-10` — Conflict resolution for two simultaneous `state.json` writers
 
-Source: [`27-book-state-persistence.md`](features/27-book-state-persistence.md).
+Source: [`27-book-state-persistence.md`](features/archive/27-book-state-persistence.md).
 
 - _Why parked:_ single-user-per-workspace assumption; file locking is advisory at best on Windows network shares.
 - _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `fe-11` — both wake under the same trigger.
