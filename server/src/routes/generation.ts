@@ -61,6 +61,7 @@ import {
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
+import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import { ensureSidecarEngineReady } from '../tts/ensure-sidecar-loaded.js';
@@ -366,6 +367,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     });
     return res.end();
   }
+
+  /* Hydrate reused characters' bespoke voices from their source book before any
+     routing/synth decision. A reused Qwen character carries only voiceId +
+     matchedFrom on disk (the reuse write paths don't copy the engine/override),
+     so without this `pickVoiceForEngine('qwen', …)` would resolve to '' and the
+     chapter would fall back to Kokoro instead of the designed voice. Folding the
+     source book's `ttsEngine` + `overrideTtsVoices` onto the character here means
+     every downstream consumer (engine detection, synthesiseChapter routing,
+     drift snapshots) sees the real designed voice. No-op for non-reused or
+     already-designed characters. */
+  cast.characters = await hydrateCastReusedVoices(cast.characters);
 
   /* Per-character engine routing (plan 108). Engine is no longer one global
      choice: a character may carry its own `ttsEngine` (narrator on Kokoro, a
