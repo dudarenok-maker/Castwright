@@ -90,6 +90,22 @@ describe('dark-mode CSS overrides (styles.css)', () => {
     { selector: '.bg-emerald-200', label: 'emerald-200 (Done progress-bar track)' },
     { selector: '.bg-emerald-400', label: 'emerald-400 (CharStatusBar fullyDone pip)' },
     { selector: '.bg-emerald-500', label: 'emerald-500 (Done progress-bar fill)' },
+    /* Install-status banners (`ollama-install.tsx`, `qwen-install.tsx`)
+       paint emerald-900 heading + emerald-900/70 version line on the
+       emerald-50 fill. Without these the banner read as green-on-green
+       on the dark canvas — the original bug this round fixed. The /70
+       alpha modifier compiles to its own selector. */
+    { selector: '.text-emerald-900', label: 'emerald-900 banner heading text' },
+    { selector: '.text-emerald-900\\/70', label: 'emerald-900 /70 banner subtext' },
+    /* Cast-view VRAM-eviction banner (`src/views/cast.tsx:401–409`):
+       `bg-emerald-50/70` base + `text-emerald-700/60` dismiss button +
+       `hover:text-emerald-700`. Each `/N` / hover form compiles to its
+       own selector the bare rules don't reach — without these the banner
+       painted a cream wash with light-on-light body text and a dark-green
+       dismiss control. */
+    { selector: '.bg-emerald-50\\/70', label: 'emerald-50 /70 (eviction banner base)' },
+    { selector: '.text-emerald-700\\/60', label: 'emerald-700 /60 (dismiss button)' },
+    { selector: '.hover\\:text-emerald-700:hover', label: 'emerald-700 hover (dismiss)' },
     /* Floating reassign picker (CharacterSearchPicker) — `bg-white` alone
        only redirects to #1f1b19, which sat at nearly the same hue as
        --canvas (#14110f) and made the popover read as if it had no
