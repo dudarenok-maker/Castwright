@@ -16,8 +16,21 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { fetch as undiciFetch } from 'undici';
 import { SidecarTtsProvider } from './sidecar.js';
 import type { SynthesizeInput } from './index.js';
+
+/* The provider posts via undici's OWN `fetch` (plan 137 — so the no-timeout
+   `Agent` dispatcher and the fetch belong to the same undici instance), NOT
+   the global fetch. So these classification tests mock the `undici` module's
+   `fetch` export; the real `Agent` is preserved (spread) so the module-level
+   SIDECAR_DISPATCHER still constructs. Real-network timeout behaviour is
+   covered separately in sidecar-timeout.test.ts. */
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return { ...actual, fetch: vi.fn() };
+});
+const mockFetch = vi.mocked(undiciFetch);
 
 function makeProvider() {
   return new SidecarTtsProvider({ url: 'http://localhost:6006/', engine: 'coqui' });
@@ -30,11 +43,11 @@ const SYNTH_INPUT: SynthesizeInput = {
 };
 
 function stubFetch(impl: typeof fetch) {
-  vi.stubGlobal('fetch', impl);
+  mockFetch.mockImplementation(impl as unknown as typeof undiciFetch);
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  mockFetch.mockReset();
 });
 
 describe('SidecarTtsProvider error classification', () => {
