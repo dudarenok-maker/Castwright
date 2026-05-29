@@ -358,6 +358,16 @@
 [data-theme='dark'] .hover\:text-red-900:hover {
   color: #fecaca;
 }
+/* The install-status banners (`ollama-install.tsx`, `qwen-install.tsx`)
+   paint emerald-900 heading + emerald-900/70 version line on the
+   emerald-50 fill. Without a dark override they stayed near-black green
+   on the dark-green wash — the green-on-green unreadable banner. The /70
+   alpha variant compiles to its own selector, same caveat as the rose
+   ladder above. Collapse both to the legible -800/-700 tint. */
+[data-theme='dark'] .text-emerald-900,
+[data-theme='dark'] .text-emerald-900\/70 {
+  color: #6ee7b7;
+}
 [data-theme='dark'] .text-emerald-800 {
   color: #6ee7b7;
 }
