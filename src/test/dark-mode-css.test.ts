@@ -90,6 +90,13 @@ describe('dark-mode CSS overrides (styles.css)', () => {
     { selector: '.bg-emerald-200', label: 'emerald-200 (Done progress-bar track)' },
     { selector: '.bg-emerald-400', label: 'emerald-400 (CharStatusBar fullyDone pip)' },
     { selector: '.bg-emerald-500', label: 'emerald-500 (Done progress-bar fill)' },
+    /* Install-status banners (`ollama-install.tsx`, `qwen-install.tsx`)
+       paint emerald-900 heading + emerald-900/70 version line on the
+       emerald-50 fill. Without these the banner read as green-on-green
+       on the dark canvas — the original bug this round fixed. The /70
+       alpha modifier compiles to its own selector. */
+    { selector: '.text-emerald-900', label: 'emerald-900 banner heading text' },
+    { selector: '.text-emerald-900\\/70', label: 'emerald-900 /70 banner subtext' },
     /* Floating reassign picker (CharacterSearchPicker) — `bg-white` alone
        only redirects to #1f1b19, which sat at nearly the same hue as
        --canvas (#14110f) and made the popover read as if it had no
