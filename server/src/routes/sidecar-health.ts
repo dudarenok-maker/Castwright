@@ -38,7 +38,31 @@ interface SidecarHealthBody {
      same single /health response so useTtsLifecycle stays on one poll. */
   qwen_loaded?: boolean;
   qwen_loading?: boolean;
+  /* Install-state (plan: Qwen-default). Distinct from load-state: tells
+     "package not pip-installed" / "installed, weights not downloaded" apart
+     from "ready" / "loaded". Absent on an older sidecar → treated as
+     'not-installed' below (never optimistically claim Qwen is usable). */
+  qwen_package_installed?: boolean;
+  qwen_weights_present?: boolean;
+  qwen_install_state?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
   device?: string | null;
+}
+
+export type QwenInstallState = 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
+
+const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
+  'not-installed',
+  'weights-missing',
+  'ready',
+  'loaded',
+];
+
+/* Normalise the sidecar's qwen_install_state. An old sidecar omits the field
+   entirely → 'not-installed' so a stale build never reports Qwen as ready. */
+function normaliseQwenInstallState(raw: unknown): QwenInstallState {
+  return QWEN_INSTALL_STATES.includes(raw as QwenInstallState)
+    ? (raw as QwenInstallState)
+    : 'not-installed';
 }
 
 sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
@@ -69,6 +93,9 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       kokoroLoading: body.kokoro_loading === true,
       qwenLoaded: body.qwen_loaded === true,
       qwenLoading: body.qwen_loading === true,
+      qwenPackageInstalled: body.qwen_package_installed === true,
+      qwenWeightsPresent: body.qwen_weights_present === true,
+      qwenInstallState: normaliseQwenInstallState(body.qwen_install_state),
       device: typeof body.device === 'string' ? body.device : null,
     });
   } catch (e) {
