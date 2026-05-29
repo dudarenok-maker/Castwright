@@ -147,6 +147,16 @@ Source: net-new (2026-05-22). Deferred from plan 101 — v1 is one-pair-at-a-tim
 - _Depends on:_ plan 101 v1 already merged.
 - _Benefit (user):_ reduces the cost of cleaning up an N-book series from N modal opens to 1. Useful exactly once per series after the user enables auto-detection or imports a long backlog of books.
 
+### `fe-16` — Surface "Fallback (Kokoro)" on the live cast-row Status pill
+
+Source: net-new (2026-05-29, plan 130 "Out of scope"). The render-time fallback fact is captured (`renderedFallbackEngine` on the segments file + `characterSnapshots`) and `resolveVoiceStatus` already renders a "Fallback (Kokoro)" pill when passed it — but the cast view doesn't yet load per-chapter render metadata, so the pill only fires where that arg is threaded (none today). The install-check banner covers the workspace-level "you're getting Kokoro" message in the meantime.
+
+- _What:_ Thread each character's last-render `renderedFallbackEngine` (from the book's segments / `characterSnapshots`) into the cast-view Status column + profile drawer's `resolveVoiceStatus` call so a character that actually rendered in Kokoro shows "Fallback (Kokoro)" instead of "Needs voice" / "Designed".
+- _Acceptance:_ Generate a Qwen book with one undesigned character → that character's cast row shows "Fallback (Kokoro)"; designing its voice + regenerating flips it back to Designed/Generated.
+- _Key files:_ `src/views/cast.tsx` + `src/modals/profile-drawer.tsx` (pass the new 4th arg to `resolveVoiceStatus`), a selector/loader exposing per-character `renderedFallbackEngine` from segments (the data already lands in `<slug>.segments.json`).
+- _Depends on:_ plan 130 (resolver support + segment stamping shipped).
+- _Benefit (user):_ closes the loop on the per-character fallback — the cast view tells you exactly which characters are on the placeholder Kokoro voice and need designing for bespoke quality.
+
 ### `fs-11` — Undo for "different on purpose" decisions
 
 Source: net-new (2026-05-22). Deferred from plan 101 — the variant decision is currently durable but lacks a reverse path.
