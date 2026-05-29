@@ -125,6 +125,15 @@ Source: net-new (2026-05-28), filed from the series-reuse repair session. Full s
 - _Depends on:_ the manual-link persistence fix (shipped, PR #301) + the one-time repair scripts (PR #302) which this makes unnecessary for future analyses.
 - _Benefit (user / technical):_ series continuity is automatic and survives re-analysis — no manual per-character linking, no re-running the repair script after every reparse. Closes the durability gap behind today's point-in-time data fixes.
 
+### `srv-14` — Denormalise reused qwen voice on the auto-match write path
+
+Source: net-new (2026-05-29), filed from the reused-qwen-voice fix (`fix/qwen-reused-voice`). The manual continuity link (`cast/link-prior`) now copies the source book's `ttsEngine` + `overrideTtsVoices` onto a reused character at write time; the **auto-match** path (voice-match apply → frontend reducer + persistence middleware → cast.json write) does not, so an auto-matched reuse still relies on read-time hydration (`server/src/tts/hydrate-reused-voice.ts`) rather than a self-complete record. Runtime hydration + the one-time migration already make these resolve correctly, so this is belt-and-suspenders, not a live bug.
+
+- _What:_ when the auto-matcher marks a character reused, persist the source's `ttsEngine` + `overrideTtsVoices.qwen` onto it (mirror the `cast-link-prior` denormalisation, reusing the shared `resolveReusedVoiceFields` resolver).
+- _Acceptance:_ after an auto-match, the reused character's cast.json carries its own qwen override (no read-time hydration needed); paired server/store test.
+- _Key files:_ `server/src/routes/voice-match.ts`, the frontend match-apply reducer + `src/store/persistence-middleware.ts`, `server/src/tts/hydrate-reused-voice.ts` (shared resolver).
+- _Benefit (technical):_ on-disk cast records stay self-consistent regardless of read-time hydration — one fewer divergence source.
+
 ### `fe-8` — Profile-drawer "Possible duplicate of …" chip
 
 Source: net-new (2026-05-22). Deferred from plan 101 — voices-view ⚠ pill + selection-pill swap are the v1 surfaces; this is the per-character drawer-side discoverability fix.
