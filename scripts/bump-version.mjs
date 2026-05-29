@@ -21,7 +21,7 @@
 // be run only from a clean working tree, on `main`, by a maintainer.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -416,6 +416,16 @@ async function main() {
 
 // Guarded so tests can import the pure helpers (semverBump, pickWorkflowRun)
 // without executing the release procedure (matches install-qwen3.mjs).
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+//
+// `process.argv[1]` is resolved through realpathSync before the compare: Node
+// realpaths `import.meta.url` (symlinks resolved unless --preserve-symlinks),
+// but `pathToFileURL(process.argv[1])` keeps the symlinked invocation path. On
+// macOS the temp dir is a symlink (`/var/folders` → `/private/var/folders`), so
+// running the script from there (e.g. the bump-version test's throwaway repo)
+// left the two hrefs unequal — the guard was false, main() silently never ran,
+// and the script exited 0 with empty output. realpathing argv[1] makes both
+// sides the canonical path so the guard holds regardless of symlinks.
+const invokedHref = process.argv[1] ? pathToFileURL(realpathSync(process.argv[1])).href : '';
+if (invokedHref && import.meta.url === invokedHref) {
   await main();
 }
