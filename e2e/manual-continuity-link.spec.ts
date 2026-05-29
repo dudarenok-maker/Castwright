@@ -13,7 +13,7 @@
  * branch) so the test is self-contained — no fixture shortcuts.
  *
  * Wall-clock budget: ~16 s warm (analyser mock ~7.6 s + UI). Pairs with
- * docs/features/09-voice-match-pipeline.md §"Manual continuity link". */
+ * docs/features/archive/09-voice-match-pipeline.md §"Manual continuity link". */
 
 import { test, expect } from '@playwright/test';
 

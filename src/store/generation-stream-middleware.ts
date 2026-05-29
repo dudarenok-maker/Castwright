@@ -68,7 +68,7 @@ function bookIdFromState(s: StreamableRootState): string | null {
    start is now an explicit user action, never a side effect of navigation. NOT
    the regen actions either (those enqueue explicitly via their own callsites) and
    NOT applyGenerationTick (the runner self-drives ticks). See
-   docs/features/137-reopen-never-auto-enqueues.md. */
+   docs/features/archive/137-reopen-never-auto-enqueues.md. */
 const ENQUEUE_TRIGGER_TYPES = new Set<string>(['ui/requestStartGeneration']);
 
 export function generationStreamMiddleware(getRunner: () => StreamRunner): Middleware {

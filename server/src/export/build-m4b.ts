@@ -4,7 +4,7 @@
    QuickTime-style chapter atoms via an FFMETADATA sidecar. PocketBook
    surfaces the resulting `.m4b` under Audiobooks (not Music), with
    chapter UI and resume-position state — see
-   `docs/features/32-audiobook-export.md`.
+   `docs/features/archive/32-audiobook-export.md`.
 
    Re-encodes (unlike Phase A's MP3.ZIP which is `-c:a copy`): 24 kHz
    mono MP3 → 44.1 kHz mono AAC-LC @ 96 kbps. The re-encode tolerates

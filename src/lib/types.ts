@@ -288,7 +288,7 @@ export interface DroppedQuotesResponse {
    reload + server restart. Matches the on-disk
    .audiobook/analysis-state.json shape one-for-one (the server
    returns it verbatim once the running→paused coercion has been
-   applied). See docs/features/32-sticky-analysis.md "Cold-boot
+   applied). See docs/features/archive/32-sticky-analysis.md "Cold-boot
    rehydration". */
 /** Wire shape for `GET /api/library/active-analyses` — every book in the
     workspace whose `.audiobook/analysis-state.json` snapshot resolves to

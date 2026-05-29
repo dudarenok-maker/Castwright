@@ -1,5 +1,5 @@
 // Conventional-Commits subject validator for .husky/commit-msg.
-// See CONTRIBUTING.md and docs/features/38-branching-and-commit-convention.md
+// See CONTRIBUTING.md and docs/features/archive/38-branching-and-commit-convention.md
 // for the spec and rationale.
 
 import { readFileSync } from 'node:fs';
