@@ -1911,10 +1911,13 @@ export interface components {
              *     (cold connect AND reconnect after `tsx watch` restart or server
              *     bounce) and carries a snapshot of completed chapter ids for the
              *     active queue entry so the reconnect doesn't replay completed work.
+             *     `warning` is a non-fatal advisory emitted at run setup (e.g. a
+             *     Qwen→Kokoro engine downgrade, or dual-model-off with a mixed cast) —
+             *     the run still proceeds; the frontend surfaces `message` as a toast.
              *     See plan `docs/features/102-global-queue-modal.md`.
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from";
+            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;
@@ -1963,6 +1966,18 @@ export interface components {
              */
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             errorReason?: string | null;
+            /**
+             * @description Only on `warning` — a stable machine-readable warning code
+             *     (e.g. `qwen_unavailable_kokoro_fallback`,
+             *     `dual_model_off_multi_engine`). Lets the frontend dedupe and
+             *     route warnings without parsing `message`.
+             */
+            code?: string;
+            /**
+             * @description Only on `warning` — the human-readable advisory text the
+             *     frontend surfaces as a toast.
+             */
+            message?: string;
             /**
              * @description On `progress`, `chapter_assembling`, `chapter_complete`,
              *     `chapter_failed`, and `resume_from` — the workspace queue entry

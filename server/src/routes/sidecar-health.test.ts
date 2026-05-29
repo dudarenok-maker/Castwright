@@ -203,6 +203,52 @@ describe('GET /api/sidecar/health', () => {
     expect(garbage.body.qwenInstallState).toBe('not-installed');
   });
 
+  it('reports qwenInstallState="loaded" when qwen_loaded is true even if qwen_install_state is ABSENT', async () => {
+    /* Stale-build incident (2026-05-29): a pre-plan-130 sidecar omits
+       qwen_install_state from /health but still reports `qwen_loaded: true`
+       (the Base model IS resident and serving). Without honouring qwen_loaded,
+       the absent field normalises to "not-installed" on every 30s poll, poisons
+       getLastKnownQwenInstallState(), and silently falls every Qwen character
+       back to Kokoro. A loaded model can never be "not installed" — the proxy
+       MUST report it as usable. Also keeps the forwarded install booleans
+       consistent (no "loaded but package=false" contradiction). */
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro', 'qwen'],
+          qwen_loaded: true,
+          qwen_loading: false,
+          // qwen_install_state / qwen_package_installed / qwen_weights_present absent
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenLoaded).toBe(true);
+    expect(res.body.qwenInstallState).toBe('loaded');
+    expect(res.body.qwenPackageInstalled).toBe(true);
+    expect(res.body.qwenWeightsPresent).toBe(true);
+  });
+
+  it('qwen_loaded overrides a downgraded qwen_install_state field', async () => {
+    /* Defence in depth: even if a sidecar reports a stale/inconsistent
+       qwen_install_state alongside qwen_loaded:true, the loaded model wins. */
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          qwen_install_state: 'not-installed',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.qwenInstallState).toBe('loaded');
+  });
+
   it('returns unreachable when the sidecar responds non-2xx', async () => {
     fetchMock.mockResolvedValue(
       new Response('nope', { status: 503, statusText: 'Service Unavailable' }),

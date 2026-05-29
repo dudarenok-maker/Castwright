@@ -50,6 +50,10 @@ export interface SpawnSidecarOpts {
   warn?: (...args: unknown[]) => void;
   spawnFn?: typeof spawn;
   probeFn?: typeof probeListening;
+  /* Override-points for the stale-sidecar handshake (side-8) — tests stub
+     these so they never touch a real port/process. */
+  healthProbeFn?: (host: string, port: number) => Promise<SidecarHealthProbe>;
+  findPidFn?: (port: number) => Promise<number | null>;
 }
 
 export interface SidecarHandle {
@@ -61,6 +65,112 @@ export interface SidecarHandle {
 const DEFAULT_PORT = 9000;
 const DEFAULT_HOST = '127.0.0.1';
 const PROBE_TIMEOUT_MS = 250;
+
+/* MUST equal SIDECAR_PROTOCOL_VERSION in server/tts-sidecar/main.py. Bump BOTH
+   together whenever a /health or wire-protocol change makes an older sidecar
+   incompatible with the current server — that's what lets the startup
+   handshake below detect (and replace) a stale process instead of silently
+   reusing it. (side-8 — stale-sidecar incident 2026-05-29.) */
+const EXPECTED_PROTOCOL_VERSION = 1;
+const HEALTH_PROBE_TIMEOUT_MS = 2_000;
+const PORT_FREE_TIMEOUT_MS = 5_000;
+const PORT_FREE_POLL_MS = 200;
+
+export interface SidecarHealthProbe {
+  /** TCP-reachable AND returned an HTTP 2xx. */
+  reachable: boolean;
+  /** Responded with OUR sidecar's /health shape (`ok` + an `engines` array),
+      vs. some unrelated process that happens to hold the port. We only ever
+      replace a process that positively identifies as our sidecar. */
+  looksLikeSidecar: boolean;
+  /** Reported `protocol_version`, or null when absent — an older (pre-side-8)
+      sidecar omits it, which reads as "stale". */
+  protocolVersion: number | null;
+}
+
+/** Probe a listening process's /health to decide whether it's the CURRENT
+    sidecar build (safe to reuse) or a stale one (replace) or not ours at all
+    (leave alone). Never throws — any failure resolves to a not-ours verdict so
+    the caller errs toward leaving an unknown process untouched. */
+export async function probeSidecarHealth(
+  host: string,
+  port: number,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = HEALTH_PROBE_TIMEOUT_MS,
+): Promise<SidecarHealthProbe> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`http://${host}:${port}/health`, { signal: controller.signal });
+    if (!res.ok) return { reachable: true, looksLikeSidecar: false, protocolVersion: null };
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    const looksLikeSidecar = body.ok === true && Array.isArray(body.engines);
+    const protocolVersion =
+      typeof body.protocol_version === 'number' ? body.protocol_version : null;
+    return { reachable: true, looksLikeSidecar, protocolVersion };
+  } catch {
+    return { reachable: false, looksLikeSidecar: false, protocolVersion: null };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Best-effort cross-platform "which PID is listening on this port". Returns
+    null when it can't tell (no tool, parse miss, error) — the caller then
+    leaves the process in place rather than killing the wrong thing. The PID
+    file (`.run/tts.pid`) is NOT used here: a stale sidecar is often a process
+    we did NOT spawn (orphan across a `tsx watch` reload, or a manual launch),
+    so its PID differs from the last one we recorded. */
+export function findListenerPid(
+  port: number,
+  platform: NodeJS.Platform = process.platform,
+  spawnFn: typeof spawn = spawn,
+): Promise<number | null> {
+  const cmd =
+    platform === 'win32'
+      ? {
+          file: 'powershell.exe',
+          args: [
+            '-NoProfile',
+            '-Command',
+            `(Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`,
+          ],
+        }
+      : { file: 'sh', args: ['-c', `lsof -ti tcp:${port} -sTCP:LISTEN 2>/dev/null | head -n1`] };
+  return new Promise((resolve) => {
+    let out = '';
+    let child: ChildProcess;
+    try {
+      child = spawnFn(cmd.file, cmd.args, { windowsHide: true });
+    } catch {
+      return resolve(null);
+    }
+    child.stdout?.on('data', (d) => {
+      out += String(d);
+    });
+    child.once('error', () => resolve(null));
+    child.once('exit', () => {
+      const pid = parseInt(out.trim().split(/\s+/)[0] ?? '', 10);
+      resolve(Number.isInteger(pid) && pid > 0 ? pid : null);
+    });
+  });
+}
+
+/** Poll until the port stops accepting connections (the killed process let go)
+    or we give up. Returns true iff the port is free. */
+async function waitForPortFree(
+  host: string,
+  port: number,
+  probeFn: typeof probeListening,
+  timeoutMs = PORT_FREE_TIMEOUT_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await probeFn(host, port))) return true;
+    await new Promise((r) => setTimeout(r, PORT_FREE_POLL_MS));
+  }
+  return !(await probeFn(host, port));
+}
 
 /** Resolve true iff something is already accepting TCP on host:port within
     PROBE_TIMEOUT_MS. Used to detect a manually-started sidecar before we
@@ -156,6 +266,8 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     warn = console.warn,
     spawnFn = spawn,
     probeFn = probeListening,
+    healthProbeFn = (h, p) => probeSidecarHealth(h, p),
+    findPidFn = (p) => findListenerPid(p),
   } = opts;
 
   if (!autoStart) {
@@ -164,8 +276,53 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   }
 
   if (await probeFn(host, port)) {
-    log(`[sidecar] already listening on :${port}, skipping spawn (manual sidecar honoured)`);
-    return null;
+    /* Something already holds :port. Before honouring it (the old behaviour),
+       handshake on /health so a STALE sidecar — an older build whose protocol
+       predates the current server — can't be silently reused. A stale process
+       drifts the whole app's behaviour invisibly (the 2026-05-29 incident: its
+       /health omitted qwen_install_state, so every Qwen book fell back to
+       Kokoro). side-8: detect & replace, don't just reuse. */
+    const health = await healthProbeFn(host, port);
+    const fresh =
+      health.looksLikeSidecar &&
+      health.protocolVersion !== null &&
+      health.protocolVersion >= EXPECTED_PROTOCOL_VERSION;
+    if (fresh) {
+      log(
+        `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), skipping spawn (current sidecar honoured)`,
+      );
+      return null;
+    }
+    if (!health.looksLikeSidecar) {
+      /* Reachable-but-not-ours, or hung/non-HTTP. Never kill an unknown
+         process — leave it and let the health route surface TTS-down. */
+      warn(
+        `[sidecar] something is listening on :${port} but it does not look like our sidecar — NOT touching it. TTS may be unavailable until the port is freed.`,
+      );
+      return null;
+    }
+    /* It IS our sidecar, but stale (missing/old protocol_version). Replace it. */
+    const reported =
+      health.protocolVersion === null ? 'missing' : `v${health.protocolVersion}`;
+    warn(
+      `[sidecar] STALE sidecar on :${port} (protocol ${reported} < v${EXPECTED_PROTOCOL_VERSION}) — replacing it with the current build to stop silent capability drift (e.g. Qwen→Kokoro fallback).`,
+    );
+    const stalePid = await findPidFn(port);
+    if (stalePid === null) {
+      warn(
+        `[sidecar] could not identify the PID on :${port} to replace the stale sidecar — leaving it in place. Restart the sidecar manually to pick up the current build.`,
+      );
+      return null;
+    }
+    await killTree(stalePid, spawnFn);
+    if (!(await waitForPortFree(host, port, probeFn))) {
+      warn(
+        `[sidecar] killed stale pid=${stalePid} but :${port} is still bound — not spawning over it. Restart manually.`,
+      );
+      return null;
+    }
+    log(`[sidecar] replaced stale sidecar (killed pid=${stalePid}); spawning current build.`);
+    /* fall through to the normal spawn below */
   }
 
   const startScript = join(repoRoot, 'server', 'tts-sidecar', 'start.ps1');

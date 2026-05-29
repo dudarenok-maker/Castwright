@@ -359,6 +359,19 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           dedupeKey: 'generation-stream',
         }),
       );
+    } else if (ev.type === 'warning' && ev.message) {
+      /* Non-fatal run-setup advisory (e.g. a Qwen→Kokoro engine downgrade, or
+         dual-model-off with a mixed cast). The run still proceeds, but the user
+         MUST see it — a silent Qwen→Kokoro fallback renders a whole book in the
+         wrong voices unnoticed. Dedupe by code so a re-emit (or per-chapter
+         stream) doesn't stack identical toasts. */
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message: ev.message,
+          dedupeKey: `generation-warning:${ev.code ?? ev.message}`,
+        }),
+      );
     } else if (ev.type === 'idle') {
       /* Server's idle tick is the unambiguous "no more work" signal for this
          chapter's stream — tear it down by its composite key, leaving sibling

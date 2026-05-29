@@ -77,8 +77,13 @@ describe('spawnSidecar', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('auto-start disabled'));
   });
 
-  it('returns null and does not spawn when port 9000 is already listening', async () => {
+  it('reuses an already-listening sidecar when its protocol_version is current', async () => {
     probeFn.mockResolvedValueOnce(true);
+    const healthProbeFn = vi.fn(async () => ({
+      reachable: true,
+      looksLikeSidecar: true,
+      protocolVersion: 1,
+    }));
 
     const handle = await spawnSidecar({
       autoStart: true,
@@ -88,14 +93,122 @@ describe('spawnSidecar', () => {
       repoRoot,
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
+      healthProbeFn,
       log,
       warn,
     });
 
     expect(handle).toBeNull();
-    expect(probeFn).toHaveBeenCalledTimes(1);
+    expect(healthProbeFn).toHaveBeenCalledTimes(1);
     expect(spawnFn).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('already listening'));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('current sidecar honoured'));
+  });
+
+  it('does NOT touch a listening process that is not our sidecar', async () => {
+    /* Reachable-but-not-ours (or hung/non-HTTP): never kill an unknown process,
+       just leave it and let the health route surface TTS-down. */
+    probeFn.mockResolvedValueOnce(true);
+    const healthProbeFn = vi.fn(async () => ({
+      reachable: true,
+      looksLikeSidecar: false,
+      protocolVersion: null,
+    }));
+    const findPidFn = vi.fn(async () => 999);
+
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: true,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      healthProbeFn,
+      findPidFn,
+      log,
+      warn,
+    });
+
+    expect(handle).toBeNull();
+    expect(findPidFn).not.toHaveBeenCalled();
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('does not look like our sidecar'));
+  });
+
+  it('leaves a stale sidecar in place when its PID cannot be identified', async () => {
+    probeFn.mockResolvedValueOnce(true);
+    const healthProbeFn = vi.fn(async () => ({
+      reachable: true,
+      looksLikeSidecar: true,
+      protocolVersion: null, // stale: pre-side-8 build omits protocol_version
+    }));
+    const findPidFn = vi.fn(async () => null);
+
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: true,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      healthProbeFn,
+      findPidFn,
+      log,
+      warn,
+    });
+
+    expect(handle).toBeNull();
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('STALE sidecar'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
+  });
+
+  it('kills a STALE sidecar and spawns the current build (side-8)', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      /* Listening at first, then free after the kill so waitForPortFree
+         resolves true. */
+      probeFn.mockResolvedValueOnce(true).mockResolvedValue(false);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: null, // stale
+      }));
+      const findPidFn = vi.fn(async () => 68624);
+
+      const calls: Array<{ cmd: string; args: string[] }> = [];
+      const trackingSpawn = vi.fn((cmd: string, args: string[]) => {
+        calls.push({ cmd, args });
+        const child = makeFakeChild();
+        if (cmd === 'taskkill') setImmediate(() => child.emit('exit', 0, null));
+        return child;
+      });
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'qwen3-tts-0.6b',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+      });
+
+      /* Replaced: taskkill'd the stale PID, then spawned the current build. */
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('STALE sidecar'));
+      expect(calls[0]).toEqual({ cmd: 'taskkill', args: ['/PID', '68624', '/T', '/F'] });
+      expect(calls[1].cmd).toBe('powershell.exe');
+      expect(handle).not.toBeNull();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('replaced stale sidecar'));
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
   });
 
   it('spawns with PRELOAD_COQUI=0 when default model is kokoro-v1', async () => {

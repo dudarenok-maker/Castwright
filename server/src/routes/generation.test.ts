@@ -460,6 +460,50 @@ describe('POST /api/books/:bookId/generation', () => {
    they pre-date the job and there's no run to aggregate over. Tests
    below split "catch-up" from "live" by the presence of the runTotal
    field — catch-up ticks lack it, live ticks always carry it. */
+describe('POST /api/books/:bookId/generation — Qwen→Kokoro fallback is loud, never silent', () => {
+  /* Regression for the 2026-05-29 stale-build incident: a whole Qwen book was
+     silently rendered in Kokoro (wrong voices) because Qwen read unavailable
+     and the only signal was an unsurfaced per-segment stamp. The route MUST
+     emit a `warning` tick at setup so the user sees the downgrade. */
+  it('emits a warning tick when a Qwen cast renders while Qwen is unavailable', async () => {
+    const { setLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    setLastKnownQwenInstallState('not-installed');
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'qwen3-tts-0.6b', force: true });
+      expect(res.status).toBe(200);
+      const ticks = parseTicks(res.text);
+      const warning = ticks.find((t) => t.type === 'warning');
+      expect(warning).toBeDefined();
+      expect(warning?.code).toBe('qwen_unavailable_kokoro_fallback');
+      expect(String(warning?.message)).toMatch(/Kokoro/);
+      expect(warning?.qwenInstallState).toBe('not-installed');
+    } finally {
+      setLastKnownQwenInstallState('not-installed');
+    }
+  });
+
+  it('does NOT emit the fallback warning when Qwen is loaded', async () => {
+    const { setLastKnownQwenInstallState } = await import('../workspace/user-settings.js');
+    setLastKnownQwenInstallState('loaded');
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'qwen3-tts-0.6b', force: true });
+      expect(res.status).toBe(200);
+      const ticks = parseTicks(res.text);
+      expect(
+        ticks.some(
+          (t) => t.type === 'warning' && t.code === 'qwen_unavailable_kokoro_fallback',
+        ),
+      ).toBe(false);
+    } finally {
+      setLastKnownQwenInstallState('not-installed');
+    }
+  });
+});
+
 describe('POST /api/books/:bookId/generation — Bug E run aggregates on every tick', () => {
   it('every LIVE broadcast tick carries runDone / runTotal / runInProgress', async () => {
     const res = await request(app)
