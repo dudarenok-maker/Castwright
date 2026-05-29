@@ -31,6 +31,7 @@ import {
 import { api, type SeriesRosterEntry } from '../lib/api';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
+import { parseDuration } from '../lib/time';
 import { stageToHash } from '../lib/router';
 import {
   TopBar,
@@ -1107,6 +1108,9 @@ export function Layout() {
           chapter={ui.regenChapter}
           defaultScope={ui.regenInitialScope ?? 'this'}
           forwardCount={chapters.filter((c) => c.id >= ui.regenChapter!.id).length}
+          forwardDurationSec={chapters
+            .filter((c) => c.id >= ui.regenChapter!.id)
+            .reduce((acc, c) => acc + parseDuration(c.duration), 0)}
           onClose={() => dispatch(uiActions.setRegenChapter(null))}
           onConfirm={({ reason, scope, note }) => {
             const chapter = ui.regenChapter;
