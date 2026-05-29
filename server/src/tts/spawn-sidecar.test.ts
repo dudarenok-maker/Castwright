@@ -161,6 +161,44 @@ describe('spawnSidecar', () => {
     expect(options.env.PRELOAD_COQUI).toBe('1');
   });
 
+  it('hot-preloads Qwen and keeps Kokoro lazy when the default model is qwen3-tts-0.6b', async () => {
+    /* Qwen-default: PRELOAD_QWEN=1 (hot at boot) + PRELOAD_KOKORO=0 even though
+       eagerLoadKokoro=true — Kokoro is the on-demand fallback engine (warms
+       ~1 s at the first fallback render), so eager-loading it too would just
+       hog ~1 GB. */
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'qwen3-tts-0.6b',
+      eagerLoadKokoro: true,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+
+    expect(handle).not.toBeNull();
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.env.PRELOAD_QWEN).toBe('1');
+    expect(options.env.PRELOAD_KOKORO).toBe('0');
+    expect(options.env.PRELOAD_COQUI).toBe('0');
+  });
+
+  it('leaves PRELOAD_QWEN=0 for a non-Qwen default', async () => {
+    await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+    const [, , options] = spawnFn.mock.calls[0];
+    expect(options.env.PRELOAD_QWEN).toBe('0');
+  });
+
   it('hands the child inherited log-file descriptors as stdout/stderr (survives parent death)', async () => {
     /* Regression for the orphaned-sidecar [Errno 22] bug: a `tsx watch` dev
        reload restarts the Node server but leaves the long-lived sidecar

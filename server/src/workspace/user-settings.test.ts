@@ -420,3 +420,58 @@ describe('user-settings location (plan 122 — shared across checkouts)', () => 
     });
   });
 });
+
+describe('getResolvedTtsModelKey — Qwen-when-installed default', () => {
+  beforeEach(async () => {
+    const mod = await import('./user-settings.js');
+    /* The whole server suite shares one throwaway USER_SETTINGS_FILE that
+       persists across tests; delete it so each case starts from factory
+       defaults (explicit=false) — the explicit sentinel can't be un-set via
+       the public API, so a leaked file would cross-contaminate. */
+    rmSync(mod.USER_SETTINGS_PATH, { force: true });
+    mod._resetUserSettingsCache();
+    await mod.readUserSettings();
+  });
+
+  it('defaults to kokoro-v1 when Qwen install-state is unknown/not-installed', async () => {
+    const mod = await import('./user-settings.js');
+    mod.setLastKnownQwenInstallState('not-installed');
+    expect(mod.getResolvedTtsModelKey()).toBe('kokoro-v1');
+    mod.setLastKnownQwenInstallState('weights-missing');
+    expect(mod.getResolvedTtsModelKey()).toBe('kokoro-v1');
+  });
+
+  it('prefers qwen3-tts-0.6b when Qwen is installed (ready or loaded) and no explicit choice', async () => {
+    const mod = await import('./user-settings.js');
+    mod.setLastKnownQwenInstallState('ready');
+    expect(mod.getResolvedTtsModelKey()).toBe('qwen3-tts-0.6b');
+    mod.setLastKnownQwenInstallState('loaded');
+    expect(mod.getResolvedTtsModelKey()).toBe('qwen3-tts-0.6b');
+  });
+
+  it('honours an explicit user choice over the Qwen preference', async () => {
+    const mod = await import('./user-settings.js');
+    mod.setLastKnownQwenInstallState('ready');
+    /* The frontend pins Kokoro by sending the explicit flag (re-selecting the
+       value that equals the stored key isn't a "change", so the flag is the
+       mechanism that lets a Qwen-box user keep Kokoro). */
+    await mod.writeUserSettings({
+      defaultTtsModelKey: 'kokoro-v1',
+      defaultTtsModelKeyExplicit: true,
+    });
+    expect(mod.getResolvedTtsModelKey()).toBe('kokoro-v1');
+  });
+
+  it('latches defaultTtsModelKeyExplicit only on a genuine change (no-op round-trip stays implicit)', async () => {
+    const mod = await import('./user-settings.js');
+    // Re-writing the SAME stored value must NOT mark explicit (the GET→PUT
+    // round-trip of the stored key would otherwise falsely lock the user).
+    const sameValue = await mod.writeUserSettings({ defaultTtsModelKey: 'kokoro-v1' });
+    expect(sameValue.defaultTtsModelKeyExplicit).toBeFalsy();
+    // A real change to a different model DOES latch it.
+    const changed = await mod.writeUserSettings({ defaultTtsModelKey: 'coqui-xtts-v2' });
+    expect(changed.defaultTtsModelKeyExplicit).toBe(true);
+    mod.setLastKnownQwenInstallState('ready');
+    expect(mod.getResolvedTtsModelKey()).toBe('coqui-xtts-v2');
+  });
+});

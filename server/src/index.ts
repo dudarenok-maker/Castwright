@@ -70,8 +70,11 @@ import {
   readUserSettings,
   getResolvedSidecarUrl,
   getResolvedAutoStartSidecar,
+  getResolvedTtsModelKey,
+  setLastKnownQwenInstallState,
 } from './workspace/user-settings.js';
 import { spawnSidecar, type SidecarHandle } from './tts/spawn-sidecar.js';
+import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 
 const app = express();
 
@@ -281,11 +284,20 @@ const listenerCallback = () => {
      will pick up the same sidecar once Kokoro/Coqui finishes loading. */
   void (async () => {
     const settings = await readUserSettings();
+    /* Seed the Qwen install-state from a Node-side disk probe BEFORE resolving
+       the default — the sidecar /health probe isn't available yet (we're about
+       to spawn it). This lets a box with Qwen installed hot-preload Qwen at
+       boot (PRELOAD_QWEN=1); a box without it spawns with Kokoro eager + Qwen
+       off, and the conditional default falls back to Kokoro. The /health poll
+       refreshes this continuously once the sidecar is up. */
+    const bootRepoRoot = resolve(__dirname, '..', '..');
+    setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
     sidecarHandle = await spawnSidecar({
       autoStart: getResolvedAutoStartSidecar(),
-      modelKey: settings.defaultTtsModelKey,
+      /* Resolved (Qwen-when-installed) key — drives PRELOAD_QWEN vs Kokoro. */
+      modelKey: getResolvedTtsModelKey(),
       eagerLoadKokoro: settings.eagerLoadKokoro ?? true,
-      repoRoot: resolve(__dirname, '..', '..'),
+      repoRoot: bootRepoRoot,
     });
   })();
 };

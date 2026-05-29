@@ -37,9 +37,12 @@ export function AccountView() {
   const [displayName, setDisplayName] = useState(account.displayName);
   const [defaultAnalysisModel, setDefaultAnalysisModel] = useState(account.defaultAnalysisModel);
   const [defaultTtsEngine, setDefaultTtsEngine] = useState<TtsEngineId>(account.defaultTtsEngine);
-  const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(
-    account.defaultTtsModelKey,
-  );
+  /* The picker shows the EFFECTIVE default (resolvedTtsModelKey, which is Qwen
+     on a box with Qwen installed), not the stored key — so the user sees what
+     books will actually use, and re-selecting a different engine is a real
+     change that pins it. Falls back to the stored key for an older server. */
+  const effectiveTtsModelKey = account.resolvedTtsModelKey ?? account.defaultTtsModelKey;
+  const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(effectiveTtsModelKey);
   const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
   const [analysisEngine, setAnalysisEngine] = useState<'local' | 'gemini'>(account.analysisEngine);
   const [ollamaUrl, setOllamaUrl] = useState(account.ollamaUrl);
@@ -84,7 +87,7 @@ export function AccountView() {
     setDisplayName(account.displayName);
     setDefaultAnalysisModel(account.defaultAnalysisModel);
     setDefaultTtsEngine(account.defaultTtsEngine);
-    setDefaultTtsModelKey(account.defaultTtsModelKey);
+    setDefaultTtsModelKey(account.resolvedTtsModelKey ?? account.defaultTtsModelKey);
     setSidecarUrl(account.sidecarUrl);
     setAnalysisEngine(account.analysisEngine);
     setOllamaUrl(account.ollamaUrl);
@@ -105,6 +108,7 @@ export function AccountView() {
     account.defaultAnalysisModel,
     account.defaultTtsEngine,
     account.defaultTtsModelKey,
+    account.resolvedTtsModelKey,
     account.sidecarUrl,
     account.analysisEngine,
     account.ollamaUrl,
@@ -152,7 +156,7 @@ export function AccountView() {
       displayName !== account.displayName ||
       defaultAnalysisModel !== account.defaultAnalysisModel ||
       defaultTtsEngine !== account.defaultTtsEngine ||
-      defaultTtsModelKey !== account.defaultTtsModelKey ||
+      defaultTtsModelKey !== effectiveTtsModelKey ||
       sidecarUrl !== account.sidecarUrl ||
       analysisEngine !== account.analysisEngine ||
       ollamaUrl !== account.ollamaUrl ||
@@ -173,6 +177,7 @@ export function AccountView() {
     defaultAnalysisModel,
     defaultTtsEngine,
     defaultTtsModelKey,
+    effectiveTtsModelKey,
     sidecarUrl,
     analysisEngine,
     ollamaUrl,
@@ -196,6 +201,14 @@ export function AccountView() {
       defaultAnalysisModel,
       defaultTtsEngine,
       defaultTtsModelKey,
+      /* Pin the user's choice (so the server stops preferring Qwen) only when
+         they picked something OTHER than the resolved default — saving an
+         unrelated field while the picker sits on the resolved default must not
+         silently disable Qwen-when-installed. Preserve a prior explicit pin. */
+      defaultTtsModelKeyExplicit:
+        defaultTtsModelKey !== effectiveTtsModelKey
+          ? true
+          : account.defaultTtsModelKeyExplicit,
       sidecarUrl,
       analysisEngine,
       ollamaUrl,
