@@ -26,8 +26,11 @@ import {
   audioDir,
   castJsonPath,
   manuscriptEditsJsonPath,
+  queueJsonPath,
   stateJsonPath,
 } from '../workspace/paths.js';
+import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
+import { resetEntryToQueued } from '../workspace/queue-io.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import { bookStateAudioFormat, findBookByBookId, type BookStateJson } from '../workspace/scan.js';
@@ -682,12 +685,57 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      keeps running for any other observers. If the starter was the only
      subscriber, the loop generates audio to disk silently; the next
      subscriber to attach picks up via the catch-up replay. */
-  req.on('close', () => {
+  /* `res.on('close')` (not `req`) is the reliable client-gone signal: once
+     express.json() has consumed the request body the `req` stream is already
+     ended, so `req.on('close')` can miss a mid-stream disconnect. The response
+     stays open for the SSE, so its `close` is what actually fires when the
+     socket tears down. */
+  res.on('close', () => {
     for (const sub of job.subscribers) {
       if (sub.res === res) {
         job.subscribers.delete(sub);
         break;
       }
+    }
+
+    /* srv-12 — orphan recovery. On success the frontend POSTs /complete BEFORE
+       the SSE closes, so the entry is already done-pruned (or marked failed) by
+       now. An entry STILL `in_progress` at last-subscriber-close is therefore
+       abnormal: the watcher vanished mid-run (tab closed / network drop) with no
+       one to drive the chapter to /complete. Reset it `in_progress`→`queued` so
+       the dispatcher re-claims it on the next boot/snapshot, and abort the
+       now-unwatched synthesis to free the GPU.
+
+       Gated three ways so we only touch genuine orphans:
+         - `job.subscribers.size === 0` — this was the LAST subscriber.
+         - `job.queueEntryId` is set — a queue-driven run (not a legacy caller).
+         - the job is still REGISTERED (`inFlightByChapter.get(key) === job`) —
+           i.e. the loop hasn't reached deregisterJob, so the run hasn't drained
+           normally. A completed/displaced job is already deregistered, so we
+           skip it and never resurrect a done entry.
+       `resetEntryToQueued` is itself a no-op for a missing / non-in_progress id,
+       so a race against the frontend-owned lifecycle can't flip a done/failed
+       entry back to queued. */
+    if (
+      job.subscribers.size === 0 &&
+      job.queueEntryId != null &&
+      inFlightByChapter.get(key) === job
+    ) {
+      const orphanEntryId = job.queueEntryId;
+      void (async () => {
+        try {
+          const before = await readQueueFile(queueJsonPath());
+          const after = resetEntryToQueued(before, orphanEntryId);
+          if (after !== before) await writeQueueFile(queueJsonPath(), after);
+        } catch (err) {
+          console.warn(
+            `[generation] orphan-recovery: failed to reset queue entry ${orphanEntryId} to queued: ${
+              (err as Error).message
+            }`,
+          );
+        }
+      })();
+      if (!job.controller.signal.aborted) job.controller.abort();
     }
   });
 
