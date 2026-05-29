@@ -241,6 +241,28 @@ async function runCrossOsGate({ ref, headSha }) {
   info(`[GATE] cross-OS verify passed (run ${runId}).`);
 }
 
+// Best-effort: refresh the code-stats block in docs/project-narrative.md so
+// every release carries fresh SLOC numbers. Deliberately NON-fatal — a release
+// must never hard-fail on a docs-cosmetic tool. Skips cleanly when
+// scripts/code-stats.mjs is absent (e.g. the throwaway test fixture repo) or
+// when tokei isn't installed (code-stats.mjs exits non-zero, which we swallow).
+function refreshCodeStats() {
+  const codeStats = resolve(repoRoot, 'scripts', 'code-stats.mjs');
+  if (!existsSync(codeStats)) {
+    info('[SKIP] code-stats: scripts/code-stats.mjs not found — narrative stats not refreshed.');
+    return;
+  }
+  try {
+    info('[STEP] refreshing code stats (docs/project-narrative.md) ...');
+    execFileSync('node', [codeStats, '--write'], { cwd: repoRoot, stdio: 'inherit' });
+  } catch {
+    info(
+      '[SKIP] code-stats refresh failed (tokei not installed?). Continuing — install tokei ' +
+        '(`winget install XAMPPRocky.tokei` / `brew install tokei`) to keep the stats current.',
+    );
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.level) {
@@ -297,6 +319,14 @@ async function main() {
     }`,
   );
 
+  info(
+    `[PLAN] refresh code stats: ${
+      existsSync(resolve(repoRoot, 'scripts', 'code-stats.mjs'))
+        ? 'docs/project-narrative.md via code-stats.mjs --write (best-effort)'
+        : 'skipped (scripts/code-stats.mjs absent)'
+    }`,
+  );
+
   if (args.dryRun) {
     info('[DRY-RUN] No mutations made. Re-run without --dry-run to apply.');
     process.exit(0);
@@ -330,21 +360,31 @@ async function main() {
     );
   }
 
+  // Refresh the engineering-notes code stats so they ride in the bump commit.
+  // Runs before the version mutation so a stats-only diff is visible alongside
+  // the version bump; non-fatal (see refreshCodeStats).
+  refreshCodeStats();
+
   // Mutate: root + server versions + both lockfiles.
   info('[STEP] npm version (root) ...');
   npm(['version', newVersion, '--no-git-tag-version']);
   info('[STEP] npm version (server) ...');
   npm(['version', newVersion, '--no-git-tag-version'], { cwd: resolve(repoRoot, 'server') });
 
-  // Stage + commit.
+  // Stage + commit. The narrative doc is only staged when it exists AND
+  // code-stats actually changed it (git add of an unchanged/absent path is a
+  // no-op / skipped) — so a tokei-less box still produces a clean version bump.
   info('[STEP] git add + commit ...');
-  git([
-    'add',
+  const addPaths = [
     'package.json',
     'package-lock.json',
     'server/package.json',
     'server/package-lock.json',
-  ]);
+  ];
+  if (existsSync(resolve(repoRoot, 'docs', 'project-narrative.md'))) {
+    addPaths.push('docs/project-narrative.md');
+  }
+  git(['add', ...addPaths]);
   git(['commit', '-m', `chore: bump version to ${newVersion}`]);
 
   // Annotated tag. `--cleanup=verbatim` is load-bearing: git's default

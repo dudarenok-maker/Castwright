@@ -40,6 +40,7 @@
     "verify:quick": "npm run test:all",
     "verify:fast": "node scripts/verify-cache.mjs --steps test:hooks,test,test:server",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
+    "stats": "node scripts/code-stats.mjs",
     "reconcile-cast": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/reconcile-broken-cast.ps1",
     "prepare": "husky"
   },
