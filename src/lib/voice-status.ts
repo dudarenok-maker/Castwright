@@ -81,3 +81,20 @@ export function resolveVoiceStatus(
     reused: !!c.matchedFrom,
   };
 }
+
+/** The status-filter keys a character matches, for the cast view's status
+    filter (cast.tsx). Derives from the same `resolveVoiceStatus` the row pills
+    use so the chips and the rows can never diverge: the lifecycle label (or
+    'Unset' for a character with no resolvable lifecycle yet), plus 'Reused'
+    when the voice was matched from a prior book. A character matches a chip if
+    ANY of its keys is selected (OR semantics). */
+export function statusFilterKeys(
+  c: Character,
+  voice: Voice | undefined,
+  effectiveEngine: TtsEngine,
+): string[] {
+  const { lifecycle, reused } = resolveVoiceStatus(c, voice, effectiveEngine);
+  const keys = [lifecycle?.label ?? 'Unset'];
+  if (reused) keys.push('Reused');
+  return keys;
+}
