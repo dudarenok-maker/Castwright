@@ -614,20 +614,19 @@ describe('AccountView — Models card (plan 61)', () => {
     }
   });
 
-  it('renders the cross-platform Qwen3-TTS install snippet (both PowerShell + Node)', () => {
-    /* The Qwen card mirrors the Coqui block: a PowerShell command for
-       Windows and a Node command for macOS / Linux, both in one copyable
-       <pre> so the user grabs their platform's line without scrolling. */
+  it('renders the in-app Qwen3-TTS installer card when Qwen is not installed', () => {
+    /* The display-only copy-paste snippet was replaced by the one-click
+       QwenInstall component (mirrors OllamaInstall). With the detect probe
+       reporting not-installed, the "Install Qwen3-TTS" card renders. */
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(
-        new Response(JSON.stringify({ installed: false, version: null }), { status: 200 }),
+        new Response(JSON.stringify({ state: 'not-installed', installed: false }), { status: 200 }),
       );
     try {
       renderView();
-      const pre = screen.getByTestId('account-qwen-install-cmd');
-      expect(pre.textContent).toMatch(/install-qwen3\.ps1/);
-      expect(pre.textContent).toMatch(/install-qwen3\.mjs/);
+      expect(screen.getByTestId('qwen-install-not-detected')).toBeInTheDocument();
+      expect(screen.getByText(/Install Qwen3-TTS/i)).toBeInTheDocument();
     } finally {
       fetchSpy.mockRestore();
     }
