@@ -3446,6 +3446,10 @@ async function realGetSidecarHealth(): Promise<SidecarHealth> {
    stays consistent under VITE_USE_MOCKS=true. */
 const MOCK_USER_SETTINGS: UserSettings = {
   ...FRONTEND_ACCOUNT_DEFAULTS,
+  /* Mock resolves to the stored Kokoro default so the broad mock/e2e suite's
+     engine assumptions are unchanged; tests exercising the Qwen-default seed
+     override this fixture (or getUserSettings) directly. */
+  resolvedTtsModelKey: FRONTEND_ACCOUNT_DEFAULTS.defaultTtsModelKey,
   apiKeyStatus: 'unset',
   workspaceRoot: '(mock)/audiobook-workspace',
   workspaceSource: 'default',
@@ -3914,7 +3918,7 @@ let MOCK_SIDECAR_QWEN_LOADED = false;
 /* Mocks pretend Qwen IS installed ('ready') so the conditional default
    resolves to Qwen and the Qwen-default path is exercisable; tests that want
    the not-installed promo/warning stub getSidecarHealth directly. */
-let MOCK_SIDECAR_QWEN_INSTALL_STATE: 'not-installed' | 'weights-missing' | 'ready' | 'loaded' =
+const MOCK_SIDECAR_QWEN_INSTALL_STATE: 'not-installed' | 'weights-missing' | 'ready' | 'loaded' =
   'ready';
 let MOCK_OLLAMA_MODEL_LOADED = false;
 
