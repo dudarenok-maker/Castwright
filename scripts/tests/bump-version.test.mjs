@@ -350,6 +350,36 @@ test('bump-version --skip-cross-os skips the gate and still bumps + tags', () =>
   }
 });
 
+/* code-stats hook — bump-version refreshes the narrative stats best-effort.
+   The throwaway fixture mirrors only bump-version.mjs (no scripts/code-stats.mjs,
+   no docs/), so the refresh must SKIP cleanly: the dry-run plan reports it's
+   skipped, and a real bump prints the [SKIP] notice while still bumping + tagging
+   (i.e. a missing code-stats.mjs never blocks a release). */
+test('bump-version reports code-stats skipped in --dry-run when the script is absent', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const out = runBump(dir, ['--level', 'patch', '--dry-run']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[PLAN\] refresh code stats: skipped \(scripts\/code-stats\.mjs absent\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('bump-version skips the code-stats refresh (script absent) but still bumps + tags', () => {
+  const dir = setupRepo('1.0.0');
+  try {
+    const out = runBump(dir, ['--level', 'patch', '--skip-cross-os']);
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[SKIP\] code-stats: scripts\/code-stats\.mjs not found/);
+    assert.equal(readVersion(dir, 'package.json'), '1.0.1');
+    const tags = gitExec(['tag', '--list'], { cwd: dir, encoding: 'utf8' }).trim();
+    assert.equal(tags, 'v1.0.1');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 /* Plan 127 — pickWorkflowRun is the pure run-discovery the gate uses to map a
    `gh workflow run` dispatch to the run it must `gh run watch`. It keys on the
    head SHA cross-OS is validating + a workflow_dispatch event + a freshness
