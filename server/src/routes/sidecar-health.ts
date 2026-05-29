@@ -67,6 +67,24 @@ function normaliseQwenInstallState(raw: unknown): QwenInstallState {
     : 'not-installed';
 }
 
+/* Derive the install-state the resolver cache should trust from a /health body.
+   `qwen_loaded: true` means the Base model is resident in the sidecar's memory —
+   the strongest possible proof Qwen is installed AND usable — so it OVERRIDES
+   the qwen_install_state field rather than being subordinate to it.
+
+   Why this override is load-bearing: a pre-plan-130 sidecar omits
+   qwen_install_state entirely, which the normaliser maps to 'not-installed'.
+   Without the override, a stale-but-running sidecar (model loaded, happily
+   serving Qwen) reports 'not-installed' on every 30s poll, which poisons
+   getLastKnownQwenInstallState() and makes generation silently fall EVERY Qwen
+   character back to Kokoro — wrong engine, wrong voices, no warning. A loaded
+   model can never be "not installed", so honour it. (Stale-build incident,
+   2026-05-29 — see docs/features/135-qwen-loud-fallback.md.) */
+function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
+  if (body.qwen_loaded === true) return 'loaded';
+  return normaliseQwenInstallState(body.qwen_install_state);
+}
+
 sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
   const url = getResolvedSidecarUrl();
   const target = `${url}/health`;
@@ -84,7 +102,12 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       });
     }
     const body = (await response.json().catch(() => ({}))) as SidecarHealthBody;
-    const qwenInstallState = normaliseQwenInstallState(body.qwen_install_state);
+    const qwenInstallState = deriveQwenInstallState(body);
+    /* A loaded model implies its package + weights are on disk — keep the
+       forwarded booleans consistent with the derived 'loaded' state so the UI
+       never shows the contradictory "loaded but not-installed" combination a
+       stale sidecar's raw report would otherwise produce. */
+    const qwenLoaded = body.qwen_loaded === true;
     /* Feed the in-process cache getResolvedTtsModelKey reads synchronously, so
        the conditional Qwen-when-installed default tracks reality on every poll
        without that resolver having to block on a sidecar fetch. Only updated on
@@ -100,10 +123,10 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       loading: body.loading === true,
       kokoroLoaded: body.kokoro_loaded === true,
       kokoroLoading: body.kokoro_loading === true,
-      qwenLoaded: body.qwen_loaded === true,
+      qwenLoaded,
       qwenLoading: body.qwen_loading === true,
-      qwenPackageInstalled: body.qwen_package_installed === true,
-      qwenWeightsPresent: body.qwen_weights_present === true,
+      qwenPackageInstalled: qwenLoaded || body.qwen_package_installed === true,
+      qwenWeightsPresent: qwenLoaded || body.qwen_weights_present === true,
       qwenInstallState: qwenInstallState,
       device: typeof body.device === 'string' ? body.device : null,
     });
