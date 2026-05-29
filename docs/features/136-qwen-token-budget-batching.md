@@ -137,6 +137,18 @@ classifier-gated). Gotcha: a shell-exported `QWEN_BATCH_SIZE` /
   token-budget packing only amortises the fixed cost better, it can't beat the
   per-step dispatch latency. See plan 133 (dispatch-latency).
 
+## Known interaction (plan 137)
+
+The practical batch-width cap is bounded not only by VRAM but by **per-batch gen
+time vs the server→sidecar fetch timeout.** Live testing at cap 64 (gen
+400–454 s) blew past undici's default 300 s `headersTimeout`, which aborted the
+fetch → retry loop → "sidecar not running" (the chapter never finished). That's
+a separate bug fixed in plan [137](137-sidecar-fetch-timeout.md) (no-timeout
+dispatcher on the synth POST). Until 137, keep the cap low enough that batches
+finish under ~250 s (cap 32 was safe). Note the A/B also showed wide caps are a
+wash-to-worse on dialogue-dense chapters (padding waste), so width is not the
+dialogue lever regardless — short-line coalescing is.
+
 ## Ship notes
 
 _Pending: shipped date + commit SHA on merge; flip to `stable` after the live

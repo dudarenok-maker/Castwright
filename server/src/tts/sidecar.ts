@@ -23,9 +23,29 @@ import type {
   TtsProvider,
   TtsEngine,
 } from './index.js';
+import { fetch as undiciFetch, Agent } from 'undici';
 import { sidecarModelId } from './index.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
+
+/* TTS synth legitimately runs for minutes — a wide Qwen batch (plan 136) can
+   exceed 5 minutes of GPU decode, and the sidecar is NON-streaming so it holds
+   the connection open computing the whole batch before sending any response
+   headers. Node's global fetch inherits undici's default 300 s `headersTimeout`,
+   which was aborting those long batches → `fetch failed` → the `post()` catch
+   below wrapped it as a `transient` "not reachable" → the retry wrapper
+   re-synthesised the same batch → loop → fatal "sidecar not running" while the
+   sidecar kept grinding orphaned audio (plan 137). The only valid cancellation
+   for a synth is the caller's AbortSignal, never a wall-clock timeout — so we
+   disable headers/body timeouts (0 = unlimited). `connectTimeout` stays short so
+   a genuinely-down sidecar still fails fast. We use undici's OWN `fetch` + this
+   `Agent` (not the global fetch + a dispatcher) so the dispatcher is guaranteed
+   to belong to the same undici instance. */
+const SIDECAR_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
 
 interface SidecarOptions {
   url: string;
@@ -145,12 +165,17 @@ export class SidecarTtsProvider implements TtsProvider {
      becomes a transient "sidecar not reachable" the retry wrapper can absorb. */
   private async post(path: string, body: string, signal?: AbortSignal): Promise<Response> {
     try {
-      return await fetch(`${this.url}${path}`, {
+      /* Cast to the global `Response` type: at runtime Node's global fetch IS
+         undici, so `globalThis.Response` and undici's exported `Response` are
+         the same class — only their duplicated TS declarations (undici vs
+         undici-types) differ, on `formData()` which we never call. */
+      return (await undiciFetch(`${this.url}${path}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body,
         signal,
-      });
+        dispatcher: SIDECAR_DISPATCHER,
+      })) as unknown as Response;
     } catch (e) {
       /* AbortError is the caller cancelling on purpose — let it propagate so
          the outer handler can shut down cleanly instead of mistaking it for a
