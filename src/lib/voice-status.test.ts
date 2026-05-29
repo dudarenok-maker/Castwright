@@ -147,6 +147,19 @@ describe('resolveVoiceStatus — Qwen lifecycle', () => {
     });
   });
 
+  it('reads "Needs voice" for a reused voice whose matched Qwen Voice has an EMPTY name', () => {
+    /* Regression: the matched Voice resolves to the qwen provider but carries no
+       designed name (voiceId never linked, or the referenced Voice was lost to a
+       persistence bug). Before the fix this fell through to "Designed"; it must
+       read "Needs voice", matching the row's "No voice designed yet" sub-line. */
+    const c = char({ voiceState: 'reused', matchedFrom });
+    const v = voice({ ttsVoice: { provider: 'qwen', name: '', description: '' } });
+    expect(resolveVoiceStatus(c, v, KOKORO).lifecycle).toEqual({
+      label: 'Needs voice',
+      color: 'warning',
+    });
+  });
+
   it('treats a REUSED voice whose matched Voice is Qwen as a Qwen lifecycle even when the effective engine is a preset', () => {
     /* The reuse path leaves the character's own ttsEngine/override empty and
        carries the Qwen voice on the matched Voice — so the Qwen branch must
