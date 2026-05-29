@@ -34,6 +34,14 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
+from warning_filters import configure_warning_filters
+
+# Silence the benign-but-scary warnings the Qwen install + first model load
+# emit on a clean Windows box (HF Hub symlink warning, SoX-not-found probe,
+# transformers flash-attn banner) before anything heavy loads. See
+# warning_filters.py for the per-warning rationale.
+configure_warning_filters()
+
 # Exposed as module constants so the logging-format regression test can
 # assert on the intended format directly, instead of fishing the formatter
 # off `logging.getLogger().handlers[0]` — pytest's caplog plugin installs
