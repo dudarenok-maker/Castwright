@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-05-30
 owner: null
 ---
 
 # Qwen batch length-bucketing
 
-> Status: active (mechanism + automated coverage + bench harness shipped 2026-05-29; the real-chapter RTF measurement row is the remaining acceptance step before `stable`)
+> Status: stable (mechanism + automated coverage + bench harness shipped 2026-05-29; live A/B completed 2026-05-30 — the ascending length sort is now the foundation of the shipped-default token-budget packer, plan 136)
 > Key files: `server/src/tts/synthesise-chapter.ts` (the work-item partition), `server/tts-sidecar/scripts/bench-tts.py` (measurement)
 > URL surface: none (internal synthesis-pipeline change)
 > OpenAPI ops: none
@@ -62,4 +62,4 @@ The 2026-05-29 measurements (`docs/tts-performance.md`) show real-prose batch-16
 - Vitest (`synthesise-chapter.test.ts`): byte-identity ON vs OFF, per-batch length-spread shrinks when bucketed, and the kill-switch reproduces index-order composition. The pre-existing size-8-vs-1 test was pinned to `qwenBatchBucket: false` (its voiceName-order assertion is index-order specific).
 - `bench-tts.py`: `HIGH_VARIANCE_SENTENCES` pool + `--bucket {0,1}` (sort-by-length vs interleave); prints the per-batch char-length spread.
 
-**Outstanding before `stable`:** run the bucketed-vs-unbucketed batch-16 measurement on a live sidecar (reboot first) and record the row in `docs/tts-performance.md`; then flip `status: stable` and `git mv` to `archive/`.
+**2026-05-30 — live A/B completed; flipped to `stable`.** The length sort was validated on the live 8 GB sidecar as the foundation of the token-budget packer (plan 136). The adopted production config is the **32/3600** setting (hard cap `QWEN_BATCH_SIZE=32`, `QWEN_BATCH_TOKEN_BUDGET=3600`), now the shipped code default (plan 136). Bucketing stays ON by default (`QWEN_BATCH_BUCKET=1`); it is a precondition of the token-budget greedy fill. Closes backlog `side-6`. The dispatch-bound floor remains (see plan 133); the residual dialogue-padding lever is short-line coalescing (`side-10`).
