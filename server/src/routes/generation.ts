@@ -432,7 +432,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      (sidecar-health.ts) now blocks that specific cause, but a genuinely
      uninstalled / weights-missing / load-failed Qwen still lands here, and that
      downgrade must be visible, not silent. (Stale-build incident, 2026-05-29 —
-     docs/features/135-qwen-loud-fallback.md.) */
+     docs/features/archive/135-qwen-loud-fallback.md.) */
   if (qwenUnavailable) {
     const message =
       `Qwen is unavailable (install-state: ${qwenState}), so every Qwen character ` +

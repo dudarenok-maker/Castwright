@@ -1,4 +1,4 @@
-// Pairs with docs/features/00-stage-machine.md, docs/features/01-hash-router.md
+// Pairs with docs/features/archive/00-stage-machine.md, docs/features/archive/01-hash-router.md
 
 import { describe, expect, it } from 'vitest';
 import { uiSlice, uiActions, type UiState } from './ui-slice';

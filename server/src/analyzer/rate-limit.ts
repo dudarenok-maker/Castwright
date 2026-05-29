@@ -31,7 +31,7 @@ const FALLBACK_LIMITS: ModelLimits = { rpm: 5, tpm: 100_000, rpd: 50 };
 
 /* Built-in limits per model id. Values pulled live from AI Studio on
    2026-05-16 — keep in lockstep with the table in
-   docs/features/06-analyzer-gemini.md (regression plan) when limits
+   docs/features/archive/06-analyzer-gemini.md (regression plan) when limits
    change. */
 const BUILTIN_LIMITS: Record<string, ModelLimits> = {
   'gemini-3.1-flash-lite': { rpm: 15, tpm: 250_000, rpd: 500 },

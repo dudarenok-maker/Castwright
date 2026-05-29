@@ -12,7 +12,7 @@ import { test, expect } from '@playwright/test';
  * importPortable echoes a synthesised bookId so the library can refresh
  * without disturbing the canned data.
  *
- * Pairs with docs/features/75-portable-book-export.md.
+ * Pairs with docs/features/archive/75-portable-book-export.md.
  */
 test.describe('plan 75 — portable book bundle round-trip', () => {
   test('Listen view: Portable bundle tile is live and triggers a download', async ({ page }) => {

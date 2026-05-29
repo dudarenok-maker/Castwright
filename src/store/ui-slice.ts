@@ -213,7 +213,7 @@ export const uiSlice = createSlice({
        no state and never persists — it exists solely so the generation-stream
        middleware can auto-enqueue the book's queued chapters on this ONE action
        and never on a passive open/hydrate/view-switch. See
-       docs/features/137-reopen-never-auto-enqueues.md. */
+       docs/features/archive/137-reopen-never-auto-enqueues.md. */
     requestStartGeneration: () => {},
     setCurrentChapterId: (s, a: PayloadAction<number>) => {
       if (s.stage.kind !== 'ready') return;

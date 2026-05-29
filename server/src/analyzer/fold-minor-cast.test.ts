@@ -1,6 +1,6 @@
-/* Pairs with docs/features/06-analyzer-gemini.md — minor-cast fold pass.
+/* Pairs with docs/features/archive/06-analyzer-gemini.md — minor-cast fold pass.
    Protected-role-exemption coverage added per
-   docs/features/97-narrator-only-named-characters.md. */
+   docs/features/archive/97-narrator-only-named-characters.md. */
 
 import { describe, it, expect } from 'vitest';
 import {

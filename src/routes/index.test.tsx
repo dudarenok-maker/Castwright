@@ -1,4 +1,4 @@
-// Pairs with docs/features/00-stage-machine.md and 21-book-library.md
+// Pairs with docs/features/archive/00-stage-machine.md and 21-book-library.md
 //
 // Regression for the "No manuscript loaded" banner that appeared on the
 // Analysing screen after a page refresh / deep link / confirm→reanalyse:
@@ -239,7 +239,7 @@ describe('AnalysingRoute manuscriptId derivation', () => {
        now matters. In real usage both ids ARE the same — the upload
        seeds both — so we test the realistic shape here. The
        precedence-when-divergent question is captured as a follow-up
-       TODO in docs/features/00-stage-machine.md.) */
+       TODO in docs/features/archive/00-stage-machine.md.) */
     const store = makeStore();
     store.dispatch(uiActions.startNewBook());
     store.dispatch(uiActions.manuscriptUploaded({ bookId: 'b1', manuscriptId: 'mns-from-upload' }));
