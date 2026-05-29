@@ -1,4 +1,4 @@
-/* Pairs with docs/features/27-book-state-persistence.md.
+/* Pairs with docs/features/archive/27-book-state-persistence.md.
 
    Covers the in-memory mock backing store for book state — the round-trip
    contract that lets jsdom tests and design fixtures exercise the persist

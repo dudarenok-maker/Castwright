@@ -1,4 +1,4 @@
-// Pairs with docs/features/09-voice-match-pipeline.md
+// Pairs with docs/features/archive/09-voice-match-pipeline.md
 
 import { describe, expect, it } from 'vitest';
 import { castSlice, castActions } from './cast-slice';

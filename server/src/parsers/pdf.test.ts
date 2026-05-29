@@ -4,7 +4,7 @@
 // precedence (info-dict Title/Author > parseText-derived) and delegating
 // body splitting to parseText. Mocking pdf-parse isolates that contract;
 // pdfjs end-to-end correctness is covered by the canonical e2e manuscript
-// run (see CLAUDE.md, docs/features/28-chapter-audio-format.md).
+// run (see CLAUDE.md, docs/features/archive/28-chapter-audio-format.md).
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
