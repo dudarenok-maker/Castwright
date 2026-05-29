@@ -184,16 +184,16 @@ test.describe('queue modal (plan 102 / 111)', () => {
   test('the queue is authoritative — generating chapters appear as real queue entries (plan 111)', async ({
     page,
   }) => {
-    /* No override any more: navigating to the Generate view fills the queue via
-       enqueue-on-work → the dispatcher drains it. So while a book generates, the
-       queue modal shows REAL entries (not the old synthetic overlay). Drives a
-       real mock generation and asserts the modal reports pending entries. */
+    /* The explicit "Approve cast & start generating" click enqueues (plan 137)
+       → the dispatcher drains it. So while a book generates, the queue modal
+       shows REAL entries (not the old synthetic overlay). Drives a real mock
+       generation and asserts the modal reports pending entries. */
     test.setTimeout(60_000);
 
     await goToConfirm(page);
     await page.getByRole('button', { name: /Confirm cast and review manuscript/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
-    await page.getByRole('button', { name: /^Generate$/ }).click();
+    await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
 
     /* Generation is live once a chapter-row "Generating" pill shows. */
@@ -209,13 +209,14 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await expect(page.getByText(/No chapters queued/)).toHaveCount(0);
   });
 
-  test('queue stays empty until the user starts generating (no enqueue at analysis/confirm)', async ({
+  test('queue stays empty until the user explicitly starts generating (plan 137)', async ({
     page,
   }) => {
-    /* Regression for "book queues at analysis time": a freshly-analysed book
-       must NOT enter the queue at confirm/manuscript — only when the user
-       navigates to the Generate view. Reads the persisted queue length straight
-       off the store (the e2e __store__ hook). */
+    /* Regression for "opening a book auto-starts generation" (plan 137): a
+       freshly-analysed book must NOT enter the queue at confirm/manuscript, NOR
+       on merely reaching the Generate view via the top-nav tab (passive
+       changeView) — only the explicit "Approve cast & start generating" click
+       enqueues. Reads the persisted queue length off the e2e __store__ hook. */
     test.setTimeout(60_000);
     const queueLen = (): Promise<number> =>
       page.evaluate(
@@ -234,8 +235,17 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await page.waitForTimeout(800);
     expect(await queueLen()).toBe(0);
 
-    /* Start generating → the queue now fills. */
+    /* Passive navigation to the Generate view (top-nav tab → changeView) must
+       NOT enqueue — this is the exact path that used to auto-start on open. */
     await page.getByRole('button', { name: /^Generate$/ }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
+    await page.waitForTimeout(800);
+    expect(await queueLen()).toBe(0);
+
+    /* Go back and use the explicit CTA → the queue now fills. */
+    await page.getByRole('button', { name: /^Manuscript$/ }).click();
+    await expect(page).toHaveURL(/#\/books\/.+\/manuscript/, { timeout: 5_000 });
+    await page.getByRole('button', { name: /Approve cast.*start generating/i }).click();
     await expect(page).toHaveURL(/#\/books\/.+\/generate/, { timeout: 5_000 });
     await expect.poll(queueLen, { timeout: 10_000 }).toBeGreaterThan(0);
   });
