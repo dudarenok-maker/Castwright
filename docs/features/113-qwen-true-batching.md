@@ -8,7 +8,7 @@ owner: null
 
 > Status: active (code + automated tests landed; real-GPU manual acceptance pending)
 > Key files: `server/tts-sidecar/main.py` (`QwenEngine.synthesize_batch`, `POST /synthesize-batch`), `server/src/tts/sidecar.ts` (`synthesizeBatch` + frame parser), `server/src/tts/index.ts` (`TtsProvider.synthesizeBatch`), `server/src/tts/synthesise-chapter.ts` (work-item dispatch), `src/views/generation.tsx` (stall copy)
-> URL surface: indirect — Generate tab SSE (see 16-generation-stream.md)
+> URL surface: indirect — Generate tab SSE (see archive/16-generation-stream.md)
 > OpenAPI ops: none (sidecar is an internal HTTP service, not the public OpenAPI surface)
 
 ## Benefit / Rationale
