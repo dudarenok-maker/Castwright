@@ -54,3 +54,5 @@ owner: null
 ## Ship notes
 
 Shipped 2026-05-27 via PR #281 (merge commit `acf2602`). Fixes the "book queues at analysis time" report and the missing bulk-clear control. Cross-links: plan 102 (global queue modal), plan 110 (active-generation honesty), plan 111 (persisted-queue worker migration).
+
+**Superseded in part by [plan 137](../137-reopen-never-auto-enqueues.md) (2026-05-29):** the "re-opening a generating book auto-resumes" intent baked into the Generate-view gate is reversed — auto-enqueue now fires solely on the explicit `ui/requestStartGeneration` intent, so opening / re-opening / navigating to the Generate view never enqueues. The Clear-queue half of this plan is unchanged and still valid.
