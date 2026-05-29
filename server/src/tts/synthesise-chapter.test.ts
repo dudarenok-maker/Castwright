@@ -1499,7 +1499,11 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
 
   it('keeps non-Qwen sentences one-per-call while batching the Qwen ones (mixed-engine chapter)', async () => {
     const cast: CastCharacter[] = [
-      { id: 'narrator', name: 'Narrator' }, // default engine (qwen)
+      /* Narrator carries a DESIGNED Qwen voice so it stays on Qwen — an
+         undesigned Qwen character now falls back to Kokoro (see the
+         "Qwen→Kokoro graceful fallback" suite), which would otherwise leave
+         no Qwen sentences for this batching test to exercise. */
+      { id: 'narrator', name: 'Narrator', overrideTtsVoices: { qwen: { name: 'narrator-q' } } },
       {
         id: 'kobo',
         name: 'Kobo',
@@ -1785,5 +1789,102 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       qwenBatchBucket: true,
     });
     expect(batchSpreads(onP)).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
+  const KOKORO_VOICE_RE = /^(af|am|bf|bm)_/;
+
+  function multiEngine() {
+    const qwen = makeProvider();
+    const kokoro = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro'
+        ? { provider: kokoro, modelKey: 'kokoro-v1' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+    return { qwen, kokoro, resolveForEngine };
+  }
+
+  it('falls an undesigned Qwen character back to Kokoro and stamps the segment', async () => {
+    const cast: CastCharacter[] = [{ id: 'Wren', name: 'Wren', gender: 'female' }];
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'Wren')],
+      cast,
+      provider: qwen,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+    });
+
+    // No designed Qwen voice → the Qwen provider is never asked to synth it.
+    expect(qwen.calls).toHaveLength(0);
+    expect(kokoro.calls).toHaveLength(1);
+    expect(kokoro.calls[0].voiceName).toMatch(KOKORO_VOICE_RE);
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.renderedFallbackEngine).toBe('kokoro');
+  });
+
+  it('does NOT fall back a designed Qwen voice when the engine is available', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'Marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'Marlow-q' } } },
+    ];
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'Marlow')],
+      cast,
+      provider: qwen,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+    });
+
+    expect(qwen.calls).toHaveLength(1);
+    expect(qwen.calls[0].voiceName).toBe('Marlow-q');
+    expect(kokoro.calls).toHaveLength(0);
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.renderedFallbackEngine).toBeUndefined();
+  });
+
+  it('falls a designed Qwen voice back to Kokoro when the engine is unavailable', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'Marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'Marlow-q' } } },
+    ];
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'Marlow')],
+      cast,
+      provider: qwen,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+      qwenUnavailable: true,
+    });
+
+    expect(qwen.calls).toHaveLength(0);
+    expect(kokoro.calls).toHaveLength(1);
+    expect(kokoro.calls[0].voiceName).toMatch(KOKORO_VOICE_RE);
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.renderedFallbackEngine).toBe('kokoro');
+  });
+
+  it('never stamps a fallback on a non-Qwen character', async () => {
+    const cast: CastCharacter[] = [{ id: 'eliza', name: 'Eliza', gender: 'female' }];
+    const provider = makeProvider();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'eliza')],
+      cast,
+      provider,
+      modelKey: 'kokoro-v1',
+      engine: 'kokoro',
+    });
+
+    expect(provider.calls).toHaveLength(1);
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.renderedFallbackEngine).toBeUndefined();
   });
 });
