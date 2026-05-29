@@ -1790,6 +1790,164 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     });
     expect(batchSpreads(onP)).toEqual([0, 0, 0, 0]);
   });
+
+  /* ── Token-budget packing (plan 136) ───────────────────────────────────────
+     Variable batch width: pack short/dialogue sentences wide (toward the hard
+     cap = qwenBatchSize) and long sentences narrow, bounded by
+     `count × maxLenInBatch <= budget`. Fake PCM is one int16 sample per char,
+     so a sentence's `normaliseForTts(text).length` IS the model-side length the
+     packer and the sidecar both use. Repeated-char strings avoid the all-caps /
+     dash scrubbing in `normaliseForTts`, so length === text.length exactly. */
+  const batchWidths = (p: ReturnType<typeof makeBatchProvider>): number[] =>
+    p.batchCalls.map((c) => c.items.length);
+  const SHORT = 'a'.repeat(10);
+  const LONG = 'b'.repeat(28);
+  /* anchor (group 0, synthed as an up-front single) + 8 shorts + 4 longs. */
+  const TB_SENTENCES = [
+    sentence(1, 'narrator', 'Anchor sentence sets the sample rate.'),
+    ...Array.from({ length: 8 }, (_, i) =>
+      sentence(i + 2, i % 2 ? 'Maerin' : 'narrator', SHORT),
+    ),
+    ...Array.from({ length: 4 }, (_, i) =>
+      sentence(i + 10, i % 2 ? 'Maerin' : 'narrator', LONG),
+    ),
+  ];
+
+  it('is output-preserving: token-budget ON is byte-identical to fixed-width OFF', async () => {
+    const onP = makeBatchProvider();
+    const on = await synthesiseChapter({
+      sentences: TB_SENTENCES,
+      cast: QWEN_CAST,
+      provider: onP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 4,
+      qwenBatchTokenBudget: 60,
+    });
+    const offP = makeBatchProvider();
+    const off = await synthesiseChapter({
+      sentences: TB_SENTENCES,
+      cast: QWEN_CAST,
+      provider: offP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 4,
+      qwenBatchTokenBudget: 0, // fixed-width fallback
+    });
+    /* Packing only changes which groups co-occur — never the audio (per-item
+       prompts) nor the concat order (index scatter-back). */
+    expect(on.pcm.equals(off.pcm)).toBe(true);
+    expect(on.sampleRate).toBe(off.sampleRate);
+    expect(on.durationSec).toBe(off.durationSec);
+    expect(on.segments).toEqual(off.segments);
+  });
+
+  it('packs short batches to the cap and long batches narrower, never violating the budget', async () => {
+    const budget = 60;
+    const hardMax = 4;
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences: TB_SENTENCES,
+      cast: QWEN_CAST,
+      provider: p,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: hardMax,
+      qwenBatchTokenBudget: budget,
+    });
+    /* The invariant the packer guarantees on EVERY batch — this is the VRAM
+       backstop, so it must hold without exception. */
+    for (const c of p.batchCalls) {
+      const maxLen = Math.max(...c.items.map((i) => i.text.length));
+      expect(c.items.length * maxLen).toBeLessThanOrEqual(budget);
+      expect(c.items.length).toBeLessThanOrEqual(hardMax);
+    }
+    /* Short batches (maxLen 10) hit the cap; long batches (maxLen 28) are forced
+       narrower by the budget (2×28=56 ≤ 60 but 3×28 > 60). */
+    const shortBatches = p.batchCalls.filter((c) => Math.max(...c.items.map((i) => i.text.length)) === 10);
+    const longBatches = p.batchCalls.filter((c) => Math.max(...c.items.map((i) => i.text.length)) === 28);
+    expect(shortBatches.length).toBeGreaterThan(0);
+    expect(longBatches.length).toBeGreaterThan(0);
+    for (const c of shortBatches) expect(c.items.length).toBe(hardMax);
+    for (const c of longBatches) expect(c.items.length).toBeLessThan(hardMax);
+  });
+
+  it('budget=0 falls back to exact fixed-width slicing (kill-switch + back-compat)', async () => {
+    const p = makeBatchProvider();
+    await synthesiseChapter({
+      sentences: TB_SENTENCES,
+      cast: QWEN_CAST,
+      provider: p,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 4,
+      qwenBatchTokenBudget: 0,
+      qwenBatchBucket: false, // index-order, so composition is fully pinned
+    });
+    /* 12 batchable body groups (anchor excluded), fixed width 4 → 3 full
+       batches, no token-budget reshaping. */
+    expect(batchWidths(p)).toEqual([4, 4, 4]);
+    const flatTexts = p.batchCalls.flatMap((c) => c.items.map((i) => i.text));
+    expect(flatTexts).toEqual(TB_SENTENCES.slice(1).map((s) => s.text));
+  });
+
+  it('emits a single sentence that alone exceeds the budget as its own work item', async () => {
+    const HUGE = 'c'.repeat(200);
+    const sentences = [
+      sentence(1, 'narrator', 'Anchor sentence sets the sample rate.'),
+      ...Array.from({ length: 6 }, (_, i) => sentence(i + 2, 'narrator', SHORT)),
+      sentence(8, 'Maerin', HUGE),
+    ];
+    const p = makeBatchProvider();
+    const out = await synthesiseChapter({
+      sentences,
+      cast: QWEN_CAST,
+      provider: p,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: 50, // 1×200 alone > 50
+    });
+    /* The over-budget sentence is never co-batched; a length-1 work item routes
+       to the single path, so it lands in singleCalls, not batchCalls. */
+    expect(p.batchCalls.every((c) => c.items.every((i) => i.text !== HUGE))).toBe(true);
+    expect(p.singleCalls.some((c) => c.text === HUGE)).toBe(true);
+    /* Audio still byte-identical to the fixed-width baseline. */
+    const refP = makeBatchProvider();
+    const ref = await synthesiseChapter({
+      sentences,
+      cast: QWEN_CAST,
+      provider: refP,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      qwenBatchSize: 8,
+      qwenBatchTokenBudget: 0,
+    });
+    expect(out.pcm.equals(ref.pcm)).toBe(true);
+    expect(out.segments).toEqual(ref.segments);
+  });
+
+  it('is deterministic: same input twice yields identical batch composition', async () => {
+    const run = async () => {
+      const p = makeBatchProvider();
+      await synthesiseChapter({
+        sentences: TB_SENTENCES,
+        cast: QWEN_CAST,
+        provider: p,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        qwenBatchSize: 4,
+        qwenBatchTokenBudget: 60,
+      });
+      return p;
+    };
+    const a = await run();
+    const b = await run();
+    expect(batchWidths(a)).toEqual(batchWidths(b));
+    expect(a.batchCalls.map((c) => c.items.map((i) => i.text))).toEqual(
+      b.batchCalls.map((c) => c.items.map((i) => i.text)),
+    );
+  });
 });
 
 describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
