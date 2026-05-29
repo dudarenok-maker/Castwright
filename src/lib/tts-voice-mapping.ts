@@ -9,7 +9,7 @@
    user hears. The Voice-library response (GET /api/voices) is authoritative;
    prefer reading `voice.ttsVoice` when it's available. */
 
-import type { Character, TtsModelKey } from './types';
+import type { Character, Voice, TtsModelKey } from './types';
 
 /* qwen is a BESPOKE per-character engine (plan 108) — no preset catalog;
    its "voice" is a designed voiceId living in overrideTtsVoices.qwen.name.
@@ -342,6 +342,28 @@ export function resolveTtsVoiceForCharacter(
     name,
     description: describeVoice(engine, name),
   };
+}
+
+/* Row-label resolver for the cast view. A library voice's preset descriptor
+   normally wins, but a character pinned to the bespoke Qwen engine (plan 108)
+   must show its designed/Qwen line, not a Coqui/Kokoro preset. For a REUSED qwen
+   voice the character's own override is empty and the bespoke voice rides on the
+   matched library Voice (itself a qwen voice) — so fall back to it, otherwise the
+   row reads "No voice designed yet" despite a real designed voice existing on the
+   matched Voice (e.g. Lord Vane → qwen-lord-Vane). Only the empty-name stub
+   remains when nothing resolves. */
+export function resolveDisplayTtsVoice(
+  c: Character,
+  voice: Voice | undefined,
+  projectEngine: TtsEngine,
+): TtsVoiceAssignment {
+  if (c.ttsEngine === 'qwen') {
+    const own = resolveTtsVoiceForCharacter(c, 'qwen');
+    if (own.name) return own;
+    if (voice?.ttsVoice?.provider === 'qwen' && voice.ttsVoice.name) return voice.ttsVoice;
+    return own;
+  }
+  return voice?.ttsVoice ?? resolveTtsVoiceForCharacter(c, projectEngine);
 }
 
 /* The single model key the Qwen bespoke engine routes through. Mirror of

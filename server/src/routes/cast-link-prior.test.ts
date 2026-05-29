@@ -297,6 +297,38 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(after?.aliases).toEqual(['Bren']);
   });
 
+  it("denormalises the target's designed qwen voice onto the source (reused-voice consistency)", async () => {
+    /* Regression for the reused-Qwen-voice bug: linking a source character to a
+       target that carries a designed qwen voice must copy the target's
+       ttsEngine + overrideTtsVoices onto the source so it no longer resolves to
+       '' (Kokoro fallback) at generation. Re-seed the keeper target (Hart) with a
+       designed qwen voice, then link the new book's full-form character to it. */
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'Hart',
+        name: 'Hart',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_Hart',
+        aliases: ['Hartwell'],
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-Hart' } },
+      },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'Hartwell-alvin-Vale',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'Hart',
+    });
+    expect(res.status).toBe(200);
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'Hartwell-alvin-Vale',
+    ) as { ttsEngine?: string; overrideTtsVoices?: { qwen?: { name: string } } } | undefined;
+    expect(after?.ttsEngine).toBe('qwen');
+    expect(after?.overrideTtsVoices?.qwen?.name).toBe('qwen-Hart');
+  });
+
   it("falls back to the target's id when the target has no voiceId", async () => {
     /* Re-seed keeper with a target carrying NO voiceId — the canonical key is
        then the target's id, and the source should adopt it. */

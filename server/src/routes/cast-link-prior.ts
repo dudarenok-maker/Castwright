@@ -32,14 +32,20 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import type { TtsEngine } from '../tts/index.js';
 
 export const castLinkPriorRouter = Router();
 
-/* cast.json on disk carries voiceId (written by the post-confirm
-   pipeline) even though the analyzer's CharacterOutput schema doesn't
-   declare it. Widen the read shape here so the link-prior response can
-   echo the target's voiceId back to the frontend. */
-type PersistedCharacter = CharacterOutput & { voiceId?: string };
+/* cast.json on disk carries voiceId + the bespoke-voice fields (written by
+   the post-confirm pipeline / voice-design flow) even though the analyzer's
+   CharacterOutput schema doesn't declare them. Widen the read shape here so
+   the link-prior response can echo the target's voiceId back to the frontend
+   AND so the link can denormalise the designed qwen voice onto the source. */
+type PersistedCharacter = CharacterOutput & {
+  voiceId?: string;
+  ttsEngine?: TtsEngine | null;
+  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+};
 interface CastFile {
   characters: PersistedCharacter[];
 }
@@ -136,8 +142,28 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
      them. Idempotent: skip the write when it already matches. */
   const canonicalVoiceId = target.voiceId ?? target.id;
   const voiceIdChanged = source.voiceId !== canonicalVoiceId;
-  if (voiceIdChanged) {
+
+  /* Denormalise the bespoke (qwen) voice onto the source at link time. A
+     reused character whose own `overrideTtsVoices.qwen` is empty would
+     otherwise resolve to '' at generation and fall back to Kokoro — the
+     reused-voice consistency bug. Copying the target's designed voice (engine
+     + override) here keeps the source's cast.json self-complete, so it no
+     longer depends on read-time hydration. Only fills when the source lacks
+     its own qwen voice and the target carries one; never clobbers an explicit
+     source override. */
+  const sourceHasQwen = !!source.overrideTtsVoices?.qwen?.name;
+  const targetQwen = target.overrideTtsVoices?.qwen?.name;
+  const shouldDenormaliseVoice = !sourceHasQwen && !!targetQwen;
+
+  if (voiceIdChanged || shouldDenormaliseVoice) {
     const mergedSource: PersistedCharacter = { ...source, voiceId: canonicalVoiceId };
+    if (shouldDenormaliseVoice) {
+      mergedSource.ttsEngine = source.ttsEngine ?? target.ttsEngine ?? 'qwen';
+      mergedSource.overrideTtsVoices = {
+        ...(target.overrideTtsVoices ?? {}),
+        ...(source.overrideTtsVoices ?? {}),
+      };
+    }
     const nextSourceCharacters = sourceCast.characters.map((c) =>
       c.id === sourceCharacterId ? mergedSource : c,
     );
