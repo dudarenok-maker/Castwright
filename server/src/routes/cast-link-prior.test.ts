@@ -314,6 +314,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
         aliases: ['Dexter'],
         ttsEngine: 'qwen',
         overrideTtsVoices: { qwen: { name: 'qwen-dex' } },
+        voiceStyle: 'a quirky, earnest boy genius',
       },
     ]);
     const res = await callLink(newBookId, {
@@ -324,8 +325,53 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(res.status).toBe(200);
     const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
       (c) => c.id === 'dexter-alvin-diznee',
-    ) as { ttsEngine?: string; overrideTtsVoices?: { qwen?: { name: string } } } | undefined;
+    ) as
+      | { ttsEngine?: string; overrideTtsVoices?: { qwen?: { name: string } }; voiceStyle?: string }
+      | undefined;
     expect(after?.ttsEngine).toBe('qwen');
+    expect(after?.overrideTtsVoices?.qwen?.name).toBe('qwen-dex');
+    /* The persona rides along the voice denormalise (srv-18). */
+    expect(after?.voiceStyle).toBe('a quirky, earnest boy genius');
+  });
+
+  it("does not clobber the source's own persona when denormalising (srv-18)", async () => {
+    /* The source already carries a hand-edited persona — the link must keep it,
+       even while it adopts the target's designed voice. */
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'dexter-alvin-diznee',
+        name: 'Dexter Alvin Diznee',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Dizz'],
+        voiceStyle: 'my own edited persona',
+      },
+    ]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'dex',
+        name: 'Dex',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_dex',
+        aliases: ['Dexter'],
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-dex' } },
+        voiceStyle: 'the target persona',
+      },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'dexter-alvin-diznee',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'dex',
+    });
+    expect(res.status).toBe(200);
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'dexter-alvin-diznee',
+    ) as { voiceStyle?: string; overrideTtsVoices?: { qwen?: { name: string } } } | undefined;
+    expect(after?.voiceStyle).toBe('my own edited persona');
     expect(after?.overrideTtsVoices?.qwen?.name).toBe('qwen-dex');
   });
 
