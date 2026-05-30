@@ -68,6 +68,28 @@ logging.basicConfig(
 )
 log = logging.getLogger("sidecar")
 
+
+def _apply_torch_perf_flags(torch: Any) -> None:
+    """Enable TF32 + high fp32-matmul precision once, idempotently, right
+    after torch is imported in a load path.
+
+    Scope note: these flags only affect *fp32* matmuls, so they help Coqui's
+    fp32 residual ops but barely touch Qwen, which loads in bfloat16 (see
+    `_load_qwen_model`). They are NOT a fix for the dispatch-bound Qwen RTF
+    floor — that would need CUDA graphs, which are blocked by Qwen's
+    DynamicCache (see docs/tts-performance.md). cudnn.benchmark is
+    deliberately left OFF: audiobook input lengths vary wildly, so its
+    per-shape autotune re-fires on every new shape and can regress first-hit
+    latency. Best-effort — any attribute drift across torch versions is
+    swallowed so a model load never fails over a perf knob."""
+    try:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
+    except Exception as e:  # pragma: no cover - defensive against API drift
+        log.warning("Could not apply torch perf flags (%s) — continuing.", e)
+
+
 app = FastAPI(title="audiobook-generator local TTS sidecar")
 
 
@@ -391,6 +413,8 @@ class CoquiEngine(Engine):
                 "`.\\.venv\\Scripts\\python.exe -m pip install torch torchaudio "
                 "--index-url https://download.pytorch.org/whl/cpu` in server/tts-sidecar."
             ) from e
+
+        _apply_torch_perf_flags(torch)
 
         model_id = {
             "xtts_v2": "tts_models/multilingual/multi-dataset/xtts_v2",
@@ -913,6 +937,7 @@ class QwenEngine(Engine):
                 "`.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` in "
                 "server/tts-sidecar."
             ) from e
+        _apply_torch_perf_flags(torch)
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
         # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
         # skeleton, so the move below can never hit "copy out of meta tensor".
