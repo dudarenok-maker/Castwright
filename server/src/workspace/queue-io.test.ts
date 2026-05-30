@@ -10,6 +10,7 @@ import {
   markInProgress,
   pruneByBook,
   reorder,
+  resetEntryToQueued,
   resetInProgressToQueued,
   retry,
   setPaused,
@@ -275,6 +276,35 @@ describe('queue-io.resetInProgressToQueued', () => {
 
   it('handles an empty queue', () => {
     expect(resetInProgressToQueued(emptyFile()).entries).toEqual([]);
+  });
+});
+
+describe('queue-io.resetEntryToQueued (srv-12 single-entry orphan recovery)', () => {
+  it('flips ONLY the targeted in_progress entry back to queued, leaving siblings', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2'), sampleEntry('e3')]);
+    f = markInProgress(f, 'e1');
+    f = markInProgress(f, 'e2');
+    const reset = resetEntryToQueued(f, 'e1');
+    expect(reset.entries.map((e) => [e.id, e.order, e.status])).toEqual([
+      ['e1', 0, 'queued'],
+      ['e2', 1, 'in_progress'],
+      ['e3', 2, 'queued'],
+    ]);
+  });
+
+  it('is a no-op for a missing id', () => {
+    const f = markInProgress(enqueue(emptyFile(), [sampleEntry('e1')]), 'e1');
+    const reset = resetEntryToQueued(f, 'nope');
+    expect(reset).toBe(f);
+  });
+
+  it('is a no-op for a non-in_progress entry (never resurrects done/failed/queued)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    f = markInProgress(f, 'e2');
+    f = completeEntry(f, 'e2', 'failed', 'sidecar 500');
+    /* e1 is queued, e2 is failed — neither flips. */
+    expect(resetEntryToQueued(f, 'e1')).toBe(f);
+    expect(resetEntryToQueued(f, 'e2')).toBe(f);
   });
 });
 

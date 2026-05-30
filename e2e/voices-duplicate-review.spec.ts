@@ -110,4 +110,72 @@ test.describe('cross-book duplicate review (plan 101)', () => {
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(page.getByText(/Same person across books\?/)).toBeHidden({ timeout: 5_000 });
   });
+
+  /* fe-9 — bulk per-series review. The series banner button walks the whole
+     queue; the single-pair queue here links and finishes. */
+  test('bulk "Review all duplicates in <Series>" links the queued pair and closes', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.goto('/#/voices');
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+
+    const bulkBtn = page.getByRole('button', { name: /Review all duplicates in/i }).first();
+    await expect(bulkBtn).toBeVisible({ timeout: 5_000 });
+    await bulkBtn.click();
+
+    /* Bulk modal mounts: per-series progress strip + the reused single-pair
+       modal. The link button enables once both casts hydrate. */
+    await expect(page.getByText(/Same person across books\?/)).toBeVisible({ timeout: 5_000 });
+    const linkBtn = page.getByRole('button', { name: /Same character — link them/i });
+    await expect(linkBtn).toBeEnabled({ timeout: 5_000 });
+    await linkBtn.click();
+
+    /* Last pair resolved → the bulk modal closes entirely. */
+    await expect(page.getByText(/Same person across books\?/)).toBeHidden({ timeout: 5_000 });
+  });
+
+  /* fs-11 — undo "different on purpose": mark a pair variant, then the Ignored
+     section lists it; Unmark re-surfaces it as a live duplicate candidate. */
+  test('Ignored section lists a variant-marked pair and Unmark re-surfaces it', async ({
+    page,
+  }) => {
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: /Start a new book/i }).first()).toBeVisible({
+      timeout: 10_000,
+    });
+    await page.goto('/#/voices');
+    await expect(page.getByText('Eliza Gray').first()).toBeVisible({ timeout: 10_000 });
+
+    /* Mark the pair "different on purpose". */
+    await page
+      .getByRole('button', { name: /duplicate candidate/i })
+      .first()
+      .click();
+    await expect(page.getByText(/Same person across books\?/)).toBeVisible({ timeout: 5_000 });
+    const variantBtn = page.getByRole('button', { name: /Different on purpose/i });
+    await expect(variantBtn).toBeEnabled({ timeout: 5_000 });
+    await variantBtn.click();
+    await expect(page.getByText(/separate characters/)).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /duplicate candidate/i })).toBeHidden({
+      timeout: 5_000,
+    });
+
+    /* Open the Ignored section → the pair is listed with an Unmark button. */
+    await page.getByTestId('toggle-ignored-duplicates').click();
+    const unmark = page.getByRole('button', { name: /^Unmark$/i }).first();
+    await expect(unmark).toBeVisible({ timeout: 5_000 });
+    await unmark.click();
+
+    /* Toast + the live candidate pill re-surfaces. */
+    await expect(page.getByText(/can be reviewed as duplicates again/)).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.getByRole('button', { name: /duplicate candidate/i }).first()).toBeVisible({
+      timeout: 5_000,
+    });
+  });
 });

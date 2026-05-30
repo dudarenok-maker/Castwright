@@ -5,6 +5,12 @@ import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/type
 
 export interface CastState {
   characters: Character[];
+  /** fe-16 — characterId → engine the character actually rendered in when it
+      differs from its configured engine (`'kokoro'` for a Qwen fallback).
+      Hydrated from the book-state GET; drives the "Fallback (Kokoro)" Status
+      pill. Optional (absent on pre-fe-16 preloaded test stores) — selectors
+      read it through a `?? {}` guard. */
+  renderedFallbackByCharacter?: Record<string, string>;
 }
 
 /* Empty initial state — the fixture seed (`initialCharacters` from
@@ -13,7 +19,7 @@ export interface CastState {
    characters between click and async hydration. Hydration via
    `hydrateFromAnalysis` / `setCharacters` (from the layout's getBookState
    handler) is the only legitimate source for a real book. */
-const initialState: CastState = { characters: [] };
+const initialState: CastState = { characters: [], renderedFallbackByCharacter: {} };
 
 export const castSlice = createSlice({
   name: 'cast',
@@ -21,6 +27,12 @@ export const castSlice = createSlice({
   reducers: {
     setCharacters: (s, a: PayloadAction<Character[]>) => {
       s.characters = a.payload;
+    },
+    /* fe-16 — overwrite the per-character render fallback map from the
+       book-state GET. Hydrated alongside setCharacters on book open; the empty
+       case clears stale entries (e.g. after a fresh render with no fallback). */
+    setRenderedFallback: (s, a: PayloadAction<Record<string, string>>) => {
+      s.renderedFallbackByCharacter = a.payload ?? {};
     },
     declineMatch: (s, a: PayloadAction<string>) => {
       const c = s.characters.find((x) => x.id === a.payload);
@@ -279,6 +291,27 @@ export const castSlice = createSlice({
         return;
       }
       c.notLinkedTo = [...existing, { bookId: otherBookId, characterId: otherCharacterId }];
+    },
+    /* From DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11).
+       Undo a prior "different on purpose" decision — strip the (otherBookId,
+       otherCharacterId) entry from this character's notLinkedTo so the
+       voices-view duplicate detector re-surfaces the pair. Idempotent: a
+       no-op when the entry is already absent. The OTHER book's redux state
+       lives elsewhere (its side is reconciled via the foreign-cast cache). */
+    removeNotLinked: (
+      s,
+      a: PayloadAction<{
+        characterId: string;
+        otherBookId: string;
+        otherCharacterId: string;
+      }>,
+    ) => {
+      const { characterId, otherBookId, otherCharacterId } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c?.notLinkedTo) return;
+      c.notLinkedTo = c.notLinkedTo.filter(
+        (p) => !(p.bookId === otherBookId && p.characterId === otherCharacterId),
+      );
     },
     /* From POST /api/books/:bookId/voice-match. Carries bookId + characterId
        through to matchedFrom so the confirm view's override toggle has a

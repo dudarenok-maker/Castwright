@@ -238,6 +238,12 @@ export interface BookStateResponse {
       reducer falls back to all-cast and the Generate view's pill list
       flickers from filtered to everyone on hydrate. */
   chapterCharacters?: Record<number, string[]>;
+  /** fe-16 — characterId → engine the character ACTUALLY rendered in when it
+      differs from its configured engine (`'kokoro'` when a Qwen character fell
+      back across any rendered chapter). Threaded into `resolveVoiceStatus` so
+      the cast Status pill reads "Fallback (Kokoro)". Empty / undefined when no
+      audio has rendered or nothing fell back. */
+  renderedFallbackByCharacter?: Record<string, string>;
   /** Editorial activity trail (regenerate confirms, etc.). Null when no
       change-log.json has been written yet — the layout falls back to an
       empty list so the Activity view doesn't replay a stale demo seed for
