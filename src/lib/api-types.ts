@@ -1346,6 +1346,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Book-open hydrate composite (state + cast + manuscript meta + revisions + …)
+         * @description The single payload the layout reads when a book is opened: `state.json`,
+         *     the on-disk cast, lightweight manuscript meta, pending revisions/drift,
+         *     completed-chapter slugs, per-chapter loudness, and (fe-16) the
+         *     per-character render-time engine-fallback map. The full per-field shape
+         *     is hand-modeled in `src/lib/types.ts:BookStateResponse`; the schema here
+         *     enumerates the top-level keys and references the component schemas that
+         *     exist, keeping `state` (`BookStateJson`) and the loose `Record` maps
+         *     permissive rather than duplicating those large shapes.
+         */
+        get: operations["getBookState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/cast/{characterId}/not-linked-to": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark a cross-book duplicate pair as intentionally separate (plan 101)
+         * @description "These two cross-book characters look like duplicates to the voices-view
+         *     detector, but they ARE intentionally separate people (e.g. teenage
+         *     Wren vs adult Wren)." Writes a symmetric `notLinkedTo` pair to BOTH
+         *     books' cast.json so the duplicate-candidate predicate stops surfacing
+         *     the pair on either side. Cross-book only (same author + series, neither
+         *     standalone); self-pair and same-book pairs are rejected. Idempotent — an
+         *     already-present pair is a no-op on that side.
+         */
+        post: operations["markNotLinkedTo"];
+        /**
+         * Undo a "different on purpose" decision (fs-11)
+         * @description Removes the symmetric `notLinkedTo` pair from BOTH books' cast.json so
+         *     the voices-view duplicate detector starts surfacing the pair again. Same
+         *     guards + body shape as the POST (cross-book only, series-mate scope,
+         *     self-pair rejected). Fully idempotent: an absent pair on either side is a
+         *     no-op for that side and the route still 200s.
+         */
+        delete: operations["removeNotLinkedTo"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2742,6 +2803,92 @@ export interface components {
             inFlight: number;
             /** @description Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU. */
             max: number;
+        };
+        /**
+         * @description The OTHER side of a cross-book pair. The source side comes from the
+         *     path (`bookId` + `characterId`).
+         */
+        NotLinkedToRequest: {
+            otherBookId: string;
+            otherCharacterId: string;
+        };
+        CastCharacterRef: {
+            bookId: string;
+            characterId: string;
+        };
+        /** @description The symmetric pair written to (or removed from) both books. */
+        NotLinkedToResponse: {
+            pair: {
+                a: components["schemas"]["CastCharacterRef"];
+                b: components["schemas"]["CastCharacterRef"];
+            };
+        };
+        /**
+         * @description Book-open hydrate composite. Canonical per-field shape is hand-modeled
+         *     in `src/lib/types.ts:BookStateResponse`; this schema enumerates the
+         *     top-level keys and references the component schemas that exist, keeping
+         *     `state` (`BookStateJson`) and the loose `Record` maps permissive rather
+         *     than duplicating those large shapes here.
+         */
+        BookStateResponse: {
+            /**
+             * @description `BookStateJson` from `<bookDir>/.audiobook/state.json` (title,
+             *     author, series, castConfirmed, tags, language, …). Hand-modeled in
+             *     `src/lib/types.ts`; kept permissive here rather than duplicated.
+             */
+            state: {
+                [key: string]: unknown;
+            };
+            cast: {
+                characters: components["schemas"]["Character"][];
+            } | null;
+            /** @description Lightweight manuscript meta pulled from the in-memory ManuscriptRecord. */
+            manuscript: {
+                wordCount: number;
+                format: string;
+            } | null;
+            manuscriptEdits: {
+                sentences?: components["schemas"]["Sentence"][];
+            } | null;
+            revisions: {
+                pending?: components["schemas"]["Revision"][];
+                drift?: components["schemas"]["DriftEvent"][];
+                dismissed?: string[];
+                /** @description revisionId → { segmentIndex → 'A' | 'B' } captured at accept time. */
+                acceptedSelections?: {
+                    [key: string]: unknown;
+                };
+            } | null;
+            /** @description Slugs of chapters that already have an audio file on disk. */
+            completedSlugs: string[];
+            /**
+             * @description chapterId → EBU R128 loudness sidecar payload (a `ChapterLoudness`,
+             *     or null when the sidecar is missing). Permissive map; the value
+             *     shape is `ChapterLoudness`.
+             */
+            chapterLufs?: {
+                [key: string]: unknown;
+            };
+            /** @description chapterId → analysed speaker ids that actually speak in the chapter. */
+            chapterCharacters?: {
+                [key: string]: string[];
+            };
+            /**
+             * @description fe-16 — characterId → the engine the character ACTUALLY rendered in
+             *     when it differs from its configured engine (`kokoro` when a Qwen
+             *     character fell back across any rendered chapter). Threaded into
+             *     `resolveVoiceStatus` so the cast Status pill reads
+             *     "Fallback (Kokoro)". Empty/absent when nothing fell back.
+             */
+            renderedFallbackByCharacter?: {
+                [key: string]: string;
+            };
+            /** @description Editorial activity trail; null when no change-log.json exists yet. */
+            changeLog: components["schemas"]["ChangeLogEvent"][] | null;
+            /** @description Persistent analysis state for the analysing view's per-chapter Retry buttons. */
+            analysis?: {
+                failedChapterIds?: number[];
+            };
         };
     };
     responses: never;
@@ -4694,6 +4841,131 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ExportLanInfo"];
                 };
+            };
+        };
+    };
+    getBookState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Book-open composite */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookStateResponse"];
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    markNotLinkedTo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotLinkedToRequest"];
+            };
+        };
+        responses: {
+            /** @description The symmetric pair that was written */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotLinkedToResponse"];
+                };
+            };
+            /** @description Missing fields, self-pair, or same-book pair */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source/other book or character not found, or not a series-mate */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source or other book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    removeNotLinkedTo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                characterId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotLinkedToRequest"];
+            };
+        };
+        responses: {
+            /** @description The symmetric pair that was removed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotLinkedToResponse"];
+                };
+            };
+            /** @description Missing fields, self-pair, or same-book pair */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source/other book or character not found, or not a series-mate */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Source or other book has no cast on disk yet */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
