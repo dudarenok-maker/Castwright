@@ -31,10 +31,12 @@ import {
 import {
   cancelQueueEntry,
   clearQueue,
+  confirmFallbackEntry,
   loadQueue,
   reorderQueue,
   retryQueueEntry,
   setQueuePaused,
+  skipFallbackEntry,
 } from '../store/queue-thunks';
 import { chaptersActions } from '../store/chapters-slice';
 import { uiActions } from '../store/ui-slice';
@@ -255,6 +257,18 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
                          dispatcher re-claims it and re-runs the chapter. */
                       dispatch(retryQueueEntry(entryId)).catch(() => {});
                     }}
+                    onConfirmFallback={(entryId) => {
+                      /* Loud-fallback gate: render this parked chapter anyway
+                         (in Kokoro). awaiting_confirm → queued + confirmed; the
+                         dispatcher re-claims it and the worker renders through. */
+                      dispatch(confirmFallbackEntry(entryId)).catch(() => {});
+                    }}
+                    onSkipFallback={(entryId) => {
+                      /* Loud-fallback gate: skip this parked chapter rather than
+                         render undesigned voices in Kokoro. awaiting_confirm →
+                         removed. */
+                      dispatch(skipFallbackEntry(entryId)).catch(() => {});
+                    }}
                   />
                 ))}
               </div>
@@ -351,6 +365,8 @@ interface BookGroupProps {
   onCancel: (entryId: string) => void;
   onForceRemove: (entryId: string) => void;
   onRetry: (entryId: string) => void;
+  onConfirmFallback: (entryId: string) => void;
+  onSkipFallback: (entryId: string) => void;
 }
 
 function BookGroup({
@@ -362,6 +378,8 @@ function BookGroup({
   onCancel,
   onForceRemove,
   onRetry,
+  onConfirmFallback,
+  onSkipFallback,
 }: BookGroupProps) {
   const moveUp = (idx: number): void => {
     if (idx <= 0) return;
@@ -485,14 +503,25 @@ function BookGroup({
                   Chapter {entry.chapterId}
                   {entry.characterId ? ` · ${entry.characterId}` : ''}
                 </div>
-                <div className="text-xs text-ink/50">
+                <div
+                  className={`text-xs ${
+                    entry.status === 'awaiting_confirm' ? 'text-magenta' : 'text-ink/50'
+                  }`}
+                  data-testid={`queue-entry-${entry.id}-status`}
+                >
                   {isInFlight
                     ? `In flight${entry.progress != null ? ` · ${Math.round(entry.progress * 100)}%` : ''}`
                     : entry.status === 'failed'
                       ? `Failed${entry.errorReason ? ` · ${entry.errorReason}` : ''}`
-                      : entry.status === 'paused'
-                        ? 'Paused'
-                        : 'Queued'}
+                      : entry.status === 'awaiting_confirm'
+                        ? `Needs confirmation · no designed Qwen voice for ${
+                            (entry.fallbackCharacters ?? [])
+                              .map((c) => c.name ?? c.id)
+                              .join(', ') || 'some characters'
+                          } → would render in Kokoro`
+                        : entry.status === 'paused'
+                          ? 'Paused'
+                          : 'Queued'}
                 </div>
                 {/* Plan 108 Wave 3 — name the TTS engine(s) this chapter needs.
                     Single: "Kokoro"; multi: "Kokoro + Qwen". Absent on legacy /
@@ -522,6 +551,31 @@ function BookGroup({
                   </p>
                 )}
               </div>
+              {entry.status === 'awaiting_confirm' && (
+                /* Loud-fallback gate: this chapter is parked because a Qwen
+                   character has no designed voice. "Render anyway" confirms the
+                   Kokoro fallback (→ queued); "Skip" drops the chapter. */
+                <>
+                  <button
+                    onClick={() => onConfirmFallback(entry.id)}
+                    aria-label="Render anyway in Kokoro"
+                    title="Render anyway (Kokoro fallback)"
+                    className="px-2 py-1 rounded-full text-xs font-semibold bg-magenta/10 text-magenta hover:bg-magenta/20 min-h-[44px] sm:min-h-0"
+                    data-testid={`queue-entry-${entry.id}-confirm-fallback`}
+                  >
+                    Render anyway
+                  </button>
+                  <button
+                    onClick={() => onSkipFallback(entry.id)}
+                    aria-label="Skip this chapter"
+                    title="Skip this chapter"
+                    className="px-2 py-1 rounded-full text-xs font-semibold bg-ink/5 text-ink/60 hover:bg-ink/10 min-h-[44px] sm:min-h-0"
+                    data-testid={`queue-entry-${entry.id}-skip-fallback`}
+                  >
+                    Skip
+                  </button>
+                </>
+              )}
               {!isInFlight && entry.status === 'failed' && (
                 /* Failed entries linger in the queue (not done-pruned) so the
                    user can re-run the chapter without re-navigating. Retry

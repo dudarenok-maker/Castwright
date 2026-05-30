@@ -513,4 +513,49 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       );
     });
   });
+
+  describe('loud-fallback gate', () => {
+    it('does NOT /complete a claimed entry that the server parked on awaiting_confirm', async () => {
+      const store = makeStore(2);
+      seed(store, [entry({ id: 'a1', bookId: 'book-A', chapterId: 1 })]);
+      await flushMicro();
+      /* The dispatcher claimed + opened the stream (POST /start). */
+      expect(openedBookIds()).toContain('book-A');
+
+      /* Server parks the chapter: the snapshot now shows awaiting_confirm. */
+      seed(store, [
+        entry({
+          id: 'a1',
+          bookId: 'book-A',
+          chapterId: 1,
+          status: 'awaiting_confirm',
+          fallbackCharacters: [{ id: 'sophie', name: 'Sophie' }],
+        }),
+      ]);
+      /* Worker closed the stream without completing (idle). */
+      completeStream('book-A', 1);
+      await flushMicro();
+
+      /* Reconcile must NOT POST /complete for the parked entry — that would
+         clobber it — and must leave it re-claimable (still awaiting_confirm). */
+      expect(
+        fetchMock.mock.calls.some((c) => String(c[0]) === '/api/queue/a1/complete'),
+      ).toBe(false);
+      expect(store.getState().queue.entries[0]?.status).toBe('awaiting_confirm');
+    });
+
+    it('threads fallbackConfirmed into the stream open for a confirmed entry', async () => {
+      const store = makeStore(2);
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1, fallbackConfirmed: true }),
+      ]);
+      await flushMicro();
+      const call = streamGenerationMock.mock.calls.find((c) => {
+        const a = c[0] as { bookId?: string };
+        return a.bookId === 'book-A';
+      });
+      expect(call).toBeDefined();
+      expect((call![0] as { fallbackConfirmed?: boolean }).fallbackConfirmed).toBe(true);
+    });
+  });
 });
