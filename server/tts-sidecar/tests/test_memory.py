@@ -166,55 +166,69 @@ def test_mem_warn_threshold_parsing(monkeypatch):
     assert main._mem_warn_threshold_mb() == 0.0
 
 
-# --- process-recycle (RSS hard ceiling → self-restart via srv-15) ---
+# --- process-recycle (committed-private hard ceiling → self-restart via srv-15) ---
+
+
+def test_process_commit_mb_reports_private():
+    """psutil is present in the venv → committed-private (Windows pmem.private /
+    elsewhere uss) is a positive figure, and ≥ RSS (private/committed exceeds the
+    resident set — the whole reason the recycle keys on it)."""
+    commit = main._process_commit_mb()
+    assert commit is not None
+    assert commit > 0
+
+
+def test_process_commit_mb_none_without_psutil(monkeypatch):
+    monkeypatch.setattr(main, "_PROC", None)
+    assert main._process_commit_mb() is None
 
 
 def test_mem_restart_threshold_parsing(monkeypatch):
     """Explicit override honoured; 0 disables; garbage falls through to the
-    RAM-based default; unset → 55% of total physical RAM."""
+    RAM-based default; unset → 70% of total physical RAM."""
     import psutil
 
-    monkeypatch.setenv("SIDECAR_RSS_RESTART_MB", "30000")
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "30000")
     assert main._mem_restart_threshold_mb() == 30000.0
 
-    monkeypatch.setenv("SIDECAR_RSS_RESTART_MB", "0")
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "0")
     assert main._mem_restart_threshold_mb() == 0.0  # disabled
 
-    monkeypatch.setenv("SIDECAR_RSS_RESTART_MB", "garbage")
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "garbage")
     assert main._mem_restart_threshold_mb() > 0  # falls through to RAM default
 
-    monkeypatch.delenv("SIDECAR_RSS_RESTART_MB", raising=False)
-    expected = 0.55 * psutil.virtual_memory().total / 1_000_000.0
+    monkeypatch.delenv("SIDECAR_RESTART_MB", raising=False)
+    expected = 0.70 * psutil.virtual_memory().total / 1_000_000.0
     assert abs(main._mem_restart_threshold_mb() - expected) < 1.0
 
 
 def test_mem_restart_disabled_without_psutil(monkeypatch):
     """No override + no psutil → 0 (disabled): never guess a ceiling that could
     fire on a healthy small box."""
-    monkeypatch.delenv("SIDECAR_RSS_RESTART_MB", raising=False)
+    monkeypatch.delenv("SIDECAR_RESTART_MB", raising=False)
     monkeypatch.setattr(main, "psutil", None)
     assert main._mem_restart_threshold_mb() == 0.0
 
 
-def test_should_restart_for_rss():
-    """Recycle iff a positive ceiling is set AND RSS meets it."""
-    assert main._should_restart_for_rss(35000, 30000) is True
-    assert main._should_restart_for_rss(30000, 30000) is True  # inclusive
-    assert main._should_restart_for_rss(29999, 30000) is False
-    assert main._should_restart_for_rss(99999, 0) is False  # disabled ceiling
+def test_should_restart():
+    """Recycle iff a positive ceiling is set AND committed memory meets it."""
+    assert main._should_restart(35000, 30000) is True
+    assert main._should_restart(30000, 30000) is True  # inclusive
+    assert main._should_restart(29999, 30000) is False
+    assert main._should_restart(99999, 0) is False  # disabled ceiling
 
 
-def test_schedule_rss_restart_is_idempotent(monkeypatch):
+def test_schedule_restart_is_idempotent(monkeypatch):
     """Two over-ceiling ticks schedule exactly ONE exit (the flag guards it).
-    `_rss_restart_now` is patched so the timer can't actually kill pytest; we
+    `_restart_now` is patched so the timer can't actually kill pytest; we
     wait past the flush delay to confirm it fired once."""
     calls: list[int] = []
-    monkeypatch.setattr(main, "_rss_restart_now", lambda: calls.append(1))
-    monkeypatch.setattr(main, "_rss_restart_scheduled", False)
+    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_restart_scheduled", False)
 
-    main._schedule_rss_restart_exit(35000, 30000)
-    main._schedule_rss_restart_exit(36000, 30000)  # second call must be a no-op
-    assert main._rss_restart_scheduled is True
+    main._schedule_restart_exit(50000, 45000)
+    main._schedule_restart_exit(51000, 45000)  # second call must be a no-op
+    assert main._restart_scheduled is True
 
     # Let the single scheduled timer fire (into the patched no-op) before the
     # monkeypatch is torn down — otherwise a late real exit would kill the suite.

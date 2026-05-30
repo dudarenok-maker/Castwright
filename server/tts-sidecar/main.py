@@ -1463,16 +1463,19 @@ async def _stop_design_idle_watchdog() -> None:
 #     accumulation during generation (fixed-shape batches hold flat; variable
 #     ones climb the floor unbounded; CUDA stays flat — pytorch #32596 / the
 #     Qwen-leak research report). gc/empty_cache reclaim ~0 against it.
-#   * HARD (SIDECAR_RSS_RESTART_MB): self-exit so the server's sidecar
-#     supervisor (srv-15) respawns a FRESH process — the report-endorsed
-#     "process recycling" mitigation, the only thing that reliably bounds a
-#     native variable-shape host leak. srv-16 (skip-completed-on-resume) means
-#     only the single in-flight chapter re-renders. (This replaces the earlier
-#     "never self-exit" stance, which was correct ONLY before srv-15 added
-#     respawn — a bare exit used to just stall the run.)
+#   * HARD (SIDECAR_RESTART_MB): self-exit so the server's sidecar supervisor
+#     (srv-15) respawns a FRESH process — the report-endorsed "process recycling"
+#     mitigation, the only thing that reliably bounds a native variable-shape
+#     host leak. srv-16 (skip-completed-on-resume) means only the single in-flight
+#     chapter re-renders. Keyed on COMMITTED-PRIVATE bytes, not RSS: that's the
+#     OOM-relevant metric — the 2026-05-30 crash was ~54 GB committed-private on a
+#     64 GB box while RSS lagged ~1.7-1.9x lower, so an RSS-keyed ceiling would
+#     have fired too late (private hits the cliff long before RSS reaches it).
+#     (This replaces the earlier "never self-exit" stance, correct ONLY before
+#     srv-15 added respawn — a bare exit used to just stall the run.)
 _MEM_WATCHDOG_INTERVAL = 60.0
 _mem_watchdog_task: "Optional[asyncio.Task[None]]" = None
-_rss_restart_scheduled = False
+_restart_scheduled = False
 
 
 def _mem_warn_threshold_mb() -> float:
@@ -1485,15 +1488,35 @@ def _mem_warn_threshold_mb() -> float:
         return 8192.0
 
 
+def _process_commit_mb() -> Optional[float]:
+    """Committed-private memory in MB — the OOM-relevant metric the recycle keys
+    on. The 2026-05-30 crash was ~54 GB committed-private on a 64 GB box while RSS
+    sat ~1.7-1.9x lower, so keying on RSS would fire too late. Windows:
+    pmem.private. Elsewhere: memory_full_info().uss (the cross-platform private
+    analog). None when unavailable — the caller falls back to RSS."""
+    if _PROC is None:
+        return None
+    try:
+        private = getattr(_PROC.memory_info(), "private", None)  # Windows pmem.private
+        if private is not None:
+            return private / 1_000_000.0
+    except Exception:
+        pass
+    try:
+        return _PROC.memory_full_info().uss / 1_000_000.0  # Linux / macOS
+    except Exception:
+        return None
+
+
 def _mem_restart_threshold_mb() -> float:
-    """RSS (MB) at which the sidecar self-exits for the supervisor to respawn it
-    (process recycling). Default = 55% of total physical RAM so it scales with
-    the box (~35 GB on 64 GB, ~9 GB on 16 GB) — high enough to rarely fire yet
-    well below the ~85% OOM-kill cliff that crashed the run on 2026-05-30.
-    Override SIDECAR_RSS_RESTART_MB (absolute MB); <=0 disables recycling.
-    Returns 0 (disabled) when psutil can't read total RAM and no override is
-    set — never guess a ceiling that might fire on a healthy small box."""
-    env = os.environ.get("SIDECAR_RSS_RESTART_MB")
+    """Committed-private (MB) at which the sidecar self-exits for the supervisor
+    to respawn it (process recycling). Default = 70% of total physical RAM so it
+    scales with the box (~45 GB on 64 GB) — below the ~85% commit cliff that
+    crashed the run on 2026-05-30 (private ~54 GB), with margin for the watchdog's
+    60 s sampling. Override SIDECAR_RESTART_MB (absolute MB); <=0 disables
+    recycling. Returns 0 (disabled) when psutil can't read total RAM and no
+    override is set — never guess a ceiling that might fire on a healthy box."""
+    env = os.environ.get("SIDECAR_RESTART_MB")
     if env is not None:
         try:
             return float(env)
@@ -1501,38 +1524,39 @@ def _mem_restart_threshold_mb() -> float:
             pass
     if psutil is not None:
         try:
-            return 0.55 * psutil.virtual_memory().total / 1_000_000.0
+            return 0.70 * psutil.virtual_memory().total / 1_000_000.0
         except Exception:
             return 0.0
     return 0.0
 
 
-def _should_restart_for_rss(rss_mb: float, threshold_mb: float) -> bool:
-    """Pure decision: recycle when a positive ceiling is set and RSS meets it."""
-    return threshold_mb > 0 and rss_mb >= threshold_mb
+def _should_restart(commit_mb: float, threshold_mb: float) -> bool:
+    """Pure decision: recycle when a positive ceiling is set and committed
+    memory meets it."""
+    return threshold_mb > 0 and commit_mb >= threshold_mb
 
 
-def _rss_restart_now() -> None:  # pragma: no cover - hard process exit; patched in tests
+def _restart_now() -> None:  # pragma: no cover - hard process exit; patched in tests
     os._exit(_RESTART_EXIT_CODE)
 
 
-def _schedule_rss_restart_exit(rss_mb: float, threshold_mb: float) -> None:
+def _schedule_restart_exit(commit_mb: float, threshold_mb: float) -> None:
     """Schedule a single hard self-exit so srv-15 respawns a fresh sidecar.
     Idempotent (a later over-ceiling tick won't double-schedule). Uses a Timer
     so the warning log flushes to tts.err.log before the process vanishes."""
-    global _rss_restart_scheduled
-    if _rss_restart_scheduled:
+    global _restart_scheduled
+    if _restart_scheduled:
         return
-    _rss_restart_scheduled = True
+    _restart_scheduled = True
     log.warning(
-        "sidecar RSS %.0fMB crossed the restart ceiling %.0fMB — self-exiting "
-        "(code %d) so the server respawns a fresh process. The in-flight chapter "
-        "re-renders; completed chapters are skipped (srv-16). Process-recycle "
-        "mitigation for the variable-shape host leak; raise SIDECAR_RSS_RESTART_MB "
-        "to recycle less often.",
-        rss_mb, threshold_mb, _RESTART_EXIT_CODE,
+        "sidecar committed memory %.0fMB crossed the restart ceiling %.0fMB — "
+        "self-exiting (code %d) so the server respawns a fresh process. The "
+        "in-flight chapter re-renders; completed chapters are skipped (srv-16). "
+        "Process-recycle mitigation for the variable-shape host leak; raise "
+        "SIDECAR_RESTART_MB to recycle less often.",
+        commit_mb, threshold_mb, _RESTART_EXIT_CODE,
     )
-    threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _rss_restart_now).start()
+    threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now).start()
 
 
 async def _memory_watchdog() -> None:
@@ -1546,17 +1570,19 @@ async def _memory_watchdog() -> None:
             rss = mem.get("rss_mb", 0.0)
             if not rss:
                 continue  # psutil unavailable — nothing to report
-            priv = mem.get("private_mb")
+            commit = _process_commit_mb()
             log.info(
                 "sidecar memory: rss=%.0fMB%s",
                 rss,
-                f" private={priv:.0f}MB" if priv is not None else "",
+                f" committed={commit:.0f}MB" if commit is not None else "",
             )
             # HARD ceiling first — recycling is the only effective lever against
             # the variable-shape leak, so don't waste a tick on the futile soft
-            # reclaim once we're already at the ceiling.
-            if _should_restart_for_rss(rss, restart_threshold):
-                _schedule_rss_restart_exit(rss, restart_threshold)
+            # reclaim once we're already at the ceiling. Key on committed-private
+            # (the OOM metric); fall back to RSS only if it's unavailable.
+            recycle_metric = commit if commit is not None else rss
+            if _should_restart(recycle_metric, restart_threshold):
+                _schedule_restart_exit(recycle_metric, restart_threshold)
                 continue
             if warn_threshold > 0 and rss >= warn_threshold:
                 await asyncio.to_thread(_reclaim_host_and_vram)
@@ -1584,7 +1610,7 @@ async def _start_memory_watchdog() -> None:
         "sidecar memory watchdog started (warn/reclaim at %.0fMB rss; "
         "process-recycle at %s).",
         _mem_warn_threshold_mb(),
-        f"{restart:.0f}MB rss" if restart > 0 else "DISABLED",
+        f"{restart:.0f}MB committed" if restart > 0 else "DISABLED",
     )
 
 
