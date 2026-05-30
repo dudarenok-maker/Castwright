@@ -32,11 +32,13 @@ import {
   cancel,
   clearQueue,
   completeEntry,
+  confirmFallback,
   enqueue,
   markInProgress,
   reorder,
   retry,
   setPaused,
+  skipFallback,
   type EnqueueInput,
   type QueueScope,
 } from '../workspace/queue-io.js';
@@ -243,6 +245,38 @@ queueRouter.post('/:entryId/retry', async (req: Request, res: Response) => {
   try {
     const before = await readQueueFile(queueJsonPath());
     const after = retry(before, entryId);
+    await writeQueueFile(queueJsonPath(), after);
+    res.json({ entries: after.entries, paused: after.paused });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/* POST /api/queue/:entryId/confirm-fallback — the user confirms a parked
+   chapter's Qwen→Kokoro fallback (status awaiting_confirm → queued,
+   fallbackConfirmed=true) so the dispatcher re-claims it and the worker renders
+   straight through. No-op (idempotent 200) unless the entry is awaiting_confirm
+   — a double-click or stale id returns the current snapshot. */
+queueRouter.post('/:entryId/confirm-fallback', async (req: Request, res: Response) => {
+  const { entryId } = req.params;
+  try {
+    const before = await readQueueFile(queueJsonPath());
+    const after = confirmFallback(before, entryId);
+    await writeQueueFile(queueJsonPath(), after);
+    res.json({ entries: after.entries, paused: after.paused });
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+/* POST /api/queue/:entryId/skip-fallback — the user skips a parked chapter
+   rather than render it in Kokoro (status awaiting_confirm → removed). No-op
+   (idempotent 200) unless the entry is awaiting_confirm. */
+queueRouter.post('/:entryId/skip-fallback', async (req: Request, res: Response) => {
+  const { entryId } = req.params;
+  try {
+    const before = await readQueueFile(queueJsonPath());
+    const after = skipFallback(before, entryId);
     await writeQueueFile(queueJsonPath(), after);
     res.json({ entries: after.entries, paused: after.paused });
   } catch (e) {

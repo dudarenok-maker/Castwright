@@ -1975,10 +1975,15 @@ export interface components {
              *     `warning` is a non-fatal advisory emitted at run setup (e.g. a
              *     Qwen→Kokoro engine downgrade, or dual-model-off with a mixed cast) —
              *     the run still proceeds; the frontend surfaces `message` as a toast.
-             *     See plan `docs/features/102-global-queue-modal.md`.
+             *     `chapter_awaiting_fallback_confirm` is emitted when a chapter would
+             *     silently render an undesigned Qwen voice in Kokoro: the chapter is
+             *     PARKED (queue entry → `awaiting_confirm`) and this tick names the
+             *     affected characters in `fallbackCharacters` so the frontend can
+             *     prompt the user to confirm or skip. The worker frees its slot; other
+             *     chapters keep flowing. See plan `docs/features/102-global-queue-modal.md`.
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning";
+            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;
@@ -2055,6 +2060,15 @@ export interface components {
              *     server catches a new subscriber up.
              */
             resumeFromCompletedChapterIds?: number[];
+            /**
+             * @description Only on `chapter_awaiting_fallback_confirm` — the characters in this
+             *     chapter that would render in Kokoro (Qwen route, no designed voice).
+             *     The frontend lists them in the confirm/skip prompt.
+             */
+            fallbackCharacters?: {
+                id?: string;
+                name?: string;
+            }[];
         };
         QueueEntry: {
             /** @description Stable unique entry id. Frontend-minted at enqueue time. */
@@ -2084,10 +2098,28 @@ export interface components {
              *     (pinned; non-draggable in the modal). `paused` = queue-global
              *     pause flipped; still ordered, drains on resume. `done` = audio
              *     on disk for this entry's chapter. `failed` = synthesis errored;
-             *     surfaces in the modal with a retry affordance.
+             *     surfaces in the modal with a retry affordance. `awaiting_confirm` =
+             *     the chapter would silently render an undesigned Qwen voice in Kokoro;
+             *     parked until the user confirms (render anyway) or skips. The
+             *     affected characters are listed in `fallbackCharacters`.
              * @enum {string}
              */
-            status: "queued" | "in_progress" | "paused" | "done" | "failed";
+            status: "queued" | "in_progress" | "paused" | "done" | "failed" | "awaiting_confirm";
+            /**
+             * @description Loud-fallback gate — the characters in this chapter that resolve to
+             *     Qwen but have no designed voice, so would render in Kokoro. Present
+             *     only on an `awaiting_confirm` entry.
+             */
+            fallbackCharacters?: {
+                id?: string;
+                name?: string;
+            }[];
+            /**
+             * @description Loud-fallback gate — true once the user confirmed this entry's
+             *     Qwen→Kokoro fallback, so the worker renders it straight through on
+             *     re-dispatch instead of re-parking it.
+             */
+            fallbackConfirmed?: boolean;
             /** @description Cross-book ordinal within the workspace queue. 0 = first to drain. Renumbered on every reorder. */
             order: number;
             /** @description Per-entry render progress (0..1), mirrored from the active GenerationTick. */
