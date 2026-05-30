@@ -238,7 +238,35 @@ describe('spawnSidecar', () => {
        (sibling to voices.json), not the sidecar's __file__-relative dir,
        so a restart / cwd change can't orphan a designed voice. */
     expect(options.env.QWEN_VOICES_DIR).toMatch(/voices[\\/]qwen$/);
+    /* CUDA-fragmentation guard (2026-05-30 mid-run VRAM OOM) — defaulted on so
+       a long run's variable-length batches don't fragment VRAM into an OOM. */
+    expect(options.env.PYTORCH_CUDA_ALLOC_CONF).toBe('expandable_segments:True');
     expect(options.windowsHide).toBe(true);
+  });
+
+  it('lets an explicit PYTORCH_CUDA_ALLOC_CONF override the default', async () => {
+    const prev = process.env.PYTORCH_CUDA_ALLOC_CONF;
+    process.env.PYTORCH_CUDA_ALLOC_CONF = 'expandable_segments:True,max_split_size_mb:256';
+    try {
+      await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        log,
+        warn,
+      });
+      const [, , options] = spawnFn.mock.calls[0];
+      expect(options.env.PYTORCH_CUDA_ALLOC_CONF).toBe(
+        'expandable_segments:True,max_split_size_mb:256',
+      );
+    } finally {
+      if (prev === undefined) delete process.env.PYTORCH_CUDA_ALLOC_CONF;
+      else process.env.PYTORCH_CUDA_ALLOC_CONF = prev;
+    }
   });
 
   it('spawns with PRELOAD_KOKORO=0 when eagerLoadKokoro is false', async () => {
