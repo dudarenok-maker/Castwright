@@ -50,6 +50,10 @@ export interface StreamOpenOpts {
       aborting the other. Absent only on the legacy/back-compat open path
       (no specific chapter), which keys by `${bookId}::*`. */
   chapterId?: number;
+  /** Loud-fallback gate — set when re-dispatching an entry the user has
+      confirmed for Qwen→Kokoro fallback. Threaded to the server so the worker
+      renders straight through instead of re-parking the chapter. */
+  fallbackConfirmed?: boolean;
 }
 
 /** Composite handle key — `${bookId}::${chapterId}` (or `${bookId}::*` when
@@ -248,6 +252,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       chapterIds: spec?.chapterIds,
       force: spec?.force,
       ...(opts.queueEntryId ? { queueEntryId: opts.queueEntryId } : {}),
+      ...(opts.fallbackConfirmed ? { fallbackConfirmed: true } : {}),
       /* The mock implementation reads live chapter state via this callback;
          the real fetch-based stream ignores it. Either way we close over the
          store, not over any view's props, so generation continues after the
@@ -370,6 +375,26 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           kind: 'warn',
           message: ev.message,
           dedupeKey: `generation-warning:${ev.code ?? ev.message}`,
+        }),
+      );
+    } else if (ev.type === 'chapter_awaiting_fallback_confirm' && ev.chapterId != null) {
+      /* Loud-fallback gate — the worker PARKED this chapter because one or more
+         Qwen characters have no designed voice and would render in Kokoro. The
+         chapter is held (queue entry → awaiting_confirm); the user confirms or
+         skips it from the queue modal. Surface a warn toast naming the chapter +
+         characters so the run doesn't look silently stalled. Deduped per entry
+         so a reconnect replay can't stack duplicates. */
+      const names = (ev.fallbackCharacters ?? [])
+        .map((c) => c.name ?? c.id)
+        .filter(Boolean)
+        .join(', ');
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message: `Chapter ${ev.chapterId} paused — no designed Qwen voice for ${
+            names || 'some characters'
+          }. Confirm or skip it in the generation queue.`,
+          dedupeKey: `fallback-confirm:${ev.queueEntryId ?? ev.chapterId}`,
         }),
       );
     } else if (ev.type === 'idle') {

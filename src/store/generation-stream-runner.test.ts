@@ -226,6 +226,26 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(store.getState().notifications.toasts).toHaveLength(1);
   });
 
+  it('surfaces a `chapter_awaiting_fallback_confirm` tick as a toast naming the chapter + characters', () => {
+    const { store, runner } = makeRunner();
+    runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [3], force: true }, { chapterId: 3 });
+    onTickFor('b1', 3)({
+      type: 'chapter_awaiting_fallback_confirm',
+      chapterId: 3,
+      queueEntryId: 'q3',
+      fallbackCharacters: [
+        { id: 'Wren', name: 'Wren' },
+        { id: 'ro', name: 'Ro' },
+      ],
+    } as unknown as GenerationTick);
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].kind).toBe('warn');
+    expect(toasts[0].message).toMatch(/Chapter 3/);
+    expect(toasts[0].message).toMatch(/Wren, Ro/);
+    expect(toasts[0].dedupeKey).toBe('fallback-confirm:q3');
+  });
+
   it('refreshes the viewed book’s snapshot from rows on a progress tick', () => {
     const { store, runner } = makeRunner();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
