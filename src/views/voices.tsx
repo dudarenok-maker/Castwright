@@ -34,10 +34,13 @@ import {
   type DuplicateReviewPair,
   type DuplicateResolution,
 } from '../modals/duplicate-review-modal';
+import { BulkDuplicateReviewModal } from '../modals/bulk-duplicate-review';
 import {
   detectDuplicateCandidates,
+  detectIgnoredDuplicatePairs,
   appendAliasToCachedCharacter,
   appendNotLinkedToCachedCharacter,
+  removeNotLinkedToCachedCharacter,
   type BookSeriesInfo,
   type DuplicateCandidate,
 } from '../lib/cross-book-duplicates';
@@ -140,6 +143,17 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     aVoiceId: string;
     bVoiceId: string;
   } | null>(null);
+  /* fe-9 — bulk per-series duplicate review. Holds the seriesKey
+     (`author|series`) of the series whose duplicates are being walked, or
+     null when closed. The queue is frozen on open from the series'
+     candidate slice. */
+  const [bulkReviewSeriesKey, setBulkReviewSeriesKey] = useState<string | null>(null);
+  const [bulkReviewQueue, setBulkReviewQueue] = useState<DuplicateCandidate[]>([]);
+  /* fs-11 — "Show ignored duplicate suggestions" toggle. Reveals the pairs the
+     user previously marked "different on purpose" (notLinkedTo) with an Unmark
+     button per pair. */
+  const [showIgnored, setShowIgnored] = useState(false);
+  const [unmarkBusyKey, setUnmarkBusyKey] = useState<string | null>(null);
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
@@ -355,6 +369,124 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     }
     return map;
   }, [duplicateCandidates]);
+
+  /* fe-9 — group candidates by series (`author|series` key) so each series
+     header can offer a "Review all duplicates in <Series>" button that opens
+     the bulk modal seeded with the whole series' queue. The display name is
+     the part after the `|` in the seriesKey. */
+  const candidatesBySeriesKey = useMemo(() => {
+    const map = new Map<string, DuplicateCandidate[]>();
+    for (const c of duplicateCandidates) {
+      const list = map.get(c.seriesKey) ?? [];
+      list.push(c);
+      map.set(c.seriesKey, list);
+    }
+    return map;
+  }, [duplicateCandidates]);
+
+  /* fs-11 — the pairs the user previously marked "different on purpose"
+     (notLinkedTo). Same hydrated context as `duplicateCandidates`. Only
+     computed when the user opens the Ignored section (toggle on) to keep the
+     default render path cheap. */
+  const ignoredPairs = useMemo<DuplicateCandidate[]>(() => {
+    if (!showIgnored) return [];
+    if (library.length < 2 || libraryBooks.length === 0) return [];
+    const seriesByBookId = new Map<string, BookSeriesInfo>();
+    for (const b of libraryBooks) {
+      seriesByBookId.set(b.bookId, {
+        author: b.author,
+        series: b.series,
+        isStandalone: b.isStandalone,
+      });
+    }
+    const charactersByBookId = new Map<string, Character[]>(globalCastCache);
+    if (currentBookId) charactersByBookId.set(currentBookId, characters);
+    return detectIgnoredDuplicatePairs({ library, seriesByBookId, charactersByBookId });
+  }, [showIgnored, library, libraryBooks, currentBookId, characters, globalCastCache]);
+
+  /* Unmark a previously "different on purpose" pair: DELETE the symmetric
+     notLinkedTo from both books, then reconcile redux (open book) + the
+     foreign-cast cache so the pair re-surfaces as a live duplicate candidate
+     immediately. Mirrors reconcileDuplicateResolution's variant branch but in
+     reverse. */
+  async function unmarkIgnoredPair(pair: DuplicateCandidate) {
+    const aId = pair.a.character?.id ?? pair.a.voice.id;
+    const bId = pair.b.character?.id ?? pair.b.voice.id;
+    const key = `${pair.a.voice.bookId}:${aId}|${pair.b.voice.bookId}:${bId}`;
+    if (unmarkBusyKey) return;
+    setUnmarkBusyKey(key);
+    try {
+      await api.removeNotLinkedTo({
+        bookId: pair.a.voice.bookId,
+        characterId: aId,
+        otherBookId: pair.b.voice.bookId,
+        otherCharacterId: bId,
+      });
+      const sides = [
+        { self: { bookId: pair.a.voice.bookId, characterId: aId }, other: { bookId: pair.b.voice.bookId, characterId: bId } },
+        { self: { bookId: pair.b.voice.bookId, characterId: bId }, other: { bookId: pair.a.voice.bookId, characterId: aId } },
+      ];
+      for (const { self, other } of sides) {
+        if (self.bookId === currentBookId) {
+          dispatch(
+            castActions.removeNotLinked({
+              characterId: self.characterId,
+              otherBookId: other.bookId,
+              otherCharacterId: other.characterId,
+            }),
+          );
+        } else {
+          setGlobalCastCache((prev) =>
+            removeNotLinkedToCachedCharacter(
+              prev,
+              self.bookId,
+              self.characterId,
+              other.bookId,
+              other.characterId,
+            ),
+          );
+        }
+      }
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'info',
+          message: `Unmarked — "${pair.a.voice.character}" and "${pair.b.voice.character}" can be reviewed as duplicates again.`,
+          dedupeKey: `voices-unmark:${key}`,
+        }),
+      );
+    } catch (err) {
+      console.error('[voices] unmark not-linked-to failed', err);
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'error',
+          message: 'Couldn’t unmark that pair. Try again.',
+          dedupeKey: `voices-unmark-error:${key}`,
+        }),
+      );
+    } finally {
+      setUnmarkBusyKey(null);
+    }
+  }
+
+  /* Freeze the series' candidate queue on open so it doesn't shift as pairs
+     resolve (each resolution drops a candidate from `duplicateCandidates`).
+     The bulk modal walks its own frozen copy. */
+  function openBulkReview(seriesKey: string) {
+    const queue = candidatesBySeriesKey.get(seriesKey) ?? [];
+    if (queue.length === 0) return;
+    setBulkReviewQueue(queue);
+    setBulkReviewSeriesKey(seriesKey);
+    /* Pre-hydrate every foreign book the queue touches so the first pair's
+       buttons aren't stuck loading. The bulk modal also hydrates per-pair,
+       but kicking these off now smooths the walk. */
+    const foreignBookIds = new Set<string>();
+    for (const c of queue) {
+      for (const bookId of [c.a.voice.bookId, c.b.voice.bookId]) {
+        if (bookId !== currentBookId) foreignBookIds.add(bookId);
+      }
+    }
+    for (const bookId of foreignBookIds) void hydrateForeignCast(bookId);
+  }
 
   /* Per-series representative book for the per-series Rebaseline button.
      Rebaseline is inherently a SERIES operation, so the global Voices view
@@ -840,6 +972,93 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         </div>
       ) : (
         <div className={`space-y-8 ${draggingVoiceId ? 'dragging-voice' : ''}`}>
+          {/* fe-9 — per-series bulk duplicate-review entry point. One banner
+              above the family grid listing every series that has cross-book
+              duplicate candidates; each opens the bulk modal seeded with that
+              series' whole queue. Hidden when there are no candidates. */}
+          {candidatesBySeriesKey.size > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/60 px-4 py-3 flex flex-col gap-2">
+              <p className="text-xs font-semibold text-amber-800">
+                ⚠ Cross-book duplicate suggestions
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {[...candidatesBySeriesKey.entries()].map(([seriesKey, list]) => {
+                  const seriesName = seriesKey.split('|').slice(1).join('|') || seriesKey;
+                  return (
+                    <button
+                      key={seriesKey}
+                      type="button"
+                      onClick={() => openBulkReview(seriesKey)}
+                      data-testid={`bulk-review-${seriesName}`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 transition-colors min-h-[44px] sm:min-h-0"
+                    >
+                      Review all duplicates in {seriesName} ({list.length})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* fs-11 — "Show ignored duplicate suggestions" toggle + the Ignored
+              section. Lets the user revisit pairs they marked "different on
+              purpose" and Unmark them so they re-surface as candidates. The
+              toggle always renders (the user might have ignored every pair, so
+              there'd be nothing in the candidate banner to hint at it). */}
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => setShowIgnored((v) => !v)}
+              data-testid="toggle-ignored-duplicates"
+              className="self-start inline-flex items-center gap-1.5 text-xs font-medium text-ink/55 hover:text-ink min-h-[44px] sm:min-h-0"
+            >
+              {showIgnored ? '▾' : '▸'} {showIgnored ? 'Hide' : 'Show'} ignored duplicate suggestions
+            </button>
+            {showIgnored && (
+              <div className="rounded-2xl border border-ink/10 bg-white px-4 py-3">
+                {ignoredPairs.length === 0 ? (
+                  <p className="text-xs text-ink/50">
+                    No ignored pairs — nothing has been marked “different on purpose” yet.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {ignoredPairs.map((pair) => {
+                      const aId = pair.a.character?.id ?? pair.a.voice.id;
+                      const bId = pair.b.character?.id ?? pair.b.voice.id;
+                      const key = `${pair.a.voice.bookId}:${aId}|${pair.b.voice.bookId}:${bId}`;
+                      return (
+                        <li
+                          key={key}
+                          className="flex items-center justify-between gap-3 flex-wrap"
+                        >
+                          <span className="text-xs text-ink/70 min-w-0">
+                            <span className="font-semibold text-ink">
+                              {pair.a.voice.character}
+                            </span>{' '}
+                            <span className="text-ink/40">({pair.a.voice.bookTitle})</span>{' '}
+                            <span className="text-ink/40">↮</span>{' '}
+                            <span className="font-semibold text-ink">
+                              {pair.b.voice.character}
+                            </span>{' '}
+                            <span className="text-ink/40">({pair.b.voice.bookTitle})</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void unmarkIgnoredPair(pair)}
+                            disabled={unmarkBusyKey !== null}
+                            data-testid={`unmark-${key}`}
+                            className="shrink-0 px-3 py-1.5 rounded-full bg-ink/5 text-ink text-xs font-semibold hover:bg-ink/10 disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                          >
+                            {unmarkBusyKey === key ? 'Unmarking…' : 'Unmark'}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
           {families.map((f) => (
             <VoiceFamilySection
               key={f.key}
@@ -1095,6 +1314,24 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           setDuplicateReviewKey(null);
         }}
       />
+
+      {/* fe-9 — bulk per-series duplicate review. Walks the frozen series
+          queue one pair at a time; each resolution reconciles the detection
+          sources exactly like the single-pair flow. */}
+      {bulkReviewSeriesKey && (
+        <BulkDuplicateReviewModal
+          open
+          candidates={bulkReviewQueue}
+          seriesName={bulkReviewSeriesKey.split('|').slice(1).join('|') || bulkReviewSeriesKey}
+          currentBookId={currentBookId}
+          characters={characters}
+          onClose={() => {
+            setBulkReviewSeriesKey(null);
+            setBulkReviewQueue([]);
+          }}
+          onResolved={(resolution) => reconcileDuplicateResolution(resolution)}
+        />
+      )}
 
       {/* Plan 108 Wave 5 + follow-up — "Rebaseline the series" modal. The
           target book comes from the ui-slice (`rebaselineBookId`): the open
