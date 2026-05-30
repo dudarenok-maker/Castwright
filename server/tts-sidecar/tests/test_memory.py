@@ -13,6 +13,7 @@ threshold parsing behave, (3) /debug/memory exposes the diagnostic surface.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -221,19 +222,115 @@ def test_should_restart():
 def test_schedule_restart_is_idempotent(monkeypatch):
     """Two over-ceiling ticks schedule exactly ONE exit (the flag guards it).
     `_restart_now` is patched so the timer can't actually kill pytest; we
-    wait past the flush delay to confirm it fired once."""
+    wait past the flush delay to confirm it fired once. With nothing in flight
+    (srv-17c) the drain returns immediately, so this is also the no-wait path."""
     calls: list[int] = []
     monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
     monkeypatch.setattr(main, "_restart_scheduled", False)
+    monkeypatch.setattr(main, "_restart_pending", False)
+    monkeypatch.setattr(main, "_inflight_synth", 0)  # nothing to drain → exits at once
 
     main._schedule_restart_exit(50000, 45000)
     main._schedule_restart_exit(51000, 45000)  # second call must be a no-op
     assert main._restart_scheduled is True
+    assert main._restart_pending is True  # new synth now fast-fails 503
 
     # Let the single scheduled timer fire (into the patched no-op) before the
     # monkeypatch is torn down — otherwise a late real exit would kill the suite.
-    time.sleep(main._POISON_EXIT_DELAY_MS / 1000.0 + 0.3)
+    time.sleep(main._POISON_EXIT_DELAY_MS / 1000.0 + 0.5)
     assert calls == [1]
+
+
+# --- srv-17c: drain in-flight synth before the recycle self-exit ---
+
+
+def test_drain_grace_parsing(monkeypatch):
+    """Default 180000ms; explicit override honoured; garbage → default; 0
+    (draining disabled → immediate exit) is a valid value."""
+    monkeypatch.delenv("SIDECAR_DRAIN_GRACE_MS", raising=False)
+    assert main._drain_grace_ms() == 180000
+
+    monkeypatch.setenv("SIDECAR_DRAIN_GRACE_MS", "5000")
+    assert main._drain_grace_ms() == 5000
+
+    monkeypatch.setenv("SIDECAR_DRAIN_GRACE_MS", "not-a-number")
+    assert main._drain_grace_ms() == 180000
+
+    monkeypatch.setenv("SIDECAR_DRAIN_GRACE_MS", "0")
+    assert main._drain_grace_ms() == 0
+
+
+def test_drain_waits_for_inflight_then_exits(monkeypatch):
+    """The drain holds the exit while a synth is in flight, then fires `_restart_now`
+    once the counter reaches 0 — so the in-flight chapter finishes on its worker
+    instead of failing."""
+    calls: list[int] = []
+    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
+    monkeypatch.setattr(main, "_inflight_synth", 1)  # one chapter mid-synth
+
+    t = threading.Thread(target=main._drain_then_restart, args=(5000,), daemon=True)
+    t.start()
+
+    time.sleep(0.3)
+    assert calls == []  # still draining — must NOT have exited yet
+
+    monkeypatch.setattr(main, "_inflight_synth", 0)  # synth finished
+    time.sleep(0.6 + 0.05 + 0.25)  # one poll + flush + margin
+    assert calls == [1]
+
+
+def test_drain_grace_expiry_exits_anyway(monkeypatch):
+    """If the grace expires with a synth STILL in flight, exit regardless — the
+    server's in-worker recovery re-renders that chapter (best-effort drain)."""
+    calls: list[int] = []
+    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
+    monkeypatch.setattr(main, "_inflight_synth", 1)  # never drains
+
+    t = threading.Thread(target=main._drain_then_restart, args=(600,), daemon=True)
+    t.start()
+
+    time.sleep(1.0 + 0.05 + 0.35)  # ~2 polls (grace) + flush + margin
+    assert calls == [1]
+
+
+def test_drain_disabled_exits_immediately(monkeypatch):
+    """SIDECAR_DRAIN_GRACE_MS=0 → draining disabled: exit at once even with synth
+    in flight (the pre-srv-17c immediate-recycle behaviour)."""
+    calls: list[int] = []
+    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
+    monkeypatch.setattr(main, "_inflight_synth", 5)  # would block if draining
+
+    t = threading.Thread(target=main._drain_then_restart, args=(0,), daemon=True)
+    t.start()
+
+    time.sleep(0.05 + 0.25)  # flush + margin — NO drain wait
+    assert calls == [1]
+
+
+def test_synthesize_fast_fails_503_while_recycling(monkeypatch):
+    """While `_restart_pending` is set, /synthesize returns a NON-poisoned 503 so
+    the server classifies it transient (5xx, not poisoned) and its in-worker
+    recovery rides out the respawn — no new chapter enters the dying process."""
+    # Mirror test_debug_memory: drop kokoro before TestClient fires the eager
+    # preload, swap a fresh cold qwen so the lookup succeeds without weights.
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_process_poisoned", False)
+    monkeypatch.setattr(main, "_restart_pending", True)
+
+    with TestClient(main.app) as client:
+        r = client.post(
+            "/synthesize",
+            json={"engine": "qwen", "model": "qwen", "voice": "v", "text": "hello"},
+        )
+
+    assert r.status_code == 503
+    body = r.json()
+    assert "recycling" in body["detail"].lower()
+    assert "poisoned" not in body  # NOT the CUDA-poison 503 — server must treat it transient
 
 
 # --- the diagnostic endpoint ---

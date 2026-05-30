@@ -1476,6 +1476,17 @@ async def _stop_design_idle_watchdog() -> None:
 _MEM_WATCHDOG_INTERVAL = 60.0
 _mem_watchdog_task: "Optional[asyncio.Task[None]]" = None
 _restart_scheduled = False
+# srv-17c — drain-before-recycle. `_restart_pending` flips True the moment a
+# recycle is scheduled; while it's set, /synthesize + /synthesize-batch fast-fail
+# with a (non-poisoned) 503 so no NEW chapter enters the dying process and the
+# server's in-worker recovery rides out the respawn. `_inflight_synth` counts
+# live synth calls (incremented on the event loop around each to_thread offload);
+# the recycle drains it to 0 (bounded by SIDECAR_DRAIN_GRACE_MS) before exiting so
+# the in-flight chapter finishes here instead of failing. Both are read by the
+# drain thread — a plain int read is atomic under the GIL, eventual consistency
+# is all the drain needs.
+_restart_pending = False
+_inflight_synth = 0
 
 
 def _mem_warn_threshold_mb() -> float:
@@ -1540,23 +1551,61 @@ def _restart_now() -> None:  # pragma: no cover - hard process exit; patched in 
     os._exit(_RESTART_EXIT_CODE)
 
 
+def _drain_grace_ms() -> int:
+    """Max ms to wait for in-flight synth to drain before a recycle self-exit
+    (srv-17c). Default 180000 — comfortably covers a long chapter so the
+    in-flight one finishes here instead of failing on the server. 0 disables
+    draining → immediate exit (the pre-srv-17c behaviour). Override
+    SIDECAR_DRAIN_GRACE_MS; garbage falls back to the default."""
+    try:
+        return int(os.environ.get("SIDECAR_DRAIN_GRACE_MS", "180000"))
+    except (TypeError, ValueError):
+        return 180000
+
+
+def _drain_then_restart(grace_ms: int) -> None:
+    """Wait (bounded by `grace_ms`) for `_inflight_synth` to reach 0, then arm the
+    flush-delayed hard exit. Runs on a daemon thread so it never needs an event
+    loop (the watchdog schedules it; tests call _schedule_restart_exit directly).
+    Best-effort: if the grace expires with synth still running we exit anyway —
+    the server's srv-17c in-worker recovery re-renders that chapter."""
+    waited_ms = 0
+    poll_ms = 500
+    while grace_ms > 0 and _inflight_synth > 0 and waited_ms < grace_ms:
+        time.sleep(poll_ms / 1000.0)
+        waited_ms += poll_ms
+    if _inflight_synth > 0:
+        log.warning(
+            "sidecar recycle: drain grace %dms expired with %d synth still in-flight "
+            "— self-exiting anyway (the server re-renders the in-flight chapter).",
+            grace_ms, _inflight_synth,
+        )
+    else:
+        log.info("sidecar recycle: in-flight synth drained — self-exiting now.")
+    threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now).start()
+
+
 def _schedule_restart_exit(commit_mb: float, threshold_mb: float) -> None:
     """Schedule a single hard self-exit so srv-15 respawns a fresh sidecar.
-    Idempotent (a later over-ceiling tick won't double-schedule). Uses a Timer
-    so the warning log flushes to tts.err.log before the process vanishes."""
-    global _restart_scheduled
+    Idempotent (a later over-ceiling tick won't double-schedule). Flips
+    `_restart_pending` (new synth now fast-fails 503) and hands off to a drain
+    thread that waits out the in-flight chapter (srv-17c) before the
+    flush-delayed exit."""
+    global _restart_scheduled, _restart_pending
     if _restart_scheduled:
         return
     _restart_scheduled = True
+    _restart_pending = True
+    grace_ms = _drain_grace_ms()
     log.warning(
         "sidecar committed memory %.0fMB crossed the restart ceiling %.0fMB — "
-        "self-exiting (code %d) so the server respawns a fresh process. The "
-        "in-flight chapter re-renders; completed chapters are skipped (srv-16). "
-        "Process-recycle mitigation for the variable-shape host leak; raise "
-        "SIDECAR_RESTART_MB to recycle less often.",
-        commit_mb, threshold_mb, _RESTART_EXIT_CODE,
+        "draining %d in-flight synth (grace %dms) then self-exiting (code %d) so the "
+        "server respawns a fresh process. Completed chapters are skipped (srv-16); "
+        "the in-flight chapter finishes here or is re-rendered by the server "
+        "(srv-17c). Raise SIDECAR_RESTART_MB to recycle less often.",
+        commit_mb, threshold_mb, _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
     )
-    threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now).start()
+    threading.Thread(target=_drain_then_restart, args=(grace_ms,), daemon=True).start()
 
 
 async def _memory_watchdog() -> None:
@@ -2131,6 +2180,18 @@ async def synthesize(req: Request) -> Response:
             status_code=503,
         )
 
+    # srv-17c drain fence: while a recycle is draining, fast-fail new synth with
+    # a NON-poisoned 503 so no fresh chapter enters the dying process. The server
+    # classifies this as transient (5xx, not poisoned) and its in-worker recovery
+    # waits out the respawn — the in-flight chapter already counted below drains.
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # CRITICAL: offload to a worker thread.
         #
@@ -2183,6 +2244,8 @@ async def synthesize(req: Request) -> Response:
             )
 
         return JSONResponse({"detail": err_str}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-17c: clears the recycle drain regardless of outcome
 
     headers = {"X-Sample-Rate": str(result.sample_rate)}
     if result.substituted_from is not None:
@@ -2257,6 +2320,17 @@ async def synthesize_batch(req: Request) -> Response:
             status_code=503,
         )
 
+    # srv-17c drain fence — same as /synthesize: a recycling sidecar fast-fails
+    # new batches with a non-poisoned 503 so the server's in-worker recovery
+    # rides out the respawn instead of a fresh batch entering the dying process.
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    global _inflight_synth
+    _inflight_synth += 1
     try:
         # Offload like /synthesize so /health stays responsive while the
         # (potentially multi-second) batched forward runs on a worker thread.
@@ -2275,6 +2349,8 @@ async def synthesize_batch(req: Request) -> Response:
             _mark_cuda_poisoned(err_str)
             return JSONResponse({"detail": err_str, "poisoned": True}, status_code=503)
         return JSONResponse({"detail": err_str}, status_code=500)
+    finally:
+        _inflight_synth -= 1  # srv-17c: clears the recycle drain regardless of outcome
 
     import json as _json
 
