@@ -670,3 +670,89 @@ describe('castSlice — renameCharacter (rename + promote alias)', () => {
   });
 });
 
+describe('castSlice — setRenderedFallback (fe-16)', () => {
+  it('overwrites the fallback map from the book-state hydrate', () => {
+    const start = { characters: [makeChar('Marrow')], renderedFallbackByCharacter: {} };
+    const next = castSlice.reducer(
+      start,
+      castActions.setRenderedFallback({ Marrow: 'kokoro' }),
+    );
+    expect(next.renderedFallbackByCharacter).toEqual({ Marrow: 'kokoro' });
+  });
+
+  it('clears stale entries when the new map is empty (post-redesign render)', () => {
+    const start = {
+      characters: [makeChar('Marrow')],
+      renderedFallbackByCharacter: { Marrow: 'kokoro' },
+    };
+    const next = castSlice.reducer(start, castActions.setRenderedFallback({}));
+    expect(next.renderedFallbackByCharacter).toEqual({});
+  });
+});
+
+describe('castSlice — applyNotLinked / removeNotLinked (cross-book variant, plan 101 + fs-11)', () => {
+  it('applyNotLinked appends the symmetric entry; dedups on repeat', () => {
+    const start = baseState([makeChar('eliza')]);
+    const once = castSlice.reducer(
+      start,
+      castActions.applyNotLinked({
+        characterId: 'eliza',
+        otherBookId: 'sb',
+        otherCharacterId: 'eliza_sb',
+      }),
+    );
+    expect(once.characters[0].notLinkedTo).toEqual([{ bookId: 'sb', characterId: 'eliza_sb' }]);
+    const twice = castSlice.reducer(
+      once,
+      castActions.applyNotLinked({
+        characterId: 'eliza',
+        otherBookId: 'sb',
+        otherCharacterId: 'eliza_sb',
+      }),
+    );
+    expect(twice.characters[0].notLinkedTo).toEqual([{ bookId: 'sb', characterId: 'eliza_sb' }]);
+  });
+
+  it('removeNotLinked strips the matching pair, leaving any others intact', () => {
+    const start = baseState([
+      makeChar('eliza', {
+        notLinkedTo: [
+          { bookId: 'sb', characterId: 'eliza_sb' },
+          { bookId: 'tb', characterId: 'eliza_tb' },
+        ],
+      }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.removeNotLinked({
+        characterId: 'eliza',
+        otherBookId: 'sb',
+        otherCharacterId: 'eliza_sb',
+      }),
+    );
+    expect(next.characters[0].notLinkedTo).toEqual([{ bookId: 'tb', characterId: 'eliza_tb' }]);
+  });
+
+  it('removeNotLinked is a no-op for an absent pair or missing character', () => {
+    const start = baseState([makeChar('eliza', { notLinkedTo: [] })]);
+    const sameAbsent = castSlice.reducer(
+      start,
+      castActions.removeNotLinked({
+        characterId: 'eliza',
+        otherBookId: 'sb',
+        otherCharacterId: 'eliza_sb',
+      }),
+    );
+    expect(sameAbsent.characters[0].notLinkedTo).toEqual([]);
+    const ghost = castSlice.reducer(
+      start,
+      castActions.removeNotLinked({
+        characterId: 'ghost',
+        otherBookId: 'sb',
+        otherCharacterId: 'eliza_sb',
+      }),
+    );
+    expect(ghost).toEqual(start);
+  });
+});
+

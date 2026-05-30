@@ -59,6 +59,10 @@ interface Props {
    see server/src/analyzer/fold-minor-cast.ts) always sink to the bottom
    regardless of their pooled line count. Ties break by name for stability. */
 const UNKNOWN_BUCKET_IDS = new Set(['unknown-male', 'unknown-female']);
+/* fe-16 — module-level stable empty map so the fallback selector returns the
+   SAME reference across renders when the slice field is absent (pre-fe-16
+   preloaded test stores), keeping the selector cheap. */
+const EMPTY_FALLBACK_MAP: Record<string, string> = {};
 export function compareCastRows(a: Character, b: Character): number {
   const aBucket = UNKNOWN_BUCKET_IDS.has(a.id);
   const bBucket = UNKNOWN_BUCKET_IDS.has(b.id);
@@ -121,6 +125,13 @@ export function CastView({
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
+  /* fe-16 — per-character render-time fallback engine (Qwen → Kokoro), hydrated
+     from book-state. Threaded into resolveVoiceStatus so a character that
+     actually rendered in Kokoro shows "Fallback (Kokoro)" instead of its
+     design-lifecycle pill. */
+  const renderedFallbackByCharacter = useAppSelector(
+    (s) => s.cast.renderedFallbackByCharacter ?? EMPTY_FALLBACK_MAP,
+  );
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   /* Per-row sample state: { [characterId]: 'loading' | 'error: msg' }. The
@@ -633,7 +644,12 @@ export function CastView({
                   ))}
                 </span>
                 <span>
-                  <StatusPill c={c} voice={voice} projectEngine={ttsEngine} />
+                  <StatusPill
+                    c={c}
+                    voice={voice}
+                    projectEngine={ttsEngine}
+                    renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
+                  />
                 </span>
                 <span
                   onClick={(e) => e.stopPropagation()}
@@ -831,7 +847,12 @@ export function CastView({
                 )}
                 <div className="flex items-center justify-between gap-3">
                   <span>
-                    <StatusPill c={c} voice={voice} projectEngine={ttsEngine} />
+                    <StatusPill
+                    c={c}
+                    voice={voice}
+                    projectEngine={ttsEngine}
+                    renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
+                  />
                   </span>
                   <button
                     type="button"
@@ -1063,15 +1084,24 @@ function StatusPill({
   c,
   voice,
   projectEngine,
+  renderedFallbackEngine,
 }: {
   c: Character;
   voice: Voice | undefined;
   projectEngine: TtsEngine;
+  /* fe-16 — engine this character ACTUALLY rendered in (Qwen → Kokoro
+     fallback). `'kokoro'` surfaces the "Fallback (Kokoro)" pill. */
+  renderedFallbackEngine?: string | null;
 }) {
   /* Effective engine = the character's own override folded over the project
      default — so a default-engine character on a Qwen project follows the Qwen
      lifecycle (e.g. "Needs voice"), not a stale preset `voiceState` pill. */
-  const { lifecycle, reused } = resolveVoiceStatus(c, voice, c.ttsEngine ?? projectEngine);
+  const { lifecycle, reused } = resolveVoiceStatus(
+    c,
+    voice,
+    c.ttsEngine ?? projectEngine,
+    renderedFallbackEngine,
+  );
   if (!lifecycle && !reused) return null;
   return (
     <span className="inline-flex items-center gap-1.5 flex-wrap">
