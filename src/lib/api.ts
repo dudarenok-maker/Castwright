@@ -2408,6 +2408,43 @@ async function mockNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToRespon
   };
 }
 
+/* DELETE /api/books/:bookId/cast/:characterId/not-linked-to  (fs-11) — undo a
+   prior "different on purpose" decision. The server removes the symmetric
+   `notLinkedTo` pair from BOTH books' cast.json so the voices-view duplicate
+   detector re-surfaces the pair. Mirror to redux via
+   castActions.removeNotLinked + the foreign-cast cache counterpart. */
+async function realRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
+  const { bookId, characterId, ...body } = args;
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/not-linked-to`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Unmark-variant failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockRemoveNotLinkedTo(args: NotLinkedToArgs): Promise<NotLinkedToResponse> {
+  await wait(80);
+  return {
+    pair: {
+      a: { bookId: args.bookId, characterId: args.characterId },
+      b: { bookId: args.otherBookId, characterId: args.otherCharacterId },
+    },
+  };
+}
+
 async function realAddFromSeriesRoster(
   args: AddFromSeriesRosterArgs,
 ): Promise<AddFromSeriesRosterResponse> {
@@ -4070,6 +4107,7 @@ const real = {
   getSeriesCast: realGetSeriesCast,
   linkPriorCharacter: realLinkPriorCharacter,
   notLinkedTo: realNotLinkedTo,
+  removeNotLinkedTo: realRemoveNotLinkedTo,
   addFromSeriesRoster: realAddFromSeriesRoster,
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
@@ -4263,6 +4301,7 @@ const mock = {
   getSeriesCast: mockGetSeriesCast,
   linkPriorCharacter: mockLinkPriorCharacter,
   notLinkedTo: mockNotLinkedTo,
+  removeNotLinkedTo: mockRemoveNotLinkedTo,
   addFromSeriesRoster: mockAddFromSeriesRoster,
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
