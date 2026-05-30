@@ -28,6 +28,10 @@ export interface ReuseHydratable {
   id: string;
   ttsEngine?: TtsEngine | null;
   overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  /** The Qwen voice-design persona (plan 108). Like the override, it lives on
+      the SOURCE book's character; reuse paths denormalise it onto the reused
+      row alongside the override (srv-18) so cast.json stays self-complete. */
+  voiceStyle?: string;
   matchedFrom?: {
     bookId?: string;
     characterId?: string;
@@ -52,6 +56,7 @@ function hasOwnQwenVoice(c: ReuseHydratable): boolean {
 export interface ResolvedReusedVoice {
   ttsEngine?: TtsEngine | null;
   overrideTtsVoices: Partial<Record<TtsEngine, { name: string }>>;
+  voiceStyle?: string;
 }
 
 export async function resolveReusedVoiceFields(
@@ -90,6 +95,7 @@ export async function resolveReusedVoiceFields(
       return {
         ttsEngine: source.ttsEngine ?? 'qwen',
         overrideTtsVoices: source.overrideTtsVoices ?? {},
+        voiceStyle: source.voiceStyle,
       };
     }
 
@@ -101,13 +107,14 @@ export async function resolveReusedVoiceFields(
 }
 
 /** Return a shallow copy of `character` enriched with the source book's
-    `ttsEngine` + `overrideTtsVoices` when it's a reuse missing its own bespoke
-    voice; otherwise return the character unchanged. Merges (does not clobber)
-    any existing override slots on the character — its own slots win. */
+    `ttsEngine` + `overrideTtsVoices` + `voiceStyle` when it's a reuse missing
+    its own bespoke voice; otherwise return the character unchanged. Merges
+    (does not clobber) any existing override slots on the character — its own
+    slots win — and keeps the character's own persona when it already has one. */
 export async function hydrateCharacterVoice<T extends ReuseHydratable>(
   character: T,
   load: CastLoader,
-): Promise<T & Pick<ReuseHydratable, 'ttsEngine' | 'overrideTtsVoices'>> {
+): Promise<T & Pick<ReuseHydratable, 'ttsEngine' | 'overrideTtsVoices' | 'voiceStyle'>> {
   const resolved = await resolveReusedVoiceFields(character, load);
   if (!resolved) return character;
 
@@ -120,5 +127,6 @@ export async function hydrateCharacterVoice<T extends ReuseHydratable>(
     ...character,
     ttsEngine: character.ttsEngine ?? resolved.ttsEngine ?? null,
     overrideTtsVoices: mergedOverrides,
+    voiceStyle: character.voiceStyle ?? resolved.voiceStyle,
   };
 }

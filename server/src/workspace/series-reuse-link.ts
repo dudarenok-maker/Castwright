@@ -55,6 +55,7 @@ export interface LinkableCharacter {
   voiceState?: 'generated' | 'tuned' | 'reused' | 'locked';
   ttsEngine?: TtsEngine | null;
   overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  voiceStyle?: string;
   matchedFrom?: {
     bookId?: string;
     characterId?: string;
@@ -235,16 +236,23 @@ export async function linkSeriesReuseAtAnalysis(
     const nextAliases = unionAliases(c.name, c.aliases, best.voice.name, best.voice.aliases);
     if (nextAliases) c.aliases = nextAliases;
 
-    /* Denormalise the matched prior character's bespoke (qwen) voice onto the
-       reused row so cast.json is self-complete — same resolver srv-14 uses. */
+    /* Denormalise the matched prior character's bespoke (qwen) voice + persona
+       onto the reused row so cast.json is self-complete — same resolver srv-14
+       uses; the persona (`voiceStyle`) rides along it (srv-18). */
     if (!c.overrideTtsVoices?.qwen?.name) {
       const resolved = await resolveReusedVoiceFields(
-        { id: c.id, matchedFrom: c.matchedFrom, overrideTtsVoices: c.overrideTtsVoices },
+        {
+          id: c.id,
+          matchedFrom: c.matchedFrom,
+          overrideTtsVoices: c.overrideTtsVoices,
+          voiceStyle: c.voiceStyle,
+        },
         castLoader,
       );
       if (resolved) {
         c.ttsEngine = c.ttsEngine ?? resolved.ttsEngine ?? null;
         c.overrideTtsVoices = { ...resolved.overrideTtsVoices, ...(c.overrideTtsVoices ?? {}) };
+        c.voiceStyle = c.voiceStyle ?? resolved.voiceStyle;
       }
     }
 
