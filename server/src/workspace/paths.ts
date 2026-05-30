@@ -184,6 +184,21 @@ export function voicesMetaPath(): string {
   return join(WORKSPACE_ROOT, 'voices.json');
 }
 
+/** Workspace-level directory holding bespoke Qwen voice sidecars — one
+    `<voiceId>.{json,pt}` pair per designed voice (the `.json` carries the
+    design `instruct`/persona + ref text; the `.pt` is the cached embedding).
+    Shared across every book, so it lives at the workspace root. Mirrors the
+    `QWEN_VOICES_DIR` the sidecar is spawned with (spawn-sidecar.ts). */
+export function qwenVoicesDir(): string {
+  return join(WORKSPACE_ROOT, 'voices', 'qwen');
+}
+
+/** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
+    persona + ref text). `name` is the designed voiceId, e.g. `qwen-sophie`. */
+export function qwenVoiceSidecarPath(name: string): string {
+  return join(qwenVoicesDir(), `${name}.json`);
+}
+
 /** Plan 102 — workspace-level chapter-generation queue. ONE file holds the
     cross-book queue so the user can mix-and-match order across books in a
     single ordering (e.g. "regenerate these 2 chapters of Book 1, then these
