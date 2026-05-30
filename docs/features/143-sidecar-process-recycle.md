@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** a full-book Qwen render survives to completion instead of OOM-killing the box partway. The sidecar recycles itself before it starves the machine; srv-16 means only the single in-flight chapter re-renders.
+- **User:** a full-book Qwen render survives to completion instead of OOM-killing the box partway. The sidecar recycles itself before it starves the machine; srv-16 means only the single in-flight chapter re-renders — and since plan 148 (srv-17c) the sidecar DRAINS that in-flight synth before exiting (and the server rides out the respawn + re-renders), so even the in-flight chapter no longer blips to `failed`.
 - **Technical:** bounds a native host-memory leak that `gc`/`empty_cache` cannot reclaim, using the process-recycle pattern the research report calls "the bulletproof" mitigation — made clean by srv-15 (respawn) + srv-16 (skip-completed-on-resume).
 - **Architectural:** corrects + supplements plan 141's root-cause scope (which addressed only the design-cycle half).
 
