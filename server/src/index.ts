@@ -16,6 +16,14 @@ import './load-env.js';
 import { installTimestamps } from './logger.js';
 installTimestamps();
 
+/* Install crash handlers ASAP — right after console is timestamp-patched — so a
+   startup OR runtime crash is captured in logs/server.err.log instead of the
+   server vanishing silently (it died twice on 2026-05-30 with no trace). Also
+   makes a stray unhandled rejection survivable so a transient async error can't
+   take down an unattended generation run. See crash-logging.ts. */
+import { installCrashHandlers } from './crash-logging.js';
+installCrashHandlers();
+
 import express from 'express';
 import { createServer as createHttpsServer } from 'node:https';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
