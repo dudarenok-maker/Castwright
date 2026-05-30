@@ -289,6 +289,57 @@ describe('QueueModal', () => {
     expect(screen.getByTestId('queue-entry-a1-cancel')).toBeInTheDocument();
   });
 
+  it('an awaiting_confirm entry names the fallback characters + shows Render-anyway / Skip', () => {
+    renderModal([
+      entry({
+        id: 'a1',
+        status: 'awaiting_confirm',
+        order: 0,
+        fallbackCharacters: [
+          { id: 'sophie', name: 'Sophie' },
+          { id: 'ro', name: 'Ro' },
+        ],
+      }),
+    ]);
+    expect(screen.getByTestId('queue-entry-a1-status')).toHaveTextContent(
+      /no designed Qwen voice for Sophie, Ro/,
+    );
+    expect(screen.getByTestId('queue-entry-a1-confirm-fallback')).toBeInTheDocument();
+    expect(screen.getByTestId('queue-entry-a1-skip-fallback')).toBeInTheDocument();
+  });
+
+  it('Render-anyway POSTs /confirm-fallback', async () => {
+    renderModal([entry({ id: 'a1', status: 'awaiting_confirm', order: 0, fallbackCharacters: [] })]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('queue-entry-a1-confirm-fallback'));
+    });
+    const call = fetchMock.mock.calls.find(
+      (c) => String(c[0]) === '/api/queue/a1/confirm-fallback',
+    );
+    expect(call).toBeDefined();
+    expect(call![1].method).toBe('POST');
+  });
+
+  it('Skip POSTs /skip-fallback', async () => {
+    renderModal([entry({ id: 'a1', status: 'awaiting_confirm', order: 0, fallbackCharacters: [] })]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('queue-entry-a1-skip-fallback'));
+    });
+    const call = fetchMock.mock.calls.find((c) => String(c[0]) === '/api/queue/a1/skip-fallback');
+    expect(call).toBeDefined();
+    expect(call![1].method).toBe('POST');
+  });
+
   it('renders EVERY in_progress entry as "In flight" (multiple concurrent under queue-sole concurrency)', () => {
     renderModal([
       entry({

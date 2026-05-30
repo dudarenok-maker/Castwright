@@ -404,6 +404,61 @@ describe('POST /api/queue/:entryId/retry', () => {
   });
 });
 
+describe('loud-fallback gate endpoints', () => {
+  /* Seed a parked (awaiting_confirm) entry directly on disk — the worker is the
+     only thing that parks an entry in real life, so the routes are tested
+     against a hand-seeded file. */
+  async function seedParked(): Promise<void> {
+    const { queueJsonPath } = await import('../workspace/paths.js');
+    const { writeQueueFile } = await import('../workspace/queue-migrate.js');
+    await writeQueueFile(queueJsonPath(), {
+      entries: [
+        {
+          id: 'p1',
+          bookId: 'book-A',
+          chapterId: 1,
+          scope: 'this',
+          addedAt: '2026-05-23T00:00:00.000Z',
+          status: 'awaiting_confirm',
+          order: 0,
+          fallbackCharacters: [{ id: 'sophie', name: 'Sophie' }],
+        },
+      ],
+      paused: false,
+    });
+  }
+
+  it('confirm-fallback flips awaiting_confirm → queued with fallbackConfirmed', async () => {
+    await seedParked();
+    const res = await request(app).post('/api/queue/p1/confirm-fallback');
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0]).toMatchObject({
+      id: 'p1',
+      status: 'queued',
+      fallbackConfirmed: true,
+    });
+  });
+
+  it('skip-fallback removes the parked entry', async () => {
+    await seedParked();
+    const res = await request(app).post('/api/queue/p1/skip-fallback');
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toHaveLength(0);
+  });
+
+  it('confirm/skip are idempotent no-ops for a non-parked entry', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    const confirm = await request(app).post('/api/queue/e1/confirm-fallback');
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.entries[0]).toMatchObject({ id: 'e1', status: 'queued' });
+    const skip = await request(app).post('/api/queue/e1/skip-fallback');
+    expect(skip.status).toBe(200);
+    expect(skip.body.entries[0]).toMatchObject({ id: 'e1', status: 'queued' });
+  });
+});
+
 describe('DELETE /api/queue/:entryId', () => {
   it('removes a queued entry', async () => {
     await request(app)

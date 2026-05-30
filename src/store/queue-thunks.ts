@@ -226,6 +226,37 @@ export function retryQueueEntry(entryId: string) {
   };
 }
 
+/** POST /api/queue/:entryId/confirm-fallback — confirm a parked chapter's
+    Qwen→Kokoro fallback (awaiting_confirm → queued, fallbackConfirmed). The
+    dispatcher then re-claims it and the worker renders it (in Kokoro) straight
+    through. Fired by the modal's "Render anyway" control on an awaiting_confirm
+    row. */
+export function confirmFallbackEntry(entryId: string) {
+  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+    const res = await queueRequest(
+      `/api/queue/${encodeURIComponent(entryId)}/confirm-fallback`,
+      { method: 'POST' },
+    );
+    const snapshot = await readSnapshot(res);
+    dispatch(queueActions.setSnapshot(snapshot));
+    return snapshot;
+  };
+}
+
+/** POST /api/queue/:entryId/skip-fallback — skip a parked chapter rather than
+    render it in Kokoro (awaiting_confirm → removed). Fired by the modal's
+    "Skip" control on an awaiting_confirm row. */
+export function skipFallbackEntry(entryId: string) {
+  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+    const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}/skip-fallback`, {
+      method: 'POST',
+    });
+    const snapshot = await readSnapshot(res);
+    dispatch(queueActions.setSnapshot(snapshot));
+    return snapshot;
+  };
+}
+
 /** DELETE /api/queue/:entryId — cancel a queued entry. The modal's per-row
     cancel button calls this. Server 409s if the entry is in_progress; we
     surface a toast in that case rather than re-throwing because the user's

@@ -2568,7 +2568,7 @@ components:
       properties:
         type:
           type: string
-          enum: [progress, chapter_assembling, chapter_complete, chapter_failed, idle, resume_from, warning]
+          enum: [progress, chapter_assembling, chapter_complete, chapter_failed, idle, resume_from, warning, chapter_awaiting_fallback_confirm]
           description: |
             `chapter_assembling` is emitted between the last per-group synthesis
             tick and `chapter_complete`, while the server concatenates the PCM,
@@ -2581,7 +2581,12 @@ components:
             `warning` is a non-fatal advisory emitted at run setup (e.g. a
             Qwen→Kokoro engine downgrade, or dual-model-off with a mixed cast) —
             the run still proceeds; the frontend surfaces `message` as a toast.
-            See plan `docs/features/102-global-queue-modal.md`.
+            `chapter_awaiting_fallback_confirm` is emitted when a chapter would
+            silently render an undesigned Qwen voice in Kokoro: the chapter is
+            PARKED (queue entry → `awaiting_confirm`) and this tick names the
+            affected characters in `fallbackCharacters` so the frontend can
+            prompt the user to confirm or skip. The worker frees its slot; other
+            chapters keep flowing. See plan `docs/features/102-global-queue-modal.md`.
         chapterId: { type: integer }
         characterId:
           type: string
@@ -2664,6 +2669,17 @@ components:
             disk for the active queue entry's containing run, so the frontend
             can skip replaying `chapter_complete` ticks for them when the
             server catches a new subscriber up.
+        fallbackCharacters:
+          type: array
+          description: |
+            Only on `chapter_awaiting_fallback_confirm` — the characters in this
+            chapter that would render in Kokoro (Qwen route, no designed voice).
+            The frontend lists them in the confirm/skip prompt.
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
 
     # --- Generation queue ------------------------------------------
 
@@ -2697,13 +2713,35 @@ components:
           description: ISO 8601 timestamp the entry was enqueued. Drives FIFO ordering when ties on `order` occur during concurrent enqueues.
         status:
           type: string
-          enum: [queued, in_progress, paused, done, failed]
+          enum: [queued, in_progress, paused, done, failed, awaiting_confirm]
           description: |
             `queued` = waiting. `in_progress` = currently synthesising
             (pinned; non-draggable in the modal). `paused` = queue-global
             pause flipped; still ordered, drains on resume. `done` = audio
             on disk for this entry's chapter. `failed` = synthesis errored;
-            surfaces in the modal with a retry affordance.
+            surfaces in the modal with a retry affordance. `awaiting_confirm` =
+            the chapter would silently render an undesigned Qwen voice in Kokoro;
+            parked until the user confirms (render anyway) or skips. The
+            affected characters are listed in `fallbackCharacters`.
+        fallbackCharacters:
+          type: array
+          description: |
+            Loud-fallback gate — the characters in this chapter that resolve to
+            Qwen but have no designed voice, so would render in Kokoro. Present
+            only on an `awaiting_confirm` entry.
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+        fallbackConfirmed:
+          type: boolean
+          description: |
+            Loud-fallback gate — true once the user confirmed this entry's
+            Qwen→Kokoro fallback, so the worker renders it straight through on
+            re-dispatch instead of re-parking it.
         order:
           type: integer
           description: Cross-book ordinal within the workspace queue. 0 = first to drain. Renumbered on every reorder.
