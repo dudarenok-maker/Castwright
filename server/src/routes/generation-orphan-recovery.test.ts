@@ -233,12 +233,15 @@ describe('srv-12 orphan recovery on SSE last-subscriber disconnect', () => {
     expect(aborted).toBe(true);
   }, 10_000);
 
-  it('does NOT reset the entry when the run completed before the SSE closed', async () => {
+  it('done-prunes the entry server-side on a completed run (srv-16) — and never resets it to queued', async () => {
     /* Synth resolves immediately → the loop runs to completion and
-       deregisterJob fires BEFORE we tear the socket down. The frontend would
-       have POSTed /complete, but even without that, the close handler must skip
-       a deregistered (completed) job — so the seeded in_progress entry is left
-       untouched by orphan recovery (the frontend owns its lifecycle). */
+       deregisterJob fires BEFORE we tear the socket down. Two things must hold:
+       (1) srv-16 — the SERVER marks the queue entry done (pruned) right after
+       the chapter renders, so completion no longer depends on the frontend
+       POSTing /complete (a hard kill / closed tab used to leave it stuck
+       in_progress forever); (2) srv-12 — orphan recovery must NOT reset it to
+       `queued` (the close handler's registration guard skips the deregistered,
+       completed job). So the entry ends up GONE, and specifically not queued. */
     synthesiseImpl = async () => ({
       pcm: Buffer.alloc(2),
       sampleRate: 24000,
@@ -259,11 +262,45 @@ describe('srv-12 orphan recovery on SSE last-subscriber disconnect', () => {
     await stream.done;
     stream.destroy();
 
-    /* The entry must NOT have been reset to queued by orphan recovery — the job
-       completed (deregistered), so the close handler's registration guard skips
-       it. It stays in_progress (the frontend's /complete would prune it in real
-       life; here we assert orphan recovery did NOT touch it). */
-    await new Promise((r) => setTimeout(r, 50));
-    expect(await readEntryStatus()).toBe('in_progress');
+    /* srv-16: the server-side completion removes the entry on render. Give the
+       async (serialized) mutation a tick, then assert it's gone — and was never
+       flipped to `queued` by orphan recovery. */
+    await vi.waitFor(async () => {
+      expect(await readEntryStatus()).toBeUndefined();
+    });
+  }, 10_000);
+});
+
+describe('srv-16 server completion when the target chapter is already on disk', () => {
+  it('done-prunes a queue entry whose chapter audio already exists, without re-rendering', async () => {
+    /* Simulates the restart-after-crash case: chapter 1 was rendered before the
+       crash (audio on disk) and its queue entry was re-queued then re-claimed
+       (in_progress, seeded by beforeEach). A non-force generation POST for it
+       finds the audio present → renders nothing → no chapter_complete → Hook 1
+       can't fire. Hook 2 must complete the entry anyway, or it loops
+       in_progress↔queued forever across boots. */
+    writeFileSync(join(bookDir, 'audio', 'chapter-1.mp3'), Buffer.from([0, 0]));
+    let synthCalled = false;
+    synthesiseImpl = async () => {
+      synthCalled = true;
+      return { pcm: Buffer.alloc(2), sampleRate: 24000, durationSec: 1, segments: [] };
+    };
+
+    /* No `force` → the audio-exists check excludes the chapter from targets. We
+       don't need to drain the SSE; Hook 2 runs server-side as the request is
+       handled. Abort once the entry is gone. */
+    const controller = new AbortController();
+    void fetch(`${baseUrl}/api/books/${bookId}/generation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelKey: 'gemini-2.5-flash', chapterIds: [1], queueEntryId: ENTRY_ID }),
+      signal: controller.signal,
+    }).catch(() => undefined);
+
+    await vi.waitFor(async () => {
+      expect(await readEntryStatus()).toBeUndefined();
+    });
+    controller.abort();
+    expect(synthCalled).toBe(false); // never rendered — audio already on disk
   }, 10_000);
 });

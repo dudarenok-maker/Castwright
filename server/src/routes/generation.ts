@@ -30,7 +30,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
-import { resetEntryToQueued } from '../workspace/queue-io.js';
+import { completeEntry, resetEntryToQueued } from '../workspace/queue-io.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import { bookStateAudioFormat, findBookByBookId, type BookStateJson } from '../workspace/scan.js';
@@ -167,6 +167,46 @@ const inFlightByBook: Map<string, Set<RunningJob>> = new Map();
 
 function chapterKey(bookId: string, chapterId: number | null): string {
   return `${bookId}::${chapterId == null ? '*' : chapterId}`;
+}
+
+/* srv-16 — serialise every server-side `.queue.json` read-modify-write through
+   one promise chain. There's no file-level lock, and the server now mutates the
+   queue from two concurrent contexts (per-chapter completion below + the
+   srv-12 orphan-recovery reset), so without this two near-simultaneous chapter
+   completions could each read the same snapshot and the later write would drop
+   the earlier removal. The frontend `/complete` is still a backstop, so a race
+   would only fall back to today's behaviour — but serialising makes it correct
+   for N>1 workers. The chain swallows errors so one failed mutation can't wedge
+   the next. */
+let queueMutationChain: Promise<unknown> = Promise.resolve();
+function serializeQueueMutation(mutate: () => Promise<void>): Promise<void> {
+  const next = queueMutationChain.then(mutate, mutate);
+  queueMutationChain = next.catch(() => undefined);
+  return next;
+}
+
+/* srv-16 — mark a chapter's queue entry done from the SERVER once the chapter
+   is actually rendered + persisted, instead of relying solely on the frontend
+   dispatcher POSTing /complete on stream close. The frontend path is fragile:
+   a hard server kill (the 2026-05-30 OOM incident) or a closed tab bypasses it,
+   leaving rendered chapters stuck `in_progress` forever (`done` never climbs,
+   and on the next boot they look like orphans to re-dispatch). Idempotent: a
+   missing entry (frontend already removed it, or it was a force-regen with no
+   queue row) is a no-op. */
+async function markQueueEntryDoneOnDisk(entryId: string, chapterId: number): Promise<void> {
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      if (!before.entries.some((e) => e.id === entryId)) return; // already gone — frontend won the race.
+      await writeQueueFile(queueJsonPath(), completeEntry(before, entryId, 'done'));
+    } catch (err) {
+      console.warn(
+        `[generation] failed to mark queue entry ${entryId} (chapter ${chapterId}) done: ${
+          (err as Error).message
+        }`,
+      );
+    }
+  });
 }
 
 function registerJob(key: string, job: RunningJob): void {
@@ -512,6 +552,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   });
   const targetIdSet = new Set(targetChapters.map((c) => c.id));
 
+  /* srv-16 — if this queue-driven POST's sole target chapter already has audio
+     on disk (rendered before a crash/restart, so it's excluded from
+     targetChapters and nothing will render), no chapter_complete fires to drive
+     Hook 1 — so complete its queue entry here. Without this, a re-dispatched
+     entry for an already-finished chapter loops in_progress->queued forever
+     across boots. Guarded to a single-chapter, non-force queue POST whose
+     target is already-on-disk. */
+  if (queueEntryId != null && !force && requestedIds && requestedIds.length === 1) {
+    const onlyId = requestedIds[0];
+    const ch = state.chapters.find((c) => c.id === onlyId);
+    if (ch && !ch.excluded && !targetIdSet.has(onlyId) && chapterAudioExists(audioRoot, ch.slug)) {
+      void markQueueEntryDoneOnDisk(queueEntryId, onlyId);
+    }
+  }
+
   /* Plan 102 — emit `resume_from` as the FIRST event on every new subscriber
      (cold connect AND post-reconnect after `tsx watch` restart or production
      server bounce). Carries the snapshot of already-completed chapter ids in
@@ -722,7 +777,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       inFlightByChapter.get(key) === job
     ) {
       const orphanEntryId = job.queueEntryId;
-      void (async () => {
+      /* srv-16 — through the shared serializer so this reset can't race a
+         concurrent per-chapter completion (read-modify-write on one file). */
+      void serializeQueueMutation(async () => {
         try {
           const before = await readQueueFile(queueJsonPath());
           const after = resetEntryToQueued(before, orphanEntryId);
@@ -734,7 +791,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             }`,
           );
         }
-      })();
+      });
       if (!job.controller.signal.aborted) job.controller.abort();
     }
   });
@@ -1127,6 +1184,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            Done pill flips, even if assembling was lost on the wire. */
         durationSec: result.durationSec,
       });
+
+      /* srv-16 — server-authoritative completion. The chapter is rendered +
+         persisted, so mark its queue entry done now rather than waiting for the
+         frontend to POST /complete on stream close (which a crash / closed tab
+         skips). Only for a genuine single-chapter queue job — the back-compat
+         `*` walker (chapterId null) carries no per-chapter entry. */
+      if (job.queueEntryId != null && job.chapterId === chapter.id) {
+        void markQueueEntryDoneOnDisk(job.queueEntryId, chapter.id);
+      }
     } catch (e) {
       /* AbortError = our own controller fired (regen displacement or
          explicit /pause). Don't report it as a chapter failure — silently
