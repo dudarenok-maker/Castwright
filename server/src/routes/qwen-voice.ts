@@ -28,7 +28,7 @@
 import { Router, type Request, type Response } from 'express';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
-import { castJsonPath } from '../workspace/paths.js';
+import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS } from '../tts/index.js';
@@ -68,6 +68,48 @@ const DESIGN_TIMEOUT_MS = 180_000;
 export function deriveQwenVoiceId(character: CastCharacter, characterId: string): string {
   return `qwen-${character.voiceId ?? characterId}`;
 }
+
+/* GET /api/books/:bookId/cast/:characterId/designed-persona
+
+   Plan 149 — surfaces the persona text (`instruct`) of a character's already
+   DESIGNED Qwen voice, read from the voice sidecar JSON. The persona is
+   persisted on the sidecar at design time but historically was NOT mirrored
+   onto `character.voiceStyle` (and reuse copies only the override, never the
+   persona) — so the Profile Drawer's "Voice persona" textarea reads blank for
+   reused/origin characters whose voice is otherwise correctly designed. The
+   drawer calls this lazily (only when `voiceStyle` is empty) to seed the
+   textarea, so the persona shows and a re-design isn't blocked by the empty-
+   persona 400 guard above.
+
+   Returns 200 `{ instruct }` — an empty string when the sidecar/key is absent
+   (a benign "no persona on disk", same as today's blank). 404 only for an
+   unknown book/character. */
+qwenVoiceRouter.get(
+  '/:bookId/cast/:characterId/designed-persona',
+  async (req: Request, res: Response) => {
+    const { bookId, characterId } = req.params;
+
+    const located = await findBookByBookId(bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+
+    const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
+    const character = cast?.characters?.find((c) => c.id === characterId);
+    if (!character) {
+      return res.status(404).json({ error: `Character "${characterId}" not found.` });
+    }
+
+    /* Same voiceId resolution as design-voice: an explicit per-character qwen
+       override wins, else the stable `qwen-${voiceId}` key (so a REUSED
+       character with an empty own override still resolves to its series-shared
+       sidecar). */
+    const voiceName = character.overrideTtsVoices?.qwen?.name ?? deriveQwenVoiceId(character, characterId);
+    const sidecar = await readJson<{ instruct?: string }>(qwenVoiceSidecarPath(voiceName)).catch(
+      () => null,
+    );
+    const instruct = typeof sidecar?.instruct === 'string' ? sidecar.instruct : '';
+    return res.status(200).json({ instruct });
+  },
+);
 
 qwenVoiceRouter.post(
   '/:bookId/cast/:characterId/design-voice',

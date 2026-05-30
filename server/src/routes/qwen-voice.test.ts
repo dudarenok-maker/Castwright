@@ -71,7 +71,25 @@ const characters = [
     evidence: [{ quote: `“${BIANA_LINE}”` }, { quote: 'Wait.' }],
   },
   { id: 'nopersona', name: 'Nopersona', role: 'extra', color: 'amber' },
+  /* Designed voice via an explicit per-character override (name diverges from
+     the derived qwen-<voiceId>) — proves the persona GET resolves the override
+     name, not the derived one. */
+  {
+    id: 'overridechar',
+    name: 'Override Char',
+    role: 'supporting',
+    color: 'teal',
+    voiceId: 'v_other',
+    overrideTtsVoices: { qwen: { name: 'qwen-custom-name' } },
+  },
 ];
+
+/** Write a designed-voice JSON sidecar under the workspace's voices/qwen dir. */
+function writeQwenSidecar(name: string, instruct: unknown) {
+  const dir = join(workspaceRoot, 'voices', 'qwen');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${name}.json`), JSON.stringify({ voiceId: name, instruct }));
+}
 
 function writeBookOnDisk(chars: object[]) {
   const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
@@ -150,6 +168,9 @@ beforeEach(() => {
   synthesize.mockReset();
   synthesize.mockResolvedValue({ pcm: Buffer.alloc(24_000 * 2 * 0.3, 0), sampleRate: 24_000 });
   for (const f of readdirSync(audioDir)) rmSync(join(audioDir, f), { force: true });
+  /* Wipe designed-voice sidecars between tests so the persona GET cases stay
+     isolated (a sidecar written by one test must not leak into the next). */
+  rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
   writeBookOnDisk(characters);
 });
 
@@ -338,6 +359,48 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/ghost/design-voice`)
       .send(designBody);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/books/:bookId/cast/:characterId/designed-persona', () => {
+  it('returns the sidecar instruct for a character whose voice was designed (derived voiceId)', async () => {
+    writeQwenSidecar('qwen-v_biana', 'a poised, confident teenage girl, clear and warm');
+    const res = await request(app).get(`/api/books/${bookId}/cast/biana/designed-persona`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ instruct: 'a poised, confident teenage girl, clear and warm' });
+  });
+
+  it('resolves the per-character override name, not the derived qwen-<voiceId>', async () => {
+    /* overridechar.voiceId is v_other, but its override pins qwen-custom-name —
+       the persona must come from the OVERRIDE sidecar. */
+    writeQwenSidecar('qwen-custom-name', 'a gruff old sailor, weathered and slow');
+    writeQwenSidecar('qwen-v_other', 'WRONG — derived name, should be ignored');
+    const res = await request(app).get(`/api/books/${bookId}/cast/overridechar/designed-persona`);
+    expect(res.status).toBe(200);
+    expect(res.body.instruct).toBe('a gruff old sailor, weathered and slow');
+  });
+
+  it('returns an empty instruct (200, not 404) when no sidecar exists on disk', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/cast/biana/designed-persona`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ instruct: '' });
+  });
+
+  it('returns an empty instruct when the sidecar exists but has no instruct key', async () => {
+    writeQwenSidecar('qwen-v_biana', undefined);
+    const res = await request(app).get(`/api/books/${bookId}/cast/biana/designed-persona`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ instruct: '' });
+  });
+
+  it('404s for an unknown bookId', async () => {
+    const res = await request(app).get('/api/books/nope/cast/biana/designed-persona');
+    expect(res.status).toBe(404);
+  });
+
+  it('404s for an unknown characterId', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/cast/ghost/designed-persona`);
     expect(res.status).toBe(404);
   });
 });
