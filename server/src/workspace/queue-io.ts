@@ -21,7 +21,20 @@
 import type { TtsEngine } from '../tts/index.js';
 
 export type QueueScope = 'this' | 'character';
-export type QueueStatus = 'queued' | 'in_progress' | 'paused' | 'done' | 'failed';
+export type QueueStatus =
+  | 'queued'
+  | 'in_progress'
+  | 'paused'
+  | 'done'
+  | 'failed'
+  /* The chapter would silently fall back from Qwen to Kokoro for one or more
+     characters with no designed voice. The worker PARKS it here (rather than
+     rendering generic voices) and waits for the user to confirm (→ queued,
+     fallbackConfirmed) or skip (→ removed). The dispatcher never claims an
+     `awaiting_confirm` entry (FILL claims only `queued`), and the boot orphan
+     sweep leaves it alone — an unanswered question, not orphaned in-flight
+     work. See the per-chapter loud-fallback gate plan. */
+  | 'awaiting_confirm';
 
 export interface QueueEntry {
   id: string;
@@ -44,6 +57,17 @@ export interface QueueEntry {
   /* True when `requiredEngines.length > 1` — surfaced as the multi-TTS badge +
      dual-model advisory in the queue modal. Mirrors `isMultiTts`. */
   multiTts?: boolean;
+  /* Per-chapter loud-fallback gate. The characters in THIS chapter that resolve
+     to Qwen but have no designed voice, so would render in Kokoro. Stamped when
+     the worker transitions the entry to `awaiting_confirm`; the modal lists
+     them in the confirmation prompt. SERVER queue shape only (NOT in
+     openapi.yaml's QueueEntry — like `requiredEngines`). */
+  fallbackCharacters?: Array<{ id: string; name?: string }>;
+  /* Set true once the user CONFIRMs the fallback for this entry. The worker
+     reads it (threaded through the generation request) so a confirmed entry
+     that re-enters (retry / reload / re-dispatch) renders straight through
+     instead of re-prompting. */
+  fallbackConfirmed?: boolean;
 }
 
 export interface QueueFile {
@@ -206,6 +230,15 @@ export function completeEntry(
   outcome: 'done' | 'failed',
   errorReason?: string,
 ): QueueFile {
+  /* Loud-fallback gate guard: NEVER complete a parked entry. When the worker
+     parks a chapter on `awaiting_confirm` and returns, its SSE stream closes —
+     the frontend dispatcher's reconcile then POSTs /complete, and the server's
+     srv-16 done-flip is shaped to fire only on chapter_complete (which a parked
+     chapter never emits). Both ultimately call here; a no-op for an
+     `awaiting_confirm` entry keeps the parked row alive until the user
+     confirms (→ queued) or skips (→ removed). */
+  const target = file.entries.find((e) => e.id === entryId);
+  if (target?.status === 'awaiting_confirm') return file;
   if (outcome === 'done') {
     return renumber({ ...file, entries: file.entries.filter((e) => e.id !== entryId) });
   }
@@ -234,6 +267,57 @@ export function retry(file: QueueFile, entryId: string): QueueFile {
       e.id === entryId ? { ...e, status: 'queued', errorReason: null, progress: undefined } : e,
   );
   return renumber({ ...file, entries: next });
+}
+
+/** Park an in-flight entry on the loud-fallback gate: `in_progress →
+ *  awaiting_confirm`, stamping the characters that would fall back to Kokoro.
+ *  The worker calls this (instead of rendering) when it detects an
+ *  undesigned-voice fallback set. No-op (returns the file unchanged) unless the
+ *  entry exists and is `in_progress`, so a stale/raced id can't disturb another
+ *  entry. Order is preserved. */
+export function markAwaitingConfirm(
+  file: QueueFile,
+  entryId: string,
+  fallbackCharacters: Array<{ id: string; name?: string }>,
+): QueueFile {
+  const target = file.entries.find((e) => e.id === entryId);
+  if (!target || target.status !== 'in_progress') return file;
+  return {
+    ...file,
+    entries: file.entries.map(
+      (e): QueueEntry =>
+        e.id === entryId
+          ? { ...e, status: 'awaiting_confirm', fallbackCharacters, progress: undefined }
+          : e,
+    ),
+  };
+}
+
+/** Confirm the fallback for a parked entry: `awaiting_confirm → queued` with
+ *  `fallbackConfirmed: true` so the dispatcher re-claims it and the worker
+ *  renders straight through (no re-prompt). No-op unless the entry is
+ *  `awaiting_confirm`. Clears `progress`. */
+export function confirmFallback(file: QueueFile, entryId: string): QueueFile {
+  const target = file.entries.find((e) => e.id === entryId);
+  if (!target || target.status !== 'awaiting_confirm') return file;
+  return renumber({
+    ...file,
+    entries: file.entries.map(
+      (e): QueueEntry =>
+        e.id === entryId
+          ? { ...e, status: 'queued', fallbackConfirmed: true, progress: undefined }
+          : e,
+    ),
+  });
+}
+
+/** Skip a parked entry: drop it from the queue entirely (the chapter is
+ *  intentionally NOT rendered). Same done-prune as `completeEntry(…, 'done')`.
+ *  No-op unless the entry is `awaiting_confirm`. */
+export function skipFallback(file: QueueFile, entryId: string): QueueFile {
+  const target = file.entries.find((e) => e.id === entryId);
+  if (!target || target.status !== 'awaiting_confirm') return file;
+  return renumber({ ...file, entries: file.entries.filter((e) => e.id !== entryId) });
 }
 
 /** Update progress on the in-flight entry. Cheap mutator the frontend

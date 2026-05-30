@@ -122,6 +122,15 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
       for (const [entryId, { bookId, chapterId }] of [...inFlight.entries()]) {
         if (!runner.hasOpenStreamForChapter(bookId, chapterId)) {
           inFlight.delete(entryId);
+          /* Loud-fallback gate: the worker PARKED this chapter (entry flipped to
+             `awaiting_confirm`) and closed its stream without completing. Free
+             the slot but do NOT /complete it and do NOT add it to `completed` —
+             it must stay re-claimable once the user confirms it back to
+             `queued`. (A /complete would be a server no-op anyway, but adding it
+             to `completed` would wedge the confirmed re-dispatch.) */
+          if (queue.entries.find((e) => e.id === entryId)?.status === 'awaiting_confirm') {
+            continue;
+          }
           /* Did this chapter FAIL? If so, complete it as `failed` so the entry
              LINGERS in the queue (rendered "Failed · <reason>" with a Retry
              control) instead of being done-pruned. Crucially we do NOT add a
@@ -230,7 +239,14 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
           e.bookId,
           ui.ttsModelKey,
           { chapterIds: [e.chapterId], force: true },
-          { queueEntryId: e.id, chapterId: e.chapterId },
+          {
+            queueEntryId: e.id,
+            chapterId: e.chapterId,
+            /* Loud-fallback gate: a confirmed entry renders straight through —
+               tell the worker so it doesn't re-park on the same undesigned
+               voices. */
+            ...(e.fallbackConfirmed ? { fallbackConfirmed: true } : {}),
+          },
         );
       }
     };

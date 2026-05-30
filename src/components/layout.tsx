@@ -913,6 +913,17 @@ export function Layout() {
     const set = new Set<EngineFamily>();
     if (defaultEngine && defaultEngine !== 'gemini') set.add(defaultEngine);
     if (showGlobalTtsPill) for (const e of enginesInUse) set.add(e);
+    /* ALSO surface any model that is actually RESIDENT in the sidecar, even if
+       the current book's cast doesn't use it. A model can load without being in
+       `enginesInUse` — most notably Kokoro pre-warmed as the Qwen→Kokoro
+       fallback target. Without this, that model holds VRAM invisibly (no pill,
+       no Stop control) — the 2026-05-30 "why is Kokoro loaded and I can't kill
+       it" report. `ready`/`streaming`/`loading` all mean it's holding (or about
+       to hold) VRAM, so it gets a kill pill. */
+    for (const e of ['kokoro', 'coqui', 'qwen'] as const) {
+      const st = ttsLifecycle[e].state;
+      if (st === 'ready' || st === 'streaming' || st === 'loading') set.add(e);
+    }
     return set;
   })();
   const showTtsControls = enginesToShow.size > 0;
