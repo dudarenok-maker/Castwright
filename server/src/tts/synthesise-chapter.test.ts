@@ -17,6 +17,7 @@ import {
   synthesiseChapter,
   resolveQwenTokenBudget,
   DEFAULT_QWEN_BATCH_TOKEN_BUDGET,
+  ChapterSynthTimeoutError,
   type CastCharacter,
 } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
@@ -241,6 +242,10 @@ describe('synthesiseChapter voice routing', () => {
       modelKey: 'gemini-2.5-flash',
       engine: 'gemini',
       signal: controller.signal,
+      /* Watchdog OFF: with no per-call timeout the parent signal is forwarded
+         verbatim, which is what this identity assertion pins. The derived-child
+         path (callTimeoutMs > 0) is covered by the plan-148 timeout tests. */
+      callTimeoutMs: 0,
     });
 
     expect(provider.calls).toHaveLength(1);
@@ -1619,6 +1624,9 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
         engine: 'qwen',
         qwenBatchSize: 8,
         signal: controller.signal,
+        /* Watchdog OFF so the parent signal is forwarded verbatim (the identity
+           this test pins). The derived-child path is covered by plan 148. */
+        callTimeoutMs: 0,
       }),
     ).rejects.toMatchObject({ name: 'AbortError' });
 
@@ -2069,5 +2077,63 @@ describe('resolveQwenTokenBudget', () => {
     expect(resolveQwenTokenBudget('3600.9')).toBe(3600);
     expect(resolveQwenTokenBudget('-5')).toBe(0);
     expect(resolveQwenTokenBudget('abc')).toBe(0);
+  });
+});
+
+/* Plan 148 — defensive per-call synth timeout. The KOTLC stall: a Qwen call
+   ran away on degenerate back-matter and never returned, hanging the chapter
+   (and the queue) for an hour. The watchdog must turn that into a chapter
+   failure the queue rides past. */
+describe('synthesiseChapter per-call timeout (plan 148)', () => {
+  const soloCast: CastCharacter[] = [
+    {
+      id: 'narrator',
+      name: 'Narrator',
+      gender: 'neutral',
+      ageRange: 'adult',
+      attributes: [],
+      description: '',
+    },
+  ];
+
+  it('fails with ChapterSynthTimeoutError and aborts the call when a synth call never returns', async () => {
+    let captured: AbortSignal | undefined;
+    const provider: TtsProvider = {
+      synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        captured = input.signal;
+        /* Never settles — mimics a runaway/hung provider call. Without the
+           watchdog this would hang the test (and, in prod, the queue). */
+        return new Promise<SynthesizeOutput>(() => {});
+      },
+    };
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator')],
+        cast: soloCast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'gemini',
+        callTimeoutMs: 40,
+        groupHeartbeatMs: 0,
+      }),
+    ).rejects.toBeInstanceOf(ChapterSynthTimeoutError);
+
+    // The derived signal was aborted, so an honouring provider cancels its fetch.
+    expect(captured?.aborted).toBe(true);
+  });
+
+  it('does not fire for a fast call — callTimeoutMs is a ceiling, not a delay', async () => {
+    const provider = makeProvider();
+    await synthesiseChapter({
+      sentences: [sentence(1, 'narrator')],
+      cast: soloCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      callTimeoutMs: 50_000,
+      groupHeartbeatMs: 0,
+    });
+    expect(provider.calls.length).toBe(1);
   });
 });
