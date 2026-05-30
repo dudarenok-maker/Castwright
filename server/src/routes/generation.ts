@@ -69,9 +69,25 @@ import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.j
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import { ensureSidecarEngineReady } from '../tts/ensure-sidecar-loaded.js';
+import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 
 export const generationRouter = Router();
+
+/* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
+   recycle (plan 143), a crash, or an OOM drops the connection on the in-flight
+   `/synthesize` (or returns the drain-503 from a recycling sidecar) — both
+   surface as a `transient` error AFTER `withTtsRetry`'s short budget exhausts.
+   The srv-17b readiness gate only protects the NEXT chapter; the one already
+   mid-synth would otherwise fail + abort the run (recovered only by a later
+   manual Retry / boot sweep — the ch36/ch46 drops). So on a transient throw we
+   ride out the supervisor respawn via `ensureSidecarEngineReady` and re-render
+   the chapter on its own worker, up to this many times before falling through
+   to the normal fatal path (so a genuinely-dead sidecar still surfaces and we
+   never loop forever). CUDA-poison carries `poisoned:true` → `transient:false`,
+   so it is excluded here and still surfaces immediately (only a restart fixes
+   a poisoned context). */
+const MAX_RECYCLE_RECOVERIES = 2;
 
 /* Per-chapter job tracker. Each entry is a RunningJob: one AbortController +
    a Set of currently-attached SSE subscribers. Designed so the server-side
@@ -955,7 +971,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          encode/disk happens after and is excluded) — drives the RTF rollup +
          the dev top-bar throughput pill. */
       const synthStartMs = Date.now();
-      const result = await synthesiseChapter({
+      /* srv-17c recovery loop (see MAX_RECYCLE_RECOVERIES). Wraps ONLY the synth
+         call: on a transient sidecar-down (recycle/respawn/crash, or a drain-503)
+         we wait out the respawn on the readiness gate and re-render. AbortError
+         and non-transient / poison errors re-throw to the outer catch unchanged. */
+      let result: Awaited<ReturnType<typeof synthesiseChapter>>;
+      for (let recovery = 0; ; recovery += 1) {
+        try {
+          result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
         provider,
@@ -1027,7 +1050,31 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         onBatchComplete: ({ genMs, audioMs }) => {
           recordBatchThroughput({ genMs, audioMs });
         },
-      });
+          });
+          break;
+        } catch (synthErr) {
+          /* Recoverable only while the run is live and the budget remains. A
+             transient sidecar-down (connection drop on recycle/crash, or a
+             drain-503) is ridden out; AbortError, poison, and every fatal
+             classifier error re-throw to the outer catch unchanged. */
+          if (
+            (synthErr as { name?: string })?.name === 'AbortError' ||
+            !isTransient(synthErr) ||
+            controller.signal.aborted ||
+            recovery >= MAX_RECYCLE_RECOVERIES
+          ) {
+            throw synthErr;
+          }
+          console.warn(
+            `[generation] chapter ${chapter.id} (${chapter.slug}): sidecar unavailable ` +
+              `mid-synth (recycle/respawn) — riding out the respawn, re-attempt ` +
+              `${recovery + 1}/${MAX_RECYCLE_RECOVERIES}.`,
+          );
+          /* Polls through the supervisor respawn (srv-17b, 120 s budget); throws
+             AbortError if the run is paused/displaced mid-wait. */
+          await ensureSidecarEngineReady(engine, controller.signal);
+        }
+      }
 
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
