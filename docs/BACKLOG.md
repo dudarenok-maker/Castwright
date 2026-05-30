@@ -88,15 +88,6 @@ Source: net-new (2026-05-28), filed from the series-reuse repair session. Full s
 - _Benefit (user / technical):_ series continuity survives re-analysis — no re-running a repair after every reparse. Closes the remaining durability gap left after Facet A.
 - _Also remaining (follow-up, surfaced this round):_ a SECOND Phase-0b finalise site in `analysis.ts` — the failed-chapter retry/resume `runChapterCastSubset` path (~L3508, writing cast.json ~L3712) — does NOT run Facet A's link pass, so a book completed exclusively via the chapter-retry path persists an unlinked cast.json until the next full `/analysis/stream`. Belt-and-suspenders; fold into Facet B or a tiny standalone fix.
 
-### `srv-15` — Server must respawn the sidecar on unexpected exit (no supervisor under `npm start`)
-
-Source: net-new (2026-05-30), filed from the host-memory-leak incident. When the sidecar process exits — CUDA-poison self-exit (`_POISON_EXIT_CODE = 42`), a future RSS-watchdog exit, an OS OOM-kill, or a plain crash — **nothing brings it back under `npm start`**. `spawn-sidecar.ts` (~L417) only *logs* `child exited`; the actual respawn loop lives in `start.ps1`, but plan 43 moved sidecar ownership to the Node server and `start-app.ps1` explicitly no longer launches it ("the TTS sidecar is no longer launched from here"). So the poison-exit's own docstring ("the start.ps1 supervisor restarts a fresh process") is **stale for npm-start mode** — a poisoned or dead sidecar leaves generation permanently stalled until the user manually restarts.
-
-- _What:_ Make the server supervise its sidecar child — on `exit`, if the run is still active, respawn it (bounded retries / backoff) and re-drive the in-flight chapter, instead of only logging. Honour exit code 42 (poison) as a "respawn me" signal. Leave a clear log + a `/api/sidecar/health`-visible "restarting" state.
-- _Acceptance:_ Kill the sidecar mid-book → the server respawns it within seconds and the current chapter retries to completion, with no user action. A repeated crash loop backs off and surfaces a loud error rather than hammering.
-- _Key files:_ `server/src/tts/spawn-sidecar.ts` (the `child.once('exit')` handler ~L417), generation queue/worker (`server/src/...` re-drive of the active chapter), `server/tts-sidecar/main.py` (poison-exit docstring is now wrong — fix or remove the start.ps1 reference).
-- _Benefit (user / technical):_ a sidecar death (poison, OOM, leak-watchdog) self-heals instead of silently stalling an overnight render — exactly the failure that compounded the 2026-05-30 incident. Re-enables the poison-exit recovery path that plan 43 quietly broke.
-
 ---
 
 ## Could — nice to have, low-cost wins
@@ -247,16 +238,6 @@ Source: [`108-qwen-coexistence.md`](features/108-qwen-coexistence.md) post-ship 
 - _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine._load_qwen_model`); the installed `qwen_tts` package (read-only — the log originates there).
 - _Depends on:_ nothing.
 - _Benefit (technical):_ stops a benign config log masquerading as a problem (it drew the eye during both the plan-108 OOM debugging and the design-timeout debugging).
-
-#### `srv-16` — Generation queue entries never transition `in_progress` → `done`
-
-Source: net-new (2026-05-30), observed live during a 45-chapter Qwen run. Chapters render fully (server logs `chapter N … rendered`, all audio + `.segments`/`.peaks`/`.lufs` land on disk) but their `.queue.json` entry status stays `in_progress` forever: across the run the `/api/queue` readout showed `done: 0` with the `in_progress` list growing `[15] → [15,16] → [15,16,17]` while `queued` shrank and `total` held at 45. The done-transition simply never fires.
-
-- _What:_ flip a chapter's queue entry to `done` once its render completes (or remove it, whichever the queue contract intends), so `done` reflects reality and `in_progress` doesn't accumulate. Investigate where the worker marks completion vs. where the entry is meant to transition — likely the completion callback updates progress but not the persisted entry status.
-- _Why it has teeth (not just cosmetic):_ on a server restart mid-run (e.g. after the 2026-05-30 OOM-kill), the queue reloads `[15,16,17]` as `in_progress` — so the resume logic may **re-render already-finished chapters**, burning hours of Qwen compute. It also makes any UI progress count (done/total) wrong.
-- _Acceptance:_ a chapter that finishes rendering shows `status:'done'` in `/api/queue` and `.queue.json`; `done` count climbs as chapters complete; `in_progress` holds at most `generationWorkers` entries. On restart, completed chapters (audio present on disk) are NOT re-rendered. New server queue test pins the transition + the restart-skip.
-- _Key files:_ generation queue + worker (`server/src/...` — the persisted-queue / worker-coalesce code from plan 111), `.queue.json` writer, the chapter-complete callback.
-- _Benefit (user / technical):_ accurate progress, and — more importantly — a restart after any failure resumes from the right chapter instead of redoing finished ones. Directly limits the blast radius of the `srv-15` / sidecar-death scenario.
 
 #### `fs-13` — Exact per-character progress under parallel synthesis
 

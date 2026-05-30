@@ -421,6 +421,29 @@ describe('spawnSidecar', () => {
     );
   });
 
+  it('invokes the onExit callback on child exit so the supervisor can respawn (srv-15)', async () => {
+    const child = makeFakeChild(54321);
+    spawnFn.mockReturnValueOnce(child);
+    const onExit = vi.fn();
+
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: true,
+      repoRoot,
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+      onExit,
+    });
+
+    expect(handle).not.toBeNull();
+    child.emit('exit', 42, null); // the poison self-exit code
+    expect(onExit).toHaveBeenCalledWith(42, null);
+  });
+
   it('handle.kill() on win32 shells out to taskkill /T /F /PID', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
