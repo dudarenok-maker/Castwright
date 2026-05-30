@@ -187,6 +187,38 @@ describe('book-state router — chapterLufs hydration (plan 77)', () => {
   });
 });
 
+describe('book-state router — renderedFallbackByCharacter (fe-16)', () => {
+  /* The aggregator walks the book's rendered chapters' segments files and
+     surfaces a characterId → engine map for characters that fell back to
+     Kokoro at render time. Threaded into the cast Status "Fallback (Kokoro)"
+     pill. */
+  it('returns {} when no segments files exist', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.renderedFallbackByCharacter).toEqual({});
+  });
+
+  it('maps a character to kokoro when its rendered snapshot stamped the fallback', async () => {
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    /* Chapter 1 slug = 'chapter-one' (beforeAll). */
+    writeFileSync(
+      join(audioRoot, 'chapter-one.segments.json'),
+      JSON.stringify({
+        chapterId: 1,
+        characterSnapshots: {
+          Wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
+          Marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-Marlow' },
+        },
+      }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.renderedFallbackByCharacter).toEqual({ Wren: 'kokoro' });
+    rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
+  });
+});
+
 describe('book-state router — dropped-quotes endpoint', () => {
   it('GET dropped-quotes returns an empty envelope when the file does not exist', async () => {
     /* The book was created in beforeAll with no dropped-quotes.json on
