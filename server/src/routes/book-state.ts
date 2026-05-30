@@ -44,9 +44,34 @@ import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
+import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
+import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
+import { collectRenderedFallbackEngines } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 export const bookStateRouter = Router();
+
+/* Denormalise the bespoke (qwen) voice onto any REUSED character before the
+   cast persist (srv-14). The auto-match apply path stamps `matchedFrom` +
+   `voiceId` + `voiceState:'reused'` on the frontend, then persists through this
+   generic PUT — but it never copies the source character's designed voice
+   (`ttsEngine` + `overrideTtsVoices.qwen`). Without it, the on-disk cast.json
+   resolves to '' at generation and falls back to Kokoro until read-time
+   hydration patches it. Stamping here (via the shared `resolveReusedVoiceFields`
+   chain-walker that cast-link-prior already uses) makes cast.json self-complete
+   after an auto-match — belt-and-suspenders alongside runtime hydration.
+
+   No-op for any character that already owns a qwen voice, isn't a reuse, or
+   whose source can't be resolved. Tolerates a non-cast-shaped patch (returns it
+   untouched) so the funnel stays generic. */
+async function denormaliseCastReusedVoices(patch: unknown): Promise<unknown> {
+  if (!patch || typeof patch !== 'object' || !Array.isArray((patch as { characters?: unknown }).characters)) {
+    return patch;
+  }
+  const cast = patch as { characters: ReuseHydratable[] };
+  const characters = await hydrateCastReusedVoices(cast.characters);
+  return { ...cast, characters };
+}
 
 /* Non-destructive title-only refresh. Invoked transparently from the
    book-state GET so users open a book and see real chapter names
@@ -302,6 +327,17 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     const rec = await getOrHydrateManuscript(state.manuscriptId);
     const manuscript = rec ? { wordCount: rec.wordCount, format: rec.format } : null;
 
+    /* fe-16 — per-character render-time fallback engine, aggregated across the
+       book's rendered chapters' segments files. `'kokoro'` for a character
+       that fell back from Qwen on any rendered chapter; the cast view threads
+       it into resolveVoiceStatus so the live Status pill reads
+       "Fallback (Kokoro)". Empty `{}` when nothing has rendered / fallen back.
+       Tolerant of missing audio dir (loadSegmentsFiles returns []). */
+    const renderedFallbackByCharacter = await collectRenderedFallbackEngines(
+      bookDir,
+      state.chapters,
+    ).catch(() => ({}));
+
     res.json({
       state,
       cast,
@@ -311,6 +347,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       completedSlugs,
       chapterCharacters,
       chapterLufs,
+      renderedFallbackByCharacter,
       changeLog: changeLog?.events ?? null,
       analysis: { failedChapterIds },
     });
@@ -410,7 +447,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
     const { bookDir, state } = located;
     switch (body.slice) {
       case 'cast':
-        await writeJsonAtomic(castJsonPath(bookDir), body.patch);
+        await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(body.patch));
         break;
       case 'manuscript':
         await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), body.patch);
