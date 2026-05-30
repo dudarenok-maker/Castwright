@@ -1229,7 +1229,7 @@ function ChapterRow({
               return (
                 <div
                   key={cid}
-                  className="grid grid-cols-[16px_minmax(0,1fr)_auto_44px] sm:grid-cols-[20px_1fr_140px_128px_28px] items-center gap-2 sm:gap-4 py-1.5 text-sm group"
+                  className="grid grid-cols-[16px_minmax(0,1fr)_auto_44px] sm:grid-cols-[20px_1fr_96px_128px_28px] items-center gap-2 sm:gap-4 py-1.5 text-sm group"
                 >
                   <ColorDot color={c.color as CharColor} size={8} />
                   {/* Name + line/word stat row: stacks vertically on phone
