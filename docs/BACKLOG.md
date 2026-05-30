@@ -97,6 +97,15 @@ Source: net-new (2026-05-30). The generation server's `:8080` child died silentl
 - _Key files:_ TBD by the captured trace; likely `server/src/routes/generation.ts` (dispatch/SSE error paths), `server/src/tts/sidecar.ts` / `retry.ts`, `server/src/tts/ensure-sidecar-loaded.ts` (readiness gate), `server/src/index.ts` (boot-time preload).
 - _Benefit (user / technical):_ removes the actual crash (plan 145 only makes it visible + survivable), so long runs don't even hit the FATAL path, and a fresh-restart run doesn't spuriously fail its first chapter.
 
+### `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed)
+
+Source: net-new (2026-05-30), from the live leak investigation (plan 143 + the user-supplied Qwen-leak research report). **Promoted Could → Should 2026-05-31** — the overnight full-book run confirmed RTF is solved (~1.04, ~realtime), so the next end-to-end win is no longer speed; it's removing the recycle interruptions this leak forces. The Qwen generation forward leaks host RAM monotonically because every sentence is a different length → a new native per-shape workspace that's never freed (RSS climbs, CUDA flat — pytorch/pytorch #32596; confirmed: fixed-shape batches hold flat, variable-shape generation climbs). Plan 143's process-recycle (RSS-ceiling self-restart via srv-15) is the safety net, but on the 2026-05-31 run it fired ~every 10 chapters and each recycle dropped the in-flight chapter to a failed state (`srv-17c`) until retried. Eliminating the leak means a full book runs on one warm sidecar with **no recycles, no dropped chapters**.
+
+- _What (candidates, test cheapest first):_ (1) `torch.backends.mkldnn.enabled = False` — if the per-shape workspace is CPU MKLDNN (speech_tokenizer / Code2Wav decode on variable-length inputs), this kills it at a small CPU-op cost; one-line, env-gated, test with a variable-shape repro. (2) **Pad batches to a small set of fixed shapes** (fixed width + fixed max-len buckets) so shape variety collapses → workspace reuse; trades padding-RTF for leak-freedom (re-tune plan 128 bucketing). (3) ~~`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`~~ — **SHIPPED in plan 144** (default in the sidecar spawn env), but that was for the *separate* CUDA-fragmentation VRAM OOM (the 2026-05-30 mid-run `CUDA error: out of memory`), NOT this host leak; left here only to note it's done. (4) Try a known-good torch/transformers combo (avoid torch 2.0.1's variable-shape leak; transformers ≥4.40 DynamicCache lifecycle). (5) If a clean minimal repro persists, file upstream `QwenLM/Qwen3-TTS` (would be the first inference-path memory issue there).
+- _Diagnostic already in place:_ `GET /debug/memory` + the `sidecar memory:` watchdog log give the RSS/private/CUDA curve; a variable-length bench loop (vary text length per batch) is the controlled repro.
+- _Key files:_ `server/tts-sidecar/main.py` (model load / mkldnn flag), `server/src/tts/synthesise-chapter.ts` (batch shaping / bucketing), `server/src/tts/spawn-sidecar.ts` (env injection like `PYTORCH_CUDA_ALLOC_CONF`).
+- _Benefit (user / technical):_ no mid-run recycle interruptions or dropped in-flight chapters (`srv-17c`) on long books — the cleanest end-to-end improvement now that RTF is acceptable. Pairs with `srv-17c` (drain/requeue the in-flight chapter): fixing the leak removes the recycle that triggers it. The `docs/tts-performance.md` "open levers" list points here as the next thing to play with.
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -210,14 +219,6 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 
 ### Engine, sidecar & analyzer
 
-#### `side-10` — Coalesce consecutive same-speaker short lines before batching
-
-Source: net-new (2026-05-29), from the plan-136 A/B. The dominant RTF drag on dialogue-dense chapters is **padding waste**: a batch decodes to its longest item, so a bucket of ultra-short same-speaker lines (avg ~12–30 chars) wastes most decode steps and produces little audio (measured RTF ~3 even at cap 64). Length-bucketing + token-budget width (plans 128/136, shipped 2026-05-30) both fail to fix this because the items are inherently tiny.
-
-- _What:_ merge runs of consecutive **same-character** short sentences into one synth item (one prompt, one decode) before the batch packer, so each item carries more audio per decode step. Must stay output-equivalent enough for captions/timing — sentence-level segment boundaries map to `sentenceIds`, so a merged item would need to either keep per-sentence timing (split the returned audio) or accept coarser sentence captions for merged runs. Quality risk: prosody across a merged boundary differs from separate synth+concat (NOT byte-identical — unlike bucketing/token-budget).
-- _Key files:_ `server/src/tts/synthesise-chapter.ts` (group construction / the batchable partition), `synthesise-chapter.test.ts`.
-- _Benefit (user / technical):_ the only lever that attacks the dialogue padding floor; could pull dialogue-dense chapters from ~2–3 RTF toward ~1 where width cannot. Gated on a captions/timing-preservation design + a quality A/B (it changes audio).
-
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
 
 Source: [`30-global-model-control.md`](features/archive/30-global-model-control.md) "When to extend the pattern".
@@ -237,15 +238,6 @@ Source: [`108-qwen-coexistence.md`](features/108-qwen-coexistence.md) post-ship 
 - _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine._load_qwen_model`); the installed `qwen_tts` package (read-only — the log originates there).
 - _Depends on:_ nothing.
 - _Benefit (technical):_ stops a benign config log masquerading as a problem (it drew the eye during both the plan-108 OOM debugging and the design-timeout debugging).
-
-#### `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed)
-
-Source: net-new (2026-05-30), from the live leak investigation (plan 143 + the user-supplied Qwen-leak research report). The Qwen generation forward leaks host RAM monotonically because every sentence is a different length → a new native per-shape workspace that's never freed (RSS climbs, CUDA flat — pytorch/pytorch #32596; confirmed: fixed-shape batches hold flat, variable-shape generation climbs). Plan 143 ships **process recycling** (RSS-ceiling self-restart via srv-15) as the guaranteed mitigation, but it re-renders the in-flight chapter on each recycle (~real overhead on a long book). This item is the *true fix* — eliminate the leak so recycling rarely/never fires.
-
-- _What (candidates, test cheapest first):_ (1) `torch.backends.mkldnn.enabled = False` — if the per-shape workspace is CPU MKLDNN (speech_tokenizer / Code2Wav decode on variable-length inputs), this kills it at a small CPU-op cost; one-line, env-gated, test with a variable-shape repro. (2) **Pad batches to a small set of fixed shapes** (fixed width + fixed max-len buckets) so shape variety collapses → workspace reuse; trades padding-RTF for leak-freedom (re-tune plan 128 bucketing). (3) ~~`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`~~ — **SHIPPED in plan 144** (default in the sidecar spawn env), but that was for the *separate* CUDA-fragmentation VRAM OOM (the 2026-05-30 mid-run `CUDA error: out of memory`), NOT this host leak; left here only to note it's done. (4) Try a known-good torch/transformers combo (avoid torch 2.0.1's variable-shape leak; transformers ≥4.40 DynamicCache lifecycle). (5) If a clean minimal repro persists, file upstream `QwenLM/Qwen3-TTS` (would be the first inference-path memory issue there).
-- _Diagnostic already in place:_ `GET /debug/memory` + the `sidecar memory:` watchdog log give the RSS/private/CUDA curve; a variable-length bench loop (vary text length per batch) is the controlled repro.
-- _Key files:_ `server/tts-sidecar/main.py` (model load / mkldnn flag), `server/src/tts/synthesise-chapter.ts` (batch shaping / bucketing), `server/src/tts/spawn-sidecar.ts` (env injection like `PYTORCH_CUDA_ALLOC_CONF`).
-- _Benefit (user / technical):_ removes the recycle overhead (no lost in-flight chapters), and lets long books run on one warm sidecar. Lower priority than 143 because recycling already prevents the crash — this is the optimisation, not the safety.
 
 #### `fs-13` — Exact per-character progress under parallel synthesis
 
@@ -420,7 +412,14 @@ Source: net-new (2026-05-26), plan 112. ICL mode drags the reference clip's code
 Source: net-new (2026-05-29), plan [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-graph-spike.md); **moved Could → Won't 2026-05-31**. Was the blocked "open lever 5" in `docs/tts-performance.md` — the only path past the dispatch-bound ~1–2 RTF floor toward sub-1, but a 2–5-day, correctness-risky fork of `qwen_tts` (it ships `_supports_static_cache=False` + a growing `DynamicCache` + a nested per-step `code_predictor.generate()`) we'd then maintain against upstream.
 
 - _Why parked (2026-05-31):_ the perf goal is met. The 2026-05-31 overnight full-book run rendered 25 real multi-voice chapters at aggregate **RTF ≈ 1.04** (range 0.91–1.26) on the adopted 32/3600 + single-worker config — ~realtime, the target. The remaining gap to sub-1 (Kokoro-class) isn't worth a risky talker fork; Kokoro stays the book-length workhorse and Qwen bespoke is already an acceptable overnight render. Even the cheap Probe 1 isn't worth running while the floor is acceptable.
-- _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost) AND the cheaper output-preserving lever (`side-10` short-line coalescing) is already banked. Then run Probe 1 first; only fork if it proves still launch-bound.
+- _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost). Then run plan-129 Probe 1 first; only fork if it proves still launch-bound.
+
+### `side-10` — Coalesce consecutive same-speaker short lines before batching
+
+Source: net-new (2026-05-29), from the plan-136 A/B; **moved Could → Won't 2026-05-31**. Was the one lever left for the dialogue **padding floor** — a batch decodes to its longest item, so a bucket of ultra-short same-speaker lines (avg ~12–30 chars) wastes most decode steps for little audio (measured RTF ~3 even at cap 64); length-bucketing/token-budget can't fix inherently tiny items. The idea: merge runs of consecutive same-character short sentences into one synth item.
+
+- _Why parked (2026-05-31):_ two reasons. (1) **Perf goal met** — the 2026-05-31 overnight full-book run held aggregate RTF ~1.04 even on multi-voice/dialogue-dense chapters, so the dialogue floor isn't worth chasing. (2) **It degrades audit / caption quality** — merging sentences into one synth item is NOT output-equivalent: prosody across a merged boundary differs from separate synth+concat, and sentence-level segment boundaries (→ `sentenceIds`) get coarser, so quote-audit and per-sentence captions/timing lose fidelity. Trading audit fidelity for a dialogue speedup we no longer need isn't a good deal.
+- _Wake when:_ Qwen synthesis becomes a real bottleneck again specifically on dialogue-dense books AND a captions/timing-preservation design + a quality A/B prove the merge doesn't hurt quote-audit fidelity.
 
 ### `ops-4` — Auto-install Ollama / auto-pull models
 
