@@ -88,6 +88,15 @@ Source: net-new (2026-05-28), filed from the series-reuse repair session. Full s
 - _Benefit (user / technical):_ series continuity survives re-analysis — no re-running a repair after every reparse. Closes the remaining durability gap left after Facet A.
 - _Also remaining (follow-up, surfaced this round):_ a SECOND Phase-0b finalise site in `analysis.ts` — the failed-chapter retry/resume `runChapterCastSubset` path (~L3508, writing cast.json ~L3712) — does NOT run Facet A's link pass, so a book completed exclusively via the chapter-retry path persists an unlinked cast.json until the next full `/analysis/stream`. Belt-and-suspenders; fold into Facet B or a tiny standalone fix.
 
+### `srv-17` — Root-cause the silent server-child death (once plan 145 captures it)
+
+Source: net-new (2026-05-30). The generation server's `:8080` child died silently TWICE — no stack trace in `server.err.log`, no heap-OOM, and the second time RAM was 61% free (not the host-leak OOM). `tsx watch`'s wrapper survives but doesn't auto-respawn the child, so the run stalls. Plan 145 added `uncaughtException`/`unhandledRejection` handlers that LOG the cause (and survive rejections), so the NEXT occurrence should finally name what's throwing.
+
+- _What:_ once plan 145's handler logs a `[server] FATAL …` line (likely an unhandled rejection on an un-awaited/un-caught async path — prime suspect: a transient sidecar-fetch rejection during the startup race, where generation/preload fires ~20 s after spawn before the eager-loading sidecar is HTTP-ready), trace it to the source and add the missing `await`/`.catch()` there. ALSO consider gating generation dispatch on sidecar `/health` readiness so the startup race can't fire spurious failures (ch20 failed this way on 2026-05-30).
+- _Acceptance:_ the root rejection/exception is fixed at its source (no longer reaches the process handler); a server restart followed by an immediate queue run doesn't fail the first chapter on "sidecar not reachable".
+- _Key files:_ TBD by the captured trace; likely `server/src/routes/generation.ts` (dispatch/SSE error paths), `server/src/tts/sidecar.ts` / `retry.ts`, `server/src/tts/ensure-sidecar-loaded.ts` (readiness gate), `server/src/index.ts` (boot-time preload).
+- _Benefit (user / technical):_ removes the actual crash (plan 145 only makes it visible + survivable), so long runs don't even hit the FATAL path, and a fresh-restart run doesn't spuriously fail its first chapter.
+
 ---
 
 ## Could — nice to have, low-cost wins
