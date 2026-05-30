@@ -106,6 +106,16 @@ Source: net-new (2026-05-30), from the live leak investigation (plan 143 + the u
 - _Key files:_ `server/tts-sidecar/main.py` (model load / mkldnn flag), `server/src/tts/synthesise-chapter.ts` (batch shaping / bucketing), `server/src/tts/spawn-sidecar.ts` (env injection like `PYTORCH_CUDA_ALLOC_CONF`).
 - _Benefit (user / technical):_ no mid-run recycle interruptions or dropped in-flight chapters (`srv-17c`) on long books — the cleanest end-to-end improvement now that RTF is acceptable. Pairs with `srv-17c` (drain/requeue the in-flight chapter): fixing the leak removes the recycle that triggers it. The `docs/tts-performance.md` "open levers" list points here as the next thing to play with.
 
+### `srv-19` — Default-bind the server to loopback; require an explicit opt-in to expose all interfaces
+
+Source: net-new (2026-05-31), from the [security review](security/2026-05-31-security-review.md) (findings #1 + #2). The default HTTP dev mode (`app.listen(PORT)` with no host) binds `0.0.0.0`, so on a shared/untrusted network every unauthenticated route — including the `/workspace` static mount that serves all manuscripts + audio + `state.json`/`cast.json` — is reachable by any LAN peer. The opt-in `LAN_HTTPS` mobile flow is *meant* to be reachable; the default dev mode is not.
+
+- _What:_ pass an explicit host to the HTTP `app.listen` so the default bind is `127.0.0.1`, and only bind `0.0.0.0` when LAN mode is on (the existing `isLanHttpsEnabled()` already gates the HTTPS listener — reuse it, plus a `BIND_HOST`/`HOST` env override for power users). The LAN HTTPS path keeps binding all interfaces (unchanged). No new abstraction — one host argument threaded through the existing `listenerCallback` wiring.
+- _Acceptance:_ with no env flags, `npm start` is reachable at `http://127.0.0.1:8080` but NOT from another machine on the LAN (connection refused). `npm run start:lan` (LAN_HTTPS=1) stays reachable on the LAN exactly as today. A `BIND_HOST=0.0.0.0` (or equivalent) escape hatch restores all-interface HTTP for users who want it. New server vitest pins the host argument selection for {default, LAN, override}; the existing LAN-mode tests stay green.
+- _Key files:_ `server/src/index.ts` (the `PORT`/`LAN_HTTPS_PORT` listen block ~L360-362 + `listenerCallback`; reuse `isLanHttpsEnabled()`).
+- _Depends on:_ none.
+- _Benefit (user / technical):_ removes the "any device on the Wi-Fi can read all your books and burn your Gemini quota" exposure in the default mode, at the cost of one host argument — the cheapest meaningful hardening from the review. The deliberate mobile flow is untouched.
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -311,7 +321,71 @@ Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
 
+### Security & hardening
+
+Source for the whole sub-group: the [2026-05-31 security review](security/2026-05-31-security-review.md). All are scoped to the **opt-in LAN exposure surface** (`npm run start:lan`) or local-only defense-in-depth — the app is single-user/local-first by design, so these harden the hostile-LAN and local-write threat models rather than fixing an exploited-today hole. `srv-19` (Should) is the partner default-bind fix.
+
+#### `srv-20` — Optional shared-secret token for the LAN flow
+
+Source: net-new (2026-05-31), security review findings #1–#4 (hostile-LAN scope). `srv-19` closes the default mode by binding loopback; the *deliberate* mobile flow still needs the LAN to reach it, and today does so with zero auth — so any peer on the same Wi-Fi has full unauthenticated API access while the phone/tablet is in use.
+
+- _What:_ a single shared-secret token (env-configured, surfaced in the LAN URL / QR alongside the existing cert flow) checked by a small Express middleware on `/api/*` and the `/workspace` mount when LAN mode is on. Loopback requests bypass the check (so `npm start` is unaffected). Reuse the existing LAN-URL/QR plumbing (`GET /api/export/lan`, `npm run install:cert-mobile`) to carry the token.
+- _Acceptance:_ with LAN_HTTPS=1 + a token set, a LAN request without the token gets 401; the printed LAN URL/QR embeds the token so the phone authenticates transparently; loopback requests need no token. New server vitest covers the middleware's {loopback-bypass, missing-token, valid-token} branches.
+- _Key files:_ new `server/src/middleware/lan-auth.ts`; `server/src/index.ts` (mount before routers + the `/workspace` static); `server/src/routes/export-lan.ts` (embed token in the LAN URL); `scripts/install-cert-mobile.*` (show token in QR).
+- _Depends on:_ `srv-19` (loopback-default) — the token only matters once LAN exposure is the explicit, narrowed surface.
+- _Benefit (user):_ the mobile flow stops being "open to everyone on the network" without re-introducing friction — the token rides the URL the user already scans.
+
+#### `srv-21` — Validate `sidecarUrl` (scheme + private-host allowlist) before fetch
+
+Source: net-new (2026-05-31), security review finding #3 (SSRF). `sidecarUrl` from user-settings is validated only as `z.string().min(1).max(2000)`, then fetched directly (`sidecar-health.ts` + `/load`/`/unload`). Normally self-set, but reachable via the unauthenticated settings PUT over LAN (#1), so a peer could point it at an internal service and read probe responses.
+
+- _What:_ tighten the zod validator (or a dedicated `assertSafeSidecarUrl`) to require `http`/`https` and a loopback/private-range host before any outbound fetch; reject otherwise with a clear 400 on the settings PUT.
+- _Acceptance:_ setting `sidecarUrl` to a non-http scheme or a public host is rejected at PUT time; localhost / 127.0.0.1 / LAN-private hosts still accepted; sidecar health/load/unload behave unchanged for valid URLs. New vitest covers the allow/deny matrix.
+- _Key files:_ `server/src/workspace/user-settings.ts` (the `sidecarUrl` zod field), `server/src/tts/sidecar-url.ts` or the resolver behind `getResolvedSidecarUrl()`, `server/src/routes/sidecar-health.ts`.
+- _Depends on:_ none (independent of `srv-19`/`srv-20`, but lower-risk once those land).
+- _Benefit (technical):_ closes the SSRF primitive; makes the sidecar-URL contract explicit instead of "any string we'll fetch".
+
+#### `srv-22` — Constrain / document the `sync-folder/test` write-probe path
+
+Source: net-new (2026-05-31), security review finding #4. `POST /api/user/settings/sync-folder/test` does `mkdir(recursive)` + `writeFile('ok')` + `unlink` on an arbitrary body-supplied `path` (validated as `z.string().max(2000)` only) — an arbitrary-mkdir / limited-clobber primitive reachable unauth over LAN.
+
+- _What:_ the probe is a legitimate "is this folder writable" UX check, so the fix is proportionate: keep the feature but (a) refuse obviously-dangerous targets (system roots), and/or (b) document the trust boundary explicitly and lean on `srv-19`/`srv-20` to remove the unauth-LAN reachability. Decide between hard-constraint vs. document-and-gate when the item opens.
+- _Acceptance:_ the probe still reports writability for a normal user-chosen sync folder; a system-root or traversal-y target is refused (if the hard-constraint path is chosen) or the reachability is closed by the bind/auth items; behaviour documented inline. New vitest pins the accept/refuse cases.
+- _Key files:_ `server/src/routes/user-settings.ts:128-152` (the probe handler).
+- _Depends on:_ pairs with `srv-19`/`srv-20` (which remove the unauth-LAN reach); standalone-fixable too.
+- _Benefit (technical):_ removes a small unauthenticated filesystem-touch primitive without breaking the Test button.
+
+#### `side-12` — Load Qwen voice `.pt` prompts with `weights_only=True` (or a safe format)
+
+Source: net-new (2026-05-31), security review finding #5. `main.py:1251` does `torch.load(pt_path, weights_only=False)` on cached voice prompts in `QWEN_VOICES_DIR`. The file is app-written and the sidecar binds loopback, so it's not network-reachable — but `weights_only=False` deserialises arbitrary pickled objects, so anyone who can drop a `.pt` into the voices dir gets RCE in the sidecar process.
+
+- _What:_ switch the voice-prompt load to `weights_only=True`; if the saved payload isn't a pure tensor/state-dict, migrate the design-time save (`design_voice`) to a safe container (safetensors, or JSON sidecar + tensors) so the load no longer needs arbitrary unpickling. One-time read-compat shim for already-cached `.pt` files (re-derive or one-shot re-save).
+- _Acceptance:_ a freshly designed voice round-trips (design → cache → reuse) with `weights_only=True`; a crafted malicious `.pt` no longer executes code on load (raises instead); existing cached voices still work (via shim or re-save). New pytest in the sidecar suite covers the safe-load path + the rejection.
+- _Key files:_ `server/tts-sidecar/main.py` (the `torch.load` at ~L1251 + the `design_voice` save site that writes the `.pt`); `server/tts-sidecar/tests/` (new case).
+- _Depends on:_ none.
+- _Benefit (technical):_ removes a local RCE-on-untrusted-file footgun; aligns with torch's `weights_only` default direction.
+
+#### `side-13` — Cap `/synthesize` input length
+
+Source: net-new (2026-05-31), security review finding #7. The sidecar checks for non-empty text but enforces no maximum, so a giant payload drives unbounded VRAM/CPU. Loopback-only, so low real exposure — pure resource-exhaustion hardening.
+
+- _What:_ add a generous `MAX_TEXT_LENGTH` guard (env-overridable) to the `/synthesize` (and `/design_voice`) request validation; return 400 with a clear message past the cap. Set the default well above any real per-sentence/batch payload the server sends.
+- _Acceptance:_ a normal chapter batch synthesises unchanged; an over-cap payload returns 400 without touching the model; the cap is env-tunable. New pytest covers under/over-cap.
+- _Key files:_ `server/tts-sidecar/main.py` (the `/synthesize` + `/design_voice` body validation); `server/tts-sidecar/tests/`.
+- _Depends on:_ none.
+- _Benefit (technical):_ bounds a trivial local DoS; cheap and self-contained.
+
 ### Ops, CI & distribution
+
+#### `ops-7` — Pin SHA256 for model + wheel downloads
+
+Source: net-new (2026-05-31), security review finding #6 (supply-chain). `scripts/install-kokoro.ps1` downloads GitHub-release `.onnx`/`.bin` and `server/tts-sidecar/scripts/install-qwen3.mjs` runs `pip install -U qwen-tts` plus a third-party community FlashAttention wheel from `huggingface.co/lldacing/…`. All over HTTPS (wire-MITM covered) but with **no integrity pin** — a compromised upstream account or registry package serves trojaned binaries that execute at load/install time. Matters most because these scripts run on alpha-tester machines from the release bundle.
+
+- _What:_ pin a known-good SHA256 for each downloaded artifact and verify after download (refuse + delete on mismatch): the kokoro `.onnx`/`.bin` release assets, and the FlashAttention wheel URL. For the pip installs, evaluate `pip install --require-hashes` against a pinned requirements set for the opt-in Qwen/FA2 deps (or at minimum pin exact versions). Surface a clear failure message pointing at the expected hash.
+- _Acceptance:_ a tampered/partial download fails the hash check with an actionable error and leaves nothing installed; an untampered install succeeds unchanged; the FA2 wheel install verifies its hash before `pip install`. New Pester case for the PowerShell hash check; the `install-qwen3.mjs` hash check exercised in its existing test harness.
+- _Key files:_ `scripts/install-kokoro.ps1` (post-download `Get-FileHash` compare), `server/tts-sidecar/scripts/install-qwen3.mjs` (`FLASH_ATTN_WHEEL_URL` verify + pip pinning), `scripts/lib/` if a shared verify helper is warranted, `scripts/tests/`.
+- _Depends on:_ none.
+- _Benefit (user / technical):_ closes the supply-chain gap on the binaries that run with the user's privileges on install — the sharpest of these is the single-maintainer community FA2 wheel. Cheap relative to the RCE blast radius.
 
 #### `ops-3` — Serialize the `regen-visual-baselines.yml` 3-leg matrix
 
