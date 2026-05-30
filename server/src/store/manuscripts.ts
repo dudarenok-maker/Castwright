@@ -8,6 +8,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findBookByManuscriptId } from '../workspace/scan.js';
 import { parseManuscript } from '../parsers/index.js';
+import { isLikelyFrontMatterTitle } from '../parsers/front-matter.js';
 
 export type ManuscriptFormat = 'markdown' | 'plaintext' | 'epub' | 'pdf' | 'mobi';
 
@@ -95,7 +96,10 @@ export async function getOrHydrateManuscript(
   }
   const chapterHints: ChapterHint[] = parsed.chapters.map((c) => ({
     ...c,
-    excluded: excludedById.get(c.id) || undefined,
+    /* User's prior exclusions win; otherwise fall back to the parser's
+       front/back-matter default so re-parse doesn't silently re-admit
+       Acknowledgments/Copyright/CONTENTS to the queue (plan 148). */
+    excluded: excludedById.get(c.id) || isLikelyFrontMatterTitle(c.title) || undefined,
   }));
 
   const record: ManuscriptRecord = {

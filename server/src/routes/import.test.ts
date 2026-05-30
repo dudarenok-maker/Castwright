@@ -259,6 +259,47 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
       expect(c.excluded).toBeFalsy();
     }
   });
+
+  it('auto-excludes front/back-matter at import even with no excludedSlugs (plan 148)', async () => {
+    /* The the Hollow Tide stall: EPUB back-matter (Acknowledgments / Contents / a
+       next-book teaser) was queued because nothing flagged it. Layer A now
+       applies the front/back-matter heuristic at import, so these default to
+       excluded WITHOUT the client sending excludedSlugs. Story chapters stay
+       included. */
+    const md = [
+      '# Plan 148 Book',
+      '',
+      '## Chapter One',
+      '',
+      'The real story opens here with several sentences of narrative content so the parser is happy. The narrator sets the scene and the reader settles in.',
+      '',
+      '## Acknowledgments',
+      '',
+      'Thanks to everyone who helped along the way, written out with enough words that this parses as its own chapter.',
+    ].join('\n');
+
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'p148.md' });
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'P148 Author',
+      title: 'Plan 148 Book',
+      seriesPosition: null,
+      isStandalone: true,
+      // deliberately NO excludedSlugs — exclusion must come from the parser default
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    const byTitle = new Map<string, { excluded?: boolean }>();
+    for (const c of stateJson.chapters as Array<{ title: string; excluded?: boolean }>) {
+      byTitle.set(c.title.toLowerCase(), c);
+    }
+    expect(byTitle.get('acknowledgments')?.excluded).toBe(true);
+    expect(byTitle.get('chapter one')?.excluded).toBeFalsy();
+  });
 });
 
 /* Plan 105 — multer 2.x guard. The import route mounts

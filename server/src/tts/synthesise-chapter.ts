@@ -70,6 +70,32 @@ export function resolveQwenTokenBudget(raw: string | undefined): number {
 }
 const QWEN_BATCH_TOKEN_BUDGET = resolveQwenTokenBudget(process.env.QWEN_BATCH_TOKEN_BUDGET);
 
+/* Defensive per-call ceiling (plan 148). A single provider call that never
+   returns — e.g. Qwen's open-ended decode running away on degenerate, non-prose
+   input (a table-of-contents page, a copyright block) — would otherwise hang the
+   chapter, and with it the whole generation queue, indefinitely (the 2026-05-31
+   the Hollow Tide stall). Bounding each call turns that infinite hang into a single
+   chapter failure the queue rides past. Generous default (10 min) — far above
+   any legitimate single batch (~250 s for 32 sentences). `0` disables. */
+const SYNTH_CALL_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.SIDECAR_CALL_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 600_000;
+})();
+
+/** Thrown when a single synth call exceeds {@link SYNTH_CALL_TIMEOUT_MS}.
+    Non-transient by construction (it is thrown OUTSIDE `withTtsRetry`, so it is
+    never replayed) — it bubbles out of `synthesiseChapter` as a normal
+    chapter failure, letting the queue advance past a degenerate chapter. */
+export class ChapterSynthTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(
+      `TTS ${label} call exceeded ${Math.round(ms / 1000)}s with no result — ` +
+        `likely runaway/degenerate input. Skipping this chapter so the queue can advance.`,
+    );
+    this.name = 'ChapterSynthTimeoutError';
+  }
+}
+
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
     — description/role/gender/ageRange/tone/evidence — are what drives
@@ -306,6 +332,12 @@ export interface SynthesiseChapterOpts {
       non-positive value to disable (tests that assert exact onGroupStart
       counts). Clamped pure — never reads process.env. */
   groupHeartbeatMs?: number;
+  /** Defensive per-call timeout in ms (plan 148). Bounds a single provider
+      synth/batch call so a runaway/never-returning call fails the chapter
+      instead of hanging the queue. Defaults to `SYNTH_CALL_TIMEOUT_MS`
+      (env `SIDECAR_CALL_TIMEOUT_MS`, default 600 000). `<= 0` disables.
+      An explicit small value lets tests drive the timeout deterministically. */
+  callTimeoutMs?: number;
   /** How many Qwen sentences to pack per batched synth call (plan 112).
       Defaults to the module-level `QWEN_BATCH_SIZE` (env `QWEN_BATCH_SIZE`,
       default 32). `=1` disables batching (every Qwen sentence is its own
@@ -416,6 +448,7 @@ export async function synthesiseChapter(
     onTitleComplete,
     sentenceConcurrency = gpuSemaphore.maxConcurrency,
     groupHeartbeatMs = 10_000,
+    callTimeoutMs = SYNTH_CALL_TIMEOUT_MS,
     qwenBatchSize = QWEN_BATCH_SIZE,
     qwenBatchBucket = QWEN_BATCH_BUCKET,
     qwenBatchTokenBudget = QWEN_BATCH_TOKEN_BUDGET,
@@ -620,6 +653,40 @@ export async function synthesiseChapter(
     }
   }
 
+  /* Defensive per-call ceiling (plan 148). Races a provider call against a
+     timer: on timeout we abort a derived AbortController (cancelling the
+     in-flight fetch) and reject with a non-transient {@link
+     ChapterSynthTimeoutError}, so a runaway/never-returning call fails the
+     chapter instead of hanging the queue. The derived controller chains the
+     parent `signal`, so an outer abort still propagates. `callTimeoutMs <= 0`
+     disables the timer and forwards the parent signal unchanged. */
+  async function withCallTimeout<T>(
+    label: string,
+    run: (sig: AbortSignal | undefined) => Promise<T>,
+  ): Promise<T> {
+    if (callTimeoutMs <= 0) return run(signal);
+    const ctrl = new AbortController();
+    const onParentAbort = (): void => ctrl.abort(signal?.reason);
+    if (signal) {
+      if (signal.aborted) ctrl.abort(signal.reason);
+      else signal.addEventListener('abort', onParentAbort, { once: true });
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        ctrl.abort();
+        reject(new ChapterSynthTimeoutError(label, callTimeoutMs));
+      }, callTimeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([run(ctrl.signal), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onParentAbort);
+    }
+  }
+
   /* Single-sentence synth. Returns the RAW provider result; the caller stores
      it by index and concatenates later, so this never touches `chunks`,
      `runningBytes`, or `segments` (which would race under parallel workers).
@@ -633,29 +700,30 @@ export async function synthesiseChapter(
      `chapter_failed`. */
   async function synthGroup(group: SentenceGroup): Promise<GroupResult> {
     const { route, voiceName } = resolveGroup(group);
-    return withHeartbeat(group, async () => {
-      const result = await withTtsRetry(
-        () =>
-          route.provider.synthesize({
-            text: normaliseForTts(group.text),
-            voiceName,
-            modelKey: route.modelKey,
-            signal,
-          }),
-        {
-          signal,
-          onRetry: (info) =>
-            onGroupRetry?.({
-              group,
-              totalGroups: groups.length,
-              attempt: info.attempt,
-              backoffMs: info.backoffMs,
-              reason: info.reason,
+    return withHeartbeat(group, () =>
+      withCallTimeout('synthesize', (sig) =>
+        withTtsRetry(
+          () =>
+            route.provider.synthesize({
+              text: normaliseForTts(group.text),
+              voiceName,
+              modelKey: route.modelKey,
+              signal: sig,
             }),
-        },
-      );
-      return { pcm: result.pcm, sampleRate: result.sampleRate };
-    });
+          {
+            signal: sig,
+            onRetry: (info) =>
+              onGroupRetry?.({
+                group,
+                totalGroups: groups.length,
+                attempt: info.attempt,
+                backoffMs: info.backoffMs,
+                reason: info.reason,
+              }),
+          },
+        ).then((result) => ({ pcm: result.pcm, sampleRate: result.sampleRate })),
+      ),
+    );
   }
 
   /* TRUE batching (plan 112): synth N Qwen sentences in ONE batched forward.
@@ -682,17 +750,22 @@ export async function synthesiseChapter(
       return { text: normaliseForTts(g.text), voiceName };
     });
     const out = await withHeartbeat(lead, () =>
-      withTtsRetry(() => batchFn.call(route.provider, { items, modelKey: route.modelKey, signal }), {
-        signal,
-        onRetry: (info) =>
-          onGroupRetry?.({
-            group: lead,
-            totalGroups: groups.length,
-            attempt: info.attempt,
-            backoffMs: info.backoffMs,
-            reason: info.reason,
-          }),
-      }),
+      withCallTimeout('batch', (sig) =>
+        withTtsRetry(
+          () => batchFn.call(route.provider, { items, modelKey: route.modelKey, signal: sig }),
+          {
+            signal: sig,
+            onRetry: (info) =>
+              onGroupRetry?.({
+                group: lead,
+                totalGroups: groups.length,
+                attempt: info.attempt,
+                backoffMs: info.backoffMs,
+                reason: info.reason,
+              }),
+          },
+        ),
+      ),
     );
     /* Live per-batch RTF beacon (plan 127). Only when the sidecar reported its
        compute timing; a zero/absent audioMs means "not reported", skip. */
