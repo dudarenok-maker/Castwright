@@ -112,6 +112,12 @@ _CUDA_POISON_RE = re.compile(
 # for this value; any other exit code breaks the loop and stays down.
 _POISON_EXIT_CODE = 42
 
+# Exit code for the host-memory process-recycle (the RSS-ceiling self-restart).
+# Distinct from poison only for log clarity — the server's sidecar supervisor
+# (srv-15) respawns on ANY unexpected child exit, so the value isn't load-bearing
+# the way the poison code was for the (now-retired) start.ps1 supervisor loop.
+_RESTART_EXIT_CODE = 43
+
 # How long to wait after flagging poison before we actually exit. The 503
 # JSON response is small (~120 bytes) and uvicorn's HTTP/1.1 keep-alive
 # socket buffers flush within a couple of ms, but we give a generous
@@ -1447,33 +1453,92 @@ async def _stop_design_idle_watchdog() -> None:
         _design_idle_task = None
 
 
-# --- Host-memory safety-net watchdog ---
+# --- Host-memory watchdog: soft reclaim + hard process-recycle ---
 #
-# Logs process RSS each tick (the leak curve — greppable as `sidecar memory:`)
-# and, past a soft threshold, forces a defensive gc+empty_cache to reclaim
-# anything the unload paths missed. It deliberately does NOT self-exit: under
-# `npm start` the Node server spawns the sidecar but does NOT respawn it on exit
-# (spawn-sidecar.ts only logs the exit), so killing the process would just stall
-# the run. In-process reclaim is the safe lever here.
+# Logs process RSS each tick (the leak curve — greppable as `sidecar memory:`).
+# Two thresholds:
+#   * SOFT (SIDECAR_RSS_WARN_MB): force a gc+empty_cache. This reclaims the
+#     design-cycle leak (plan 141) but NOT the dominant leak — confirmed
+#     2026-05-30: the real driver is VARIABLE-INPUT-SHAPE host-workspace
+#     accumulation during generation (fixed-shape batches hold flat; variable
+#     ones climb the floor unbounded; CUDA stays flat — pytorch #32596 / the
+#     Qwen-leak research report). gc/empty_cache reclaim ~0 against it.
+#   * HARD (SIDECAR_RSS_RESTART_MB): self-exit so the server's sidecar
+#     supervisor (srv-15) respawns a FRESH process — the report-endorsed
+#     "process recycling" mitigation, the only thing that reliably bounds a
+#     native variable-shape host leak. srv-16 (skip-completed-on-resume) means
+#     only the single in-flight chapter re-renders. (This replaces the earlier
+#     "never self-exit" stance, which was correct ONLY before srv-15 added
+#     respawn — a bare exit used to just stall the run.)
 _MEM_WATCHDOG_INTERVAL = 60.0
 _mem_watchdog_task: "Optional[asyncio.Task[None]]" = None
+_rss_restart_scheduled = False
 
 
 def _mem_warn_threshold_mb() -> float:
-    """RSS (MB) above which the watchdog forces a reclaim + warns. Default 8192:
-    the legit resident footprint (Kokoro ~1 GB + Qwen Base ~1.2 GB + torch/CUDA
-    runtime) is a few GB, so 8 GB sits well above normal yet far below the level
-    that starved the 64 GB box. Override via SIDECAR_RSS_WARN_MB; <=0 keeps the
-    per-tick logging but disables the forced reclaim."""
+    """RSS (MB) above which the watchdog forces a gc+empty_cache reclaim + warns.
+    Default 8192. Override SIDECAR_RSS_WARN_MB; <=0 keeps per-tick logging but
+    disables the (largely futile against the variable-shape leak) reclaim."""
     try:
         return float(os.environ.get("SIDECAR_RSS_WARN_MB", "8192"))
     except (TypeError, ValueError):
         return 8192.0
 
 
+def _mem_restart_threshold_mb() -> float:
+    """RSS (MB) at which the sidecar self-exits for the supervisor to respawn it
+    (process recycling). Default = 55% of total physical RAM so it scales with
+    the box (~35 GB on 64 GB, ~9 GB on 16 GB) — high enough to rarely fire yet
+    well below the ~85% OOM-kill cliff that crashed the run on 2026-05-30.
+    Override SIDECAR_RSS_RESTART_MB (absolute MB); <=0 disables recycling.
+    Returns 0 (disabled) when psutil can't read total RAM and no override is
+    set — never guess a ceiling that might fire on a healthy small box."""
+    env = os.environ.get("SIDECAR_RSS_RESTART_MB")
+    if env is not None:
+        try:
+            return float(env)
+        except (TypeError, ValueError):
+            pass
+    if psutil is not None:
+        try:
+            return 0.55 * psutil.virtual_memory().total / 1_000_000.0
+        except Exception:
+            return 0.0
+    return 0.0
+
+
+def _should_restart_for_rss(rss_mb: float, threshold_mb: float) -> bool:
+    """Pure decision: recycle when a positive ceiling is set and RSS meets it."""
+    return threshold_mb > 0 and rss_mb >= threshold_mb
+
+
+def _rss_restart_now() -> None:  # pragma: no cover - hard process exit; patched in tests
+    os._exit(_RESTART_EXIT_CODE)
+
+
+def _schedule_rss_restart_exit(rss_mb: float, threshold_mb: float) -> None:
+    """Schedule a single hard self-exit so srv-15 respawns a fresh sidecar.
+    Idempotent (a later over-ceiling tick won't double-schedule). Uses a Timer
+    so the warning log flushes to tts.err.log before the process vanishes."""
+    global _rss_restart_scheduled
+    if _rss_restart_scheduled:
+        return
+    _rss_restart_scheduled = True
+    log.warning(
+        "sidecar RSS %.0fMB crossed the restart ceiling %.0fMB — self-exiting "
+        "(code %d) so the server respawns a fresh process. The in-flight chapter "
+        "re-renders; completed chapters are skipped (srv-16). Process-recycle "
+        "mitigation for the variable-shape host leak; raise SIDECAR_RSS_RESTART_MB "
+        "to recycle less often.",
+        rss_mb, threshold_mb, _RESTART_EXIT_CODE,
+    )
+    threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _rss_restart_now).start()
+
+
 async def _memory_watchdog() -> None:
     """See the block comment above. Never dies on a transient error."""
-    threshold = _mem_warn_threshold_mb()
+    warn_threshold = _mem_warn_threshold_mb()
+    restart_threshold = _mem_restart_threshold_mb()
     while True:
         try:
             await asyncio.sleep(_MEM_WATCHDOG_INTERVAL)
@@ -1487,14 +1552,21 @@ async def _memory_watchdog() -> None:
                 rss,
                 f" private={priv:.0f}MB" if priv is not None else "",
             )
-            if threshold > 0 and rss >= threshold:
+            # HARD ceiling first — recycling is the only effective lever against
+            # the variable-shape leak, so don't waste a tick on the futile soft
+            # reclaim once we're already at the ceiling.
+            if _should_restart_for_rss(rss, restart_threshold):
+                _schedule_rss_restart_exit(rss, restart_threshold)
+                continue
+            if warn_threshold > 0 and rss >= warn_threshold:
                 await asyncio.to_thread(_reclaim_host_and_vram)
                 after = _process_mem().get("rss_mb", rss)
                 log.warning(
                     "sidecar memory crossed %.0fMB (rss=%.0fMB) — forced "
                     "gc+empty_cache reclaimed %.0fMB (now %.0fMB). If this "
-                    "recurs the leak is outliving model unload.",
-                    threshold, rss, rss - after, after,
+                    "recurs the leak is outliving model unload (expected for the "
+                    "variable-shape leak; the restart ceiling is the real guard).",
+                    warn_threshold, rss, rss - after, after,
                 )
         except asyncio.CancelledError:
             raise
@@ -1504,12 +1576,15 @@ async def _memory_watchdog() -> None:
 
 @app.on_event("startup")
 async def _start_memory_watchdog() -> None:
-    """Launch the host-memory safety-net watchdog (see _memory_watchdog)."""
+    """Launch the host-memory watchdog (see _memory_watchdog)."""
     global _mem_watchdog_task
     _mem_watchdog_task = asyncio.create_task(_memory_watchdog())
+    restart = _mem_restart_threshold_mb()
     log.info(
-        "sidecar memory watchdog started (warn/reclaim at %.0fMB rss).",
+        "sidecar memory watchdog started (warn/reclaim at %.0fMB rss; "
+        "process-recycle at %s).",
         _mem_warn_threshold_mb(),
+        f"{restart:.0f}MB rss" if restart > 0 else "DISABLED",
     )
 
 
