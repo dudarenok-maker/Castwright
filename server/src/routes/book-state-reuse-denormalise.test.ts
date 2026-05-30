@@ -81,6 +81,7 @@ beforeAll(async () => {
       color: '#abc',
       ttsEngine: 'qwen',
       overrideTtsVoices: { qwen: { name: 'voice_Wren_designed' } },
+      voiceStyle: 'a poised, confident teenage girl',
     },
   ]);
   targetBookDir = join(booksRoot, TARGET_TITLE);
@@ -133,6 +134,8 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
     const Wren = onDisk.characters.find((c: { id: string }) => c.id === 'Wren');
     expect(Wren.ttsEngine).toBe('qwen');
     expect(Wren.overrideTtsVoices.qwen.name).toBe('voice_Wren_designed');
+    /* The persona is denormalised the same way (srv-18). */
+    expect(Wren.voiceStyle).toBe('a poised, confident teenage girl');
     /* Identity fields survive the pass untouched. */
     expect(Wren.voiceState).toBe('reused');
     expect(Wren.matchedFrom.bookId).toBe(sourceBookId);

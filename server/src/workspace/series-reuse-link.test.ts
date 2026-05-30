@@ -62,6 +62,7 @@ function baseOptions(overrides: Partial<LinkSeriesReuseOptions> = {}): LinkSerie
               id: 'Wren',
               ttsEngine: 'qwen',
               overrideTtsVoices: { qwen: { name: 'voice_Wren' } },
+              voiceStyle: 'a poised, confident teenage girl',
             },
           ]
         : null,
@@ -83,9 +84,10 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(Wren.matchedFrom?.characterId).toBe('Wren');
     expect(Wren.voiceId).toBe('Wren');
     expect(Wren.voiceState).toBe('reused');
-    /* Bespoke voice denormalised from the source book. */
+    /* Bespoke voice + persona denormalised from the source book (srv-18). */
     expect(Wren.ttsEngine).toBe('qwen');
     expect(Wren.overrideTtsVoices?.qwen?.name).toBe('voice_Wren');
+    expect(Wren.voiceStyle).toBe('a poised, confident teenage girl');
     /* Prior name unioned into aliases (already same name → dropped as self). */
     expect(Wren.aliases).toBeUndefined();
 
