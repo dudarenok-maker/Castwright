@@ -6,7 +6,9 @@ import {
   cancel,
   clearQueue,
   completeEntry,
+  confirmFallback,
   enqueue,
+  markAwaitingConfirm,
   markInProgress,
   pruneByBook,
   reorder,
@@ -14,6 +16,7 @@ import {
   resetInProgressToQueued,
   retry,
   setPaused,
+  skipFallback,
   startEntry,
   updateProgress,
   type EnqueueInput,
@@ -384,5 +387,78 @@ describe('queue-io.pruneByBook', () => {
     const f = enqueue(emptyFile(), [sampleEntry('a1', 'book-A')]);
     const next = pruneByBook(f, 'book-B');
     expect(next.entries).toHaveLength(1);
+  });
+});
+
+describe('queue-io loud-fallback gate', () => {
+  const chars = [{ id: 'Oduvan', name: 'Oduvan' }];
+
+  describe('markAwaitingConfirm', () => {
+    it('parks an in_progress entry, stamping the fallback characters', () => {
+      let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+      f = markInProgress(f, 'e1');
+      f = markAwaitingConfirm(f, 'e1', chars);
+      const e = f.entries.find((x) => x.id === 'e1')!;
+      expect(e.status).toBe('awaiting_confirm');
+      expect(e.fallbackCharacters).toEqual(chars);
+    });
+
+    it('is a no-op for a queued (not in_progress) entry', () => {
+      const f = enqueue(emptyFile(), [sampleEntry('e1')]);
+      expect(markAwaitingConfirm(f, 'e1', chars)).toEqual(f);
+    });
+
+    it('is a no-op for a missing id', () => {
+      let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+      f = markInProgress(f, 'e1');
+      expect(markAwaitingConfirm(f, 'nope', chars)).toEqual(f);
+    });
+  });
+
+  describe('confirmFallback', () => {
+    it('flips awaiting_confirm → queued with fallbackConfirmed', () => {
+      let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+      f = markAwaitingConfirm(markInProgress(f, 'e1'), 'e1', chars);
+      f = confirmFallback(f, 'e1');
+      const e = f.entries.find((x) => x.id === 'e1')!;
+      expect(e.status).toBe('queued');
+      expect(e.fallbackConfirmed).toBe(true);
+    });
+
+    it('is a no-op unless the entry is awaiting_confirm', () => {
+      const f = enqueue(emptyFile(), [sampleEntry('e1')]);
+      expect(confirmFallback(f, 'e1')).toEqual(f);
+      expect(confirmFallback(f, 'missing')).toEqual(f);
+    });
+  });
+
+  describe('skipFallback', () => {
+    it('removes a parked entry and renumbers', () => {
+      let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+      f = markAwaitingConfirm(markInProgress(f, 'e1'), 'e1', chars);
+      f = skipFallback(f, 'e1');
+      expect(f.entries.map((e) => [e.id, e.order])).toEqual([['e2', 0]]);
+    });
+
+    it('is a no-op unless the entry is awaiting_confirm', () => {
+      let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+      f = markInProgress(f, 'e1');
+      expect(skipFallback(f, 'e1')).toEqual(f);
+    });
+  });
+
+  it('boot orphan sweep leaves awaiting_confirm untouched', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1'), sampleEntry('e2')]);
+    f = markAwaitingConfirm(markInProgress(f, 'e1'), 'e1', chars);
+    f = markInProgress(f, 'e2');
+    const swept = resetInProgressToQueued(f);
+    expect(swept.entries.find((e) => e.id === 'e1')!.status).toBe('awaiting_confirm');
+    expect(swept.entries.find((e) => e.id === 'e2')!.status).toBe('queued');
+  });
+
+  it('cancel can remove an awaiting_confirm entry (not in_progress)', () => {
+    let f = enqueue(emptyFile(), [sampleEntry('e1')]);
+    f = markAwaitingConfirm(markInProgress(f, 'e1'), 'e1', chars);
+    expect(cancel(f, 'e1').entries).toHaveLength(0);
   });
 });

@@ -30,7 +30,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
-import { completeEntry, resetEntryToQueued } from '../workspace/queue-io.js';
+import { completeEntry, markAwaitingConfirm, resetEntryToQueued } from '../workspace/queue-io.js';
+import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import { bookStateAudioFormat, findBookByBookId, type BookStateJson } from '../workspace/scan.js';
@@ -113,6 +114,11 @@ interface RunningJob {
       when entries from different books interleave. Null when this job
       started outside the queue surface (legacy callers; back-compat). */
   queueEntryId: string | null;
+  /** Loud-fallback gate — true when the dispatcher re-dispatched this entry
+      AFTER the user confirmed its Qwen→Kokoro fallback. The worker skips the
+      gate (renders straight through) for a confirmed entry, so a confirm →
+      re-claim → re-enter cycle doesn't re-prompt. Default false. */
+  fallbackConfirmed: boolean;
   /** The chapter the loop is currently synthesising. Set at the top of
       each loop iteration and cleared on chapter_complete / break. Used
       by the catch-up replay so a post-reload subscriber's UI immediately
@@ -202,6 +208,31 @@ async function markQueueEntryDoneOnDisk(entryId: string, chapterId: number): Pro
     } catch (err) {
       console.warn(
         `[generation] failed to mark queue entry ${entryId} (chapter ${chapterId}) done: ${
+          (err as Error).message
+        }`,
+      );
+    }
+  });
+}
+
+/* Loud-fallback gate — park a chapter's queue entry on `awaiting_confirm` from
+   the SERVER once the worker detects an undesigned-voice Qwen→Kokoro fallback,
+   stamping the affected characters for the modal. Serialised through the same
+   chain as the done-flip so it can't race the srv-12 orphan-reset / srv-16
+   done-flip. Idempotent: a missing entry (already gone) or one no longer
+   in_progress is a no-op (markAwaitingConfirm guards both). */
+async function markQueueEntryAwaitingConfirmOnDisk(
+  entryId: string,
+  fallbackCharacters: QwenFallbackChar[],
+): Promise<void> {
+  await serializeQueueMutation(async () => {
+    try {
+      const before = await readQueueFile(queueJsonPath());
+      const after = markAwaitingConfirm(before, entryId, fallbackCharacters);
+      if (after !== before) await writeQueueFile(queueJsonPath(), after);
+    } catch (err) {
+      console.warn(
+        `[generation] failed to park queue entry ${entryId} on fallback confirm: ${
           (err as Error).message
         }`,
       );
@@ -300,6 +331,10 @@ interface GenerationRequestBody {
       with it so the frontend dispatcher can correlate ticks back to the
       right queue row. */
   queueEntryId?: unknown;
+  /** Loud-fallback gate — set by the dispatcher when it re-dispatches an entry
+      the user has CONFIRMED for Qwen→Kokoro fallback, so the worker renders
+      straight through instead of re-parking it. Optional / back-compat. */
+  fallbackConfirmed?: unknown;
 }
 
 /* Snapshot of a character's voice-relevant attributes captured at the
@@ -383,6 +418,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      null when called outside the queue surface. Stored on the RunningJob
      and stamped on every broadcast tick + the resume_from ack. */
   const queueEntryId = typeof body.queueEntryId === 'string' ? body.queueEntryId : null;
+  const fallbackConfirmed = body.fallbackConfirmed === true;
 
   let provider;
   try {
@@ -727,6 +763,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     bookId,
     chapterId: jobChapterId,
     queueEntryId,
+    fallbackConfirmed,
     currentChapterId: null,
     lastProgressTick: null,
     runTotal: nonExcluded.length,
@@ -843,6 +880,33 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       return;
     }
 
+    /* Loud-fallback gate. Before emitting any progress, check whether this
+       chapter would SILENTLY render an undesigned Qwen voice in Kokoro. If so,
+       park the entry on `awaiting_confirm` and release this worker (without
+       failing the chapter) so the user can confirm (render anyway) or skip —
+       other chapters keep flowing. Scope: queue-driven runs only (there's a row
+       to flip), Qwen healthy (the qwenUnavailable all-cast case has its own
+       loud warning above), and not already confirmed for this entry. */
+    if (qwenInUse && !qwenUnavailable && job.queueEntryId != null && !job.fallbackConfirmed) {
+      const speakingIds = new Set(sentences.map((s) => s.characterId));
+      const speakers = cast.characters.filter((c) => speakingIds.has(c.id));
+      const fallbackSet = computeQwenKokoroFallbackSet(speakers, engine);
+      if (fallbackSet.length > 0) {
+        /* Flip in_progress → awaiting_confirm FIRST (serialised, so the srv-12
+           res-close orphan-reset + srv-16 done-flip see a non-in_progress entry
+           and no-op), then broadcast + return without rendering. */
+        await markQueueEntryAwaitingConfirmOnDisk(job.queueEntryId, fallbackSet);
+        job.runInProgress.delete(chapter.id);
+        job.currentChapterId = null;
+        broadcast(job, {
+          type: 'chapter_awaiting_fallback_confirm',
+          chapterId: chapter.id,
+          fallbackCharacters: fallbackSet,
+        });
+        return;
+      }
+    }
+
     const totalLines = sentences.length;
     const initialTick = {
       chapterId: chapter.id,
@@ -868,11 +932,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          `_base_load_lock` is the correctness guarantee; this is the explicit
          "wait until ready" on top). Honours the run abort. */
       await ensureSidecarEngineReady(engine, controller.signal);
-      /* Warm Kokoro on demand when Qwen is in use: any Qwen character with no
-         designed voice (or an unavailable Qwen engine) falls back to Kokoro, so
-         the first fallback render shouldn't race a cold Kokoro load. Kokoro is
-         intentionally NOT eager-loaded at boot when Qwen is the default. */
-      if (qwenInUse) {
+      /* Warm Kokoro ONLY when this chapter will actually render a Qwen→Kokoro
+         fallback — either the whole-cast `qwenUnavailable` case, or a confirmed
+         per-character undesigned-voice fallback (an unconfirmed one parked the
+         chapter above and never reaches here). A fully-designed, healthy all-Qwen
+         book never loads Kokoro now — previously `if (qwenInUse)` warmed it
+         unconditionally, wasting ~1 GB of VRAM and oversubscribing an 8 GB card.
+         Kokoro is intentionally NOT eager-loaded at boot when Qwen is default. */
+      const willFallBackToKokoro =
+        qwenUnavailable ||
+        (qwenInUse &&
+          computeQwenKokoroFallbackSet(
+            cast.characters.filter((c) =>
+              new Set(sentences.map((s) => s.characterId)).has(c.id),
+            ),
+            engine,
+          ).length > 0);
+      if (willFallBackToKokoro) {
         await ensureSidecarEngineReady('kokoro', controller.signal);
       }
       /* Wall around the synth phase only (all TTS — title beat + body groups;
