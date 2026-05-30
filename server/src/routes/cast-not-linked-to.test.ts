@@ -148,6 +148,13 @@ function callNotLinked(bookId: string, characterId: string, body: object) {
     .send(body);
 }
 
+function callUnmark(bookId: string, characterId: string, body: object) {
+  return request(app)
+    .delete(`/api/books/${bookId}/cast/${characterId}/not-linked-to`)
+    .set('Content-Type', 'application/json')
+    .send(body);
+}
+
 describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
   it('rejects when body fields are missing', async () => {
     const res = await callNotLinked(keeperBookId, 'sophie', {});
@@ -249,5 +256,93 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
     };
     expect(res2.status).toBe(200);
     expect(after).toEqual(before);
+  });
+});
+
+describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', () => {
+  it('removes the symmetric pair from BOTH cast.json files', async () => {
+    /* Mark first, then unmark. */
+    await callNotLinked(keeperBookId, 'sophie', {
+      otherBookId: exileBookId,
+      otherCharacterId: 'sophie',
+    });
+    const res = await callUnmark(keeperBookId, 'sophie', {
+      otherBookId: exileBookId,
+      otherCharacterId: 'sophie',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      pair: {
+        a: { bookId: keeperBookId, characterId: 'sophie' },
+        b: { bookId: exileBookId, characterId: 'sophie' },
+      },
+    });
+    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'sophie',
+    );
+    const sophieExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
+      (c) => c.id === 'sophie',
+    );
+    expect(sophieKeeper?.notLinkedTo).toEqual([]);
+    expect(sophieExile?.notLinkedTo).toEqual([]);
+  });
+
+  it('is idempotent: deleting an absent pair is a 200 no-op', async () => {
+    const res = await callUnmark(keeperBookId, 'sophie', {
+      otherBookId: exileBookId,
+      otherCharacterId: 'sophie',
+    });
+    expect(res.status).toBe(200);
+    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'sophie',
+    );
+    /* No notLinkedTo written (never marked) — field absent or empty. */
+    expect(sophieKeeper?.notLinkedTo ?? []).toEqual([]);
+  });
+
+  it('removes the entry only on the side that has it (asymmetric on-disk start)', async () => {
+    /* Simulate a half-state where only the keeper side carries the entry
+       (e.g. a prior failed symmetric write). DELETE still settles both. */
+    const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, KEEPER_BOOK);
+    const cast = JSON.parse(readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'));
+    cast.characters.find((c: { id: string }) => c.id === 'sophie').notLinkedTo = [
+      { bookId: exileBookId, characterId: 'sophie' },
+    ];
+    writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    const res = await callUnmark(keeperBookId, 'sophie', {
+      otherBookId: exileBookId,
+      otherCharacterId: 'sophie',
+    });
+    expect(res.status).toBe(200);
+    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'sophie',
+    );
+    expect(sophieKeeper?.notLinkedTo).toEqual([]);
+  });
+
+  it('rejects same-bookId and self-pair', async () => {
+    const sameBook = await callUnmark(keeperBookId, 'sophie', {
+      otherBookId: keeperBookId,
+      otherCharacterId: 'narrator',
+    });
+    expect(sameBook.status).toBe(400);
+    const selfPair = await callUnmark(keeperBookId, 'sophie', {
+      otherBookId: keeperBookId,
+      otherCharacterId: 'sophie',
+    });
+    expect(selfPair.status).toBe(400);
+  });
+
+  it('returns 404 on cross-series / standalone other book', async () => {
+    const crossSeries = await callUnmark(keeperBookId, 'sophie', {
+      otherBookId,
+      otherCharacterId: 'unrelated',
+    });
+    expect(crossSeries.status).toBe(404);
+    const standalone = await callUnmark(keeperBookId, 'sophie', {
+      otherBookId: standaloneBookId,
+      otherCharacterId: 'lonely',
+    });
+    expect(standalone.status).toBe(404);
   });
 });

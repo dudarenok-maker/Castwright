@@ -29,6 +29,7 @@ import {
   buildNameChangeEvent,
 } from '../lib/change-log';
 import { api, type SeriesRosterEntry } from '../lib/api';
+import type { Character } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { parseDuration } from '../lib/time';
@@ -58,6 +59,15 @@ import { RegenerateModal } from '../modals/regenerate';
 import { CharacterRegenerateModal } from '../modals/character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
+import {
+  DuplicateReviewModal,
+  type DuplicateReviewPair,
+} from '../modals/duplicate-review-modal';
+import {
+  detectDuplicateCandidates,
+  type BookSeriesInfo,
+  type DuplicateCandidate,
+} from '../lib/cross-book-duplicates';
 import { ReattributeLinesModal } from '../modals/reattribute-lines';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { QueueModalContainer } from '../modals/queue-modal';
@@ -134,6 +144,11 @@ export function Layout() {
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
   const voices = useAppSelector((s) => s.voices.voices);
+  /* fe-16 — per-character render fallback engine for the profile drawer's
+     Status pill (Qwen → Kokoro). Same map the cast view threads. */
+  const renderedFallbackByCharacter = useAppSelector(
+    (s) => s.cast.renderedFallbackByCharacter,
+  );
 
   const stageKind = stage.kind;
   const bookId = (stage as { bookId?: string }).bookId ?? null;
@@ -208,6 +223,103 @@ export function Layout() {
   const profileVoice = profileCharacter
     ? (voices.find((v) => v.id === profileCharacter.voiceId) ?? null)
     : null;
+
+  /* fe-8 — cross-book "Possible duplicate of …" chip in the profile drawer.
+     Reuse the voices-view predicate (`detectDuplicateCandidates`) against the
+     open book's voices + cast + the library's per-book series metadata. We
+     only need the ONE candidate whose open-book side IS the character whose
+     drawer is open. The foreign side's Character isn't hydrated here (it lives
+     in another book's cast.json), so suppression falls back to the foreign
+     Voice's own carried aliases/notLinkedTo — exactly the global-tab path the
+     voices view relies on. `duplicateReviewOpen` mounts the modal; the foreign
+     cast is hydrated on open so the modal's link/variant buttons enable. */
+  const [duplicateReviewOpen, setDuplicateReviewOpen] = useState(false);
+  const [foreignCast, setForeignCast] = useState<{ bookId: string; characters: Character[] } | null>(
+    null,
+  );
+  const profileDuplicateCandidate = useMemo<DuplicateCandidate | null>(() => {
+    if (!profileCharacter) return null;
+    if (voices.length < 2 || library.books.length === 0) return null;
+    const seriesByBookId = new Map<string, BookSeriesInfo>();
+    for (const b of library.books) {
+      seriesByBookId.set(b.bookId, {
+        author: b.author,
+        series: b.series,
+        isStandalone: b.isStandalone,
+      });
+    }
+    const charactersByBookId = new Map<string, Character[]>();
+    if (bookId) charactersByBookId.set(bookId, characters);
+    const candidates = detectDuplicateCandidates({
+      library: voices,
+      seriesByBookId,
+      charactersByBookId,
+    });
+    /* Pick the candidate whose open-book side is the open-profile character.
+       The open-book voice resolves via the character's voiceId (or its id). */
+    const openVoiceId = profileVoice?.id ?? profileCharacter.voiceId ?? profileCharacter.id;
+    return (
+      candidates.find(
+        (c) =>
+          (c.a.voice.bookId === bookId && c.a.voice.id === openVoiceId) ||
+          (c.b.voice.bookId === bookId && c.b.voice.id === openVoiceId),
+      ) ?? null
+    );
+  }, [profileCharacter, profileVoice, voices, library.books, characters, bookId]);
+
+  /* Orient the candidate so `near` is the open-book side and `far` is the
+     other book. The chip + modal read `far` for the partner name/title. */
+  const profileDuplicateOriented = useMemo(() => {
+    if (!profileDuplicateCandidate) return null;
+    const c = profileDuplicateCandidate;
+    const aIsNear = c.a.voice.bookId === bookId;
+    return { near: aIsNear ? c.a : c.b, far: aIsNear ? c.b : c.a };
+  }, [profileDuplicateCandidate, bookId]);
+
+  /* On chip-open, hydrate the FAR book's cast so the modal can resolve both
+     characters and enable the link/variant actions. Mirrors the voices view's
+     `hydrateForeignCast`, scoped to the single far book. */
+  useEffect(() => {
+    if (!duplicateReviewOpen || !profileDuplicateOriented) return;
+    const farBookId = profileDuplicateOriented.far.voice.bookId;
+    if (foreignCast?.bookId === farBookId) return;
+    let cancelled = false;
+    api
+      .getBookState(farBookId)
+      .then((res) => {
+        if (cancelled) return;
+        const cast = res?.cast?.characters ?? [];
+        setForeignCast({ bookId: farBookId, characters: cast });
+      })
+      .catch((err) => {
+        console.warn('[duplicate-review] foreign cast hydrate failed', (err as Error).message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [duplicateReviewOpen, profileDuplicateOriented, foreignCast?.bookId]);
+
+  /* Build the modal pair: near side from redux, far side from the hydrated
+     foreign cast (resolved by the far voice's id). Far character stays null
+     until hydration lands — the modal disables its actions + shows a loading
+     hint in that window. */
+  const duplicateReviewPair = useMemo<DuplicateReviewPair | null>(() => {
+    if (!profileDuplicateOriented) return null;
+    const { near, far } = profileDuplicateOriented;
+    let farCharacter = far.character;
+    if (!farCharacter && foreignCast?.bookId === far.voice.bookId) {
+      farCharacter =
+        foreignCast.characters.find(
+          (c) => c.voiceId === far.voice.id || c.id === far.voice.id,
+        ) ?? null;
+    }
+    return { a: near, b: { voice: far.voice, character: farCharacter } };
+  }, [profileDuplicateOriented, foreignCast]);
+
+  const duplicateReviewLoading =
+    !!profileDuplicateOriented &&
+    (!duplicateReviewPair?.b.character || foreignCast?.bookId !== profileDuplicateOriented.far.voice.bookId);
+
   const regenCharacter = ui.regenCharacterCtx
     ? (characters.find((c) => c.id === ui.regenCharacterCtx!.characterId) ?? null)
     : null;
@@ -516,6 +628,9 @@ export function Layout() {
            Analysing view's "Cast so far" pill would start at 24 instead
            of 0 as Phase 0a streams in fresh detections. */
         dispatch(castActions.setCharacters(res.cast?.characters ?? []));
+        /* fe-16 — per-character render fallback engine (Qwen → Kokoro). Empty
+           map clears stale entries when a re-render dropped the fallback. */
+        dispatch(castActions.setRenderedFallback(res.renderedFallbackByCharacter ?? {}));
         dispatch(
           chaptersActions.hydrateFromBookState({
             bookId,
@@ -1436,6 +1551,18 @@ export function Layout() {
                     }
                   : undefined
               }
+              duplicateOther={
+                profileDuplicateOriented
+                  ? {
+                      name: profileDuplicateOriented.far.voice.character,
+                      bookTitle: profileDuplicateOriented.far.voice.bookTitle,
+                    }
+                  : null
+              }
+              onReviewDuplicate={
+                profileDuplicateOriented ? () => setDuplicateReviewOpen(true) : undefined
+              }
+              renderedFallbackEngine={renderedFallbackByCharacter?.[profileCharacter.id]}
               onClose={() => dispatch(uiActions.setOpenProfileId(null))}
               onSave={(updated, meta) => {
                 const prior = profileCharacter;
@@ -1513,6 +1640,23 @@ export function Layout() {
             />
           );
         })()}
+
+      {/* fe-8 — duplicate-review modal opened from the profile-drawer chip.
+          Pre-populated with the open character (near) + its cross-book
+          partner (far, hydrated on open). On a successful link/variant the
+          modal already dispatches the near-side reducer; we clear the open
+          flag so a re-open recomputes against the now-suppressed candidate. */}
+      <DuplicateReviewModal
+        open={duplicateReviewOpen && duplicateReviewPair !== null}
+        pair={duplicateReviewPair}
+        loading={duplicateReviewLoading}
+        onClose={() => setDuplicateReviewOpen(false)}
+        onResolved={() => {
+          setDuplicateReviewOpen(false);
+          setForeignCast(null);
+        }}
+      />
+
       {reattributeModal && (
         <ReattributeLinesModal
           sourceCharacterId={reattributeModal.sourceCharacterId}
