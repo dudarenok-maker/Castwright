@@ -47,3 +47,10 @@ onnxruntime-gpu>=1.20.0,<2.0.0
 # run the sidecar with EITHER Coqui OR Qwen in its venv, or pin transformers to
 # a version both accept (verified empirically when the model is downloaded).
 # qwen-tts
+
+# psutil — process RSS / committed-private bytes for the host-memory watchdog +
+# /debug/memory readout (the 2026-05-30 host-RAM leak guard). Already arrives
+# transitively via accelerate, but the watchdog now depends on it directly, so
+# pin it explicitly rather than rely on a transitive that a future install could
+# drop. Tiny, pure-bookkeeping dep; no native build.
+psutil>=5.9
