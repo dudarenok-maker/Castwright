@@ -353,6 +353,18 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
        dir. A sidecar restart / cwd change / workspace move can't orphan a
        designed voice (a latent ENOENT on torch.load at synth time). */
     QWEN_VOICES_DIR: join(WORKSPACE_ROOT, 'voices', 'qwen'),
+    /* Fight CUDA allocator fragmentation. PyTorch's default caching allocator
+       uses fixed cudaMalloc blocks; over a long run the variable-length Qwen
+       batches fragment VRAM until a wide (e.g. 32-item) batch can't find a
+       contiguous block and 500s with `CUDA error: out of memory` even though
+       total usage is modest — the 2026-05-30 mid-run sidecar OOM (recovered by
+       the srv-15 poison-respawn, but it failed 2 chapters). `expandable_segments`
+       (PyTorch ≥2.1) grows/shrinks virtual segments via CUDA VMM instead, so
+       fragmented free space is reusable. Set via env because it must be in
+       place BEFORE torch initialises the CUDA context — a spawn-env default is
+       guaranteed pre-import. An explicit parent-env value wins (override / tune
+       e.g. `expandable_segments:True,max_split_size_mb:256`). */
+    PYTORCH_CUDA_ALLOC_CONF: process.env.PYTORCH_CUDA_ALLOC_CONF ?? 'expandable_segments:True',
   };
 
   /* Open the sidecar's log files (tts.log / tts.err.log, the same convention
