@@ -70,6 +70,16 @@ describe('resolveReusedVoiceFields', () => {
     ).toBeNull();
   });
 
+  it('carries the source persona (voiceStyle) alongside the resolved voice (srv-18)', async () => {
+    const reused: ReuseHydratable = { id: 'x', matchedFrom: { bookId: 'src', characterId: 'x' } };
+    const source: ReuseHydratable = {
+      ...designed('x', 'qwen-x'),
+      voiceStyle: 'a bright, confident teenage girl',
+    };
+    const r = await resolveReusedVoiceFields(reused, loaderFrom({ src: [source] }));
+    expect(r?.voiceStyle).toBe('a bright, confident teenage girl');
+  });
+
   it('defaults ttsEngine to qwen when the source has an override but no engine field', async () => {
     const reused: ReuseHydratable = { id: 'x', matchedFrom: { bookId: 'src', characterId: 'x' } };
     const source: ReuseHydratable = { id: 'x', overrideTtsVoices: { qwen: { name: 'qwen-x' } } };
@@ -119,5 +129,23 @@ describe('hydrateCharacterVoice', () => {
     );
     expect(out.overrideTtsVoices?.kokoro?.name).toBe('af_bella'); // own slot kept
     expect(out.overrideTtsVoices?.qwen?.name).toBe('qwen-x'); // source slot added
+  });
+
+  it('copies the source persona onto a reused char that lacks one (srv-18)', async () => {
+    const reused = { id: 'x', name: 'X', matchedFrom: { bookId: 'src', characterId: 'x' } };
+    const source: ReuseHydratable = { ...designed('x', 'qwen-x'), voiceStyle: 'sardonic charmer' };
+    const out = await hydrateCharacterVoice(reused, loaderFrom({ src: [source] }));
+    expect(out.voiceStyle).toBe('sardonic charmer');
+  });
+
+  it('keeps the character own persona, never clobbering it with the source (srv-18)', async () => {
+    const reused: ReuseHydratable = {
+      id: 'x',
+      voiceStyle: 'hand-edited persona',
+      matchedFrom: { bookId: 'src', characterId: 'x' },
+    };
+    const source: ReuseHydratable = { ...designed('x', 'qwen-x'), voiceStyle: 'source persona' };
+    const out = await hydrateCharacterVoice(reused, loaderFrom({ src: [source] }));
+    expect(out.voiceStyle).toBe('hand-edited persona');
   });
 });
