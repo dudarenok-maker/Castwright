@@ -38,6 +38,14 @@ A true root-cause *elimination* (force fixed shapes via padding/bucketing, disab
 
 srv-16's skip-completed-on-resume means a recycle only re-renders the single in-flight chapter; the queue carries on. The crash-loop cap in the supervisor doesn't trip because recycles are minutes/hours apart (well past its 30 s "lived long enough" reset).
 
+### Post-ship correction (2026-05-30): keyed on committed-private, not RSS
+
+The original ceiling above was keyed on **RSS**, which is wrong: the OOM-relevant metric is **committed-private** bytes. Live monitoring showed **private ≈ 1.7–1.9× RSS** during generation, so an RSS-37 GB ceiling maps to private ~65–70 GB — *above* the 64 GB box's RAM. Private would hit the ~54 GB crash cliff (≈ RSS 28 GB) **before** an RSS-37 GB ceiling ever fired, so the recycle would never trigger in time. Corrected:
+
+- The recycle now keys on **committed-private** (`_process_commit_mb()` — Windows `pmem.private`, elsewhere `memory_full_info().uss`; falls back to RSS only if unavailable).
+- Env knob renamed `SIDECAR_RSS_RESTART_MB` → **`SIDECAR_RESTART_MB`**, default **70% of total physical RAM** (~45 GB on 64 GB — below the observed ~54 GB cliff with margin for the 60 s sampling). The old RSS-keyed env name is gone (its RSS-tuned values would mis-apply as a private ceiling).
+- Helpers renamed accordingly: `_should_restart`, `_schedule_restart_exit`, `_restart_now`, `_restart_scheduled`. The soft `SIDECAR_RSS_WARN_MB` reclaim is unchanged (RSS-keyed is fine for that — it's just a gc nudge).
+
 ## Architectural impact
 
 - **New seams:** `SIDECAR_RSS_RESTART_MB` env; `_mem_restart_threshold_mb()`, `_should_restart_for_rss()`, `_schedule_rss_restart_exit()` / `_rss_restart_now()` (the last is the test seam); exit code 43.
