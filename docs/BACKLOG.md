@@ -210,16 +210,6 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 
 ### Engine, sidecar & analyzer
 
-#### `side-7` — Qwen decode CUDA-graph / static-cache spike (probe-gated)
-
-Plan: [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-graph-spike.md). The blocked "open lever 5" in `docs/tts-performance.md`, now scoped. Source: net-new (2026-05-29), filed from the v1.5.0 generation-perf session.
-
-- _What:_ Two cheap probes gate a possible static-cache fork — do NOT fork on a hunch. **Probe 1** (~1–2 h): profile the batch-16 decode loop (`torch.profiler` / `nvidia-smi dmon`) to settle whether the BATCHED forward is still launch-bound (CUDA graphs would help) or already ~compute-bound (graphs are a dead end — `QWEN_BATCH_SIZE=16` already amortizes per-launch overhead 16×, which is why the clean bench hits RTF 0.80). **Probe 2** (only if launch-bound): audit the nested per-step `code_predictor.generate()` in `qwen_tts` for fixed-vs-variable token count + CPU sync points (`.item()`/`.cpu()`/python branches → graph-breaks). Only if BOTH green: fork `qwen_tts` for a static KV cache + `torch.compile(mode="reduce-overhead")`, behind an env kill-switch + a byte-identical-audio regression test.
-- _Acceptance:_ Probe 1 records a kernel/CPU/idle-gap split + a go/no-go line in `docs/tts-performance.md`; if compute-bound the item closes with that note (we're at the model's floor). If the fork ever lands: byte-identical PCM compiled vs un-compiled (pytest), kill-switch reverts to the un-compiled path, `_synth_lock` serialisation preserved.
-- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine` synth + `synthesize_batch`), the installed `qwen_tts` package (read-only — `generate_voice_clone` + nested `code_predictor.generate()`), `server/tts-sidecar/scripts/bench-tts.py`, `docs/tts-performance.md` (open lever 5).
-- _Depends on:_ length-bucketing + token-budget packing (plans 128/136, shipped 2026-05-30 at the 32/3600 default) banked first — this is the fallback past them once the cheaper output-preserving levers are exhausted. Last resort.
-- _Benefit (user / technical):_ the only path past the dispatch-bound ~1–2 RTF floor toward sub-1 (Kokoro-class) Qwen speed; the probe gate means the 2–5-day, correctness-risky, maintenance-heavy fork is only attempted if a measurement proves it can actually pay off — not on the serial-path hunch.
-
 #### `side-10` — Coalesce consecutive same-speaker short lines before batching
 
 Source: net-new (2026-05-29), from the plan-136 A/B. The dominant RTF drag on dialogue-dense chapters is **padding waste**: a batch decodes to its longest item, so a bucket of ultra-short same-speaker lines (avg ~12–30 chars) wastes most decode steps and produces little audio (measured RTF ~3 even at cap 64). Length-bucketing + token-budget width (plans 128/136, shipped 2026-05-30) both fail to fix this because the items are inherently tiny.
@@ -422,8 +412,15 @@ Source: net-new (2026-05-27), considered and declined during CI cost round 2 ([`
 
 Source: net-new (2026-05-26), plan 112. ICL mode drags the reference clip's codec tokens through context every decode step; `x_vector_only_mode=True` drops that for shorter/faster steps, at a fidelity/consistency cost.
 
-- _Why parked (2026-05-26):_ the perf problem that motivated it is solved — after the plan-113 batching + the concurrent-batch race fix, end-to-end Qwen chapters run at **~RTF 1.15** (a ~10 h novel ≈ overnight). That's acceptable, so trading the bespoke-voice identity-consistency this feature exists to guarantee for a marginal further speedup isn't worth it this round.
+- _Why parked (2026-05-26; confirmed 2026-05-31):_ the perf problem that motivated it is solved — after the plan-113 batching + the concurrent-batch race fix, end-to-end Qwen chapters run at **~RTF 1.15**, and the **2026-05-31 overnight full-book run held aggregate RTF ≈ 1.04 across 25 real multi-voice chapters** (range 0.91–1.26, ~realtime — the target). The perf goal is decisively met, so trading the bespoke-voice identity-consistency this feature exists to guarantee for a marginal further speedup isn't worth it. Closed, not just deferred.
 - _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost) AND a listen-test shows x-vector-only holds identity acceptably.
+
+### `side-7` — Qwen decode CUDA-graph / static-cache spike (probe-gated)
+
+Source: net-new (2026-05-29), plan [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-graph-spike.md); **moved Could → Won't 2026-05-31**. Was the blocked "open lever 5" in `docs/tts-performance.md` — the only path past the dispatch-bound ~1–2 RTF floor toward sub-1, but a 2–5-day, correctness-risky fork of `qwen_tts` (it ships `_supports_static_cache=False` + a growing `DynamicCache` + a nested per-step `code_predictor.generate()`) we'd then maintain against upstream.
+
+- _Why parked (2026-05-31):_ the perf goal is met. The 2026-05-31 overnight full-book run rendered 25 real multi-voice chapters at aggregate **RTF ≈ 1.04** (range 0.91–1.26) on the adopted 32/3600 + single-worker config — ~realtime, the target. The remaining gap to sub-1 (Kokoro-class) isn't worth a risky talker fork; Kokoro stays the book-length workhorse and Qwen bespoke is already an acceptable overnight render. Even the cheap Probe 1 isn't worth running while the floor is acceptable.
+- _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost) AND the cheaper output-preserving lever (`side-10` short-line coalescing) is already banked. Then run Probe 1 first; only fork if it proves still launch-bound.
 
 ### `ops-4` — Auto-install Ollama / auto-pull models
 
