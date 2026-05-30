@@ -204,6 +204,29 @@ The plan-136 token-budget A/B — blocked on 2026-05-29 by the plan-137 fetch ti
 - **Output is byte-identical** (per-item prompts + index scatter-back) — this is a pure batch-*composition* change, not an audio change.
 - Plans 128 (length-bucketing, the prerequisite sort) and 136 → `stable` + archived; backlog `side-6` and `side-9` closed. The width lever helps prose, not dialogue; the remaining dialogue lever is short-line coalescing (`side-10`), and the dispatch-bound floor (`side-7`) is still the ceiling.
 
+### Qwen3-TTS 0.6B — full-book run RTF (32/3600, merged build) + host-memory leak — 2026-05-30
+
+Live full-book run of **The Hollow Tide** on the merged build (32/3600 token-budget default, single worker, eager Qwen, 8 GB 4070 Laptop / 64 GB host). Two outcomes: the config's per-chapter RTF is **strong**, and the run surfaced a **host-memory leak** that is its own record below.
+
+**Per-chapter RTF (server-reported `synth ÷ audio`, the true pipeline figure):**
+
+| Chapter | Lines | Audio s | Synth s | RTF | Note |
+|---|---|---|---|---|---|
+| 15 "THIRTEEN" | 166 | 533.6 | 906.4 | **1.70** | first chapter — startup/voice-load warm-up in the wall |
+| 16 "FOURTEEN" | 279 | 866.7 | 1241.9 | **1.43** | |
+| 17 "FIFTEEN" | 323 | 1216.8 | 1335.8 | **1.10** | 0.91× realtime — best; big prose chapter packs wide |
+| 18 "SIXTEEN" | 316 | 1270.3 | 1869.0 | ~~1.47~~ | **contaminated** — a leak-diagnostic bench was stealing the `_synth_lock` during this render; not a real number |
+
+**Takeaway:** the adopted **32/3600** config lands real prose-heavy chapters at **RTF ~1.1–1.7 and falling as chapters get longer/wider** (1.70 → 1.43 → 1.10) — the best end-to-end figures recorded, and ch17 dipped **under realtime**. Confirms the 32/3600 adoption on a genuine multi-voice book, not just a micro-bench.
+
+**HOST-MEMORY LEAK (the big find — see plan 143):** during this run the sidecar's host RAM (RSS / committed-private) climbed steadily — private floor 11.5 → 27 GB over ~30 min (~+0.3 GB/min), peaks to 41 GB — while **`cuda_allocated`/`cuda_reserved` stayed flat (~1.9 GB)**. The 2026-05-30 root-cause work (instrumented via the new `GET /debug/memory` + per-minute `sidecar memory:` log) established:
+
+- **It's a CPU/host leak, not VRAM** (RSS climbs, CUDA flat — the classic signature; corroborated by a user-supplied "Qwen3 TTS 0.6B PyTorch Memory Leak" research report).
+- **Driven by VARIABLE INPUT SHAPES.** Decisive controlled experiment: **40 identical fixed-shape `batch-16` synths** against `/synthesize-batch` held the floor **flat** (~28–30 GB private); variable-shape real generation climbed it **unbounded**. Every sentence is a different length → a new native per-shape workspace (MKLDNN / allocator) that's never freed — pytorch/pytorch **#32596**.
+- **`gc.collect()` + `torch.cuda.empty_cache()` reclaim ~0** against it (the watchdog logged it every tick) — it's neither Python reference cycles nor the CUDA cache. So plan 141's gc-on-unload fix (correct for the *design-cycle* leak) does NOT touch this. The original 54 GB OOM was **generation watermark + design-cycle leak stacked** over a long cast-review session.
+- **Mitigation shipped (plan 143):** an RSS hard-ceiling **process-recycle** — the sidecar self-exits at `SIDECAR_RSS_RESTART_MB` (default 55% of RAM) and the srv-15 supervisor respawns a fresh process; srv-16 skips completed chapters so only the in-flight one re-renders. The report's "bulletproof" pattern, made clean by srv-15/16.
+- **Open: eliminate the leak itself** (so recycling isn't needed) — `side-11`: try `torch.backends.mkldnn.enabled=False`, pad/bucket batches to a small set of fixed shapes, `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, or an upstream `qwen_tts` fix. Repro: a variable-length bench loop; watch `/debug/memory` (RSS climbs + CUDA flat = this leak).
+
 ## Open levers to measure (feeds `side-3` / `side-4`)
 
 1. ~~**Length-bucketing batches**~~ (plan 128) — group similar-length sentences before each `/synthesize-batch` so a batch decodes to a tighter max-length. **SHIPPED + ADOPTED 2026-05-30** (`synthesise-chapter.ts` sort, `QWEN_BATCH_BUCKET` default ON, output-preserving). Validated on the live 8 GB box as the foundation of the token-budget packer (7); plan 128 → `stable`, `side-6` closed.
