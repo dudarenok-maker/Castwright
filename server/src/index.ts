@@ -74,7 +74,10 @@ import {
   getResolvedTtsModelKey,
   setLastKnownQwenInstallState,
 } from './workspace/user-settings.js';
-import { spawnSidecar, type SidecarHandle } from './tts/spawn-sidecar.js';
+import {
+  createSidecarSupervisor,
+  type SidecarSupervisor,
+} from './tts/sidecar-supervisor.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 
 const app = express();
@@ -204,11 +207,11 @@ app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inF
 const PORT = Number(process.env.PORT ?? 8080);
 const LAN_HTTPS_PORT = Number(process.env.LAN_HTTPS_PORT ?? 8443);
 
-/* Sidecar child-process handle: populated when the spawn succeeds, null
-   when the preference is off OR something is already listening on :9000
-   (manual `npm run tts:sidecar` already running). Kept module-scoped so
-   the SIGINT/SIGTERM handlers below can reach it. */
-let sidecarHandle: SidecarHandle | null = null;
+/* Sidecar supervisor (srv-15): owns the sidecar child handle and respawns it
+   on unexpected exit (crash / OOM-kill / poison self-exit). Module-scoped so
+   the SIGINT/SIGTERM handlers below can stop it (which reaps the child without
+   triggering a respawn). Null until the boot block constructs it. */
+let sidecarSupervisor: SidecarSupervisor | null = null;
 
 /* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
    listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated
@@ -284,25 +287,32 @@ const listenerCallback = () => {
      after the listener is up so the server is already accepting requests
      while the sidecar warms in the background. The catalog audit above
      will pick up the same sidecar once Kokoro/Coqui finishes loading. */
-  void (async () => {
-    const settings = await readUserSettings();
-    /* Seed the Qwen install-state from a Node-side disk probe BEFORE resolving
-       the default — the sidecar /health probe isn't available yet (we're about
-       to spawn it). This lets a box with Qwen installed hot-preload Qwen at
-       boot (PRELOAD_QWEN=1); a box without it spawns with Kokoro eager + Qwen
-       off, and the conditional default falls back to Kokoro. The /health poll
-       refreshes this continuously once the sidecar is up. */
-    const bootRepoRoot = resolve(__dirname, '..', '..');
-    setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
-    sidecarHandle = await spawnSidecar({
-      autoStart: getResolvedAutoStartSidecar(),
-      /* Resolved (Qwen-when-installed) key — drives PRELOAD_QWEN vs Kokoro. */
-      modelKey: getResolvedTtsModelKey(),
-      eagerLoadKokoro: settings.eagerLoadKokoro ?? true,
-      eagerLoadQwen: settings.eagerLoadQwen ?? true,
-      repoRoot: bootRepoRoot,
-    });
-  })();
+  const bootRepoRoot = resolve(__dirname, '..', '..');
+  /* Seed the Qwen install-state from a Node-side disk probe BEFORE resolving
+     the default — the sidecar /health probe isn't available yet (we're about
+     to spawn it). This lets a box with Qwen installed hot-preload Qwen at boot
+     (PRELOAD_QWEN=1); a box without it spawns with Kokoro eager + Qwen off, and
+     the conditional default falls back to Kokoro. The /health poll refreshes
+     this continuously once the sidecar is up. */
+  setLastKnownQwenInstallState(detectQwenInstallStateOnDisk(bootRepoRoot));
+  /* srv-15 — supervise the sidecar instead of a one-shot spawn, so a crash /
+     OOM-kill / poison self-exit respawns instead of stalling generation
+     forever. `buildOpts` re-reads settings on each respawn so a mid-session
+     eager-load / model-key change is picked up by the next process. */
+  sidecarSupervisor = createSidecarSupervisor({
+    buildOpts: async () => {
+      const settings = await readUserSettings();
+      return {
+        autoStart: getResolvedAutoStartSidecar(),
+        /* Resolved (Qwen-when-installed) key — drives PRELOAD_QWEN vs Kokoro. */
+        modelKey: getResolvedTtsModelKey(),
+        eagerLoadKokoro: settings.eagerLoadKokoro ?? true,
+        eagerLoadQwen: settings.eagerLoadQwen ?? true,
+        repoRoot: bootRepoRoot,
+      };
+    },
+  });
+  void sidecarSupervisor.start();
 };
 
 /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
@@ -354,7 +364,9 @@ function shutdown(signal: NodeJS.Signals): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[server] ${signal} received, tearing down sidecar...`);
-  const reap = sidecarHandle?.kill() ?? Promise.resolve();
+  /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
+     child's exit can't trigger a respawn race during shutdown. */
+  const reap = sidecarSupervisor?.stop() ?? Promise.resolve();
   void reap.finally(() => process.exit(0));
 }
 process.once('SIGINT', () => shutdown('SIGINT'));
