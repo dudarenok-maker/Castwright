@@ -26,6 +26,13 @@ vi.mock('../tts/index.js', async (importOriginal) => {
     selectTtsProvider: () => ({ synthesize: vi.fn() }),
   };
 });
+/* No sidecar in the test. The preload gate now POLLS through a respawn (plan
+   147) — for a kokoro/qwen run with nothing at :9000 it would wait out its full
+   readiness budget and hang the run. Stub it to a no-op so these resume_from
+   SSE tests exercise the route, not the (separately-tested) readiness gate. */
+vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
+  ensureSidecarEngineReady: async () => undefined,
+}));
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
