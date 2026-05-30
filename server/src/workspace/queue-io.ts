@@ -270,6 +270,26 @@ export function resetInProgressToQueued(file: QueueFile): QueueFile {
   });
 }
 
+/** Reset a SINGLE `in_progress` entry back to `queued` — the SSE
+ *  last-subscriber-disconnect orphan recovery (srv-12). When the last
+ *  subscriber to a generation SSE closes BEFORE the frontend POSTed
+ *  /complete, the in-flight chapter's queue entry is an orphan: nobody is
+ *  watching the run and the server aborts the now-unwatched synthesis, so the
+ *  entry must go back to `queued` for the dispatcher to re-claim. Guarded to a
+ *  single id and a no-op unless that entry is `in_progress` — a missing id or a
+ *  done/queued/failed entry is returned unchanged so we never resurrect a
+ *  finished entry or fight the frontend-owned lifecycle. Order is preserved. */
+export function resetEntryToQueued(file: QueueFile, entryId: string): QueueFile {
+  const target = file.entries.find((e) => e.id === entryId);
+  if (!target || target.status !== 'in_progress') return file;
+  return renumber({
+    ...file,
+    entries: file.entries.map(
+      (e): QueueEntry => (e.id === entryId ? { ...e, status: 'queued' } : e),
+    ),
+  });
+}
+
 /** Recompute `order` to be contiguous 0..N-1 after any mutation. The
  *  in_progress entry (if present) stays at order=0; the rest follow in
  *  their current array order. */
