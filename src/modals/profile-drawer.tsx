@@ -587,6 +587,40 @@ export function ProfileDrawer({
     }
   }
 
+  /* Plan 149 — seed the persona textarea from the DESIGNED voice's sidecar
+     when the character has a designed Qwen voice (`designedVoiceId`) but no
+     persisted `voiceStyle`. Historically the persona was saved only on the
+     voice sidecar (`instruct`), never mirrored onto the character, and reuse
+     copies the override but not the persona — so reused/origin characters
+     showed a blank textarea and couldn't re-design (the design route 400s on
+     an empty persona). Fetches lazily, mirrors into redux like generatePersona,
+     and never clobbers a persona the user has started typing. */
+  useEffect(() => {
+    if (!bookId || !designedVoiceId) return;
+    if ((character.voiceStyle ?? '').trim()) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { instruct } = await api.fetchDesignedPersona(bookId, character.id);
+        if (cancelled || !instruct.trim()) return;
+        let seeded = false;
+        setPersona((prev) => {
+          if (prev.trim()) return prev;
+          seeded = true;
+          return instruct;
+        });
+        if (seeded) {
+          dispatch(castActions.setVoiceStyle({ characterId: character.id, voiceStyle: instruct }));
+        }
+      } catch {
+        /* benign — leave the textarea empty exactly as before */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, character.id, character.voiceStyle, designedVoiceId, dispatch]);
+
   function onSelectEngine(next: EngineChoice) {
     setEngineChoice(next);
     setEngineError(null);
