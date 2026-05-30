@@ -46,6 +46,7 @@ import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
+import { collectRenderedFallbackEngines } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 export const bookStateRouter = Router();
@@ -326,6 +327,17 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     const rec = await getOrHydrateManuscript(state.manuscriptId);
     const manuscript = rec ? { wordCount: rec.wordCount, format: rec.format } : null;
 
+    /* fe-16 — per-character render-time fallback engine, aggregated across the
+       book's rendered chapters' segments files. `'kokoro'` for a character
+       that fell back from Qwen on any rendered chapter; the cast view threads
+       it into resolveVoiceStatus so the live Status pill reads
+       "Fallback (Kokoro)". Empty `{}` when nothing has rendered / fallen back.
+       Tolerant of missing audio dir (loadSegmentsFiles returns []). */
+    const renderedFallbackByCharacter = await collectRenderedFallbackEngines(
+      bookDir,
+      state.chapters,
+    ).catch(() => ({}));
+
     res.json({
       state,
       cast,
@@ -335,6 +347,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       completedSlugs,
       chapterCharacters,
       chapterLufs,
+      renderedFallbackByCharacter,
       changeLog: changeLog?.events ?? null,
       analysis: { failedChapterIds },
     });

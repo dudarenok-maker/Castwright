@@ -423,6 +423,68 @@ describe('CastView Qwen status pill (plan 117)', () => {
     expect(within(row).queryByText('Designed')).toBeNull();
   });
 
+  it('shows "Fallback (Kokoro)" when the character actually rendered in Kokoro (fe-16)', () => {
+    /* A Qwen character with no designed voice that fell back to Kokoro at
+       render time. The cast slice's renderedFallbackByCharacter map carries
+       `'kokoro'` for its id; the Status pill reads it via the 4th arg. */
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+      preloadedState: {
+        cast: {
+          ...castSlice.getInitialState(),
+          renderedFallbackByCharacter: { [sweeney.id]: 'kokoro' },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[{ ...sweeney, ttsEngine: 'qwen', overrideTtsVoices: undefined }]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    const row = rowFor('Mr. Sweeney');
+    expect(within(row).getByText('Fallback (Kokoro)')).toBeInTheDocument();
+    /* The render-time fact outranks the design lifecycle — no "Needs voice". */
+    expect(within(row).queryByText('Needs voice')).toBeNull();
+  });
+
+  it('clears the fallback pill once a voice is designed + regenerated (no fallback in the map)', () => {
+    /* After designing the voice + regenerating, generation writes snapshots
+       with no renderedFallbackEngine → the map no longer carries the id, so
+       the design lifecycle pill ("Designed") shows again. */
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+      preloadedState: {
+        cast: { ...castSlice.getInitialState(), renderedFallbackByCharacter: {} },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[sweeneyQwen]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    const row = rowFor('Mr. Sweeney');
+    expect(within(row).getByText('Designed')).toBeInTheDocument();
+    expect(within(row).queryByText('Fallback (Kokoro)')).toBeNull();
+  });
+
   it('optimistically marks the matched voice sampled after a successful Qwen audition', async () => {
     /* The library only re-hydrates on book/stage/engine/genProgress change, so
        the cast view dispatches voicesActions.markSampled on a successful sample

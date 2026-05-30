@@ -110,6 +110,20 @@ interface Props {
       name. Dispatch-only (no API call) — the cast-slice persistence rule
       round-trips it to cast.json. When omitted, both affordances hide. */
   onRename?: (characterId: string, name: string) => void;
+  /** Plan 101 follow-up (fe-8) — an auto-detected cross-book duplicate
+      candidate for THIS character (same base voice, same series, name dedup
+      hit, not already linked/variant-marked). When present the Voice-profile
+      header renders a "⚠ Possible duplicate of …" chip; clicking it fires
+      `onReviewDuplicate`. Omitted → no chip. */
+  duplicateOther?: { name: string; bookTitle: string } | null;
+  /** Open the duplicate-review modal for this character's candidate. Layout
+      wires this to mount `DuplicateReviewModal` pre-populated with the pair. */
+  onReviewDuplicate?: () => void;
+  /** Plan 130 follow-up (fe-16) — the engine this character ACTUALLY rendered
+      in last generation when it differs from its configured engine. `'kokoro'`
+      surfaces the "Fallback (Kokoro)" status pill. Threaded into
+      `resolveVoiceStatus` as the 4th arg. */
+  renderedFallbackEngine?: string | null;
 }
 
 export interface PriorMergeCandidate {
@@ -164,6 +178,9 @@ export function ProfileDrawer({
   onUnlinkAlias,
   onAddAlias,
   onRename,
+  duplicateOther,
+  onReviewDuplicate,
+  renderedFallbackEngine,
 }: Props) {
   const [tone, setTone] = useState(
     character.tone ?? { warmth: 50, pace: 50, authority: 50, emotion: 50 },
@@ -694,9 +711,16 @@ export function ProfileDrawer({
               <div className="flex items-center gap-2">
                 {/* Lifecycle pill + Reused badge, resolved the same way as the
                     cast view's Status column so the two surfaces agree (a
-                    reused Qwen voice shows "Designed/Generated · Reused"). */}
+                    reused Qwen voice shows "Designed/Generated · Reused"). The
+                    4th arg (fe-16) surfaces "Fallback (Kokoro)" when this
+                    character actually rendered in Kokoro last generation. */}
                 {(() => {
-                  const { lifecycle, reused } = resolveVoiceStatus(character, voice, effectiveEngine);
+                  const { lifecycle, reused } = resolveVoiceStatus(
+                    character,
+                    voice,
+                    effectiveEngine,
+                    renderedFallbackEngine,
+                  );
                   return (
                     <>
                       {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
@@ -706,6 +730,23 @@ export function ProfileDrawer({
                 })()}
               </div>
             </div>
+
+            {/* fe-8 — cross-book "Possible duplicate of …" chip. Surfaces when
+                the voices-view duplicate detector flags THIS character as a
+                likely same-person match in a series-mate book. Click opens the
+                DuplicateReviewModal (mounted by layout) pre-populated with the
+                pair so the user can link or mark-as-variant without leaving
+                the drawer. 44px tap target on phone. */}
+            {duplicateOther && onReviewDuplicate && (
+              <button
+                type="button"
+                onClick={onReviewDuplicate}
+                title={`"${character.name}" and "${duplicateOther.name}" (${duplicateOther.bookTitle}) share this base voice across books in the same series — review and link, or mark as an intentional variant.`}
+                className="mb-4 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 transition-colors min-h-[44px] sm:min-h-0"
+              >
+                ⚠ Possible duplicate of &ldquo;{duplicateOther.name}&rdquo; ({duplicateOther.bookTitle}) →
+              </button>
+            )}
 
             <div className="flex items-center gap-4 p-4 rounded-2xl bg-canvas border border-ink/10">
               <div>

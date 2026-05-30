@@ -87,6 +87,9 @@ function renderDrawer(
     voice?: Voice;
     baseVoices?: BaseVoice[];
     voices?: Voice[];
+    duplicateOther?: { name: string; bookTitle: string } | null;
+    onReviewDuplicate?: () => void;
+    renderedFallbackEngine?: string | null;
   } = {},
 ) {
   const store = makeStore({ baseVoices: extra.baseVoices, voices: extra.voices });
@@ -107,6 +110,9 @@ function renderDrawer(
           onUnlinkAlias={extra.onUnlinkAlias}
           onAddAlias={extra.onAddAlias}
           onRename={extra.onRename}
+          duplicateOther={extra.duplicateOther}
+          onReviewDuplicate={extra.onReviewDuplicate}
+          renderedFallbackEngine={extra.renderedFallbackEngine}
         />
       </Provider>,
     ),
@@ -1268,5 +1274,49 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
       </Provider>,
     );
     expect(screen.getByText('Model voice')).toBeTruthy();
+  });
+});
+
+describe('ProfileDrawer cross-book duplicate chip (fe-8)', () => {
+  it('renders the "Possible duplicate of …" chip and fires onReviewDuplicate on click', () => {
+    const onReviewDuplicate = vi.fn();
+    renderDrawer(
+      { ...baseChar, name: 'Eliza Gray' },
+      {
+        duplicateOther: { name: 'Eliza', bookTitle: 'Book Two' },
+        onReviewDuplicate,
+      },
+    );
+    const chip = screen.getByRole('button', { name: /Possible duplicate of/i });
+    expect(chip).toBeTruthy();
+    expect(chip).toHaveTextContent('Eliza');
+    expect(chip).toHaveTextContent('Book Two');
+    fireEvent.click(chip);
+    expect(onReviewDuplicate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT render the chip once the candidate is resolved (duplicateOther null on re-open)', () => {
+    /* Resolving the duplicate (link / variant) suppresses the candidate, so
+       layout passes duplicateOther=null on the next drawer open — the chip
+       disappears. */
+    const { rerender, store } = renderDrawer(
+      { ...baseChar, name: 'Eliza Gray' },
+      { duplicateOther: { name: 'Eliza', bookTitle: 'Book Two' }, onReviewDuplicate: () => {} },
+    );
+    expect(screen.getByRole('button', { name: /Possible duplicate of/i })).toBeTruthy();
+    rerender(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={{ ...baseChar, name: 'Eliza Gray' }}
+          voice={undefined}
+          onClose={() => {}}
+          onSave={() => {}}
+          onLock={() => {}}
+          duplicateOther={null}
+          onReviewDuplicate={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByRole('button', { name: /Possible duplicate of/i })).toBeNull();
   });
 });

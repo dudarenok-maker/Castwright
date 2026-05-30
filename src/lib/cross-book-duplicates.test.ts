@@ -8,11 +8,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   detectDuplicateCandidates,
+  detectIgnoredDuplicatePairs,
   looksLikeSameName,
   normaliseDuplicateToken,
   sameCharacterByNameAlias,
   appendAliasToCachedCharacter,
   appendNotLinkedToCachedCharacter,
+  removeNotLinkedToCachedCharacter,
   type BookSeriesInfo,
   type CharacterIdentity,
 } from './cross-book-duplicates';
@@ -424,6 +426,116 @@ describe('appendNotLinkedToCachedCharacter', () => {
   it('is a no-op on missing other-side ids', () => {
     const cache = baseCache();
     expect(appendNotLinkedToCachedCharacter(cache, 'ns', 'v_eliza', '', '')).toBe(cache);
+  });
+});
+
+describe('removeNotLinkedToCachedCharacter (fs-11)', () => {
+  const markedCache = () =>
+    new Map<string, Character[]>([
+      [
+        'ns',
+        [
+          makeCharacter('v_eliza', 'Eliza Gray', {
+            notLinkedTo: [{ bookId: 'sb', characterId: 'v_eliza_sb' }],
+          }),
+        ],
+      ],
+    ]);
+
+  it('removes the notLinkedTo pair from the matching cached character', () => {
+    const next = removeNotLinkedToCachedCharacter(markedCache(), 'ns', 'v_eliza', 'sb', 'v_eliza_sb');
+    expect(next.get('ns')?.[0].notLinkedTo).toEqual([]);
+  });
+
+  it('returns a new Map (immutable) and leaves the source untouched', () => {
+    const cache = markedCache();
+    const next = removeNotLinkedToCachedCharacter(cache, 'ns', 'v_eliza', 'sb', 'v_eliza_sb');
+    expect(next).not.toBe(cache);
+    expect(cache.get('ns')?.[0].notLinkedTo).toEqual([{ bookId: 'sb', characterId: 'v_eliza_sb' }]);
+  });
+
+  it('is a no-op (same Map reference) when the pair is already absent', () => {
+    const cache = new Map<string, Character[]>([['ns', [makeCharacter('v_eliza', 'Eliza Gray')]]]);
+    expect(removeNotLinkedToCachedCharacter(cache, 'ns', 'v_eliza', 'sb', 'v_eliza_sb')).toBe(cache);
+  });
+
+  it('is a no-op when the book is not cached or ids are missing', () => {
+    const cache = markedCache();
+    expect(removeNotLinkedToCachedCharacter(cache, 'unknown', 'v_eliza', 'sb', 'x')).toBe(cache);
+    expect(removeNotLinkedToCachedCharacter(cache, 'ns', 'v_eliza', '', '')).toBe(cache);
+  });
+});
+
+describe('detectIgnoredDuplicatePairs (fs-11)', () => {
+  const seriesByBookId = new Map<string, BookSeriesInfo>([
+    ['ns', SERIES_NCT],
+    ['sb', SERIES_NCT],
+  ]);
+
+  const elizaNs = makeVoice({
+    id: 'v_eliza',
+    character: 'Eliza Gray',
+    bookId: 'ns',
+    bookTitle: 'Northern Star',
+    voiceName: 'Kore',
+  });
+  const elizaSb = makeVoice({
+    id: 'v_eliza_sb',
+    character: 'Eliza',
+    bookId: 'sb',
+    bookTitle: 'Solway Bay',
+    voiceName: 'Kore',
+  });
+
+  it('returns the pair when one side carries the other in notLinkedTo', () => {
+    const charactersByBookId = new Map<string, Character[]>([
+      [
+        'ns',
+        [makeCharacter('v_eliza', 'Eliza Gray', {
+          notLinkedTo: [{ bookId: 'sb', characterId: 'v_eliza_sb' }],
+        })],
+      ],
+      ['sb', [makeCharacter('v_eliza_sb', 'Eliza')]],
+    ]);
+    const out = detectIgnoredDuplicatePairs({
+      library: [elizaNs, elizaSb],
+      seriesByBookId,
+      charactersByBookId,
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].seriesKey).toBe(`${SERIES_NCT.author}|${SERIES_NCT.series}`);
+  });
+
+  it('returns nothing when the pair is NOT marked notLinkedTo (it is a live candidate, not ignored)', () => {
+    const charactersByBookId = new Map<string, Character[]>([
+      ['ns', [makeCharacter('v_eliza', 'Eliza Gray')]],
+      ['sb', [makeCharacter('v_eliza_sb', 'Eliza')]],
+    ]);
+    expect(
+      detectIgnoredDuplicatePairs({
+        library: [elizaNs, elizaSb],
+        seriesByBookId,
+        charactersByBookId,
+      }),
+    ).toHaveLength(0);
+  });
+
+  it('reads notLinkedTo off the Voice fallback when no cast is hydrated', () => {
+    const elizaNsMarked = makeVoice({
+      id: 'v_eliza',
+      character: 'Eliza Gray',
+      bookId: 'ns',
+      bookTitle: 'Northern Star',
+      voiceName: 'Kore',
+      notLinkedTo: [{ bookId: 'sb', characterId: 'v_eliza_sb' }],
+    });
+    expect(
+      detectIgnoredDuplicatePairs({
+        library: [elizaNsMarked, elizaSb],
+        seriesByBookId,
+        charactersByBookId: new Map(),
+      }),
+    ).toHaveLength(1);
   });
 });
 

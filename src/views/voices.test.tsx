@@ -65,6 +65,20 @@ const notLinkedToMock =
       };
     }>
   >();
+const removeNotLinkedToMock =
+  vi.fn<
+    (args: {
+      bookId: string;
+      characterId: string;
+      otherBookId: string;
+      otherCharacterId: string;
+    }) => Promise<{
+      pair: {
+        a: { bookId: string; characterId: string };
+        b: { bookId: string; characterId: string };
+      };
+    }>
+  >();
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -94,6 +108,12 @@ vi.mock('../lib/api', () => ({
       otherBookId: string;
       otherCharacterId: string;
     }) => notLinkedToMock(args),
+    removeNotLinkedTo: (args: {
+      bookId: string;
+      characterId: string;
+      otherBookId: string;
+      otherCharacterId: string;
+    }) => removeNotLinkedToMock(args),
   },
 }));
 
@@ -188,6 +208,7 @@ beforeEach(() => {
   mergeCharactersMock.mockReset();
   linkPriorCharacterMock.mockReset();
   notLinkedToMock.mockReset();
+  removeNotLinkedToMock.mockReset();
 });
 
 describe('LibraryView voice-family grouping', () => {
@@ -1372,6 +1393,163 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     );
     await act(async () => {});
     expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
+  });
+
+  /* fe-9 — bulk per-series review. The series banner surfaces a "Review all
+     duplicates in <Series>" button; opening it walks the queue one pair at a
+     time. Here the queue has one pair, so linking it persists via the v1 route
+     and closes the bulk modal. */
+  it('opens a bulk review for the series and links the single queued pair', async () => {
+    getBookState.mockImplementation((bookId: string) => Promise.resolve(elizaCasts(bookId)));
+    linkPriorCharacterMock.mockResolvedValue({
+      matchedFrom: { bookId: 'b1', characterId: 'v_eliza', bookTitle: 'Book One', confidence: 1 },
+      voiceId: 'v_eliza',
+    });
+    renderWithLibrarySlice();
+    await act(async () => {});
+    /* The series banner button carries the series name + candidate count. */
+    const bulkButton = screen.getByRole('button', {
+      name: /Review all duplicates in Test Series/i,
+    });
+    expect(bulkButton).toHaveTextContent('(1)');
+    fireEvent.click(bulkButton);
+    /* Bulk modal mounts with the per-series progress strip (1 / 1) + the
+       reused single-pair modal. */
+    expect(screen.getByTestId('bulk-duplicate-review')).toBeInTheDocument();
+    expect(screen.getByText('1 / 1')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Same character — link them/i })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Same character — link them/i }));
+    await waitFor(() => expect(linkPriorCharacterMock).toHaveBeenCalledTimes(1));
+    /* Last pair resolved → bulk modal closes. */
+    await waitFor(() =>
+      expect(screen.queryByTestId('bulk-duplicate-review')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('skips the queued pair via the Skip control and closes when it is the last', async () => {
+    getBookState.mockImplementation((bookId: string) => Promise.resolve(elizaCasts(bookId)));
+    renderWithLibrarySlice();
+    await act(async () => {});
+    fireEvent.click(
+      screen.getByRole('button', { name: /Review all duplicates in Test Series/i }),
+    );
+    expect(screen.getByTestId('bulk-duplicate-review')).toBeInTheDocument();
+    /* Single-pair queue → the Skip control reads "Skip & finish". */
+    fireEvent.click(screen.getByRole('button', { name: /Skip & finish/i }));
+    await waitFor(() =>
+      expect(screen.queryByTestId('bulk-duplicate-review')).not.toBeInTheDocument(),
+    );
+    expect(linkPriorCharacterMock).not.toHaveBeenCalled();
+    expect(notLinkedToMock).not.toHaveBeenCalled();
+  });
+
+  /* fs-11 — "Show ignored duplicate suggestions" toggle + Unmark. The b1 Eliza
+     carries the b2 Eliza in notLinkedTo (variant-marked), so the live
+     duplicate candidate is suppressed but the Ignored section lists the pair.
+     Unmark DELETEs the symmetric pair and re-surfaces the duplicate. */
+  it('lists ignored pairs under the toggle and unmarks them, re-surfacing the candidate', async () => {
+    removeNotLinkedToMock.mockResolvedValue({
+      pair: {
+        a: { bookId: 'b1', characterId: 'v_eliza' },
+        b: { bookId: 'b2', characterId: 'v_eliza_sb' },
+      },
+    });
+    /* Open book b1 so the variant-marked redux character drives suppression. */
+    const variantMarked: Character[] = [
+      {
+        id: 'v_eliza',
+        name: 'Eliza Gray',
+        role: 'character',
+        color: 'unset',
+        notLinkedTo: [{ bookId: 'b2', characterId: 'v_eliza_sb' }],
+      } as Character,
+    ];
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        library: librarySlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(castSlice.actions.setCharacters(variantMarked));
+    store.dispatch(
+      librarySlice.actions.hydrate({
+        authors: [
+          {
+            name: 'Test Author',
+            series: [
+              {
+                name: 'Test Series',
+                books: [
+                  {
+                    bookId: 'b1',
+                    title: 'Book One',
+                    author: 'Test Author',
+                    series: 'Test Series',
+                    seriesPosition: 1,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-01',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                  {
+                    bookId: 'b2',
+                    title: 'Book Two',
+                    author: 'Test Author',
+                    series: 'Test Series',
+                    seriesPosition: 2,
+                    isStandalone: false,
+                    status: 'complete',
+                    chapterCount: 0,
+                    completedChapters: 0,
+                    characterCount: 0,
+                    voiceCount: 0,
+                    lastWorkedOn: '2026-01-02',
+                    coverGradient: ['#000', '#fff'],
+                    tags: [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <LibraryView library={libraryWithDuplicate} />
+      </Provider>,
+    );
+    await act(async () => {});
+    /* The live candidate pill is suppressed by the notLinkedTo. */
+    expect(screen.queryByRole('button', { name: /duplicate candidate/i })).toBeNull();
+    /* Toggle the Ignored section open → the pair is listed with an Unmark. */
+    fireEvent.click(screen.getByTestId('toggle-ignored-duplicates'));
+    const unmark = await screen.findByRole('button', { name: /^Unmark$/i });
+    expect(unmark).toBeInTheDocument();
+    fireEvent.click(unmark);
+    await waitFor(() => expect(removeNotLinkedToMock).toHaveBeenCalledTimes(1));
+    expect(removeNotLinkedToMock).toHaveBeenCalledWith({
+      bookId: 'b1',
+      characterId: 'v_eliza',
+      otherBookId: 'b2',
+      otherCharacterId: 'v_eliza_sb',
+    });
+    /* The redux removeNotLinked dispatched → the candidate pill re-surfaces. */
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /1 duplicate candidate/i })).toBeInTheDocument(),
+    );
   });
 });
 

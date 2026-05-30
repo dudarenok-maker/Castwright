@@ -206,6 +206,67 @@ export function detectDuplicateCandidates(
   return out;
 }
 
+/* fs-11 — the INVERSE of detectDuplicateCandidates' notLinkedTo suppression.
+   Returns the same-base-voice same-series cross-book pairs that ARE marked
+   "different on purpose" (a notLinkedTo relation on either side), so the
+   voices view can list them under an "Ignored duplicate suggestions" section
+   with an Unmark button. Name-similarity is NOT required here — the user may
+   have intentionally separated two genuinely same-named-but-different
+   characters, OR the notLinkedTo was written for a pair the name heuristic
+   would also have flagged; either way the stored relation is the source of
+   truth for what to show. The same UNMERGEABLE / series-mate guards apply. */
+export function detectIgnoredDuplicatePairs(
+  ctx: DuplicateDetectionContext,
+): DuplicateCandidate[] {
+  const byFamily = new Map<string, Voice[]>();
+  for (const v of ctx.library) {
+    if (!v.ttsVoice) continue;
+    const key = `${v.ttsVoice.provider}|${v.ttsVoice.name}`;
+    const arr = byFamily.get(key) ?? [];
+    arr.push(v);
+    byFamily.set(key, arr);
+  }
+
+  const out: DuplicateCandidate[] = [];
+  for (const [voiceKey, members] of byFamily) {
+    if (members.length < 2) continue;
+    for (let i = 0; i < members.length; i += 1) {
+      for (let j = i + 1; j < members.length; j += 1) {
+        const a = members[i];
+        const b = members[j];
+        if (a.bookId === b.bookId) continue;
+        const seriesA = ctx.seriesByBookId.get(a.bookId);
+        const seriesB = ctx.seriesByBookId.get(b.bookId);
+        if (!seriesA || !seriesB) continue;
+        if (seriesA.isStandalone || seriesB.isStandalone) continue;
+        if (seriesA.author !== seriesB.author) continue;
+        if (seriesA.series !== seriesB.series) continue;
+
+        const charA = resolveCharacter(a, ctx.charactersByBookId.get(a.bookId));
+        const charB = resolveCharacter(b, ctx.charactersByBookId.get(b.bookId));
+        const supA = suppressionView(a, charA);
+        const supB = suppressionView(b, charB);
+        if (UNMERGEABLE_IDS.has(supA.id)) continue;
+        if (UNMERGEABLE_IDS.has(supB.id)) continue;
+
+        /* Emit only when the pair is actually marked notLinkedTo on either
+           side — that's what "ignored" means. */
+        const ignored =
+          hasNotLinkedTo(supA, b.bookId, supB.id) || hasNotLinkedTo(supB, a.bookId, supA.id);
+        if (!ignored) continue;
+
+        out.push({
+          voiceKey,
+          seriesKey: `${seriesA.author}|${seriesA.series}`,
+          a: { voice: a, character: charA },
+          b: { voice: b, character: charB },
+        });
+      }
+    }
+  }
+  return out;
+}
+
 function resolveCharacter(v: Voice, characters: Character[] | undefined): Character | null {
   if (!characters) return null;
   const explicit = characters.find((c) => c.voiceId === v.id);
@@ -307,6 +368,38 @@ export function appendNotLinkedToCachedCharacter(
       ...c,
       notLinkedTo: [...existing, { bookId: otherBookId, characterId: otherCharacterId }],
     };
+  });
+  if (!changed) return cache;
+  const map = new Map(cache);
+  map.set(bookId, next);
+  return map;
+}
+
+/* fs-11 counterpart to appendNotLinkedToCachedCharacter — reflect a DELETE
+   not-linked-to (undo "different on purpose") into the foreign-cast cache by
+   stripping the (otherBookId, otherCharacterId) entry from the cached
+   character's notLinkedTo. Same no-op-returns-same-reference contract: book
+   not cached / character missing / pair already absent → original Map back. */
+export function removeNotLinkedToCachedCharacter(
+  cache: Map<string, Character[]>,
+  bookId: string,
+  characterId: string,
+  otherBookId: string,
+  otherCharacterId: string,
+): Map<string, Character[]> {
+  const cached = cache.get(bookId);
+  if (!cached) return cache;
+  if (!otherBookId || !otherCharacterId) return cache;
+  let changed = false;
+  const next = cached.map((c) => {
+    if (c.id !== characterId) return c;
+    const existing = c.notLinkedTo ?? [];
+    const filtered = existing.filter(
+      (p) => !(p.bookId === otherBookId && p.characterId === otherCharacterId),
+    );
+    if (filtered.length === existing.length) return c; // pair already absent
+    changed = true;
+    return { ...c, notLinkedTo: filtered };
   });
   if (!changed) return cache;
   const map = new Map(cache);
