@@ -21,6 +21,7 @@ import { existsSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseManuscript, UnsupportedFormatError, DrmProtectedError } from '../parsers/index.js';
+import { isLikelyFrontMatterTitle } from '../parsers/front-matter.js';
 import { putManuscript, type ManuscriptRecord, type ChapterHint } from '../store/manuscripts.js';
 import { getStaging, putStaging, dropStaging, type StagedImport } from '../store/import-staging.js';
 import {
@@ -236,7 +237,12 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     );
     const chaptersWithSlug = entry.chapters.map((c) => {
       const slugStr = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
-      const isExcluded = excludedSet.has(slugStr);
+      /* Auto-exclude EPUB/PDF back-matter the user didn't already opt out of
+         (Acknowledgments, Copyright, CONTENTS, a next-book teaser, …). These
+         carry no narratable prose — left in, they queue pointlessly and can
+         hang synthesis on degenerate input (plan 148). The user can always
+         re-include one via the per-chapter exclude toggle. */
+      const isExcluded = excludedSet.has(slugStr) || isLikelyFrontMatterTitle(c.title);
       return {
         id: c.id,
         title: c.title,
