@@ -844,6 +844,7 @@ class QwenEngine(Engine):
                 "`.\\.venv\\Scripts\\python.exe -m pip install qwen-tts` in "
                 "server/tts-sidecar."
             ) from e
+        _apply_torch_perf_flags(torch)
         attn_impl = os.environ.get("QWEN_ATTN_IMPL", "sdpa")
         # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
         # skeleton, so the move below can never hit "copy out of meta tensor".
