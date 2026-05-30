@@ -54,6 +54,13 @@ export interface SpawnSidecarOpts {
      these so they never touch a real port/process. */
   healthProbeFn?: (host: string, port: number) => Promise<SidecarHealthProbe>;
   findPidFn?: (port: number) => Promise<number | null>;
+  /* srv-15 — invoked when the spawned child EXITS on its own (crash, OS
+     OOM-kill, or the Python poison self-exit code 42), AFTER the exit is
+     logged. The supervisor (createSidecarSupervisor) passes a callback that
+     respawns a fresh sidecar with backoff, so a sidecar death no longer
+     stalls generation with no recovery. Not called when the child is never
+     spawned (autoStart off / reuse / spawn failure returns null). */
+  onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
 }
 
 export interface SidecarHandle {
@@ -268,6 +275,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     probeFn = probeListening,
     healthProbeFn = (h, p) => probeSidecarHealth(h, p),
     findPidFn = (p) => findListenerPid(p),
+    onExit,
   } = opts;
 
   if (!autoStart) {
@@ -417,6 +425,11 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   child.once('exit', (code, signal) => {
     const when = formatTimestamp(new Date());
     warn(`[sidecar] child exited (code=${code}, signal=${signal}) at ${when}`);
+    /* srv-15 — hand the exit to the supervisor so it can respawn. Plan 43
+       moved sidecar ownership to the Node server and start-app.ps1 no longer
+       supervises it, so without this a crash / OOM-kill / poison-exit (code
+       42) would leave generation permanently stalled. */
+    onExit?.(code, signal);
   });
 
   return {
