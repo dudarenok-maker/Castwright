@@ -1,17 +1,27 @@
-/* Preload gate (plan 113 follow-up). Before a generation worker dispatches any
-   synth for a chapter, it POSTs the sidecar `/load` for the chapter's engine and
-   WAITS until the model reports ready — so a cold start pauses the queue on the
-   load instead of N workers all hitting a cold model at once. The sidecar's
-   `_base_load_lock` already makes the lazy load single-flight + correct; this is
-   the explicit "in code, not hope" gate on top: the model is confirmed resident
-   before the first batch leaves.
+/* Preload + READINESS gate (plan 113 follow-up; srv-17 respawn-resilience).
+   Before a generation worker dispatches any synth for a chapter, it POSTs the
+   sidecar `/load` for the chapter's engine and WAITS until the model reports
+   ready — so a cold start (or a supervisor respawn) pauses the queue ON THE
+   GATE instead of N workers all firing synth at a sidecar that isn't up yet.
 
-   Best-effort by design: a `/load` failure logs and returns rather than throwing,
-   because the per-call lazy load (under the lock) is a correct fallback — the
-   gate can only help, never turn a run that would otherwise proceed into a
-   failure. Idempotent on the sidecar (a second call returns "ready" fast), so
-   calling it per chapter is cheap AND recovers if the model was evicted
-   mid-run. A run-level abort (pause / same-book displacement) cancels the wait. */
+   WHY THIS BLOCKS (srv-17). The host-RAM recycle (plan 143) makes the sidecar
+   self-exit; the srv-15 supervisor respawns it with backoff [2s,5s,15s] + a
+   fresh model load (~10-30s to be HTTP-ready). During that window the sidecar
+   is unreachable. The OLD gate gave up on the first connection-refused and let
+   the worker proceed straight into a synth that then failed "sidecar not
+   reachable" — and because multiple chapters get claimed back-to-back, that
+   produced a BURST of failures that tripped the queue's consecutive-failure
+   breaker and paused the whole run (2026-05-30 incident). The gate now POLLS:
+   a sidecar that is unreachable (respawning) OR still loading is treated as
+   "keep waiting", up to `READINESS_TIMEOUT_MS`, so the worker rides out the
+   respawn and never dispatches synth into the gap.
+
+   Best-effort ONLY at the very end: if the sidecar is still not ready after the
+   full budget, the gate logs and returns (the per-call lazy load under the
+   sidecar's `_base_load_lock` remains a correct fallback) — the gate can help,
+   never turn a run that would otherwise proceed into a failure. Idempotent on
+   the sidecar (a second /load returns "ready" fast). A run-level abort (pause /
+   same-book displacement) cancels the wait promptly. */
 
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import type { TtsEngine } from './index.js';
@@ -21,26 +31,41 @@ import type { TtsEngine } from './index.js';
    to the per-call path. */
 const SIDECAR_ENGINES: ReadonlySet<TtsEngine> = new Set(['qwen', 'kokoro', 'coqui']);
 
-/* Matches the /api/sidecar/load proxy budget — a cold XTTS pull can take ~90s;
-   Qwen/Kokoro are far faster but share the ceiling (over-budgeted is safe). */
+/* Per-/load-attempt timeout. A cold XTTS pull can take ~90s; Qwen/Kokoro are
+   far faster but share the ceiling (over-budgeted is safe). */
 const LOAD_TIMEOUT_MS = 90_000;
 
-/** Preload `engine`'s sidecar model and resolve once it reports ready (or on a
-    best-effort failure). Throws only on a run-level abort, so the caller's
-    AbortError handling treats it as a clean stop. */
-export async function ensureSidecarEngineReady(
-  engine: TtsEngine,
-  signal?: AbortSignal,
-): Promise<void> {
-  if (!SIDECAR_ENGINES.has(engine)) return; // cloud / unknown — nothing to load
-  if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
+/* Total readiness budget across poll attempts. Must comfortably cover a
+   supervisor respawn (backoff up to 15s on a crash-loop tier) PLUS a fresh
+   model load, so a recycle-induced respawn is ridden out rather than failing
+   chapters into the breaker. */
+const READINESS_TIMEOUT_MS = 120_000;
 
-  const target = `${getResolvedSidecarUrl()}/load`;
+/* Gap between poll attempts when the sidecar is unreachable / still loading. */
+const POLL_INTERVAL_MS = 1_500;
+
+export interface EnsureReadyOpts {
+  /** Override the total readiness budget (tests use a small value). */
+  timeoutMs?: number;
+  /** Override the inter-poll gap (tests use a small value). */
+  pollIntervalMs?: number;
+}
+
+type LoadOutcome = { ready: true } | { ready: false; reason: string };
+
+/** POST `/load` once. Returns `{ready:true}` when the model reports ready,
+    else a reason. A connection failure (sidecar down / respawning) and a
+    non-ok / non-ready response are both `{ready:false}` so the caller keeps
+    waiting. Re-throws AbortError so a run-level stop propagates cleanly. */
+async function tryLoadOnce(
+  target: string,
+  engine: TtsEngine,
+  signal: AbortSignal | undefined,
+): Promise<LoadOutcome> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LOAD_TIMEOUT_MS);
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
-
   try {
     const res = await fetch(target, {
       method: 'POST',
@@ -48,26 +73,69 @@ export async function ensureSidecarEngineReady(
       body: JSON.stringify({ engine }),
       signal: controller.signal,
     });
-    if (!res.ok) {
-      console.warn(
-        `[generation] preload ${engine}: sidecar /load returned ${res.status} — falling back to lazy load.`,
-      );
-      return;
-    }
+    if (!res.ok) return { ready: false, reason: `/load returned ${res.status}` };
     const body = (await res.json().catch(() => ({}))) as { status?: string };
-    if (body.status !== 'ready') {
-      console.warn(
-        `[generation] preload ${engine}: sidecar /load status=${body.status ?? 'unknown'} — falling back to lazy load.`,
-      );
-    }
+    if (body.status === 'ready') return { ready: true };
+    return { ready: false, reason: `status=${body.status ?? 'unknown'}` };
   } catch (e) {
-    // A run-level abort propagates as a clean stop; anything else is best-effort.
+    /* A run-level abort propagates as a clean stop. A timeout / connection
+       error (sidecar down or respawning) is a "keep waiting" signal, NOT a
+       stop. */
     if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
-    console.warn(
-      `[generation] preload ${engine}: ${(e as Error).message} — falling back to lazy load.`,
-    );
+    return { ready: false, reason: (e as Error).message };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
   }
+}
+
+/** Preload `engine`'s sidecar model and resolve once it reports ready. Polls
+    through a respawn (unreachable / loading) until ready or the readiness
+    budget is exhausted; on exhaustion it returns best-effort (lazy load is a
+    correct fallback). Throws only on a run-level abort, so the caller's
+    AbortError handling treats it as a clean stop. */
+export async function ensureSidecarEngineReady(
+  engine: TtsEngine,
+  signal?: AbortSignal,
+  opts: EnsureReadyOpts = {},
+): Promise<void> {
+  if (!SIDECAR_ENGINES.has(engine)) return; // cloud / unknown — nothing to load
+  if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
+
+  const target = `${getResolvedSidecarUrl()}/load`;
+  const timeoutMs = opts.timeoutMs ?? READINESS_TIMEOUT_MS;
+  const pollIntervalMs = opts.pollIntervalMs ?? POLL_INTERVAL_MS;
+  const deadline = Date.now() + timeoutMs;
+  let lastReason = 'unknown';
+
+  for (;;) {
+    if (signal?.aborted) throw new DOMException('preload aborted', 'AbortError');
+    const outcome = await tryLoadOnce(target, engine, signal);
+    if (outcome.ready) return;
+    lastReason = outcome.reason;
+    if (Date.now() >= deadline) {
+      console.warn(
+        `[generation] preload ${engine}: not ready after ${timeoutMs}ms (last: ${lastReason}) — ` +
+          `falling back to lazy load.`,
+      );
+      return;
+    }
+    await sleep(pollIntervalMs, signal);
+  }
+}
+
+/* Abort-aware sleep — resolves after `ms`, or rejects promptly if `signal`
+   fires (so a run-level Stop tears down the wait without serving the full gap). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('preload aborted', 'AbortError'));
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
