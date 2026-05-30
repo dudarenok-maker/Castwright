@@ -59,6 +59,7 @@ Real backend + sidecar, a long all-Qwen run that crosses a host-RAM recycle:
 
 ## Out of scope
 
+- The chapter already **mid-synth** when a recycle exits — this gate protects only the NEXT (queued) chapter. Closed by [148-recycle-inflight-recovery.md](148-recycle-inflight-recovery.md) (srv-17c): the worker re-renders it via this same gate, and the sidecar drains in-flight synth before exiting.
 - The OTHER half of srv-17 — root-causing the *silent server-child death* (the `:8080` process dying with no stack trace) — stays open in `docs/BACKLOG.md`; plan 145's crash handlers will name it on the next occurrence.
 - Emitting an SSE heartbeat during a long gate wait (a multi-second respawn wait is silent on the chapter's stream; the frontend's 30 s "worker quiet" banner is cosmetic and a respawn is usually faster). Follow-up if it proves noisy.
 - Eliminating the host-RAM leak itself (side-11) so recycles stop happening.
