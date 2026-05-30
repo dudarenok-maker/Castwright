@@ -81,6 +81,7 @@ beforeAll(async () => {
       color: '#abc',
       ttsEngine: 'qwen',
       overrideTtsVoices: { qwen: { name: 'voice_sophie_designed' } },
+      voiceStyle: 'a poised, confident teenage girl',
     },
   ]);
   targetBookDir = join(booksRoot, TARGET_TITLE);
@@ -133,6 +134,8 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
     const sophie = onDisk.characters.find((c: { id: string }) => c.id === 'sophie');
     expect(sophie.ttsEngine).toBe('qwen');
     expect(sophie.overrideTtsVoices.qwen.name).toBe('voice_sophie_designed');
+    /* The persona is denormalised the same way (srv-18). */
+    expect(sophie.voiceStyle).toBe('a poised, confident teenage girl');
     /* Identity fields survive the pass untouched. */
     expect(sophie.voiceState).toBe('reused');
     expect(sophie.matchedFrom.bookId).toBe(sourceBookId);

@@ -59,7 +59,8 @@ export const bookStateRouter = Router();
    resolves to '' at generation and falls back to Kokoro until read-time
    hydration patches it. Stamping here (via the shared `resolveReusedVoiceFields`
    chain-walker that cast-link-prior already uses) makes cast.json self-complete
-   after an auto-match — belt-and-suspenders alongside runtime hydration.
+   after an auto-match — belt-and-suspenders alongside runtime hydration. The
+   persona (`voiceStyle`) is denormalised the same way (srv-18).
 
    No-op for any character that already owns a qwen voice, isn't a reuse, or
    whose source can't be resolved. Tolerates a non-cast-shaped patch (returns it

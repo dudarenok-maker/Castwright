@@ -150,7 +150,9 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
      + override) here keeps the source's cast.json self-complete, so it no
      longer depends on read-time hydration. Only fills when the source lacks
      its own qwen voice and the target carries one; never clobbers an explicit
-     source override. */
+     source override. The persona (`voiceStyle`) rides along the same gate
+     (srv-18) — copied from the target only when the source lacks its own, so
+     the reused row carries the persona on disk without a backfill. */
   const sourceHasQwen = !!source.overrideTtsVoices?.qwen?.name;
   const targetQwen = target.overrideTtsVoices?.qwen?.name;
   const shouldDenormaliseVoice = !sourceHasQwen && !!targetQwen;
@@ -163,6 +165,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
         ...(target.overrideTtsVoices ?? {}),
         ...(source.overrideTtsVoices ?? {}),
       };
+      mergedSource.voiceStyle = source.voiceStyle ?? target.voiceStyle;
     }
     const nextSourceCharacters = sourceCast.characters.map((c) =>
       c.id === sourceCharacterId ? mergedSource : c,

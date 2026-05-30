@@ -217,16 +217,6 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 - _Depends on:_ plan 108 (series-scoped write) shipped.
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 
-#### `srv-18` — Denormalise `voiceStyle` (Qwen persona) at the auto-match write site
-
-Source: net-new (2026-05-31), filed from the [plan 149](features/149-qwen-persona-display-backfill.md) persona-display fix. Plan 149 heals existing data once (`scripts/backfill-qwen-voicestyle.mjs`) and resolves the persona at read-time (drawer fallback to the sidecar `instruct`), but — unlike its sibling `srv-14` for `overrideTtsVoices` — it does NOT yet copy `voiceStyle` onto a character at the moment a voice is auto-matched/reused. A freshly designed-then-reused voice can land without a denormalised persona until the next backfill run (the read-time fallback still covers it in the drawer).
-
-- _What:_ at the auto-match / reuse write path (the same site `srv-14` patched to copy `overrideTtsVoices`), also copy the source character's `voiceStyle` onto the reused character when the reused one lacks it. Idempotent; never overwrite an existing persona.
-- _Acceptance:_ design a voice in book A, auto-match the same character into a fresh book B → B's cast.json carries `voiceStyle` immediately (no backfill, no read-time fallback needed). A reused character that already has a `voiceStyle` is untouched.
-- _Key files:_ the auto-match write path `srv-14` modified (cast-link-prior / voice-match / series-cast write site); `scripts/backfill-qwen-voicestyle.mjs` is the data-recovery analogue (reference).
-- _Depends on:_ plan 149 shipped (read-time fallback + backfill).
-- _Benefit (technical):_ closes the last write-time gap so the persona is self-consistent on disk without relying on a periodic backfill — the durable companion to plan 149's heal-once + resolve-at-read.
-
 ### Engine, sidecar & analyzer
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
