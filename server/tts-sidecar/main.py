@@ -22,6 +22,7 @@ that's fine. Read the license before redistributing audio you generate.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import os
 import re
@@ -174,6 +175,70 @@ def _parse_bool(value: Optional[str], default: bool) -> bool:
     if s in ("0", "false", "no", "off"):
         return False
     return default
+
+
+# --- Process-memory instrumentation + reclaim (host-RAM leak guard) ---
+#
+# Added after the 2026-05-30 incident: a long-lived sidecar grew to ~54 GB
+# committed-private host RAM, starved the 64 GB box, and the OS killed the Node
+# server mid-run (no crash trace). Root cause: PyTorch nn.Module/Parameter
+# graphs hold reference CYCLES, so dropping a heavy model (`self._base = None`)
+# does NOT refcount-free it — it waits for CPython's cyclic GC, which lags under
+# the GIL-contended synth load, so unloaded multi-GB models pile up. The unload
+# paths now gc.collect() explicitly; this block gives the watchdog + /debug
+# endpoint a host-RAM readout so the curve is observable.
+#
+# psutil is a hard transitive dep (accelerate → it); declared explicitly in
+# requirements.txt so the readout can't silently lose its only RSS source.
+# Import is guarded so a stripped install degrades to "no readout" not a crash.
+try:
+    import psutil  # type: ignore
+
+    _PROC = psutil.Process()
+except Exception:  # pragma: no cover - psutil is a hard dep in practice
+    psutil = None  # type: ignore
+    _PROC = None
+
+
+def _process_mem() -> dict[str, float]:
+    """Process memory snapshot in MB. `rss_mb` is resident set; `private_mb`
+    (Windows pmem.private) is committed-private bytes — the TRUE leak signal,
+    since it excludes shared libraries and memory-mapped weight files (the
+    incident read 54 GB private while the working set sat at 42 GB). Returns {}
+    when psutil is unavailable so callers degrade gracefully."""
+    if _PROC is None:
+        return {}
+    try:
+        mi = _PROC.memory_info()
+        out: dict[str, float] = {
+            "rss_mb": mi.rss / 1_000_000.0,
+            "vms_mb": mi.vms / 1_000_000.0,
+        }
+        private = getattr(mi, "private", None)  # Windows-only; absent elsewhere
+        if private is not None:
+            out["private_mb"] = private / 1_000_000.0
+        return out
+    except Exception:
+        return {}
+
+
+def _reclaim_host_and_vram() -> None:
+    """Full reclaim after a heavy model is dropped. ORDER matters:
+      1. gc.collect() FIRST — break the dropped nn.Module's reference cycles so
+         its backing host storage is released now, not whenever the lagging
+         cyclic collector next runs (the 2026-05-30 leak mechanism).
+      2. torch.cuda.empty_cache() SECOND — return the freed GPU tensors' blocks
+         from the caching allocator back to the driver.
+    Defensive throughout: a torch import / CUDA error must never turn an unload
+    (or a watchdog tick) into a failure."""
+    gc.collect()
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 class SynthResult:
@@ -414,6 +479,10 @@ class CoquiEngine(Engine):
         self._speakers = []
         self._resolved_device = "cpu"
         self._use_half = False
+        # Break the dropped model's reference cycles NOW (see
+        # _reclaim_host_and_vram) — nn.Module graphs aren't refcount-freed, and
+        # a lagging cyclic GC under load is what leaked host RAM (2026-05-30).
+        gc.collect()
         # `torch.cuda.empty_cache()` releases the cached allocator blocks
         # back to the driver. Python's GC will reclaim the model's tensors
         # once `self._tts = None` drops the last reference, but the cached
@@ -964,6 +1033,9 @@ class QwenEngine(Engine):
         with self._cache_lock:
             self._prompt_cache.clear()
         if had:
+            # Collect the dropped Base + VoiceDesign reference cycles before
+            # reclaiming VRAM — see _reclaim_host_and_vram (2026-05-30 leak).
+            gc.collect()
             try:
                 import torch  # type: ignore
 
@@ -983,6 +1055,11 @@ class QwenEngine(Engine):
             if self._design is None:
                 return
             self._design = None
+        # The VoiceDesign 1.7B is the heaviest transient model and this fires on
+        # the first generation after a design session — collect its cycles
+        # before freeing VRAM or the ~3.4 GB host copy lingers (the dominant
+        # contributor to the 2026-05-30 54 GB leak: ~15 design cycles × 3.4 GB).
+        gc.collect()
         try:
             import torch  # type: ignore
 
@@ -1345,6 +1422,84 @@ async def _stop_design_idle_watchdog() -> None:
         _design_idle_task = None
 
 
+# --- Host-memory safety-net watchdog ---
+#
+# Logs process RSS each tick (the leak curve — greppable as `sidecar memory:`)
+# and, past a soft threshold, forces a defensive gc+empty_cache to reclaim
+# anything the unload paths missed. It deliberately does NOT self-exit: under
+# `npm start` the Node server spawns the sidecar but does NOT respawn it on exit
+# (spawn-sidecar.ts only logs the exit), so killing the process would just stall
+# the run. In-process reclaim is the safe lever here.
+_MEM_WATCHDOG_INTERVAL = 60.0
+_mem_watchdog_task: "Optional[asyncio.Task[None]]" = None
+
+
+def _mem_warn_threshold_mb() -> float:
+    """RSS (MB) above which the watchdog forces a reclaim + warns. Default 8192:
+    the legit resident footprint (Kokoro ~1 GB + Qwen Base ~1.2 GB + torch/CUDA
+    runtime) is a few GB, so 8 GB sits well above normal yet far below the level
+    that starved the 64 GB box. Override via SIDECAR_RSS_WARN_MB; <=0 keeps the
+    per-tick logging but disables the forced reclaim."""
+    try:
+        return float(os.environ.get("SIDECAR_RSS_WARN_MB", "8192"))
+    except (TypeError, ValueError):
+        return 8192.0
+
+
+async def _memory_watchdog() -> None:
+    """See the block comment above. Never dies on a transient error."""
+    threshold = _mem_warn_threshold_mb()
+    while True:
+        try:
+            await asyncio.sleep(_MEM_WATCHDOG_INTERVAL)
+            mem = _process_mem()
+            rss = mem.get("rss_mb", 0.0)
+            if not rss:
+                continue  # psutil unavailable — nothing to report
+            priv = mem.get("private_mb")
+            log.info(
+                "sidecar memory: rss=%.0fMB%s",
+                rss,
+                f" private={priv:.0f}MB" if priv is not None else "",
+            )
+            if threshold > 0 and rss >= threshold:
+                await asyncio.to_thread(_reclaim_host_and_vram)
+                after = _process_mem().get("rss_mb", rss)
+                log.warning(
+                    "sidecar memory crossed %.0fMB (rss=%.0fMB) — forced "
+                    "gc+empty_cache reclaimed %.0fMB (now %.0fMB). If this "
+                    "recurs the leak is outliving model unload.",
+                    threshold, rss, rss - after, after,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # a watchdog must never die on a transient error
+            log.warning("sidecar memory watchdog tick failed (%s).", e)
+
+
+@app.on_event("startup")
+async def _start_memory_watchdog() -> None:
+    """Launch the host-memory safety-net watchdog (see _memory_watchdog)."""
+    global _mem_watchdog_task
+    _mem_watchdog_task = asyncio.create_task(_memory_watchdog())
+    log.info(
+        "sidecar memory watchdog started (warn/reclaim at %.0fMB rss).",
+        _mem_warn_threshold_mb(),
+    )
+
+
+@app.on_event("shutdown")
+async def _stop_memory_watchdog() -> None:
+    global _mem_watchdog_task
+    if _mem_watchdog_task is not None:
+        _mem_watchdog_task.cancel()
+        try:
+            await _mem_watchdog_task
+        except asyncio.CancelledError:
+            pass
+        _mem_watchdog_task = None
+
+
 @app.on_event("startup")
 async def _preload_default_engines() -> None:
     """Engine preload at startup.
@@ -1549,6 +1704,52 @@ def health() -> dict[str, Any]:
         "poisoned": poisoned,
         "poison_reason": poison_reason,
     }
+
+
+@app.get("/debug/memory")
+def debug_memory() -> dict[str, Any]:
+    """On-demand memory readout for leak diagnosis — pairs with the per-tick
+    `sidecar memory:` log line so the host-RAM curve is observable without
+    attaching a profiler. Reports process RSS/private bytes, Python GC stats,
+    each engine's resident-model + cache footprint, and torch CUDA
+    alloc/reserved, so you can see WHICH layer is holding memory. (Added after
+    the 2026-05-30 host-RAM leak.)"""
+    out: dict[str, Any] = {"process": _process_mem()}
+    out["gc"] = {
+        "counts": list(gc.get_count()),
+        "garbage": len(gc.garbage),
+        "tracked_objects": len(gc.get_objects()),
+    }
+    engines: dict[str, Any] = {}
+    qwen = ENGINES.get("qwen")
+    if isinstance(qwen, QwenEngine):
+        with qwen._cache_lock:
+            prompt_cache_entries = len(qwen._prompt_cache)
+        engines["qwen"] = {
+            "base_loaded": qwen._base is not None,
+            "design_loaded": qwen._design is not None,
+            "prompt_cache_entries": prompt_cache_entries,
+        }
+    coqui = ENGINES.get("coqui")
+    if isinstance(coqui, CoquiEngine):
+        engines["coqui"] = {"model_loaded": coqui._tts is not None}
+    kokoro = ENGINES.get("kokoro")
+    if isinstance(kokoro, KokoroEngine):
+        engines["kokoro"] = {"model_loaded": kokoro._kokoro is not None}
+    out["engines"] = engines
+    cuda: dict[str, Any] = {}
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            cuda = {
+                "allocated_mb": torch.cuda.memory_allocated() / 1_000_000.0,
+                "reserved_mb": torch.cuda.memory_reserved() / 1_000_000.0,
+            }
+    except Exception:
+        pass
+    out["cuda"] = cuda
+    return out
 
 
 @app.post("/load")
