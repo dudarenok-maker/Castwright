@@ -35,7 +35,7 @@ import { jaccard, nameTokens, normaliseForMatch } from '../util/text-match.js';
 
 export const voiceMatchRouter = Router();
 
-interface CharacterMatchInput {
+export interface CharacterMatchInput {
   id: string;
   name: string;
   aliases?: string[];
@@ -44,14 +44,14 @@ interface CharacterMatchInput {
   attributes?: string[];
 }
 
-interface MatchFactor {
+export interface MatchFactor {
   id: string;
   label: string;
   score: number;
   detail?: string;
 }
 
-interface Candidate {
+export interface Candidate {
   voiceId: string;
   fromBookId: string;
   fromBookTitle: string;
@@ -65,7 +65,7 @@ interface Candidate {
    TTS pipeline hashes against (see voices.ts). `characterId` is carried so
    the library-cast override endpoint can address the exact record without
    re-walking the books tree. */
-interface LibraryVoice {
+export interface LibraryVoice {
   voiceId: string;
   bookId: string;
   bookTitle: string;
@@ -165,7 +165,12 @@ function clamp01(n: number): number {
   return Math.max(0, Math.min(1, n));
 }
 
-function scoreOne(input: CharacterMatchInput, voice: LibraryVoice): Candidate | null {
+/* Score one incoming character against one library voice, returning a ranked
+   candidate or null when it falls under the name-score floor. Exported so the
+   analysis-time auto-link pass (series-reuse-link.ts) agrees byte-for-byte with
+   what the client-side voice-match would have picked — same floor, same
+   gender/age/attribute factors — instead of re-deriving its own scorer. */
+export function scoreOne(input: CharacterMatchInput, voice: LibraryVoice): Candidate | null {
   const aForms = nameForms(input.name, input.aliases ?? []);
   const bForms = nameForms(voice.name, voice.aliases);
 

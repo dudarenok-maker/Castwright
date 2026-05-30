@@ -1,0 +1,157 @@
+/* srv-13 / plan 126 Facet A — analysis-time cross-book reuse linking.
+
+   Unit-level: drives linkSeriesReuseAtAnalysis with injected scanners so the
+   matcher + guards are exercised without a real workspace. Asserts:
+     - a later book whose new character recurs by name against a prior
+       (earlier-position) confirmed character gets matchedFrom + a unified
+       voiceId + voiceState:'reused' + the denormalised bespoke qwen voice;
+     - a notLinkedTo pair is never auto-linked;
+     - the earliest (origin) book gets no links;
+     - unknown-male/female buckets and already-linked / tuned characters are
+       left alone. */
+
+import { describe, it, expect } from 'vitest';
+import {
+  linkSeriesReuseAtAnalysis,
+  type LinkableCharacter,
+  type LinkSeriesReuseOptions,
+} from './series-reuse-link.js';
+import type { LibraryCharacterRecord } from './library-cast-scan.js';
+
+const AUTHOR = 'A';
+const SERIES = 'S';
+const BOOK1 = 'book-1';
+const BOOK2 = 'book-2';
+
+/* Prior confirmed cast living in book-1 (seriesPosition 1). Wren carries the
+   designed qwen voice; Marlow is plain. */
+const PRIOR_LIBRARY: LibraryCharacterRecord[] = [
+  {
+    bookId: BOOK1,
+    bookTitle: 'Book One',
+    character: {
+      id: 'Wren',
+      name: 'Wren',
+      gender: 'female',
+      ageRange: 'teen',
+      voiceId: 'Wren',
+    },
+  },
+  {
+    bookId: BOOK1,
+    bookTitle: 'Book One',
+    character: { id: 'Marlow', name: 'Marlow', gender: 'male', ageRange: 'teen' },
+  },
+];
+
+function baseOptions(overrides: Partial<LinkSeriesReuseOptions> = {}): LinkSeriesReuseOptions {
+  return {
+    scanLibrary: async () => PRIOR_LIBRARY,
+    resolveAuthorSeries: async () => ({ author: AUTHOR, series: SERIES }),
+    positions: async () =>
+      new Map<string, number | null>([
+        [BOOK1, 1],
+        [BOOK2, 2],
+      ]),
+    /* Source cast loader for the bespoke-voice denormalisation: book-1's Wren
+       owns the qwen voice. */
+    castLoader: async (bookId: string) =>
+      bookId === BOOK1
+        ? [
+            {
+              id: 'Wren',
+              ttsEngine: 'qwen',
+              overrideTtsVoices: { qwen: { name: 'voice_Wren' } },
+            },
+          ]
+        : null,
+    ...overrides,
+  };
+}
+
+describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
+  it('links a recurring same-name character and unifies voiceId + denormalises voice', async () => {
+    const characters: LinkableCharacter[] = [
+      { id: 'Wren-new', name: 'Wren', gender: 'female', ageRange: 'teen' },
+      { id: 'newbie', name: 'Pell', gender: 'male' }, // no prior match
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
+    expect(linked).toBe(1);
+
+    const Wren = characters[0];
+    expect(Wren.matchedFrom?.bookId).toBe(BOOK1);
+    expect(Wren.matchedFrom?.characterId).toBe('Wren');
+    expect(Wren.voiceId).toBe('Wren');
+    expect(Wren.voiceState).toBe('reused');
+    /* Bespoke voice denormalised from the source book. */
+    expect(Wren.ttsEngine).toBe('qwen');
+    expect(Wren.overrideTtsVoices?.qwen?.name).toBe('voice_Wren');
+    /* Prior name unioned into aliases (already same name → dropped as self). */
+    expect(Wren.aliases).toBeUndefined();
+
+    /* Non-matching character untouched. */
+    expect(characters[1].matchedFrom).toBeUndefined();
+  });
+
+  it('never auto-links a notLinkedTo pair', async () => {
+    const characters: LinkableCharacter[] = [
+      {
+        id: 'Wren-adult',
+        name: 'Wren',
+        gender: 'female',
+        ageRange: 'adult',
+        notLinkedTo: [{ bookId: BOOK1, characterId: 'Wren' }],
+      },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
+    expect(linked).toBe(0);
+    expect(characters[0].matchedFrom).toBeUndefined();
+    expect(characters[0].voiceState).toBeUndefined();
+  });
+
+  it('produces no links for the earliest (origin) book', async () => {
+    /* book-1 IS the earliest — there is no lower-positioned prior to match
+       against, so the pass is a no-op even though the library is non-empty. */
+    const characters: LinkableCharacter[] = [
+      { id: 'Wren', name: 'Wren', gender: 'female', ageRange: 'teen' },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK1, characters, baseOptions());
+    expect(linked).toBe(0);
+    expect(characters[0].matchedFrom).toBeUndefined();
+  });
+
+  it('skips unknown-male/female buckets and already-linked characters', async () => {
+    const characters: LinkableCharacter[] = [
+      { id: 'unknown-female', name: 'Wren' }, // bucket — never reused
+      {
+        id: 'Wren-prelinked',
+        name: 'Wren',
+        matchedFrom: { bookId: 'other', characterId: 'x', confidence: 1 },
+      },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
+    expect(linked).toBe(0);
+    expect(characters[0].matchedFrom).toBeUndefined();
+    /* Existing link preserved, not overwritten. */
+    expect(characters[1].matchedFrom?.bookId).toBe('other');
+  });
+
+  it('does not demote a tuned voice to reused but still stamps the link', async () => {
+    const characters: LinkableCharacter[] = [
+      { id: 'Wren-tuned', name: 'Wren', gender: 'female', ageRange: 'teen', voiceState: 'tuned' },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
+    expect(linked).toBe(1);
+    expect(characters[0].matchedFrom?.bookId).toBe(BOOK1);
+    expect(characters[0].voiceState).toBe('tuned');
+  });
+
+  it('returns 0 for a standalone / out-of-library book', async () => {
+    const characters: LinkableCharacter[] = [{ id: 'x', name: 'Wren' }];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, {
+      ...baseOptions(),
+      resolveAuthorSeries: async () => null,
+    });
+    expect(linked).toBe(0);
+  });
+});
