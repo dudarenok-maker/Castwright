@@ -393,6 +393,16 @@ export interface GenerateAllVoiceStylesResponse {
   failures: Record<string, string>;
 }
 
+/* Persona (`instruct`) read back from a character's already-DESIGNED Qwen
+   voice sidecar (plan 149). The drawer calls this lazily to seed the "Voice
+   persona" textarea when `character.voiceStyle` is empty but the voice is
+   designed — so a reused/origin character whose persona was never mirrored
+   onto `voiceStyle` still shows it (and isn't blocked from re-designing).
+   `instruct` is '' when no sidecar/persona exists on disk. */
+export interface FetchDesignedPersonaResponse {
+  instruct: string;
+}
+
 /* Design + audition a bespoke Qwen voice for a cast member (plan 108,
    Wave 4). The server proxies the sidecar's /qwen/design-voice, which
    caches a reusable speaker embedding under a derived voiceId. The audition
@@ -2244,6 +2254,35 @@ async function mockGenerateVoiceStyle(
 ): Promise<GenerateVoiceStyleResponse> {
   await wait(80);
   return { voiceStyle: MOCK_PERSONA };
+}
+
+async function realFetchDesignedPersona(
+  bookId: string,
+  characterId: string,
+): Promise<FetchDesignedPersonaResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/designed-persona`,
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Designed-persona lookup failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+/* Mock has no on-disk voice sidecars — return an empty persona so the drawer's
+   lazy seed is a benign no-op under VITE_USE_MOCKS. */
+async function mockFetchDesignedPersona(
+  _bookId: string,
+  _characterId: string,
+): Promise<FetchDesignedPersonaResponse> {
+  await wait(40);
+  return { instruct: '' };
 }
 
 async function mockGenerateAllVoiceStyles(
@@ -4101,6 +4140,7 @@ const real = {
   addAlias: realAddAlias,
   generateVoiceStyle: realGenerateVoiceStyle,
   generateAllVoiceStyles: realGenerateAllVoiceStyles,
+  fetchDesignedPersona: realFetchDesignedPersona,
   designQwenVoice: realDesignQwenVoice,
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
@@ -4295,6 +4335,7 @@ const mock = {
   addAlias: mockAddAlias,
   generateVoiceStyle: mockGenerateVoiceStyle,
   generateAllVoiceStyles: mockGenerateAllVoiceStyles,
+  fetchDesignedPersona: mockFetchDesignedPersona,
   designQwenVoice: mockDesignQwenVoice,
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,

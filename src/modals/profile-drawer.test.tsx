@@ -42,6 +42,9 @@ const designQwenVoice = vi.fn((_bookId: string, _characterId: string, _args?: un
     previewUrl: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
   }),
 );
+const fetchDesignedPersona = vi.fn((_bookId: string, _characterId: string) =>
+  Promise.resolve({ instruct: '' }),
+);
 vi.mock('../lib/api', () => ({
   api: {
     /* Forward exactly the args received — a 2-arg call stays 2-arg so the
@@ -53,6 +56,8 @@ vi.mock('../lib/api', () => ({
       generateVoiceStyle(bookId, characterId),
     designQwenVoice: (bookId: string, characterId: string, args?: unknown) =>
       designQwenVoice(bookId, characterId, args),
+    fetchDesignedPersona: (bookId: string, characterId: string) =>
+      fetchDesignedPersona(bookId, characterId),
   },
 }));
 
@@ -995,6 +1000,48 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
         'a bright, confident teenage voice',
       );
     });
+  });
+
+  it('seeds the persona textarea from the designed voice sidecar when voiceStyle is empty (plan 149)', async () => {
+    /* A reused/origin Qwen character whose persona lives only on the voice
+       sidecar (no `voiceStyle`): the drawer lazily reads `instruct` and seeds
+       the textarea so it isn't wrongly blank and a re-design isn't blocked. */
+    fetchDesignedPersona.mockClear();
+    fetchDesignedPersona.mockResolvedValueOnce({
+      instruct: 'A relatable teen girl, clear and earnest',
+    });
+    renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceId: 'halloran',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      // deliberately no voiceStyle
+    });
+    await waitFor(() => {
+      expect(fetchDesignedPersona).toHaveBeenCalledWith('book-1', 'halloran');
+    });
+    await waitFor(() => {
+      expect((screen.getByTestId('qwen-persona-text') as HTMLTextAreaElement).value).toBe(
+        'A relatable teen girl, clear and earnest',
+      );
+    });
+  });
+
+  it('does NOT look up the sidecar persona when the character already has a voiceStyle (plan 149)', async () => {
+    /* An existing persona must not be clobbered — the effect guards on an
+       empty voiceStyle, so the sidecar GET is never fired. */
+    fetchDesignedPersona.mockClear();
+    renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      voiceStyle: 'an existing user persona',
+    });
+    expect((screen.getByTestId('qwen-persona-text') as HTMLTextAreaElement).value).toBe(
+      'an existing user persona',
+    );
+    await Promise.resolve();
+    expect(fetchDesignedPersona).not.toHaveBeenCalled();
   });
 
   it('regenerates the persona via the api on Regenerate click', async () => {
