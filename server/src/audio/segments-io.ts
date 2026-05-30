@@ -27,6 +27,11 @@ export interface CharacterSnapshot {
       bespoke Qwen render this is the designed voiceId (e.g. `qwen-elwin`).
       Absent on pre-108 segments. */
   resolvedVoiceName?: string;
+  /** Engine this character ACTUALLY rendered in when it differs from its
+      configured engine — `'kokoro'` when a Qwen character fell back (no
+      designed voice, or Qwen unavailable). Undefined = rendered in its
+      configured engine. Drives the "Fallback (Kokoro)" cast status (fe-16). */
+  renderedFallbackEngine?: string;
   /** Attribute list captured at synthesis time, sorted by generation.ts. */
   attributes?: string[];
 }
@@ -84,4 +89,30 @@ export async function collectRenderedQwenVoiceNames(
     }
   }
   return names;
+}
+
+/* fe-16 — per-character fallback engine aggregated across a book's rendered
+   chapters. A character maps to `'kokoro'` when ANY rendered snapshot stamped
+   `renderedFallbackEngine === 'kokoro'` (the Qwen → Kokoro graceful fallback:
+   no designed voice, or Qwen unavailable at render time). The book-state GET
+   threads this map to the cast view so the live Status pill shows
+   "Fallback (Kokoro)" for characters still on the placeholder voice.
+
+   "ANY chapter fell back" wins over "some chapter rendered fine" on purpose:
+   a character that fell back in even one rendered chapter has placeholder
+   audio in the assembled book and still needs a designed voice. Designing the
+   voice + regenerating overwrites those snapshots with no fallback stamp, so
+   the map clears on the next render. */
+export async function collectRenderedFallbackEngines(
+  bookDir: string,
+  chapters: Array<{ id: number; slug: string }>,
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const segs = await loadSegmentsFiles(bookDir, chapters);
+  for (const seg of segs) {
+    for (const [characterId, snap] of Object.entries(seg.characterSnapshots ?? {})) {
+      if (snap.renderedFallbackEngine) out[characterId] = snap.renderedFallbackEngine;
+    }
+  }
+  return out;
 }
