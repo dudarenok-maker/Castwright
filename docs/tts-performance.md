@@ -227,6 +227,53 @@ Live full-book run of **The Hollow Tide** on the merged build (32/3600 token-bud
 - **Mitigation shipped (plan 143):** an RSS hard-ceiling **process-recycle** — the sidecar self-exits at `SIDECAR_RSS_RESTART_MB` (default 55% of RAM) and the srv-15 supervisor respawns a fresh process; srv-16 skips completed chapters so only the in-flight one re-renders. The report's "bulletproof" pattern, made clean by srv-15/16.
 - **Open: eliminate the leak itself** (so recycling isn't needed) — `side-11`: try `torch.backends.mkldnn.enabled=False`, pad/bucket batches to a small set of fixed shapes, `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, or an upstream `qwen_tts` fix. Repro: a variable-length bench loop; watch `/debug/memory` (RSS climbs + CUDA flat = this leak).
 
+### Qwen3-TTS 0.6B — full-book overnight run on the FIXED build (32/3600, plans 141/146/147) — 2026-05-31 ✅ best sustained full-book result
+
+The headline run: a complete overnight render of **The Hollow Tide** (the full story, chapters 25–49 of the manuscript = chapterIds 27–51) on the build carrying all three prior fixes — the gc-on-unload + RSS-recycle leak work (plan 141/143), the Kokoro pre-warm / fallback gate (plan 146), and the sidecar-readiness gate (plan 147 / srv-17b). Goal was twofold: re-render the whole book on Qwen for engine consistency, and validate those fixes on a genuine multi-voice book rather than a micro-bench. **All three held; the config sustained ~realtime across 25 chapters.** A late stall (root-caused below) was a *new*, separate bug (back-matter), since fixed as plan 148.
+
+_Settings:_ adopted production config **`QWEN_BATCH_SIZE=32`, `QWEN_BATCH_TOKEN_BUDGET=3600`** (the shipped defaults), **single generation worker** (account `generationWorkers`; the per-chapter-fastest config per 2026-05-28/29), eager Qwen (`PRELOAD_QWEN=1`), **Kokoro NOT loaded** (plan 146 stopped the unconditional pre-warm), `QWEN_ATTN_IMPL=sdpa`, Windows High-performance plan. 8 GB 4070 Laptop / 64 GB host. RTF = server-reported `synth ÷ audio` (the true pipeline figure; per-character voice routing + batching + MP3 assembly).
+
+**Per-chapter RTF (all 25 rendered chapters, in render order):**
+
+| Ch | Lines | Audio s | Synth s | RTF | Note |
+|---|---|---|---|---|---|
+| 27 | 230 | 789.6 | 779.9 | **0.99** | post-reboot start; already ~realtime |
+| 28 | 268 | 807.6 | 846.0 | 1.05 | |
+| 29 | 165 | 583.8 | 567.4 | 0.97 | |
+| 30 | 311 | 1221.6 | 1116.8 | **0.91** | big prose chapter packs wide — best |
+| 31 | 127 | 530.3 | 510.8 | 0.96 | |
+| 32 | 95 | 339.8 | 411.3 | 1.21 | short ch — fixed overhead dominates |
+| 33 | 170 | 580.9 | 628.2 | 1.08 | |
+| 34 | 171 | 577.7 | 599.7 | 1.04 | |
+| 35 | 215 | 717.4 | 754.5 | 1.05 | |
+| — | | | | | **recycle #1** 01:56 (RSS ceiling) → respawn 2 s, queue rode through (srv-17b) |
+| 37 | 221 | 642.9 | 810.1 | 1.26 | first chapter post-respawn (model just reloaded) |
+| 38 | 216 | 856.8 | 890.9 | 1.04 | |
+| 39 | 115 | 359.2 | 390.9 | 1.09 | short |
+| 40 | 234 | 818.9 | 805.0 | 0.98 | |
+| 41 | 224 | 697.9 | 723.8 | 1.04 | |
+| 42 | 251 | 972.7 | 966.3 | 0.99 | |
+| 43 | 131 | 460.4 | 479.9 | 1.04 | |
+| 44 | 307 | 1073.6 | 1048.6 | 0.98 | |
+| 45 | 169 | 559.6 | 547.3 | 0.98 | |
+| — | | | | | **recycle #2** 03:53 → respawn 2 s, queue rode through (srv-17b) |
+| 46 | 286 | 814.8 | 927.4 | 1.14 | first post-respawn |
+| 47 | 222 | 771.1 | 814.7 | 1.06 | |
+| 48 | 176 | 654.4 | 670.7 | 1.03 | |
+| 49 | 244 | 889.0 | 907.7 | 1.02 | |
+| 50 | 240 | 1174.4 | 1281.7 | 1.09 | |
+| 51 | 293 | 1148.4 | 1042.7 | **0.91** | last story chapter — under realtime |
+| 36 | 246 | 1024.3 | 1227.3 | 1.20 | re-rendered ~2 h later (recycle-orphan retry, see srv-17c) |
+
+**Aggregate: ~5.30 h of audio produced at RTF ≈ 1.04** (Σ synth 19 750 s ÷ Σ audio 19 067 s). Per-chapter mean **1.04**, median **1.04**, range **0.91–1.26**, pace ~4.6 ch/hr (excluding the stall). **This is the best sustained full-book figure on record** — the 2026-05-30 partial run showed 1.10–1.70 over 3 chapters; this holds ~1.04 across 25 real multi-voice chapters, with two dipping under realtime. Confirms 32/3600 + single-worker as the production config on the 4070.
+
+**Fix validation (the real point of the run):**
+- **No VRAM spill, all night.** `kokoroLoaded` stayed `false` across ~20 health checks; CUDA reserved held **~1.9–3.9 GB** (never near 8 GB). The plan-146 pre-warm fix is what kept Kokoro off the card — the spilling-era ~3.7–4.8 RTF was the oversubscription it caused, and it did not recur (~4× recovery, sustained).
+- **2 host-RAM recycles fired and both self-healed** (plan 143 + srv-17b). The sidecar self-exited at the RSS ceiling (`code=0`), the supervisor respawned in ~2 s, host RAM dropped (37→15 GB, 37→11 GB), and **the queue never paused and the breaker never tripped** — the exact failure the 2026-05-30 run hit (paused ~34 min) is now ridden out unattended. The gc/leak work held host RAM bounded (~37 GB plateau, not unbounded growth).
+- **srv-17c surfaced** (NOT yet fixed): each mid-chapter recycle drops the single *in-flight* chapter to terminal `failed` (the readiness gate guards the *next* dispatch, not a chapter already synthesizing). Observed twice — ch46 self-recovered, ch36 needed a manual retry (the 07:43 row). Follow-up: drain/requeue the in-flight chapter across a recycle.
+
+**The ~1 h end-of-run stall — a NEW bug, root-caused + fixed (plan 148), not a perf regression.** After ch51 (the last *story* chapter), the queue tail went 4-wide on chapterIds 52–59, which are **EPUB back-matter** (Acknowledgments, a next-book teaser + that book's PREFACE/ONE, About-the-author, Copyright, CONTENTS) the parser admitted as chapters. Degenerate non-prose input (a table of contents) sent Qwen's open-ended decode into a runaway (one batch logged 261 s compute for 51 s audio, RTF >5) and **hung the queue ~1 h with no chapter ever reaching `failed`** (server + sidecar both alive; sidecar memory frozen, GPU idle). Fixed defensively: **Layer A** auto-excludes detected front/back-matter at import/re-parse so it never queues; **Layer B** a per-call synth timeout (`SIDECAR_CALL_TIMEOUT_MS`, default 600 s) aborts a runaway call and fails the chapter so the queue advances. See `docs/features/148-skip-nonnarration-chapters.md` and memory `project_multiworker_qwen_final_batch_stall`. **Lesson for perf reads: 52–59 were never narration — a "full book" tops out at the last story chapter; check `state.json` chapter titles before treating tail chapters as renderable.**
+
 ## Open levers to measure (feeds `side-3` / `side-4`)
 
 1. ~~**Length-bucketing batches**~~ (plan 128) — group similar-length sentences before each `/synthesize-batch` so a batch decodes to a tighter max-length. **SHIPPED + ADOPTED 2026-05-30** (`synthesise-chapter.ts` sort, `QWEN_BATCH_BUCKET` default ON, output-preserving). Validated on the live 8 GB box as the foundation of the token-budget packer (7); plan 128 → `stable`, `side-6` closed.
