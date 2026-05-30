@@ -1729,6 +1729,92 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ExportLanInfo' }
 
+  /api/books/{bookId}/state:
+    get:
+      summary: Book-open hydrate composite (state + cast + manuscript meta + revisions + …)
+      operationId: getBookState
+      description: |
+        The single payload the layout reads when a book is opened: `state.json`,
+        the on-disk cast, lightweight manuscript meta, pending revisions/drift,
+        completed-chapter slugs, per-chapter loudness, and (fe-16) the
+        per-character render-time engine-fallback map. The full per-field shape
+        is hand-modeled in `src/lib/types.ts:BookStateResponse`; the schema here
+        enumerates the top-level keys and references the component schemas that
+        exist, keeping `state` (`BookStateJson`) and the loose `Record` maps
+        permissive rather than duplicating those large shapes.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Book-open composite
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookStateResponse' }
+        '404':
+          description: Book not found
+
+  /api/books/{bookId}/cast/{characterId}/not-linked-to:
+    post:
+      summary: Mark a cross-book duplicate pair as intentionally separate (plan 101)
+      operationId: markNotLinkedTo
+      description: |
+        "These two cross-book characters look like duplicates to the voices-view
+        detector, but they ARE intentionally separate people (e.g. teenage
+        Wren vs adult Wren)." Writes a symmetric `notLinkedTo` pair to BOTH
+        books' cast.json so the duplicate-candidate predicate stops surfacing
+        the pair on either side. Cross-book only (same author + series, neither
+        standalone); self-pair and same-book pairs are rejected. Idempotent — an
+        already-present pair is a no-op on that side.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotLinkedToRequest' }
+      responses:
+        '200':
+          description: The symmetric pair that was written
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotLinkedToResponse' }
+        '400':
+          description: Missing fields, self-pair, or same-book pair
+        '404':
+          description: Source/other book or character not found, or not a series-mate
+        '409':
+          description: Source or other book has no cast on disk yet
+    delete:
+      summary: Undo a "different on purpose" decision (fs-11)
+      operationId: removeNotLinkedTo
+      description: |
+        Removes the symmetric `notLinkedTo` pair from BOTH books' cast.json so
+        the voices-view duplicate detector starts surfacing the pair again. Same
+        guards + body shape as the POST (cross-book only, series-mate scope,
+        self-pair rejected). Fully idempotent: an absent pair on either side is a
+        no-op for that side and the route still 200s.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotLinkedToRequest' }
+      responses:
+        '200':
+          description: The symmetric pair that was removed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotLinkedToResponse' }
+        '400':
+          description: Missing fields, self-pair, or same-book pair
+        '404':
+          description: Source/other book or character not found, or not a series-mate
+        '409':
+          description: Source or other book has no cast on disk yet
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------
@@ -3648,3 +3734,128 @@ components:
           type: integer
           minimum: 1
           description: "Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU."
+
+    # --- Cross-book duplicate "not linked to" (plan 101 + fs-11) -----
+    NotLinkedToRequest:
+      type: object
+      required: [otherBookId, otherCharacterId]
+      description: |
+        The OTHER side of a cross-book pair. The source side comes from the
+        path (`bookId` + `characterId`).
+      properties:
+        otherBookId: { type: string }
+        otherCharacterId: { type: string }
+    CastCharacterRef:
+      type: object
+      required: [bookId, characterId]
+      properties:
+        bookId: { type: string }
+        characterId: { type: string }
+    NotLinkedToResponse:
+      type: object
+      required: [pair]
+      description: The symmetric pair written to (or removed from) both books.
+      properties:
+        pair:
+          type: object
+          required: [a, b]
+          properties:
+            a: { $ref: '#/components/schemas/CastCharacterRef' }
+            b: { $ref: '#/components/schemas/CastCharacterRef' }
+
+    # --- Book-open hydrate composite (GET /api/books/{bookId}/state) --
+    BookStateResponse:
+      type: object
+      description: |
+        Book-open hydrate composite. Canonical per-field shape is hand-modeled
+        in `src/lib/types.ts:BookStateResponse`; this schema enumerates the
+        top-level keys and references the component schemas that exist, keeping
+        `state` (`BookStateJson`) and the loose `Record` maps permissive rather
+        than duplicating those large shapes here.
+      required: [state, cast, manuscript, manuscriptEdits, revisions, completedSlugs, changeLog]
+      properties:
+        state:
+          type: object
+          additionalProperties: true
+          description: |
+            `BookStateJson` from `<bookDir>/.audiobook/state.json` (title,
+            author, series, castConfirmed, tags, language, …). Hand-modeled in
+            `src/lib/types.ts`; kept permissive here rather than duplicated.
+        cast:
+          type: object
+          nullable: true
+          required: [characters]
+          properties:
+            characters:
+              type: array
+              items: { $ref: '#/components/schemas/Character' }
+        manuscript:
+          type: object
+          nullable: true
+          required: [wordCount, format]
+          description: Lightweight manuscript meta pulled from the in-memory ManuscriptRecord.
+          properties:
+            wordCount: { type: integer }
+            format: { type: string }
+        manuscriptEdits:
+          type: object
+          nullable: true
+          properties:
+            sentences:
+              type: array
+              items: { $ref: '#/components/schemas/Sentence' }
+        revisions:
+          type: object
+          nullable: true
+          properties:
+            pending:
+              type: array
+              items: { $ref: '#/components/schemas/Revision' }
+            drift:
+              type: array
+              items: { $ref: '#/components/schemas/DriftEvent' }
+            dismissed:
+              type: array
+              items: { type: string }
+            acceptedSelections:
+              type: object
+              additionalProperties: true
+              description: revisionId → { segmentIndex → 'A' | 'B' } captured at accept time.
+        completedSlugs:
+          type: array
+          items: { type: string }
+          description: Slugs of chapters that already have an audio file on disk.
+        chapterLufs:
+          type: object
+          additionalProperties: true
+          description: |
+            chapterId → EBU R128 loudness sidecar payload (a `ChapterLoudness`,
+            or null when the sidecar is missing). Permissive map; the value
+            shape is `ChapterLoudness`.
+        chapterCharacters:
+          type: object
+          description: chapterId → analysed speaker ids that actually speak in the chapter.
+          additionalProperties:
+            type: array
+            items: { type: string }
+        renderedFallbackByCharacter:
+          type: object
+          description: |
+            fe-16 — characterId → the engine the character ACTUALLY rendered in
+            when it differs from its configured engine (`kokoro` when a Qwen
+            character fell back across any rendered chapter). Threaded into
+            `resolveVoiceStatus` so the cast Status pill reads
+            "Fallback (Kokoro)". Empty/absent when nothing fell back.
+          additionalProperties: { type: string }
+        changeLog:
+          type: array
+          nullable: true
+          items: { $ref: '#/components/schemas/ChangeLogEvent' }
+          description: Editorial activity trail; null when no change-log.json exists yet.
+        analysis:
+          type: object
+          description: Persistent analysis state for the analysing view's per-chapter Retry buttons.
+          properties:
+            failedChapterIds:
+              type: array
+              items: { type: integer }
