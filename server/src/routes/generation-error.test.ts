@@ -33,6 +33,59 @@ describe('describeSynthesisError', () => {
     expect(out.errorReason).toMatch(/rate-limited/i);
   });
 
+  it('a real 429 is still Gemini-rate-limited even when the engine is local', () => {
+    /* A genuine HTTP 429 only comes from the metered cloud engine, so the
+       Gemini wording is correct regardless of the run's primary engine. */
+    const err = Object.assign(new Error('Too Many Requests'), { status: 429 });
+    const out = describeSynthesisError(err, 'qwen');
+    expect(out.fatal).toBe(true);
+    expect(out.errorReason).toMatch(/gemini tts rate-limited/i);
+  });
+
+  it('does NOT classify a local synth timeout as a Gemini rate-limit (the "degenerate" substring bug)', () => {
+    /* 2026-05-31 the Hollow Tide The Drowning Bell CH24: a local Qwen batch blew the 600s
+       per-call ceiling and threw ChapterSynthTimeoutError. Its message contains
+       "runaway/degenerate input" — and the OLD /rate/i quota regex matched the
+       "rate" inside "dege·nerate", so the local timeout was reported as
+       "Gemini TTS rate-limited" AND escalated to fatal, stopping the whole book.
+       It must be NON-fatal (skip & advance) and never mention Gemini. */
+    const timeoutErr = Object.assign(
+      new Error(
+        'TTS batch call exceeded 600s with no result — likely runaway/degenerate input. ' +
+          'Skipping this chapter so the queue can advance.',
+      ),
+      { name: 'ChapterSynthTimeoutError' },
+    );
+    const out = describeSynthesisError(timeoutErr, 'qwen');
+    expect(out.fatal).toBe(false);
+    expect(out.errorReason).not.toMatch(/gemini/i);
+    expect(out.errorReason).not.toMatch(/rate-limited/i);
+    expect(out.errorReason).toMatch(/timed out/i);
+  });
+
+  it('does not blame Gemini for a rate-limit-shaped message on a local engine', () => {
+    /* Defense-in-depth: even if a local engine somehow emits a "rate limit"
+       phrase (no HTTP 429), don't pin it on Gemini — surface it non-fatally. */
+    const err = new Error('Local TTS sidecar returned 503: {"detail":"rate limit exceeded"}');
+    const out = describeSynthesisError(err, 'qwen');
+    expect(out.fatal).toBe(false);
+    expect(out.errorReason).not.toMatch(/gemini/i);
+  });
+
+  it('still flags a real Gemini quota message (engine=gemini) as fatal', () => {
+    const err = new Error('RESOURCE_EXHAUSTED: Quota exceeded for the current project');
+    const out = describeSynthesisError(err, 'gemini');
+    expect(out.fatal).toBe(true);
+    expect(out.errorReason).toMatch(/gemini tts rate-limited/i);
+  });
+
+  it('treats the word "generated" in an unmapped error as non-fatal, not a rate-limit', () => {
+    /* "generated" also contains the substring "rate" — guard the same class. */
+    const out = describeSynthesisError(new Error('Audio could not be generated for this segment'));
+    expect(out.fatal).toBe(false);
+    expect(out.errorReason).not.toMatch(/rate-limited/i);
+  });
+
   it('flags 401/403 auth as fatal', () => {
     const err = Object.assign(new Error('forbidden'), { status: 403 });
     const out = describeSynthesisError(err);
