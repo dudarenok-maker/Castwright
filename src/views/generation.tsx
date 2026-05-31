@@ -63,7 +63,7 @@ import {
   overallProgress,
   sentencesPerChapter,
 } from '../lib/generation-progress';
-import { withRecomputedDisplay } from '../lib/change-log';
+import { relativeTime, withRecomputedDisplay } from '../lib/change-log';
 import { LOG_TYPES } from '../data/log-types';
 import type {
   Chapter,
@@ -375,6 +375,23 @@ export function GenerationView({
     guard(() => {
       void handleToggleExcluded(chapterId, false);
     });
+  }
+
+  /* Escape hatch for a chapter stuck showing "Queued" with no active run —
+     e.g. one that failed before the durable failure-status landed, so the
+     queue entry was long since cleared and nothing remembers it. A queued row
+     otherwise only offers Rename/Exclude, leaving such a chapter unactionable.
+     This directly enqueues a single-chapter entry (mirrors the drift-bulk
+     enqueue above); the queue dispatcher claims it and opens the stream. We
+     skip the reason-prompt RegenerateModal that `onRegenerate` opens because a
+     never-rendered chapter has no prior render to "regenerate". */
+  function handleGenerateChapter(ch: Chapter): void {
+    const rand = Math.random().toString(36).slice(2, 8);
+    void dispatch(
+      enqueueQueueEntries([
+        { id: `generate-row-${bookId}-${ch.id}-${rand}`, bookId, chapterId: ch.id, scope: 'this' },
+      ]),
+    );
   }
 
   /* Manuscript-derived shape used both for accurate overall-progress
@@ -794,6 +811,7 @@ export function GenerationView({
               charStats={characterStats[ch.id]}
               charPositions={characterPositions[ch.id]}
               onRegenerate={onRegenerate}
+              onGenerateChapter={handleGenerateChapter}
               onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
               onPreview={onPreview}
               onRename={setRenamingChapter}
@@ -900,6 +918,9 @@ interface ChapterRowProps {
   charStats: Record<string, { lines: number; words: number }> | undefined;
   charPositions: Record<string, number[]> | undefined;
   onRegenerate: (ch: Chapter) => void;
+  /** Escape hatch for a stuck/never-rendered `queued` row: enqueues this one
+      chapter directly (no reason prompt) so the dispatcher picks it up. */
+  onGenerateChapter: (ch: Chapter) => void;
   onRegenerateCharacterInChapter: (charId: string, chapterId: number) => void;
   onPreview: (chapterId: number) => void;
   /** Plan 78 — opens the rename modal for this chapter. View-level
@@ -935,6 +956,7 @@ function ChapterRow({
   charStats,
   charPositions,
   onRegenerate,
+  onGenerateChapter,
   onRegenerateCharacterInChapter,
   onPreview,
   onRename,
@@ -1143,6 +1165,19 @@ function ChapterRow({
             button gets min-h + tap padding so the touch target hits ≥44px
             without changing the visual size of the labels on desktop. */
         <div className="px-4 sm:px-6 pb-3 sm:pb-4 -mt-2 flex flex-wrap justify-end items-center gap-x-3 gap-y-1">
+          {/* When the audio was synthesised. `mr-auto` keeps it left-aligned
+              while the action buttons stay right-aligned and wrap cleanly on
+              phone. Relative label (matches the Activity feed) with the exact
+              date/time on hover. Guarded on the field so legacy chapters
+              rendered before it existed simply omit the line. */}
+          {chapter.state === 'done' && chapter.audioRenderedAt && (
+            <span
+              className="mr-auto text-[11px] text-ink/40 tabular-nums"
+              title={new Date(chapter.audioRenderedAt).toLocaleString()}
+            >
+              Generated {relativeTime(chapter.audioRenderedAt)}
+            </span>
+          )}
           {chapter.state === 'done' && (
             <button
               onClick={(e) => {
@@ -1193,6 +1228,24 @@ function ChapterRow({
           expanded view keeps the collapsed row visually clean. */}
       {expanded && (chapter.state === 'queued' || chapter.state === 'in_progress') && (
         <div className="px-4 sm:px-6 -mt-3 flex flex-wrap justify-end items-center gap-x-3 gap-y-1">
+          {/* Escape hatch: a `queued` row that isn't part of an active run
+              (e.g. one that failed before the durable status landed, then had
+              its queue entry cleared) is otherwise unactionable. Enqueue it
+              directly so the dispatcher renders just this chapter. */}
+          {chapter.state === 'queued' && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onGenerateChapter(chapter);
+              }}
+              data-testid={`chapter-row-${chapter.id}-generate`}
+              aria-label={`Generate chapter ${chapter.id}`}
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-magenta hover:text-magenta/80 transition-colors"
+              title="Queue this chapter for synthesis now."
+            >
+              <IconPlay className="w-3.5 h-3.5" /> Generate this chapter
+            </button>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();

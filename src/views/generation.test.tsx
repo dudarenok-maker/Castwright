@@ -1569,3 +1569,105 @@ describe('GenerationView — phone viewport (375×667, Wave 3)', () => {
     expect(row!.className).toContain('min-h-[44px]');
   });
 });
+
+describe('GenerationView — stuck-queued escape hatch + generated-time (side: stuck-queued)', () => {
+  function makeViewStore(chapters: Chapter[]) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters,
+        sentences,
+      } as any),
+    );
+    return store;
+  }
+
+  function renderWith(chapters: Chapter[]) {
+    const store = makeViewStore(chapters);
+    return render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={chapters}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('a queued row exposes "Generate this chapter" which enqueues just that chapter', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: () => Promise.resolve({ entries: [], paused: false }),
+    } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWith([chapter1, chapter2]);
+    /* Expand the queued chapter — the escape-hatch action lives in the
+       expanded panel (the collapsed row stays visually clean). */
+    fireEvent.click(screen.getByText('Chapter 2'));
+    const btn = screen.getByRole('button', { name: /Generate chapter 2/i });
+    expect(btn).toBeInTheDocument();
+
+    fireEvent.click(btn);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/queue/enqueue',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const call = fetchMock.mock.calls.find((c) => c[0] === '/api/queue/enqueue');
+    const body = JSON.parse((call?.[1] as { body: string }).body) as {
+      entries: { bookId: string; chapterId: number; scope: string }[];
+    };
+    expect(body.entries).toHaveLength(1);
+    expect(body.entries[0]).toMatchObject({ bookId: 'b1', chapterId: 2, scope: 'this' });
+    vi.unstubAllGlobals();
+  });
+
+  it('does NOT offer "Generate this chapter" on a done row', () => {
+    renderWith([chapter1, chapter2]);
+    fireEvent.click(screen.getByText('Chapter 1')); // done chapter
+    expect(screen.queryByRole('button', { name: /Generate chapter 1/i })).toBeNull();
+  });
+
+  it('shows the audio-generated time on a done row with the absolute timestamp on hover', () => {
+    const renderedAt = '2026-05-31T16:39:00.000Z';
+    const done: Chapter = { ...chapter1, audioRenderedAt: renderedAt };
+    renderWith([done, chapter2]);
+    const label = screen.getByText(/^Generated /);
+    expect(label).toBeInTheDocument();
+    /* Tooltip carries the exact local date/time. */
+    expect(label.getAttribute('title')).toBe(new Date(renderedAt).toLocaleString());
+  });
+
+  it('omits the generated-time line on a done row that predates audioRenderedAt', () => {
+    /* chapter1 has no audioRenderedAt → no "Generated …" line (legacy audio). */
+    renderWith([chapter1, chapter2]);
+    expect(screen.queryByText(/^Generated /)).toBeNull();
+  });
+});
