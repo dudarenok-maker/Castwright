@@ -833,6 +833,74 @@ describe('chaptersSlice — hydrateFromBookState', () => {
     expect(next.chapters[0].lufs).toBeUndefined();
     expect(next.chapters[1].lufs).toBeUndefined();
   });
+
+  /* Durable per-chapter failure status. A chapter that failed wrote no audio
+     so it's absent from completedSlugs; before this, it re-hydrated as the
+     misleading neutral "queued". Honor the persisted `generationState:'failed'`
+     so it shows "Failed · reason" with a Retry control after a reload / once
+     the (clearable) queue entry is gone. */
+  it("hydrates a not-done chapter with generationState 'failed' as state 'failed' + errorReason", () => {
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
+          {
+            id: 2,
+            title: 'Chapter 2',
+            slug: '02-chapter-two',
+            generationState: 'failed',
+            generationError: "Local TTS sidecar returned 400: Item 0: 'text' is required.",
+          },
+        ],
+        completedSlugs: [],
+        characters: cast,
+      }),
+    );
+    expect(next.chapters[0].state).toBe('queued');
+    expect(next.chapters[0].errorReason).toBeUndefined();
+    expect(next.chapters[1].state).toBe('failed');
+    expect(next.chapters[1].errorReason).toBe(
+      "Local TTS sidecar returned 400: Item 0: 'text' is required.",
+    );
+  });
+
+  it("lets a chapter on disk (done) win over a stale generationState 'failed'", () => {
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters: [
+          {
+            id: 1,
+            title: 'Chapter 1',
+            slug: '01-chapter-one',
+            generationState: 'failed',
+            generationError: 'a stale failure that a later successful render should hide',
+          },
+        ],
+        completedSlugs: ['01-chapter-one'],
+        characters: cast,
+      }),
+    );
+    expect(next.chapters[0].state).toBe('done');
+    expect(next.chapters[0].errorReason).toBeUndefined();
+  });
+
+  it("hydrates as 'queued' when generationState is absent (unchanged baseline)", () => {
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+      }),
+    );
+    expect(next.chapters[0].state).toBe('queued');
+    expect(next.chapters[1].state).toBe('queued');
+  });
 });
 
 describe('chaptersSlice — misc reducers', () => {

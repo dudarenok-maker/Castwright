@@ -250,7 +250,19 @@ export const chaptersSlice = createSlice({
             id: c.id,
             title: c.title,
             duration: c.duration ?? '00:00',
-            state: done.has(c.slug) ? 'done' : 'queued',
+            /* `done` (audio on disk) wins over a stale persisted failure, so a
+           chapter that later rendered is never stuck showing "Failed".
+           Otherwise honor the durable `generationState: 'failed'` so a
+           failed chapter re-hydrates as "Failed · reason" with a Retry
+           control instead of the misleading neutral "Queued" — the failure
+           record no longer lives only in the (clearable) queue entry. */
+            state: done.has(c.slug)
+              ? 'done'
+              : c.generationState === 'failed'
+                ? 'failed'
+                : 'queued',
+            errorReason:
+              !done.has(c.slug) && c.generationState === 'failed' ? c.generationError : undefined,
             progress: done.has(c.slug) ? 1 : 0,
             characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
             /* Persist the user's per-chapter exclude choice across hydrate so

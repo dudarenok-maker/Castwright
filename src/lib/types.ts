@@ -200,6 +200,15 @@ export interface BookStateJson {
     /** ISO timestamp when the audio was synthesised; mirrors the
         segments file's `synthesizedAt`. */
     audioRenderedAt?: string;
+    /** Durable record of the last synthesis FAILURE (mirror of the server's
+        BookStateJson type). Only `'failed'` is persisted — "done" comes from
+        `completedSlugs` (audio on disk) and "queued" is the absence of both.
+        Lets a failed chapter re-hydrate as "Failed · reason" instead of the
+        misleading "Queued" after a reload / queue-clear. */
+    generationState?: 'failed';
+    /** Human-readable reason behind `generationState: 'failed'`; surfaced on
+        the chapter row's failed-state error box + Retry control. */
+    generationError?: string;
   }>;
   coverGradient: [string, string];
   createdAt: string;
