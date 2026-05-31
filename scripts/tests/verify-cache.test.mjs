@@ -18,6 +18,10 @@ import {
   saveCache,
   parseFlags,
   selectStepFiles,
+  stepTouchedByDiff,
+  computeShared,
+  parseNvidiaSmiUtil,
+  STEPS,
   _internals,
 } from '../verify-cache.mjs';
 
@@ -177,15 +181,24 @@ test('path normalization — Windows and POSIX produce identical hashes', () => 
 });
 
 test('parseFlags recognizes --no-cache anywhere in argv', () => {
-  assert.deepEqual(parseFlags([]), { noCache: false, steps: null });
-  assert.deepEqual(parseFlags(['--no-cache']), { noCache: true, steps: null });
-  assert.deepEqual(parseFlags(['a', 'b', '--no-cache', 'c']), { noCache: true, steps: null });
+  assert.deepEqual(parseFlags([]), { noCache: false, steps: null, scopeStaged: false });
+  assert.deepEqual(parseFlags(['--no-cache']), {
+    noCache: true,
+    steps: null,
+    scopeStaged: false,
+  });
+  assert.deepEqual(parseFlags(['a', 'b', '--no-cache', 'c']), {
+    noCache: true,
+    steps: null,
+    scopeStaged: false,
+  });
 });
 
 test('parseFlags --steps with space-separated form', () => {
   assert.deepEqual(parseFlags(['--steps', 'test:hooks,test,test:server']), {
     noCache: false,
     steps: ['test:hooks', 'test', 'test:server'],
+    scopeStaged: false,
   });
 });
 
@@ -193,6 +206,7 @@ test('parseFlags --steps with = form', () => {
   assert.deepEqual(parseFlags(['--steps=test:hooks,test,test:server']), {
     noCache: false,
     steps: ['test:hooks', 'test', 'test:server'],
+    scopeStaged: false,
   });
 });
 
@@ -200,6 +214,7 @@ test('parseFlags --steps trims whitespace and drops empty segments', () => {
   assert.deepEqual(parseFlags(['--steps=test:hooks , , test']), {
     noCache: false,
     steps: ['test:hooks', 'test'],
+    scopeStaged: false,
   });
 });
 
@@ -207,6 +222,7 @@ test('parseFlags --steps combines with --no-cache', () => {
   assert.deepEqual(parseFlags(['--steps=test:hooks,test', '--no-cache']), {
     noCache: true,
     steps: ['test:hooks', 'test'],
+    scopeStaged: false,
   });
 });
 
@@ -214,12 +230,32 @@ test('parseFlags missing --steps argument yields empty list (caller errors out)'
   // `--steps` with no following arg, or followed by another `--flag`, is a
   // user-error case that runPipeline surfaces as a non-zero exit rather than
   // silently running the full pipeline.
-  assert.deepEqual(parseFlags(['--steps']), { noCache: false, steps: [] });
-  assert.deepEqual(parseFlags(['--steps', '--no-cache']), { noCache: true, steps: [] });
+  assert.deepEqual(parseFlags(['--steps']), {
+    noCache: false,
+    steps: [],
+    scopeStaged: false,
+  });
+  assert.deepEqual(parseFlags(['--steps', '--no-cache']), {
+    noCache: true,
+    steps: [],
+    scopeStaged: false,
+  });
 });
 
 test('parseFlags absent --steps leaves steps null (full pipeline)', () => {
-  assert.deepEqual(parseFlags(['some', 'other', 'arg']), { noCache: false, steps: null });
+  assert.deepEqual(parseFlags(['some', 'other', 'arg']), {
+    noCache: false,
+    steps: null,
+    scopeStaged: false,
+  });
+});
+
+test('parseFlags recognizes --scope-staged', () => {
+  assert.deepEqual(parseFlags(['--scope-staged']), {
+    noCache: false,
+    steps: null,
+    scopeStaged: true,
+  });
 });
 
 test('hashFile returns __missing__ for absent files (no throw)', () => {
@@ -305,4 +341,71 @@ test('stepName participates in the hash (different steps with same inputs differ
   const a = composeInputHash(fixedArgs({ stepName: 'lint' }));
   const b = composeInputHash(fixedArgs({ stepName: 'test' }));
   assert.notEqual(a, b);
+});
+
+// --- Pre-commit scope filter (plan 156) ---------------------------------
+
+const stepByName = Object.fromEntries(STEPS.map((s) => [s.name, s]));
+
+test('stepTouchedByDiff: a sidecar-only diff leaves the fast legs out of scope', () => {
+  const diff = ['server/tts-sidecar/main.py'];
+  assert.equal(stepTouchedByDiff(stepByName['test'], diff), false); // frontend
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), false);
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), false);
+});
+
+test('stepTouchedByDiff: a frontend diff is in scope for test, not test:server', () => {
+  const diff = ['src/views/listen.tsx'];
+  assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), false);
+});
+
+test('stepTouchedByDiff: a server diff is in scope for test:server, not test', () => {
+  const diff = ['server/src/routes/generation.ts'];
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
+  assert.equal(stepTouchedByDiff(stepByName['test'], diff), false);
+});
+
+test('stepTouchedByDiff: a hook-script diff matches test:hooks via extraFiles', () => {
+  const diff = ['scripts/validate-commit-msg.mjs'];
+  assert.equal(stepTouchedByDiff(stepByName['test:hooks'], diff), true);
+});
+
+test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
+  const diff = ['tailwind.config.ts'];
+  assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);
+});
+
+test('stepTouchedByDiff: the server lockfile is in scope for server legs only', () => {
+  const diff = ['server/package-lock.json'];
+  assert.equal(stepTouchedByDiff(stepByName['test:server'], diff), true);
+  assert.equal(stepTouchedByDiff(stepByName['test'], diff), false);
+});
+
+test('stepTouchedByDiff: an empty diff touches nothing', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test'], []), false);
+});
+
+test('computeShared is true for a root manifest/lockfile change', () => {
+  assert.equal(computeShared(['package.json']), true);
+  assert.equal(computeShared(['package-lock.json']), true);
+});
+
+test('computeShared is false for a scoped-only change', () => {
+  assert.equal(computeShared(['server/package-lock.json']), false);
+  assert.equal(computeShared(['src/app.tsx']), false);
+});
+
+// --- Contention guard (plan 156) ----------------------------------------
+
+test('parseNvidiaSmiUtil parses the first GPU utilization line', () => {
+  assert.equal(parseNvidiaSmiUtil('87\n'), 87);
+  assert.equal(parseNvidiaSmiUtil('5\n92\n'), 5); // first GPU on a multi-GPU box
+  assert.equal(parseNvidiaSmiUtil('43, 7000\n'), 43); // ignores trailing CSV fields
+});
+
+test('parseNvidiaSmiUtil returns null on empty / unparseable output', () => {
+  assert.equal(parseNvidiaSmiUtil(''), null);
+  assert.equal(parseNvidiaSmiUtil('\n'), null);
+  assert.equal(parseNvidiaSmiUtil('N/A\n'), null);
 });

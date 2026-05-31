@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { lowConcurrency } from './test-concurrency.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -156,7 +157,11 @@ export function parseFlags(argv) {
       steps = parseStepsCsv(a.slice('--steps='.length));
     }
   }
-  return { noCache: argv.includes('--no-cache'), steps };
+  return {
+    noCache: argv.includes('--no-cache'),
+    steps,
+    scopeStaged: argv.includes('--scope-staged'),
+  };
 }
 
 function parseStepsCsv(csv) {
@@ -338,6 +343,90 @@ export function selectStepFiles({ fileList, step }) {
   return [...set].sort();
 }
 
+// --- Scope filter (pre-commit) -------------------------------------------
+// Diff-driven gate that sits IN FRONT of the input-hash cache: a step whose
+// scope the staged diff never touched is skipped outright, regardless of cache
+// state. This closes the hole where a flaked prior run (no green entry) forces
+// an out-of-scope suite to re-run. Mirrors the scope detection in
+// .github/workflows/verify.yml; the STEPS `inputs.globs` ARE the scope map.
+
+// A root manifest change is treated as global — a dep/lock bump can affect
+// every leg (mirrors verify.yml's `shared` scope).
+export function computeShared(diffFiles) {
+  return diffFiles.some((f) => f === 'package.json' || f === 'package-lock.json');
+}
+
+// Does any staged diff file fall inside this step's declared scope? Reuses the
+// step's own globs + extraFiles + server lockfile. Deliberately NOT
+// selectStepFiles — that always injects extraFiles into its result, so it can
+// never report "untouched". This needs a real membership predicate.
+export function stepTouchedByDiff(step, diffFiles) {
+  const regexes = (step.inputs.globs ?? []).map(globToRegex);
+  for (const f of diffFiles) {
+    if (regexes.some((re) => re.test(f))) return true;
+  }
+  const extras = new Set((step.inputs.extraFiles ?? []).map(toPosix));
+  for (const f of diffFiles) {
+    if (extras.has(f)) return true;
+  }
+  if (
+    (step.inputs.includeLockfiles ?? []).includes('server') &&
+    diffFiles.includes('server/package-lock.json')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// Files staged for commit. Returns POSIX paths, or null if git fails (→ caller
+// disables the scope filter and runs everything; never skip on uncertainty).
+function stagedDiffFiles(cwd) {
+  const r = spawnSync('git', ['diff', '--cached', '--name-only'], {
+    cwd,
+    encoding: 'utf8',
+  });
+  if (r.error || r.status !== 0) return null;
+  return r.stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(toPosix);
+}
+
+// --- Contention guard ----------------------------------------------------
+// A co-running GPU generation hammers CPU/disk and is the documented cause of
+// "Worker exited unexpectedly" crashes and 250s+ environment-setup stalls in
+// the test legs. When we detect a busy GPU we throttle test concurrency (soft —
+// warn + dial down, never block).
+
+const GPU_BUSY_THRESHOLD = 40; // % utilization
+
+// Parse the first GPU's utilization (%) from nvidia-smi CSV output. Returns a
+// number, or null if unparseable / no GPU line.
+export function parseNvidiaSmiUtil(stdout) {
+  if (!stdout) return null;
+  const firstLine = stdout
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)[0];
+  if (!firstLine) return null;
+  const n = Number.parseInt(firstLine.split(',')[0].trim(), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Returns { busy, util }. nvidia-smi absent / errors → { busy:false, util:null }
+// (e.g. CI ubuntu runners, non-NVIDIA boxes). Cheap (~100ms).
+function detectGpuContention() {
+  const r = spawnSync(
+    'nvidia-smi',
+    ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'],
+    { encoding: 'utf8', timeout: 5000 },
+  );
+  if (r.error || r.status !== 0) return { busy: false, util: null };
+  const util = parseNvidiaSmiUtil(r.stdout);
+  return { busy: util !== null && util >= GPU_BUSY_THRESHOLD, util };
+}
+
 // Tool fingerprints — strings that change when the relevant tool's
 // availability or version changes. Used to invalidate the cache when a user
 // installs Pester or bootstraps the pytest venv after a previous skip.
@@ -420,6 +509,37 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
     const selected = new Set(flags.steps);
     activeSteps = STEPS.filter((s) => selected.has(s.name));
   }
+
+  // Contention guard — if a generation run is hammering the GPU, throttle the
+  // child test runs (soft: warn + dial down, never block). Skip the probe when
+  // already throttled or explicitly disabled.
+  if (!env.SKIP_CONTENTION_CHECK && !lowConcurrency(env)) {
+    const { busy, util } = detectGpuContention();
+    if (busy) {
+      console.log(
+        `[contention] GPU busy (~${util}% util) — a generation run may be active.`,
+      );
+      console.log(
+        '[contention] Throttling test concurrency (LOW_CONCURRENCY=1). Set SKIP_CONTENTION_CHECK=1 to disable.',
+      );
+      env.LOW_CONCURRENCY = '1';
+    }
+  }
+
+  // Scope filter (pre-commit) — compute the staged diff once; per-step skip
+  // happens at the top of the loop below.
+  let scopeDiff = null;
+  let scopeShared = false;
+  if (flags.scopeStaged) {
+    scopeDiff = stagedDiffFiles(cwd);
+    if (scopeDiff === null) {
+      console.log('[scope] git diff --cached failed; running all selected steps');
+    } else if (computeShared(scopeDiff)) {
+      scopeShared = true;
+      console.log('[scope] root manifest changed — all selected steps in scope');
+    }
+  }
+
   const cachePath = join(cwd, CACHE_FILENAME);
   const fileList = gitFileList(cwd);
   const nodeVer = process.version;
@@ -439,6 +559,10 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
   }
 
   for (const step of activeSteps) {
+    if (scopeDiff !== null && !scopeShared && !stepTouchedByDiff(step, scopeDiff)) {
+      console.log(`[skip] ${step.name} (out of scope)`);
+      continue;
+    }
     const files = fileList ? selectStepFiles({ fileList, step }) : [];
     const entries = files.map((rel) => {
       let h = fileHashes.get(rel);
