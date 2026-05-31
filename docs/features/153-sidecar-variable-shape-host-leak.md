@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-06-01
 owner: null
 ---
 
-# 153 — Eliminate the variable-input-shape host-memory leak (side-11)
+# 153 — Variable-input-shape host-memory leak: candidate-1 (MKLDNN-disable) probe + leak-slope harness
 
-> Status: draft — candidate-1 (MKLDNN-disable) probe + leak-slope harness landed; flag default OFF until a live A/B proves the slope flattens.
+> Status: stable — candidate-1 (MKLDNN-disable) was **REJECTED** by the 2026-06-01 live A/B: disabling MKLDNN cripples Qwen synth ~15×+ (see "A/B result"), so it's non-viable regardless of leak effect. `SIDECAR_DISABLE_MKLDNN` stays **default OFF**. The durable deliverables of this plan are the **leak-slope harness** (`bench-tts.py --mem-sample`) and the **committed-private `/debug/memory` readout** — both reused for the next candidate. The still-open leak work (candidate 2 — fixed-shape padding) lives in `docs/BACKLOG.md` `side-11`.
 > Key files: `server/tts-sidecar/main.py`, `server/tts-sidecar/scripts/bench-tts.py`, `server/tts-sidecar/tests/test_memory.py`, `server/.env.example`
 > URL surface: none (sidecar runtime + bench tooling)
 > OpenAPI ops: none
@@ -53,6 +53,15 @@ owner: null
 6. **End-to-end acceptance (the real bar):** with the proven flag set and `SIDECAR_RESTART_MB` left at its default (recycle armed as backstop), run a full book through the queue. `tts.log` `sidecar memory:` holds a flat committed floor for the whole book and the run completes with **zero `code 43` recycles and zero dropped/re-rendered chapters**.
 7. **If pass:** flip `SIDECAR_DISABLE_MKLDNN` default ON (one-line follow-up) and flip this plan to `stable`. **If fail:** MKLDNN is not the lever (likely a CUDA-allocator-side workspace) → proceed to candidate 2 (fixed-shape batch padding) on the same harness.
 
+## A/B result (2026-06-01) — candidate 1 REJECTED
+
+Run on the 8 GB box (cold sidecar each side, voice `qwen-biana`, `--batch 16 --mem-sample`):
+
+- **OFF (`SIDECAR_DISABLE_MKLDNN=0`):** healthy throughput (~120–150 s/batch). The leak reproduced emphatically — committed-private ~20.2 GB @ batch 12 → ~32.9 GB @ batch 23 ≈ **+1,150 MB/batch**, with CUDA also climbing into heavy WDDM spill (reserved 3.3 → 16.2 GB) by ~batch 23, at which point batches stall. (NB: that spill regime is well past production, which never exceeds ~6 GB VRAM — cap A/B runs at ~25 batches.)
+- **ON (`SIDECAR_DISABLE_MKLDNN=1`):** **synth catastrophically slow.** A single 16-sentence batch did **not complete in 31 minutes** (vs ~120 s OFF); the sidecar pegged ~7–8 CPU cores (13,724 cpu-s over ~31 min wall) while the **GPU sat idle (0 %)** — the bottleneck moved to an un-accelerated CPU op in the Qwen audio path (tokenizer / Code2Wav vocoder). The leak slope was unmeasurable because no batch finished.
+
+**Verdict:** MKLDNN is load-bearing for the Qwen CPU audio path on this stack — the "small CPU cost" assumption was wrong. A ~15×+ slowdown is non-viable, so candidate 1 fails the gate on throughput grounds (independent of any leak effect). Keep the flag OFF. Move to candidate 2 (fixed-shape batch padding) — `side-11`. The host leak stays mitigated meanwhile by the process-recycle (plan 143) + the load-failure VRAM reclaim (plan 155).
+
 ## Out of scope
 
 - **Candidate 2 — fixed-shape batch padding** (Node packer `QWEN_BATCH_FIXED_SHAPE` + `QWEN_BATCH_LEN_BUCKETS` in `synthesise-chapter.ts` + a python-side pad in `synthesize_batch` so `generate_voice_clone` sees ≈3 fixed shapes). Heavier, carries an RTF cost; only built if candidate 1 fails the gate. Its own future branch.
@@ -61,4 +70,4 @@ owner: null
 
 ## Ship notes
 
-(Filled in when status flips to `stable` after the stage-6 full-book pass.)
+Shipped 2026-06-01. The candidate-1 probe (`SIDECAR_DISABLE_MKLDNN`, default OFF), the `committed_mb` `/debug/memory` field, and the `bench-tts.py --mem-sample` leak-slope harness landed earlier in this plan's branch. The live A/B (above) **rejected candidate 1 on throughput** — the flag stays OFF and is retained only as a measurement/diagnostic toggle, not a production lever. This plan is closed for candidate 1; the leak itself is still open under `side-11` (candidate 2 — fixed-shape batch padding), kept bounded in the meantime by the plan-143 process-recycle + the plan-155 load-failure VRAM reclaim. The bench's summary print was also de-glyphed (`Δ`/`≈` → ASCII) so it doesn't crash under Windows cp1252.
