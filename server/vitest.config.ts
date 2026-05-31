@@ -38,6 +38,16 @@ const SLOW_FILES_TO_EXCLUDE = [
   'src/routes/generation.test.ts',
 ];
 
+/* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or
+   automatically by scripts/verify-cache.mjs on a busy GPU) drops maxForks
+   2 → 1 so a co-running generation can't tip this subprocess-heavy suite into
+   "Worker exited unexpectedly". Mirrors serverMaxForks() in
+   scripts/test-concurrency.mjs (the unit-tested copy); can't import it here
+   (tsconfig allowJs:false). */
+const lowConcurrency =
+  process.env.LOW_CONCURRENCY === '1' || process.env.LOW_CONCURRENCY === 'true';
+const maxForks = lowConcurrency ? 1 : 2;
+
 export default defineConfig({
   test: {
     environment: 'node',
@@ -52,7 +62,7 @@ export default defineConfig({
     pool: 'forks',
     poolOptions: {
       forks: {
-        maxForks: 2,
+        maxForks,
         minForks: 1,
       },
     },
