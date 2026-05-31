@@ -1004,42 +1004,59 @@ class QwenEngine(Engine):
         # low_cpu_mem_usage=False: full CPU materialisation, no meta-device
         # skeleton, so the move below can never hit "copy out of meta tensor".
         common = {"dtype": torch.bfloat16, "low_cpu_mem_usage": False}
+        # Reclaim-on-failure (side-11 / 2026-05-31): a load that raises AFTER it
+        # has materialised weights — most commonly `inner.to(device)` hitting a
+        # CUDA OOM partway through the move when the card is already pressured —
+        # leaves a partially-built model whose nn.Module reference CYCLES keep its
+        # tensors alive past this failing frame. Refcount alone won't free them
+        # (cycles need gc.collect), and `_ensure_*_loaded` never assigned them to
+        # `self._base`/`self._design`, so nothing else reclaims either. Repeated
+        # failed reloads then accumulate orphaned VRAM (the measured ~9.9 GB
+        # CUDA-allocated with `base_loaded=false`). Mirror unload(): drop the
+        # partial and run the gc+empty_cache reclaim before re-raising, so a
+        # failed (re)load leaves the allocator where it started.
+        model: Any = None
         try:
-            with _suppress_code_predictor_log():
-                model = Qwen3TTSModel.from_pretrained(
-                    model_id, attn_implementation=attn_impl, **common
+            try:
+                with _suppress_code_predictor_log():
+                    model = Qwen3TTSModel.from_pretrained(
+                        model_id, attn_implementation=attn_impl, **common
+                    )
+            except (ValueError, TypeError) as e:
+                # Only an old transformers/qwen_tts build that doesn't know the
+                # kwarg lands here — retry with library-default attention. (A
+                # device_map fallback is deliberately NOT used: it is the path that
+                # 500s with the meta-tensor NotImplementedError on this stack.)
+                log.warning(
+                    "Qwen load: attn_implementation=%r rejected (%s); retrying without it.",
+                    attn_impl, e,
                 )
-        except (ValueError, TypeError) as e:
-            # Only an old transformers/qwen_tts build that doesn't know the
-            # kwarg lands here — retry with library-default attention. (A
-            # device_map fallback is deliberately NOT used: it is the path that
-            # 500s with the meta-tensor NotImplementedError on this stack.)
-            log.warning(
-                "Qwen load: attn_implementation=%r rejected (%s); retrying without it.",
-                attn_impl, e,
+                with _suppress_code_predictor_log():
+                    model = Qwen3TTSModel.from_pretrained(model_id, **common)
+            # Move the inner nn.Module to the device and resync the wrapper's cached
+            # device (the wrapper has no `.to()` — see docstring point 1).
+            inner = getattr(model, "model", None)
+            if inner is not None and hasattr(inner, "to"):
+                inner.to(self._device)
+            else:  # defensive: wrapper-API drift moved the module — move the object.
+                model.to(self._device)
+            try:
+                model.device = torch.device(self._device)
+            except Exception:
+                pass
+            # Surface the impl that actually took effect (getattr-guarded — the
+            # nested attribute path can drift across qwen_tts/transformers versions).
+            resolved = getattr(getattr(model, "model", None), "config", None)
+            resolved_impl = getattr(resolved, "_attn_implementation", "unknown")
+            log.info(
+                "Qwen model=%s attn_implementation=%s device=%s",
+                model_id, resolved_impl, self._device,
             )
-            with _suppress_code_predictor_log():
-                model = Qwen3TTSModel.from_pretrained(model_id, **common)
-        # Move the inner nn.Module to the device and resync the wrapper's cached
-        # device (the wrapper has no `.to()` — see docstring point 1).
-        inner = getattr(model, "model", None)
-        if inner is not None and hasattr(inner, "to"):
-            inner.to(self._device)
-        else:  # defensive: wrapper-API drift moved the module — move the object.
-            model.to(self._device)
-        try:
-            model.device = torch.device(self._device)
+            return model
         except Exception:
-            pass
-        # Surface the impl that actually took effect (getattr-guarded — the
-        # nested attribute path can drift across qwen_tts/transformers versions).
-        resolved = getattr(getattr(model, "model", None), "config", None)
-        resolved_impl = getattr(resolved, "_attn_implementation", "unknown")
-        log.info(
-            "Qwen model=%s attn_implementation=%s device=%s",
-            model_id, resolved_impl, self._device,
-        )
-        return model
+            model = None
+            _reclaim_host_and_vram()
+            raise
 
     def _ensure_base_loaded(self) -> None:
         # Fast path: already loaded, no lock needed (the assignment below is the
