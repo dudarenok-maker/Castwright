@@ -1123,3 +1123,102 @@ describe('POST /api/books/:bookId/generation — queue-sole per-chapter concurre
     expect(isGenerationActive(bookId)).toBe(false);
   }, 15_000);
 });
+
+/* Durable per-chapter failure status (side: stuck-queued bug). A chapter that
+   fails writes no audio, so it's absent from completedSlugs and used to
+   re-hydrate as the misleading neutral "Queued" once its queue entry was
+   cleared. The failure path now persists `generationState:'failed'` +
+   `generationError` to state.json so the chapter survives a reload as
+   "Failed · reason"; a later successful render clears both. */
+describe('POST /api/books/:bookId/generation — persists generationState on failure', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+
+  /* Reset to a clean two-chapter baseline so prior tests' mutations (excluded
+     flags, persisted failures) can't bleed in. */
+  beforeEach(() => {
+    writeFileSync(
+      statePath(),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-two' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  async function readState(): Promise<{
+    chapters: Array<{ id: number; generationState?: string; generationError?: string }>;
+  }> {
+    const fs = await import('node:fs');
+    return JSON.parse(fs.readFileSync(statePath(), 'utf8'));
+  }
+
+  it('writes generationState:"failed" + generationError to state.json on a synth failure', async () => {
+    synthesiseImpl = async () => {
+      throw new Error('Local TTS sidecar returned 400: {"detail":"Item 0: \'text\' is required."}');
+    };
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    const failed = ticks.find((t) => t.type === 'chapter_failed' && t.chapterId === 1);
+    expect(failed).toBeDefined();
+
+    const state = await readState();
+    const ch1 = state.chapters.find((c) => c.id === 1)!;
+    expect(ch1.generationState).toBe('failed');
+    /* The persisted reason matches the broadcast errorReason verbatim. */
+    expect(ch1.generationError).toBe(failed!.errorReason as string);
+    /* Untouched sibling carries no failure. */
+    expect(state.chapters.find((c) => c.id === 2)!.generationState).toBeUndefined();
+  });
+
+  it('clears generationState + generationError on a subsequent successful render', async () => {
+    /* First fail chapter 1 so the failure is persisted. */
+    synthesiseImpl = async () => {
+      throw new Error('Local TTS sidecar returned 400: {"detail":"Item 0: \'text\' is required."}');
+    };
+    await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).toBe('failed');
+
+    /* Now render it successfully — the success path must wipe the stale flag. */
+    synthesiseImpl = async () => ({
+      pcm: Buffer.alloc(2),
+      sampleRate: 24000,
+      durationSec: 1,
+      segments: [
+        {
+          characterId: 'narrator',
+          voiceName: 'Zephyr',
+          sampleStart: 0,
+          sampleEnd: 1,
+          sentenceIds: [1],
+        },
+      ],
+    });
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+    expect(res.status).toBe(200);
+
+    const ch1 = (await readState()).chapters.find((c) => c.id === 1)!;
+    expect(ch1.generationState).toBeUndefined();
+    expect(ch1.generationError).toBeUndefined();
+  });
+});
