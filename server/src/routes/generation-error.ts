@@ -17,22 +17,61 @@ export interface SynthesisErrorClassification {
   fatal: boolean;
 }
 
-export function describeSynthesisError(err: unknown): SynthesisErrorClassification {
+export function describeSynthesisError(
+  err: unknown,
+  engine?: string,
+): SynthesisErrorClassification {
   const raw = (err as Error)?.message ?? String(err);
   const status = (err as { status?: number })?.status;
+  const name = (err as { name?: string })?.name;
+
+  /* Per-call ceiling tripped (ChapterSynthTimeoutError, synthesise-chapter.ts).
+     Its own message says "Skipping this chapter so the queue can advance" — it
+     is MEANT to be non-fatal: drop this chapter, keep the queue moving. Classify
+     it explicitly and FIRST so (a) a future regex tweak can't re-escalate it and
+     (b) its "…runaway/degenerate input…" wording can never be read as a quota
+     error. The substring "rate" inside "dege·nerate" used to match the old
+     `/rate/i` quota regex and stop the whole run (2026-05-31, KOTLC Stellarlune
+     CH24). */
+  if (name === 'ChapterSynthTimeoutError') {
+    return {
+      errorReason:
+        'TTS synthesis timed out for this chapter — the local engine stalled (often the ' +
+        'sidecar reclaiming memory mid-render). Skipped so the queue advances; click Retry to re-render.',
+      fatal: false,
+    };
+  }
 
   const isSidecarDown = /sidecar not reachable|ECONNREFUSED|fetch failed/i.test(raw);
   if (isSidecarDown) {
     return { errorReason: 'Local TTS sidecar not running — start it and resume.', fatal: true };
   }
 
-  const isQuota = status === 429 || /429|quota|rate/i.test(raw);
-  if (isQuota) {
-    return {
-      errorReason:
-        'Gemini TTS rate-limited — stopped run; resume later or switch to a local engine.',
-      fatal: true,
-    };
+  /* Upstream rate-limit / quota. Match STRICTLY: a real HTTP 429, or an
+     unambiguous quota / rate-limit phrase. The bare token "rate" is NOT enough —
+     it matches inside ordinary words like "degenerate"/"generated", which is
+     exactly how a local Qwen timeout got mislabeled "Gemini TTS rate-limited". */
+  const isHttp429 = status === 429;
+  const looksRateLimited =
+    isHttp429 ||
+    /\b429\b|\btoo many requests\b|\bquota\b|rate[-\s]?limit|resource (?:has been )?exhausted/i.test(
+      raw,
+    );
+  if (looksRateLimited) {
+    /* Only the metered cloud engine (Gemini TTS) can actually rate-limit; the
+       local sidecar engines (qwen/kokoro/coqui) never do. A genuine 429 is always
+       upstream. But a rate-limit-SHAPED message on a local-engine run is NOT
+       Gemini — don't pin the blame there; surface the raw reason as non-fatal. */
+    const localEngine = engine != null && engine !== 'gemini';
+    if (isHttp429 || !localEngine) {
+      return {
+        errorReason:
+          'Gemini TTS rate-limited — stopped run; resume later or switch to a local engine.',
+        fatal: true,
+      };
+    }
+    const trimmed = raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
+    return { errorReason: trimmed, fatal: false };
   }
 
   const isAuth = status === 401 || status === 403 || /invalid[_ ]?key|API key/i.test(raw);
