@@ -114,7 +114,7 @@ beforeEach(() => {
 /* Wave 3 — phone viewport contract: the dropzone, model selector, and
    action chips render full-width at 375×667 and the primary tap targets
    (paste-text button, dropzone, model select) hit the ≥44px height the
-   touch-equivalence rule in `docs/features/81-mobile-tablet-support.md`
+   touch-equivalence rule in `docs/features/archive/81-mobile-tablet-support.md`
    pins. matchMedia is mocked to "phone" so Tailwind's `sm:` variants
    stay opted-out at the same time. */
 function mockPhoneViewport() {

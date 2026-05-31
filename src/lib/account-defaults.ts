@@ -33,6 +33,9 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   | 'eagerLoadKokoro'
   | 'eagerLoadQwen'
   | 'generationWorkers'
+  | 'backupEnabled'
+  | 'backupCadence'
+  | 'backupRetention'
 > = {
   displayName: 'Mike Dudarenok',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
@@ -100,4 +103,10 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      concurrency only; the GPU semaphore stays the VRAM guard. Flip in lockstep
      with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   generationWorkers: 2,
+  /* srv-2 — per-book state.json auto-backup. On by default with a daily
+     cadence and a 14-snapshot retention window. Flip in lockstep with
+     server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
+  backupEnabled: true,
+  backupCadence: 'daily',
+  backupRetention: 14,
 };

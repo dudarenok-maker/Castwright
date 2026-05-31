@@ -1,25 +1,31 @@
 name: Regenerate Linux Visual Baselines
 
-# Workflow-dispatch-triggered regeneration of the Linux
-# Playwright visual baseline tree on ubuntu-latest. Restores PR Verify as
-# a real merge gate on the visual-regression seam: today only Windows
-# baselines are committed, so the directory-level skip in
-# `e2e/responsive/visual.spec.ts` (lines 57 + 85) suppresses all 14 visual
-# specs × 3 projects on Linux CI.
+# Workflow-dispatch-triggered regeneration of the Linux Playwright visual
+# baseline tree on ubuntu-latest. Restores PR Verify as a real merge gate on
+# the visual-regression seam: today only Windows baselines are committed, so
+# the directory-level skip in `e2e/responsive/visual.spec.ts` (lines 57 + 85)
+# suppresses all 14 visual specs × 3 projects on Linux CI.
+#
+# Single-job shape (ops-3): all three Playwright projects (chromium /
+# mobile-chrome / tablet-chrome) regenerate sequentially in ONE job, so the
+# cold-start tax (checkout + npm ci + Playwright install) is paid once instead
+# of 3× — the old `strategy.matrix` fan-out repeated that setup per leg. A
+# single chromium install covers all three projects (mobile/tablet pin
+# `browserName: 'chromium'` in playwright.config.ts), so nothing is lost by
+# serialising. Since every PNG lands in the same working tree, the old
+# per-project artifact upload + download round-trip into a separate `open-pr`
+# job is gone too — we commit + open the PR inline.
 #
 # How it works:
-#   1. Fan out across the three Playwright projects (chromium / mobile-chrome
-#      / tablet-chrome) on ubuntu-latest. Each matrix leg runs
-#      `playwright test e2e/responsive/visual.spec.ts --update-snapshots
-#      --project=<name> --workers=1`. Playwright's snapshotPathTemplate
-#      (see playwright.config.ts:47) writes to
-#      `e2e/{platform}/responsive/visual.spec.ts/{projectName}/<name>.png`
-#      automatically — process.platform === 'linux' on ubuntu-latest, so
-#      the new PNGs land in `e2e/linux/...` without any path overrides.
-#   2. Each matrix leg uploads its 14 PNGs as a per-project artifact.
-#   3. A consolidation job downloads all three artifacts back into the
-#      working tree, commits the 42-PNG tree on a fresh branch, pushes,
-#      and opens a PR against `main` via the `gh` CLI.
+#   1. One ubuntu-latest runner: checkout + Node + npm ci (root + server) +
+#      Playwright chromium, all once.
+#   2. Loop the three projects, each `playwright test
+#      e2e/responsive/visual.spec.ts --update-snapshots --project=<name>
+#      --workers=1`. Playwright's snapshotPathTemplate (playwright.config.ts:47)
+#      writes to `e2e/{platform}/responsive/visual.spec.ts/{projectName}/<name>.png`
+#      — process.platform === 'linux' here, so PNGs land in `e2e/linux/...`.
+#   3. Verify 42 PNGs (14 per project × 3), commit the tree on a fresh branch,
+#      push, and open a PR against `main` via the `gh` CLI.
 #
 # Reviewer merges the auto-PR; the directory-level skip un-skips the visual
 # specs automatically the moment `e2e/linux/responsive/visual.spec.ts/`
@@ -36,16 +42,17 @@ permissions:
 
 jobs:
   regen:
-    name: Regenerate ${{ matrix.project }}
+    name: Regenerate baselines + open PR
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        project: [chromium, mobile-chrome, tablet-chrome]
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Token required so the later `git push` + `gh pr create` authenticate
+          # as GITHUB_TOKEN. Default fetch-depth: 1 is fine — we cut a fresh
+          # branch off the workflow_dispatch ref and commit the PNGs on top.
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -59,12 +66,11 @@ jobs:
       - name: Install root deps
         run: npm ci
 
-      # Server deps aren't strictly needed for Playwright visual specs
-      # (mocks live in src/lib/api.ts; the visual battery runs against
-      # Vite in --mode e2e with no Node server in play). But the root
-      # `prepare` hook + a few transitive scripts assume `server/node_modules`
-      # exists; installing keeps the runner consistent with verify.yml's
-      # state.
+      # Server deps aren't strictly needed for Playwright visual specs (mocks
+      # live in src/lib/api.ts; the visual battery runs against Vite in
+      # --mode e2e with no Node server in play). But the root `prepare` hook +
+      # a few transitive scripts assume `server/node_modules` exists; installing
+      # keeps the runner consistent with verify.yml's state.
       - name: Install server deps
         run: npm --prefix server ci
 
@@ -78,87 +84,31 @@ jobs:
             ${{ runner.os }}-playwright-
 
       # Both mobile-chrome and tablet-chrome use the chromium engine per
-      # playwright.config.ts (browserName: 'chromium' override on the
-      # Pixel 7 / iPad Pro 11 device presets), so a single chromium install
-      # covers all three matrix legs. `--with-deps` brings in the system
-      # libraries chromium needs on a stock ubuntu-latest image.
+      # playwright.config.ts (browserName: 'chromium' override on the Pixel 7 /
+      # iPad Pro 11 device presets), so a single chromium install covers all
+      # three projects. `--with-deps` brings in the system libraries chromium
+      # needs on a stock ubuntu-latest image.
       - name: Install Playwright chromium
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
 
-      # Pre-create the baseline directory so the per-platform skip in
+      # Regenerate all three projects sequentially in one job. Pre-create each
+      # project's baseline dir first so the per-platform skip in
       # `e2e/responsive/visual.spec.ts:85` + `:168` (which checks
-      # `existsSync(BASELINE_DIR)`) does NOT fire on a fresh Linux runner.
-      # Without this, all 14 visual specs are skipped before
-      # --update-snapshots has any chance to write PNGs, the artifact
-      # upload step finds nothing, and the matrix leg fails. The actual
-      # PNGs land in this same directory once playwright writes them
-      # below.
-      - name: Bootstrap baseline directory
-        run: mkdir -p e2e/linux/responsive/visual.spec.ts/${{ matrix.project }}
-
-      # `--update-snapshots` writes the PNGs in-place under
-      # `e2e/linux/responsive/visual.spec.ts/<project>/*.png` (per
-      # snapshotPathTemplate in playwright.config.ts). `--workers=1` keeps
-      # the run serial — visuals share the Vite dev server with each other
-      # and parallel-worker contention drifts font hinting past the 5%
-      # maxDiffPixelRatio threshold (see e2e/responsive/visual.spec.ts:68).
-      - name: Regenerate baselines for ${{ matrix.project }}
-        run: npx playwright test e2e/responsive/visual.spec.ts --project=${{ matrix.project }} --update-snapshots --workers=1
-
-      - name: Upload baselines artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-visual-baselines-${{ matrix.project }}
-          path: e2e/linux/responsive/visual.spec.ts/${{ matrix.project }}/
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-${{ matrix.project }}
-          path: playwright-report/
-          retention-days: 7
-
-  open-pr:
-    name: Open baseline-regen PR
-    needs: regen
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # Default fetch-depth: 1 is fine — we're cutting a fresh branch
-          # off the workflow_dispatch ref (typically `main`) and committing
-          # the artifacts on top. No history rewrite, so a shallow clone is
-          # sufficient. The token is required so the subsequent `git push`
-          # and `gh pr create` authenticate as GITHUB_TOKEN.
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      # Download each matrix leg's artifact back into the working tree at
-      # the right path. Using a directory pattern under `path:` makes
-      # actions/download-artifact place each artifact in its own subdir,
-      # which we then assemble into the final layout.
-      - name: Download chromium baselines
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-visual-baselines-chromium
-          path: e2e/linux/responsive/visual.spec.ts/chromium/
-
-      - name: Download mobile-chrome baselines
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-visual-baselines-mobile-chrome
-          path: e2e/linux/responsive/visual.spec.ts/mobile-chrome/
-
-      - name: Download tablet-chrome baselines
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-visual-baselines-tablet-chrome
-          path: e2e/linux/responsive/visual.spec.ts/tablet-chrome/
+      # `existsSync(BASELINE_DIR)`) does NOT fire on a fresh Linux runner —
+      # without it the 14 specs are skipped before --update-snapshots can write
+      # any PNG. `--workers=1` keeps each run serial — visuals share the Vite
+      # dev server and parallel-worker contention drifts font hinting past the
+      # 5% maxDiffPixelRatio threshold (see e2e/responsive/visual.spec.ts:68).
+      - name: Regenerate baselines (all projects, sequential)
+        run: |
+          for project in chromium mobile-chrome tablet-chrome; do
+            echo "::group::Regenerating ${project}"
+            mkdir -p "e2e/linux/responsive/visual.spec.ts/${project}"
+            npx playwright test e2e/responsive/visual.spec.ts \
+              --project="${project}" --update-snapshots --workers=1
+            echo "::endgroup::"
+          done
 
       - name: Verify PNG count
         run: |
@@ -216,3 +166,11 @@ jobs:
           - [ ] After merge, confirm the next PR Verify run reports \`42 passed\` on visuals rather than \`42 skipped\`.
 
           See plan 37 (\`docs/features/archive/37-e2e-playwright.md\`) \"Regenerate baselines (workflow_dispatch)\" for the regen contract."
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

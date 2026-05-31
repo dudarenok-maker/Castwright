@@ -30,7 +30,7 @@ describe('dark-mode CSS overrides (styles.css)', () => {
        as a surface (background) or hovered surface. If the dark
        theme doesn't repaint it, light-mode pales (white, near-white,
        pastel pills) bleed through and break the contrast contract
-       documented in docs/features/42-dark-mode.md "Contrast
+       documented in docs/features/archive/42-dark-mode.md "Contrast
        invariants". */
     { selector: '.bg-white', label: 'solid white surface' },
     { selector: '.bg-white\\/40', label: 'translucent /40 surface (drawer engine tabs)' },

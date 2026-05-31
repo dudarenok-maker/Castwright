@@ -2,7 +2,7 @@
    return HTTP 415 (not the generic 500) — aligning the manuscripts upload
    route with /api/import, which already returns 415. DrmProtectedError and
    UnusableEpubError share the UnusableMediaError base the route catches with
-   one instanceof. Pairs with docs/features/116-epub-parsing.md. */
+   one instanceof. Pairs with docs/features/archive/116-epub-parsing.md. */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';

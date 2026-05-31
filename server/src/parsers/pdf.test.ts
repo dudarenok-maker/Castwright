@@ -1,4 +1,4 @@
-// Pairs with docs/features/06-manuscript-parsing.md (PDF parser).
+// Pairs with docs/features/archive/02-upload-paste-or-file.md (PDF parser).
 //
 // parsePdf is a thin wrapper around pdf-parse — its real job is metadata
 // precedence (info-dict Title/Author > parseText-derived) and delegating

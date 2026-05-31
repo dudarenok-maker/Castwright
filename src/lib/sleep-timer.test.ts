@@ -1,4 +1,4 @@
-// Pairs with docs/features/53-mini-player-feature-pack.md
+// Pairs with docs/features/archive/53-mini-player-feature-pack.md
 
 import { describe, expect, it } from 'vitest';
 import {

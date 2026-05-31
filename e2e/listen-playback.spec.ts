@@ -7,7 +7,7 @@
  * "Play from the start" button stays disabled and there's nothing to
  * test. Mock audio URLs (stubAudioA/B) shipped 2026-05-17 with plan 20.
  *
- * Pairs with docs/features/37-e2e-playwright.md. */
+ * Pairs with docs/features/archive/37-e2e-playwright.md. */
 
 import { test, expect } from '@playwright/test';
 import { waitForListenViewReady } from './helpers';

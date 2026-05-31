@@ -3,7 +3,7 @@ import { goToConfirm, waitForConfirmViewReady } from './helpers';
 
 /**
  * Voice-preview-while-editing flow — pairs with
- * docs/features/60-voice-preview-while-editing.md.
+ * docs/features/archive/64-voice-preview-while-editing.md.
  *
  * Drives a fresh book to the confirm-cast view, opens the profile
  * drawer, expands the candidate-preview list, sets a custom sample
