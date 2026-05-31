@@ -167,6 +167,60 @@ def test_mem_warn_threshold_parsing(monkeypatch):
     assert main._mem_warn_threshold_mb() == 0.0
 
 
+# --- side-11: env-gated MKLDNN disable (variable-shape host-leak probe) ---
+
+
+def test_disable_mkldnn_parsing(monkeypatch):
+    """Default OFF (opt-in); truthy tokens enable; garbage / 0 / unset → OFF."""
+    monkeypatch.delenv("SIDECAR_DISABLE_MKLDNN", raising=False)
+    assert main._disable_mkldnn() is False
+
+    for truthy in ("1", "true", "TRUE", "yes", "on"):
+        monkeypatch.setenv("SIDECAR_DISABLE_MKLDNN", truthy)
+        assert main._disable_mkldnn() is True, truthy
+
+    for falsy in ("0", "false", "no", "off", "not-a-bool", ""):
+        monkeypatch.setenv("SIDECAR_DISABLE_MKLDNN", falsy)
+        assert main._disable_mkldnn() is False, falsy
+
+
+class _FakePerfTorch:
+    """Stub torch exposing exactly the attributes `_apply_torch_perf_flags`
+    touches, so we can assert the mkldnn gate flips the flag WITHOUT regressing
+    the always-on TF32 / matmul-precision settings."""
+
+    def __init__(self) -> None:
+        from types import SimpleNamespace
+
+        self.backends = SimpleNamespace(
+            cuda=SimpleNamespace(matmul=SimpleNamespace(allow_tf32=False)),
+            cudnn=SimpleNamespace(allow_tf32=False),
+            mkldnn=SimpleNamespace(enabled=True),
+        )
+        self.matmul_precision = None
+
+    def set_float32_matmul_precision(self, value: str) -> None:
+        self.matmul_precision = value
+
+
+def test_apply_torch_perf_flags_disables_mkldnn_when_gated(monkeypatch):
+    """SIDECAR_DISABLE_MKLDNN on → mkldnn.enabled flipped False; off → left True.
+    Either way the TF32 / matmul-precision flags are still applied (no regress)."""
+    monkeypatch.setenv("SIDECAR_DISABLE_MKLDNN", "1")
+    t = _FakePerfTorch()
+    main._apply_torch_perf_flags(t)
+    assert t.backends.mkldnn.enabled is False
+    assert t.backends.cuda.matmul.allow_tf32 is True
+    assert t.backends.cudnn.allow_tf32 is True
+    assert t.matmul_precision == "high"
+
+    monkeypatch.setenv("SIDECAR_DISABLE_MKLDNN", "0")
+    t2 = _FakePerfTorch()
+    main._apply_torch_perf_flags(t2)
+    assert t2.backends.mkldnn.enabled is True  # untouched when gate off
+    assert t2.backends.cuda.matmul.allow_tf32 is True  # TF32 still applied
+
+
 # --- process-recycle (committed-private hard ceiling → self-restart via srv-15) ---
 
 
@@ -388,6 +442,11 @@ def test_debug_memory_endpoint_shape(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert "process" in body and "rss_mb" in body["process"]
+    # The leak-slope bench keys its success bar on committed-private (the
+    # recycle's own metric), so /debug/memory must surface it — present in the
+    # venv where psutil resolves committed-private.
+    assert "committed_mb" in body["process"]
+    assert body["process"]["committed_mb"] > 0
     assert "gc" in body and "counts" in body["gc"]
     assert "engines" in body
     # Qwen is registered and cold here: base/design not loaded, cache empty.

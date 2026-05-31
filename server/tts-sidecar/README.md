@@ -446,6 +446,16 @@ $resp.Headers['X-Sample-Rate']
   installed (see **FlashAttention-2** below). A build that rejects the kwarg
   falls back to the library default with a warning. The impl that actually took
   effect is logged at model load (`Qwen model=… attn_implementation=…`).
+- `SIDECAR_DISABLE_MKLDNN` (default `0`/off) — **side-11 host-leak probe.** Qwen
+  generation leaks committed-private host RAM monotonically: every sentence is a
+  different length → a new native per-shape workspace that is never freed
+  (committed climbs unbounded on variable-length generation, holds flat on fixed
+  shapes; CUDA stays flat — pytorch/pytorch #32596). Setting this to `1` disables
+  torch MKLDNN, which kills the suspected CPU per-shape workspace at a small
+  CPU-op cost. Opt-in until a live A/B (`bench-tts.py --mem-sample`, below) proves
+  the committed slope flattens. CPU-only flag — a no-op if the leak is on the CUDA
+  allocator side. The `SIDECAR_RESTART_MB` process-recycle remains the backstop
+  regardless.
 
 ## FlashAttention-2 (optional, Windows / Python 3.11)
 
@@ -529,6 +539,27 @@ To compare the SDPA default against another backend, set `QWEN_ATTN_IMPL`
 see **FlashAttention-2** above) in the sidecar env, restart it, run the bench,
 then unset it and re-run. Confirm the model-load line reports the impl you set
 before trusting the number.
+
+### Host-leak slope A/B (`--mem-sample`, side-11)
+
+`--mem-sample` drives many variable-shape batched calls, sampling
+`/debug/memory` after each, and prints the **committed-private slope (MB/batch)**
+— the metric the process-recycle keys on. A steep committed slope with flat CUDA
+is the variable-shape host leak; a flat slope means a candidate fix bound it.
+Reboot first (clean VRAM/process state), then A/B a fix off vs on:
+
+```powershell
+# 1. baseline — leak present (flag OFF):
+python scripts\bench-tts.py --engine qwen --voice <id> --batch 16 --mem-sample --batches 200
+# 2. restart the sidecar with the candidate fix, re-run IDENTICALLY:
+$env:SIDECAR_DISABLE_MKLDNN='1'   # then restart the sidecar
+python scripts\bench-tts.py --engine qwen --voice <id> --batch 16 --mem-sample --batches 200
+```
+
+PASS iff the flag-ON committed slope is ≈ flat (within ±2 MB/batch of the
+`--bucket 1` length-tight control) while CUDA stays flat. The seeded corpus makes
+the two runs byte-identical, so the slope delta is signal, not noise. `--out
+series.csv` dumps the per-batch series (the only file the script writes).
 
 ## License note
 
