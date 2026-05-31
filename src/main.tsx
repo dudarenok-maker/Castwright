@@ -52,7 +52,7 @@ import './styles.css';
    `page.evaluate(() => window.__store__.getState())`. The branch is
    tree-shaken in production builds — `import.meta.env.DEV` is `false`
    and `MODE === 'e2e'` is `false` for `vite build`. Documented in
-   docs/features/37-e2e-playwright.md under "Test hooks". */
+   docs/features/archive/37-e2e-playwright.md under "Test hooks". */
 if (import.meta.env.DEV || import.meta.env.MODE === 'e2e') {
   (window as unknown as { __store__: typeof store }).__store__ = store;
   /* Plan 111 — let e2e specs seed/reset the in-memory mock queue (the queue

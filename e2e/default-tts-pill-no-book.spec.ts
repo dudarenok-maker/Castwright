@@ -9,7 +9,7 @@
  * control instead of the old "TTS controls appear once a manuscript is open"
  * dead-end text. This lets the user pre-load the model right after launch.
  *
- * Pairs with docs/features/14a-model-control-pill.md (default-engine pill
+ * Pairs with docs/features/archive/30-global-model-control.md (default-engine pill
  * reachable on book-less views) and crosses the redux/layout/popover seam
  * Vitest+jsdom can't fully exercise (the Status pill's render gate +
  * popover open + per-engine pill render). */

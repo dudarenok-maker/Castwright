@@ -3,7 +3,7 @@
    inside a minimal Redux Provider, then asserts axe(container)
    reports no violations.
 
-   Companion plan: docs/features/46-lint-format-a11y.md. The harness
+   Companion plan: docs/features/archive/46-lint-format-a11y.md. The harness
    complements ESLint's static jsx-a11y rules (which we relax in
    eslint.config.js for inherited debt) by validating the rendered DOM
    against the WCAG ruleset axe-core ships. */

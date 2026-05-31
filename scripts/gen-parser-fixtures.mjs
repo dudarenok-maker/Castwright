@@ -592,7 +592,7 @@ console.log(`wrote ${imageOnlyPath}`);
  * both detect the missing files and skip with a "Calibre required"
  * message. EPUB + PDF fixtures (above) stay generated unconditionally.
  *
- * Pairs with docs/features/60-real-binary-parser-fixtures.md.
+ * Pairs with docs/features/archive/66-real-binary-parser-fixtures.md.
  */
 
 function findCalibre() {

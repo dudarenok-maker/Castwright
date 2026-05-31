@@ -1,4 +1,4 @@
-// Pairs with docs/features/111-queue-worker-pool.md (wave 3).
+// Pairs with docs/features/archive/111-queue-worker-pool.md (wave 3).
 //
 // The plan-111 middleware is no longer a stream-opener — the queue dispatcher
 // is the sole opener and the runner self-drives ticks. This middleware now

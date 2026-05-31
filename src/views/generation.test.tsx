@@ -712,7 +712,10 @@ describe('GenerationView — header action once the run is complete', () => {
       </Provider>,
     );
 
-    expect(screen.queryByRole('button', { name: /Pause|Resume/ })).not.toBeInTheDocument();
+    /* The old per-book Pause/Resume TOGGLE (plan 102 moved queue-global pause
+       to the queue modal) must stay gone — match the EXACT label so fe-17's
+       separate "Resume generation" enqueue button doesn't trip this guard. */
+    expect(screen.queryByRole('button', { name: /^(Pause|Resume)$/ })).not.toBeInTheDocument();
     const regen = screen.getByRole('button', { name: /^Regenerate$/ });
     fireEvent.click(regen);
     /* The view never picks a "current" chapter from a fully-drained queue — it
@@ -763,7 +766,10 @@ describe('GenerationView — header action once the run is complete', () => {
       </Provider>,
     );
 
-    expect(screen.queryByRole('button', { name: /Pause|Resume/ })).not.toBeInTheDocument();
+    /* The old per-book Pause/Resume TOGGLE (plan 102 moved queue-global pause
+       to the queue modal) must stay gone — match the EXACT label so fe-17's
+       separate "Resume generation" enqueue button doesn't trip this guard. */
+    expect(screen.queryByRole('button', { name: /^(Pause|Resume)$/ })).not.toBeInTheDocument();
     expect(screen.getByTestId('generation-view-queue')).toBeInTheDocument();
   });
 });
@@ -1505,7 +1511,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 /* Wave 3 — phone viewport contract for the Generation view: the page
    header action buttons (Pause / Resume / Regenerate) and each chapter
    row's collapsed grid both hit the ≥44px touch-target invariant from
-   `docs/features/81-mobile-tablet-support.md` while the responsive
+   `docs/features/archive/81-mobile-tablet-support.md` while the responsive
    grid template at the top-level shrinks to single-column. Stat panel
    collapses 4-up → 2×2 below `sm:` so the four numbers don't compress
    to single digits at 375×667. */

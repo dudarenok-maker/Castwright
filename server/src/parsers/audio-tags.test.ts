@@ -1,4 +1,4 @@
-// Pairs with docs/features/06-manuscript-parsing.md (audio-tag detection layer).
+// Pairs with docs/features/archive/08-audio-tag-auto-detection.md (audio-tag detection layer).
 
 import { describe, expect, it } from 'vitest';
 import {

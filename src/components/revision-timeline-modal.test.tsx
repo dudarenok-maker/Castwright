@@ -1,5 +1,5 @@
 /* Plan 55 — revision history modal coverage.
-   Pairs with docs/features/55-revision-history-timeline.md. */
+   Pairs with docs/features/archive/55-revision-history-timeline.md. */
 
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';

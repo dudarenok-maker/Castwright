@@ -29,6 +29,7 @@ import re
 import shutil
 import threading
 import time
+from contextlib import contextmanager
 from typing import Any, Optional
 
 import numpy as np
@@ -67,6 +68,48 @@ logging.basicConfig(
     datefmt=LOG_DATEFMT,
 )
 log = logging.getLogger("sidecar")
+
+
+class _DropSubstringLogFilter(logging.Filter):
+    """Drop log records whose rendered message contains ``needle``.
+
+    Used to silence ONE benign third-party line during Qwen model load without
+    raising the level of (and thus muting real warnings from) the qwen_tts /
+    transformers loggers. Backlog item side-5."""
+
+    def __init__(self, needle: str) -> None:
+        super().__init__()
+        self._needle = needle
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            return self._needle not in record.getMessage()
+        except Exception:
+            return True
+
+
+@contextmanager
+def _suppress_code_predictor_log():
+    """Temporarily drop the benign qwen_tts load line::
+
+        code_predictor_config is None. Initializing code_predictor model with
+        default values
+
+    It originates in ``Qwen3TTSTalkerConfig.__init__`` (the installed qwen_tts
+    package) at ``from_pretrained`` — HuggingFace config-defaulting at load,
+    NOT a per-sentence recompute, so it's noise that reads as alarming (it drew
+    the eye during both the plan-108 OOM and the design-timeout debugging). The
+    filter attaches to the ROOT handlers (child-logger records propagate there)
+    and is removed in ``finally`` so nothing leaks past the load. side-5."""
+    flt = _DropSubstringLogFilter("code_predictor_config is None")
+    handlers = list(logging.getLogger().handlers)
+    for h in handlers:
+        h.addFilter(flt)
+    try:
+        yield
+    finally:
+        for h in handlers:
+            h.removeFilter(flt)
 
 
 def _apply_torch_perf_flags(torch: Any) -> None:
@@ -949,9 +992,10 @@ class QwenEngine(Engine):
         # skeleton, so the move below can never hit "copy out of meta tensor".
         common = {"dtype": torch.bfloat16, "low_cpu_mem_usage": False}
         try:
-            model = Qwen3TTSModel.from_pretrained(
-                model_id, attn_implementation=attn_impl, **common
-            )
+            with _suppress_code_predictor_log():
+                model = Qwen3TTSModel.from_pretrained(
+                    model_id, attn_implementation=attn_impl, **common
+                )
         except (ValueError, TypeError) as e:
             # Only an old transformers/qwen_tts build that doesn't know the
             # kwarg lands here — retry with library-default attention. (A
@@ -961,7 +1005,8 @@ class QwenEngine(Engine):
                 "Qwen load: attn_implementation=%r rejected (%s); retrying without it.",
                 attn_impl, e,
             )
-            model = Qwen3TTSModel.from_pretrained(model_id, **common)
+            with _suppress_code_predictor_log():
+                model = Qwen3TTSModel.from_pretrained(model_id, **common)
         # Move the inner nn.Module to the device and resync the wrapper's cached
         # device (the wrapper has no `.to()` — see docstring point 1).
         inner = getattr(model, "model", None)

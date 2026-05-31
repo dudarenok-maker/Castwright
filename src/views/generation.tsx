@@ -599,6 +599,25 @@ export function GenerationView({
           >
             View queue{activityCount > 0 && <span className="text-magenta">· {activityCount}</span>}
           </button>
+          {/* fe-17 — explicit one-click resume for an interrupted run. Plan 137
+              made opening a book never auto-enqueue, so a book whose run was
+              interrupted (queue drained server-side, chapters still `queued`)
+              has no in-view way to continue. Shown only when there's queued
+              work and nothing is in flight; it dispatches the same
+              requestStartGeneration intent the "Approve cast & start
+              generating" CTA uses. Hidden while a run is live, once every
+              chapter is done (queued === 0), or while generation is halted on
+              an error. */}
+          {queued > 0 && inProgressCnt === 0 && !lastError && (
+            <button
+              type="button"
+              onClick={() => dispatch(uiActions.requestStartGeneration())}
+              data-testid="generation-view-resume"
+              className="min-h-[44px] px-4 py-2.5 rounded-full border border-magenta/30 bg-magenta/5 text-sm font-medium text-magenta hover:bg-magenta/10 inline-flex items-center gap-2"
+            >
+              <IconPlay className="w-4 h-4" /> Resume generation
+            </button>
+          )}
           {allComplete && (
             <button
               onClick={onRegenerateBook}

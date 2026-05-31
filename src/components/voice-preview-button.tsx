@@ -1,5 +1,5 @@
 /* Per-candidate "Play sample" affordance for the profile drawer.
-   Pairs with docs/features/60-voice-preview-while-editing.md.
+   Pairs with docs/features/archive/64-voice-preview-while-editing.md.
 
    Synthesizes a short user-editable preview line through the same
    sidecar lifecycle as the rest of the app — `playBaseVoiceSampleWithAutoLoad`

@@ -1,4 +1,4 @@
-// Pairs with docs/features/06-manuscript-parsing.md (plain text + Markdown layer).
+// Pairs with docs/features/archive/02-upload-paste-or-file.md (plain text + Markdown layer).
 
 import { describe, expect, it } from 'vitest';
 import { parseText, parseFilenameMetadata, parseSeriesFromTitle } from './text.js';

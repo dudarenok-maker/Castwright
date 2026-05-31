@@ -9,8 +9,15 @@ import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
-import type { TtsModelKey, UserSettings, UserSettingsPatch } from '../lib/types';
+import type {
+  BackupSnapshot,
+  TtsModelKey,
+  UserSettings,
+  UserSettingsPatch,
+} from '../lib/types';
 import type { ThemePreference } from '../lib/use-theme';
+import { api } from '../lib/api';
+import { selectLibraryBooks } from '../store/library-slice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import {
@@ -82,6 +89,12 @@ export function AccountView() {
   const [generationWorkers, setGenerationWorkers] = useState<number>(
     account.generationWorkers ?? 2,
   );
+  /* srv-2 — per-book state.json auto-backup preferences. */
+  const [backupEnabled, setBackupEnabled] = useState<boolean>(account.backupEnabled ?? true);
+  const [backupCadence, setBackupCadence] = useState<'daily' | 'weekly'>(
+    account.backupCadence ?? 'daily',
+  );
+  const [backupRetention, setBackupRetention] = useState<number>(account.backupRetention ?? 14);
   const themeOverride = useAppSelector((s) => s.ui.themeOverride);
   const [showSaved, setShowSaved] = useState(false);
 
@@ -105,6 +118,9 @@ export function AccountView() {
     setEagerLoadKokoro(account.eagerLoadKokoro ?? true);
     setEagerLoadQwen(account.eagerLoadQwen ?? true);
     setGenerationWorkers(account.generationWorkers ?? 2);
+    setBackupEnabled(account.backupEnabled ?? true);
+    setBackupCadence(account.backupCadence ?? 'daily');
+    setBackupRetention(account.backupRetention ?? 14);
   }, [
     account.hydrated,
     account.displayName,
@@ -127,6 +143,9 @@ export function AccountView() {
     account.eagerLoadKokoro,
     account.eagerLoadQwen,
     account.generationWorkers,
+    account.backupEnabled,
+    account.backupCadence,
+    account.backupRetention,
   ]);
 
   /* When the engine switches, the selected modelKey may not belong to the
@@ -240,6 +259,9 @@ export function AccountView() {
       eagerLoadKokoro,
       eagerLoadQwen,
       generationWorkers,
+      backupEnabled,
+      backupCadence,
+      backupRetention,
     };
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
@@ -708,6 +730,67 @@ export function AccountView() {
         </FormCard>
 
         <FormCard
+          title="Backups"
+          hint="Automatic snapshots of each book's state.json (cast, chapters, metadata) so an accidental edit or corrupt write can be rolled back. Snapshots live alongside the book in its workspace folder."
+        >
+          <FieldRow
+            label="Automatic backups"
+            sublabel="When on, the server snapshots a book's state.json on the cadence below, pruning to the retention count. Turn off to manage backups manually with 'Back up now'."
+          >
+            <label className="inline-flex items-center gap-3 cursor-pointer select-none min-h-[44px] sm:min-h-0">
+              <input
+                type="checkbox"
+                checked={backupEnabled}
+                onChange={(e) => setBackupEnabled(e.target.checked)}
+                data-testid="account-backup-enabled"
+                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+              />
+              <span className="text-sm text-ink">
+                {backupEnabled
+                  ? 'Enabled — the server snapshots state.json automatically.'
+                  : 'Disabled — snapshots only when you click "Back up now".'}
+              </span>
+            </label>
+          </FieldRow>
+          <FieldRow
+            label="Cadence"
+            sublabel="How often an automatic snapshot is taken when a book's state changes."
+          >
+            <select
+              value={backupCadence}
+              onChange={(e) => setBackupCadence(e.target.value as 'daily' | 'weekly')}
+              data-testid="account-backup-cadence"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          </FieldRow>
+          <FieldRow
+            label="Retention (snapshots to keep)"
+            sublabel="Older snapshots beyond this count are pruned. 1–365."
+          >
+            <input
+              type="number"
+              min={1}
+              max={365}
+              step={1}
+              value={backupRetention}
+              onChange={(e) => {
+                const parsed = parseInt(e.target.value, 10);
+                if (Number.isFinite(parsed)) {
+                  /* Clamp to schema [1, 365] so Save can't 400 on a fat-finger. */
+                  setBackupRetention(Math.max(1, Math.min(365, parsed)));
+                }
+              }}
+              data-testid="account-backup-retention"
+              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+            />
+          </FieldRow>
+          <BackupRestoreSection />
+        </FormCard>
+
+        <FormCard
           title="Server configuration"
           hint="Non-secret overrides for what's in server/.env. Sidecar URL and Ollama settings take effect on the next request; workspace directory needs a server restart."
         >
@@ -837,6 +920,149 @@ function FieldRow({
       {sublabel && <span className="block text-xs text-ink/55 mt-0.5">{sublabel}</span>}
       <div className="mt-2">{children}</div>
     </label>
+  );
+}
+
+/* srv-2 — Restore-from-backup picker. Picks a book from the library,
+   lists its on-disk snapshots, and offers "Back up now" + per-snapshot
+   "Restore" (confirm-gated). Feedback is inline text — the Account view
+   has no toast surface. */
+function BackupRestoreSection() {
+  const books = useAppSelector(selectLibraryBooks);
+  const [bookId, setBookId] = useState<string>('');
+  const [snapshots, setSnapshots] = useState<BackupSnapshot[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadSnapshots = async (id: string) => {
+    if (!id) {
+      setSnapshots([]);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      setSnapshots(await api.listBookBackups(id));
+    } catch (e) {
+      setError((e as Error).message);
+      setSnapshots([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onPickBook = (id: string) => {
+    setBookId(id);
+    setStatus(null);
+    setError(null);
+    void loadSnapshots(id);
+  };
+
+  const onBackupNow = async () => {
+    if (!bookId) return;
+    setBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await api.backupBookNow(bookId);
+      setStatus('Backup created.');
+      await loadSnapshots(bookId);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onRestore = async (file: string) => {
+    if (!bookId) return;
+    if (
+      !window.confirm(
+        `Restore this book from "${file}"? The current state.json will be overwritten.`,
+      )
+    )
+      return;
+    setBusy(true);
+    setStatus(null);
+    setError(null);
+    try {
+      await api.restoreBookBackup(bookId, file);
+      setStatus(`Restored from ${file}.`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="block border-t border-ink/10 pt-4">
+      <span className="block text-sm font-medium text-ink">Restore from backup</span>
+      <span className="block text-xs text-ink/55 mt-0.5">
+        Pick a book to list its snapshots, take a fresh one, or roll back to an earlier state.json.
+      </span>
+      <div className="mt-2">
+        <select
+          value={bookId}
+          onChange={(e) => onPickBook(e.target.value)}
+          data-testid="account-backup-book-picker"
+          className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+        >
+          <option value="">Select a book…</option>
+          {books.map((b) => (
+            <option key={b.bookId} value={b.bookId}>
+              {b.title}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {bookId && (
+        <div className="mt-3 flex items-center gap-3">
+          <PrimaryButton variant="dark" icon={false} onClick={onBackupNow}>
+            {busy ? 'Working…' : 'Back up now'}
+          </PrimaryButton>
+        </div>
+      )}
+
+      {bookId && (
+        <div className="mt-3 space-y-2">
+          {loading ? (
+            <p className="text-xs text-ink/55">Loading snapshots…</p>
+          ) : snapshots.length === 0 ? (
+            <p className="text-xs text-ink/55">No snapshots yet for this book.</p>
+          ) : (
+            snapshots.map((s) => (
+              <div
+                key={s.file}
+                data-testid="account-backup-snapshot"
+                className="flex items-center justify-between gap-3 rounded-xl border border-ink/10 bg-ink/[0.02] px-3 py-2"
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-mono text-ink truncate">{s.file}</div>
+                  <div className="text-[11px] text-ink/55">
+                    {new Date(s.createdAt).toLocaleString()} · {Math.round(s.sizeBytes / 1024)} KB
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onRestore(s.file)}
+                  disabled={busy}
+                  className="shrink-0 min-h-[44px] sm:min-h-0 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/[0.04] disabled:opacity-50"
+                >
+                  Restore
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {status && <p className="mt-2 text-xs text-magenta font-semibold">{status}</p>}
+      {error && <p className="mt-2 text-xs text-rose-700">{error}</p>}
+    </div>
   );
 }
 

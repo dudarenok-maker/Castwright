@@ -23,7 +23,7 @@
  *   3. PROFILE-REGEN PREVIEW GATE — when the single preview chapter completes
  *      (markRevisionPlayable for the chapter the user is previewing), build the
  *      now-playable A/B stub and auto-open the diff player. See plan
- *      docs/features/114-profile-regen-preview.md.
+ *      docs/features/archive/114-profile-regen-preview.md.
  *
  * Skipped under VITE_USE_MOCKS=true? — NO. The mock SSE depends on a long-lived
  * caller; the runner (opened by the dispatcher) is that caller. */
@@ -157,7 +157,7 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
          player. Built fresh on completion so a mid-render revisions poll
          (applyPoll replaces `pending` wholesale) can't leave the gate without
          a revision to show. Normal chapter regens never set previewRegen, so
-         this no-ops for them. See docs/features/114-profile-regen-preview.md. */
+         this no-ops for them. See docs/features/archive/114-profile-regen-preview.md. */
       if (type === 'revisions/markRevisionPlayable') {
         const payload = (a as { payload?: { chapterId: number } }).payload;
         if (payload) {
