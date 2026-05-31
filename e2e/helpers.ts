@@ -115,3 +115,32 @@ export async function waitForLibraryViewReady(page: Page): Promise<void> {
     timeout: 10_000,
   });
 }
+
+/* The Account view mounts QwenInstall + OllamaInstall (+ model-pull-status),
+ * which probe the backend with RAW `fetch` — `/api/qwen/detect`,
+ * `/api/ollama/detect`, `/api/ollama/refresh` — bypassing the VITE_USE_MOCKS
+ * client layer that every other e2e surface goes through. The e2e Vite server
+ * proxies `/api` to `localhost:8080` (vite.config), so on a dev box with the
+ * real app running these resolve to the MACHINE's actual install state (Qwen /
+ * Ollama installed) instead of the "not installed" state the Account specs
+ * assume. That makes the install-card assertions flake whenever :8080 is up
+ * (they pass on CI, where nothing answers the proxy), and the real-backend
+ * round-trips on every mount add the latency behind the `goto`/visibility
+ * timeouts under parallel-worker load. Stub the probes to a deterministic
+ * not-installed / empty state so the Account view renders identically
+ * regardless of the box AND mounts without a network hop. Call in a
+ * `beforeEach`, before the first navigation. */
+export async function stubAccountModelProbes(page: Page): Promise<void> {
+  const json = (body: unknown) => ({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(body),
+  });
+  await page.route('**/api/qwen/detect', (route) =>
+    route.fulfill(json({ state: 'not-installed', installed: false })),
+  );
+  await page.route('**/api/ollama/detect', (route) =>
+    route.fulfill(json({ installed: false, version: null })),
+  );
+  await page.route('**/api/ollama/refresh', (route) => route.fulfill(json({ models: [] })));
+}
