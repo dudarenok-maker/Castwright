@@ -18,6 +18,14 @@
  *     serving. (If a future crash STILL leaves no log, it's native/external —
  *     itself a diagnostic clue.)
  *
+ * srv-17 — once the plan-145 handlers above were live they captured the actual
+ * crash, and it was NOT the hypothesised mid-run silent death: both FATALs were
+ * `listen EADDRINUSE` at startup (a double-start while a prior instance still
+ * held the port). A raw bind failure bubbling to uncaughtException prints a
+ * cryptic Node stack; `attachListenErrorHandler` below intercepts it on the
+ * listener itself and prints an actionable "a server is already running" line
+ * before a clean exit, so EADDRINUSE never reaches the uncaughtException path.
+ *
  * console.* is already timestamp-patched (logger.installTimestamps), so the
  * messages here inherit the standard `YYYY-MM-DD HH:mm:ss.SSS [server]` stamp.
  */
@@ -57,5 +65,46 @@ export function installCrashHandlers(hooks: CrashHandlerHooks = {}): void {
 
   target.on('unhandledRejection', (reason: unknown) => {
     log(`${formatCrash('unhandledRejection', reason)} (survived — server continues)`);
+  });
+}
+
+/* ---- srv-17: actionable listen-error handling ---------------------------- */
+
+/** A freshly-created HTTP/HTTPS listener — just the slice we attach to. */
+export interface ListenErrorTarget {
+  on(event: 'error', cb: (err: NodeJS.ErrnoException) => void): void;
+}
+
+/** Format a listen-error line. EADDRINUSE — the only one we've actually seen
+ *  (a double-start) — gets an actionable hint pointing at the likely cause;
+ *  any other bind error gets the generic FATAL form with the stack. No
+ *  timestamp — the console patch adds it. */
+export function formatListenError(port: number, err: NodeJS.ErrnoException): string {
+  if (err.code === 'EADDRINUSE') {
+    return (
+      `[server] Port ${port} is already in use — another server instance is likely ` +
+      `already running. Stop it first (stop-app, or Ctrl+C the existing run) or set ` +
+      `PORT to a free port, then retry.`
+    );
+  }
+  return `[server] FATAL listen error on port ${port} — ${err.stack ?? `${err.name}: ${err.message}`}`;
+}
+
+/** Attach an `'error'` handler to a freshly-created listener so a bind failure
+ *  (EADDRINUSE on a double-start, or a stale instance still holding the port)
+ *  surfaces an actionable message and a clean exit, instead of bubbling to the
+ *  uncaughtException handler as a cryptic stack. `onLog` / `onExit` default to
+ *  console.error / process.exit and are injectable for tests, mirroring
+ *  `installCrashHandlers`. */
+export function attachListenErrorHandler(
+  server: ListenErrorTarget,
+  port: number,
+  hooks: { onLog?: (msg: string) => void; onExit?: (code: number) => void } = {},
+): void {
+  const log = hooks.onLog ?? ((m: string) => console.error(m));
+  const exit = hooks.onExit ?? ((c: number) => process.exit(c));
+  server.on('error', (err) => {
+    log(formatListenError(port, err));
+    exit(1);
   });
 }

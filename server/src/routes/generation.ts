@@ -1218,7 +1218,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          + future playback slice can render it without re-reading the audio.
          Also stamp the TTS model key + render timestamp so the frontend
          can surface engine-drift badges without reading every segments
-         file on chapter-list hydrate (see docs/features/35-engine-drift).
+         file on chapter-list hydrate (see docs/features/archive/35-engine-drift-detection.md).
 
          With sibling chapters of the same book completing in parallel
          (separate dispatcher POSTs now), two handlers can race to
