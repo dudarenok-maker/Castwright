@@ -113,9 +113,12 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible();
     await expect(page.getByText(/Failed · sidecar 500/)).toBeVisible();
     await page.getByTestId('queue-entry-e-failed-retry').click();
-    /* Re-queued → the Failed line is gone and the row reads Queued. */
+    /* Re-queued → the Failed line is gone and the row reads Queued. Assert via
+       the entry's own status testid rather than a bare getByText('Queued'),
+       which also matches the dev build-stamp footer (plan 124) on any branch
+       whose name contains "queued" — a strict-mode violation. */
     await expect(page.getByText(/Failed · sidecar 500/)).toHaveCount(0, { timeout: 5_000 });
-    await expect(page.getByText('Queued')).toBeVisible();
+    await expect(page.getByTestId('queue-entry-e-failed-status')).toHaveText('Queued');
   });
 
   test('cross-book entries render grouped and the other book’s entry cancels while viewing one book', async ({
