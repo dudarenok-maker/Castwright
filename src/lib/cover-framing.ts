@@ -4,7 +4,7 @@
 
    Mapping: offset∈[-100,100] maps linearly to object-position 0%–100%
    with 0 → 50% (centred). Plan
-   [40](docs/features/40-cover-framing-and-upload.md). */
+   [40](docs/features/archive/40-cover-framing-and-upload.md). */
 
 import type { CSSProperties } from 'react';
 import type { components } from './api-types';

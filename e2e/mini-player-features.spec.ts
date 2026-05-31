@@ -1,7 +1,7 @@
 /* Browser-level coverage for plan 53 mini-player feature pack:
  * playback speed picker, user-placed markers, sleep timer.
  *
- * Pairs with docs/features/53-mini-player-feature-pack.md.
+ * Pairs with docs/features/archive/53-mini-player-feature-pack.md.
  *
  * Persistence-across-reload is covered by the Vitest server spec for
  * the PUT validator + the slice-roundtrip Vitest spec; here we drive

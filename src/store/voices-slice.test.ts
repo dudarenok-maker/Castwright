@@ -1,4 +1,4 @@
-// Pairs with docs/features/24-voice-library.md
+// Pairs with docs/features/archive/22-voice-library.md
 
 import { describe, expect, it } from 'vitest';
 import { voicesSlice, voicesActions } from './voices-slice';

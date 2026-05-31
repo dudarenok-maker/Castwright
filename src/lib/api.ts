@@ -2744,7 +2744,7 @@ async function mockRenameChapter(
    voice assignment; only chapterId pointers and per-chapter sentence
    ids are rewritten. Audio for content-changed chapters is deleted on
    disk (chapter unplayable until regen); audio for renumbered-only
-   chapters is renamed in place. See docs/features/51-restructure-chapters.md. */
+   chapters is renamed in place. See docs/features/archive/51-restructure-chapters.md. */
 export interface ChapterRestructureResponse {
   chapters: Array<{
     id: number;
@@ -4104,9 +4104,101 @@ async function mockGetOllamaHealth(): Promise<OllamaHealth> {
   };
 }
 
+/* ── Per-book state.json auto-backup (srv-2) ────────────────────────────
+   Real path round-trips through the /api/books/:bookId/backups routes
+   (server/src/routes/backup.ts). Mock path keeps an in-memory per-book
+   list seeded with a couple of fake snapshots so mock-mode / e2e never
+   404s on the Account view's Restore picker. */
+async function realListBookBackups(
+  bookId: string,
+): Promise<{ file: string; sizeBytes: number; createdAt: string }[]> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/backups`);
+  if (!res.ok)
+    throw new Error(
+      `Backups fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  const body = (await res.json()) as {
+    backups: { file: string; sizeBytes: number; createdAt: string }[];
+  };
+  return body.backups;
+}
+
+async function realBackupBookNow(bookId: string): Promise<{ file: string }> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/backups/now`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Backup failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function realRestoreBookBackup(bookId: string, backupFile: string): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/backups/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ backupFile }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Restore failed (${res.status}).`);
+  }
+}
+
+const MOCK_BACKUPS = new Map<string, { file: string; sizeBytes: number; createdAt: string }[]>();
+
+async function mockListBookBackups(
+  bookId: string,
+): Promise<{ file: string; sizeBytes: number; createdAt: string }[]> {
+  await wait(40);
+  if (!MOCK_BACKUPS.has(bookId)) {
+    const now = Date.now();
+    MOCK_BACKUPS.set(bookId, [
+      {
+        file: 'state.2026-05-31T08-00-00-000Z.json',
+        sizeBytes: 18_432,
+        createdAt: new Date(now - 3_600_000).toISOString(),
+      },
+      {
+        file: 'state.2026-05-30T08-00-00-000Z.json',
+        sizeBytes: 17_980,
+        createdAt: new Date(now - 90_000_000).toISOString(),
+      },
+    ]);
+  }
+  return [...(MOCK_BACKUPS.get(bookId) ?? [])];
+}
+
+async function mockBackupBookNow(bookId: string): Promise<{ file: string }> {
+  await wait(60);
+  const file = `state.${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  const list = MOCK_BACKUPS.get(bookId) ?? [];
+  list.unshift({ file, sizeBytes: 18_500, createdAt: new Date().toISOString() });
+  MOCK_BACKUPS.set(bookId, list);
+  return { file };
+}
+
+async function mockRestoreBookBackup(_bookId: string, _backupFile: string): Promise<void> {
+  await wait(60);
+}
+
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
    playback slice that comes after this one. */
 const real = {
+  listBookBackups: realListBookBackups,
+  backupBookNow: realBackupBookNow,
+  restoreBookBackup: realRestoreBookBackup,
   getUserSettings: realGetUserSettings,
   putUserSettings: realPutUserSettings,
   putGeminiKey: realPutGeminiKey,
@@ -4302,6 +4394,9 @@ const real = {
 };
 
 const mock = {
+  listBookBackups: mockListBookBackups,
+  backupBookNow: mockBackupBookNow,
+  restoreBookBackup: mockRestoreBookBackup,
   getUserSettings: mockGetUserSettings,
   putUserSettings: mockPutUserSettings,
   putGeminiKey: mockPutGeminiKey,

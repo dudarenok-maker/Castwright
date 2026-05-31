@@ -208,3 +208,15 @@ export function qwenVoiceSidecarPath(name: string): string {
 export function queueJsonPath(): string {
   return join(WORKSPACE_ROOT, '.queue.json');
 }
+
+/** srv-2 — workspace-level backup jail. Per-book state.json snapshots live at
+    `<WORKSPACE_ROOT>/.backups/<bookId>/<YYYYMMDD-HHMMSS>.json` — OUTSIDE the
+    book folder so a book move/delete doesn't take its history with it, and so
+    every snapshot sits in one place the user can browse/copy. */
+export function backupsRootDir(): string {
+  return join(WORKSPACE_ROOT, '.backups');
+}
+
+export function bookBackupsDir(bookId: string): string {
+  return join(backupsRootDir(), bookId);
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* Repair: stamp a Xing/Info VBR header onto every chapter MP3 in the
    workspace that shipped without one. Companion to the plan 109 encoder fix
-   (`docs/features/109-mp3-xing-vbr-header.md`).
+   (`docs/features/archive/109-mp3-xing-vbr-header.md`).
 
    Every MP3 generated before plan 109 was piped to ffmpeg's `pipe:1`
    (non-seekable stdout), so libmp3lame could not seek back to write the Xing

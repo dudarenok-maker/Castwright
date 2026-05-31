@@ -22,7 +22,7 @@
    silently.
 
    The route is synchronous — Phase 1 re-analysis is NOT triggered.
-   See `docs/features/51-restructure-chapters.md` for the full design. */
+   See `docs/features/archive/51-restructure-chapters.md` for the full design. */
 
 import { Router, type Request, type Response } from 'express';
 import {

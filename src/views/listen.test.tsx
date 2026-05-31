@@ -1,4 +1,4 @@
-// Pairs with docs/features/18-listen-view.md
+// Pairs with docs/features/archive/18-listen-view.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';

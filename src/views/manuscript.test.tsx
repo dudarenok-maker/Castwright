@@ -690,7 +690,7 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
       wiring. Smoke-tests the "drawer auto-closes on chapter pick" wrap.
 
    Layout-correctness (no horizontal overflow at 375×667) belongs in
-   Playwright (Wave 5) — see docs/features/81-mobile-tablet-support.md. */
+   Playwright (Wave 5) — see docs/features/archive/81-mobile-tablet-support.md. */
 describe('ManuscriptView — responsive scaffolding (plan 81 wave 3)', () => {
   const r3Characters: Character[] = [
     { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },

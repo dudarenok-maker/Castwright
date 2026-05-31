@@ -1,4 +1,4 @@
-// Pairs with docs/features/12-revisions-pipeline.md
+// Pairs with docs/features/archive/20-revisions-and-drift.md
 
 import { describe, expect, it } from 'vitest';
 import {

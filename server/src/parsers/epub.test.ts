@@ -1,4 +1,4 @@
-// Pairs with docs/features/116-epub-parsing.md (EPUB parser).
+// Pairs with docs/features/archive/116-epub-parsing.md (EPUB parser).
 
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';

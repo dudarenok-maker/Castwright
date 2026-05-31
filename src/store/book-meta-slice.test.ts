@@ -1,4 +1,4 @@
-// Pairs with docs/features/18-listen-view.md
+// Pairs with docs/features/archive/18-listen-view.md
 
 import { describe, expect, it } from 'vitest';
 import {

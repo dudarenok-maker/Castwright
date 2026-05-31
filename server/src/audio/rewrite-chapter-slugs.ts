@@ -17,7 +17,7 @@
    a future fsck (see plan 51 follow-up); we prefer that over half-
    clobbering source files.
 
-   See docs/features/51-restructure-chapters.md. */
+   See docs/features/archive/51-restructure-chapters.md. */
 
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';

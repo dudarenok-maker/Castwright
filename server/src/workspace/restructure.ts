@@ -2,7 +2,7 @@
    No I/O — the route handler is responsible for reading + writing files
    based on the result objects this module produces.
 
-   See docs/features/51-restructure-chapters.md for the design contract.
+   See docs/features/archive/51-restructure-chapters.md for the design contract.
 
    Output shape covers four downstream layers in one pass:
    - state.chapters (slug regen + audioModelKey/audioRenderedAt clearing

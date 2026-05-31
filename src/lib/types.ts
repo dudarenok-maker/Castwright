@@ -81,8 +81,29 @@ export type TtsEngine = NonNullable<BaseVoice['engine']>;
    /api/user/settings response. Read-only fields (apiKeyStatus, workspaceRoot,
    workspaceSource) come from the server's env layer and can't be edited
    through the PUT endpoint. */
-export type UserSettings = components['schemas']['UserSettings'];
-export type UserSettingsPatch = components['schemas']['UserSettingsPatch'];
+/* srv-2 — per-book state.json auto-backup preferences. Declared as an
+   intersection on top of the generated schema so the three optional fields
+   are available to the slice + Account view even before `openapi:types`
+   regenerates `api-types.ts`. Mirrors the server's userSettingsSchema. */
+export type BackupCadence = 'daily' | 'weekly';
+export type UserSettings = components['schemas']['UserSettings'] & {
+  backupEnabled?: boolean;
+  backupCadence?: BackupCadence;
+  backupRetention?: number;
+};
+export type UserSettingsPatch = components['schemas']['UserSettingsPatch'] & {
+  backupEnabled?: boolean;
+  backupCadence?: BackupCadence;
+  backupRetention?: number;
+};
+
+/* srv-2 — one auto-backup snapshot of a book's state.json, newest first.
+   Mirrors server/src/routes/backup.ts BackupSnapshot. */
+export interface BackupSnapshot {
+  file: string;
+  sizeBytes: number;
+  createdAt: string;
+}
 
 export interface Book {
   id: string;
