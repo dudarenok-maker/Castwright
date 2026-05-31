@@ -2,7 +2,7 @@
 status: active
 ---
 
-# 150 — Per-book `state.json` auto-backup (srv-2)
+# 151 — Per-book `state.json` auto-backup (srv-2)
 
 ## Context
 
