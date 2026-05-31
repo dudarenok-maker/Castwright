@@ -10,7 +10,7 @@
 
    We do NOT exercise main() end-to-end here — that needs real ffmpeg on
    synthetic MP3 bytes; the real-ffmpeg remux is covered by the live
-   verification in the regression plan (docs/features/109-mp3-xing-vbr-header.md). */
+   verification in the regression plan (docs/features/archive/109-mp3-xing-vbr-header.md). */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

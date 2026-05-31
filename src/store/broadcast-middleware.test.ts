@@ -1,4 +1,4 @@
-/* Pairs with docs/features/63-cross-tab-broadcast-sync.md and the
+/* Pairs with docs/features/archive/63-cross-tab-broadcast-sync.md and the
    diffing/debounce refinement from plan 89 C2.
 
    The broadcast middleware brokers the analysis + chapters activeStream

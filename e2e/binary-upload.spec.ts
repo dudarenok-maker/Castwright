@@ -19,7 +19,7 @@
  * spec at `server/src/parsers/mobi-real-fixtures.test.ts` — that suite
  * also skips when the fixtures are absent.
  *
- * Pairs with docs/features/60-real-binary-parser-fixtures.md +
+ * Pairs with docs/features/archive/66-real-binary-parser-fixtures.md +
  * docs/features/archive/58-e2e-coverage-refresh.md +
  * docs/features/archive/52-mobi-parsing.md.
  */

@@ -1,4 +1,4 @@
-// Pairs with docs/features/23-book-state-persistence.md
+// Pairs with docs/features/archive/27-book-state-persistence.md
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 

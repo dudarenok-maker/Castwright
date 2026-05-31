@@ -117,4 +117,12 @@ export function filterBooks(
   });
 }
 
+/* srv-2 — flat list of every book in the library, for the Account view's
+   backup-restore book picker. Defensive read covers a test-harness path
+   where `preloadedState.library` is constructed without all initial
+   fields (a real production store always has it via `initialState`). */
+export function selectLibraryBooks(state: { library?: LibraryState }): LibraryBook[] {
+  return state.library?.books ?? [];
+}
+
 export const libraryActions = librarySlice.actions;

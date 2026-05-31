@@ -1,4 +1,4 @@
-// Pairs with docs/features/22-book-library.md and 73-library-search-tags.md
+// Pairs with docs/features/archive/21-book-library.md and 73-library-search-tags.md
 
 import { describe, expect, it } from 'vitest';
 import { librarySlice, libraryActions, selectAllTags, filterBooks } from './library-slice';

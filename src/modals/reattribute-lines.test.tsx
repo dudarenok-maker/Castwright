@@ -1,4 +1,4 @@
-// Pairs with docs/features/95-alias-edit.md
+// Pairs with docs/features/archive/95-alias-edit.md
 
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';

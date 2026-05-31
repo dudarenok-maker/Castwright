@@ -121,6 +121,17 @@ export const accountSlice = createSlice({
     setGenerationWorkers: (s, a: PayloadAction<number>) => {
       s.generationWorkers = a.payload;
     },
+    /* srv-2 — per-book state.json auto-backup preferences. Toggled from the
+       Account view's Backups card; persisted via the same Save thunk. */
+    setBackupEnabled: (s, a: PayloadAction<boolean>) => {
+      s.backupEnabled = a.payload;
+    },
+    setBackupCadence: (s, a: PayloadAction<UserSettings['backupCadence']>) => {
+      s.backupCadence = a.payload;
+    },
+    setBackupRetention: (s, a: PayloadAction<number>) => {
+      s.backupRetention = a.payload;
+    },
   },
   extraReducers: (builder) => {
     builder

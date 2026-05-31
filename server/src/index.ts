@@ -75,6 +75,7 @@ import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
+import { startBackupScheduler, stopBackupScheduler } from './workspace/auto-backup.js';
 import {
   readUserSettings,
   getResolvedSidecarUrl,
@@ -159,6 +160,8 @@ app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
 app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analysis
 app.use('/api/books', bookStateRouter); // mounts /:bookId/state (GET/PUT)
+import { backupRouter } from './routes/backup.js';
+app.use('/api/books', backupRouter); // srv-2 — /:bookId/backups (list) + /backups/now + /backups/restore
 app.use('/api/books', coverRouter); // mounts /:bookId/cover{,/candidates} (OpenLibrary covers)
 app.use('/api/books', voiceMatchRouter); // mounts /:bookId/voice-match
 app.use('/api/books', castMergeRouter); // mounts /:bookId/cast/merge
@@ -321,6 +324,11 @@ const listenerCallback = () => {
     },
   });
   void sidecarSupervisor.start();
+
+  /* srv-2 — start the periodic per-book state.json backup sweep (no-op when
+     disabled in user-settings). Timers are unref()'d so they never hold the
+     process open on their own. */
+  startBackupScheduler();
 };
 
 /* Plan: server-boot orphan sweep for the chapter-generation queue. A restart
@@ -371,6 +379,7 @@ let shuttingDown = false;
 function shutdown(signal: NodeJS.Signals): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  stopBackupScheduler();
   console.log(`[server] ${signal} received, tearing down sidecar...`);
   /* stop() sets the supervisor's stopped flag BEFORE reaping the child, so the
      child's exit can't trigger a respawn race during shutdown. */
