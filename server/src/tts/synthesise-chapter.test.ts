@@ -841,6 +841,24 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
     expect(groups[0].text).toBe('Sentence 1.');
     expect(groups[206].text).toBe('Sentence 207.');
   });
+
+  /* The 2026-05-31 ch14 failure: a blank/whitespace sentence reached a synth
+     batch and the sidecar rejected it with `400 "item 0: text is required."`,
+     failing the whole chapter. Empty-after-normalisation sentences are dropped
+     here so they never become a synth item. */
+  it('drops sentences whose text is empty/whitespace after normalisation', () => {
+    const groups = buildSentenceGroups([
+      s(1, 'narrator', 'Open.'),
+      s(2, 'narrator', '   '), // whitespace-only → no spoken audio
+      s(3, 'Wren', 'Hi.'),
+      s(4, 'narrator', ''), // empty → dropped
+      s(5, 'narrator', 'Close.'),
+    ]);
+    expect(groups.map((g) => g.text)).toEqual(['Open.', 'Hi.', 'Close.']);
+    expect(groups.map((g) => g.sentenceIds)).toEqual([[1], [3], [5]]);
+    // index is re-sequenced contiguously over the kept groups (scatter-back key)
+    expect(groups.map((g) => g.index)).toEqual([0, 1, 2]);
+  });
 });
 
 /* ── plan 107 — within-chapter sentence parallelism ──────────────────────
