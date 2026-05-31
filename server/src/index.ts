@@ -21,7 +21,7 @@ installTimestamps();
    server vanishing silently (it died twice on 2026-05-30 with no trace). Also
    makes a stray unhandled rejection survivable so a transient async error can't
    take down an unattended generation run. See crash-logging.ts. */
-import { installCrashHandlers } from './crash-logging.js';
+import { installCrashHandlers, attachListenErrorHandler } from './crash-logging.js';
 installCrashHandlers();
 
 import express from 'express';
@@ -365,9 +365,11 @@ if (lanHttps) {
   }
   const key = readFileSync(LAN_KEY_FILE);
   const cert = readFileSync(LAN_CERT_FILE);
-  createHttpsServer({ key, cert }, app).listen(LAN_HTTPS_PORT, listenerCallback);
+  const server = createHttpsServer({ key, cert }, app).listen(LAN_HTTPS_PORT, listenerCallback);
+  attachListenErrorHandler(server, LAN_HTTPS_PORT);
 } else {
-  app.listen(PORT, listenerCallback);
+  const server = app.listen(PORT, listenerCallback);
+  attachListenErrorHandler(server, PORT);
 }
 
 /* On Ctrl+C or kill, reap the sidecar tree before exit so port 9000 is
