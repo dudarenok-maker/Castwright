@@ -355,16 +355,6 @@ Source: net-new (2026-05-31), security review finding #5. `main.py:1251` does `t
 - _Depends on:_ none.
 - _Benefit (technical):_ removes a local RCE-on-untrusted-file footgun; aligns with torch's `weights_only` default direction.
 
-#### `side-13` — Cap `/synthesize` input length
-
-Source: net-new (2026-05-31), security review finding #7. The sidecar checks for non-empty text but enforces no maximum, so a giant payload drives unbounded VRAM/CPU. Loopback-only, so low real exposure — pure resource-exhaustion hardening.
-
-- _What:_ add a generous `MAX_TEXT_LENGTH` guard (env-overridable) to the `/synthesize` (and `/design_voice`) request validation; return 400 with a clear message past the cap. Set the default well above any real per-sentence/batch payload the server sends.
-- _Acceptance:_ a normal chapter batch synthesises unchanged; an over-cap payload returns 400 without touching the model; the cap is env-tunable. New pytest covers under/over-cap.
-- _Key files:_ `server/tts-sidecar/main.py` (the `/synthesize` + `/design_voice` body validation); `server/tts-sidecar/tests/`.
-- _Depends on:_ none.
-- _Benefit (technical):_ bounds a trivial local DoS; cheap and self-contained.
-
 ### Ops, CI & distribution
 
 #### `ops-7` — Pin SHA256 for model + wheel downloads

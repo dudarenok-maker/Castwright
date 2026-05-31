@@ -101,6 +101,41 @@ def test_synthesize_rejects_empty_text(client: TestClient) -> None:
     assert "text" in r.json()["detail"].lower()
 
 
+def test_synthesize_rejects_over_cap_text(client: TestClient, monkeypatch) -> None:
+    """side-13: a pathological over-length item fails FAST with a 400 (carrying
+    the offending length) instead of hanging the model for the 600s server
+    timeout (the 2026-05-31 ch29 ChapterSynthTimeoutError). The cap is checked
+    before the engine is touched."""
+    monkeypatch.setenv("MAX_TEXT_LENGTH", "50")
+    r = client.post(
+        "/synthesize",
+        json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "x" * 51},
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"].lower()
+    assert "too long" in detail and "51" in detail
+
+
+def test_synthesize_accepts_under_cap_text(client: TestClient, monkeypatch) -> None:
+    """A normal-length item is unaffected by the cap."""
+    monkeypatch.setenv("MAX_TEXT_LENGTH", "50")
+    r = client.post(
+        "/synthesize",
+        json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "x" * 10},
+    )
+    assert r.status_code == 200
+
+
+def test_synthesize_cap_disabled_with_zero(client: TestClient, monkeypatch) -> None:
+    """MAX_TEXT_LENGTH=0 disables the cap — a long item is accepted."""
+    monkeypatch.setenv("MAX_TEXT_LENGTH", "0")
+    r = client.post(
+        "/synthesize",
+        json={"engine": "coqui", "model": "xtts_v2", "voice": "v", "text": "x" * 20000},
+    )
+    assert r.status_code == 200
+
+
 def test_synthesize_rejects_non_string_fields(client: TestClient) -> None:
     """Type coercion bugs upstream shouldn't reach the engine — bail at the
     boundary so the error message points at the right layer."""
