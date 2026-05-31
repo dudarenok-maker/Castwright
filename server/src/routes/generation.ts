@@ -1053,22 +1053,36 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           });
           break;
         } catch (synthErr) {
-          /* Recoverable only while the run is live and the budget remains. A
-             transient sidecar-down (connection drop on recycle/crash, or a
-             drain-503) is ridden out; AbortError, poison, and every fatal
-             classifier error re-throw to the outer catch unchanged. */
+          /* Recoverable only while the run is live and the budget remains. Two
+             recoverable shapes:
+               1. a transient sidecar-down (connection drop on recycle/crash, or
+                  a drain-503), and
+               2. a ChapterSynthTimeoutError — a synth that HUNG past the per-call
+                  ceiling. Under a host-RAM recycle the respawned sidecar can be
+                  HTTP-up but still loading the model in-band, so the in-flight
+                  call stalls to the timeout instead of failing fast. That timeout
+                  is non-transient by construction, so without this it bubbles to
+                  the outer catch and stops the run (2026-05-31 KOTLC CH24). Ride
+                  it out the same way: wait on the readiness gate, then re-render
+                  against a sidecar that is actually ready.
+             AbortError, poison, and every other fatal classifier error re-throw
+             to the outer catch unchanged. */
+          const isRecycleTimeout =
+            (synthErr as { name?: string })?.name === 'ChapterSynthTimeoutError';
           if (
             (synthErr as { name?: string })?.name === 'AbortError' ||
-            !isTransient(synthErr) ||
+            (!isTransient(synthErr) && !isRecycleTimeout) ||
             controller.signal.aborted ||
             recovery >= MAX_RECYCLE_RECOVERIES
           ) {
             throw synthErr;
           }
           console.warn(
-            `[generation] chapter ${chapter.id} (${chapter.slug}): sidecar unavailable ` +
-              `mid-synth (recycle/respawn) — riding out the respawn, re-attempt ` +
-              `${recovery + 1}/${MAX_RECYCLE_RECOVERIES}.`,
+            `[generation] chapter ${chapter.id} (${chapter.slug}): ${
+              isRecycleTimeout
+                ? 'synth stalled (likely a mid-render recycle)'
+                : 'sidecar unavailable mid-synth (recycle/respawn)'
+            } — riding out the respawn, re-attempt ${recovery + 1}/${MAX_RECYCLE_RECOVERIES}.`,
           );
           /* Polls through the supervisor respawn (srv-17b, 120 s budget); throws
              AbortError if the run is paused/displaced mid-wait. */
@@ -1330,7 +1344,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         job.runInProgress.delete(chapter.id);
         return;
       }
-      const initial = describeSynthesisError(e);
+      const initial = describeSynthesisError(e, engine);
       let { errorReason, fatal } = initial;
       console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
       if (!fatal) {

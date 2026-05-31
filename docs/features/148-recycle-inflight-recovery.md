@@ -10,6 +10,7 @@ owner: null
 > Key files: `server/src/routes/generation.ts` (in-worker recovery), `server/tts-sidecar/main.py` (drain-before-recycle)
 > URL surface: indirect (generation SSE + sidecar lifecycle)
 > OpenAPI ops: none
+> Extended by [[154-false-gemini-rate-limit-misclassify]] — the recovery trigger now also covers `ChapterSynthTimeoutError` (a synth that stalls into the 600 s ceiling while the respawned sidecar is still loading), not just transient sidecar-down; and that timeout, once recovery is exhausted, is non-fatal (skip & advance) instead of a mislabeled "Gemini rate-limited" run-stop.
 
 ## Benefit / Rationale
 
