@@ -88,14 +88,13 @@ Source: net-new (2026-05-28), filed from the series-reuse repair session. Full s
 - _Benefit (user / technical):_ series continuity survives re-analysis — no re-running a repair after every reparse. Closes the remaining durability gap left after Facet A.
 - _Also remaining (follow-up, surfaced this round):_ a SECOND Phase-0b finalise site in `analysis.ts` — the failed-chapter retry/resume `runChapterCastSubset` path (~L3508, writing cast.json ~L3712) — does NOT run Facet A's link pass, so a book completed exclusively via the chapter-retry path persists an unlinked cast.json until the next full `/analysis/stream`. Belt-and-suspenders; fold into Facet B or a tiny standalone fix.
 
-### `srv-17` — Root-cause the silent server-child death (once plan 145 captures it)
+### `srv-17` — ~~Root-cause the silent server-child death~~ → RESOLVED as a startup port collision (2026-05-31)
 
-Source: net-new (2026-05-30). The generation server's `:8080` child died silently TWICE — no stack trace in `server.err.log`, no heap-OOM, and the second time RAM was 61% free (not the host-leak OOM). `tsx watch`'s wrapper survives but doesn't auto-respawn the child, so the run stalls. Plan 145 added `uncaughtException`/`unhandledRejection` handlers that LOG the cause (and survive rejections), so the NEXT occurrence should finally name what's throwing.
+Source: net-new (2026-05-30). **Resolved 2026-05-31** (branch `fix/server-listen-eaddrinuse`). Plan 145's handlers captured the crash, and it was **not** the hypothesised mid-run silent death: both `[server] FATAL uncaughtException` lines (08:34 + 14:55, `logs/server.err.log`) were `listen EADDRINUSE: address already in use :::8080` at **startup** — a double-start while a prior instance still held the port. The server never logged a mid-run FATAL across the whole run; the perceived "death" was a *stuck* server (the 14:19–14:21 recycle-drain cascade + a handled 600 s ch29 timeout — sidecar instability, see `side-11` / the recycle-drain-cascade) plus a restart that collided on `:8080`.
 
-- _What:_ once plan 145's handler logs a `[server] FATAL …` line (likely an unhandled rejection on an un-awaited/un-caught async path), trace it to the source and add the missing `await`/`.catch()` there. ~~ALSO gate generation dispatch on sidecar readiness so the startup race can't fire spurious failures.~~ **DONE — readiness-gate half shipped as plan 147 (2026-05-30):** `ensureSidecarEngineReady` now POLLS through a respawn (sidecar unreachable / model loading) instead of bailing on the first connection-refused, so a recycle-induced respawn (plan 143) no longer fires a burst of "sidecar not reachable" failures that trips the srv-11 breaker and pauses the queue (the 2026-05-30 incident). **Remaining here:** root-cause the *silent server-child death* itself (the `:8080` process dying with NO stack trace), once a `[server] FATAL …` line captures it.
-- _Acceptance:_ the root rejection/exception is fixed at its source (no longer reaches the process handler). ~~A server restart + immediate queue run doesn't fail the first chapter on "sidecar not reachable"~~ — covered by plan 147 (`ensure-sidecar-loaded.test.ts` pins the poll-through-respawn behavior).
-- _Key files:_ TBD by the captured trace; likely `server/src/routes/generation.ts` (dispatch/SSE error paths), `server/src/tts/sidecar.ts` / `retry.ts`, `server/src/tts/ensure-sidecar-loaded.ts` (readiness gate), `server/src/index.ts` (boot-time preload).
-- _Benefit (user / technical):_ removes the actual crash (plan 145 only makes it visible + survivable), so long runs don't even hit the FATAL path, and a fresh-restart run doesn't spuriously fail its first chapter.
+- _What (done):_ `app.listen` had no `'error'` handler, so the bind failure bubbled to the plan-145 `uncaughtException` handler as a cryptic stack. Added `attachListenErrorHandler(server, port)` (`server/src/crash-logging.ts`) on both the HTTP and HTTPS listeners in `index.ts`: EADDRINUSE → actionable *"Port N is already in use — another server instance is likely already running…"* + clean `exit(1)`; any other bind error → generic FATAL + stack. EADDRINUSE no longer reaches the uncaughtException path.
+- _Acceptance (met):_ paired `crash-logging.test.ts` cases pin `formatListenError` (EADDRINUSE hint vs generic FATAL) and `attachListenErrorHandler` (logs + `exit(1)`). Manual: a second `npm run dev` against an occupied `:8080` prints the actionable line, not a raw stack. Regression: `docs/features/145-server-crash-diagnostics.md` "srv-17 follow-up" section.
+- _Residual watch:_ the mid-run silent-death hypothesis was never reproduced; the plan-145 `uncaughtException`/`unhandledRejection` handlers stay armed as the ongoing watch. The run-instability that *looked* like a death is tracked under `side-11` (eliminate the host-memory leak so the sidecar stops recycling mid-run), not here.
 
 ### `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed)
 
@@ -366,26 +365,6 @@ Source: net-new (2026-05-31), security review finding #6 (supply-chain). `script
 - _Key files:_ `scripts/install-kokoro.ps1` (post-download `Get-FileHash` compare), `server/tts-sidecar/scripts/install-qwen3.mjs` (`FLASH_ATTN_WHEEL_URL` verify + pip pinning), `scripts/lib/` if a shared verify helper is warranted, `scripts/tests/`.
 - _Depends on:_ none.
 - _Benefit (user / technical):_ closes the supply-chain gap on the binaries that run with the user's privileges on install — the sharpest of these is the single-maintainer community FA2 wheel. Cheap relative to the RCE blast radius.
-
-#### `ops-3` — Serialize the `regen-visual-baselines.yml` 3-leg matrix
-
-Source: net-new (2026-05-23). Surfaced during the plan-103 CI cost audit.
-
-- _What:_ `regen-visual-baselines.yml` fans out across three Playwright projects (chromium / mobile-chrome / tablet-chrome) as a parallel matrix, paying a full cold-start (checkout + npm ci + Playwright install) per leg. Collapse into a single job that runs all three `--update-snapshots` passes sequentially, so the setup tax is paid once. Only fires on `workflow_dispatch` (~2 runs/month), so the saving is bursty rather than steady.
-- _Acceptance:_ A single `workflow_dispatch` run regenerates all 42 PNGs (14 per project × 3) in one job and still opens the auto-PR. Billed minutes for a regen drop from ~3× cold-start to ~1×.
-- _Key files:_ `.github/workflows/regen-visual-baselines.yml` (collapse `strategy.matrix.project` into a sequential step loop; consolidate the artifact upload).
-- _Depends on:_ none.
-- _Benefit (technical):_ ~60 billed min/month freed on regen days; tidier workflow.
-
-#### `ops-6` — Refresh stale `docs/features/<NN>.md` path pointers in source comments
-
-Source: net-new (2026-05-29). Fallout from the plan-archiving sweep that moved ~56 shipped plans into `docs/features/archive/`. The rendered markdown links in `CLAUDE.md` / `CONTRIBUTING.md` / `README.md` / `BACKLOG.md` / `INDEX.md` were updated in that same PR, but plain-text "Pairs with `docs/features/<NN>-…md`" pointers in `.ts` / `.tsx` test + source comments, `openapi.yaml` description strings, and `skills/*.md` were intentionally left alone — editing them would have broken the doc-only CI fast-path and coupled unrelated scope into a docs PR.
-
-- _What:_ Sweep the non-doc tree for `docs/features/<NN>-…md` comment pointers to now-archived plans and rewrite them to `docs/features/archive/<NN>-…md`. Mechanical; group into one commit. (~40 files: see `git grep "docs/features/" -- '*.ts' '*.tsx' '*.mjs' openapi.yaml skills`.)
-- _Acceptance:_ `git grep "docs/features/[0-9]" -- '*.ts' '*.tsx' '*.mjs' openapi.yaml skills | grep -v archive/` returns only references to plans that are still top-level (active/deferred).
-- _Key files:_ assorted `*.test.ts(x)` + `server/src/**` comments, `openapi.yaml`, `skills/audiobook-character-detection-per-chapter.md`.
-- _Depends on:_ none.
-- _Benefit (technical):_ a dev following a "Pairs with …" pointer lands on the file instead of a 404; keeps the regression-plan ↔ test linkage navigable. Low urgency — the plans are findable by slug via `git grep`.
 
 #### `srv-4` — Track upstream-blocked deprecation chains (~~jsdom~~ · ~~archiver~~ · @google/genai)
 
