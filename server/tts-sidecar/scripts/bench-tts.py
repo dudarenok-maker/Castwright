@@ -29,13 +29,26 @@ sidecar. Run it by hand against a live sidecar:
   python scripts/bench-tts.py --engine qwen --voice <id> --batch 16 --bucket 1
   #   compare the "sidecar compute RTF" lines; bucket 1 should be lower.
 
-Stdlib only (urllib + concurrent.futures) so it runs in any venv.
+  # side-11 host-leak slope A/B — drive MANY variable-shape batches, sampling
+  # /debug/memory after each, and print the committed-private slope (MB/batch).
+  # The variable-input-shape host leak (pytorch/pytorch #32596): committed RAM
+  # climbs unbounded on variable-length generation but holds flat on fixed
+  # shapes, while CUDA stays flat. Run OFF then ON to prove a candidate fix:
+  #   python scripts/bench-tts.py --engine qwen --voice <id> --batch 16 \
+  #       --mem-sample --batches 200                       # flag OFF baseline
+  #   $env:SIDECAR_DISABLE_MKLDNN='1'  # restart sidecar, then re-run identically
+  #   PASS iff the ON committed slope is ≈ flat (within ±2 MB/batch) vs a clearly
+  #   steeper OFF slope. The seeded corpus makes the two runs byte-identical.
+
+Stdlib only (urllib + concurrent.futures) so it runs in any venv. Writes nothing
+unless --out <csv> is passed.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import random
 import statistics
 import sys
 import time
@@ -91,6 +104,63 @@ DEFAULT_MODELS = {
 }
 
 
+# Small fixed lexicon for the leak-slope corpus. Real-ish words so the model
+# tokenizes/synths normally; the only thing that matters for the leak is that
+# each batch ends up a DIFFERENT length (→ a new native per-shape workspace).
+_LEXICON = (
+    "the lantern guttered throwing long shadows across an empty hall while she "
+    "paused at the door and listened to the slow understanding that nothing "
+    "about the journey ahead would ever be simple or safe or kind to anyone "
+    "who had once believed otherwise beneath the certainty they wore like armour"
+).split()
+
+
+def build_variable_corpus(n: int, seed: int, min_len: int, max_len: int) -> list[str]:
+    """Deterministically build `n` sentences whose char lengths are spread
+    across [min_len, max_len], so consecutive batches see varied max-lengths
+    (the variable-shape condition that drives the host leak). Seeded → byte-
+    identical between the flag-OFF and flag-ON runs, which is load-bearing for a
+    valid A/B (slope deltas must be signal, not corpus noise)."""
+    rng = random.Random(seed)
+    out: list[str] = []
+    for _ in range(n):
+        target = rng.randint(min_len, max_len)
+        words: list[str] = []
+        length = 0
+        while length < target:
+            w = rng.choice(_LEXICON)
+            words.append(w)
+            length += len(w) + 1
+        out.append(" ".join(words).capitalize() + ".")
+    return out
+
+
+def _slope_mb_per_batch(xs: list[int], ys: list[float]) -> float:
+    """Least-squares slope of ys vs xs (MB per batch). 0.0 for <2 points or a
+    degenerate x-spread."""
+    if len(xs) < 2:
+        return 0.0
+    n = len(xs)
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    denom = sum((x - mean_x) ** 2 for x in xs)
+    if denom == 0:
+        return 0.0
+    num = sum((xs[i] - mean_x) * (ys[i] - mean_y) for i in range(n))
+    return num / denom
+
+
+def sample_memory(server_base: str) -> dict:
+    """GET /debug/memory → the process/cuda readout (committed-private + rss +
+    cuda alloc/reserved). Returns {} on any error so a transient blip doesn't
+    abort a long bench."""
+    try:
+        with urllib.request.urlopen(f"{server_base}/debug/memory") as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, ValueError):
+        return {}
+
+
 def synth_once(url: str, engine: str, model: str, voice: str, text: str):
     """POST one /synthesize call. Returns (wall_s, audio_s, rtf)."""
     payload = json.dumps(
@@ -136,6 +206,96 @@ def synth_batch_once(url: str, engine: str, model: str, items: list[dict]):
     return wall_s, audio_s, rtf, float(header.get("genMs", 0.0)), float(header.get("audioMs", 0.0))
 
 
+def run_mem_sample(args, model: str) -> int:
+    """side-11 leak-slope mode. Drive `args.batches` variable-shape batched
+    /synthesize-batch calls, sampling /debug/memory after each, and report the
+    committed-private slope (MB/batch) — the metric the hard-recycle keys on. A
+    flat slope (≈ the fixed-shape control) means the leak is bound."""
+    if args.engine != "qwen":
+        print("--mem-sample is Qwen-only (it drives the /synthesize-batch path).")
+        return 2
+    batch = args.batch if args.batch >= 1 else 16
+    batch_url = args.url.replace("/synthesize", "/synthesize-batch")
+    server_base = args.url.rsplit("/", 1)[0]
+
+    corpus = build_variable_corpus(batch * args.batches, args.seed, args.min_len, args.max_len)
+    if args.bucket:
+        corpus.sort(key=len)  # length-tight batches (the fixed-ish control)
+    batches = [corpus[i * batch : (i + 1) * batch] for i in range(args.batches)]
+    print(
+        f"mem-sample: voice={args.voice} batch={batch} x {args.batches} calls "
+        f"len=[{args.min_len},{args.max_len}] seed={args.seed} "
+        f"{'bucketed' if args.bucket else 'variable'} -> {batch_url}"
+    )
+
+    def commit_of(mem: dict) -> float:
+        proc = mem.get("process", {}) if mem else {}
+        for key in ("committed_mb", "private_mb", "rss_mb"):
+            if key in proc:
+                return float(proc[key])
+        return 0.0
+
+    series: list[dict] = []
+    for i in range(args.batches):
+        items = [{"voice": args.voice, "text": t} for t in batches[i]]
+        try:
+            synth_batch_once(batch_url, args.engine, model, items)
+        except urllib.error.HTTPError as e:
+            print(f"  batch {i}: HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:200]}")
+            return 1
+        except urllib.error.URLError as e:
+            print(f"  batch {i}: connection failed: {e}. Is the sidecar at {batch_url}?")
+            return 1
+        mem = sample_memory(server_base)
+        proc = mem.get("process", {})
+        cuda = mem.get("cuda", {})
+        row = {
+            "batch": i + 1,
+            "committed_mb": commit_of(mem),
+            "rss_mb": float(proc.get("rss_mb", 0.0)),
+            "cuda_alloc_mb": float(cuda.get("allocated_mb", 0.0)),
+            "cuda_reserved_mb": float(cuda.get("reserved_mb", 0.0)),
+        }
+        series.append(row)
+        if (i + 1) % 10 == 0 or i == 0:
+            print(
+                f"  batch {row['batch']:>4}: committed={row['committed_mb']:8.0f}MB "
+                f"rss={row['rss_mb']:8.0f}MB cuda_resv={row['cuda_reserved_mb']:6.0f}MB"
+            )
+
+    if not series:
+        print("no samples collected — aborting.")
+        return 1
+
+    xs = [r["batch"] for r in series]
+    commit_slope = _slope_mb_per_batch(xs, [r["committed_mb"] for r in series])
+    rss_slope = _slope_mb_per_batch(xs, [r["rss_mb"] for r in series])
+    cuda = [r["cuda_reserved_mb"] for r in series]
+    cuda_span = max(cuda) - min(cuda)
+    commit_delta = series[-1]["committed_mb"] - series[0]["committed_mb"]
+    print(
+        f"\nLEAK SLOPE: committed {commit_slope:+.2f} MB/batch "
+        f"(rss {rss_slope:+.2f} MB/batch); cuda_reserved span ±{cuda_span:.0f} MB; "
+        f"committed start->end {series[0]['committed_mb']:.0f}->{series[-1]['committed_mb']:.0f}MB "
+        f"(Δ{commit_delta:+.0f}MB over {len(series)} batches)"
+    )
+    print(
+        "  PASS bar: committed slope ≈ flat (within ±2 MB/batch of the --bucket "
+        "control) with cuda flat. A steep committed slope + flat cuda = the leak."
+    )
+
+    if args.out:
+        with open(args.out, "w", encoding="utf-8", newline="") as f:
+            f.write("batch,committed_mb,rss_mb,cuda_alloc_mb,cuda_reserved_mb\n")
+            for r in series:
+                f.write(
+                    f"{r['batch']},{r['committed_mb']:.1f},{r['rss_mb']:.1f},"
+                    f"{r['cuda_alloc_mb']:.1f},{r['cuda_reserved_mb']:.1f}\n"
+                )
+        print(f"  wrote series -> {args.out}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--engine", required=True, choices=sorted(DEFAULT_MODELS))
@@ -176,9 +336,38 @@ def main(argv: list[str]) -> int:
         "length-tight. Run both and compare the sidecar compute RTF — the gap "
         "is the padding waste bucketing removes. Mirrors QWEN_BATCH_BUCKET.",
     )
+    p.add_argument(
+        "--mem-sample", action="store_true",
+        help="side-11 leak mode: drive --batches variable-shape batched calls, "
+        "sampling GET /debug/memory after each, and print the committed-private "
+        "slope (MB/batch). Implies --batch (defaults to 16 if unset). Run with "
+        "SIDECAR_DISABLE_MKLDNN off then on to A/B a candidate fix.",
+    )
+    p.add_argument(
+        "--batches", type=int, default=200,
+        help="--mem-sample mode: number of batched calls to drive (default 200 "
+        "≈ 3200 synths at --batch 16, matching the original leak experiment).",
+    )
+    p.add_argument(
+        "--seed", type=int, default=1234,
+        help="--mem-sample corpus seed (default 1234). Keep identical across the "
+        "OFF/ON A/B runs so the two slopes are comparable.",
+    )
+    p.add_argument("--min-len", type=int, default=10, help="--mem-sample: min sentence chars (default 10).")
+    p.add_argument("--max-len", type=int, default=300, help="--mem-sample: max sentence chars (default 300).")
+    p.add_argument(
+        "--out", default=None,
+        help="--mem-sample: optional CSV path for the per-batch series (the ONLY "
+        "file this script writes; omitted = stdout only).",
+    )
     args = p.parse_args(argv)
 
     model = args.model or DEFAULT_MODELS[args.engine]
+
+    # ── side-11 leak-slope mode: many variable-shape batches, sample memory ──
+    if args.mem_sample:
+        return run_mem_sample(args, model)
+
     jobs = [s for _ in range(args.repeat) for s in DEFAULT_SENTENCES]
     print(
         f"bench: engine={args.engine} model={model} voice={args.voice} "
