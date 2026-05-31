@@ -277,10 +277,10 @@ def run_mem_sample(args, model: str) -> int:
         f"\nLEAK SLOPE: committed {commit_slope:+.2f} MB/batch "
         f"(rss {rss_slope:+.2f} MB/batch); cuda_reserved span ±{cuda_span:.0f} MB; "
         f"committed start->end {series[0]['committed_mb']:.0f}->{series[-1]['committed_mb']:.0f}MB "
-        f"(Δ{commit_delta:+.0f}MB over {len(series)} batches)"
+        f"(delta {commit_delta:+.0f}MB over {len(series)} batches)"
     )
     print(
-        "  PASS bar: committed slope ≈ flat (within ±2 MB/batch of the --bucket "
+        "  PASS bar: committed slope ~ flat (within +/-2 MB/batch of the --bucket "
         "control) with cuda flat. A steep committed slope + flat cuda = the leak."
     )
 
