@@ -22,7 +22,21 @@
  * tests independently. */
 
 import { test, expect } from '@playwright/test';
-import { waitForRouteReady } from './helpers';
+import { waitForRouteReady, stubAccountModelProbes } from './helpers';
+
+/* Run this file's tests sequentially (not across parallel workers): the
+   Account view is heavy and its mount-time probes flake under contention.
+   Matches account-models.spec.ts. */
+test.describe.configure({ mode: 'serial' });
+
+/* The analyzer knobs come from the client mock layer, but the Account view
+   still mounts the Qwen/Ollama install cards, which probe the real backend
+   via raw fetch through the Vite /api proxy. Stub those probes so the mount
+   is fast + deterministic (no real-backend round-trip) — the latency behind
+   the goto/visibility timeouts under parallel load. See stubAccountModelProbes. */
+test.beforeEach(async ({ page }) => {
+  await stubAccountModelProbes(page);
+});
 
 /* The mock layer keeps user-settings in a module-scope object; the
    slice's saveAccountSettings thunk reaches it via the same window-
