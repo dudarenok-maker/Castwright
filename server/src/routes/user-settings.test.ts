@@ -266,6 +266,9 @@ describe('user-settings router', () => {
       eagerLoadKokoro: false,
       eagerLoadQwen: false,
       generationWorkers: 4,
+      backupEnabled: false,
+      backupCadence: 'weekly',
+      backupRetention: 30,
     };
 
     /* Guard: every writable schema field has a sample value here. A field
