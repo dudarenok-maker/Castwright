@@ -96,6 +96,26 @@ export class ChapterSynthTimeoutError extends Error {
   }
 }
 
+/* Identify the input that hung when a synth call times out. We couldn't tell
+   what the 2026-05-31 ch29 ChapterSynthTimeoutError choked on, so on a timeout
+   log the offending group(s): sentence id(s), speaker, the longest item's char
+   count, and a truncated prefix. Self-service observability — a follow-up can
+   then scope the actual degenerate-input root cause from data, not a guess. */
+function logSynthTimeoutOffender(err: unknown, groups: SentenceGroup[]): void {
+  if ((err as { name?: string })?.name !== 'ChapterSynthTimeoutError') return;
+  const longest = groups.reduce(
+    (a, b) => (normaliseForTts(b.text).length > normaliseForTts(a.text).length ? b : a),
+    groups[0],
+  );
+  const sentText = normaliseForTts(longest.text);
+  const ids = groups.flatMap((g) => g.sentenceIds).join(',');
+  const preview = sentText.length > 200 ? `${sentText.slice(0, 200)}…` : sentText;
+  console.warn(
+    `[generation] synth timeout offender — sentenceIds=[${ids}] speaker=${longest.characterId} ` +
+      `longestLen=${sentText.length} text="${preview}"`,
+  );
+}
+
 /** Matches the on-disk cast.json shape (see `server/src/routes/voices.ts`
     `CastJsonCharacter` and the analyzer's Character output). The hint fields
     — description/role/gender/ageRange/tone/evidence — are what drives
@@ -381,12 +401,24 @@ export interface SynthesiseChapterOpts {
     sitting on `1 of 207` for the whole call.
     Order preserved. */
 export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[] {
-  return sentences.map((s, i) => ({
-    index: i,
-    characterId: s.characterId,
-    sentenceIds: [s.id],
-    text: s.text,
-  }));
+  /* Drop any sentence whose spoken text is empty after normalisation. Such a
+     sentence would otherwise become a synth item with empty `text`, which the
+     sidecar rejects with `400 "item N: text is required"` — failing the WHOLE
+     chapter (the 2026-05-31 ch14 failure: a blank/whitespace sentence reached
+     the batch). Filter with the SAME `normaliseForTts` the synth path applies
+     (:708/:750) so the guard matches exactly what would be sent. `index` is
+     re-sequenced over the KEPT groups because it's the scatter-back slot key
+     for the index-order concat (`results[group.index]`); a gap would leave a
+     hole in the concatenated PCM. A dropped sentence has no spoken audio, so it
+     correctly contributes no segment. */
+  return sentences
+    .filter((s) => normaliseForTts(s.text).trim() !== '')
+    .map((s, i) => ({
+      index: i,
+      characterId: s.characterId,
+      sentenceIds: [s.id],
+      text: s.text,
+    }));
 }
 
 /** Build the VoiceLike payload that pickVoiceForEngine consumes from a
@@ -723,7 +755,10 @@ export async function synthesiseChapter(
           },
         ).then((result) => ({ pcm: result.pcm, sampleRate: result.sampleRate })),
       ),
-    );
+    ).catch((err) => {
+      logSynthTimeoutOffender(err, [group]);
+      throw err;
+    });
   }
 
   /* TRUE batching (plan 112): synth N Qwen sentences in ONE batched forward.
@@ -766,7 +801,10 @@ export async function synthesiseChapter(
           },
         ),
       ),
-    );
+    ).catch((err) => {
+      logSynthTimeoutOffender(err, batchGroups);
+      throw err;
+    });
     /* Live per-batch RTF beacon (plan 127). Only when the sidecar reported its
        compute timing; a zero/absent audioMs means "not reported", skip. */
     if (out.genMs != null && out.audioMs != null && out.audioMs > 0) {

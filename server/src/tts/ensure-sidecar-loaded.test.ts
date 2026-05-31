@@ -64,6 +64,27 @@ describe('ensureSidecarEngineReady', () => {
     expect(f).toHaveBeenCalledTimes(2);
   });
 
+  /* The 2026-05-31 cascade fix: during a recycle DRAIN the sidecar /load now
+     answers the recycling 503 (drain fence) instead of an instant `ready`, so
+     the gate must POLL THROUGH the drain and only proceed once the respawned
+     sidecar is ready — otherwise a queued chapter marches into a 503 and fails. */
+  it('polls through a recycle drain (recycling 503) then resolves once respawned', async () => {
+    const recyclingResp = {
+      ok: false,
+      status: 503,
+      json: async () => ({ detail: 'TTS sidecar is recycling to free memory; retry shortly.' }),
+    };
+    const f = vi
+      .fn()
+      .mockResolvedValueOnce(recyclingResp)
+      .mockResolvedValueOnce(recyclingResp)
+      .mockResolvedValue(readyResp);
+    global.fetch = f as unknown as typeof fetch;
+
+    await expect(ensureSidecarEngineReady('qwen', undefined, PATIENT)).resolves.toBeUndefined();
+    expect(f).toHaveBeenCalledTimes(3); // waited out the drain, then ready
+  });
+
   it('gives up best-effort (no throw) after the budget when the sidecar stays down', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const f = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
