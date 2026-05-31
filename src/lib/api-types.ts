@@ -109,6 +109,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a book's state.json auto-backup snapshots
+         * @description srv-2 — returns every on-disk backup snapshot of the book's
+         *     `.audiobook/state.json`, newest first. Snapshots are written by the
+         *     per-book auto-backup on the user's configured cadence (see
+         *     UserSettings.backupCadence / backupRetention) and by an explicit
+         *     "Back up now" request. Empty array when no snapshots exist yet.
+         */
+        get: operations["listBookBackups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/backups/now": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Take an immediate state.json backup snapshot
+         * @description srv-2 — snapshots the book's current `.audiobook/state.json` on
+         *     demand, independent of the auto-backup cadence, and prunes to the
+         *     retention window. Returns the new snapshot filename.
+         */
+        post: operations["backupBookNow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/backups/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore a book's state.json from a backup snapshot
+         * @description srv-2 — overwrites the book's current `.audiobook/state.json` with
+         *     the contents of the named snapshot. The `backupFile` must be one of
+         *     the filenames returned by GET /api/books/{bookId}/backups.
+         */
+        post: operations["restoreBookBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/workspace/changelog": {
         parameters: {
             query?: never;
@@ -340,7 +408,7 @@ export interface paths {
          *     slugs (content unchanged, no regen needed).
          *
          *     Pure remap — no Phase 1 re-analysis is triggered. See
-         *     `docs/features/51-restructure-chapters.md`.
+         *     `docs/features/archive/51-restructure-chapters.md`.
          */
         post: operations["mergeChapters"];
         delete?: never;
@@ -478,7 +546,7 @@ export interface paths {
          *     stay JPEG. Writes atomically to `<bookDir>/.audiobook/cover.jpg`,
          *     replacing any prior cover, and patches `state.json.coverImage`
          *     with `source: 'local'`, `originalFilename`, and `uploadedAt`.
-         *     Plan [40](docs/features/40-cover-framing-and-upload.md).
+         *     Plan [40](docs/features/archive/40-cover-framing-and-upload.md).
          */
         post: operations["uploadCover"];
         delete?: never;
@@ -508,7 +576,7 @@ export interface paths {
          *     export pipeline is unaffected. Server clamps `offsetX`/`offsetY`
          *     to [-100, 100] and `zoom` to [1.0, 3.0]. To reset framing to
          *     defaults, PATCH `{ offsetX: 0, offsetY: 0, zoom: 1.0 }`.
-         *     Plan [40](docs/features/40-cover-framing-and-upload.md).
+         *     Plan [40](docs/features/archive/40-cover-framing-and-upload.md).
          */
         patch: operations["setCoverFraming"];
         trace?: never;
@@ -527,7 +595,7 @@ export interface paths {
          *     listening session has been recorded yet. Backed by a sibling
          *     `listen-progress.json` next to `state.json` so the
          *     schema-versioning shape from plan 27 stays stable. Plan
-         *     [47](docs/features/47-listen-progress.md).
+         *     [47](docs/features/archive/47-listen-progress.md).
          */
         get: operations["getListenProgress"];
         /**
@@ -538,7 +606,7 @@ export interface paths {
          *     rotation — the file is cheap to re-derive on loss, unlike
          *     `state.json`). Called debounced from the mini-player's
          *     `onTimeUpdate` (once per 5 s) plus one final flush on chapter
-         *     switch / close. Plan [47](docs/features/47-listen-progress.md).
+         *     switch / close. Plan [47](docs/features/archive/47-listen-progress.md).
          */
         put: operations["putListenProgress"];
         post?: never;
@@ -642,7 +710,7 @@ export interface paths {
          *     Aggregated across all books — entries from different books interleave
          *     based on `order`. Drains FIFO, one entry at a time. Read on app cold
          *     boot to restore the queue across reloads. See plan
-         *     `docs/features/102-global-queue-modal.md`.
+         *     `docs/features/archive/102-global-queue-modal.md`.
          */
         get: operations["getQueue"];
         put?: never;
@@ -836,7 +904,7 @@ export interface paths {
          *     production server bounce), the server emits a `resume_from` ack as
          *     the first event carrying the snapshot of completed chapter ids for
          *     the active queue entry so the reconnect doesn't replay. See plan
-         *     `docs/features/102-global-queue-modal.md`.
+         *     `docs/features/archive/102-global-queue-modal.md`.
          */
         post: operations["streamGeneration"];
         delete?: never;
@@ -1411,6 +1479,21 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * @description srv-2 — one auto-backup snapshot of a book's state.json. Returned
+         *     by GET /api/books/{bookId}/backups, newest first.
+         */
+        BackupSnapshot: {
+            /** @description Snapshot filename (within the book's backup dir). */
+            file: string;
+            /** @description Size of the snapshot file in bytes. */
+            sizeBytes: number;
+            /**
+             * Format: date-time
+             * @description ISO timestamp the snapshot was written.
+             */
+            createdAt: string;
+        };
         UserSettings: {
             /**
              * @description Free-text name shown in the top-bar avatar and used as the
@@ -1512,7 +1595,7 @@ export interface components {
              *     (the default) preserves today's behaviour: OpenLibrary
              *     candidates first. `upload` is for users who routinely bring
              *     their own cover art and want the file-picker tab front.
-             *     Plan [40](docs/features/40-cover-framing-and-upload.md).
+             *     Plan [40](docs/features/archive/40-cover-framing-and-upload.md).
              * @enum {string}
              */
             coverPickerDefaultTab?: "search" | "upload";
@@ -1523,7 +1606,7 @@ export interface components {
              *     is set, and what any new device inherits. `system` resolves
              *     via `prefers-color-scheme` at runtime and re-evaluates if
              *     the OS scheme flips.
-             *     Plan [41](docs/features/41-dark-mode.md).
+             *     Plan [41](docs/features/archive/42-dark-mode.md).
              * @enum {string}
              */
             defaultThemePreference?: "light" | "dark" | "system";
@@ -1535,7 +1618,7 @@ export interface components {
              *     themselves (e.g. `npm run tts:sidecar` in a second terminal)
              *     and the Node server still serves requests over a red
              *     /api/sidecar/health until they do.
-             *     Plan [43](docs/features/43-auto-start-sidecar.md).
+             *     Plan [43](docs/features/archive/43-auto-start-sidecar.md).
              */
             autoStartSidecar?: boolean;
             /**
@@ -1609,6 +1692,15 @@ export interface components {
              *     as `GEN_WORKERS` env > this setting > 2.
              */
             generationWorkers?: number;
+            /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
+            backupEnabled?: boolean;
+            /**
+             * @description srv-2 — how often an automatic snapshot is taken. Default daily.
+             * @enum {string}
+             */
+            backupCadence?: "daily" | "weekly";
+            /** @description srv-2 — number of snapshots to keep; older ones are pruned. Default 14. */
+            backupRetention?: number;
             /**
              * @description Whether process.env.GEMINI_API_KEY is non-empty. The key value
              *     itself is never returned over the wire — the UI uses this flag
@@ -1666,6 +1758,15 @@ export interface components {
             eagerLoadKokoro?: boolean;
             eagerLoadQwen?: boolean;
             generationWorkers?: number;
+            /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
+            backupEnabled?: boolean;
+            /**
+             * @description srv-2 — how often an automatic snapshot is taken. Default daily.
+             * @enum {string}
+             */
+            backupCadence?: "daily" | "weekly";
+            /** @description srv-2 — number of snapshots to keep; older ones are pruned. Default 14. */
+            backupRetention?: number;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
@@ -1699,8 +1800,8 @@ export interface components {
          *     to seek the audio element. Persisted as a sibling
          *     `listen-progress.json` next to `state.json` so the
          *     schema-versioning shape from plan 27 stays stable. Plan
-         *     [47](docs/features/47-listen-progress.md); extended by plan
-         *     [53](docs/features/53-mini-player-feature-pack.md) with
+         *     [47](docs/features/archive/47-listen-progress.md); extended by plan
+         *     [53](docs/features/archive/53-mini-player-feature-pack.md) with
          *     `playbackRate` + `markers`.
          */
         ListenProgress: {
@@ -1757,7 +1858,7 @@ export interface components {
          *     to CSS `object-position: <offsetX>% <offsetY>%; transform:
          *     scale(<zoom>)` on the `<img>` element. Server clamps to the
          *     ranges below; client should too for live preview. Plan
-         *     [40](docs/features/40-cover-framing-and-upload.md).
+         *     [40](docs/features/archive/40-cover-framing-and-upload.md).
          */
         CoverFraming: {
             /** @description Horizontal pan as `object-position` percentage. 0 = centred. */
@@ -1980,7 +2081,7 @@ export interface components {
              *     PARKED (queue entry → `awaiting_confirm`) and this tick names the
              *     affected characters in `fallbackCharacters` so the frontend can
              *     prompt the user to confirm or skip. The worker frees its slot; other
-             *     chapters keep flowing. See plan `docs/features/102-global-queue-modal.md`.
+             *     chapters keep flowing. See plan `docs/features/archive/102-global-queue-modal.md`.
              * @enum {string}
              */
             type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm";
@@ -2707,7 +2808,7 @@ export interface components {
          *     (ids re-issued 1..N); `sentenceRemap` is the translation table
          *     the frontend applies to its sentence cache so it can rewrite
          *     `chapterId` + per-chapter `id` without re-fetching the full
-         *     sentence list. See `docs/features/51-restructure-chapters.md`.
+         *     sentence list. See `docs/features/archive/51-restructure-chapters.md`.
          */
         ChapterRestructureResponse: {
             chapters: {
@@ -3067,6 +3168,118 @@ export interface operations {
             };
             /** @description Malformed body (path missing, empty, or too long) */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listBookBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Snapshots newest-first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        backups: components["schemas"]["BackupSnapshot"][];
+                    };
+                };
+            };
+        };
+    };
+    backupBookNow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Snapshot taken */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                        file: string;
+                    };
+                };
+            };
+            /** @description No state.json on disk to back up */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error?: string;
+                    };
+                };
+            };
+        };
+    };
+    restoreBookBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Filename of the snapshot to restore. */
+                    backupFile: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Restored */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok: boolean;
+                    };
+                };
+            };
+            /** @description Bad / unsafe backupFile name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or snapshot not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Snapshot is corrupt / unparseable */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

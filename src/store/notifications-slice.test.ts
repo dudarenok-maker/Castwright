@@ -1,4 +1,4 @@
-// Pairs with docs/features/48-toast-surface.md
+// Pairs with docs/features/archive/48-toast-surface.md
 
 import { describe, expect, it } from 'vitest';
 import { notificationsSlice, notificationsActions } from './notifications-slice';

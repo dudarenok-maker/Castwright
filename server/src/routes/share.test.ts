@@ -12,7 +12,7 @@
    completed M4B manifest + its artifact file are on disk. The "M4B"
    here is a few bytes of placeholder content, served as audio/mp4.
 
-   Pairs with docs/features/archive/67-streaming-link-tile.md. */
+   Pairs with docs/features/archive/68-streaming-link-tile.md. */
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import {

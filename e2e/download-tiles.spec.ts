@@ -15,7 +15,7 @@ import { waitForRouteReady } from './helpers';
  * opens the ShareLinkModal with a copyable URL.
  *
  * Pairs with docs/features/archive/57-download-tiles.md (M4B + MP3 ZIP)
- * and docs/features/archive/67-streaming-link-tile.md (Streaming link).
+ * and docs/features/archive/68-streaming-link-tile.md (Streaming link).
  */
 test.describe.configure({ mode: 'serial' });
 

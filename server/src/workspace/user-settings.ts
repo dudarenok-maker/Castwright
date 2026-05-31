@@ -76,6 +76,7 @@ export const TTS_MODEL_KEY_VALUES = [
 ] as const;
 export const COVER_PICKER_TAB_VALUES = ['search', 'upload'] as const;
 export const THEME_PREFERENCE_VALUES = ['light', 'dark', 'system'] as const;
+export const BACKUP_CADENCE_VALUES = ['daily', 'weekly'] as const;
 
 export const userSettingsSchema = z.object({
   displayName: z.string().max(120),
@@ -182,6 +183,13 @@ export const userSettingsSchema = z.object({
      `writeGeminiApiKey()` invoked from the dedicated
      PUT /api/user/settings/gemini-key endpoint. */
   geminiApiKey: z.string().nullable().optional(),
+  /* srv-2 — per-book state.json auto-backup. When enabled, a background sweep
+     snapshots each book's state.json on the chosen cadence and keeps the
+     newest `backupRetention`. Optional with ON/daily/14 defaults so legacy
+     user-settings.json files load unchanged. */
+  backupEnabled: z.boolean().optional(),
+  backupCadence: z.enum(BACKUP_CADENCE_VALUES).optional(),
+  backupRetention: z.number().int().min(1).max(365).optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -260,6 +268,12 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   /* Plan 49 — null = no UI-saved key. Resolver falls through to env
      (process.env.GEMINI_API_KEY) and then null. */
   geminiApiKey: null,
+  /* srv-2 — auto-backup ON by default (disaster recovery without manual
+     intervention), daily, keep the last 14 snapshots. Flip in lockstep with
+     src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  backupEnabled: true,
+  backupCadence: 'daily',
+  backupRetention: 14,
 };
 
 let cached: UserSettings | null = null;
@@ -398,6 +412,24 @@ export function getResolvedGenerationWorkers(): number {
     return fromSettings;
   }
   return DEFAULT_USER_SETTINGS.generationWorkers ?? 2;
+}
+
+export interface ResolvedBackupConfig {
+  enabled: boolean;
+  cadence: (typeof BACKUP_CADENCE_VALUES)[number];
+  retention: number;
+}
+
+/** srv-2 — resolve the auto-backup config from cached user-settings, falling
+    back to the factory defaults (ON / daily / keep 14). Synchronous read from
+    the in-process cache; never blocks. */
+export function getResolvedBackupConfig(): ResolvedBackupConfig {
+  const c = cached;
+  return {
+    enabled: c?.backupEnabled ?? DEFAULT_USER_SETTINGS.backupEnabled ?? true,
+    cadence: c?.backupCadence ?? DEFAULT_USER_SETTINGS.backupCadence ?? 'daily',
+    retention: c?.backupRetention ?? DEFAULT_USER_SETTINGS.backupRetention ?? 14,
+  };
 }
 
 export type QwenInstallState = 'not-installed' | 'weights-missing' | 'ready' | 'loaded';

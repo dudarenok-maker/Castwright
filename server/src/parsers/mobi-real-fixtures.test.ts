@@ -19,7 +19,7 @@
  * binaries are converted from that EPUB, so we assert the same title +
  * author come through the real parser.
  *
- * Pairs with docs/features/60-real-binary-parser-fixtures.md +
+ * Pairs with docs/features/archive/66-real-binary-parser-fixtures.md +
  * docs/features/archive/52-mobi-parsing.md.
  */
 
