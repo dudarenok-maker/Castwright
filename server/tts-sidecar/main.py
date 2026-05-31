@@ -1608,6 +1608,26 @@ def _drain_grace_ms() -> int:
         return 180000
 
 
+# side-13 — cap synth input length. The server sends one item per sentence, so a
+# real payload is a few hundred chars; a pathological item (a manuscript-parse
+# bug, a run-on "sentence", or a degenerate back-matter blob) can drive unbounded
+# CPU/VRAM and hang the synth call for the full 600s server timeout (the
+# 2026-05-31 ch29 ChapterSynthTimeoutError). A generous cap fails such input FAST
+# with a 400 (non-transient → the server skips the chapter) instead of a 10-min
+# hang, and the 400 carries the offending length so the bad input is identifiable.
+_DEFAULT_MAX_TEXT_LENGTH = 8000
+
+
+def _max_text_length() -> int:
+    """Max characters allowed in a single synth item's `text`. Default 8000
+    (well above any real per-sentence payload); override MAX_TEXT_LENGTH. A
+    value <= 0 disables the cap. Garbage falls back to the default."""
+    try:
+        return int(os.environ.get("MAX_TEXT_LENGTH", str(_DEFAULT_MAX_TEXT_LENGTH)))
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_TEXT_LENGTH
+
+
 def _drain_then_restart(grace_ms: int) -> None:
     """Wait (bounded by `grace_ms`) for `_inflight_synth` to reach 0, then arm the
     flush-delayed hard exit. Runs on a daemon thread so it never needs an event
@@ -1992,6 +2012,20 @@ async def load_model(req: Request) -> JSONResponse:
     if not isinstance(engine_id, str) or engine_id not in {"coqui", "kokoro", "qwen"}:
         engine_id = "coqui"
 
+    # srv-17c drain fence (same as /synthesize): while a recycle is draining, the
+    # model is still resident, so the per-engine branches below would answer
+    # `ready` INSTANTLY — but /synthesize fast-fails 503 until the respawn. That
+    # split made the server's readiness gate (ensureSidecarEngineReady → /load)
+    # see `ready` and march a queued chapter straight into a 503, dropping every
+    # chapter a free worker picked up during the ~2-min drain window (the
+    # 2026-05-31 cascade). Report not-ready here too so the gate POLLS through
+    # the drain+respawn instead of trusting a model that won't accept synth yet.
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
     if engine_id == "kokoro":
         kokoro = ENGINES.get("kokoro")
         if not isinstance(kokoro, KokoroEngine):
@@ -2151,6 +2185,17 @@ async def qwen_design_voice(req: Request) -> Response:
         raise HTTPException(status_code=400, detail="`voiceId` is required.")
     if not isinstance(instruct, str) or not instruct.strip():
         raise HTTPException(status_code=400, detail="`instruct` is required.")
+    _cap = _max_text_length()
+    if _cap > 0 and len(instruct) > _cap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"`instruct` too long ({len(instruct)} chars > {_cap} cap).",
+        )
+    if _cap > 0 and isinstance(calibration_text, str) and len(calibration_text) > _cap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"`calibrationText` too long ({len(calibration_text)} chars > {_cap} cap).",
+        )
 
     qwen = ENGINES.get("qwen")
     if not isinstance(qwen, QwenEngine):
@@ -2201,6 +2246,12 @@ async def synthesize(req: Request) -> Response:
         raise HTTPException(status_code=400, detail="`voice` is required.")
     if not isinstance(text, str) or not text.strip():
         raise HTTPException(status_code=400, detail="`text` is required.")
+    _cap = _max_text_length()
+    if _cap > 0 and len(text) > _cap:
+        raise HTTPException(
+            status_code=400,
+            detail=f"`text` too long ({len(text)} chars > {_cap} cap).",
+        )
 
     engine = ENGINES[engine_id]
 
@@ -2344,6 +2395,12 @@ async def synthesize_batch(req: Request) -> Response:
             raise HTTPException(status_code=400, detail=f"item {i}: `voice` is required.")
         if not isinstance(item.get("text"), str) or not item["text"].strip():
             raise HTTPException(status_code=400, detail=f"item {i}: `text` is required.")
+        _cap = _max_text_length()
+        if _cap > 0 and len(item["text"]) > _cap:
+            raise HTTPException(
+                status_code=400,
+                detail=f"item {i}: `text` too long ({len(item['text'])} chars > {_cap} cap).",
+            )
 
     engine = ENGINES["qwen"]
 

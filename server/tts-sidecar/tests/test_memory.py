@@ -260,6 +260,22 @@ def test_drain_grace_parsing(monkeypatch):
     assert main._drain_grace_ms() == 0
 
 
+def test_max_text_length_parsing(monkeypatch):
+    """side-13: default 8000; explicit override honoured; garbage → default;
+    0 (cap disabled) is a valid value."""
+    monkeypatch.delenv("MAX_TEXT_LENGTH", raising=False)
+    assert main._max_text_length() == 8000
+
+    monkeypatch.setenv("MAX_TEXT_LENGTH", "1234")
+    assert main._max_text_length() == 1234
+
+    monkeypatch.setenv("MAX_TEXT_LENGTH", "not-a-number")
+    assert main._max_text_length() == 8000
+
+    monkeypatch.setenv("MAX_TEXT_LENGTH", "0")
+    assert main._max_text_length() == 0
+
+
 def test_drain_waits_for_inflight_then_exits(monkeypatch):
     """The drain holds the exit while a synth is in flight, then fires `_restart_now`
     once the counter reaches 0 — so the in-flight chapter finishes on its worker
@@ -331,6 +347,27 @@ def test_synthesize_fast_fails_503_while_recycling(monkeypatch):
     body = r.json()
     assert "recycling" in body["detail"].lower()
     assert "poisoned" not in body  # NOT the CUDA-poison 503 — server must treat it transient
+
+
+def test_load_reports_not_ready_while_recycling(monkeypatch):
+    """The 2026-05-31 cascade fix: while `_restart_pending` is set, /load must NOT
+    answer the instant `{"status":"ready"}` (the model is still resident) — it has
+    to mirror the /synthesize drain fence with the recycling 503. Otherwise the
+    server's readiness gate (ensureSidecarEngineReady → /load) sees `ready` and
+    marches a queued chapter straight into a 503, dropping every chapter started
+    during the ~2-min drain window. With the fence, the gate POLLS through the
+    drain+respawn instead."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_restart_pending", True)
+
+    with TestClient(main.app) as client:
+        r = client.post("/load", json={"engine": "qwen"})
+
+    assert r.status_code == 503
+    body = r.json()
+    assert "recycling" in body["detail"].lower()
+    assert body.get("status") != "ready"  # the gate must treat this as keep-waiting
 
 
 # --- the diagnostic endpoint ---

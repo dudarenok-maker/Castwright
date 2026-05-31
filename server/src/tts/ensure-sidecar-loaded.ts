@@ -35,11 +35,15 @@ const SIDECAR_ENGINES: ReadonlySet<TtsEngine> = new Set(['qwen', 'kokoro', 'coqu
    far faster but share the ceiling (over-budgeted is safe). */
 const LOAD_TIMEOUT_MS = 90_000;
 
-/* Total readiness budget across poll attempts. Must comfortably cover a
-   supervisor respawn (backoff up to 15s on a crash-loop tier) PLUS a fresh
-   model load, so a recycle-induced respawn is ridden out rather than failing
-   chapters into the breaker. */
-const READINESS_TIMEOUT_MS = 120_000;
+/* Total readiness budget across poll attempts. Must comfortably cover a full
+   recycle: the srv-17c DRAIN of in-flight synth (SIDECAR_DRAIN_GRACE_MS, default
+   180s) THEN the supervisor respawn (backoff up to 15s on a crash-loop tier)
+   PLUS a fresh model load. Set above the 180s drain grace so a SINGLE preload-
+   gate wait rides out a worst-case full-grace drain — otherwise the gate times
+   out mid-drain, falls back to a lazy-load synth, and eats another 503 (the
+   2026-05-31 cascade). Now that /load honors the drain fence, this budget is
+   what the gate actually spends polling through it. */
+const READINESS_TIMEOUT_MS = 210_000;
 
 /* Gap between poll attempts when the sidecar is unreachable / still loading. */
 const POLL_INTERVAL_MS = 1_500;
