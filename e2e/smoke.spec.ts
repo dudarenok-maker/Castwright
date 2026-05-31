@@ -14,7 +14,7 @@ test.describe.configure({ mode: 'serial' });
  *
  * Does NOT exercise the analysis pipeline, TTS sidecar, or generation —
  * those are out of scope until visual-regression baselines are captured
- * (see docs/features/37-e2e-playwright.md for the rollout plan).
+ * (see docs/features/archive/37-e2e-playwright.md for the rollout plan).
  */
 test.describe('golden path', () => {
   test('cold boot lands on books library and "New book" routes to /new', async ({ page }) => {

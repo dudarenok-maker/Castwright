@@ -1,4 +1,4 @@
-// Pairs with docs/features/118-analyzer-per-phase-wiring-fix.md
+// Pairs with docs/features/archive/118-analyzer-per-phase-wiring-fix.md
 // (originally docs/features/archive/95-analysing-multi-model-ui.md)
 
 import { describe, expect, it } from 'vitest';

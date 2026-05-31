@@ -9,7 +9,7 @@
    On apply error: keeps the panel mounted so the user can retry or back
    out without losing their selection.
 
-   See docs/features/51-restructure-chapters.md. */
+   See docs/features/archive/51-restructure-chapters.md. */
 
 import { useCallback, useState } from 'react';
 import { useAppDispatch, useAppSelector, store } from '../store';

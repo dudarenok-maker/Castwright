@@ -225,7 +225,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
            dispatch no longer triggers an open (the override is gone); it only
            updates slice rows. Every entry is a whole-chapter regen now (the
            per-character scope path was removed — see plan
-           docs/features/114-profile-regen-preview.md), so a tolerated-but-
+           docs/features/archive/114-profile-regen-preview.md), so a tolerated-but-
            unused `scope:'character'` on an old .queue.json row maps to the
            same chapter regen. */
         if (chapters.currentBookId === e.bookId) {

@@ -1,4 +1,4 @@
-// Pairs with docs/features/60-voice-preview-while-editing.md
+// Pairs with docs/features/archive/64-voice-preview-while-editing.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';

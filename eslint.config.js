@@ -9,7 +9,7 @@
    `eslint: …^9.7` and `eslint-plugin-jsx-a11y@6.10.2` peers `eslint: …^9`
    — neither declares ESLint-10 support yet, so 9 is the ceiling. Revisit
    when both plugins ship an ESLint-10 peer range. See
-   `docs/features/104-eslint-flat-config.md`.
+   `docs/features/archive/104-eslint-flat-config.md`.
 
    Companion: `.prettierrc` handles formatting; `eslint-config-prettier`
    (last in the array) disables every formatting-related ESLint rule so

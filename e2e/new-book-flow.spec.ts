@@ -11,7 +11,7 @@
  * after each transition and a final refresh-restores-stage check that
  * pins the redux-persist wiring shipped 2026-05-17.
  *
- * Pairs with docs/features/37-e2e-playwright.md. */
+ * Pairs with docs/features/archive/37-e2e-playwright.md. */
 
 import { test, expect, type Page } from '@playwright/test';
 

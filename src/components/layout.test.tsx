@@ -339,7 +339,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
   });
 });
 
-/* Pairs with docs/features/91-cast-drift-consolidation.md — the multi-book
+/* Pairs with docs/features/archive/91-cast-drift-consolidation.md — the multi-book
    drift modal's BOOK header must resolve titles through a saved → library
    → bookId chain so cross-book groups (book never opened this session, so
    bookMeta.saved is empty) don't fall back to the raw workspace slug. */
