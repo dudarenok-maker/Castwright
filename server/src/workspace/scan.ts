@@ -73,6 +73,20 @@ export interface BookStateJson {
         land. Round-trips through `state.json` and through the portable
         book bundle (plan 75). */
     titleOverridden?: boolean;
+    /** Durable record of the LAST synthesis FAILURE for this chapter.
+        Only `'failed'` is ever persisted — "done" is derived from the
+        audio file on disk (`completedSlugs`) and "queued" is the absence
+        of both, so a full status enum would just duplicate disk truth.
+        Written by the generation route's failure path and CLEARED on a
+        successful render, so a chapter that failed (no audio on disk)
+        re-hydrates as "Failed · reason" instead of the misleading
+        "Queued" after a reload or queue-clear. Distinct from
+        `analysis.failedChapterIds` (Phase 0/1 analysis failures).
+        Optional so legacy state.json files load cleanly. */
+    generationState?: 'failed';
+    /** Human-readable reason for the persisted `generationState: 'failed'`.
+        Mirrors the `chapter_failed` SSE broadcast's `errorReason`. */
+    generationError?: string;
   }>;
   coverGradient: [string, string];
   /** Cached cover-image metadata. Bytes live next to state.json at
