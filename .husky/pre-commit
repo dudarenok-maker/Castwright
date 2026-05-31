@@ -1,1 +1,1 @@
-npm run verify:fast
+npm run verify:fast:scoped

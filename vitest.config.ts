@@ -1,6 +1,20 @@
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { availableParallelism } from 'node:os';
+
+/* Contention throttle (plan 156). When LOW_CONCURRENCY is set — manually, or
+   automatically by scripts/verify-cache.mjs when it detects a busy GPU — cap
+   the frontend pool to half the cores so a co-running generation can't starve
+   the run into setup stalls / worker crashes. When unset, leave vitest's
+   default in place (plan 45: this jsdom suite is CPU-bound and intentionally
+   uncapped). Mirrors frontendPoolCap() in scripts/test-concurrency.mjs (the
+   unit-tested copy); this file can't import it (tsconfig allowJs:false). */
+const lowConcurrency =
+  process.env.LOW_CONCURRENCY === '1' || process.env.LOW_CONCURRENCY === 'true';
+const poolCap = lowConcurrency
+  ? Math.max(1, Math.floor(availableParallelism() / 2))
+  : undefined;
 
 export default defineConfig({
   plugins: [react()],
@@ -34,5 +48,13 @@ export default defineConfig({
        Vitest's defaults — jsdom suites are CPU-bound, not subprocess-
        bound; the server suite is where the worker-crash pattern lives. */
     retry: 1,
+    ...(poolCap
+      ? {
+          poolOptions: {
+            threads: { maxThreads: poolCap, minThreads: 1 },
+            forks: { maxForks: poolCap, minForks: 1 },
+          },
+        }
+      : {}),
   },
 });
