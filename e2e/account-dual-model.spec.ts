@@ -13,7 +13,19 @@
  * unit tests independently. */
 
 import { test, expect } from '@playwright/test';
-import { waitForRouteReady } from './helpers';
+import { waitForRouteReady, stubAccountModelProbes } from './helpers';
+
+/* Run this file's tests sequentially (not across parallel workers): the
+   Account view is heavy and its mount-time probes flake under contention.
+   Matches account-models.spec.ts. */
+test.describe.configure({ mode: 'serial' });
+
+/* Stub the raw-fetch install probes so the Account view renders a
+   deterministic not-installed state regardless of whether a real backend is
+   live on :8080 (the proxy target) — see stubAccountModelProbes. */
+test.beforeEach(async ({ page }) => {
+  await stubAccountModelProbes(page);
+});
 
 async function readAccountSlice(page: import('@playwright/test').Page) {
   return await page.evaluate(() => {
