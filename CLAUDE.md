@@ -286,11 +286,17 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   no-scope catch-all). Merge / Revert / fixup! / squash! commits are exempt.
   Full spec lives in [CONTRIBUTING.md](CONTRIBUTING.md); regression plan is
   [docs/features/archive/38-branching-and-commit-convention.md](docs/features/archive/38-branching-and-commit-convention.md).
-- **pre-commit** (`.husky/pre-commit`): runs `npm run verify:fast` —
-  validator unit tests + frontend + server tests. Sub-5s on a warm cache.
-  Refuses the commit if any spec is red. Sidecar (pytest), Pester scripts,
+- **pre-commit** (`.husky/pre-commit`): runs `npm run verify:fast:scoped` —
+  validator unit tests + frontend + server tests, but **scope-filtered against
+  the staged diff** (plan 156): a leg whose scope the staged change never
+  touched is skipped (`[skip] … (out of scope)`), so a sidecar-only or
+  docs-only commit runs none of them. Sub-5s on a warm cache. Refuses the
+  commit if any in-scope spec is red. Sidecar (pytest), Pester scripts,
   Playwright e2e, and typecheck are NOT in pre-commit — they live in
-  pre-push so commits stay snappy.
+  pre-push so commits stay snappy. If a co-running GPU generation is detected
+  (nvidia-smi), the runner warns and throttles test concurrency
+  (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables the probe.
+  `npm run verify:fast` (no scope filter) remains for a manual full fast run.
 - **pre-push** (`.husky/pre-push`): runs `npm run verify` — typecheck +
   all tests + e2e + build. Refuses the push if any step fails.
 
