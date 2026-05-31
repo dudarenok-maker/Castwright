@@ -129,6 +129,19 @@ def _apply_torch_perf_flags(torch: Any) -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
+        # side-11 probe: optionally disable MKLDNN. The variable-input-shape host
+        # leak (committed-private climbs unbounded on variable-length generation,
+        # flat on fixed shapes; CUDA flat — pytorch/pytorch #32596) is suspected to
+        # be a per-shape CPU MKLDNN workspace (speech_tokenizer / Code2Wav decode
+        # run on CPU even though the Qwen forward is on cuda). Disabling MKLDNN
+        # kills that workspace at a small CPU-op cost. Default OFF (opt-in) — flip
+        # via SIDECAR_DISABLE_MKLDNN once a live A/B proves the slope flattens.
+        # Read here (a shared post-import hook) so the env knob applies whichever
+        # engine triggers the load. CPU-only flag: a no-op if the leak is on the
+        # CUDA allocator side. Inside the same try so attr drift is swallowed.
+        if _disable_mkldnn():
+            torch.backends.mkldnn.enabled = False
+            log.info("torch.backends.mkldnn.enabled = False (SIDECAR_DISABLE_MKLDNN).")
     except Exception as e:  # pragma: no cover - defensive against API drift
         log.warning("Could not apply torch perf flags (%s) — continuing.", e)
 
@@ -1534,6 +1547,15 @@ _restart_pending = False
 _inflight_synth = 0
 
 
+def _disable_mkldnn() -> bool:
+    """Whether to set `torch.backends.mkldnn.enabled = False` at model load
+    (side-11 variable-shape host-leak probe — see `_apply_torch_perf_flags`).
+    Default OFF (opt-in); `SIDECAR_DISABLE_MKLDNN` in {1,true,yes,on} enables it,
+    anything else (incl. garbage) keeps it off."""
+    raw = os.environ.get("SIDECAR_DISABLE_MKLDNN", "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _mem_warn_threshold_mb() -> float:
     """RSS (MB) above which the watchdog forces a gc+empty_cache reclaim + warns.
     Default 8192. Override SIDECAR_RSS_WARN_MB; <=0 keeps per-tick logging but
@@ -1955,6 +1977,14 @@ def debug_memory() -> dict[str, Any]:
     alloc/reserved, so you can see WHICH layer is holding memory. (Added after
     the 2026-05-30 host-RAM leak.)"""
     out: dict[str, Any] = {"process": _process_mem()}
+    # Surface the SAME metric the hard-recycle keys on (committed-private, the
+    # OOM-relevant signal) so the leak-slope bench (scripts/bench-tts.py
+    # --mem-sample) can state its success bar in the recycle's own units rather
+    # than RSS. `_process_mem` already carries `private_mb` on Windows; this adds
+    # the cross-platform name (uss elsewhere) under one key.
+    commit = _process_commit_mb()
+    if commit is not None:
+        out["process"]["committed_mb"] = commit
     out["gc"] = {
         "counts": list(gc.get_count()),
         "garbage": len(gc.garbage),
