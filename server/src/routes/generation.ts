@@ -1244,6 +1244,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                   duration: formatted,
                   audioModelKey: modelKey,
                   audioRenderedAt: segmentsFile.synthesizedAt,
+                  /* A successful render clears any stale persisted failure so
+                     the chapter no longer hydrates as "Failed" after reload. */
+                  generationState: undefined,
+                  generationError: undefined,
                 }
               : c,
           ),
@@ -1344,6 +1348,33 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         chapterId: chapter.id,
         errorReason,
       });
+      /* Durably record the failure in state.json so the chapter survives a
+         reload / queue-clear as "Failed · reason" instead of re-hydrating as
+         the misleading "Queued" (no audio on disk → absent from
+         completedSlugs). Mirrors the success-path read-modify-write above.
+         Wrapped in try/catch so a persistence hiccup never masks the real
+         synthesis failure the user needs to see. */
+      try {
+        const statePath = stateJsonPath(bookDir);
+        const prev = await readJson<BookStateJson>(statePath);
+        if (prev) {
+          const next: BookStateJson = {
+            ...prev,
+            chapters: prev.chapters.map((c) =>
+              c.id === chapter.id
+                ? { ...c, generationState: 'failed', generationError: errorReason }
+                : c,
+            ),
+            updatedAt: new Date().toISOString(),
+          };
+          await writeJsonAtomic(statePath, stampStateSchema(next));
+        }
+      } catch (persistErr) {
+        console.warn(
+          `[generation] failed to persist error state for chapter ${chapter.id}:`,
+          persistErr,
+        );
+      }
       if (fatal) {
         /* Back-compat `*` job only: set the flag AND abort the signal so the
            sequential loop stops at the next chapter. On a single-chapter job
