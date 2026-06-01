@@ -629,6 +629,18 @@ export const chaptersSlice = createSlice({
 
 export const chaptersActions = chaptersSlice.actions;
 
+/** The set of chapters a 'forward' regen ("this and all subsequent") affects:
+    the anchor chapter plus every later one, minus excluded chapters. Excluded
+    front/back-matter (Dedication, Copyright, CONTENTS) has no narration, so
+    enqueuing it produces empty no-content queue entries. Mirrors the
+    `!c.excluded` predicate used by `regenerateChapterIds` (above) and
+    `enqueueOnWork` (generation-stream-middleware.ts). The regen modal uses
+    this for the affected count, the ETA duration, AND the enqueued ids so the
+    three can never diverge. */
+export function forwardRegenChapters(chapters: Chapter[], anchorId: number): Chapter[] {
+  return chapters.filter((c) => c.id >= anchorId && !c.excluded);
+}
+
 /* --- Active-stream selectors (plan 111 Wave 2) ----------------------------
    The single `activeStream` field became a per-book map; these give consumers
    a stable read surface that works whether 0, 1, or N streams are open. */
