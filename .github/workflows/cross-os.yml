@@ -42,7 +42,7 @@ jobs:
         os: [macos-latest, windows-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Node 24 + npm/node_modules caches + `npm ci` (root + server). Shared
       # composite with verify.yml (plan 106) — this matrix job gains the
@@ -83,7 +83,7 @@ jobs:
       frontend_e2e: ${{ steps.probe.outputs.frontend_e2e }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Full history so `git log --since` can reach commits up to 7 days
           # back; a shallow clone would miss most of the window.
@@ -118,7 +118,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Shared composite with verify.yml (plan 106): Node 24 + caches + ci.
       - name: Setup Node + deps
@@ -129,7 +129,7 @@ jobs:
 
       - name: Cache Playwright browsers
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
@@ -148,7 +148,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report-mobile
           path: playwright-report/

@@ -33,10 +33,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           # Bumped 20 → 24 alongside plan 81 / wave 1 (see verify.yml).
           node-version: '24'
@@ -80,9 +80,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
-          # `fetch-depth: 0` alone fetches all commits but actions/checkout@v4
+          # `fetch-depth: 0` alone fetches all commits but actions/checkout
           # leaves `fetch-tags: false` by default, so the tag *object* (with
           # its annotation) is never pulled. With `fetch-tags: true` the FIRST
           # fetch pulls the annotated tag — but actions/checkout then runs a
@@ -111,7 +111,7 @@ jobs:
           echo "tag type: $type — annotation restored"
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           # Bumped 20 → 24 alongside plan 81 / wave 1 (see verify.yml).
           node-version: '24'
