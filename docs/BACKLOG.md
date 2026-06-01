@@ -92,14 +92,6 @@ Source: net-new (2026-05-28), filed from the series-reuse repair session. Full s
 - _Benefit (user / technical):_ series continuity survives re-analysis — no re-running a repair after every reparse. Closes the remaining durability gap left after Facet A.
 - _Also remaining (follow-up, surfaced this round):_ a SECOND Phase-0b finalise site in `analysis.ts` — the failed-chapter retry/resume `runChapterCastSubset` path (~L3508, writing cast.json ~L3712) — does NOT run Facet A's link pass, so a book completed exclusively via the chapter-retry path persists an unlinked cast.json until the next full `/analysis/stream`. Belt-and-suspenders; fold into Facet B or a tiny standalone fix.
 
-### `srv-17` — ~~Root-cause the silent server-child death~~ → RESOLVED as a startup port collision (2026-05-31)
-
-Source: net-new (2026-05-30). **Resolved 2026-05-31** (branch `fix/server-listen-eaddrinuse`). Plan 145's handlers captured the crash, and it was **not** the hypothesised mid-run silent death: both `[server] FATAL uncaughtException` lines (08:34 + 14:55, `logs/server.err.log`) were `listen EADDRINUSE: address already in use :::8080` at **startup** — a double-start while a prior instance still held the port. The server never logged a mid-run FATAL across the whole run; the perceived "death" was a *stuck* server (the 14:19–14:21 recycle-drain cascade + a handled 600 s ch29 timeout — sidecar instability, see `side-11` / the recycle-drain-cascade) plus a restart that collided on `:8080`.
-
-- _What (done):_ `app.listen` had no `'error'` handler, so the bind failure bubbled to the plan-145 `uncaughtException` handler as a cryptic stack. Added `attachListenErrorHandler(server, port)` (`server/src/crash-logging.ts`) on both the HTTP and HTTPS listeners in `index.ts`: EADDRINUSE → actionable *"Port N is already in use — another server instance is likely already running…"* + clean `exit(1)`; any other bind error → generic FATAL + stack. EADDRINUSE no longer reaches the uncaughtException path.
-- _Acceptance (met):_ paired `crash-logging.test.ts` cases pin `formatListenError` (EADDRINUSE hint vs generic FATAL) and `attachListenErrorHandler` (logs + `exit(1)`). Manual: a second `npm run dev` against an occupied `:8080` prints the actionable line, not a raw stack. Regression: `docs/features/145-server-crash-diagnostics.md` "srv-17 follow-up" section.
-- _Residual watch:_ the mid-run silent-death hypothesis was never reproduced; the plan-145 `uncaughtException`/`unhandledRejection` handlers stay armed as the ongoing watch. The run-instability that *looked* like a death is tracked under `side-11` (eliminate the host-memory leak so the sidecar stops recycling mid-run), not here.
-
 ### `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed)
 
 The Qwen generation forward leaks committed-private host RAM monotonically: every sentence is a different length → a new native per-shape workspace that is never freed (climbs unbounded on variable-length generation, flat on fixed shapes; CUDA flat until it spills — pytorch/pytorch #32596). Measured 2026-06-01: **~1,150 MB/batch** committed on the variable-shape bench. This forces plan 143's process-recycle (~every 10 chapters on a long book), which is disruptive. **Goal:** a full book on one warm sidecar with no recycles and no dropped chapters — the cleanest end-to-end win now that RTF is solved (~1.04).
@@ -118,6 +110,104 @@ The Qwen generation forward leaks committed-private host RAM monotonically: ever
 - _Key files:_ `server/src/tts/synthesise-chapter.ts` (batch shaping / bucketing for item 1), `server/tts-sidecar/main.py` (python-side pad in `synthesize_batch`; the watchdog / `recycle_pending` for item 2), `server/src/routes/generation.ts` (boundary-recycle check for item 2).
 - _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved.
 - _Keep this item open_ until a full-book run holds a flat committed floor with zero recycles; on a pass, note "recycle now a safety net, not load-bearing" and close.
+
+### `fe-2` — Keyboard shortcuts / power-user tuning panel
+
+Source: net-new (2026-05-18). Promoted Could → Should (2026-06-02).
+
+- _What:_ Add a settings panel (under a gear icon in the top-bar) for power-user tuning: keyboard-shortcut overrides (e.g. spacebar = play/pause), runtime knobs (SSE chunk size, TTS concurrency cap, debounce values for autosave), accessibility toggles (high-contrast theme, larger text). Settings persist in localStorage and apply on next render.
+- _Acceptance:_ Open settings, change autosave debounce from 500ms to 2000ms → next edit waits 2s before write. Override "play/pause" shortcut to "K" → keyboard "K" toggles mini-player. Vitest covers the persistence + shortcut binding.
+- _Key files:_ new `src/views/settings.tsx`; new `src/lib/keybindings.ts`; new `src/store/settings-slice.ts`; `src/components/layout.tsx` (gear icon entry point).
+- _Depends on:_ none.
+- _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
+
+### `fe-1` — In-app LAN HTTPS banner under dev settings
+
+Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item. Promoted Could → Should (2026-06-02).
+
+- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
+- _Acceptance:_ When LAN_HTTPS=1 is set on the server, the Account view shows a "LAN access" card with the live HTTPS URL + a QR code linking to `/cert/root.crt`. Tapping "Copy URL" puts the URL in the clipboard.
+- _Key files:_ new `src/components/lan-access-card.tsx`; `src/views/account.tsx` (or wherever account settings render) to mount the card; `src/lib/api.ts` to wrap `GET /api/export/lan` if not already wrapped.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
+
+### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
+
+Source: net-new (2026-05-21). Plan 81 wave 4 deferred item. Promoted Could → Should (2026-06-02).
+
+- _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
+- _Acceptance:_ All action-revealing hover patterns in cast, manuscript, voices, listen, generation views get a `coarse-pointer:opacity-100` (or appropriate) fallback. A test confirms `(pointer: coarse)` simulation reveals the same buttons hover would.
+- _Key files:_ grep `src/**/*.tsx` for `group-hover:` / `peer-hover:` / `hover:opacity-0`; apply per-component judgement.
+- _Depends on:_ plan 81 shipped.
+- _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
+
+### Dependency major upgrades
+
+Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit. The audit cleared the deadline-driven CI-action bump (`ops-8`) + the genuinely-safe minor bumps (TypeScript → latest 5.x, `@google/genai` → 2.7, Node-floor pin) inline, and filed every framework **major** that is now behind here — each researched to "pickup-ready" (current → target, breaking-change surface, blast radius, automated migration path if any, risk). None blocks ship; pick up when time allows. Ordered foundational/low-risk → broad/high-risk. **Note on the React cluster:** `fe-18` (React 19), `fe-21` (router 7), and `fe-19` (Vite/Vitest) are commonly upgraded together — sequence `fe-19` → `fe-18` → `fe-21` in one round.
+
+#### `fe-19` — Vite 5 → 7 + Vitest 2 → 3 + @vitejs/plugin-react 4 → 5 (one unit)
+
+- _What:_ bump `vite ^5.2.0 → 7.x`, `vitest ^2.1.9 → 3.x` (root + `server/`), `@vitejs/plugin-react ^4.3.0 → 5.x` together. Vite 7 requires Node 20.19+/22.12+ — we run Node 24, fine. Vite-7 support lands in **Vitest 3.2+**; plugin-react 5 is Vite-7 compatible. Breaking surface: `build.rollupOptions` `manualChunks` object-form dropped (function-form deprecated), `import.meta.url` no longer polyfilled in UMD/IIFE, default browser target → `baseline-widely-available`, Vitest 3 config/reporter API tweaks. Audit `vite.config.ts`, `server/vitest.config.ts` + `server/vitest.config.slow.ts`, and any `manualChunks`.
+- _Acceptance:_ `npm run build` + all four vitest harnesses (frontend, server fast, server slow, a11y) + e2e green on Vite 7 / Vitest 3; no `manualChunks` deprecation; CI `vitest --changed` path still works.
+- _Key files:_ root + `server/package.json`; `vite.config.ts`; `server/vitest.config.ts`, `server/vitest.config.slow.ts`.
+- _Depends on:_ none (do before/with the React 19 cluster).
+- _Benefit (technical / architectural):_ faster builds + test runner; back on a supported tooling line (currently two majors behind). _Risk: medium._
+
+#### `ops-10` — TypeScript 5 → 6
+
+- _What:_ bump `typescript ^5.9.0 → 6.x` (root + `server/`). TS 6.0 shipped as the latest major (this round held at 5.9.3 as the safe line). Breaking surface: removed long-deprecated compiler options + stricter defaults; re-run `npm run typecheck` (root + server) and `npm run lint` (typescript-eslint must be on a TS-6-compatible release — verify `typescript-eslint ^8` supports it or bump). Low-friction historically, but still a major.
+- _Acceptance:_ `npm run typecheck` + `npm run lint` green on TS 6 across root + server; no removed-option errors; `tsconfig.json` (both) compile clean.
+- _Key files:_ root + `server/package.json` (`typescript`, possibly `typescript-eslint`); `tsconfig.json`, `tsconfig.node.json`, `server/tsconfig.json`.
+- _Depends on:_ none.
+- _Benefit (technical):_ latest compiler + perf; supported line. _Risk: low-medium._
+
+#### `srv-25` — Zod 3 → 4 (and drop `zod-to-json-schema`)
+
+- _What:_ bump `zod ^3.23.8 → 4.x`. Zod 4 ships **native `z.toJSONSchema()`**, so the `zod-to-json-schema` dependency can be **removed** entirely (today it builds the Gemini/Ollama structured-output schemas). Breaking surface: string-format validators moved to top-level (`z.string().email()` → `z.email()`, `.uuid()`, `.url()`), unified error-customization param. Affected: `server/src/analyzer/{ollama,gemini}.ts`, `server/src/handoff/schemas.ts`, `server/src/workspace/user-settings.ts`, `server/src/routes/{user-settings,cast-series-patch}.ts` (8 files). Migration: `npx @zod/codemod --transform v3-to-v4`.
+- _Acceptance:_ all server tests green on Zod 4; `zod-to-json-schema` removed from `server/package.json`; the JSON Schema fed to Gemini/Ollama is equivalent (golden-compare the generated schema before/after, since the analyzer contract depends on its exact shape).
+- _Key files:_ `server/package.json`; the 8 files above; any `zodToJsonSchema(...)` call sites → `z.toJSONSchema(...)`.
+- _Depends on:_ none.
+- _Benefit (technical / architectural):_ large parse/compile perf win, smaller bundle, **deletes a whole dependency**. _Risk: medium (verify the generated schema still satisfies the structured-output contract)._
+
+#### `srv-24` — Express 4 → 5
+
+- _What:_ bump `express ^4.19.2 → 5.x` (GA). Breaking surface: `path-to-regexp` v8 route syntax (`*` → named `/*splat`, optional `:param?` → `{/:param}`), removed legacy signatures (`app.del`, `res.json(status, body)`, `res.send(status)`), rejected-promise propagation in middleware, `req.query` is now a getter. Audit every route under `server/src/routes/` for wildcard/optional params + the removed signatures.
+- _Acceptance:_ all server + supertest route tests green on Express 5; every route still resolves (no path-to-regexp parse errors at boot); e2e audio/upload paths unaffected.
+- _Key files:_ `server/package.json`; `server/src/index.ts` (app + middleware mount order); all `server/src/routes/*.ts`.
+- _Depends on:_ none.
+- _Benefit (technical):_ supported GA major; async-error handling improvements. _Risk: medium (route-syntax migration is the main hazard)._
+
+#### `fe-18` — React 18 → 19
+
+- _What:_ bump `react`/`react-dom ^18.3.1 → 19.x`, `@types/react`/`@types/react-dom → 19`, and — **required for React-19 peer compat (confirmed 2026-06-01)** — `react-redux ^9.1.0 → ^9.2.0+` and `@reduxjs/toolkit ^2.2.0 → ^2.5.0+`. Breaking surface: removed legacy APIs (`propTypes`/`defaultProps` on function components, string refs, legacy context), ref-as-prop, stricter StrictMode/`useEffect` double-invoke. Blast radius: large (all of `src/components`, `src/views`, `src/modals`). Codemod: `npx codemod@latest react/19/migration-recipe`. Pair with a full e2e pass.
+- _Acceptance:_ frontend unit + a11y + e2e green on React 19; no legacy-API warnings in test output; RTK/react-redux on their React-19-compatible minors.
+- _Key files:_ root `package.json`; broad `src/**` (codemod-driven); `src/main.tsx` (root render).
+- _Depends on:_ pairs with `fe-19` (Vite/Vitest) — do Vite/Vitest first or together.
+- _Benefit (technical):_ unblocks React-19-only ecosystem deps; keeps RTK/react-redux on a supported line. _Risk: medium-high (broad surface)._
+
+#### `fe-21` — react-router-dom 6 → 7
+
+- _What:_ bump `react-router-dom ^6.26.0 → 7.x` (used in 10 files incl. `src/main.tsx`, `src/routes/index.tsx`, `src/components/layout.tsx`, `src/views/{generation,upload}.tsx`). v7 requires React 18+ and turns the v6 `future` flags on by default. **Confirm interplay with the custom hash router** (`src/lib/router.ts`) — react-router may own only a thin surface here, which could make this low-effort.
+- _Acceptance:_ routing + the hash-router grammar behave identically on v7; frontend + e2e green; no `future`-flag deprecation warnings.
+- _Key files:_ root `package.json`; the 10 `react-router-dom` consumers; `src/lib/router.ts` (interplay check).
+- _Depends on:_ `fe-18` (React 19) — sequence as a follow-on.
+- _Benefit (technical):_ supported major; aligns with React 19. _Risk: low-medium._
+
+#### `fe-20` — Tailwind 3 → 4
+
+- _What:_ bump `tailwindcss ^3.4.10 → 4.x` + add `@tailwindcss/postcss`. v4 is CSS-first: `@import "tailwindcss"` replaces the `@tailwind` directives; theme moves into `@theme` (the JS `tailwind.config.ts` still works via the `@config` directive for back-compat). **Our setup is unusually well-aligned** — `src/styles.css` already declares design tokens as CSS custom properties (`--peach`, `--ink`, …) and `tailwind.config.ts` references them, which is exactly v4's "every token is a CSS var" model. Run `npx @tailwindcss/upgrade` (automates ~90% incl. class renames). v4 drops the need for `autoprefixer`/`postcss-import` boilerplate.
+- _Acceptance:_ all four core views render pixel-identically; `npm run test:e2e:visual` re-baselined (the snapshots WILL shift — budget a re-bake); lint/build green; design-token CSS-vars contract preserved (no hex literals leak in).
+- _Key files:_ root `package.json`; `src/styles.css` (`@import` + `@theme`); `tailwind.config.ts`; `postcss.config.js`; visual baselines under `e2e/**/visual.spec.ts/`.
+- _Depends on:_ none.
+- _Benefit (technical):_ faster engine, runtime theme switching, simpler toolchain. _Risk: medium — visual-regression baselines shift; needs a snapshot re-bake._
+
+#### `srv-26` — pdfjs-dist 4 → 5
+
+- _What:_ bump `pdfjs-dist ^4.10.38 → 5.x`. ESM-only, Node 20+, worker-setup changes. Single consumer (PDF manuscript parse). Verify the worker wiring + the parse path still resolve under the v5 ESM layout.
+- _Acceptance:_ PDF manuscript upload → parse end-to-end works on v5 (the canonical-recipe regression); server tests green.
+- _Key files:_ `server/package.json`; the PDF-parse consumer in `server/src/` (worker/import setup).
+- _Depends on:_ none.
+- _Benefit (technical):_ supported major + security fixes. _Risk: low-medium._
 
 _`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026-06-01** via
 [plan 164](features/164-deps-ci-hygiene.md) — all workflows now pin the latest Node-24 action
@@ -225,6 +315,26 @@ Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexi
 - _Depends on:_ plan 108 (series-scoped write) shipped.
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 
+#### `fs-12` — Standalone library-voice authoring (a voice not tied to one character)
+
+Source: [`22-voice-library.md`](features/archive/22-voice-library.md); _What_ revised 2026-05-26 for the Qwen voice-design engine. Promoted Won't → Could (2026-06-02).
+
+- _What:_ A standalone library-voice authoring surface on top of the per-character Qwen design flow (plan 108, which already designs → clones → caches → reuses a bespoke voice scoped to a cast member). Add first-class library entries not tied to a single character: design a voice from a persona (or a reference clip), name + tag + pin it, reuse it across books, with optional fine-tuning of an already-designed voice.
+- _Acceptance:_ From the voice library, a "Create voice" action opens an authoring flow (persona text → design → audition); saving adds a named, taggable, pinnable library entry assignable to any character in any book; reusing it across books reproduces the same voice (shared cached embedding). Vitest covers the create/save/reuse logic; one e2e covers the authoring modal.
+- _Key files:_ `src/views/voices.tsx` (Create-voice entry point); new authoring modal under `src/modals/`; reuse the Qwen design route (`server/src/routes/qwen-voice.ts`) + the voice-embedding cache; `server/src/routes/voices.ts` (standalone library-entry write, not character-scoped).
+- _Depends on:_ plan 108 (per-character Qwen design + embedding cache) shipped — this generalises it to character-independent entries.
+- _Benefit (user):_ build a personal stable of named narrators to assign across the catalogue, independent of any single character. Pairs with `fe-12` (bulk library ops): a from-scratch author flow is what grows the library big enough to need them.
+
+#### `fe-12` — Bulk pin / bulk delete in voice library
+
+Source: [`22-voice-library.md`](features/archive/22-voice-library.md); revised 2026-05-26 for Qwen custom voices. Promoted Won't → Could (2026-06-02) — the per-character Qwen design flow accumulates many cached custom voices, so a heavy multi-book library crosses the ~50-entry threshold where per-voice curation gets painful.
+
+- _What:_ Multi-select in the voice library with bulk actions — pin/unpin and delete across the selection (with a confirm + count). Deletion respects in-use voices (warn or block when a voice is assigned to a character in any book).
+- _Acceptance:_ Select N voices → bulk pin flips all N; bulk delete removes the unused ones and warns on any in-use voice; the library refreshes. Vitest covers the selection + bulk-action reducers; one e2e covers the multi-select flow.
+- _Key files:_ `src/views/voices.tsx` (selection state + bulk-action bar); `server/src/routes/voices.ts` (bulk delete/pin endpoint + in-use guard).
+- _Depends on:_ none (no longer blocked on `fs-12` — Qwen's per-character design already produces the bulk-worthy entries).
+- _Benefit (user):_ curating a large accumulated voice library stops being a per-voice click-fest.
+
 ### Engine, sidecar & analyzer
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
@@ -268,36 +378,6 @@ Source: net-new (2026-05-18).
 - _Key files:_ new `server/src/workspace/auto-backup.ts`; `server/src/workspace/scan.ts` (initial trigger on server start); new settings affordance under `fe-2` power-user panel (or inline in `src/views/library.tsx` if shipped first).
 - _Depends on:_ none.
 - _Benefit (user):_ disaster recovery without manual intervention. Particularly valuable on Windows where OneDrive sync conflicts can occasionally corrupt `state.json` mid-write.
-
-#### `fe-2` — Keyboard shortcuts / power-user tuning panel
-
-Source: net-new (2026-05-18).
-
-- _What:_ Add a settings panel (under a gear icon in the top-bar) for power-user tuning: keyboard-shortcut overrides (e.g. spacebar = play/pause), runtime knobs (SSE chunk size, TTS concurrency cap, debounce values for autosave), accessibility toggles (high-contrast theme, larger text). Settings persist in localStorage and apply on next render.
-- _Acceptance:_ Open settings, change autosave debounce from 500ms to 2000ms → next edit waits 2s before write. Override "play/pause" shortcut to "K" → keyboard "K" toggles mini-player. Vitest covers the persistence + shortcut binding.
-- _Key files:_ new `src/views/settings.tsx`; new `src/lib/keybindings.ts`; new `src/store/settings-slice.ts`; `src/components/layout.tsx` (gear icon entry point).
-- _Depends on:_ none.
-- _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
-
-#### `fe-1` — In-app LAN HTTPS banner under dev settings
-
-Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
-
-- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
-- _Acceptance:_ When LAN_HTTPS=1 is set on the server, the Account view shows a "LAN access" card with the live HTTPS URL + a QR code linking to `/cert/root.crt`. Tapping "Copy URL" puts the URL in the clipboard.
-- _Key files:_ new `src/components/lan-access-card.tsx`; `src/views/account.tsx` (or wherever account settings render) to mount the card; `src/lib/api.ts` to wrap `GET /api/export/lan` if not already wrapped.
-- _Depends on:_ plan 81 shipped.
-- _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
-
-#### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
-
-Source: net-new (2026-05-21). Plan 81 wave 4 deferred item.
-
-- _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
-- _Acceptance:_ All action-revealing hover patterns in cast, manuscript, voices, listen, generation views get a `coarse-pointer:opacity-100` (or appropriate) fallback. A test confirms `(pointer: coarse)` simulation reveals the same buttons hover would.
-- _Key files:_ grep `src/**/*.tsx` for `group-hover:` / `peer-hover:` / `hover:opacity-0`; apply per-component judgement.
-- _Depends on:_ plan 81 shipped.
-- _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
 
 ### Security & hardening
 
@@ -404,74 +484,6 @@ Source: net-new (2026-05-18). Deferred follow-up to the release-package work ([`
 - _Depends on:_ plan 49 release package shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
 
-### Dependency major upgrades (deferred)
-
-Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit. The audit cleared the deadline-driven CI-action bump (`ops-8`) + the genuinely-safe minor bumps (TypeScript → latest 5.x, `@google/genai` → 2.7, Node-floor pin) inline, and filed every framework **major** that is now behind here — each researched to "pickup-ready" (current → target, breaking-change surface, blast radius, automated migration path if any, risk). None blocks ship; pick up when time allows. Ordered foundational/low-risk → broad/high-risk. **Note on the React cluster:** `fe-18` (React 19), `fe-21` (router 7), and `fe-19` (Vite/Vitest) are commonly upgraded together — sequence `fe-19` → `fe-18` → `fe-21` in one round.
-
-#### `fe-19` — Vite 5 → 7 + Vitest 2 → 3 + @vitejs/plugin-react 4 → 5 (one unit)
-
-- _What:_ bump `vite ^5.2.0 → 7.x`, `vitest ^2.1.9 → 3.x` (root + `server/`), `@vitejs/plugin-react ^4.3.0 → 5.x` together. Vite 7 requires Node 20.19+/22.12+ — we run Node 24, fine. Vite-7 support lands in **Vitest 3.2+**; plugin-react 5 is Vite-7 compatible. Breaking surface: `build.rollupOptions` `manualChunks` object-form dropped (function-form deprecated), `import.meta.url` no longer polyfilled in UMD/IIFE, default browser target → `baseline-widely-available`, Vitest 3 config/reporter API tweaks. Audit `vite.config.ts`, `server/vitest.config.ts` + `server/vitest.config.slow.ts`, and any `manualChunks`.
-- _Acceptance:_ `npm run build` + all four vitest harnesses (frontend, server fast, server slow, a11y) + e2e green on Vite 7 / Vitest 3; no `manualChunks` deprecation; CI `vitest --changed` path still works.
-- _Key files:_ root + `server/package.json`; `vite.config.ts`; `server/vitest.config.ts`, `server/vitest.config.slow.ts`.
-- _Depends on:_ none (do before/with the React 19 cluster).
-- _Benefit (technical / architectural):_ faster builds + test runner; back on a supported tooling line (currently two majors behind). _Risk: medium._
-
-#### `ops-10` — TypeScript 5 → 6
-
-- _What:_ bump `typescript ^5.9.0 → 6.x` (root + `server/`). TS 6.0 shipped as the latest major (this round held at 5.9.3 as the safe line). Breaking surface: removed long-deprecated compiler options + stricter defaults; re-run `npm run typecheck` (root + server) and `npm run lint` (typescript-eslint must be on a TS-6-compatible release — verify `typescript-eslint ^8` supports it or bump). Low-friction historically, but still a major.
-- _Acceptance:_ `npm run typecheck` + `npm run lint` green on TS 6 across root + server; no removed-option errors; `tsconfig.json` (both) compile clean.
-- _Key files:_ root + `server/package.json` (`typescript`, possibly `typescript-eslint`); `tsconfig.json`, `tsconfig.node.json`, `server/tsconfig.json`.
-- _Depends on:_ none.
-- _Benefit (technical):_ latest compiler + perf; supported line. _Risk: low-medium._
-
-#### `srv-25` — Zod 3 → 4 (and drop `zod-to-json-schema`)
-
-- _What:_ bump `zod ^3.23.8 → 4.x`. Zod 4 ships **native `z.toJSONSchema()`**, so the `zod-to-json-schema` dependency can be **removed** entirely (today it builds the Gemini/Ollama structured-output schemas). Breaking surface: string-format validators moved to top-level (`z.string().email()` → `z.email()`, `.uuid()`, `.url()`), unified error-customization param. Affected: `server/src/analyzer/{ollama,gemini}.ts`, `server/src/handoff/schemas.ts`, `server/src/workspace/user-settings.ts`, `server/src/routes/{user-settings,cast-series-patch}.ts` (8 files). Migration: `npx @zod/codemod --transform v3-to-v4`.
-- _Acceptance:_ all server tests green on Zod 4; `zod-to-json-schema` removed from `server/package.json`; the JSON Schema fed to Gemini/Ollama is equivalent (golden-compare the generated schema before/after, since the analyzer contract depends on its exact shape).
-- _Key files:_ `server/package.json`; the 8 files above; any `zodToJsonSchema(...)` call sites → `z.toJSONSchema(...)`.
-- _Depends on:_ none.
-- _Benefit (technical / architectural):_ large parse/compile perf win, smaller bundle, **deletes a whole dependency**. _Risk: medium (verify the generated schema still satisfies the structured-output contract)._
-
-#### `srv-24` — Express 4 → 5
-
-- _What:_ bump `express ^4.19.2 → 5.x` (GA). Breaking surface: `path-to-regexp` v8 route syntax (`*` → named `/*splat`, optional `:param?` → `{/:param}`), removed legacy signatures (`app.del`, `res.json(status, body)`, `res.send(status)`), rejected-promise propagation in middleware, `req.query` is now a getter. Audit every route under `server/src/routes/` for wildcard/optional params + the removed signatures.
-- _Acceptance:_ all server + supertest route tests green on Express 5; every route still resolves (no path-to-regexp parse errors at boot); e2e audio/upload paths unaffected.
-- _Key files:_ `server/package.json`; `server/src/index.ts` (app + middleware mount order); all `server/src/routes/*.ts`.
-- _Depends on:_ none.
-- _Benefit (technical):_ supported GA major; async-error handling improvements. _Risk: medium (route-syntax migration is the main hazard)._
-
-#### `fe-18` — React 18 → 19
-
-- _What:_ bump `react`/`react-dom ^18.3.1 → 19.x`, `@types/react`/`@types/react-dom → 19`, and — **required for React-19 peer compat (confirmed 2026-06-01)** — `react-redux ^9.1.0 → ^9.2.0+` and `@reduxjs/toolkit ^2.2.0 → ^2.5.0+`. Breaking surface: removed legacy APIs (`propTypes`/`defaultProps` on function components, string refs, legacy context), ref-as-prop, stricter StrictMode/`useEffect` double-invoke. Blast radius: large (all of `src/components`, `src/views`, `src/modals`). Codemod: `npx codemod@latest react/19/migration-recipe`. Pair with a full e2e pass.
-- _Acceptance:_ frontend unit + a11y + e2e green on React 19; no legacy-API warnings in test output; RTK/react-redux on their React-19-compatible minors.
-- _Key files:_ root `package.json`; broad `src/**` (codemod-driven); `src/main.tsx` (root render).
-- _Depends on:_ pairs with `fe-19` (Vite/Vitest) — do Vite/Vitest first or together.
-- _Benefit (technical):_ unblocks React-19-only ecosystem deps; keeps RTK/react-redux on a supported line. _Risk: medium-high (broad surface)._
-
-#### `fe-21` — react-router-dom 6 → 7
-
-- _What:_ bump `react-router-dom ^6.26.0 → 7.x` (used in 10 files incl. `src/main.tsx`, `src/routes/index.tsx`, `src/components/layout.tsx`, `src/views/{generation,upload}.tsx`). v7 requires React 18+ and turns the v6 `future` flags on by default. **Confirm interplay with the custom hash router** (`src/lib/router.ts`) — react-router may own only a thin surface here, which could make this low-effort.
-- _Acceptance:_ routing + the hash-router grammar behave identically on v7; frontend + e2e green; no `future`-flag deprecation warnings.
-- _Key files:_ root `package.json`; the 10 `react-router-dom` consumers; `src/lib/router.ts` (interplay check).
-- _Depends on:_ `fe-18` (React 19) — sequence as a follow-on.
-- _Benefit (technical):_ supported major; aligns with React 19. _Risk: low-medium._
-
-#### `fe-20` — Tailwind 3 → 4
-
-- _What:_ bump `tailwindcss ^3.4.10 → 4.x` + add `@tailwindcss/postcss`. v4 is CSS-first: `@import "tailwindcss"` replaces the `@tailwind` directives; theme moves into `@theme` (the JS `tailwind.config.ts` still works via the `@config` directive for back-compat). **Our setup is unusually well-aligned** — `src/styles.css` already declares design tokens as CSS custom properties (`--peach`, `--ink`, …) and `tailwind.config.ts` references them, which is exactly v4's "every token is a CSS var" model. Run `npx @tailwindcss/upgrade` (automates ~90% incl. class renames). v4 drops the need for `autoprefixer`/`postcss-import` boilerplate.
-- _Acceptance:_ all four core views render pixel-identically; `npm run test:e2e:visual` re-baselined (the snapshots WILL shift — budget a re-bake); lint/build green; design-token CSS-vars contract preserved (no hex literals leak in).
-- _Key files:_ root `package.json`; `src/styles.css` (`@import` + `@theme`); `tailwind.config.ts`; `postcss.config.js`; visual baselines under `e2e/**/visual.spec.ts/`.
-- _Depends on:_ none.
-- _Benefit (technical):_ faster engine, runtime theme switching, simpler toolchain. _Risk: medium — visual-regression baselines shift; needs a snapshot re-bake._
-
-#### `srv-26` — pdfjs-dist 4 → 5
-
-- _What:_ bump `pdfjs-dist ^4.10.38 → 5.x`. ESM-only, Node 20+, worker-setup changes. Single consumer (PDF manuscript parse). Verify the worker wiring + the parse path still resolve under the v5 ESM layout.
-- _Acceptance:_ PDF manuscript upload → parse end-to-end works on v5 (the canonical-recipe regression); server tests green.
-- _Key files:_ `server/package.json`; the PDF-parse consumer in `server/src/` (worker/import setup).
-- _Depends on:_ none.
-- _Benefit (technical):_ supported major + security fixes. _Risk: low-medium._
-
 ### Listener-app handoffs
 
 #### `fe-3` — Apple Books (iOS / macOS) handoff modal
@@ -558,28 +570,6 @@ Source: [`32-sticky-analysis.md`](features/archive/32-sticky-analysis.md).
 - _Why parked:_ disk `state.json` is authoritative + single-user-per-workspace, so two tabs on the same book never compete on writes. Tab B catches up by re-reading state on focus.
 - _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `srv-10` — both wake under the same trigger.
 
-### `srv-9` — Multi-book parallel generation
-
-Source: [`16-generation-stream.md`](features/archive/16-generation-stream.md).
-
-- _Why parked:_ single 8 GB GPU can't hold two XTTS/Kokoro instances; the generation queue is serial per workspace by design.
-- _Wake when:_ either cloud TTS becomes the dominant generation path so VRAM is no longer the bottleneck, or the user adds a dedicated per-book GPU. Neither is on the v1 roadmap.
-
-### `fs-12` — Voice creation from scratch
-
-Source: [`22-voice-library.md`](features/archive/22-voice-library.md); _What_ revised 2026-05-26 for the Qwen voice-design engine.
-
-- _What (revised 2026-05-26):_ Qwen3-TTS (plan 108) already authors a bespoke per-character voice from a text persona (design → clone → cache the embedding → reuse for consistency), so "create a voice that exists in no catalog" is no longer hypothetical — it ships, scoped to a cast member. What's still missing is a _standalone_ library-voice authoring surface: design a voice from a persona (or a reference clip) as a first-class library entry not tied to one character, name + tag + pin it, reuse it across books, plus optional fine-tuning of an already-designed voice.
-- _Why parked:_ the per-character Qwen design flow covers the dominant need (give this character a distinct voice). A general-purpose voice-authoring studio (standalone named library entries, reference-clip cloning UI, fine-tune controls) is its own product surface beyond today's read-mostly library.
-- _Wake when:_ users want to design + curate voices as reusable library assets independent of a single character — e.g. building a personal stable of named narrators to assign across the catalogue. Pairs with `fe-12` (bulk library ops): a from-scratch author flow is what grows the library big enough to need them.
-
-### `fe-12` — Bulk pin / bulk delete in voice library
-
-Source: [`22-voice-library.md`](features/archive/22-voice-library.md); revised 2026-05-26 for Qwen custom voices.
-
-- _Why parked (under review 2026-05-26):_ the original "fewer than 50 entries (28 Kokoro + ~12 Coqui defaults), per-voice click is fast enough" premise is weakening. Qwen3-TTS (plan 108) designs a bespoke voice per character, so a heavy multi-book user accumulates many cached custom voices in the library — quickly past the ~50-entry comfort threshold. At that point bulk pin / bulk delete stops being a nicety and becomes the only sane way to curate. **Flagged to move up to Could (or Should) after a review of real library sizes once a few books have been (re)generated under Qwen.**
-- _Wake when:_ a real workspace's library crosses ~50 entries from accumulated Qwen-designed voices and per-voice curation gets painful — likely soon given the catalogue-wide Qwen regen, so review proactively rather than waiting for a complaint. No longer blocked on `fs-12`: Qwen's per-character design flow already produces the bulk-worthy entries.
-
 ### `fe-13` — Live `VITE_USE_MOCKS` toggle in running UI
 
 Source: [`23-mock-toggle.md`](features/archive/23-mock-toggle.md).
@@ -607,13 +597,6 @@ Source: net-new (2026-05-24), spun off from [plan 108](features/108-qwen-coexist
 
 - _Why parked (2026-05-26):_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost map now matters only for **cross-engine** packing (Kokoro 1 + Qwen 1, vs Coqui 3 / analyzer 4). Empirically `GPU_VRAM_BUDGET=2` + `QWEN_BATCH_SIZE=8` ran an end-to-end Qwen chapter (~RTF 1.15) with no VRAM trouble on the 4070, so the provisional constants are good enough in practice. The only unmeasured residual — true per-engine _peak_ VRAM for the cross-engine case — isn't worth a dedicated tuning pass while the empirical config holds.
 - _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. Then measure peak-per-engine and correct `ENGINE_VRAM_COST`.
-
-### `srv-3` — Per-call local→Gemini analyzer overflow
-
-Source: net-new (2026-05-21), spun off from the perf-tuning survey (item B4); moved Could → Won't 2026-05-26. Would extend `FallbackAnalyzer` (`server/src/analyzer/index.ts:159-210`) to route partial load to Gemini when local Ollama is _slow_ (not just unreachable), with cross-analyzer roster-name normalisation to avoid duplicate characters.
-
-- _Why parked (2026-05-26):_ Gemini is already the strong performer in the analyzer mix, so the marginal value of overflowing to it per-call is low — and the overflow round-trip (mid-run analyzer switch + name reconciliation) would be slow in comparison while adding duplicate-character risk for no reliable latency win. Plan 88's per-phase bucketed split already covers the deliberate "use Gemini for these phases" case.
-- _Wake when:_ a workload appears where local Ollama is the genuine bottleneck AND idle Gemini quota would finish the burst faster — measured, not assumed. Plan 88's per-phase plumbing is the seam to build on.
 
 ---
 
