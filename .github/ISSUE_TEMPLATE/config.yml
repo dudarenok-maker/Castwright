@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Backlog & priorities
+    url: https://github.com/dudarenok-maker/AudioBook-Generator/blob/main/docs/BACKLOG.md
+    about: The prioritized MoSCoW planning view. File a "Backlog item" above to add a tracked piece of work.
