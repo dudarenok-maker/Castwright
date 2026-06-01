@@ -15,6 +15,14 @@ import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { IconSpinner } from '../lib/icons';
 import type { ConfirmBookResponse, LibraryBook } from '../lib/types';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
+import { detectLanguage } from '../lib/detect-language';
+
+/* fs-2 — languages offered at confirm. The field is an open BCP-47 string in
+   the data model, but v1 UX offers English ↔ Russian only. */
+const LANGUAGE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'en', label: 'English' },
+  { value: 'ru', label: 'Russian' },
+];
 
 export function ConfirmMetadataView() {
   const dispatch = useAppDispatch();
@@ -29,6 +37,13 @@ export function ConfirmMetadataView() {
     candidate?.seriesPosition != null ? String(candidate.seriesPosition) : '',
   );
   const [title, setTitle] = useState(candidate?.title ?? '');
+  /* fs-2 — language seeded from the server hint (none today) or auto-detected
+     from the manuscript text (Cyrillic ratio). Tracked-touched so the
+     "auto-detected" chip clears once the user confirms or overrides. */
+  const [language, setLanguage] = useState<string>(
+    () => candidate?.language ?? detectLanguage(candidate?.sourceText ?? ''),
+  );
+  const [languageTouched, setLanguageTouched] = useState(false);
   /* Bug B: server marks series/seriesPosition as title-extracted when it
      fell back to the parenthetical heuristic. Surface a small chip so the
      user knows the value is a guess; clear the flag on any edit so the
@@ -109,6 +124,7 @@ export function ConfirmMetadataView() {
         seriesPosition: isStandalone ? null : seriesPosNum,
         title: trimmedTitle,
         isStandalone,
+        language,
         excludedSlugs: excludedSlugs.size > 0 ? [...excludedSlugs] : undefined,
       });
       dispatch(manuscriptActions.uploadComplete(res));
@@ -129,6 +145,7 @@ export function ConfirmMetadataView() {
         lastWorkedOn: 'Just now',
         coverGradient: ['#3C194F', '#0F0E0D'],
         tags: [],
+        language,
       };
       dispatch(libraryActions.addBook(optimistic));
       dispatch(
@@ -261,6 +278,38 @@ export function ConfirmMetadataView() {
               placeholder="e.g. A Wizard of Earthsea"
               className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
             />
+          </Field>
+
+          <Field label="Language" required>
+            <select
+              value={language}
+              disabled={busy}
+              data-testid="confirm-language"
+              onChange={(e) => {
+                setLanguage(e.target.value);
+                setLanguageTouched(true);
+              }}
+              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+            >
+              {LANGUAGE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+            {!languageTouched && language === 'ru' && (
+              <p className="mt-1.5">
+                <span className="inline-block text-[10px] uppercase tracking-[0.10em] font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
+                  Auto-detected Russian — verify
+                </span>
+              </p>
+            )}
+            {language !== 'en' && (
+              <p className="mt-1.5 text-[11px] text-ink/55">
+                Russian books narrate with designed Qwen voices — you'll design a voice for the
+                narrator and each speaking character in the cast view.
+              </p>
+            )}
           </Field>
 
           <div className="pt-2 grid grid-cols-3 gap-3 text-[11px] text-ink/55">
