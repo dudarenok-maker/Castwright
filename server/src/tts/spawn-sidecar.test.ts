@@ -269,8 +269,12 @@ describe('spawnSidecar', () => {
        so a restart / cwd change can't orphan a designed voice. */
     expect(options.env.QWEN_VOICES_DIR).toMatch(/voices[\\/]qwen$/);
     /* CUDA-fragmentation guard (2026-05-30 mid-run VRAM OOM) — defaulted on so
-       a long run's variable-length batches don't fragment VRAM into an OOM. */
-    expect(options.env.PYTORCH_CUDA_ALLOC_CONF).toBe('expandable_segments:True');
+       a long run's variable-length batches don't fragment VRAM into an OOM.
+       Plan 161: the default ALSO carries max_split_size_mb + garbage_collection,
+       which (unlike expandable_segments) apply on Windows too. */
+    expect(options.env.PYTORCH_CUDA_ALLOC_CONF).toBe(
+      'expandable_segments:True,max_split_size_mb:256,garbage_collection_threshold:0.8',
+    );
     expect(options.windowsHide).toBe(true);
   });
 

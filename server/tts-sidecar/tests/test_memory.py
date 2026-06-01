@@ -614,3 +614,142 @@ def test_recycle_endpoint_drains_inflight_before_exit(monkeypatch):
     monkeypatch.setattr(main, "_inflight_synth", 0)  # synth finished
     time.sleep(0.6 + 0.05 + 0.25)  # one poll + flush + margin
     assert calls == [1]
+
+
+# --- plan 161: VRAM-keyed recycle + non-leaky reload ---
+
+
+def test_vram_recycle_threshold_parsing(monkeypatch):
+    """Soft/hard VRAM ceilings: explicit MB env wins; unset → a fraction of the
+    device total (auto-scales to the card); no env AND no readable total →
+    0 (disabled)."""
+    monkeypatch.delenv("SIDECAR_VRAM_RECYCLE_SOFT_MB", raising=False)
+    monkeypatch.delenv("SIDECAR_VRAM_RESTART_MB", raising=False)
+    # No env: derive from device total.
+    assert main._vram_recycle_soft_threshold_mb(8000.0) == pytest.approx(7200.0)
+    assert main._vram_restart_threshold_mb(8000.0) == pytest.approx(7840.0)
+    # No env AND no total → disabled (never guess a ceiling).
+    assert main._vram_recycle_soft_threshold_mb(None) == 0.0
+    assert main._vram_restart_threshold_mb(None) == 0.0
+    # Explicit MB overrides the fraction regardless of total.
+    monkeypatch.setenv("SIDECAR_VRAM_RECYCLE_SOFT_MB", "7400")
+    monkeypatch.setenv("SIDECAR_VRAM_RESTART_MB", "8000")
+    assert main._vram_recycle_soft_threshold_mb(8000.0) == 7400.0
+    assert main._vram_restart_threshold_mb(None) == 8000.0
+    # Garbage falls back to the fraction (or disabled when no total).
+    monkeypatch.setenv("SIDECAR_VRAM_RECYCLE_SOFT_MB", "nope")
+    assert main._vram_recycle_soft_threshold_mb(8000.0) == pytest.approx(7200.0)
+
+
+def test_watchdog_vram_soft_sets_recycle_pending(monkeypatch):
+    """Reserved VRAM in [soft, hard) flags `recycle_pending` (the SAME flag the
+    host soft-recycle uses) and does NOT exit. Host ceilings disabled so only the
+    VRAM branch can fire."""
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "0")  # host hard disabled
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "0")  # host soft disabled
+    monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")  # skip the reclaim branch
+    monkeypatch.setenv("SIDECAR_VRAM_RECYCLE_SOFT_MB", "7000")
+    monkeypatch.setenv("SIDECAR_VRAM_RESTART_MB", "8000")
+    monkeypatch.setattr(main, "_recycle_pending", False)
+    monkeypatch.setattr(main, "_process_mem", lambda: {"rss_mb": 5000.0})
+    monkeypatch.setattr(main, "_process_commit_mb", lambda: 5000.0)
+    # reserved 7500: soft(7000) <= reserved < hard(8000) on an 8188MB card.
+    monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (5000.0, 7500.0, 8188.0))
+    scheduled: list = []
+    monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
+    monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(2))
+
+    with pytest.raises(_StopLoop):
+        asyncio.run(main._memory_watchdog())
+
+    assert main._recycle_pending is True
+    assert scheduled == [], "VRAM soft recycle must NOT trigger the hard self-exit"
+
+
+def test_watchdog_vram_hard_exits(monkeypatch):
+    """Reserved VRAM at/above the hard ceiling schedules the self-exit, labelled
+    'reserved VRAM' so the log names which pressure tripped."""
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "0")  # host hard disabled
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "0")
+    monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")
+    monkeypatch.setenv("SIDECAR_VRAM_RECYCLE_SOFT_MB", "7000")
+    monkeypatch.setenv("SIDECAR_VRAM_RESTART_MB", "8000")
+    monkeypatch.setattr(main, "_recycle_pending", False)
+    monkeypatch.setattr(main, "_process_mem", lambda: {"rss_mb": 5000.0})
+    monkeypatch.setattr(main, "_process_commit_mb", lambda: 5000.0)
+    monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (8050.0, 8100.0, 8188.0))
+    scheduled: list = []
+    monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
+    monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(2))
+
+    with pytest.raises(_StopLoop):
+        asyncio.run(main._memory_watchdog())
+
+    assert len(scheduled) == 1, "VRAM hard ceiling must schedule the recycle exit"
+    assert scheduled[0][2] == "reserved VRAM", "exit log must name the VRAM ceiling"
+    assert main._recycle_pending is False, "hard branch continues before the soft branch"
+
+
+def test_watchdog_no_vram_branch_when_cuda_unavailable(monkeypatch):
+    """When CUDA is unavailable (_cuda_vram_mb → all None) the VRAM branches are
+    skipped entirely — no crash, no spurious recycle."""
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "0")
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "0")
+    monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")
+    monkeypatch.setattr(main, "_recycle_pending", False)
+    monkeypatch.setattr(main, "_process_mem", lambda: {"rss_mb": 5000.0})
+    monkeypatch.setattr(main, "_process_commit_mb", lambda: 5000.0)
+    monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (None, None, None))
+    scheduled: list = []
+    monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
+    monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(2))
+
+    with pytest.raises(_StopLoop):
+        asyncio.run(main._memory_watchdog())
+
+    assert main._recycle_pending is False
+    assert scheduled == []
+
+
+def test_health_reports_vram_fields(monkeypatch):
+    """/health exposes `vram_reserved_mb` / `vram_total_mb` so the dev can watch
+    headroom off the same poll."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (5000.0, 7500.0, 8188.0))
+    with TestClient(main.app) as client:
+        body = client.get("/health").json()
+    assert body["vram_reserved_mb"] == 7500.0
+    assert body["vram_total_mb"] == 8188.0
+
+
+def test_qwen_unload_waits_for_synth_lock(monkeypatch):
+    """unload() must acquire `_synth_lock` before nulling `_base`, so it can't
+    drop the model out from under an in-flight forward. Without the lock the
+    running forward keeps the old model alive past the null → its VRAM can't be
+    reclaimed → the next /load stacks a SECOND copy (the 2026-06-01 reload spill).
+    Mirrors the drain-fence test: hold the lock, confirm unload blocks, release,
+    confirm it completes."""
+    counting = _CountingGc(main.gc)
+    monkeypatch.setattr(main, "gc", counting)
+    # Avoid a real CUDA call in the delta-log + keep it deterministic.
+    monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (None, None, None))
+
+    engine = main.QwenEngine()
+    engine._base = object()
+
+    engine._synth_lock.acquire()  # simulate a forward in flight
+    done: list[int] = []
+    t = threading.Thread(target=lambda: (engine.unload(), done.append(1)))
+    t.start()
+    try:
+        time.sleep(0.2)
+        assert engine._base is not None, "unload must BLOCK while _synth_lock is held"
+        assert done == []
+    finally:
+        engine._synth_lock.release()
+
+    t.join(timeout=2)
+    assert engine._base is None, "unload completes once the forward releases the lock"
+    assert done == [1]
+    assert counting.collect_calls >= 1
