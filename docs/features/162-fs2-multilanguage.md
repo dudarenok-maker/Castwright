@@ -4,7 +4,7 @@ shipped: null
 owner: null
 ---
 
-# 160 — Multi-language support (Russian first): the language half of fs-2
+# 162 — Multi-language support (Russian first): the language half of fs-2
 
 > Status: active — server invariant + analyzer + frontend UX landed; library
 > En/Ru filter pill + cast-wide banner deferred (see Out of scope).

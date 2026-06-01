@@ -53,7 +53,7 @@ Source: net-new (2026-05-22). Captured during planning of the cross-version upgr
 
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
-[plan 160](features/160-fs2-multilanguage.md). Deferred follow-ups from the
+[plan 162](features/162-fs2-multilanguage.md). Deferred follow-ups from the
 language half live as `fe-16` (library/cast language UX polish) and `fs-14`
 (Russian UI localization) below._
 
@@ -63,7 +63,7 @@ language half live as `fe-16` (library/cast language UX polish) and `fs-14`
 
 ### `fs-14` — Russian UI localization (interface strings, react-i18next)
 
-Source: net-new (2026-06-01). Captured alongside the fs-2 language half ([plan 160](features/160-fs2-multilanguage.md)); user asked to localize the UX to Russian "at the same time" but it was deferred as a separate epic. **Distinct axis from fs-2:** fs-2's `language` is per-BOOK _content_ (which language the audio is in); this is the per-USER _interface_ language (which language the app chrome renders in). A user could run a Russian UI while reading English books, or vice-versa.
+Source: net-new (2026-06-01). Captured alongside the fs-2 language half ([plan 162](features/162-fs2-multilanguage.md)); user asked to localize the UX to Russian "at the same time" but it was deferred as a separate epic. **Distinct axis from fs-2:** fs-2's `language` is per-BOOK _content_ (which language the audio is in); this is the per-USER _interface_ language (which language the app chrome renders in). A user could run a Russian UI while reading English books, or vice-versa.
 
 - _What:_ Localize the application interface to Russian. Stand up an i18n framework (**react-i18next** — user-confirmed choice) + a per-user `UserSettings.uiLanguage` preference with a language switcher in Account management, then translate the high-traffic surfaces first (top nav, account, upload/confirm, listen, cast) and grow coverage incrementally. Ground truth at capture: **no i18n library today**, ~1,500 hardcoded user-facing strings across ~82 components (densest: `account.tsx` ~92, `profile-drawer.tsx` ~79, `voices.tsx` ~68, `analysing.tsx` ~59, `cast.tsx` ~58, `export-audiobook.tsx` ~52). Centralisable copy already lives in `src/data/{walkthroughs,analysis-phases,regen-reasons,match-factors,listener-apps}.ts`. Locale-sensitive formatting is minimal (`src/lib/time.ts` durations only; no currency/date pickers).
 - _Acceptance:_ Account → Language switcher flips `uiLanguage` and persists through `PUT /api/user/settings`; the core surfaces (top nav, account, upload, confirm-metadata, listen, cast) render in Russian when `uiLanguage='ru'` and English otherwise; switching is live (no reload); a missing translation key falls back to English (visible, not a crash). New paired Vitest on the i18n provider wiring + the account switcher; one Playwright spec asserting the switch flips a representative surface. Bulk-string coverage tracked as incremental follow-up, not a single PR.
@@ -208,7 +208,7 @@ Source: plan 114 ship (2026-05-26). The profile-regen preview gate's full click-
 
 #### `fe-16` — Library/cast language UX polish (fs-2 follow-up)
 
-Source: [plan 160](features/160-fs2-multilanguage.md) ship (2026-06-01) — Out of scope. The fs-2 language half shipped the never-cross-language invariant + core UX (detection, confirm selector, cast Qwen-lock, Listen badge), deferring two discovery/polish surfaces.
+Source: [plan 162](features/162-fs2-multilanguage.md) ship (2026-06-01) — Out of scope. The fs-2 language half shipped the never-cross-language invariant + core UX (detection, confirm selector, cast Qwen-lock, Listen badge), deferring two discovery/polish surfaces.
 
 - _What:_ Two small frontend additions. **(a) Library En/Ru filter pill** — a dedicated language pill set in `src/components/library/library-chrome.tsx` (rendered only when the library holds >1 language) that ANDs with the existing search/tag filter via `filterBooks` in `src/store/library-slice.ts` (keep it OUT of the user-tag set — language is structured data, not a free-text tag). **(b) Cast-wide banner + Qwen auto-load** — on `#/cast` for a non-English book, a banner ("Design a Qwen voice for the narrator and every speaking character — undesigned characters can't be generated") plus auto-loading Qwen on cast-view entry (reuse `ModelControlPill`/qwen-install machinery), so the user isn't blocked on a manual load.
 - _Acceptance:_ With ≥1 English and ≥1 Russian book imported, the library shows an En/Ru pill set that filters correctly and ANDs with a tag filter; a single-language library shows no pill. Opening a non-English book's cast view shows the banner and triggers a Qwen load. New Vitest on the `filterBooks` language combination + the banner render.
