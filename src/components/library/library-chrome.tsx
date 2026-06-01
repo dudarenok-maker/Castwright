@@ -14,6 +14,7 @@ import { IconPlus, IconFolder, IconCopy, IconClose, IconDownload } from '../../l
 import { SectionLabel, MixedHeading, PrimaryButton } from '../primitives';
 import { formatHours } from '../../lib/time';
 import { StatTile } from '../stat-tiles';
+import { languageLabel } from '../../store/library-slice';
 import type { WorkspaceInfo } from '../../lib/api';
 
 type Filter = 'all' | 'in_progress' | 'complete';
@@ -53,6 +54,12 @@ interface Props {
   allTags: string[];
   activeTags: string[];
   toggleTag: (tag: string) => void;
+  /** fe-16 — distinct languages present across the library (English first),
+      from `selectPresentLanguages`. The language pill row renders ONLY when
+      this holds >1 entry; a single-language library shows no pills. */
+  presentLanguages: string[];
+  activeLanguages: string[];
+  toggleLanguage: (lang: string) => void;
   clearFilters: () => void;
 }
 
@@ -72,10 +79,14 @@ export function LibraryChrome({
   allTags,
   activeTags,
   toggleTag,
+  presentLanguages,
+  activeLanguages,
+  toggleLanguage,
   clearFilters,
 }: Props) {
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const hasActiveFilter = search.trim().length > 0 || activeTags.length > 0;
+  const hasActiveFilter =
+    search.trim().length > 0 || activeTags.length > 0 || activeLanguages.length > 0;
   return (
     <>
       <div className="mb-8 flex items-end justify-between gap-6 flex-wrap">
@@ -177,6 +188,34 @@ export function LibraryChrome({
                 }`}
               >
                 {tag}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* fe-16 — language filter pills. Only rendered when the library holds
+          more than one language; ANDs with the search + tag filters above. */}
+      {presentLanguages.length > 1 && (
+        <div
+          className="flex items-center gap-2 mb-6 flex-wrap"
+          data-testid="library-language-chip-row"
+        >
+          {presentLanguages.map((lang) => {
+            const active = activeLanguages.includes(lang);
+            return (
+              <button
+                key={lang}
+                onClick={() => toggleLanguage(lang)}
+                data-testid={`language-filter-chip-${lang}`}
+                aria-pressed={active}
+                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
+                  active
+                    ? 'bg-purple-deep text-white border-purple-deep'
+                    : 'bg-white text-ink/70 border-ink/10 hover:bg-ink/[0.04]'
+                }`}
+              >
+                {languageLabel(lang)}
               </button>
             );
           })}
