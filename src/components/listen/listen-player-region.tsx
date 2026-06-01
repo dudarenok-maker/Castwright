@@ -241,6 +241,19 @@ function ChapterListenRow({
   const totalSec = live?.durationSec || parseDuration(chapter.duration);
   const elapsedSec = live ? Math.min(live.currentSec, totalSec) : 0;
   const progress = totalSec ? elapsedSec / totalSec : 0;
+  /* A chapter only has audio to play or share once it's `done` — the
+     other states (queued / in_progress / failed) carry a placeholder
+     "0:00" duration and no file. Gate the Play + Share affordances on
+     this so the row reads as inert until generation lands, and surface
+     the state instead of a misleading "0:00". Regenerate stays active —
+     on a non-done chapter it can kick off (or retry) generation. */
+  const hasAudio = chapter.state === 'done';
+  const statusLabel =
+    chapter.state === 'in_progress'
+      ? 'Generating…'
+      : chapter.state === 'failed'
+        ? 'Failed'
+        : 'Queued';
   return (
     <div
       data-testid={`chapter-row-${chapter.id}`}
@@ -257,8 +270,21 @@ function ChapterListenRow({
         <div className="flex items-center gap-3 min-w-0 md:contents">
           <button
             onClick={onPlay}
-            aria-label={isPlaying ? `Pause chapter ${chapter.id}` : `Play chapter ${chapter.id}`}
-            className={`shrink-0 w-11 h-11 md:w-9 md:h-9 rounded-full grid place-items-center transition-all ${isPlaying ? 'bg-ink text-canvas' : 'bg-canvas border border-ink/15 text-ink hover:bg-ink hover:text-canvas'}`}
+            disabled={!hasAudio}
+            aria-label={
+              !hasAudio
+                ? `Chapter ${chapter.id} not yet generated`
+                : isPlaying
+                  ? `Pause chapter ${chapter.id}`
+                  : `Play chapter ${chapter.id}`
+            }
+            className={`shrink-0 w-11 h-11 md:w-9 md:h-9 rounded-full grid place-items-center transition-all ${
+              !hasAudio
+                ? 'bg-canvas border border-ink/10 text-ink/30 opacity-50 cursor-not-allowed'
+                : isPlaying
+                  ? 'bg-ink text-canvas'
+                  : 'bg-canvas border border-ink/15 text-ink hover:bg-ink hover:text-canvas'
+            }`}
           >
             {isPlaying ? (
               <IconPause className="w-3.5 h-3.5" />
@@ -299,7 +325,11 @@ function ChapterListenRow({
             cells. */}
         <div className="flex items-center gap-2 md:contents pl-14 md:pl-0">
           <span className="text-sm tabular-nums text-ink/60 md:text-right flex-1 md:flex-none">
-            {isPlaying ? (
+            {!hasAudio ? (
+              <span className={chapter.state === 'failed' ? 'text-rose-500' : 'text-ink/40'}>
+                {statusLabel}
+              </span>
+            ) : isPlaying ? (
               <span className="text-ink font-semibold">
                 {formatTime(elapsedSec)} / {formatTime(totalSec)}
               </span>
@@ -327,10 +357,19 @@ function ChapterListenRow({
             </button>
             <button
               onClick={onShareClip}
-              title="Share a 30-second clip"
-              aria-label={`Share clip of chapter ${chapter.id}`}
+              disabled={!hasAudio}
+              title={hasAudio ? 'Share a 30-second clip' : 'No audio to share yet'}
+              aria-label={
+                hasAudio
+                  ? `Share clip of chapter ${chapter.id}`
+                  : `Chapter ${chapter.id} has no audio to share yet`
+              }
               data-testid={`chapter-row-${chapter.id}-share-clip`}
-              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/[0.04]"
+              className={`grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full ${
+                hasAudio
+                  ? 'text-ink/40 hover:text-magenta hover:bg-ink/[0.04]'
+                  : 'text-ink/20 opacity-50 cursor-not-allowed'
+              }`}
             >
               <IconShare className="w-4 h-4" />
             </button>
