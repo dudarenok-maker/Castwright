@@ -189,6 +189,73 @@ describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detectio
        source of truth for the chapter list. */
     expect((result as unknown as { chapters?: unknown }).chapters).toBeUndefined();
   });
+
+  /* fs-2 — a non-English book injects a language preamble into the system
+     instruction so attribution respects the script's conventions. */
+  it("prepends a Russian preamble to the system instruction when call.language is 'ru'", async () => {
+    generateContentStream.mockResolvedValue(
+      asyncFromArray(chunksOf(PER_CHAPTER_RESPONSE, 64).map((text) => ({ text }))),
+    );
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+    await analyzer.runStage1Chapter('m_test', 7, '# prompt', { language: 'ru' });
+    const sys = generateContentStream.mock.calls[0][0].config.systemInstruction as string;
+    expect(sys).toMatch(/manuscript text is in Russian/i);
+    expect(sys).toMatch(/VERBATIM/);
+  });
+
+  it("omits the language preamble for an English book (call.language 'en' or absent)", async () => {
+    for (const language of ['en', undefined]) {
+      generateContentStream.mockReset();
+      generateContentStream.mockResolvedValue(
+        asyncFromArray(chunksOf(PER_CHAPTER_RESPONSE, 64).map((text) => ({ text }))),
+      );
+      const { GeminiAnalyzer } = await import('./gemini.js');
+      const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+      await analyzer.runStage1Chapter('m_test', 7, '# prompt', { language });
+      const sys = generateContentStream.mock.calls[0][0].config.systemInstruction as string;
+      expect(sys).not.toMatch(/manuscript text is in/i);
+    }
+  });
+});
+
+describe('fs-2 — languagePreamble + estimateInputTokens', () => {
+  it('languagePreamble: Russian for ru, empty for en/absent', async () => {
+    const { languagePreamble } = await import('./gemini.js');
+    expect(languagePreamble('ru')).toMatch(/Russian/);
+    expect(languagePreamble('ru')).toMatch(/«…»|em-dash/);
+    expect(languagePreamble('ru-RU')).toMatch(/Russian/);
+    expect(languagePreamble('en')).toBe('');
+    expect(languagePreamble(undefined)).toBe('');
+    expect(languagePreamble('')).toBe('');
+  });
+
+  it('buildSystemInstruction appends the preamble only for non-English', async () => {
+    const { buildSystemInstruction } = await import('./gemini.js');
+    expect(buildSystemInstruction('SKILL', 'ru')).toMatch(/manuscript text is in Russian/i);
+    expect(buildSystemInstruction('SKILL', 'en')).not.toMatch(/manuscript text is in/i);
+    expect(buildSystemInstruction('SKILL')).not.toMatch(/manuscript text is in/i);
+  });
+
+  it('estimateInputTokens: Latin uses chars/4, Cyrillic ~chars/2.5, mixed between', async () => {
+    const { estimateInputTokens } = await import('./gemini.js');
+    const latin = 'a'.repeat(1000);
+    const cyrillic = 'я'.repeat(1000);
+    const mixed = 'a'.repeat(500) + 'я'.repeat(500);
+    const wrap = (text: string) => [{ role: 'user' as const, parts: [{ text }] }];
+
+    const latinEst = estimateInputTokens('', wrap(latin));
+    const cyrEst = estimateInputTokens('', wrap(cyrillic));
+    const mixedEst = estimateInputTokens('', wrap(mixed));
+
+    /* Latin: 1000/4 + 1000 = 1250 (regression pin — unchanged from pre-fs-2). */
+    expect(latinEst).toBe(1250);
+    /* All-Cyrillic: 1000/2.5 + 1000 = 1400. */
+    expect(cyrEst).toBe(1400);
+    /* Mixed lands strictly between the two. */
+    expect(mixedEst).toBeGreaterThan(latinEst);
+    expect(mixedEst).toBeLessThan(cyrEst);
+  });
 });
 
 describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
