@@ -32,6 +32,9 @@ vi.mock('../tts/index.js', async (importOriginal) => {
    SSE tests exercise the route, not the (separately-tested) readiness gate. */
 vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   ensureSidecarEngineReady: async () => undefined,
+  /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
+     consumer) is a no-op here. */
+  SIDECAR_ENGINES: new Set(),
 }));
 
 const AUTHOR = 'Test Author';
