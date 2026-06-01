@@ -65,7 +65,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Full history so the scope detector can diff the PR head against
           # its base commit. A shallow clone wouldn't have the base reachable.
@@ -163,7 +163,7 @@ jobs:
       - name: Cache Playwright browsers
         if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
         id: playwright-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
