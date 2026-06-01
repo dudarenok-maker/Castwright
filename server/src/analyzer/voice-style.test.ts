@@ -68,6 +68,23 @@ describe('buildVoiceStylePrompt', () => {
     expect(prompt).toMatch(/Output ONLY/i);
   });
 
+  it('requests the official Qwen VoiceDesign format (pitch, purpose clause, objectivity)', async () => {
+    /* Plan 160: the persona must mirror Qwen3-TTS's VoiceDesign guidance —
+       a 15–40-word descriptive sentence covering pitch + the other voice
+       dimensions and ending with a purpose/scenario clause, written as
+       objective voice qualities rather than the character's feelings/plot. */
+    const { buildVoiceStylePrompt } = await import('./voice-style.js');
+    const prompt = buildVoiceStylePrompt(BIANA);
+    /* Pitch is the dimension the old prompt omitted. */
+    expect(prompt).toMatch(/pitch/i);
+    /* A purpose/scenario clause is requested + exemplified. */
+    expect(prompt).toMatch(/audiobook narration|character dialogue/i);
+    /* Objectivity principle: voice qualities, not feelings/backstory/plot. */
+    expect(prompt).toMatch(/NOT the character's feelings/i);
+    /* The 15–40-word length band replaces the old "~30 words" cap. */
+    expect(prompt).toMatch(/15\s*[–-]\s*40 words/);
+  });
+
   it('caps the quote block so a chatty character cannot blow out the prompt', async () => {
     const { buildVoiceStylePrompt } = await import('./voice-style.js');
     const chatty: CastCharacter = {
