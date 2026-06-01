@@ -115,6 +115,16 @@ The Qwen generation forward leaks committed-private host RAM monotonically: ever
 - _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved.
 - _Keep this item open_ until a full-book run holds a flat committed floor with zero recycles; on a pass, note "recycle now a safety net, not load-bearing" and close.
 
+### `ops-8` — Bump GitHub Actions off the deprecated Node-20 runtime
+
+Source: net-new (2026-06-01), surfaced from the v1.5.1 release `cross-os.yml` run annotations.
+
+- _What:_ GitHub is **forcing Node-20 JS actions to run on Node 24 on 2026-06-16** and **removing Node 20 from the runners on 2026-09-16**. Our workflows pin Node-20-runtime action majors — the v1.5.1 cross-OS run flagged `actions/checkout@v4`, `actions/setup-node@v4`, and `actions/cache@v4` (audit every `.github/workflows/*.yml` for others). Bump each to the major that ships the Node-24 runtime (`actions/checkout@v5`, `actions/setup-node@v5`, the current `actions/cache` line, etc.) across all workflows (`verify.yml`, `release.yml`, `cross-os.yml`, the PR-title-lint workflow, the docs-skip config, …). Confirm each bumped action's inputs are still compatible.
+- _Acceptance:_ a fresh run of each workflow shows **no "Node.js 20 actions are deprecated" annotations**; verify / release / cross-OS stay green on the bumped versions.
+- _Key files:_ `.github/workflows/*.yml` (every workflow that uses `checkout` / `setup-node` / `cache` or other JS actions).
+- _Depends on:_ none.
+- _Benefit (technical):_ avoids CI breaking when Node 20 leaves the runners (2026-09-16) and removes the forced-migration uncertainty on 2026-06-16. Cheap, deadline-driven hygiene — do it before mid-June.
+
 ---
 
 ## Could — nice to have, low-cost wins
