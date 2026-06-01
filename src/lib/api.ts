@@ -824,6 +824,19 @@ function buildNorthernStarMockState(): BookStateResponse {
    Eliza partner (resolves `v_eliza_cc` via voiceId) plus First Mate Greene
    (the existing `v_navigator` cc voice) so `findCharacterForVoice` lands a
    match on the foreign side. */
+/* fe-15 — Carrick's Compass carries BOTH a non-null cast AND chapters its
+   cast speaks in, so the profile-regen preview flow (change a voice →
+   Regenerate this character → Preview → A/B player) is e2e-drivable under
+   mocks. `eliza_cc` speaks in CH1/2/3 (CH1 is the preview sample, CH2/3 fan
+   out on Approve); `greene` speaks in CH2/3/4. completedSlugs stays empty so
+   the chapters hydrate `queued` and mockStreamGeneration can drive them. */
+const CC_CHAPTERS: BookStateJson['chapters'] = [
+  { id: 1, title: 'Casting Off', slug: '01-casting-off', duration: '34:12' },
+  { id: 2, title: 'Dead Reckoning', slug: '02-dead-reckoning', duration: '41:55' },
+  { id: 3, title: 'The Lee Shore', slug: '03-the-lee-shore', duration: '38:07' },
+  { id: 4, title: 'Landfall', slug: '04-landfall', duration: '29:44' },
+];
+
 function buildCarricksCompassMockState(): BookStateResponse {
   const now = new Date().toISOString();
   return {
@@ -837,7 +850,7 @@ function buildCarricksCompassMockState(): BookStateResponse {
       isStandalone: false,
       manuscriptFile: 'manuscript.epub',
       castConfirmed: true,
-      chapters: [],
+      chapters: CC_CHAPTERS,
       coverGradient: ['#D4A04E', '#7B5A26'],
       createdAt: now,
       updatedAt: now,
@@ -873,7 +886,7 @@ function buildCarricksCompassMockState(): BookStateResponse {
     manuscriptEdits: null,
     revisions: null,
     completedSlugs: [],
-    chapterCharacters: undefined,
+    chapterCharacters: { 1: ['eliza_cc'], 2: ['eliza_cc', 'greene'], 3: ['eliza_cc', 'greene'], 4: ['greene'] },
     changeLog: null,
     analysis: undefined,
   };
@@ -1322,7 +1335,13 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
      per-book endpoint shape. The dev fixture seeds events for two
      books — the modal's multi-book grouping only renders if the slice
      accumulates entries from each book separately, which is what
-     happens when `applyPoll` is called once per book. */
+     happens when `applyPoll` is called once per book.
+
+     NOTE: `pending` is returned for every book (the slice's `applyPoll`
+     replaces `pending` wholesale regardless of bookId, so scoping it here
+     would let a background poll of an empty book wipe the active book's
+     pending). The fe-15 profile-regen-preview spec clears `pending` itself
+     before opening its preview stub to avoid the phantom-revision collision. */
   return {
     pending: PENDING_REVISIONS,
     drift: VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),

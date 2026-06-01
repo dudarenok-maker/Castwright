@@ -28,6 +28,9 @@ function renderChrome(
     allTags: ['draft', 'favourite', 'series-1'],
     activeTags: [],
     toggleTag: vi.fn(),
+    presentLanguages: ['en'],
+    activeLanguages: [],
+    toggleLanguage: vi.fn(),
     clearFilters: vi.fn(),
   };
   const props = { ...defaults, ...overrides };
@@ -74,6 +77,38 @@ describe('LibraryChrome — tag-chip row (plan 73)', () => {
     renderChrome({ toggleTag });
     fireEvent.click(screen.getByTestId('tag-filter-chip-favourite'));
     expect(toggleTag).toHaveBeenCalledWith('favourite');
+  });
+});
+
+describe('LibraryChrome — language-chip row (fe-16)', () => {
+  it('omits the row when only one language is present', () => {
+    renderChrome({ presentLanguages: ['en'] });
+    expect(screen.queryByTestId('library-language-chip-row')).not.toBeInTheDocument();
+  });
+
+  it('renders one pill per language with human labels when >1 language is present', () => {
+    renderChrome({ presentLanguages: ['en', 'ru'] });
+    expect(screen.getByTestId('library-language-chip-row')).toBeInTheDocument();
+    expect(screen.getByTestId('language-filter-chip-en')).toHaveTextContent('English');
+    expect(screen.getByTestId('language-filter-chip-ru')).toHaveTextContent('Русский');
+  });
+
+  it('marks the active language pill with aria-pressed=true', () => {
+    renderChrome({ presentLanguages: ['en', 'ru'], activeLanguages: ['ru'] });
+    expect(screen.getByTestId('language-filter-chip-ru')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('language-filter-chip-en')).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('fires toggleLanguage when a pill is clicked', () => {
+    const toggleLanguage = vi.fn();
+    renderChrome({ presentLanguages: ['en', 'ru'], toggleLanguage });
+    fireEvent.click(screen.getByTestId('language-filter-chip-ru'));
+    expect(toggleLanguage).toHaveBeenCalledWith('ru');
+  });
+
+  it('shows the clear-filters affordance when a language is active', () => {
+    renderChrome({ presentLanguages: ['en', 'ru'], activeLanguages: ['ru'] });
+    expect(screen.getByTestId('library-clear-filters')).toBeInTheDocument();
   });
 });
 

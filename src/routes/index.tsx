@@ -594,6 +594,7 @@ function ReadyViewSwitch({
           setCharacters={setCharacters}
           library={voices}
           title={projectTitle}
+          bookLanguage={activeBook?.language ?? 'en'}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}
           onShowMatchDetail={(id) => dispatch(uiActions.setMatchDetailFor(id))}
           driftEvents={drift}
