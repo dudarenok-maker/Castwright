@@ -261,6 +261,68 @@ To bypass the hook in a genuine emergency, use `git commit --no-verify` — but
 the pre-push `verify` gate will still run the regression test for the validator,
 and the bypassed commit will need fixing before any PR is reviewed.
 
+## Issues
+
+GitHub issues hold the **detail** for tracked work and are the home for **bug
+tracking**. [`docs/BACKLOG.md`](docs/BACKLOG.md) stays the thin, prioritized
+MoSCoW planning view; the issue is where the spec, discussion, and PR-linking
+live. Regression plan: [docs/features/165-github-issues-backlog-integration.md](docs/features/165-github-issues-backlog-integration.md).
+
+### Backlog items ↔ issues
+
+- **One backlog item ↔ one issue.** The issue title leads with the permanent
+  `<prefix>-<n>` ID: `<prefix>-<n> — <one-line what>` (e.g. `srv-1 — Merge
+  journal for alias un-link`). The ID stays the durable cross-reference in
+  code/commits/plans; the issue `#NN` is just the auto-close hook.
+- **The issue body is canonical** — What / Acceptance / Key files / Depends on /
+  Benefit. `docs/BACKLOG.md` keeps a thin summary + the issue link for
+  Must/Should/Could, and a one-liner for Won't.
+- File via the **Backlog item** form (`.github/ISSUE_TEMPLATE/backlog-item.yml`,
+  auto-labels `type:feature`), then add `area:<prefix>` + `moscow:<tier>`.
+
+### Bugs
+
+Bugs are **out-of-band** — file the **Bug** form (auto-labels `bug`), keep a
+plain descriptive title (no `<prefix>-<n>`), and leave them **off**
+`docs/BACKLOG.md`. They still get triage, history, and PR-linking.
+
+### Labels
+
+Three axes + two helpers, version-controlled in `scripts/gh-labels.mjs` (run
+`node scripts/gh-labels.mjs --apply` to create/reconcile them):
+
+- `area:fe` · `area:srv` · `area:side` · `area:ops` · `area:fs`
+- `moscow:must` · `moscow:should` · `moscow:could` · `moscow:wont`
+- `type:feature` · `type:chore` · `bug`
+- `needs-plan` (owes a `docs/features/NN-*.md`) · `tracking` (watchdog, no direct fix)
+
+### Plan vs. no-plan
+
+Substantial / cross-cutting issues still get a numbered `docs/features/NN-*.md`
+regression plan (label the issue `needs-plan`; the plan cites the issue, the
+issue links the plan). Small / localized issues skip the plan — the issue body
++ a paired test is the spec, and the work goes straight issue → PR.
+
+### Linking from PRs
+
+Because the merge policy lands the PR description on `main`, a closing keyword
+**in the PR body** auto-closes the issue on merge:
+
+- Full delivery → `Closes #NN` in `## Summary`.
+- Partial / one wave of multi-wave work → `Refs #NN` (no auto-close); the final
+  wave's PR uses `Closes #NN`.
+- Bug fix → `Closes #NN` (the bug issue).
+
+Keep citing the `<prefix>-<n>` ID in commit **subjects** as before — the ID is
+the durable reference, `#NN` is the GitHub hook.
+
+### Server-side enforcement
+
+Issue templates + labels are a **soft convention** (the same posture as the
+commit/PR-title rules). On the Free plan there's no Actions budget to spend on
+label-lint or required-field enforcement beyond the forms themselves; the
+`blank_issues_enabled: false` config funnels every issue through a template.
+
 ## Pull requests
 
 Every change that lands on `main` goes through a GitHub PR. The template, the
@@ -299,6 +361,10 @@ Two required sections:
 2. **`## Test plan`** — checklist of what was run and what reviewers should
    look at. Always start with `- [ ] npm run verify — green` (the pre-push
    hook will fail your push if it isn't anyway).
+
+If the PR delivers or advances a backlog/bug issue, link it in `## Summary`:
+`Closes #NN` (full delivery) or `Refs #NN` (partial). The keyword in the PR
+body auto-closes the issue on merge. See [Issues](#issues).
 
 The template's HTML comments are guidance — strip them before submitting, or
 leave them; they don't render. The Summary and Test plan headings are the
