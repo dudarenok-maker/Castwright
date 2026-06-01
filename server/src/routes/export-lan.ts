@@ -11,8 +11,10 @@
      mostly doesn't advertise these to phones)
 
    Order matches `os.networkInterfaces()` enumeration — the modal picks
-   the first. Server defaults to listening on all interfaces (Node's
-   `app.listen(port)` binds 0.0.0.0), so any of these IPs reaches us.
+   the first. In LAN HTTPS mode the server binds all interfaces (0.0.0.0,
+   see bind-host.ts), so any of these IPs reaches us. (Plain HTTP dev mode
+   binds loopback only since srv-19 — these LAN URLs are for the LAN_HTTPS
+   flow, which is exactly when this endpoint is meant to be used.)
 
    Plan 81 mobile + tablet support: when LAN_HTTPS=1 is set, the protocol
    becomes `https` and the default port becomes 8443 to match Node's
