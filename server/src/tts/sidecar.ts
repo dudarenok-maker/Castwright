@@ -24,7 +24,7 @@ import type {
   TtsEngine,
 } from './index.js';
 import { fetch as undiciFetch, Agent } from 'undici';
-import { sidecarModelId } from './index.js';
+import { sidecarModelId } from './model-keys.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
 
