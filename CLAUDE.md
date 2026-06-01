@@ -297,8 +297,13 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   (nvidia-smi), the runner warns and throttles test concurrency
   (`LOW_CONCURRENCY=1`); `SKIP_CONTENTION_CHECK=1` disables the probe.
   `npm run verify:fast` (no scope filter) remains for a manual full fast run.
-- **pre-push** (`.husky/pre-push`): runs `npm run verify` — typecheck +
-  all tests + e2e + build. Refuses the push if any step fails.
+- **pre-push** (`.husky/pre-push`): first runs `scripts/guard-protected-push.mjs`,
+  which refuses a force-push or deletion of a protected branch (`main`) before
+  the battery even starts (local stand-in for GitHub branch protection, which
+  this private repo's plan can't enable server-side — see
+  [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
+  bypass intentionally with `git push --no-verify`). Then runs `npm run verify`
+  — typecheck + all tests + e2e + build. Refuses the push if any step fails.
 
 `npm run verify` is cache-aware (see
 [docs/features/archive/50-verify-cache.md](docs/features/archive/50-verify-cache.md)):
