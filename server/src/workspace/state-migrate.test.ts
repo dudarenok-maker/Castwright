@@ -111,4 +111,18 @@ describe('migrateStateJson', () => {
        only pre-v1 case. A schema = 0 would be a user-corrupted file. */
     expect(() => migrateStateJson({ ...baseState, schema: 0 })).toThrow(/No migration registered/);
   });
+
+  it('preserves the fs-2 language field without bumping the schema (additive field)', () => {
+    /* `language` is an additive optional field — per the plan-27 rename-vs-add
+       policy it does NOT bump CURRENT_STATE_SCHEMA. A legacy file with no
+       language still loads (reads back 'en' at the bookStateLanguage seam);
+       a 'ru' value round-trips through migrate + stamp unchanged. */
+    const legacy = migrateStateJson({ ...baseState });
+    expect(legacy.language).toBeUndefined();
+    expect(legacy.schema).toBe(1);
+
+    const russian = stampStateSchema(migrateStateJson({ ...baseState, language: 'ru' }));
+    expect(russian.language).toBe('ru');
+    expect(russian.schema).toBe(1);
+  });
 });
