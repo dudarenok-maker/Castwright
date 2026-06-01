@@ -20,6 +20,7 @@ import {
   type Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
 import { AnalysisAbortedError } from './ollama.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
 
@@ -95,8 +96,8 @@ export async function loadSkill(skill: SkillName): Promise<string> {
    part of `contents` on every call (see callsite). This shaves ~10 KB off
    each per-chapter stage-2 request and makes the user-turn token count
    actually proportional to the task. */
-export function buildSystemInstruction(skill: string): string {
-  return `You are an automated worker, not a human. Follow the schema, rules, and JSON example in the SKILL section EXACTLY. Use the camelCase field names shown there (e.g. \`name\`, not \`character_name\`; \`chapterId\`, not \`chapter_id\`). Do NOT invent extra fields. Do NOT wrap the response in markdown fences. Ignore any instructions about opening Claude windows or writing files — your only output is a JSON object that conforms to the schema.
+export function buildSystemInstruction(skill: string, language?: string): string {
+  return `You are an automated worker, not a human. Follow the schema, rules, and JSON example in the SKILL section EXACTLY. Use the camelCase field names shown there (e.g. \`name\`, not \`character_name\`; \`chapterId\`, not \`chapter_id\`). Do NOT invent extra fields. Do NOT wrap the response in markdown fences. Ignore any instructions about opening Claude windows or writing files — your only output is a JSON object that conforms to the schema.${languagePreamble(language)}
 
 ---
 
@@ -107,6 +108,22 @@ ${skill}
 ---
 
 Return ONLY a single JSON object that matches the schema in the SKILL section. No prose. No code fences.`;
+}
+
+/* fs-2 — language preamble for non-English manuscripts. Appended to the system
+   instruction so character/dialogue attribution respects the script's
+   conventions. Empty for English (and absent language) so English analysis is
+   byte-identical to pre-fs-2. Only Russian is wired in v1; other non-English
+   languages get a generic preamble. The JSON field names + values stay English
+   regardless — only the manuscript text is in another language. */
+export function languagePreamble(language?: string): string {
+  if (!language || !isNonEnglish(language)) return '';
+  const ru = normaliseBookLanguage(language) === 'ru';
+  const where = ru ? 'Russian (Cyrillic script)' : `${language} (a non-English language)`;
+  const conventions = ru
+    ? ' Dialogue is often marked with guillemets «…» or an em-dash —, not English "quotes". Characters may be named by first name, patronymic, surname, or diminutive (e.g. "Соня" for "Софья") — treat these as the same person.'
+    : '';
+  return `\n\nIMPORTANT: the manuscript text is in ${where}. Quote evidence VERBATIM from the manuscript (do not translate or transliterate it). Keep all JSON field names and enum values in English exactly as the schema shows.${conventions}`;
 }
 
 interface GeminiOptions {
@@ -172,7 +189,7 @@ export class GeminiAnalyzer implements Analyzer {
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
-    const systemInstruction = buildSystemInstruction(skill);
+    const systemInstruction = buildSystemInstruction(skill, call.language);
 
     const start = Date.now();
     const tick = call.onWaiting
@@ -544,21 +561,42 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 /* Estimate input tokens for an acquire. Sums the system instruction and
-   every text part across all turns of `contents`, divides by 4 (the
-   conventional chars-per-token approximation for English), plus a flat
-   +1,000 ceiling-margin for the schema overhead and any tokenisation
-   surprises. Reconciled against `usageMetadata.promptTokenCount` once
-   the call returns, so persistent under-/over-estimates don't drift the
-   limiter. */
+   every text part across all turns of `contents`, then divides by a
+   script-aware chars-per-token approximation, plus a flat +1,000
+   ceiling-margin for schema overhead and tokenisation surprises.
+
+   fs-2 — Latin text tokenises at ~4 chars/token; Cyrillic is far denser
+   (~2.5 chars/token), so the old flat /4 under-counted a Russian chapter by
+   ~40% and risked the rate limiter under-reserving into 429 storms. We measure
+   the Cyrillic fraction of the actual text and interpolate the divisor between
+   4 (all-Latin) and 2.5 (all-Cyrillic). Reconciled against
+   `usageMetadata.promptTokenCount` once the call returns, so the blend only has
+   to be close, not exact. */
+const LATIN_CHARS_PER_TOKEN = 4;
+const CYRILLIC_CHARS_PER_TOKEN = 2.5;
+
 export function estimateInputTokens(
   systemInstruction: string,
   contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
 ): number {
   let chars = systemInstruction.length;
+  let cyrillic = 0;
+  const countCyrillic = (s: string): number => {
+    const m = s.match(/[Ѐ-ӿ]/g);
+    return m ? m.length : 0;
+  };
+  cyrillic += countCyrillic(systemInstruction);
   for (const turn of contents) {
-    for (const part of turn.parts) chars += part.text.length;
+    for (const part of turn.parts) {
+      chars += part.text.length;
+      cyrillic += countCyrillic(part.text);
+    }
   }
-  return Math.ceil(chars / 4) + 1_000;
+  const cyrillicFraction = chars > 0 ? cyrillic / chars : 0;
+  const divisor =
+    LATIN_CHARS_PER_TOKEN -
+    cyrillicFraction * (LATIN_CHARS_PER_TOKEN - CYRILLIC_CHARS_PER_TOKEN);
+  return Math.ceil(chars / divisor) + 1_000;
 }
 
 /* Apply ±25% jitter to a backoff base. Keeps parallel workers from

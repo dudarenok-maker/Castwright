@@ -361,6 +361,40 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
       .send(designBody);
     expect(res.status).toBe(404);
   });
+
+  /* fs-2 — the design proxy threads the BOOK's language to the sidecar so the
+     designed voice is baked in the right language. */
+  it("sends language:'Russian' to the sidecar for a 'ru' book", async () => {
+    const statePath = join(
+      workspaceRoot,
+      'books',
+      AUTHOR,
+      SERIES,
+      BOOK,
+      '.audiobook',
+      'state.json',
+    );
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    writeFileSync(statePath, JSON.stringify({ ...state, language: 'ru' }));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.language).toBe('Russian');
+  });
+
+  it("sends language:'English' for a book with no language field (legacy default)", async () => {
+    /* beforeEach writes the book with no `language` — the seam defaults to 'en'
+       → 'English', so legacy books keep designing English voices unchanged. */
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(200);
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.language).toBe('English');
+  });
 });
 
 describe('GET /api/books/:bookId/cast/:characterId/designed-persona', () => {

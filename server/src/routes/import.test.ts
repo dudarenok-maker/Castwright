@@ -302,6 +302,50 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
   });
 });
 
+/* fs-2 — the confirm POST persists the chosen BCP-47 language onto
+   state.json (default 'en'), so the never-cross-language routing has a
+   durable per-book source. */
+describe('POST /api/books — fs-2 language persistence', () => {
+  it("persists the confirmed language ('ru') to state.json", async () => {
+    const md = '# Russian Book\n\n## Глава Один\n\nЭто начало истории на русском языке.';
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'russian.md' });
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'Russian Author',
+      title: 'Russian Book',
+      seriesPosition: null,
+      isStandalone: true,
+      language: 'ru',
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('ru');
+  });
+
+  it("defaults language to 'en' when the confirm body omits it", async () => {
+    const md = '# English Book\n\n## Chapter One\n\nThe story opens here with several sentences.';
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'english.md' });
+    const confirmRes = await request(app).post('/api/books').send({
+      tempId: importRes.body.tempId,
+      author: 'English Author',
+      title: 'English Book',
+      seriesPosition: null,
+      isStandalone: true,
+    });
+    expect(confirmRes.status).toBe(201);
+    const stateJson = JSON.parse(
+      readFileSync(join(confirmRes.body.paths.dotAudiobook, 'state.json'), 'utf8'),
+    );
+    expect(stateJson.language).toBe('en');
+  });
+});
+
 /* Plan 105 — multer 2.x guard. The import route mounts
    `upload.single('file')` with no bespoke MulterError branch, so an
    upload riding an unexpected field name raises a MulterError

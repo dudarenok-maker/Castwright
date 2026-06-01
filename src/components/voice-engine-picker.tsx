@@ -46,6 +46,12 @@ interface Props {
       Surfaced in the "Default (…)" option so a Qwen project doesn't show a
       misleading "Default (Kokoro)". */
   defaultEngineLabel: string;
+  /** fs-2 — when true (a non-English book), the engine is hard-locked to Qwen:
+      Kokoro is English-only and can't read the book's language, so the picker
+      shows Qwen only (disabled select) + an explanatory note, and the design
+      sub-flow below is always visible. The server enforces this too — this
+      keeps the UI honest. */
+  lockedToQwen?: boolean;
 
   /* ── Qwen sub-flow (only rendered when value === 'qwen') ─────────── */
   /** The editable voice-design persona (Character.voiceStyle). */
@@ -72,6 +78,7 @@ export function VoiceEnginePicker({
   onChange,
   installedEngines,
   defaultEngineLabel,
+  lockedToQwen = false,
   persona,
   onPersonaChange,
   onRegeneratePersona,
@@ -93,17 +100,30 @@ export function VoiceEnginePicker({
       <select
         id="character-engine"
         aria-label="TTS engine for this character"
-        value={value}
+        value={lockedToQwen ? 'qwen' : value}
+        disabled={lockedToQwen}
         onChange={(e) => onChange(e.target.value as EngineChoice)}
-        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0"
+        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0 disabled:opacity-70 disabled:cursor-not-allowed"
       >
-        <option value="default">Default ({defaultEngineLabel})</option>
-        {installedEngines.map((engine) => (
-          <option key={engine} value={engine}>
-            {ENGINE_LABELS[engine]}
-          </option>
-        ))}
+        {lockedToQwen ? (
+          <option value="qwen">{ENGINE_LABELS.qwen}</option>
+        ) : (
+          <>
+            <option value="default">Default ({defaultEngineLabel})</option>
+            {installedEngines.map((engine) => (
+              <option key={engine} value={engine}>
+                {ENGINE_LABELS[engine]}
+              </option>
+            ))}
+          </>
+        )}
       </select>
+      {lockedToQwen && (
+        <p className="mt-1.5 text-[10px] text-ink/55 leading-relaxed" data-testid="qwen-locked-note">
+          This book isn't English, so every character — including the narrator — needs a designed
+          Qwen voice. English voices can't read the book's language.
+        </p>
+      )}
 
       {value === 'qwen' && (
         <div className="mt-3 space-y-3" data-testid="qwen-design-panel">
