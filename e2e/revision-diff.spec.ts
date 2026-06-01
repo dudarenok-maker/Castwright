@@ -8,25 +8,18 @@ test.describe.configure({ mode: 'serial' });
  * Revision-diff a/b audition pill — plan 20 follow-on (a/b audio for revisions).
  *
  * Asserts the integration bit Vitest can't cover: the revisions poll
- * resolves under VITE_USE_MOCKS and the pending-revisions action renders.
- * The affordance lives in the Status popover (not an inline top-bar pill), so
- * the test opens the popover (via the compact Status pill) and asserts the
- * "N revisions pending" action inside it. The full diff-player open + a/b
- * mutual exclusion logic is covered by `src/views/revision-diff.test.tsx`
- * (jsdom + spied <audio>), which doesn't need a populated chapters slice —
- * the e2e here just proves the polling effect → slice → Status-popover seam
- * is wired.
- *
- * Why not also click through to the player here: mock mode doesn't
- * hydrate chapters from the library payload (state.json hydration
- * throws in mocks), so RevisionDiffPlayer returns null when the
- * fixture's chapterId doesn't resolve. That's a separate gap to close
- * (would need either a mock chapters seed or a graceful fallback in
- * the player) — out of scope for this PR.
+ * resolves under VITE_USE_MOCKS, the pending-revisions action renders in the
+ * Status popover, AND clicking it opens the review-mode A/B player against a
+ * hydrated chapter. `sb` (Solway Bay) hydrates 18 chapters under mocks
+ * (api.ts SB_CHAPTERS) and the mock pending revision targets chapterId 3, so
+ * `RevisionDiffPlayer` resolves its chapter and mounts. The full per-segment
+ * a/b mutual-exclusion logic stays covered by `src/views/revision-diff.test.tsx`
+ * (jsdom + spied <audio>); this e2e pins the polling → slice → popover → player
+ * open seam in a real browser.
  */
 
 test.describe('revision diff a/b audition pill', () => {
-  test('pending-revisions action appears in the Status popover after opening a complete book under mocks', async ({
+  test('opens the review-mode A/B player from the Status popover after opening a complete book under mocks', async ({
     page,
   }) => {
     await page.goto('/');
@@ -45,8 +38,17 @@ test.describe('revision diff a/b audition pill', () => {
        Wait for the revisions action to appear once the mock pollRevisions call
        resolves (≈200ms) and the slice flips loaded. */
     await page.getByTestId('status-pill').click();
-    await expect(
-      page.getByTestId('status-popover-revisions').getByRole('button', { name: /\d+ revisions?/i }),
-    ).toBeVisible({ timeout: 10_000 });
+    const openRevisions = page
+      .getByTestId('status-popover-revisions')
+      .getByRole('button', { name: /\d+ revisions?/i });
+    await expect(openRevisions).toBeVisible({ timeout: 10_000 });
+
+    /* Clicking through opens the review-mode player. The chapters slice is
+       hydrated by now (Layout's getBookState effect ran on book open), so the
+       revision's chapterId resolves and the player mounts in 'review' mode. */
+    await openRevisions.click();
+    const player = page.getByTestId('revision-diff-player');
+    await expect(player).toBeVisible({ timeout: 10_000 });
+    await expect(player).toHaveAttribute('data-mode', 'review');
   });
 });

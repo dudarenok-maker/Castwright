@@ -1,7 +1,15 @@
 // Pairs with docs/features/archive/21-book-library.md and 73-library-search-tags.md
 
 import { describe, expect, it } from 'vitest';
-import { librarySlice, libraryActions, selectAllTags, filterBooks } from './library-slice';
+import {
+  librarySlice,
+  libraryActions,
+  selectAllTags,
+  filterBooks,
+  selectPresentLanguages,
+  languageLabel,
+  LANGUAGE_LABELS,
+} from './library-slice';
 import type { LibraryBook, LibraryResponse } from '../lib/types';
 
 const book = (overrides: Partial<LibraryBook> & Pick<LibraryBook, 'bookId'>): LibraryBook => ({
@@ -166,5 +174,44 @@ describe('librarySlice — filterBooks (plan 73)', () => {
   });
   it('returns [] when an active tag matches no book', () => {
     expect(filterBooks(books, '', ['nonexistent'])).toEqual([]);
+  });
+});
+
+describe('librarySlice — language filter (fe-16)', () => {
+  const books = [
+    book({ bookId: 'a', title: 'Solway Bay', author: 'Mike D', tags: ['favourite'], language: 'en' }),
+    book({ bookId: 'b', title: 'Северный путь', author: 'Mike D', tags: ['series-1'], language: 'ru' }),
+    book({ bookId: 'c', title: 'Twilight Stations', author: 'Mike D', tags: ['series-1'] }), // no language → 'en'
+    book({ bookId: 'd', title: 'Полночь', author: 'Mike D', tags: [], language: 'ru' }),
+  ];
+
+  it('passes through when no languages are active', () => {
+    expect(filterBooks(books, '', [], []).map((b) => b.bookId)).toEqual(['a', 'b', 'c', 'd']);
+  });
+  it('filters by a single active language', () => {
+    expect(filterBooks(books, '', [], ['ru']).map((b) => b.bookId)).toEqual(['b', 'd']);
+  });
+  it("treats a missing language as 'en'", () => {
+    expect(filterBooks(books, '', [], ['en']).map((b) => b.bookId)).toEqual(['a', 'c']);
+  });
+  it('ANDs language with an active tag', () => {
+    expect(filterBooks(books, '', ['series-1'], ['ru']).map((b) => b.bookId)).toEqual(['b']);
+  });
+  it('ANDs language with search', () => {
+    expect(filterBooks(books, 'twilight', [], ['ru'])).toEqual([]); // Twilight Stations is 'en'
+  });
+
+  it('selectPresentLanguages returns the distinct set, English first', () => {
+    expect(selectPresentLanguages(books)).toEqual(['en', 'ru']);
+  });
+  it('selectPresentLanguages returns a single entry for a one-language library', () => {
+    expect(selectPresentLanguages([book({ bookId: 'x' }), book({ bookId: 'y', language: 'en' })])).toEqual([
+      'en',
+    ]);
+  });
+  it('languageLabel maps known codes and falls back to the raw code', () => {
+    expect(languageLabel('en')).toBe('English');
+    expect(languageLabel('ru')).toBe(LANGUAGE_LABELS.ru);
+    expect(languageLabel('de')).toBe('de');
   });
 });

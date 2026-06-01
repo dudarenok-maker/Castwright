@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   IconLink,
   IconAlertTri,
@@ -38,12 +38,18 @@ import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { StaleAudioBanner } from '../components/stale-audio-banner';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
+import { api } from '../lib/api';
 
 interface Props {
   characters: Character[];
   setCharacters: (next: Character[] | ((prev: Character[]) => Character[])) => void;
   library: Voice[];
   title?: string | null;
+  /** fe-16 — BCP-47 language of the open book (default 'en'). When it isn't
+      English the cast view shows the Qwen design banner and auto-loads Qwen,
+      since non-English books are Qwen-locked and every speaking character
+      needs a designed voice before it can be generated. */
+  bookLanguage?: string;
   onOpenProfile: (id: string | null) => void;
   onShowMatchDetail: (id: string) => void;
   driftEvents: DriftEvent[];
@@ -93,12 +99,38 @@ export function CastView({
   setCharacters,
   library,
   title,
+  bookLanguage = 'en',
   onOpenProfile,
   onShowMatchDetail,
   driftEvents,
   onShowDrift,
 }: Props) {
   const [query, setQuery] = useState('');
+  /* fe-16 — non-English books are Qwen-locked. On entry, eagerly load Qwen so
+     the user isn't blocked on a manual ModelControlPill load before designing
+     voices. One-shot (guarded ref), gated on the install probe so we never try
+     to load an uninstalled engine, and fully non-blocking — failures stay
+     silent (the banner already tells the user what to do). */
+  const isNonEnglish = bookLanguage !== 'en';
+  const qwenAutoLoadFired = useRef(false);
+  useEffect(() => {
+    if (!isNonEnglish || qwenAutoLoadFired.current) return;
+    qwenAutoLoadFired.current = true;
+    let alive = true;
+    void (async () => {
+      try {
+        const res = await fetch('/api/qwen/detect');
+        if (!res.ok) return;
+        const body = (await res.json()) as { installed: boolean };
+        if (alive && body.installed) await api.loadSidecar({ engine: 'qwen' });
+      } catch {
+        /* Probe/load unreachable → stay silent; the banner already guides. */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [isNonEnglish]);
   /* Voice-matching status filter (multi-select, OR). Each entry is a key
      emitted by `statusFilterKeys` — a lifecycle label ('Needs voice',
      'Generated', …), 'Unset', or 'Reused'. Empty = show all. */
@@ -450,6 +482,28 @@ export function CastView({
           </button>
         )}
 
+        {/* fe-16 — non-English on-ramp. Russian (and any future non-English)
+            books render only through Qwen, so every speaking character needs a
+            designed voice. Surface that requirement up front; Qwen is being
+            loaded in the background (see the entry effect above). */}
+        {isNonEnglish && (
+          <div
+            role="status"
+            data-testid="cast-qwen-language-banner"
+            className="w-full mb-4 p-4 rounded-3xl border border-purple-deep/20 bg-purple-deep/[0.05] flex items-center gap-4 text-left"
+          >
+            <span className="w-10 h-10 rounded-full bg-purple-deep/10 grid place-items-center text-purple-deep shrink-0">
+              <IconAlertTri className="w-5 h-5" />
+            </span>
+            <p className="flex-1 text-sm text-ink/80 leading-relaxed">
+              <span className="font-bold text-ink">Design a Qwen voice for the narrator and every
+              speaking character.</span>{' '}
+              This book isn't in English, so it renders through Qwen — undesigned characters can't be
+              generated.
+            </p>
+          </div>
+        )}
+
         <div className="flex items-center gap-2 md:gap-3 mb-4">
           <div className="flex-1 min-w-0 relative">
             <IconSearch className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-ink/40" />
@@ -532,6 +586,7 @@ export function CastView({
             return (
               <div
                 key={c.id}
+                data-testid={`cast-row-${c.id}`}
                 onDragOver={(e) => {
                   if (draggingVoiceId) {
                     e.preventDefault();
