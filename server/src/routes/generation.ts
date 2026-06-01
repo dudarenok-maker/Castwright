@@ -49,7 +49,11 @@ import {
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
-import { getCachedUserSettings, getLastKnownQwenInstallState } from '../workspace/user-settings.js';
+import {
+  getCachedUserSettings,
+  getLastKnownQwenInstallState,
+  getResolvedSidecarUrl,
+} from '../workspace/user-settings.js';
 import {
   audioExtForFormat,
   encodePcmToAudio,
@@ -68,7 +72,7 @@ import {
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
-import { ensureSidecarEngineReady } from '../tts/ensure-sidecar-loaded.js';
+import { ensureSidecarEngineReady, SIDECAR_ENGINES } from '../tts/ensure-sidecar-loaded.js';
 import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 
@@ -88,6 +92,42 @@ export const generationRouter = Router();
    so it is excluded here and still surfaces immediately (only a restart fixes
    a poisoned context). */
 const MAX_RECYCLE_RECOVERIES = 2;
+
+/* side-11 item 2 — soft recycle at the chapter boundary. The sidecar raises
+   `recycle_pending` in /health once committed-private memory crosses the SOFT
+   threshold (SIDECAR_RECYCLE_SOFT_MB, below the hard watchdog ceiling). Reading
+   it between chapters lets us trigger a CLEAN recycle (POST /recycle → drain →
+   respawn) at a boundary — earlier than the hard ceiling (sustained RTF) and
+   without cutting a chapter mid-synth. Best-effort throughout: a flaky/timed-out
+   health read or recycle POST must NEVER block or fail generation — the hard
+   watchdog remains the backstop. */
+const BOUNDARY_RECYCLE_PROBE_TIMEOUT_MS = 2_000;
+
+async function getSidecarRecyclePending(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), BOUNDARY_RECYCLE_PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${getResolvedSidecarUrl()}/health`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    if (!res.ok) return false;
+    const body = (await res.json().catch(() => ({}))) as { recycle_pending?: unknown };
+    return body.recycle_pending === true;
+  } catch {
+    return false; // unreachable / timeout — let generation proceed
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function triggerSidecarRecycle(): Promise<void> {
+  try {
+    await fetch(`${getResolvedSidecarUrl()}/recycle`, { method: 'POST' });
+  } catch {
+    /* best-effort — the hard watchdog still recycles if this never lands */
+  }
+}
 
 /* Per-chapter job tracker. Each entry is a RunningJob: one AbortController +
    a Set of currently-attached SSE subscribers. Designed so the server-side
@@ -1423,6 +1463,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   for (const chapter of targetChapters) {
     if (controller.signal.aborted || cascadeFatal) break;
     await processOneChapter(chapter);
+    /* side-11 item 2 — at this chapter boundary, if the sidecar has crossed the
+       SOFT committed threshold, trigger a CLEAN recycle now (drain → respawn)
+       instead of waiting for the hard watchdog to fire mid-chapter. Awaiting the
+       POST guarantees the sidecar's 503 fence is up before this job's SSE closes,
+       so the NEXT chapter's dispatcher POST only opens afterwards and its
+       `ensureSidecarEngineReady` gate polls cleanly through the respawn. Sidecar
+       engines only (cloud engines have nothing to recycle); skipped on abort. */
+    if (!controller.signal.aborted && SIDECAR_ENGINES.has(engine)) {
+      if (await getSidecarRecyclePending()) await triggerSidecarRecycle();
+    }
   }
 
   deregisterJob(key, job);
