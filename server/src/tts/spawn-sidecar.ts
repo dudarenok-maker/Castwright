@@ -372,11 +372,20 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
        total usage is modest — the 2026-05-30 mid-run sidecar OOM (recovered by
        the srv-15 poison-respawn, but it failed 2 chapters). `expandable_segments`
        (PyTorch ≥2.1) grows/shrinks virtual segments via CUDA VMM instead, so
-       fragmented free space is reusable. Set via env because it must be in
-       place BEFORE torch initialises the CUDA context — a spawn-env default is
-       guaranteed pre-import. An explicit parent-env value wins (override / tune
-       e.g. `expandable_segments:True,max_split_size_mb:256`). */
-    PYTORCH_CUDA_ALLOC_CONF: process.env.PYTORCH_CUDA_ALLOC_CONF ?? 'expandable_segments:True',
+       fragmented free space is reusable.
+
+       NB (plan 161): `expandable_segments` is **unsupported on Windows** — torch
+       logs "expandable_segments not supported on this platform" and ignores it,
+       so plan 144's default was a silent no-op on this box while a reserved-pool
+       that crept past the card spilled into the NVIDIA sysmem fallback (RTF
+       collapse). So the default ALSO carries the cross-platform `max_split_size_mb`
+       + `garbage_collection_threshold` knobs, which DO apply on Windows and curb
+       the same fragmentation. Set via env because it must be in place BEFORE
+       torch initialises the CUDA context — a spawn-env default is guaranteed
+       pre-import. An explicit parent-env value (server/.env) wins outright. */
+    PYTORCH_CUDA_ALLOC_CONF:
+      process.env.PYTORCH_CUDA_ALLOC_CONF ??
+      'expandable_segments:True,max_split_size_mb:256,garbage_collection_threshold:0.8',
   };
 
   /* Open the sidecar's log files (tts.log / tts.err.log, the same convention

@@ -54,10 +54,16 @@ interface SidecarHealthBody {
      sidecar's committed-private memory crosses SIDECAR_RECYCLE_SOFT_MB (below the
      hard ceiling); the generation worker reads it off this poll and triggers a
      clean boundary recycle. `committed_mb` is the figure behind that decision
-     (may be null when psutil can't read it). Absent on an older sidecar → false
-     / null below. */
+     (may be null when psutil can't read it). `recycle_pending` ALSO flips true
+     when reserved VRAM crosses the VRAM soft ceiling (plan 159) — the server
+     can't tell the two pressures apart and doesn't need to; the boundary recycle
+     is identical. `vram_reserved_mb` / `vram_total_mb` are the VRAM figures
+     behind that decision (observability). Absent on an older sidecar → false /
+     null below. */
   recycle_pending?: boolean;
   committed_mb?: number | null;
+  vram_reserved_mb?: number | null;
+  vram_total_mb?: number | null;
 }
 
 const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
@@ -141,6 +147,9 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
          for an older sidecar that omits them). */
       recyclePending: body.recycle_pending === true,
       committedMb: typeof body.committed_mb === 'number' ? body.committed_mb : null,
+      vramReservedMb:
+        typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
+      vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
     });
   } catch (e) {
     clearTimeout(timer);
