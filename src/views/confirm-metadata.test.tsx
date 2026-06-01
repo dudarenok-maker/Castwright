@@ -205,6 +205,54 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
   });
 });
 
+describe('ConfirmMetadataView — fs-2 language selector', () => {
+  function renderWithCandidate(c: Partial<ImportCandidate>) {
+    const candidateOverride: ImportCandidate = { ...candidate, ...c };
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        library: librarySlice.reducer,
+        ui: uiSlice.reducer,
+      },
+      preloadedState: {
+        manuscript: { ...manuscriptSlice.getInitialState(), importCandidate: candidateOverride },
+        library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <ConfirmMetadataView />
+      </Provider>,
+    );
+  }
+
+  it('defaults the selector to English for a Latin manuscript (no chip)', () => {
+    renderWithCandidate({ sourceText: 'The quick brown fox jumps over the lazy dog.' });
+    const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
+    expect(select.value).toBe('en');
+    expect(screen.queryByText(/auto-detected russian/i)).not.toBeInTheDocument();
+  });
+
+  it('auto-detects Russian from Cyrillic text and shows the chip + Qwen note', () => {
+    renderWithCandidate({
+      sourceText: 'Съешь же ещё этих мягких французских булок да выпей чаю. Это длинный текст.',
+    });
+    const select = screen.getByTestId('confirm-language') as HTMLSelectElement;
+    expect(select.value).toBe('ru');
+    expect(screen.getByText(/auto-detected russian/i)).toBeInTheDocument();
+    expect(screen.getByText(/designed Qwen voices/i)).toBeInTheDocument();
+  });
+
+  it('clears the auto-detected chip once the user changes the selector', async () => {
+    const user = userEvent.setup();
+    renderWithCandidate({ sourceText: 'Привет мир, это русский текст для проверки определения.' });
+    expect(screen.getByText(/auto-detected russian/i)).toBeInTheDocument();
+    const select = screen.getByTestId('confirm-language');
+    await user.selectOptions(select, 'en');
+    expect(screen.queryByText(/auto-detected russian/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('ConfirmMetadataView — input theme classes', () => {
   /* Regression: in dark mode `--ink` flips near-white, so an input without
      an explicit `bg-white text-ink` pair gets a browser-default white

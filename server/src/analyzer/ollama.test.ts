@@ -249,6 +249,33 @@ describe('OllamaAnalyzer — schema-constrained `format`', () => {
   });
 });
 
+/* fs-2 — the Ollama analyzer gets the same language preamble as Gemini (parity)
+   so a local Russian run attributes correctly. */
+describe('OllamaAnalyzer — fs-2 language preamble', () => {
+  function systemContent(callArgs: unknown): string {
+    const body = JSON.parse((callArgs as { body: string }).body) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    return body.messages.find((m) => m.role === 'system')?.content ?? '';
+  }
+
+  it("injects the Russian preamble into the system message for language 'ru'", async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    await analyzer.runStage1Chapter('m_ollama_ru', 1, '# prompt', { language: 'ru' });
+    expect(systemContent(fetchMock.mock.calls[0][1])).toMatch(/manuscript text is in Russian/i);
+  });
+
+  it("omits the preamble for an English book (language 'en' or absent)", async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    await analyzer.runStage1Chapter('m_ollama_en', 1, '# prompt', {});
+    expect(systemContent(fetchMock.mock.calls[0][1])).not.toMatch(/manuscript text is in/i);
+  });
+});
+
 describe('OllamaAnalyzer — LocalUnreachableError classification', () => {
   it('throws LocalUnreachableError when fetch fails with ECONNREFUSED', async () => {
     const fetchErr = Object.assign(new TypeError('fetch failed'), {

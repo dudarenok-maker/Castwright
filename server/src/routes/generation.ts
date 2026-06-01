@@ -26,6 +26,7 @@ import {
   audioDir,
   castJsonPath,
   manuscriptEditsJsonPath,
+  qwenVoiceSidecarPath,
   queueJsonPath,
   stateJsonPath,
 } from '../workspace/paths.js';
@@ -34,7 +35,13 @@ import { completeEntry, markAwaitingConfirm, resetEntryToQueued } from '../works
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
-import { bookStateAudioFormat, findBookByBookId, type BookStateJson } from '../workspace/scan.js';
+import {
+  bookStateAudioFormat,
+  bookStateLanguage,
+  findBookByBookId,
+  type BookStateJson,
+} from '../workspace/scan.js';
+import { isNonEnglish, sidecarLanguageName } from '../tts/language.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
@@ -514,6 +521,44 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      already-designed characters. */
   cast.characters = await hydrateCastReusedVoices(cast.characters);
 
+  /* fs-2 — never-cross-language enforcement (server-authoritative layer). For a
+     non-English book, Kokoro (English-only) cannot speak the text, so EVERY
+     character — including the narrator — must render in a designed Qwen voice.
+     We force `ttsEngine = 'qwen'` here, AFTER hydration, so a stale/hand-edited
+     cast.json or a reused English engine setting can't leak an English voice
+     into a Russian book. Undesigned characters are then blocked (not silently
+     downgraded to Kokoro) by `forbidKokoroFallback` at the synthesiseChapter
+     call below. English books are untouched (byte-identical to pre-fs-2). */
+  const bookLanguage = bookStateLanguage(state);
+  const nonEnglishBook = isNonEnglish(bookLanguage);
+  if (nonEnglishBook) {
+    const expectedLang = sidecarLanguageName(bookLanguage);
+    for (const c of cast.characters) {
+      c.ttsEngine = 'qwen';
+      /* fs-2 — force re-design on cross-language reuse. A designed Qwen voice
+         bakes its language into the on-disk manifest at design time. If a voice
+         designed under a different-language book is reused here, its baked
+         language won't match — reading the new book's text through it would be
+         wrong-language audio. Clear the override so the voice reads as
+         UNDESIGNED, which the forbidKokoroFallback gate then blocks (the user
+         re-designs it in the book's language). */
+      const designedName = c.overrideTtsVoices?.qwen?.name;
+      if (designedName) {
+        const manifest = await readJson<{ language?: string }>(
+          qwenVoiceSidecarPath(designedName),
+        ).catch(() => null);
+        if (!manifest || manifest.language !== expectedLang) {
+          if (c.overrideTtsVoices?.qwen) delete c.overrideTtsVoices.qwen;
+          console.warn(
+            `[generation] ${c.name ?? c.id}: designed Qwen voice "${designedName}" ` +
+              `is not ${expectedLang} (manifest: ${manifest?.language ?? 'missing'}) — ` +
+              `treating as undesigned, re-design required for this ${bookLanguage} book.`,
+          );
+        }
+      }
+    }
+  }
+
   /* Per-character engine routing (plan 108). Engine is no longer one global
      choice: a character may carry its own `ttsEngine` (narrator on Kokoro, a
      bespoke character on Qwen, …). Build a per-engine provider cache — the
@@ -568,6 +613,19 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      uninstalled / weights-missing / load-failed Qwen still lands here, and that
      downgrade must be visible, not silent. (Stale-build incident, 2026-05-29 —
      docs/features/archive/135-qwen-loud-fallback.md.) */
+  if (qwenUnavailable && nonEnglishBook) {
+    /* fs-2 — a non-English book CANNOT fall back to Kokoro (English-only), so an
+       unavailable Qwen engine is fatal, not an advisory. Abort the whole run
+       before any chapter renders rather than emitting cross-language garbage. */
+    const message =
+      `This ${bookLanguage} book requires Qwen, but Qwen is unavailable ` +
+      `(install-state: ${qwenState}). English Kokoro voices cannot read ` +
+      `${bookLanguage} text, so no chapter can be generated. Start/refresh the ` +
+      `TTS sidecar and load Qwen, then regenerate.`;
+    console.warn(`[generation] ${message}`);
+    send({ type: 'chapter_failed', errorReason: message });
+    return res.end();
+  }
   if (qwenUnavailable) {
     const message =
       `Qwen is unavailable (install-state: ${qwenState}), so every Qwen character ` +
@@ -1026,6 +1084,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         engine,
         resolveForEngine,
         qwenUnavailable,
+        /* fs-2 — block the Kokoro fallback on non-English books so an undesigned
+           Qwen voice fails the chapter loudly instead of reading the book's
+           language through an English voice. English books keep the graceful
+           fallback (forbidKokoroFallback = false). */
+        forbidKokoroFallback: nonEnglishBook,
+        bookLanguage,
         signal: controller.signal,
         chapterTitleNarration,
         narratorCharacterId: 'narrator',

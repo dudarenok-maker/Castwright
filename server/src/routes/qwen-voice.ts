@@ -27,7 +27,8 @@
 
 import { Router, type Request, type Response } from 'express';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { findBookByBookId } from '../workspace/scan.js';
+import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
+import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
@@ -124,6 +125,11 @@ qwenVoiceRouter.post(
     const located = await findBookByBookId(bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir } = located;
+    /* fs-2 — design the voice in the BOOK's language. The sidecar bakes this
+       into the cached voice manifest, so every later /synthesize of this
+       voice speaks the right language (synth itself carries no language).
+       A Russian book therefore yields Russian-speaking designed voices. */
+    const designLanguage = sidecarLanguageName(bookStateLanguage(located.state));
 
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
     if (!cast?.characters?.length) {
@@ -183,7 +189,7 @@ qwenVoiceRouter.post(
         body: JSON.stringify({
           voiceId,
           instruct: persona,
-          language: 'English',
+          language: designLanguage,
           calibrationText,
         }),
       });
