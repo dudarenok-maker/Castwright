@@ -5,6 +5,7 @@ import {
   aggregateStreamsByBook,
   chaptersSlice,
   chaptersActions,
+  forwardRegenChapters,
   selectActiveStreams,
   selectAnyActiveStream,
   type ActiveStreamSnapshot,
@@ -1475,5 +1476,39 @@ describe('chaptersSlice — applyGenerationTick (plan 87 interleaved chapter rou
     const inProgress = s.chapters.filter((c) => c.state === 'in_progress');
     expect(inProgress.map((c) => c.id).sort()).toEqual([1, 2]);
     expect(s.chapters[2].state).toBe('queued');
+  });
+});
+
+describe('forwardRegenChapters', () => {
+  /* The 'forward' regen scope ("this and all subsequent") must expand to the
+     anchor chapter plus every later chapter MINUS excluded ones. Excluded
+     front/back-matter (Dedication, Copyright, CONTENTS) has no narration, so
+     enqueuing it produces empty no-content queue entries — the bug this
+     fixes. Mirrors the !c.excluded predicate already used by
+     regenerateChapterIds and enqueueOnWork. */
+  const chapters = [
+    makeChapter(1),
+    makeChapter(2),
+    makeChapter(3, { excluded: true }), // back-matter in the forward range
+    makeChapter(4),
+  ];
+
+  it('returns the anchor plus every later chapter, in order', () => {
+    expect(forwardRegenChapters([makeChapter(1), makeChapter(2), makeChapter(3)], 1).map((c) => c.id)).toEqual([
+      1, 2, 3,
+    ]);
+  });
+
+  it('drops chapters before the anchor', () => {
+    expect(forwardRegenChapters(chapters, 2).map((c) => c.id)).toEqual([2, 4]);
+  });
+
+  it('omits an excluded chapter inside the forward range', () => {
+    // chapter 3 is excluded → never enqueued even though 3 >= anchor 1
+    expect(forwardRegenChapters(chapters, 1).map((c) => c.id)).toEqual([1, 2, 4]);
+  });
+
+  it('includes the anchor itself when it is not excluded', () => {
+    expect(forwardRegenChapters(chapters, 4).map((c) => c.id)).toEqual([4]);
   });
 });
