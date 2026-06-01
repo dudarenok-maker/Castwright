@@ -22,6 +22,7 @@ installTimestamps();
    makes a stray unhandled rejection survivable so a transient async error can't
    take down an unattended generation run. See crash-logging.ts. */
 import { installCrashHandlers, attachListenErrorHandler } from './crash-logging.js';
+import { selectBindHost } from './bind-host.js';
 installCrashHandlers();
 
 import express from 'express';
@@ -230,11 +231,15 @@ let sidecarSupervisor: SidecarSupervisor | null = null;
    "Not Secure" warning AND clipboard / file-picker / mic / camera /
    service-worker APIs become available on mobile.
 
-   When LAN_HTTPS is unset, behaviour is identical to before plan 81:
-   plain HTTP, app.listen(PORT) binds all interfaces, every existing
-   workflow unchanged. The HTTPS path is opt-in only via npm run start:lan
-   (which sets LAN_HTTPS=1 via cross-env). */
+   When LAN_HTTPS is unset, behaviour is plain HTTP on :8080, every existing
+   workflow unchanged — EXCEPT the bind host: since srv-19 the default HTTP
+   listener binds loopback (127.0.0.1) only, so the unauthenticated API +
+   /workspace static mount aren't reachable from other LAN machines. Set
+   BIND_HOST=0.0.0.0 (or HOST=…) to restore all-interface HTTP. The HTTPS path
+   is opt-in only via npm run start:lan (LAN_HTTPS=1) and keeps binding all
+   interfaces — it's the deliberately-reachable mobile flow. */
 const lanHttps = isLanHttpsEnabled();
+const bindHost = selectBindHost(lanHttps);
 const repoRoot = resolve(__dirname, '..', '..');
 const LAN_CERT_FILE = resolve(repoRoot, '.run', 'certs', 'lan-cert.pem');
 const LAN_KEY_FILE = resolve(repoRoot, '.run', 'certs', 'lan-key.pem');
@@ -365,10 +370,14 @@ if (lanHttps) {
   }
   const key = readFileSync(LAN_KEY_FILE);
   const cert = readFileSync(LAN_CERT_FILE);
-  const server = createHttpsServer({ key, cert }, app).listen(LAN_HTTPS_PORT, listenerCallback);
+  const server = createHttpsServer({ key, cert }, app).listen(
+    LAN_HTTPS_PORT,
+    bindHost,
+    listenerCallback,
+  );
   attachListenErrorHandler(server, LAN_HTTPS_PORT);
 } else {
-  const server = app.listen(PORT, listenerCallback);
+  const server = app.listen(PORT, bindHost, listenerCallback);
   attachListenErrorHandler(server, PORT);
 }
 
