@@ -12,8 +12,16 @@
         (genMs) + audio (audioMs); we keep the recent few so the dev pill shows
         a number that moves every ~batch. This is the figure the user can ACT
         on mid-chapter (the per-chapter rollup is too coarse).
+     3. PER-CHAPTER history ring — a bounded, newest-first list of each finished
+        chapter's own RTF (+ title/book/engine) so the dev Worktrees view can
+        render the trend across a run ("is it deteriorating or consistent?")
+        without grepping logs. INDEPENDENT of the rolling window's RESET_MS
+        idle reset — an idle gap blanks the aggregate but must NOT blank the
+        history. In-memory only: survives a sidecar recycle (this Node process
+        persists; only the Python sidecar restarts per-batch), resets on a full
+        server restart (a restart is a new session).
 
-   A tiny GET endpoint exposes both so the user self-monitors speed without
+   A tiny GET endpoint exposes all three so the user self-monitors speed without
    grepping logs.
 
    RTF convention matches the sidecar everywhere: rtf = wall / audio, so < 1 is
@@ -21,6 +29,21 @@
    window groups one run; a gap > RESET_MS starts fresh so yesterday's stat
    never dilutes today's. The batch window is independent — it reports while the
    FIRST chapter is still rendering (when the chapter window is still empty). */
+
+/** One finished chapter's own throughput, for the history ring. `rtf` is
+    `synthSec / audioSec` (< 1 = faster than realtime) or `null` when the
+    chapter produced no audio (guards a divide-by-zero from corrupting the
+    deterioration comparison the view draws). */
+export interface ChapterThroughputRecord {
+  chapterId: number | string;
+  title: string | null;
+  bookId: string | null;
+  modelKey: string | null;
+  rtf: number | null;
+  audioSec: number;
+  synthSec: number;
+  at: string;
+}
 
 export interface GenerationStats {
   // ── per-chapter rolling window (lagging summary) ──────────────────────
@@ -56,6 +79,12 @@ export interface GenerationStats {
   batchesInWindow: number;
   /** ISO timestamp of the most-recent batch, or null when none is recent. */
   batchUpdatedAt: string | null;
+
+  // ── per-chapter history ring (trend, newest-first) ────────────────────
+  /** Recent finished chapters, NEWEST-FIRST, capped at MAX_HISTORY. Survives
+      the rolling-window RESET_MS reset (its whole value is the cross-pause
+      trend). The dev Worktrees view renders this as the throughput table. */
+  recentChapters: ChapterThroughputRecord[];
 }
 
 /* Gap (ms) after the last chapter beyond which the next chapter opens a fresh
@@ -69,6 +98,9 @@ const BATCH_IDLE_MS = 5 * 60_000;
 /* Cap the live window so `liveBatchRtf` stays "recent" (and memory is bounded)
    — an aggregate over roughly the last dozen batches. */
 const MAX_BATCHES = 12;
+/* Cap the per-chapter history ring. ~200 small records covers multiple books /
+   a long run while keeping memory trivial — the big-book ceiling is ~60 chapters. */
+const MAX_HISTORY = 200;
 
 interface WindowState {
   startMs: number;
@@ -87,6 +119,7 @@ interface BatchRecord {
 
 let state: WindowState | null = null;
 let batches: BatchRecord[] = [];
+let history: ChapterThroughputRecord[] = [];
 
 const emptyChapter = (): Pick<
   GenerationStats,
@@ -142,7 +175,14 @@ const projectBatch = (
     snapshot. `synthMs` is the wall time spent inside `synthesiseChapter`
     (all TTS — title beat + body, excludes encode/disk). */
 export function recordChapterThroughput(
-  input: { chapterId: number | string; audioSec: number; synthMs: number },
+  input: {
+    chapterId: number | string;
+    audioSec: number;
+    synthMs: number;
+    title?: string | null;
+    bookId?: string | null;
+    modelKey?: string | null;
+  },
   now: number = Date.now(),
 ): GenerationStats {
   const synthSec = input.synthMs / 1000;
@@ -153,6 +193,21 @@ export function recordChapterThroughput(
     synthSec,
     at: new Date(now).toISOString(),
   };
+
+  /* History ring — push BEFORE the window-reset branch so it always records,
+     independent of the RESET_MS idle reset. Newest-first, capped. `rtf` is
+     null (not 0) on no-audio so the view renders a dash and skips the tint. */
+  history.unshift({
+    chapterId: input.chapterId,
+    title: input.title ?? null,
+    bookId: input.bookId ?? null,
+    modelKey: input.modelKey ?? null,
+    rtf: input.audioSec > 0 ? synthSec / input.audioSec : null,
+    audioSec: input.audioSec,
+    synthSec,
+    at: new Date(now).toISOString(),
+  });
+  history = history.slice(0, MAX_HISTORY);
 
   /* Fresh window on first fold or after an idle gap. Anchor the window start
      at this chapter's synth START (now − synthMs) so chapters/hr counts the
@@ -198,11 +253,14 @@ export function recordBatchThroughput(
 export function getGenerationStats(now: number = Date.now()): GenerationStats {
   const chapter =
     state && now - state.updatedAtMs <= RESET_MS ? projectChapter(state) : emptyChapter();
-  return { ...chapter, ...projectBatch(now) };
+  /* `history` is already newest-first and capped; the RESET_MS reset above
+     blanks the aggregate but must NOT touch the history trend. */
+  return { ...chapter, ...projectBatch(now), recentChapters: history };
 }
 
 /** Test-only: drop both windows so cases don't bleed into each other. */
 export function __resetGenerationStatsForTest(): void {
   state = null;
   batches = [];
+  history = [];
 }
