@@ -456,6 +456,17 @@ $resp.Headers['X-Sample-Rate']
   the committed slope flattens. CPU-only flag — a no-op if the leak is on the CUDA
   allocator side. The `SIDECAR_RESTART_MB` process-recycle remains the backstop
   regardless.
+- `SIDECAR_RECYCLE_SOFT_MB` (default `0`/off) — **side-11 item 2: soft recycle at
+  the chapter boundary.** Once committed-private crosses this threshold the
+  sidecar sets `recycle_pending: true` in `/health` (it does **not** exit). The
+  generation worker reads that at each chapter boundary and POSTs `/recycle` to
+  trigger a CLEAN recycle (drain → respawn) — so the leak-forced recycle lands
+  *between* chapters and *earlier* than the hard `SIDECAR_RESTART_MB` ceiling
+  (which fires late, after RTF has degraded, and can drain mid-chapter). Set it a
+  few GB **below** `SIDECAR_RESTART_MB`. Opt-in (default off) until a live GPU run
+  tunes it; the hard ceiling stays the untouched backstop. `POST /recycle` reuses
+  the hard watchdog's drain→exit path verbatim (idempotent), and `/health` also
+  carries `committed_mb` for boundary-decision observability.
 
 ## FlashAttention-2 (optional, Windows / Python 3.11)
 

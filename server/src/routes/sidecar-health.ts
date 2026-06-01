@@ -50,6 +50,14 @@ interface SidecarHealthBody {
   qwen_weights_present?: boolean;
   qwen_install_state?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
   device?: string | null;
+  /* side-11 item 2 — SOFT recycle signal. `recycle_pending` flips true once the
+     sidecar's committed-private memory crosses SIDECAR_RECYCLE_SOFT_MB (below the
+     hard ceiling); the generation worker reads it off this poll and triggers a
+     clean boundary recycle. `committed_mb` is the figure behind that decision
+     (may be null when psutil can't read it). Absent on an older sidecar → false
+     / null below. */
+  recycle_pending?: boolean;
+  committed_mb?: number | null;
 }
 
 const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
@@ -129,6 +137,10 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       qwenWeightsPresent: qwenLoaded || body.qwen_weights_present === true,
       qwenInstallState: qwenInstallState,
       device: typeof body.device === 'string' ? body.device : null,
+      /* side-11 item 2 — forward the soft-recycle signal (default false / null
+         for an older sidecar that omits them). */
+      recyclePending: body.recycle_pending === true,
+      committedMb: typeof body.committed_mb === 'number' ? body.committed_mb : null,
     });
   } catch (e) {
     clearTimeout(timer);
