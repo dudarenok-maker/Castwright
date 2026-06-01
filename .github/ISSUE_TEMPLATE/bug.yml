@@ -1,0 +1,66 @@
+name: Bug
+description: A defect. Bugs are tracked here and stay off the MoSCoW backlog.
+title: "<short description of the bug>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bugs are out-of-band — tracked as issues for triage/history/PR-linking, but
+        NOT added to `docs/BACKLOG.md`. Use a plain descriptive title (no `<prefix>-<n>`
+        ID — that's for backlog items). The fixing PR links back with `Closes #NN`.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences — what's broken.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps. Include the book / view / engine if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: false
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happened instead — paste the error / log line / screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, app version (top-bar pill), engine (Kokoro / Qwen / Coqui / Gemini) if relevant.
+    validations:
+      required: false
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - blocker (data loss / can't ship / can't use the app)
+        - high (a core flow is broken, no workaround)
+        - normal (broken with a workaround)
+        - low (cosmetic / minor)
+    validations:
+      required: true
+  - type: dropdown
+    id: reproducible
+    attributes:
+      label: Reproducible?
+      options:
+        - always
+        - intermittently
+        - once (couldn't reproduce)
+    validations:
+      required: true

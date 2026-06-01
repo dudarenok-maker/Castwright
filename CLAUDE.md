@@ -162,21 +162,29 @@ the canonical recipe.
 
 ## The backlog
 
-`docs/BACKLOG.md` is the canonical, MoSCoW-bucketed list of outstanding
-work — every KNOWN-scaffolded plan, every "Out of scope" follow-up, every
-CLAUDE.md "Suggested follow-up", every untested seam. Future planned rounds
-of work pull from here. Bugs are out-of-band (the user files them as they
-hit them; they don't queue on the backlog).
+`docs/BACKLOG.md` is the thin, MoSCoW-bucketed **prioritized planning view**.
+Each item maps to exactly one GitHub issue (title `<prefix>-<n> — <what>`),
+which is the **canonical detail home** — What / Acceptance / Key files /
+Depends on / Benefit live in the issue, not in BACKLOG.md. The `<prefix>-<n>`
+ID stays the durable cross-reference for code/commits/plans; the issue `#NN`
+is the GitHub-native auto-close hook. **Bugs are GitHub issues with the `bug`
+label and stay off `docs/BACKLOG.md`** (still out-of-band — the user files
+them as they hit them). The label taxonomy, issue forms, and the full
+convention live in [CONTRIBUTING.md "Issues"](CONTRIBUTING.md#issues); plan
+[165](docs/features/165-github-issues-backlog-integration.md) is the rationale.
 
 When you ship a backlog item:
 
-1. Remove its bullet from `docs/BACKLOG.md`.
-2. Update the source plan's `status:` and/or fill its **Ship notes**.
-3. If the plan is now `stable`, move it to `docs/features/archive/`.
+1. Close its issue — or let the delivering PR auto-close it via `Closes #NN`
+   in the PR body (`Refs #NN` for a partial / multi-wave delivery).
+2. Remove (or, for a Won't item, collapse) its row in `docs/BACKLOG.md`.
+3. Update the source plan's `status:` and/or fill its **Ship notes**; if the
+   plan is now `stable`, move it to `docs/features/archive/`.
 
 When you discover a new outstanding item (e.g. a "Suggested follow-up"
-added to a plan), add it to `docs/BACKLOG.md` in the right bucket in the
-same PR — the backlog is only useful while it stays current.
+added to a plan), file a Backlog-item issue (it gets `area:`/`moscow:`/`type:`
+labels) **and** add the thin row to `docs/BACKLOG.md` linking it, in the same
+round — the backlog is only useful while it stays current.
 
 ## Planning-mode behaviour
 
@@ -194,12 +202,13 @@ This applies to BOTH formal plans (ExitPlanMode) AND informal end-of-turn summar
 
 Run this before declaring any non-trivial task "done." Skipping a step is fine when the step genuinely does not apply (e.g. a doc-only change has no test plan) — but say so explicitly rather than silently omitting.
 
-1. **Update or create the regression plan** under `docs/features/`. New feature → new file from `TEMPLATE.md`. Changed behaviour cited in an existing plan → update that plan in the same diff. Use frontmatter `status:` (`draft` / `active` / `stable` / `scaffolded` / `deferred`).
+1. **Update or create the regression plan** under `docs/features/` — _for substantial/cross-cutting work._ New feature → new file from `TEMPLATE.md` (and tag the issue `needs-plan`). Changed behaviour cited in an existing plan → update that plan in the same diff. Use frontmatter `status:` (`draft` / `active` / `stable` / `scaffolded` / `deferred`). Small/localized items skip the plan doc — the issue body + paired test is the spec.
 2. **Land paired automated test(s).** New behaviour → new test. Bug fix → regression test (fails before, passes after). UI-visible behaviour crossing router/redux/layout seams → Playwright e2e spec under `e2e/`.
 3. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
-4. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
-5. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
-6. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
+4. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too.
+5. **Run `npm run verify`** locally — same battery as pre-push. Catches typecheck + all tests + e2e + build in one shot.
+6. **If shipping a plan** (status → `stable`): fill its **Ship notes** section with the shipped date and the commit SHA, then `git mv` it under `docs/features/archive/` and re-link any active plan that pointed at it.
+7. **Surface what changed** in the end-of-turn summary in 1–2 sentences. Do not narrate the diff — point at the user-visible delta and the test that locks it.
 
 ## Out of scope until told otherwise
 
