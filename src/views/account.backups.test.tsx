@@ -12,6 +12,7 @@ import userEvent from '@testing-library/user-event';
 import { accountSlice, type AccountState } from '../store/account-slice';
 import { librarySlice, type LibraryState } from '../store/library-slice';
 import { uiSlice } from '../store/ui-slice';
+import { settingsSlice } from '../store/settings-slice';
 import { AccountView } from './account';
 import type { UserSettings } from '../lib/types';
 
@@ -91,6 +92,7 @@ function renderView(initial: Partial<UserSettings> = {}) {
       account: accountSlice.reducer,
       ui: uiSlice.reducer,
       library: librarySlice.reducer,
+      settings: settingsSlice.reducer,
     },
     preloadedState: { account: preloaded, library: LIBRARY_FIXTURE },
   });

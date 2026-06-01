@@ -25,6 +25,14 @@ import {
   saveAccountSettings,
   saveGeminiApiKey,
 } from '../store/account-slice';
+import {
+  settingsActions,
+  type KeyboardActionId,
+  type TextScale,
+  AUTOSAVE_DEBOUNCE_MIN_MS,
+  AUTOSAVE_DEBOUNCE_MAX_MS,
+} from '../store/settings-slice';
+import { formatKeyLabel, normalizeKeyEvent } from '../lib/keybindings';
 import { OllamaInstall } from '../components/ollama-install';
 import { QwenInstall } from '../components/qwen-install';
 import { CoquiInstall } from '../components/coqui-install';
@@ -866,6 +874,8 @@ export function AccountView() {
 
         <ModelsCard />
 
+        <AdvancedCard />
+
         <div className="flex items-center gap-4">
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
             {saving ? 'Saving…' : 'Save changes'}
@@ -1290,6 +1300,179 @@ function ModelsCard() {
             offline setups.
           </p>
           <QwenInstall />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* fe-2 — power-user tuning. Device-local preferences (settings slice,
+   localStorage via redux-persist): a rebindable play/pause shortcut,
+   accessibility toggles (high-contrast + larger text), and the autosave
+   debounce. These apply instantly and per-browser, so — unlike the account
+   settings above — there's no Save button; each control dispatches directly. */
+const TEXT_SCALE_OPTIONS: { value: TextScale; label: string }[] = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'large', label: 'Large' },
+  { value: 'larger', label: 'Larger' },
+];
+
+function AdvancedCard() {
+  const dispatch = useAppDispatch();
+  const keybindings = useAppSelector((s) => s.settings.keybindings);
+  const highContrast = useAppSelector((s) => s.settings.highContrast);
+  const textScale = useAppSelector((s) => s.settings.textScale);
+  const autosaveDebounceMs = useAppSelector((s) => s.settings.autosaveDebounceMs);
+
+  const [capturing, setCapturing] = useState<KeyboardActionId | null>(null);
+  /* Local mirror so partial typing (e.g. clearing the field) doesn't clamp
+     mid-edit; commit (clamped) on blur / Enter. */
+  const [debounceDraft, setDebounceDraft] = useState(String(autosaveDebounceMs));
+  useEffect(() => {
+    setDebounceDraft(String(autosaveDebounceMs));
+  }, [autosaveDebounceMs]);
+
+  /* Rebind capture — while armed, the next keydown is swallowed and bound.
+     Capture phase so it preempts any other global shortcut; Escape cancels;
+     unbindable keys (Enter, arrows…) are ignored so capture keeps waiting. */
+  useEffect(() => {
+    if (!capturing) return;
+    const action = capturing;
+    function onKey(e: KeyboardEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === 'Escape') {
+        setCapturing(null);
+        return;
+      }
+      const key = normalizeKeyEvent(e);
+      if (!key) return;
+      dispatch(settingsActions.setKeybinding({ action, key }));
+      setCapturing(null);
+    }
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [capturing, dispatch]);
+
+  const commitDebounce = () => {
+    const n = Number(debounceDraft);
+    dispatch(settingsActions.setAutosaveDebounceMs(Number.isFinite(n) ? n : autosaveDebounceMs));
+  };
+
+  return (
+    <section
+      data-testid="account-advanced-card"
+      className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card"
+    >
+      <h2 className="text-base font-semibold text-ink">Advanced (power-user)</h2>
+      <p className="mt-1 text-xs text-ink/55">
+        Device-local tuning — applies to this browser only and saves instantly (no Save needed).
+      </p>
+
+      <div className="mt-4 space-y-6">
+        {/* Keyboard shortcut — play/pause */}
+        <div>
+          <span className="block text-sm font-medium text-ink">Keyboard shortcut — play / pause</span>
+          <span className="block text-xs text-ink/55 mt-0.5">
+            Toggles the mini-player on the Listen view. Default is Space; rebind to any letter or
+            Space.
+          </span>
+          <div className="mt-2 flex items-center gap-3">
+            <kbd
+              data-testid="account-play-pause-binding"
+              className="px-2.5 py-1 rounded-lg border border-ink/15 bg-ink/[0.04] text-xs font-mono text-ink min-w-[3rem] text-center"
+            >
+              {formatKeyLabel(keybindings['play-pause'])}
+            </kbd>
+            <button
+              type="button"
+              onClick={() => setCapturing('play-pause')}
+              data-testid="account-rebind-play-pause"
+              aria-pressed={capturing === 'play-pause'}
+              className="px-3 py-1.5 min-h-[36px] rounded-full border border-ink/15 bg-white text-xs text-ink hover:bg-ink/[0.04]"
+            >
+              {capturing === 'play-pause' ? 'Press a key… (Esc to cancel)' : 'Rebind'}
+            </button>
+            <button
+              type="button"
+              onClick={() => dispatch(settingsActions.resetKeybinding('play-pause'))}
+              className="px-3 py-1.5 min-h-[36px] rounded-full text-xs text-ink/60 hover:text-ink"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {/* High-contrast */}
+        <div>
+          <span className="block text-sm font-medium text-ink">High-contrast theme</span>
+          <span className="block text-xs text-ink/55 mt-0.5">
+            Maximises text + border contrast for low-vision use. Composes with light or dark.
+          </span>
+          <label className="mt-2 inline-flex items-center gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={highContrast}
+              onChange={(e) => dispatch(settingsActions.setHighContrast(e.target.checked))}
+              data-testid="account-high-contrast"
+              className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+            />
+            <span className="text-sm text-ink">
+              {highContrast ? 'On — high-contrast palette active.' : 'Off — standard palette.'}
+            </span>
+          </label>
+        </div>
+
+        {/* Text size */}
+        <div>
+          <label htmlFor="account-text-scale" className="block text-sm font-medium text-ink">
+            Text size
+          </label>
+          <span className="block text-xs text-ink/55 mt-0.5">
+            Scales the whole interface. Larger steps help readability on high-DPI displays.
+          </span>
+          <select
+            id="account-text-scale"
+            value={textScale}
+            onChange={(e) => dispatch(settingsActions.setTextScale(e.target.value as TextScale))}
+            data-testid="account-text-scale"
+            className="mt-2 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:ring-2 focus:ring-magenta/30"
+          >
+            {TEXT_SCALE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Autosave debounce */}
+        <div>
+          <label htmlFor="account-autosave-debounce" className="block text-sm font-medium text-ink">
+            Autosave debounce (ms)
+          </label>
+          <span className="block text-xs text-ink/55 mt-0.5">
+            How long edits (cast, manuscript, notes) wait before writing to disk. Higher coalesces
+            more; lower saves sooner. {AUTOSAVE_DEBOUNCE_MIN_MS}–{AUTOSAVE_DEBOUNCE_MAX_MS} ms.
+          </span>
+          <input
+            id="account-autosave-debounce"
+            type="number"
+            min={AUTOSAVE_DEBOUNCE_MIN_MS}
+            max={AUTOSAVE_DEBOUNCE_MAX_MS}
+            step={100}
+            value={debounceDraft}
+            onChange={(e) => setDebounceDraft(e.target.value)}
+            onBlur={commitDebounce}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitDebounce();
+              }
+            }}
+            data-testid="account-autosave-debounce"
+            className="mt-2 w-32 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm tabular-nums text-ink focus:ring-2 focus:ring-magenta/30"
+          />
         </div>
       </div>
     </section>

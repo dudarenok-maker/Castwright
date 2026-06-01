@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useKeyBinding } from '../lib/keybindings';
 import {
   IconBook,
   IconClock,
@@ -96,6 +97,11 @@ export function MiniPlayer({
      the slice update AND the optional PUT to keep on-disk in sync. */
   const dispatch = useAppDispatch();
   const persisted = useAppSelector(selectListenProgress(bookId));
+  /* fe-2 — user-rebindable play/pause key (default Space). Bound below via the
+     same window-keydown path as the marker `M` shortcut. Optional-chained so a
+     minimal test store that omits the settings slice still renders (the real
+     store always wires it — store/index.ts). */
+  const playPauseKey = useAppSelector((s) => s.settings?.keybindings?.['play-pause'] ?? 'Space');
   const [playbackRate, setPlaybackRate] = useState<number>(() => getPlaybackRate(persisted));
   /* Ref so onLoadedMetadata + the audio.url effect can set
      el.playbackRate without re-running on every rate change. */
@@ -382,6 +388,12 @@ export function MiniPlayer({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [chapter, startMarkerDraft]);
+
+  /* fe-2 — play/pause shortcut (default Space, rebindable in Account →
+     Advanced). Toggles the same local `playing` state as the on-screen button;
+     gated on a loaded chapter so it's inert when the player is closed. */
+  const togglePlay = useCallback(() => setPlaying((v) => !v), []);
+  useKeyBinding(playPauseKey, togglePlay, Boolean(chapter));
 
   /* Plan 53 — sleep-timer countdown tick. Only mounted while the
      timer is in the countdown state; ticks once per second. End-of-
