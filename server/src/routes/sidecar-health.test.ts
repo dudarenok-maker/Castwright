@@ -271,10 +271,31 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.committedMb).toBe(30123.5);
   });
 
-  it('defaults recyclePending=false / committedMb=null for an older sidecar', async () => {
-    /* A pre-side-11 sidecar omits both fields. The proxy must coerce so the
+  it('forwards the VRAM figures as vramReservedMb / vramTotalMb (plan 161)', async () => {
+    /* The reserved-VRAM recycle reuses `recycle_pending`, so no new boundary
+       signal is needed — but the VRAM figures are forwarded for observability. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          vram_reserved_mb: 7500.25,
+          vram_total_mb: 8188,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.vramReservedMb).toBe(7500.25);
+    expect(res.body.vramTotalMb).toBe(8188);
+  });
+
+  it('defaults recyclePending=false / committedMb=null / VRAM=null for an older sidecar', async () => {
+    /* A pre-side-11 sidecar omits all of these. The proxy must coerce so the
        boundary check reads a definite `false` (never recycles on a stale
-       build) and committedMb is an explicit null, not undefined. */
+       build) and the numeric figures are explicit null, not undefined. */
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true }), {
         status: 200,
@@ -285,6 +306,8 @@ describe('GET /api/sidecar/health', () => {
     const res = await request(makeApp()).get('/api/sidecar/health');
     expect(res.body.recyclePending).toBe(false);
     expect(res.body.committedMb).toBeNull();
+    expect(res.body.vramReservedMb).toBeNull();
+    expect(res.body.vramTotalMb).toBeNull();
   });
 
   it('returns unreachable when the sidecar responds non-2xx', async () => {
