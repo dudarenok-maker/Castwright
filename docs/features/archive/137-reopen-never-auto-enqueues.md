@@ -107,7 +107,11 @@ Mock mode (`VITE_USE_MOCKS=true`):
   for deliberately continuing an interrupted run with one click. Deferred to the
   backlog per the user's "never auto-start" decision; not required for this fix
   since the explicit CTA covers first-time start and server workers continue
-  truly in-flight runs on their own.
+  truly in-flight runs on their own. **(Shipped since — backlog `fe-17`. The
+  button is live in `src/views/generation.tsx`, gated `queued > 0 &&
+  inProgressCnt === 0 && !lastError`, dispatching the same `requestStartGeneration`
+  intent; dedicated coverage landed 2026-06-01: unit cases in
+  `src/views/generation.test.tsx` + e2e `e2e/generation-resume.spec.ts`.)**
 
 ## Ship notes
 
