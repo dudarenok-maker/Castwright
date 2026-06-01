@@ -61,6 +61,16 @@ export interface SpawnSidecarOpts {
      stalls generation with no recovery. Not called when the child is never
      spawned (autoStart off / reuse / spawn failure returns null). */
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
+  /* srv-15 (adopt-supervision) — invoked when an already-listening FRESH
+     sidecar is honoured instead of spawning. We don't own that process, so
+     `onExit` can never fire for it; the supervisor passes a callback that
+     watches the port and respawns an OWNED child once the adopted sidecar
+     disappears. Without it, a self-recycle of an adopted sidecar — e.g. after
+     a `tsx watch` dev reload re-adopted the orphan (the 2026-06-01 stall) — is
+     never recovered and generation wedges on "sidecar not reachable". Only the
+     fresh-reuse branch calls this; the not-ours / stale / disabled paths don't,
+     so the supervisor never respawns over a process we deliberately left alone. */
+  onAdoptExisting?: (info: { host: string; port: number }) => void;
 }
 
 export interface SidecarHandle {
@@ -276,6 +286,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     healthProbeFn = (h, p) => probeSidecarHealth(h, p),
     findPidFn = (p) => findListenerPid(p),
     onExit,
+    onAdoptExisting,
   } = opts;
 
   if (!autoStart) {
@@ -299,6 +310,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       log(
         `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), skipping spawn (current sidecar honoured)`,
       );
+      onAdoptExisting?.({ host, port });
       return null;
     }
     if (!health.looksLikeSidecar) {
