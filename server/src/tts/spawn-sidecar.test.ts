@@ -104,6 +104,36 @@ describe('spawnSidecar', () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining('current sidecar honoured'));
   });
 
+  it('announces an adopted sidecar via onAdoptExisting so the supervisor can watch it', async () => {
+    probeFn.mockResolvedValueOnce(true);
+    const healthProbeFn = vi.fn(async () => ({
+      reachable: true,
+      looksLikeSidecar: true,
+      protocolVersion: 1,
+    }));
+    const onAdoptExisting = vi.fn();
+
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: true,
+      repoRoot,
+      port: 9000,
+      host: '127.0.0.1',
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      healthProbeFn,
+      log,
+      warn,
+      onAdoptExisting,
+    });
+
+    expect(handle).toBeNull();
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(onAdoptExisting).toHaveBeenCalledWith({ host: '127.0.0.1', port: 9000 });
+  });
+
   it('does NOT touch a listening process that is not our sidecar', async () => {
     /* Reachable-but-not-ours (or hung/non-HTTP): never kill an unknown process,
        just leave it and let the health route surface TTS-down. */

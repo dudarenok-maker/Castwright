@@ -13,7 +13,7 @@
  * respawns. `buildOpts` is async + re-evaluated per respawn so a settings
  * change (eager-load prefs, model key) is picked up by the next process. */
 import type { SidecarHandle, SpawnSidecarOpts } from './spawn-sidecar.js';
-import { spawnSidecar } from './spawn-sidecar.js';
+import { spawnSidecar, probeListening } from './spawn-sidecar.js';
 
 /* A child that dies faster than this counts toward the crash-loop cap; one
    that lived longer is treated as a fresh incident and resets the counter, so
@@ -22,6 +22,11 @@ import { spawnSidecar } from './spawn-sidecar.js';
 const QUICK_DEATH_MS = 30_000;
 const DEFAULT_BACKOFFS_MS = [2_000, 5_000, 15_000];
 const DEFAULT_MAX_CONSECUTIVE_FAILURES = 5;
+/* How often to poll an ADOPTED (already-listening, not-owned) sidecar for
+   disappearance. Short enough that a self-recycle is detected and a fresh
+   owned child respawned inside the generation path's ride-out window, but not
+   so chatty that it spams the port during a normal multi-minute drain. */
+const DEFAULT_ADOPTED_POLL_MS = 1_500;
 
 export interface SidecarSupervisorOpts {
   /** Builds the base spawn opts for each (re)spawn. Async so it can re-read
@@ -36,6 +41,10 @@ export interface SidecarSupervisorOpts {
   nowFn?: () => number;
   backoffsMs?: number[];
   maxConsecutiveFailures?: number;
+  /* Probe whether something still holds the adopted sidecar's port. */
+  probeFn?: (host: string, port: number) => Promise<boolean>;
+  /* Poll interval for the adopted-sidecar watchdog. */
+  adoptedPollMs?: number;
 }
 
 export interface SidecarSupervisor {
@@ -59,22 +68,67 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     nowFn = () => Date.now(),
     backoffsMs = DEFAULT_BACKOFFS_MS,
     maxConsecutiveFailures = DEFAULT_MAX_CONSECUTIVE_FAILURES,
+    probeFn = probeListening,
+    adoptedPollMs = DEFAULT_ADOPTED_POLL_MS,
   } = opts;
 
   let stopped = false;
   let handle: SidecarHandle | null = null;
   let consecutiveFailures = 0;
   let lastSpawnAt = 0;
+  /* True while a watchdog loop is polling an adopted sidecar's port. Guards
+     against starting a second loop if the adopt callback fires again before
+     the first loop has released. */
+  let adoptedWatching = false;
 
   async function spawnOnce(): Promise<void> {
     if (stopped) return;
     lastSpawnAt = nowFn();
     const base = await buildOpts();
-    /* spawnSidecar returns null for benign no-spawn (autoStart off, a healthy
-       sidecar already listening) AND for a spawn error. Either way there's no
-       child, so no onExit fires and supervision is dormant until something is
-       actually spawned — matching the pre-supervisor contract. */
-    handle = await spawnFn({ ...base, onExit: onChildExit });
+    /* spawnSidecar returns null for benign no-spawn (autoStart off, a spawn
+       error, or an already-listening healthy sidecar we adopt). For the adopt
+       case it invokes onAdoptExisting first, so the watchdog below can respawn
+       an owned child once that process disappears; the other null paths fire no
+       callback and leave supervision dormant — matching the pre-supervisor
+       contract (don't resurrect a disabled or deliberately-untouched sidecar). */
+    handle = await spawnFn({ ...base, onExit: onChildExit, onAdoptExisting: onAdopt });
+  }
+
+  /* Watch an adopted (already-listening, not-owned) sidecar. When its port goes
+     silent — e.g. the committed-memory soft-recycle self-exit (code 43) — bring
+     up a fresh OWNED child via spawnOnce, which re-establishes full onExit
+     supervision (or re-arms this watch if it adopts again). */
+  function onAdopt(info: { host: string; port: number }): void {
+    if (stopped || adoptedWatching) return;
+    adoptedWatching = true;
+    log(
+      `[sidecar] supervisor: watching adopted sidecar on :${info.port} ` +
+        `(not our child) — will respawn an owned process if it exits.`,
+    );
+    void (async () => {
+      while (!stopped) {
+        await delayFn(adoptedPollMs);
+        if (stopped) break;
+        if (await probeFn(info.host, info.port)) continue; // still up
+        /* Gone. Release the flag BEFORE respawning so a re-adopt inside
+           spawnOnce can arm a fresh watch, then respawn an owned child. */
+        adoptedWatching = false;
+        warn(
+          `[sidecar] supervisor: adopted sidecar on :${info.port} disappeared ` +
+            `(likely a self-recycle) — respawning a supervised child.`,
+        );
+        try {
+          await spawnOnce();
+        } catch (err) {
+          warn(
+            `[sidecar] supervisor: respawn after adopted-exit failed ` +
+              `(${(err as Error).message}).`,
+          );
+        }
+        return;
+      }
+      adoptedWatching = false;
+    })();
   }
 
   function onChildExit(code: number | null, signal: NodeJS.Signals | null): void {
