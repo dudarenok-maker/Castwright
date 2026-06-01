@@ -27,6 +27,7 @@ import {
 } from '../store/account-slice';
 import { OllamaInstall } from '../components/ollama-install';
 import { QwenInstall } from '../components/qwen-install';
+import { CoquiInstall } from '../components/coqui-install';
 import { ModelPullStatus } from '../components/model-pull-status';
 
 /* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS.
@@ -1267,23 +1268,17 @@ function ModelsCard() {
           <ModelPullStatus health={health} pullableModels={PULLABLE_MODELS} />
         </div>
 
-        <div>
-          <h3 className="text-sm font-medium text-ink">Coqui XTTS v2 (optional TTS engine)</h3>
-          <p className="mt-1 text-xs text-ink/55">
-            XTTS v2 is downloaded on first synth (~1.8 GB), or pre-fetched via{' '}
-            <code className="font-mono">install-coqui</code> in the release bundle:
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-ink">Coqui XTTS v2 (alternate cloning engine)</h3>
+          <p className="text-xs text-ink/55">
+            The alternate engine — zero-shot voice cloning from a reference clip, plus ~30 baked
+            multilingual voices. Optional: Kokoro and Qwen cover the defaults. Install it here to
+            pre-fetch the model; the CLI (
+            <code className="font-mono">install-coqui.ps1</code> / <code className="font-mono">.sh</code>)
+            stays available for scripted / offline setups, and the sidecar still auto-downloads on
+            first synth if you skip this.
           </p>
-          <pre
-            data-testid="account-coqui-install-cmd"
-            className="mt-2 rounded-xl bg-ink/[0.04] p-3 text-xs font-mono text-ink/80 overflow-x-auto"
-          >{`# Windows
-pwsh server/tts-sidecar/scripts/install-coqui.ps1
-
-# macOS / Linux
-bash server/tts-sidecar/scripts/install-coqui.sh`}</pre>
-          <p className="mt-2 text-xs text-ink/55">
-            One-shot pre-fetch is optional; the sidecar auto-downloads on first synth call.
-          </p>
+          <CoquiInstall />
         </div>
 
         <div className="space-y-2">
