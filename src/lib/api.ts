@@ -4504,22 +4504,53 @@ const mock = {
   }> => {
     return { worktrees: [] };
   },
-  /* Mock has no real generation pipeline — always idle. */
-  getGenerationStats: async (): Promise<GenerationStatsResponse> => ({
-    chapters: 0,
-    audioSec: 0,
-    synthSec: 0,
-    rtf: null,
-    xRealtime: null,
-    chaptersPerHour: null,
-    last: null,
-    updatedAt: null,
-    liveBatchRtf: null,
-    lastBatchRtf: null,
-    batchesInWindow: 0,
-    batchUpdatedAt: null,
-  }),
+  /* Mock has no live pipeline (liveBatchRtf stays null), but ships a small
+     deterministic history with a deliberately rising rtf (newest-first) so the
+     dev Worktrees throughput table + deterioration tint are exercisable under
+     VITE_USE_MOCKS. Fixed ISO timestamps (no Date.now()) keep snapshots stable. */
+  getGenerationStats: async (): Promise<GenerationStatsResponse> => {
+    const recentChapters = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map((rtf, i) => ({
+      chapterId: 7 - i,
+      title: `Chapter ${7 - i}`,
+      bookId: 'mock-book',
+      modelKey: 'qwen3-tts',
+      rtf,
+      audioSec: 600,
+      synthSec: Math.round(600 * rtf),
+      // Newest-first: index 0 is the latest. 9-minute spacing, fixed base.
+      at: new Date(Date.parse('2026-06-01T09:00:00Z') + (6 - i) * 9 * 60_000).toISOString(),
+    }));
+    return {
+      chapters: recentChapters.length,
+      audioSec: 4200,
+      synthSec: 6700,
+      rtf: 1.6,
+      xRealtime: 0.63,
+      chaptersPerHour: 6.4,
+      last: null,
+      updatedAt: recentChapters[0].at,
+      liveBatchRtf: null,
+      lastBatchRtf: null,
+      batchesInWindow: 0,
+      batchUpdatedAt: null,
+      recentChapters,
+    };
+  },
 };
+
+/** One finished chapter's own throughput, for the dev Worktrees throughput
+    table. `rtf` is synth-wall ÷ audio (< 1 = faster than realtime) or null when
+    the chapter produced no audio. Mirrors the server's `ChapterThroughputRecord`. */
+export interface RecentChapter {
+  chapterId: number | string;
+  title: string | null;
+  bookId: string | null;
+  modelKey: string | null;
+  rtf: number | null;
+  audioSec: number;
+  synthSec: number;
+  at: string;
+}
 
 /** Live generation-throughput snapshot — mirrors the server's
     `generation-stats` accumulator. Backs the dev top-bar RTF pill. */
@@ -4547,6 +4578,9 @@ export interface GenerationStatsResponse {
   lastBatchRtf: number | null;
   batchesInWindow: number;
   batchUpdatedAt: string | null;
+  /** Recent finished chapters, NEWEST-FIRST, capped server-side. Survives the
+      rolling-window idle reset — backs the dev Worktrees throughput table. */
+  recentChapters: RecentChapter[];
 }
 
 export const api = USE_MOCKS ? mock : real;

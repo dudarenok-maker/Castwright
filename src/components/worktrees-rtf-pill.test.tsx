@@ -20,6 +20,7 @@ const idle = {
   lastBatchRtf: null,
   batchesInWindow: 0,
   batchUpdatedAt: null,
+  recentChapters: [],
 };
 
 const mockStats = vi.mocked(api.getGenerationStats);
