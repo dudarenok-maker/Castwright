@@ -1,1 +1,5 @@
+# Refuse force-push / deletion of protected branches (main) before the
+# ~15-min verify even starts. Bypass intentionally with `git push --no-verify`.
+# See docs/features/163-protected-push-guard.md.
+node scripts/guard-protected-push.mjs "$@" || exit 1
 npm run verify
