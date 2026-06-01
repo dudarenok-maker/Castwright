@@ -45,6 +45,19 @@ const designQwenVoice = vi.fn((_bookId: string, _characterId: string, _args?: un
 const fetchDesignedPersona = vi.fn((_bookId: string, _characterId: string) =>
   Promise.resolve({ instruct: '' }),
 );
+/* Plan 161 — the A/B compare modal promotes the preview on approve. */
+const promoteQwenVoice = vi.fn((_bookId: string, _characterId: string, args?: unknown) =>
+  Promise.resolve({
+    voiceId: String((args as { previewVoiceId?: string })?.previewVoiceId ?? 'qwen-halloran').replace(
+      /-preview$/,
+      '',
+    ),
+    url: '/audio/voices/char-halloran-qwen3-tts-0.6b-mock.mp3',
+  }),
+);
+const discardQwenPreview = vi.fn((_bookId: string, _characterId: string, _args?: unknown) =>
+  Promise.resolve(),
+);
 vi.mock('../lib/api', () => ({
   api: {
     /* Forward exactly the args received — a 2-arg call stays 2-arg so the
@@ -58,6 +71,10 @@ vi.mock('../lib/api', () => ({
       designQwenVoice(bookId, characterId, args),
     fetchDesignedPersona: (bookId: string, characterId: string) =>
       fetchDesignedPersona(bookId, characterId),
+    promoteQwenVoice: (bookId: string, characterId: string, args?: unknown) =>
+      promoteQwenVoice(bookId, characterId, args),
+    discardQwenPreview: (bookId: string, characterId: string, args?: unknown) =>
+      discardQwenPreview(bookId, characterId, args),
   },
 }));
 
@@ -1057,14 +1074,15 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     });
   });
 
-  it('designs + previews the voice via the api on Design click', async () => {
+  it('Design & compare stages a PREVIEW design and opens the A/B modal; approve stages it (plan 161)', async () => {
     designQwenVoice.mockClear();
+    promoteQwenVoice.mockClear();
     renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
     selectQwen();
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     await waitFor(() => {
-      /* The persona still flows through; the 3rd arg is now the cache-identity
-         object so the audition can double as the 12s sample. */
+      /* The persona still flows through; preview:true stages a sibling id so
+         the live voice isn't overwritten while the user compares. */
       expect(designQwenVoice).toHaveBeenCalledWith(
         'book-1',
         'halloran',
@@ -1072,12 +1090,20 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
           persona: 'a steady adult voice',
           modelKey: 'qwen3-tts-0.6b',
           sampleVoiceId: expect.any(String),
+          preview: true,
         }),
       );
     });
-    await waitFor(() => {
-      expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy();
-    });
+    /* The compare modal opens; the designed-confirm is NOT shown yet (staging
+       is deferred to approve). */
+    await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+
+    /* Approve → promote the preview, then the drawer stages the real voice and
+       surfaces the designed confirmation. */
+    fireEvent.click(screen.getByTestId('voice-compare-approve'));
+    await waitFor(() => expect(promoteQwenVoice).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
   });
 
   it('on Save writes ttsEngine=qwen + the qwen override series-scoped', async () => {
@@ -1085,9 +1111,12 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     const onSave = vi.fn();
     renderWithBook({ ...baseChar, voiceId: 'v_hal', voiceStyle: 'a steady adult voice' }, onSave);
     selectQwen();
-    /* Design first so a voiceId is staged. */
+    /* Design opens the compare modal; approving promotes + stages the voiceId. */
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     await waitFor(() => expect(designQwenVoice).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId('voice-compare-approve')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('voice-compare-approve'));
+    await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
@@ -1184,8 +1213,11 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     expect(
       (screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
-    /* Design stages the voiceId returned by the mocked sidecar (qwen-halloran). */
+    /* Design → compare → approve stages the voiceId returned by the mock
+       (qwen-halloran). */
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    await waitFor(() => expect(screen.getByTestId('voice-compare-approve')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('voice-compare-approve'));
     await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
     const playBtn = screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement;
     expect(playBtn.disabled).toBe(false);

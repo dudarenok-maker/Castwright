@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { IconClose, IconPlay, IconPause, IconSpinner, IconRefresh } from '../lib/icons';
+import { useMemo, useState, type ReactNode } from 'react';
+import { IconPlay, IconPause, IconSpinner } from '../lib/icons';
 import { Avatar, Pill, PrimaryButton } from '../components/primitives';
 import { ToneSlider } from './profile-drawer';
+import { AbCompareShell } from '../components/ab-compare-shell';
+import { useAbAudition, type AbSide } from '../lib/use-ab-audition';
 import { engineForModelKey } from '../lib/tts-models';
 import { resolveTtsVoiceForCharacter, resolveProfileForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
-import { sampleScopeFor } from '../lib/sample-scope';
+import { sampleScopeFor, sampleUrlPrefix } from '../lib/sample-scope';
 import { findVoiceForCharacter } from '../lib/voice-character-link';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -95,10 +97,6 @@ function isDirty(orig: Character, d: SideDraft): boolean {
   return o.gender !== d.gender || o.ageRange !== d.ageRange || !tonesEqual(o.tone, d.tone);
 }
 
-function sampleUrlPrefix(voiceId: string, modelKey: TtsModelKey): string {
-  return `/audio/voices/${encodeURIComponent(voiceId)}-${modelKey}`;
-}
-
 export function CompareCastModal({
   characters,
   library,
@@ -114,37 +112,6 @@ export function CompareCastModal({
 
   const [draftA, setDraftA] = useState<SideDraft>(() => draftFromCharacter(a));
   const [draftB, setDraftB] = useState<SideDraft>(() => draftFromCharacter(b));
-  const [rowState, setRowState] = useState<Record<SideKey, { loading?: boolean; error?: string }>>({
-    a: {},
-    b: {},
-  });
-  const [autoRunning, setAutoRunning] = useState(false);
-  const [footerError, setFooterError] = useState<string | null>(null);
-  const autoCancelRef = useRef(false);
-
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') handleClose();
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function handleClose() {
-    autoCancelRef.current = true;
-    if (playback.isPlaying) playback.stop();
-    onClose();
-  }
-
-  function setRow(side: SideKey, patch: { loading?: boolean; error?: string } | null) {
-    setRowState((prev) => {
-      const next = { ...prev };
-      if (patch === null) next[side] = {};
-      else next[side] = { ...next[side], ...patch };
-      return next;
-    });
-  }
 
   const sideA = useMemo(
     () => buildSideContext(a, draftA, library, ttsEngine, ttsModelKey),
@@ -158,76 +125,51 @@ export function CompareCastModal({
   const dirtyA = isDirty(a, draftA);
   const dirtyB = isDirty(b, draftB);
 
-  async function playSide(side: SideKey) {
-    /* Cancel any in-flight auto-compare so an individual play doesn't fight
-       the sequence. */
-    autoCancelRef.current = true;
-    setAutoRunning(false);
-    const ctx = side === 'a' ? sideA : sideB;
-    const draft = side === 'a' ? draftA : draftB;
-    const character = side === 'a' ? a : b;
-    if (playback.isPlaying && playback.currentUrl?.startsWith(ctx.samplePrefix)) {
-      playback.stop();
-      return;
-    }
-    setRow(side, { loading: true, error: undefined });
-    setFooterError(null);
-    try {
-      await playSampleWithAutoLoad({
-        args: {
-          voiceId: ctx.sampleVoiceId,
-          voice: ctx.subject,
-          modelKey: ttsModelKey,
-          characterHint: buildCharacterHint(character, draftToHintOverrides(draft)),
-        },
-        playback,
-      });
-      setRow(side, { loading: false });
-    } catch (err) {
-      setRow(side, { loading: false, error: (err as Error).message });
-    }
-  }
+  /* Each side plays a server voice sample for its (possibly edited) identity;
+     the shared A/B hook owns the loading/error rows + the Auto A → B sequence
+     (prefix-match because the sample URL carries a cache hash we don't know
+     client-side). */
+  const sides: Record<SideKey, AbSide> = {
+    a: {
+      matchUrl: sideA.samplePrefix,
+      matchMode: 'prefix',
+      play: async () => {
+        await playSampleWithAutoLoad({
+          args: {
+            voiceId: sideA.sampleVoiceId,
+            voice: sideA.subject,
+            modelKey: ttsModelKey,
+            characterHint: buildCharacterHint(a, draftToHintOverrides(draftA)),
+          },
+          playback,
+        });
+      },
+    },
+    b: {
+      matchUrl: sideB.samplePrefix,
+      matchMode: 'prefix',
+      play: async () => {
+        await playSampleWithAutoLoad({
+          args: {
+            voiceId: sideB.sampleVoiceId,
+            voice: sideB.subject,
+            modelKey: ttsModelKey,
+            characterHint: buildCharacterHint(b, draftToHintOverrides(draftB)),
+          },
+          playback,
+        });
+      },
+    },
+  };
 
-  async function runAuto() {
-    if (autoRunning) {
-      autoCancelRef.current = true;
-      setAutoRunning(false);
-      if (playback.isPlaying) playback.stop();
-      return;
-    }
-    autoCancelRef.current = false;
-    setAutoRunning(true);
-    setFooterError(null);
-    try {
-      for (const side of ['a', 'b'] as const) {
-        if (autoCancelRef.current) break;
-        const ctx = side === 'a' ? sideA : sideB;
-        const draft = side === 'a' ? draftA : draftB;
-        const character = side === 'a' ? a : b;
-        setRow(side, { loading: true, error: undefined });
-        try {
-          await playSampleWithAutoLoad({
-            args: {
-              voiceId: ctx.sampleVoiceId,
-              voice: ctx.subject,
-              modelKey: ttsModelKey,
-              characterHint: buildCharacterHint(character, draftToHintOverrides(draft)),
-            },
-            playback,
-          });
-          setRow(side, { loading: false });
-        } catch (err) {
-          setRow(side, { loading: false, error: (err as Error).message });
-          setFooterError((err as Error).message);
-          break;
-        }
-        if (autoCancelRef.current) break;
-        const { cancelled } = await playback.playUntilEnded();
-        if (cancelled || autoCancelRef.current) break;
-      }
-    } finally {
-      setAutoRunning(false);
-    }
+  const { rowState, autoRunning, footerError, playSide, runAuto, stopAndCancel } = useAbAudition({
+    sides,
+    playback,
+  });
+
+  function handleClose() {
+    stopAndCancel();
+    onClose();
   }
 
   function saveSide(side: SideKey) {
@@ -246,116 +188,74 @@ export function CompareCastModal({
   }
 
   return (
-    <>
-      <div
-        onClick={handleClose}
-        className="fixed inset-0 bg-ink/40 z-40 fade-in"
-        data-testid="compare-cast-overlay"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Compare cast members"
-        className="fixed inset-0 z-50 overflow-y-auto pointer-events-none"
-      >
-        <div className="min-h-full flex items-start justify-center p-4 sm:p-8">
-          <div className="w-full max-w-[960px] bg-canvas rounded-3xl shadow-float pointer-events-auto">
-            <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
-              <h3 className="text-lg font-bold text-ink">Compare cast members</h3>
-              <p className="text-xs text-ink/50 ml-2">
-                Tune fields on either side and re-sample to hear the difference before saving.
-              </p>
-              <button
-                onClick={handleClose}
-                aria-label="Close"
-                className="ml-auto p-2 rounded-full hover:bg-ink/5 text-ink/60"
-              >
-                <IconClose className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-6 p-6">
-              <SidePanel
-                side="a"
-                character={a}
-                draft={draftA}
-                setDraft={setDraftA}
-                ctx={sideA}
-                otherCharacter={b}
-                otherDraft={draftB}
-                otherCtx={sideB}
-                rowState={rowState.a}
-                dirty={dirtyA}
-                disabled={autoRunning && (rowState.b?.loading ?? false)}
-                propagatesAcrossSeries={propagatesAcrossSeries}
-                onPlay={() => playSide('a')}
-                onSave={() => saveSide('a')}
-                onReset={() => resetSide('a')}
-                onOpenProfile={() => {
-                  onOpenProfile(a.id);
-                  handleClose();
-                }}
-                playbackUrl={playback.currentUrl}
-                playbackPlaying={playback.isPlaying}
-              />
-              <SidePanel
-                side="b"
-                character={b}
-                draft={draftB}
-                setDraft={setDraftB}
-                ctx={sideB}
-                otherCharacter={a}
-                otherDraft={draftA}
-                otherCtx={sideA}
-                rowState={rowState.b}
-                dirty={dirtyB}
-                disabled={autoRunning && (rowState.a?.loading ?? false)}
-                propagatesAcrossSeries={propagatesAcrossSeries}
-                onPlay={() => playSide('b')}
-                onSave={() => saveSide('b')}
-                onReset={() => resetSide('b')}
-                onOpenProfile={() => {
-                  onOpenProfile(b.id);
-                  handleClose();
-                }}
-                playbackUrl={playback.currentUrl}
-                playbackPlaying={playback.isPlaying}
-              />
-            </div>
-
-            <div className="px-6 py-4 border-t border-ink/10 flex items-center gap-3 flex-wrap">
-              <button
-                onClick={runAuto}
-                disabled={!autoRunning && (rowState.a?.loading || rowState.b?.loading)}
-                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                  autoRunning
-                    ? 'bg-magenta text-white hover:bg-magenta/90'
-                    : 'bg-peach text-ink hover:bg-peach/90'
-                }`}
-              >
-                {autoRunning ? (
-                  <IconPause className="w-3.5 h-3.5" />
-                ) : (
-                  <IconRefresh className="w-3.5 h-3.5" />
-                )}
-                <span>{autoRunning ? 'Stop auto-compare' : 'Auto A → B'}</span>
-              </button>
-              {footerError && (
-                <span className="text-xs text-red-600/80 truncate" title={footerError}>
-                  ⚠ {footerError}
-                </span>
-              )}
-              <button
-                onClick={handleClose}
-                className="ml-auto px-4 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </>
+    <AbCompareShell
+      title="Compare cast members"
+      subtitle="Tune fields on either side and re-sample to hear the difference before saving."
+      ariaLabel="Compare cast members"
+      autoRunning={autoRunning}
+      autoDisabled={!autoRunning && !!(rowState.a?.loading || rowState.b?.loading)}
+      footerError={footerError}
+      onRunAuto={runAuto}
+      onClose={handleClose}
+      sideA={
+        <SidePanel
+          side="a"
+          character={a}
+          draft={draftA}
+          setDraft={setDraftA}
+          ctx={sideA}
+          otherCharacter={b}
+          otherDraft={draftB}
+          otherCtx={sideB}
+          rowState={rowState.a}
+          dirty={dirtyA}
+          disabled={autoRunning && (rowState.b?.loading ?? false)}
+          propagatesAcrossSeries={propagatesAcrossSeries}
+          onPlay={() => playSide('a')}
+          onSave={() => saveSide('a')}
+          onReset={() => resetSide('a')}
+          onOpenProfile={() => {
+            onOpenProfile(a.id);
+            handleClose();
+          }}
+          playbackUrl={playback.currentUrl}
+          playbackPlaying={playback.isPlaying}
+        />
+      }
+      sideB={
+        <SidePanel
+          side="b"
+          character={b}
+          draft={draftB}
+          setDraft={setDraftB}
+          ctx={sideB}
+          otherCharacter={a}
+          otherDraft={draftA}
+          otherCtx={sideA}
+          rowState={rowState.b}
+          dirty={dirtyB}
+          disabled={autoRunning && (rowState.a?.loading ?? false)}
+          propagatesAcrossSeries={propagatesAcrossSeries}
+          onPlay={() => playSide('b')}
+          onSave={() => saveSide('b')}
+          onReset={() => resetSide('b')}
+          onOpenProfile={() => {
+            onOpenProfile(b.id);
+            handleClose();
+          }}
+          playbackUrl={playback.currentUrl}
+          playbackPlaying={playback.isPlaying}
+        />
+      }
+      footerEnd={
+        <button
+          onClick={handleClose}
+          className="px-4 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink"
+        >
+          Done
+        </button>
+      }
+    />
   );
 }
 

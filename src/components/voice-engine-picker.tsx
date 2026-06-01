@@ -189,7 +189,7 @@ export function VoiceEnginePicker({
             ) : (
               <>
                 <IconSparkle className="w-4 h-4" />
-                <span>Design &amp; preview voice</span>
+                <span>Design &amp; compare</span>
               </>
             )}
           </button>

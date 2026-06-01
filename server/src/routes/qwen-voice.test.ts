@@ -29,6 +29,7 @@ import {
   writeFileSync,
   readFileSync,
   readdirSync,
+  existsSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -436,5 +437,77 @@ describe('GET /api/books/:bookId/cast/:characterId/designed-persona', () => {
   it('404s for an unknown characterId', async () => {
     const res = await request(app).get(`/api/books/${bookId}/cast/ghost/designed-persona`);
     expect(res.status).toBe(404);
+  });
+});
+
+describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () => {
+  const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
+  /* Stand in for what the (mocked) sidecar would write at design time. */
+  function stagedPreviewArtifacts(previewId: string) {
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), `${previewId}.pt`), 'EMBEDDING');
+    writeFileSync(
+      join(qwenDir(), `${previewId}.json`),
+      JSON.stringify({ voiceId: previewId, instruct: 'a brand new take' }),
+    );
+  }
+
+  it('design-voice with preview:true stages under a -preview id (live voice untouched)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/design-voice`)
+      .send({ ...designBody, preview: true });
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('qwen-v_Maerin-preview');
+    /* The sidecar was asked to design the PREVIEW id, not the live one. */
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.voiceId).toBe('qwen-v_Maerin-preview');
+  });
+
+  it('promote-voice moves the preview onto the stable id, returns it, and evicts the sidecar cache', async () => {
+    stagedPreviewArtifacts('qwen-v_Maerin-preview');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_Maerin-preview', sampleVoiceId: 'v_Maerin', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('qwen-v_Maerin');
+    expect(res.body.url).toMatch(/^\/audio\/voices\/v_Maerin-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+    /* Files moved: real id now present, preview gone. */
+    expect(existsSync(join(qwenDir(), 'qwen-v_Maerin.pt'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_Maerin.json'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_Maerin-preview.pt'))).toBe(false);
+    /* The sidecar cache for the REAL id was evicted so the swap is seen. */
+    const evictCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/qwen/evict-voice'));
+    expect(evictCall).toBeTruthy();
+    expect(JSON.parse(evictCall![1].body).voiceId).toBe('qwen-v_Maerin');
+  });
+
+  it('promote-voice 409s when nothing was staged', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_Maerin-preview', sampleVoiceId: 'v_Maerin', modelKey: QWEN_KEY });
+    expect(res.status).toBe(409);
+  });
+
+  it('promote-voice 400s on a previewVoiceId that is not this character’s preview', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-someone-else-preview', sampleVoiceId: 'v_Maerin', modelKey: QWEN_KEY });
+    expect(res.status).toBe(400);
+  });
+
+  it('discard-voice removes the staged preview and never touches the live voice', async () => {
+    stagedPreviewArtifacts('qwen-v_Maerin-preview');
+    /* A live voice exists alongside the preview — it must survive. */
+    writeFileSync(join(qwenDir(), 'qwen-v_Maerin.pt'), 'LIVE');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/Maerin/discard-voice`)
+      .send({ previewVoiceId: 'qwen-v_Maerin-preview', sampleVoiceId: 'v_Maerin', modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(existsSync(join(qwenDir(), 'qwen-v_Maerin-preview.pt'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_Maerin-preview.json'))).toBe(false);
+    expect(readFileSync(join(qwenDir(), 'qwen-v_Maerin.pt'), 'utf8')).toBe('LIVE');
   });
 });
