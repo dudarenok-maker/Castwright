@@ -9,6 +9,7 @@ import { fetchAccountSettings } from '../store/account-slice';
 import {
   aggregateStreamsByBook,
   chaptersActions,
+  forwardRegenChapters,
   selectActiveStreams,
   STALL_THRESHOLD_MS,
 } from '../store/chapters-slice';
@@ -1233,10 +1234,11 @@ export function Layout() {
         <RegenerateModal
           chapter={ui.regenChapter}
           defaultScope={ui.regenInitialScope ?? 'this'}
-          forwardCount={chapters.filter((c) => c.id >= ui.regenChapter!.id).length}
-          forwardDurationSec={chapters
-            .filter((c) => c.id >= ui.regenChapter!.id)
-            .reduce((acc, c) => acc + parseDuration(c.duration), 0)}
+          forwardCount={forwardRegenChapters(chapters, ui.regenChapter!.id).length}
+          forwardDurationSec={forwardRegenChapters(chapters, ui.regenChapter!.id).reduce(
+            (acc, c) => acc + parseDuration(c.duration),
+            0,
+          )}
           onClose={() => dispatch(uiActions.setRegenChapter(null))}
           onConfirm={({ reason, scope, note }) => {
             const chapter = ui.regenChapter;
@@ -1251,7 +1253,7 @@ export function Layout() {
                    stays a single entry. */
                 const targetIds =
                   scope === 'forward'
-                    ? chapters.filter((c) => c.id >= chapter.id).map((c) => c.id)
+                    ? forwardRegenChapters(chapters, chapter.id).map((c) => c.id)
                     : [chapter.id];
                 dispatch(
                   changeLogActions.appendLogEvent(
