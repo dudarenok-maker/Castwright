@@ -1,55 +1,36 @@
 # Backlog (MoSCoW)
 
-The live backlog. Every outstanding item from `docs/features/*.md` plan bodies,
-CLAUDE.md "Suggested follow-ups", deferred sections, KNOWN-scaffolded plans,
-and untested territory.
+The prioritized planning view. Each item maps to exactly one GitHub issue — the
+**canonical detail home** (What / Acceptance / Key files / Depends on / Benefit).
+This file stays the single MoSCoW-bucketed, position-prioritized list; the issue
+holds the detail and the delivery history. Bugs are GitHub issues with the `bug`
+label and stay **off** this list (they're out-of-band — filed as the user hits
+them). See [CONTRIBUTING.md "Issues"](../CONTRIBUTING.md#issues).
 
-**Update rule:** Future rounds of planned work pull from this list. Bugs are
-out-of-band (the user files them as they hit them; they don't queue here).
-When an item ships:
+**Item IDs are permanent.** Each item carries a `<prefix>-<n>` ID — `fe` (frontend),
+`srv` (server), `side` (TTS sidecar), `ops` (CI / build / dev-tooling), or `fs`
+(full-stack). IDs are assigned once and **never reused or renumbered**; gaps are
+expected. Cite an item by its ID from code or docs and the reference won't rot.
+The issue title leads with the same ID; the issue `#NN` is the GitHub-native
+auto-close hook (`Closes #NN` on the delivering PR).
 
-1. Remove its bullet here.
-2. Update the source plan's `status:` / fill its **Ship notes** section.
-3. If the plan is now `stable`, move it to `docs/features/archive/` per
-   [`archive/README.md`](features/archive/README.md).
+**Priority = position.** Top of a bucket — and of a sub-group within it — is
+highest priority. Reprioritising is pure reordering; it never changes an ID.
 
-When you discover a new outstanding item (a new "Suggested follow-up" added
-to a plan, a TODO landed in code, a flaky test quarantined), add it here in
-the same PR — the backlog is only useful while it stays current.
-
-**Each item carries:**
-
-- **_What_**: one-sentence concrete description so the work is actionable from this bullet alone.
-- **_Acceptance_**: observable criteria for "done", so future-you knows when to remove the bullet.
-- **_Key files_**: starting points so the next pick-up doesn't spend an hour spelunking.
-- **_Depends on_**: (optional) — listed only when there's a real prerequisite.
-- **_Benefit (axis)_**: the _why_ (user / technical / architectural).
-
-**Item IDs are permanent.** Each item carries a `<prefix>-<n>` ID: the prefix is
-its dominant area — `fe` (frontend), `srv` (server), `side` (TTS sidecar), `ops`
-(CI / build / dev-tooling), or `fs` (full-stack) — and `<n>` is sequential within
-that prefix. IDs are assigned once and **never reused or renumbered**: a shipped
-item's ID is retired, not recycled, and gaps are expected. Cite an item by its ID
-from code or docs and the reference won't rot.
-
-**Priority = position.** Top of a bucket — and top of a sub-group within a bucket —
-is highest priority. Reprioritising is pure reordering; it never changes an item's
-ID. The MoSCoW bucket is shown by its section heading; an item that moves buckets
-keeps its ID.
+**Update rule:** when an item ships, close its issue (or let the PR auto-close it
+via `Closes #NN`) and remove its row here; update the source plan's `status:` /
+Ship notes and archive it if `stable`. When you discover a new item, file a
+Backlog-item issue AND add the thin row here linking it, in the same round.
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
 
-### `fs-1` — In-app upgrade pathway (package-drop install with data migration)
-
-Source: net-new (2026-05-22). Captured during planning of the cross-version upgrade flow; user-flagged as the top-priority Must for the next round of work, ahead of multi-language. Full design captured in `~/.claude/plans/as-we-are-now-refactored-cupcake.md` — move into `docs/features/NN-in-app-upgrade.md` when the round opens.
+### `fs-1` — In-app upgrade pathway (package-drop install with data migration) ([#395](https://github.com/dudarenok-maker/AudioBook-Generator/issues/395))
 
 - _What:_ Turn cross-version upgrades into a one-click Account-tab flow for hand-delivered alpha bundles (no GitHub polling — explicit user direction). Three coupled pieces. **(a) Foundation** — new `GET /api/info` endpoint reporting `{ appVersion, sidecarVersion, schemas, lastSeenAppVersion, showWhatsNew }`; schema-version stamping on `cast.json` / `manuscript-edits.json` / `revisions.json` / `listen-progress.json` / `voices.json` / `user-settings.json` mirroring the existing `state-migrate.ts` pattern (absence-means-v1 back-compat, refuses future schemas, identity migrations at v1); version pill in top-bar sourced from a `useAppInfo()` hook; sidecar exposes `__version__` in `/health`; `bump-version.mjs` extended to rewrite a new `server/tts-sidecar/version.py` in lockstep with the two `package.json`s. Boot-time `upgrade-coordinator.ts` walks every book on `lastSeenAppVersion ≠ appVersion`, snapshots all `.audiobook/*.json` + `voices.json` + `user-settings.json` to `<WORKSPACE_DIR>/.upgrade-backups/from-<old>-to-<new>-<iso>/` before re-stamping any stale-schema files. **(b) Upload + swap** — `POST /api/admin/upgrade/{stage,apply,abort}` + `GET /api/admin/upgrade/state` accept multipart zip upload, validate `audiobook-generator-vX.Y.Z/` root + embedded `package.json` + manifest sanity + SHA-256, refuse concurrent in-flight generation/analysis (409 with busy-book list) and unconfirmed downgrades (412), write `<WORKSPACE_DIR>/.upgrade-pending.json` and spawn a detached restarter via inline `child_process.spawn('node', ['-e', '<...>'], { detached: true })` (inline string so the swap can't delete its own supervisor mid-flight). `scripts/start-app-prod.mjs` detects the marker on boot and performs a preserve-list swap — **preserve** `server/user-settings.json` / `server/.env` / `server/tts-sidecar/.venv/` / `server/tts-sidecar/voices/kokoro/` / `audiobook-workspace/` / `logs/` / `.run/`; **swap** `dist/` / `server/dist/` / `server/tts-sidecar/*.py` / both `package.json`s + lockfiles. Run `npm ci` root + server; re-run `pip install -r requirements.txt` only when its hash changed; rename-aside `repoRoot.bak-<ts>/` until swap completes so any failure during steps 5–9 rolls back atomically; append every attempt (ok / failed) to `<WORKSPACE_DIR>/.upgrade-log.json`. Cross-platform Node ESM (Win + macOS + Linux per the alpha-tester spread), no PowerShell. **(c) UX** — Account view gets a top `Application updates` FormCard with a file-picker that POSTs multipart to `/stage`, a confirmation dialog showing v-from → v-to + short SHA-256 + bundled `RELEASE_NOTES.md` + data-safety blurb, and a full-screen `UpgradingScreen` overlay during apply that polls `/state` every 2s and `/api/info` every 2s; the overlay dismisses when `appVersion` flips, success toast fires, and a "What's new in vX.Y.Z" banner renders at the top of every view until dismissed (driven by the `showWhatsNew` flag clearing via `POST /api/info/dismiss-whats-new`). `scripts/build-release-zip.mjs` extended to bake `RELEASE_NOTES.md` (from the annotated tag body that `bump-version.mjs --notes-file` already captures) into the zip root and include it in MANIFEST.
-- _Acceptance:_ Cut v1.4→v1.5 locally via `bump-version.mjs + build-release-zip.mjs` (with `--notes-file`); from a running v1.4, upload the v1.5 zip in Account tab → confirm dialog shows the version delta + correct SHA-256 + release notes → click Apply → overlay progresses through "Server restarting" / "Installing dependencies" / "Migrating book data" → within 90 s the version pill flips to v1.5, the What's-new banner appears, success toast fires. After upgrade: `.audiobook/state.json` + `cast.json` + `revisions.json` parse with stamped schemas; `audiobook-workspace/` intact; `server/user-settings.json` retains the user's Gemini key + theme + analyzer-model overrides; `server/.env` untouched; Kokoro voices still selectable. Failure-path coverage: with one in-flight generation, Apply returns 409 with the busy-book list and the dialog refuses to proceed; a corrupted zip returns 400 with a precise reason and no state change; a deliberately broken zip mid-swap triggers atomic rollback via `repoRoot.bak-<ts>/` with the old version booting back up. `<WORKSPACE_DIR>/.upgrade-backups/` contains a timestamped snapshot for the v1.4→v1.5 jump and `.upgrade-log.json` has an `ok` entry. Repeat the happy path on a macOS box (alpha-tester platform spread). New paired tests: Vitest pins per `*-migrate.ts` + `upgrade-coordinator` + `zip-validate` + `staging` + `upgrade-slice`; new Pester or Vitest harness drives `start-app-prod.mjs` against a temp dir for the marker-detection + swap + rollback paths; new pytest asserts sidecar `__version__` lands in `/health`; new Playwright e2e (`e2e/upgrade-flow.spec.ts`) drives stage→apply→banner against mocked endpoints + crosses router/redux/layout seams per CLAUDE.md's e2e rule.
-- _Key files:_ **Foundation** — new `server/src/routes/info.ts`; new `server/src/workspace/{cast,manuscript-edits,revisions,listen-progress,voices-meta}-migrate.ts` (each mirrors the existing `server/src/workspace/state-migrate.ts:33-100` shape: `CURRENT_XXX_SCHEMA` + `migrateXxxJson` + `stampXxxSchema` + `UnsupportedXxxSchemaError`); new `server/src/workspace/upgrade-coordinator.ts` (called from `server/src/index.ts` after workspace mount, before serving); `server/src/workspace/user-settings.ts` (add `lastSeenAppVersion` + `schemaVersion` additive fields to the zod schema, no schema bump); `server/tts-sidecar/main.py` (new `__version__` constant, return in `/health` envelope) + new tiny `server/tts-sidecar/version.py`; `scripts/bump-version.mjs:142-198` (extend lockstep pre-flight to include the sidecar version file); new `src/lib/use-app-info.ts`; `src/components/top-bar.tsx` (small version pill near avatar); `openapi.yaml` (new `/api/info` shape). **Upload + swap** — new `server/src/routes/upgrade.ts` (four routes); new `server/src/upgrade/zip-validate.ts` + `server/src/upgrade/staging.ts` (busy-book probe must reuse existing analysis/generation state — locate + reuse, do not duplicate, per `feedback_verify_reanalysis_actually_needed`); `scripts/start-app-prod.mjs:18-80` (extend with marker detection + `safeRm()` preserve-list + extract + rollback before existing `probePort`/spawn logic); `openapi.yaml` (upgrade endpoints). **UX** — new `src/components/upgrade-card.tsx` (FormCard component); new `src/store/upgrade-slice.ts` (thunks + selectors, plays into `notifications-slice` for the success toast via `pushToast`); `src/views/account.tsx:248-260` (mount `<UpgradeCard />` as the FIRST FormCard above Profile); new `src/components/whats-new-banner.tsx`; `src/components/layout.tsx` (mount banner at top of every view when `showWhatsNew`); `scripts/build-release-zip.mjs:20-122` (bake `RELEASE_NOTES.md` from annotated tag body, add to MANIFEST.include). Full design + branching/wave decomposition + rebase notes in `~/.claude/plans/as-we-are-now-refactored-cupcake.md`.
-- _Depends on:_ none structural. Reuses the schema-version pattern from `server/src/workspace/state-migrate.ts`, the existing `notifications-slice` `pushToast` shape, the user-settings zod schema in `server/src/workspace/user-settings.ts`, the existing analysis + generation state (busy-book probe), the existing `taskkill /T /F` sidecar teardown on Windows, the `writeJsonAtomic` + rotation contract from `state-io.ts`, the annotated-tag-body release-notes contract from plan 49, and the existing `release.yml` tag-triggered CI pipeline. The release zip's exclude list at `scripts/build-release-zip.mjs:62-91` already keeps the preserved paths (`.venv`, `voices/kokoro`, `.env`, `audiobook-workspace`) out of the bundle, so the swap script's preserve list aligns naturally with what the zip doesn't carry. Pairs structurally with `fs-2` (multi-language) — `fs-2`'s `language` field on `BookStateJson` is the first real test of the migration coordinator built here.
 - _Benefit (user / architectural):_ removes the manual upgrade rite (download zip → extract → `npm ci` → restart) every alpha tester walks through every release; replaces it with a single click in the Account tab, with auto-backup-before-migrate as the data-integrity contract. Surfaces the version delta + release notes inline so testers always know what changed. Atomic rollback path when an upgrade goes sideways means the user never wakes up to a half-applied state. Architecturally: establishes the per-file schema-version pattern across the rest of the workspace (today only `state.json` has it), so `fs-2`'s `language` field — and every future non-additive shape change — has a tested migration seam instead of a one-shot ad-hoc script. Foundation work also enables future BACKLOG items `ops-1` (Windows installer) and `ops-2` (Docker image) to share the same `RELEASE_NOTES.md` + `/api/info` plumbing.
+_Full detail + acceptance:_ [#395](https://github.com/dudarenok-maker/AudioBook-Generator/issues/395).
 
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
@@ -61,153 +42,99 @@ The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ## Should — important, not blocking ship
 
-### `fs-14` — Russian UI localization (interface strings, react-i18next)
-
-Source: net-new (2026-06-01). Captured alongside the fs-2 language half ([plan 162](features/162-fs2-multilanguage.md)); user asked to localize the UX to Russian "at the same time" but it was deferred as a separate epic. **Distinct axis from fs-2:** fs-2's `language` is per-BOOK _content_ (which language the audio is in); this is the per-USER _interface_ language (which language the app chrome renders in). A user could run a Russian UI while reading English books, or vice-versa.
+### `fs-14` — Russian UI localization (interface strings, react-i18next) ([#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396))
 
 - _What:_ Localize the application interface to Russian. Stand up an i18n framework (**react-i18next** — user-confirmed choice) + a per-user `UserSettings.uiLanguage` preference with a language switcher in Account management, then translate the high-traffic surfaces first (top nav, account, upload/confirm, listen, cast) and grow coverage incrementally. Ground truth at capture: **no i18n library today**, ~1,500 hardcoded user-facing strings across ~82 components (densest: `account.tsx` ~92, `profile-drawer.tsx` ~79, `voices.tsx` ~68, `analysing.tsx` ~59, `cast.tsx` ~58, `export-audiobook.tsx` ~52). Centralisable copy already lives in `src/data/{walkthroughs,analysis-phases,regen-reasons,match-factors,listener-apps}.ts`. Locale-sensitive formatting is minimal (`src/lib/time.ts` durations only; no currency/date pickers).
-- _Acceptance:_ Account → Language switcher flips `uiLanguage` and persists through `PUT /api/user/settings`; the core surfaces (top nav, account, upload, confirm-metadata, listen, cast) render in Russian when `uiLanguage='ru'` and English otherwise; switching is live (no reload); a missing translation key falls back to English (visible, not a crash). New paired Vitest on the i18n provider wiring + the account switcher; one Playwright spec asserting the switch flips a representative surface. Bulk-string coverage tracked as incremental follow-up, not a single PR.
-- _Key files:_ NEW i18n provider + `src/locales/{en,ru}.json`; `src/store/account-slice.ts` + `server/src/workspace/user-settings.ts` zod + `openapi.yaml` (`uiLanguage`); `src/views/account.tsx` (switcher); top-bar; then the per-surface string extraction. Survey + approach captured in `~/.claude/plans/lets-look-at-the-adaptive-swing.md` ("Deferred this round" section).
-- _Depends on:_ none structural. Reuses the user-settings zod + account-slice + `PUT /api/user/settings` round-trip and the mock-echo pattern.
 - _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience.
+_Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
 
-### `srv-1` — Merge journal for deterministic alias un-link
-
-Source: plan 95 ship (2026-05-22) — Out of scope. PR [#142](https://github.com/dudarenok-maker/AudioBook-Generator/pull/142) shipped editable cast aliases with a Reattribute Lines modal that uses the preserved Phase-0a `chapterCast` as a lineage proxy to narrow the user's manual reattribution from "whole book" to "these N chapters." It works, but it's not deterministic — a chapter shows up if the alias was in its Phase-0a roster, even when the merge that put the alias on the source character happened mid-book and didn't actually rewrite any chapter-1 sentences. The user has to skim and reassign.
+### `srv-1` — Merge journal for deterministic alias un-link ([#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397))
 
 - _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.
-- _Acceptance:_ A book with a single mid-flight merge that touched 12 sentences (all in chapters 7-9) → the unlink-alias modal lists exactly those 12 sentences across chapters 7-9, nothing else. Today's `chapterCast` path would also list chapters 1-6 sentences attributed to the source if the alias name happened to be in their roster too (false positives the user has to skip).
-- _Key files:_ `server/src/routes/cast-merge.ts` (write the journal entry alongside the manuscript-edits rewrite), `server/src/analyzer/fold-minor-cast.ts` (caller-side hook so post-stage-2 folds also log), `server/src/routes/cast-aliases.ts` (replace the `chapterCast` derivation with a journal lookup), `server/src/workspace/paths.ts` (new path helper).
-- _Migration:_ books that pre-date the journal still get the `chapterCast` fallback (today's behaviour); only newly-merged ones benefit. No backfill — the lineage was lost at the old merges and there's no way to reconstruct it.
 - _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
+_Full detail + acceptance:_ [#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397).
 
-### `srv-13` — Analysis-time cross-book reuse linking — Facet B (reparse preservation)
-
-Source: net-new (2026-05-28), filed from the series-reuse repair session. Full scope in [`126-analysis-time-reuse-linking.md`](features/126-analysis-time-reuse-linking.md). **Facet A (auto-link at analysis) + the `srv-14` denormalisation it builds on shipped 2026-05-30** (this round, `feat/server-analysis-reuse-linking` — commits `cb65724` srv-14, `33cc87a` Facet A). What remains is Facet B below.
+### `srv-13` — Analysis-time cross-book reuse linking — Facet B (reparse preservation) ([#398](https://github.com/dudarenok-maker/AudioBook-Generator/issues/398))
 
 - _What:_ Preserve cross-book "reused" continuity (`matchedFrom` + unified `voiceId` + `voiceState:'reused'` + aliases) **across reparse**. Today reparse **deletes `cast.json`** (`book-state.ts:722-723`), so the links Facet A establishes evaporate on the next re-analysis. Read the existing cast before deleting and carry forward per-character `matchedFrom`/`voiceId`/`voiceState`/`aliases` for surviving characters (match by id, then name/alias), mirroring the `cast-slice.ts:mergeCharacters` preservation pattern (which already preserves tuned/locked voices). Facet A is unaffected — it re-establishes links on a full `/analysis/stream`; Facet B stops a reparse from silently dropping them in between.
-- _Acceptance:_ Reparsing a series book whose recurring characters were auto-linked keeps the Reused badges + shared designed voice instead of reverting to "Designed"/unlinked. User-tuned/locked voices still survive. New `book-state.test.ts` reparse-preservation cases.
-- _Key files:_ `server/src/routes/book-state.ts` (reparse preserve — the cast.json delete site ~L722-723), `src/store/cast-slice.ts` (`mergeCharacters` reference pattern).
-- _Depends on:_ Facet A (shipped this round).
 - _Benefit (user / technical):_ series continuity survives re-analysis — no re-running a repair after every reparse. Closes the remaining durability gap left after Facet A.
-- _Also remaining (follow-up, surfaced this round):_ a SECOND Phase-0b finalise site in `analysis.ts` — the failed-chapter retry/resume `runChapterCastSubset` path (~L3508, writing cast.json ~L3712) — does NOT run Facet A's link pass, so a book completed exclusively via the chapter-retry path persists an unlinked cast.json until the next full `/analysis/stream`. Belt-and-suspenders; fold into Facet B or a tiny standalone fix.
+_Full detail + acceptance:_ [#398](https://github.com/dudarenok-maker/AudioBook-Generator/issues/398).
 
-### `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed)
+### `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed) ([#399](https://github.com/dudarenok-maker/AudioBook-Generator/issues/399))
 
-The Qwen generation forward leaks committed-private host RAM monotonically: every sentence is a different length → a new native per-shape workspace that is never freed (climbs unbounded on variable-length generation, flat on fixed shapes; CUDA flat until it spills — pytorch/pytorch #32596). Measured 2026-06-01: **~1,150 MB/batch** committed on the variable-shape bench. This forces plan 143's process-recycle (~every 10 chapters on a long book), which is disruptive. **Goal:** a full book on one warm sidecar with no recycles and no dropped chapters — the cleanest end-to-end win now that RTF is solved (~1.04).
-
-**Already contained (mitigation, not the fix):** the process-recycle (plan 143/152) bounds it; the load-failure VRAM reclaim (plan 155) stops *failed reloads* orphaning VRAM (that orphaned-CUDA-tensor facet is closed); the **reload-doubling VRAM facet is closed** by [plan 161](features/161-sidecar-vram-reload-recycle.md) — `unload()` now takes `_synth_lock` so a mid-synth `/unload`+`/load` can't stack a second model copy past the card (which had spilled into the Windows sysmem fallback → 100%-util stall), and the watchdog gained a reserved-VRAM recycle tier (host-keyed recycling was blind to VRAM). Note this is a SEPARATE pressure from the host committed-RAM leak below.
-
-**Tried & rejected:** candidate 1 — `SIDECAR_DISABLE_MKLDNN=1` — **rejected** by the 2026-06-01 A/B: it cripples synth ~15×+ (MKLDNN is load-bearing for the Qwen CPU audio path), so it's non-viable regardless of leak effect. Flag stays default OFF. See [plan 153](features/153-sidecar-variable-shape-host-leak.md).
-
-**Open — what's left to look at (priority order):**
-
-1. **Candidate 2 — fixed-shape batch padding** (the main remaining lever). Pad to a small set of fixed width × max-len buckets so shape variety collapses → the native per-shape workspace is reused. Re-tune plan-128 bucketing + a python-side pad in `synthesize_batch` (the Node packer alone can't set the tensor shape). Carries an RTF/padding cost — measure on the `bench-tts.py --mem-sample` harness; target is to beat the ~1,150 MB/batch OFF slope toward ≈ flat. Its own branch.
-2. **Recycle-at-chapter-boundary** (blast-radius mitigation — helps even if the leak persists). **Code + tests landed — [plan 158](features/158-sidecar-soft-recycle-boundary.md), branch `feat/sidecar-soft-recycle`; awaiting full-book live-GPU acceptance.** Sidecar surfaces a `recycle_pending` signal in `/health` (set when committed crosses the SOFT `SIDECAR_RECYCLE_SOFT_MB` threshold below the hard ceiling) WITHOUT exiting; the generation worker checks it at a chapter boundary and POSTs a new sidecar `POST /recycle` (reuses `_schedule_restart_exit`'s drain → respawn → readiness gate) before the next chapter. The HARD watchdog self-exit stays as the untouched backstop. Default OFF; set on this box's `server/.env` (`SIDECAR_RECYCLE_SOFT_MB=30000`, hard `SIDECAR_RESTART_MB=35000`). Live run still needed to confirm a flat floor + zero recycles before closing.
-3. **Fallbacks if 1–2 don't flatten it:** try a known-good torch/transformers combo (avoid torch 2.0.1's variable-shape leak; transformers ≥4.40 DynamicCache lifecycle); if a clean `--mem-sample` repro persists, file upstream `QwenLM/Qwen3-TTS` (the bench IS the minimal repro).
-
-- _Harness / diagnostic (in place, reusable):_ `bench-tts.py --mem-sample` (seeded variable-shape batches → committed-slope verdict) + `GET /debug/memory` `committed_mb` + the `sidecar memory:` watchdog log. **Cap A/B runs at ~25 batches** — beyond that the bench drives CUDA into a >6 GB WDDM-spill regime production never hits.
-- _Key files:_ `server/src/tts/synthesise-chapter.ts` (batch shaping / bucketing for item 1), `server/tts-sidecar/main.py` (python-side pad in `synthesize_batch`; the watchdog / `recycle_pending` for item 2), `server/src/routes/generation.ts` (boundary-recycle check for item 2).
+- _What:_ The Qwen generation forward leaks committed host RAM monotonically (a new never-freed native workspace per sentence length; ~1,150 MB/batch), forcing plan-143 process-recycles every ~10 chapters. Goal: a full book on one warm sidecar with no recycles and no dropped chapters, now that RTF is solved (~1.04). Open levers: fixed-shape batch padding, chapter-boundary recycle, torch/transformers version pin.
 - _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved.
-- _Keep this item open_ until a full-book run holds a flat committed floor with zero recycles; on a pass, note "recycle now a safety net, not load-bearing" and close.
+_Full detail + acceptance:_ [#399](https://github.com/dudarenok-maker/AudioBook-Generator/issues/399).
 
-### `fe-2` — Keyboard shortcuts / power-user tuning panel
-
-Source: net-new (2026-05-18). Promoted Could → Should (2026-06-02).
+### `fe-2` — Keyboard shortcuts / power-user tuning panel ([#400](https://github.com/dudarenok-maker/AudioBook-Generator/issues/400))
 
 - _What:_ Add a settings panel (under a gear icon in the top-bar) for power-user tuning: keyboard-shortcut overrides (e.g. spacebar = play/pause), runtime knobs (SSE chunk size, TTS concurrency cap, debounce values for autosave), accessibility toggles (high-contrast theme, larger text). Settings persist in localStorage and apply on next render.
-- _Acceptance:_ Open settings, change autosave debounce from 500ms to 2000ms → next edit waits 2s before write. Override "play/pause" shortcut to "K" → keyboard "K" toggles mini-player. Vitest covers the persistence + shortcut binding.
-- _Key files:_ new `src/views/settings.tsx`; new `src/lib/keybindings.ts`; new `src/store/settings-slice.ts`; `src/components/layout.tsx` (gear icon entry point).
-- _Depends on:_ none.
 - _Benefit (technical / accessibility):_ power-user tuning surfaces today's hardcoded values; keyboard navigation closes an accessibility gap.
+_Full detail + acceptance:_ [#400](https://github.com/dudarenok-maker/AudioBook-Generator/issues/400).
 
-### `fe-1` — In-app LAN HTTPS banner under dev settings
-
-Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item. Promoted Could → Should (2026-06-02).
+### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401))
 
 - _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
-- _Acceptance:_ When LAN_HTTPS=1 is set on the server, the Account view shows a "LAN access" card with the live HTTPS URL + a QR code linking to `/cert/root.crt`. Tapping "Copy URL" puts the URL in the clipboard.
-- _Key files:_ new `src/components/lan-access-card.tsx`; `src/views/account.tsx` (or wherever account settings render) to mount the card; `src/lib/api.ts` to wrap `GET /api/export/lan` if not already wrapped.
-- _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
+_Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401).
 
-### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
-
-Source: net-new (2026-05-21). Plan 81 wave 4 deferred item. Promoted Could → Should (2026-06-02).
+### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant ([#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402))
 
 - _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
-- _Acceptance:_ All action-revealing hover patterns in cast, manuscript, voices, listen, generation views get a `coarse-pointer:opacity-100` (or appropriate) fallback. A test confirms `(pointer: coarse)` simulation reveals the same buttons hover would.
-- _Key files:_ grep `src/**/*.tsx` for `group-hover:` / `peer-hover:` / `hover:opacity-0`; apply per-component judgement.
-- _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
+_Full detail + acceptance:_ [#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402).
 
 ### Dependency major upgrades
 
 Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit. The audit cleared the deadline-driven CI-action bump (`ops-8`) + the genuinely-safe minor bumps (TypeScript → latest 5.x, `@google/genai` → 2.7, Node-floor pin) inline, and filed every framework **major** that is now behind here — each researched to "pickup-ready" (current → target, breaking-change surface, blast radius, automated migration path if any, risk). None blocks ship; pick up when time allows. Ordered foundational/low-risk → broad/high-risk. **Note on the React cluster:** `fe-18` (React 19), `fe-21` (router 7), and `fe-19` (Vite/Vitest) are commonly upgraded together — sequence `fe-19` → `fe-18` → `fe-21` in one round.
 
-#### `fe-19` — Vite 5 → 7 + Vitest 2 → 3 + @vitejs/plugin-react 4 → 5 (one unit)
+#### `fe-19` — Vite 5 → 7 + Vitest 2 → 3 + @vitejs/plugin-react 4 → 5 (one unit) ([#403](https://github.com/dudarenok-maker/AudioBook-Generator/issues/403))
 
 - _What:_ bump `vite ^5.2.0 → 7.x`, `vitest ^2.1.9 → 3.x` (root + `server/`), `@vitejs/plugin-react ^4.3.0 → 5.x` together. Vite 7 requires Node 20.19+/22.12+ — we run Node 24, fine. Vite-7 support lands in **Vitest 3.2+**; plugin-react 5 is Vite-7 compatible. Breaking surface: `build.rollupOptions` `manualChunks` object-form dropped (function-form deprecated), `import.meta.url` no longer polyfilled in UMD/IIFE, default browser target → `baseline-widely-available`, Vitest 3 config/reporter API tweaks. Audit `vite.config.ts`, `server/vitest.config.ts` + `server/vitest.config.slow.ts`, and any `manualChunks`.
-- _Acceptance:_ `npm run build` + all four vitest harnesses (frontend, server fast, server slow, a11y) + e2e green on Vite 7 / Vitest 3; no `manualChunks` deprecation; CI `vitest --changed` path still works.
-- _Key files:_ root + `server/package.json`; `vite.config.ts`; `server/vitest.config.ts`, `server/vitest.config.slow.ts`.
-- _Depends on:_ none (do before/with the React 19 cluster).
 - _Benefit (technical / architectural):_ faster builds + test runner; back on a supported tooling line (currently two majors behind). _Risk: medium._
+_Full detail + acceptance:_ [#403](https://github.com/dudarenok-maker/AudioBook-Generator/issues/403).
 
-#### `ops-10` — TypeScript 5 → 6
+#### `ops-10` — TypeScript 5 → 6 ([#404](https://github.com/dudarenok-maker/AudioBook-Generator/issues/404))
 
 - _What:_ bump `typescript ^5.9.0 → 6.x` (root + `server/`). TS 6.0 shipped as the latest major (this round held at 5.9.3 as the safe line). Breaking surface: removed long-deprecated compiler options + stricter defaults; re-run `npm run typecheck` (root + server) and `npm run lint` (typescript-eslint must be on a TS-6-compatible release — verify `typescript-eslint ^8` supports it or bump). Low-friction historically, but still a major.
-- _Acceptance:_ `npm run typecheck` + `npm run lint` green on TS 6 across root + server; no removed-option errors; `tsconfig.json` (both) compile clean.
-- _Key files:_ root + `server/package.json` (`typescript`, possibly `typescript-eslint`); `tsconfig.json`, `tsconfig.node.json`, `server/tsconfig.json`.
-- _Depends on:_ none.
 - _Benefit (technical):_ latest compiler + perf; supported line. _Risk: low-medium._
+_Full detail + acceptance:_ [#404](https://github.com/dudarenok-maker/AudioBook-Generator/issues/404).
 
-#### `srv-25` — Zod 3 → 4 (and drop `zod-to-json-schema`)
+#### `srv-25` — Zod 3 → 4 (and drop `zod-to-json-schema`) ([#405](https://github.com/dudarenok-maker/AudioBook-Generator/issues/405))
 
 - _What:_ bump `zod ^3.23.8 → 4.x`. Zod 4 ships **native `z.toJSONSchema()`**, so the `zod-to-json-schema` dependency can be **removed** entirely (today it builds the Gemini/Ollama structured-output schemas). Breaking surface: string-format validators moved to top-level (`z.string().email()` → `z.email()`, `.uuid()`, `.url()`), unified error-customization param. Affected: `server/src/analyzer/{ollama,gemini}.ts`, `server/src/handoff/schemas.ts`, `server/src/workspace/user-settings.ts`, `server/src/routes/{user-settings,cast-series-patch}.ts` (8 files). Migration: `npx @zod/codemod --transform v3-to-v4`.
-- _Acceptance:_ all server tests green on Zod 4; `zod-to-json-schema` removed from `server/package.json`; the JSON Schema fed to Gemini/Ollama is equivalent (golden-compare the generated schema before/after, since the analyzer contract depends on its exact shape).
-- _Key files:_ `server/package.json`; the 8 files above; any `zodToJsonSchema(...)` call sites → `z.toJSONSchema(...)`.
-- _Depends on:_ none.
 - _Benefit (technical / architectural):_ large parse/compile perf win, smaller bundle, **deletes a whole dependency**. _Risk: medium (verify the generated schema still satisfies the structured-output contract)._
+_Full detail + acceptance:_ [#405](https://github.com/dudarenok-maker/AudioBook-Generator/issues/405).
 
-#### `srv-24` — Express 4 → 5
+#### `srv-24` — Express 4 → 5 ([#406](https://github.com/dudarenok-maker/AudioBook-Generator/issues/406))
 
 - _What:_ bump `express ^4.19.2 → 5.x` (GA). Breaking surface: `path-to-regexp` v8 route syntax (`*` → named `/*splat`, optional `:param?` → `{/:param}`), removed legacy signatures (`app.del`, `res.json(status, body)`, `res.send(status)`), rejected-promise propagation in middleware, `req.query` is now a getter. Audit every route under `server/src/routes/` for wildcard/optional params + the removed signatures.
-- _Acceptance:_ all server + supertest route tests green on Express 5; every route still resolves (no path-to-regexp parse errors at boot); e2e audio/upload paths unaffected.
-- _Key files:_ `server/package.json`; `server/src/index.ts` (app + middleware mount order); all `server/src/routes/*.ts`.
-- _Depends on:_ none.
 - _Benefit (technical):_ supported GA major; async-error handling improvements. _Risk: medium (route-syntax migration is the main hazard)._
+_Full detail + acceptance:_ [#406](https://github.com/dudarenok-maker/AudioBook-Generator/issues/406).
 
-#### `fe-18` — React 18 → 19
+#### `fe-18` — React 18 → 19 ([#407](https://github.com/dudarenok-maker/AudioBook-Generator/issues/407))
 
 - _What:_ bump `react`/`react-dom ^18.3.1 → 19.x`, `@types/react`/`@types/react-dom → 19`, and — **required for React-19 peer compat (confirmed 2026-06-01)** — `react-redux ^9.1.0 → ^9.2.0+` and `@reduxjs/toolkit ^2.2.0 → ^2.5.0+`. Breaking surface: removed legacy APIs (`propTypes`/`defaultProps` on function components, string refs, legacy context), ref-as-prop, stricter StrictMode/`useEffect` double-invoke. Blast radius: large (all of `src/components`, `src/views`, `src/modals`). Codemod: `npx codemod@latest react/19/migration-recipe`. Pair with a full e2e pass.
-- _Acceptance:_ frontend unit + a11y + e2e green on React 19; no legacy-API warnings in test output; RTK/react-redux on their React-19-compatible minors.
-- _Key files:_ root `package.json`; broad `src/**` (codemod-driven); `src/main.tsx` (root render).
-- _Depends on:_ pairs with `fe-19` (Vite/Vitest) — do Vite/Vitest first or together.
 - _Benefit (technical):_ unblocks React-19-only ecosystem deps; keeps RTK/react-redux on a supported line. _Risk: medium-high (broad surface)._
+_Full detail + acceptance:_ [#407](https://github.com/dudarenok-maker/AudioBook-Generator/issues/407).
 
-#### `fe-21` — react-router-dom 6 → 7
+#### `fe-21` — react-router-dom 6 → 7 ([#408](https://github.com/dudarenok-maker/AudioBook-Generator/issues/408))
 
 - _What:_ bump `react-router-dom ^6.26.0 → 7.x` (used in 10 files incl. `src/main.tsx`, `src/routes/index.tsx`, `src/components/layout.tsx`, `src/views/{generation,upload}.tsx`). v7 requires React 18+ and turns the v6 `future` flags on by default. **Confirm interplay with the custom hash router** (`src/lib/router.ts`) — react-router may own only a thin surface here, which could make this low-effort.
-- _Acceptance:_ routing + the hash-router grammar behave identically on v7; frontend + e2e green; no `future`-flag deprecation warnings.
-- _Key files:_ root `package.json`; the 10 `react-router-dom` consumers; `src/lib/router.ts` (interplay check).
-- _Depends on:_ `fe-18` (React 19) — sequence as a follow-on.
 - _Benefit (technical):_ supported major; aligns with React 19. _Risk: low-medium._
+_Full detail + acceptance:_ [#408](https://github.com/dudarenok-maker/AudioBook-Generator/issues/408).
 
-#### `fe-20` — Tailwind 3 → 4
+#### `fe-20` — Tailwind 3 → 4 ([#409](https://github.com/dudarenok-maker/AudioBook-Generator/issues/409))
 
 - _What:_ bump `tailwindcss ^3.4.10 → 4.x` + add `@tailwindcss/postcss`. v4 is CSS-first: `@import "tailwindcss"` replaces the `@tailwind` directives; theme moves into `@theme` (the JS `tailwind.config.ts` still works via the `@config` directive for back-compat). **Our setup is unusually well-aligned** — `src/styles.css` already declares design tokens as CSS custom properties (`--peach`, `--ink`, …) and `tailwind.config.ts` references them, which is exactly v4's "every token is a CSS var" model. Run `npx @tailwindcss/upgrade` (automates ~90% incl. class renames). v4 drops the need for `autoprefixer`/`postcss-import` boilerplate.
-- _Acceptance:_ all four core views render pixel-identically; `npm run test:e2e:visual` re-baselined (the snapshots WILL shift — budget a re-bake); lint/build green; design-token CSS-vars contract preserved (no hex literals leak in).
-- _Key files:_ root `package.json`; `src/styles.css` (`@import` + `@theme`); `tailwind.config.ts`; `postcss.config.js`; visual baselines under `e2e/**/visual.spec.ts/`.
-- _Depends on:_ none.
 - _Benefit (technical):_ faster engine, runtime theme switching, simpler toolchain. _Risk: medium — visual-regression baselines shift; needs a snapshot re-bake._
+_Full detail + acceptance:_ [#409](https://github.com/dudarenok-maker/AudioBook-Generator/issues/409).
 
-#### `srv-26` — pdfjs-dist 4 → 5
+#### `srv-26` — pdfjs-dist 4 → 5 ([#410](https://github.com/dudarenok-maker/AudioBook-Generator/issues/410))
 
 - _What:_ bump `pdfjs-dist ^4.10.38 → 5.x`. ESM-only, Node 20+, worker-setup changes. Single consumer (PDF manuscript parse). Verify the worker wiring + the parse path still resolve under the v5 ESM layout.
-- _Acceptance:_ PDF manuscript upload → parse end-to-end works on v5 (the canonical-recipe regression); server tests green.
-- _Key files:_ `server/package.json`; the PDF-parse consumer in `server/src/` (worker/import setup).
-- _Depends on:_ none.
 - _Benefit (technical):_ supported major + security fixes. _Risk: low-medium._
+_Full detail + acceptance:_ [#410](https://github.com/dudarenok-maker/AudioBook-Generator/issues/410).
 
 _`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026-06-01** via
 [plan 164](features/164-deps-ci-hygiene.md) — all workflows now pin the latest Node-24 action
@@ -224,296 +151,177 @@ handoffs). Sub-groups and the items within them are ranked top = highest priorit
 
 ### Audio & playback
 
-#### `fs-9` — Configurable chapter-title silence durations
-
-Source: [`28-chapter-audio-format.md`](features/archive/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
+#### `fs-9` — Configurable chapter-title silence durations ([#411](https://github.com/dudarenok-maker/AudioBook-Generator/issues/411))
 
 - _What:_ Promote the two hard-coded constants `CHAPTER_LEAD_SILENCE_SEC = 1.5` and `CHAPTER_POST_TITLE_SILENCE_SEC = 1.5` in `server/src/tts/synthesise-chapter.ts` to a per-book setting on `state.json`. Surface in the Listen view's metadata editor (the same panel that already edits narratorCredit / genre / etc.) as a "Chapter break duration" slider with a small preset list (e.g. 0.5/1/1.5/2/3 s) for the leading + post-title legs. Generation route reads the per-book values and forwards into `synthesiseChapter` opts.
-- _Acceptance:_ Editing a book's silence durations and regenerating one chapter produces an MP3 whose leading + post-title silence matches the new setting (ffprobe / spectrogram). Default for legacy books stays 1.5 + 1.5. Existing chapter-audio-format paired tests stay green.
-- _Key files:_ `server/src/tts/synthesise-chapter.ts` (params); `server/src/routes/generation.ts` (forward); `server/src/workspace/scan.ts` (state-json field); `src/components/listen/listen-header.tsx` or sibling metadata editor (UI); `openapi.yaml` (book-state shape).
-- _Depends on:_ none.
 - _Benefit (user):_ lets the user pace chapter breaks to match book length / mood (a tight 0.5 s for a short kids' book, a longer 3 s for a slow-burn novel) without code changes. Today the 3.0 s default is "audiobook-standard" but not universally right.
+_Full detail + acceptance:_ [#411](https://github.com/dudarenok-maker/AudioBook-Generator/issues/411).
 
-#### `fs-10` — Render the chapter-title segment on the Listen view timeline
-
-Source: [`28-chapter-audio-format.md`](features/archive/28-chapter-audio-format.md) follow-up — net-new (2026-05-21). Deferred from PR #101 (`fix/server-voiced-chapter-titles-and-pauses`).
+#### `fs-10` — Render the chapter-title segment on the Listen view timeline ([#412](https://github.com/dudarenok-maker/AudioBook-Generator/issues/412))
 
 - _What:_ The new title segment in `segments.json` (kind: `'title'`, empty `sentenceIds[]`) is currently filtered out at the `ChapterAudio` API boundary in `server/src/routes/chapter-audio.ts` because the wire contract types `sentenceId` as a required integer. To surface the title on the listen-view timeline (a labelled "TITLE" pill anchored at the start of the chapter, ~3 s wide including silence), widen the API segment shape so `sentenceId` is optional and add an optional `kind?: 'title' | 'sentence'` discriminator, regenerate `src/lib/api-types.ts`, then teach `src/components/listen/listen-player-region.tsx` to render title-kind segments differently from sentence-kind segments.
-- _Acceptance:_ The listen view's chapter timeline shows a short "TITLE" pill at the head of each chapter rendered after this lands. Clicking it seeks to t=0. Pre-existing chapters whose `segments.json` has no title-kind row degrade gracefully (no title pill — same as today).
-- _Key files:_ `openapi.yaml` (ChapterAudio segments shape); `src/lib/api-types.ts` (regenerated); `server/src/routes/chapter-audio.ts` (drop the filter, pass kind through); `src/components/listen/listen-player-region.tsx`.
-- _Depends on:_ none (the on-disk segment shape already carries `kind: 'title'` since PR #101).
 - _Benefit (user):_ visual cue that matches the audible cue — listener sees "you're hearing the title now" before the body segments start. Today the title beat is audible-only.
+_Full detail + acceptance:_ [#412](https://github.com/dudarenok-maker/AudioBook-Generator/issues/412).
 
-#### `fe-6` — Waveform memoisation
-
-Source: net-new (2026-05-21). Spun off from the perf-tuning survey (item C6).
+#### `fe-6` — Waveform memoisation ([#413](https://github.com/dudarenok-maker/AudioBook-Generator/issues/413))
 
 - _What:_ In `src/components/waveform.tsx`, stabilise the 48-bar `useMemo` (memo key invariant against re-mount) and lift the animation interval to the parent so it ticks once per listen-view mount (not per waveform instance).
-- _Acceptance:_ Listen view with N visible waveforms ticks on one shared interval (not N intervals); the rendered output is visually unchanged from today.
-- _Key files:_ `src/components/waveform.tsx`; parent in `src/components/listen/listen-player-region.tsx`.
-- _Depends on:_ none.
 - _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
+_Full detail + acceptance:_ [#413](https://github.com/dudarenok-maker/AudioBook-Generator/issues/413).
 
-#### `fs-3` — Streaming audio for live playback during chapter generation
-
-Source: [`28-chapter-audio-format.md`](features/archive/28-chapter-audio-format.md) follow-ups.
-
-> **Re-prioritised Should → Could (2026-05-26):** generation now runs close to real-time speech speed (Qwen end-to-end ~RTF 1.15, Kokoro faster), so the wait a streaming player would hide is small — a chapter finishes about as fast as you could start listening to it stream. Worth doing for the "listen as it generates" polish, not for throughput.
+#### `fs-3` — Streaming audio for live playback during chapter generation ([#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414))
 
 - _What:_ Change the chapter audio pipeline from "encode the full chapter, then signal complete" to "emit MP3 frames as ffmpeg produces them, signal each chunk via SSE, frontend appends to a MediaSource". Magic moment: listen as it generates.
-- _Acceptance:_ Generating a chapter shows audio progress under the play cursor before the chapter completes. Existing per-chapter file is still written atomically at the end.
-- _Key files:_ `server/src/tts/synthesise-chapter.ts`; `server/src/tts/mp3.ts`; `src/components/mini-player.tsx` for the MediaSource consumer.
 - _Benefit (user):_ "listen as it generates" is the magic moment audiobook tools sell on.
+_Full detail + acceptance:_ [#414](https://github.com/dudarenok-maker/AudioBook-Generator/issues/414).
 
 ### Revisions & history
 
-#### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history)
-
-Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ships the read-only history view; this entry covers the multi-step rollback that needs snapshot-per-entry storage.
-
-> **Standalone value (2026-05-26):** kept in Could on its own merits after `fs-4` (per-segment commits) was retired — this is _chapter-level_ non-linear undo (whole-entry rollback), not segment-level, and plan 55's slice plumbing (`rolledBack` reducer + `reversible` field) is already on disk, so it's a self-contained feature, not gated on segment-level revision.
+#### `fs-5` — Multi-step rollback / snapshot-per-entry (revision history) ([#415](https://github.com/dudarenok-maker/AudioBook-Generator/issues/415))
 
 - _What:_ Extend plan 20's `preserveExistingAsPrevious` to write `.previous.<entryId>.<slug>.mp3` per timeline entry (not just one `.previous.<slug>.mp3` per chapter). Wire a server `POST /api/books/:bookId/revisions/:entryId/rollback` endpoint that restores a specific timeline entry's audio + flips subsequent entries to `rolled-back-from`. Add a GC pass that prunes oldest snapshots after the user commits (or when disk pressure exceeds a cap, e.g. 10 entries / chapter).
-- _Acceptance:_ Generate chapter, regenerate twice, accept both. Open History → 2 active entries each `reversible: true`. Click Rollback on entry 1 → chapter audio reverts to entry-1's state; entry 2 marked `rolled-back-from`. New rollback can target a still-reversible entry; double-rollback → 409.
-- _Key files:_ `server/src/workspace/preserve-previous-audio.ts` (extend filename pattern); new `server/src/routes/revisions-rollback.ts`; `src/components/revision-timeline-modal.tsx` (enable Rollback button on reversible entries); slice already plumbed (plan 55's `rolledBack` reducer + `reversible` field).
-- _Depends on:_ plan 55 shipped (slice plumbing already on disk).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
+_Full detail + acceptance:_ [#415](https://github.com/dudarenok-maker/AudioBook-Generator/issues/415).
 
 ### Cast, voice & duplicates
 
-#### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>`
-
-Source: net-new (2026-05-22).
-
-> **Scope note (2026-05-24):** [plan 108](features/108-qwen-coexistence.md) surfaces `<VoiceOverridePicker>` for every character (not just library-matched ones) and reuses `playSampleWithAutoLoad` for current-vs-proposed audition in the rebaseline modal — so the in-row `▶` affordance described here is a natural add inside the same picker work. Land it as part of plan 108's Wave 4 per-character picker, or keep as a standalone follow-up. Deferred from the picker-autocomplete bundle — the model-voice override picker now uses the shared `<SearchablePicker>` primitive but renders each voice row as just `name`. The original plan reserved a tiny `▶` slot on each row for in-list auditioning so the user can preview a voice without committing the override; v1 ships with the row label only, matching the legacy `<select>` parity.
+#### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>` ([#416](https://github.com/dudarenok-maker/AudioBook-Generator/issues/416))
 
 - _What:_ Add a per-row Play button that routes through `playSampleWithAutoLoad` (same helper the existing "Preview voice" / cast-row swatch use). Hover/focus reveals the icon on pointer devices; `coarse-pointer:opacity-60` keeps it faintly visible on touch. Sample text comes from the same drawer-level `previewText` the candidate-preview block uses. Single-row in-flight gate (the helper already coalesces concurrent clicks).
-- _Acceptance:_ Open the Profile Drawer's voice-override picker on the Kokoro tab. Click the `▶` next to a voice → that voice's sample plays without changing the current override. Pick the voice → override commits. Concurrent rapid clicks across rows fire one synth at a time.
-- _Key files:_ `src/components/voice-override-picker.tsx` (renderItem extension), `src/lib/play-sample-with-auto-load.ts` (reuse as-is), no test churn beyond a new wrapper test for the play affordance.
-- _Depends on:_ none.
 - _Benefit (user):_ shortens the "scrolled past 40 Kokoro voices, want to hear three before committing" flow from "pick → close → preview from drawer → pick another" to "▶ in-row, ▶ in-row, pick the one I like." Pairs with the autocomplete added in this bundle — search narrows the list, in-row preview judges the few remaining options.
+_Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-Generator/issues/416).
 
-#### `fs-6` — Batch voice-replace across all books
-
-Source: net-new (2026-05-18).
-
-> **Re-scoped (2026-05-24, plan 108 shipped):** the _series-scoped_ per-character re-map is now delivered by [plan 108](features/108-qwen-coexistence.md)'s "Rebaseline the series" modal + `PUT /api/voices/:voiceId/override?scope=series` (re-map a character's engine + base voice across a series with current-vs-proposed audition). This item now covers ONLY what remains: the _library-level, workspace-wide_ "pick voice A → replace with voice B everywhere across ALL books (not just one series)" bulk affordance + multi-book audio invalidation.
+#### `fs-6` — Batch voice-replace across all books ([#417](https://github.com/dudarenok-maker/AudioBook-Generator/issues/417))
 
 - _What:_ Add a "Replace voice everywhere" affordance in the voice library: pick a current voice, pick a replacement, see a preview of all (book, character) pairs that would be affected, confirm. Affected books' cast slices are mutated; audio is invalidated (regen prompt per book).
-- _Acceptance:_ Three books each use voice `am_michael` for one character → batch replace `am_michael` → `am_eric` shows 3 affected pairs, confirm rewrites all three cast.json files, audio marked stale. Vitest covers the dry-run preview + write logic; e2e covers the modal flow.
-- _Key files:_ new `src/modals/batch-voice-replace.tsx`; `src/views/voices.tsx` (entry point); `server/src/routes/voices.ts` (cross-book write endpoint); new `server/src/audio/invalidate.ts` (multi-book audio invalidation).
-- _Depends on:_ none.
 - _Benefit (user):_ cross-book voice consistency without per-book re-casting. Common need when switching a recurring narrator across a series.
+_Full detail + acceptance:_ [#417](https://github.com/dudarenok-maker/AudioBook-Generator/issues/417).
 
-#### `srv-7` — Cross-series voice linking
-
-Source: net-new (2026-05-24). Surfaced during [plan 108](features/108-qwen-coexistence.md) planning — series scoping stops at the `(author, series)` boundary.
+#### `srv-7` — Cross-series voice linking ([#418](https://github.com/dudarenok-maker/AudioBook-Generator/issues/418))
 
 - _What:_ Plan 108's per-character engine + voice changes propagate across one series via `findAuthorSeriesForBookId`. A character who recurs across DIFFERENT series by the same author (or a shared-universe crossover) is not covered — the rebaseline / per-character write stops at the series boundary by design. Add an explicit cross-series link affordance (extend `Character.aliases` / a new link record) so a deliberate "this is the same voice across series X and Y" decision propagates voice + engine across both.
-- _Acceptance:_ Link character A in series X to character B in series Y; a voice/engine change on A also writes B's cast.json. No implicit cross-series propagation without an explicit link (preserves the current series-boundary default).
-- _Key files:_ `server/src/workspace/series-cast-scan.ts`; `server/src/routes/voices.ts` (cross-series write path); a new link record on `Character`.
-- _Depends on:_ plan 108 (series-scoped write) shipped.
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
+_Full detail + acceptance:_ [#418](https://github.com/dudarenok-maker/AudioBook-Generator/issues/418).
 
-#### `fs-12` — Standalone library-voice authoring (a voice not tied to one character)
-
-Source: [`22-voice-library.md`](features/archive/22-voice-library.md); _What_ revised 2026-05-26 for the Qwen voice-design engine. Promoted Won't → Could (2026-06-02).
+#### `fs-12` — Standalone library-voice authoring (a voice not tied to one character) ([#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419))
 
 - _What:_ A standalone library-voice authoring surface on top of the per-character Qwen design flow (plan 108, which already designs → clones → caches → reuses a bespoke voice scoped to a cast member). Add first-class library entries not tied to a single character: design a voice from a persona (or a reference clip), name + tag + pin it, reuse it across books, with optional fine-tuning of an already-designed voice.
-- _Acceptance:_ From the voice library, a "Create voice" action opens an authoring flow (persona text → design → audition); saving adds a named, taggable, pinnable library entry assignable to any character in any book; reusing it across books reproduces the same voice (shared cached embedding). Vitest covers the create/save/reuse logic; one e2e covers the authoring modal.
-- _Key files:_ `src/views/voices.tsx` (Create-voice entry point); new authoring modal under `src/modals/`; reuse the Qwen design route (`server/src/routes/qwen-voice.ts`) + the voice-embedding cache; `server/src/routes/voices.ts` (standalone library-entry write, not character-scoped).
-- _Depends on:_ plan 108 (per-character Qwen design + embedding cache) shipped — this generalises it to character-independent entries.
 - _Benefit (user):_ build a personal stable of named narrators to assign across the catalogue, independent of any single character. Pairs with `fe-12` (bulk library ops): a from-scratch author flow is what grows the library big enough to need them.
+_Full detail + acceptance:_ [#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419).
 
-#### `fe-12` — Bulk pin / bulk delete in voice library
-
-Source: [`22-voice-library.md`](features/archive/22-voice-library.md); revised 2026-05-26 for Qwen custom voices. Promoted Won't → Could (2026-06-02) — the per-character Qwen design flow accumulates many cached custom voices, so a heavy multi-book library crosses the ~50-entry threshold where per-voice curation gets painful.
+#### `fe-12` — Bulk pin / bulk delete in voice library ([#420](https://github.com/dudarenok-maker/AudioBook-Generator/issues/420))
 
 - _What:_ Multi-select in the voice library with bulk actions — pin/unpin and delete across the selection (with a confirm + count). Deletion respects in-use voices (warn or block when a voice is assigned to a character in any book).
-- _Acceptance:_ Select N voices → bulk pin flips all N; bulk delete removes the unused ones and warns on any in-use voice; the library refreshes. Vitest covers the selection + bulk-action reducers; one e2e covers the multi-select flow.
-- _Key files:_ `src/views/voices.tsx` (selection state + bulk-action bar); `server/src/routes/voices.ts` (bulk delete/pin endpoint + in-use guard).
-- _Depends on:_ none (no longer blocked on `fs-12` — Qwen's per-character design already produces the bulk-worthy entries).
 - _Benefit (user):_ curating a large accumulated voice library stops being a per-voice click-fest.
+_Full detail + acceptance:_ [#420](https://github.com/dudarenok-maker/AudioBook-Generator/issues/420).
 
 ### Engine, sidecar & analyzer
 
-#### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking)
-
-Source: [`30-global-model-control.md`](features/archive/30-global-model-control.md) "When to extend the pattern".
+#### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
 - _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) drives today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. Per the 2026-05-21 Kokoro-Stop-pill change, the hook now fans out per engine: it returns `{ coqui, kokoro, evictionNotice, loadErrorNotice, dismissNotices }` from a single /health probe. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
-- _Acceptance:_ The new surface reads `ttsLifecycle` from `useOutletContext<LayoutContext>()` (pattern from `generation.tsx`), picks the per-engine slot it cares about (`ttsLifecycle.coqui` / `ttsLifecycle.kokoro`), and renders the right pill via `ModelControlPill` with the matching `engineLabel`. No new `setInterval`, no new `/health` poll, no duplicated `evictionNotice` / `loadErrorNotice` state.
-- _Key files:_ `src/lib/use-tts-lifecycle.ts` (no changes expected — the per-engine fan-out is already in place); `src/components/layout.tsx` (no changes — already exposes the context and the `selectEnginesInUse` mounting pattern); `src/store/engines-in-use-selector.ts` (extend only if the new surface needs a different "is this engine relevant" predicate); the new surface's component file.
-- _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
 - _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
+_Full detail + acceptance:_ [#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421).
 
-#### `fs-13` — Exact per-character progress under parallel synthesis
-
-Source: net-new (2026-05-28). Surfaced shipping the generation progress-bounce fix (PR #308, `fix/server-generation-progress-bounce`). That fix made the chapter "line N of M" counter monotonic by deriving it from a shared `completed` GROUP COUNT (plan 107 invariant 6) instead of each in-flight group's narrative position. Side effect: the per-character mini-bars in the Generate view (`linesDoneAt(positions, chapter.currentLine)`) now read `currentLine` as a COUNT, not a narrative watermark — so under genuinely out-of-order completion (`GPU_VRAM_BUDGET`/poolWidth > 1 + Qwen batching) a character whose lines cluster late/early in the chapter can read slightly low/high until the count catches up. Strictly better than the prior backward bounce, but no longer an exact per-character tally.
+#### `fs-13` — Exact per-character progress under parallel synthesis ([#422](https://github.com/dudarenok-maker/AudioBook-Generator/issues/422))
 
 - _What:_ Carry per-character completion in the generation SSE tick so the Generate view renders an exact per-character "X / Y done" rather than deriving an approximation from one chapter-wide `currentLine` count. Likely shape: each completed-group tick includes the completed sentence id(s) (or a per-character done tally), and the frontend tracks the SET of completed positions per character instead of `linesDoneAt(positions, currentLine)`. Keep the chapter-level `currentLine`/`progress` as the monotonic count it is today — that part is correct.
-- _Acceptance:_ Generate a multi-character chapter at `GPU_VRAM_BUDGET=2` + `QWEN_BATCH_SIZE=8` (forces out-of-order completion). Each character's mini-bar reflects exactly that character's synthesised lines at all times — never reads ahead of or behind its true done count — while the chapter-level counter stays monotonic. New paired test pins per-character accuracy under forced out-of-order completion.
-- _Key files:_ `server/src/routes/generation.ts` (tick payload — emit completed sentence id / per-character tally; `onGroupComplete` already knows the group's `characterId` + `sentenceIds`), `server/src/tts/synthesise-chapter.ts` (`fireComplete`), `openapi.yaml` + `src/lib/api-types.ts` (`GenerationTick` shape), `src/lib/generation-progress.ts` (`linesDoneAt` → set-based), `src/store/chapters-slice.ts` (track completed positions per character), `src/views/generation.tsx` (per-character bar source).
-- _Depends on:_ the progress-bounce fix shipped (PR #308) — builds on the same `completed`-count plumbing.
 - _Benefit (user):_ per-character progress bars become exact under parallel synthesis, not a monotonic approximation. Low urgency — the bars are already monotonic and directionally right; this only bites if a user watches a single character's bar closely during a heavily-parallel run.
+_Full detail + acceptance:_ [#422](https://github.com/dudarenok-maker/AudioBook-Generator/issues/422).
 
-#### `srv-23` — Opt-in "refresh personas + re-design voices" sweep for existing books
-
-Source: net-new (2026-06-01), deferred half of plan [`160-voicedesign-persona-format.md`](features/160-voicedesign-persona-format.md). Plan 160 upgraded `buildVoiceStylePrompt` to the official Qwen VoiceDesign format (sentence + purpose clause + pitch + objectivity), but only for personas generated FROM NOW ON — existing books keep their old-format `voiceStyle` strings and their already-designed `voices/qwen/<id>.pt` embeddings until manually re-generated and re-designed.
+#### `srv-23` — Opt-in "refresh personas + re-design voices" sweep for existing books ([#423](https://github.com/dudarenok-maker/AudioBook-Generator/issues/423))
 
 - _What:_ a per-book opt-in action that re-runs `generate-all` voice-style then re-designs every Qwen voice from the refreshed personas, so an existing book can adopt the improved format in one click. Must NOT clobber hand-edited personas without confirmation, and must surface the Gemini-quota + GPU-time cost up front.
-- _Acceptance:_ on a book designed under the old format, the sweep regenerates personas (new format), re-designs each Qwen voice, and the next generation audibly reflects the new designs; a hand-edited persona is preserved or explicitly confirmed before overwrite.
-- _Key files:_ `server/src/routes/voice-style.ts` (`generate-all`), `server/src/routes/qwen-voice.ts` (design), a new batch orchestrator, and the cast/Account UI affordance.
-- _Depends on:_ plan 160 shipped (the new prompt).
 - _Benefit (user):_ existing libraries can adopt the better voice-design format without re-casting by hand. Low urgency — costly (quota + GPU) and only matters for books a user wants to re-render.
+_Full detail + acceptance:_ [#423](https://github.com/dudarenok-maker/AudioBook-Generator/issues/423).
 
 ### Workflow, power-user & dev settings
 
-#### `srv-2` — Auto-backup scheduling for `state.json`
-
-Source: net-new (2026-05-18).
+#### `srv-2` — Auto-backup scheduling for `state.json` ([#424](https://github.com/dudarenok-maker/AudioBook-Generator/issues/424))
 
 - _What:_ Add a background backup job that on configurable cadence (daily / weekly) writes a snapshot of `<workspace>/<bookId>/.audiobook/state.json` to `<workspace>/.backups/<bookId>/<YYYYMMDD-HHMMSS>.json`. Keep last N (configurable, default 14). Manual "Restore from backup" affordance in workspace settings.
-- _Acceptance:_ Set daily backups → 14 daily snapshots accumulate in `.backups/`, oldest auto-pruned. Restore from snapshot → state.json reverted to that point; library view refreshes. New server Vitest spec covers the cron-like cadence + prune.
-- _Key files:_ new `server/src/workspace/auto-backup.ts`; `server/src/workspace/scan.ts` (initial trigger on server start); new settings affordance under `fe-2` power-user panel (or inline in `src/views/library.tsx` if shipped first).
-- _Depends on:_ none.
 - _Benefit (user):_ disaster recovery without manual intervention. Particularly valuable on Windows where OneDrive sync conflicts can occasionally corrupt `state.json` mid-write.
+_Full detail + acceptance:_ [#424](https://github.com/dudarenok-maker/AudioBook-Generator/issues/424).
 
 ### Security & hardening
 
 Source for the whole sub-group: the [2026-05-31 security review](security/2026-05-31-security-review.md). All are scoped to the **opt-in LAN exposure surface** (`npm run start:lan`) or local-only defense-in-depth — the app is single-user/local-first by design, so these harden the hostile-LAN and local-write threat models rather than fixing an exploited-today hole. `srv-19` (Should) is the partner default-bind fix.
 
-#### `srv-20` — Optional shared-secret token for the LAN flow
-
-Source: net-new (2026-05-31), security review findings #1–#4 (hostile-LAN scope). `srv-19` closes the default mode by binding loopback; the *deliberate* mobile flow still needs the LAN to reach it, and today does so with zero auth — so any peer on the same Wi-Fi has full unauthenticated API access while the phone/tablet is in use.
+#### `srv-20` — Optional shared-secret token for the LAN flow ([#425](https://github.com/dudarenok-maker/AudioBook-Generator/issues/425))
 
 - _What:_ a single shared-secret token (env-configured, surfaced in the LAN URL / QR alongside the existing cert flow) checked by a small Express middleware on `/api/*` and the `/workspace` mount when LAN mode is on. Loopback requests bypass the check (so `npm start` is unaffected). Reuse the existing LAN-URL/QR plumbing (`GET /api/export/lan`, `npm run install:cert-mobile`) to carry the token.
-- _Acceptance:_ with LAN_HTTPS=1 + a token set, a LAN request without the token gets 401; the printed LAN URL/QR embeds the token so the phone authenticates transparently; loopback requests need no token. New server vitest covers the middleware's {loopback-bypass, missing-token, valid-token} branches.
-- _Key files:_ new `server/src/middleware/lan-auth.ts`; `server/src/index.ts` (mount before routers + the `/workspace` static); `server/src/routes/export-lan.ts` (embed token in the LAN URL); `scripts/install-cert-mobile.*` (show token in QR).
-- _Depends on:_ `srv-19` (loopback-default) — the token only matters once LAN exposure is the explicit, narrowed surface.
 - _Benefit (user):_ the mobile flow stops being "open to everyone on the network" without re-introducing friction — the token rides the URL the user already scans.
+_Full detail + acceptance:_ [#425](https://github.com/dudarenok-maker/AudioBook-Generator/issues/425).
 
-#### `srv-21` — Validate `sidecarUrl` (scheme + private-host allowlist) before fetch
-
-Source: net-new (2026-05-31), security review finding #3 (SSRF). `sidecarUrl` from user-settings is validated only as `z.string().min(1).max(2000)`, then fetched directly (`sidecar-health.ts` + `/load`/`/unload`). Normally self-set, but reachable via the unauthenticated settings PUT over LAN (#1), so a peer could point it at an internal service and read probe responses.
+#### `srv-21` — Validate `sidecarUrl` (scheme + private-host allowlist) before fetch ([#426](https://github.com/dudarenok-maker/AudioBook-Generator/issues/426))
 
 - _What:_ tighten the zod validator (or a dedicated `assertSafeSidecarUrl`) to require `http`/`https` and a loopback/private-range host before any outbound fetch; reject otherwise with a clear 400 on the settings PUT.
-- _Acceptance:_ setting `sidecarUrl` to a non-http scheme or a public host is rejected at PUT time; localhost / 127.0.0.1 / LAN-private hosts still accepted; sidecar health/load/unload behave unchanged for valid URLs. New vitest covers the allow/deny matrix.
-- _Key files:_ `server/src/workspace/user-settings.ts` (the `sidecarUrl` zod field), `server/src/tts/sidecar-url.ts` or the resolver behind `getResolvedSidecarUrl()`, `server/src/routes/sidecar-health.ts`.
-- _Depends on:_ none (independent of `srv-19`/`srv-20`, but lower-risk once those land).
 - _Benefit (technical):_ closes the SSRF primitive; makes the sidecar-URL contract explicit instead of "any string we'll fetch".
+_Full detail + acceptance:_ [#426](https://github.com/dudarenok-maker/AudioBook-Generator/issues/426).
 
-#### `srv-22` — Constrain / document the `sync-folder/test` write-probe path
-
-Source: net-new (2026-05-31), security review finding #4. `POST /api/user/settings/sync-folder/test` does `mkdir(recursive)` + `writeFile('ok')` + `unlink` on an arbitrary body-supplied `path` (validated as `z.string().max(2000)` only) — an arbitrary-mkdir / limited-clobber primitive reachable unauth over LAN.
+#### `srv-22` — Constrain / document the `sync-folder/test` write-probe path ([#427](https://github.com/dudarenok-maker/AudioBook-Generator/issues/427))
 
 - _What:_ the probe is a legitimate "is this folder writable" UX check, so the fix is proportionate: keep the feature but (a) refuse obviously-dangerous targets (system roots), and/or (b) document the trust boundary explicitly and lean on `srv-19`/`srv-20` to remove the unauth-LAN reachability. Decide between hard-constraint vs. document-and-gate when the item opens.
-- _Acceptance:_ the probe still reports writability for a normal user-chosen sync folder; a system-root or traversal-y target is refused (if the hard-constraint path is chosen) or the reachability is closed by the bind/auth items; behaviour documented inline. New vitest pins the accept/refuse cases.
-- _Key files:_ `server/src/routes/user-settings.ts:128-152` (the probe handler).
-- _Depends on:_ pairs with `srv-19`/`srv-20` (which remove the unauth-LAN reach); standalone-fixable too.
 - _Benefit (technical):_ removes a small unauthenticated filesystem-touch primitive without breaking the Test button.
+_Full detail + acceptance:_ [#427](https://github.com/dudarenok-maker/AudioBook-Generator/issues/427).
 
-#### `side-12` — Load Qwen voice `.pt` prompts with `weights_only=True` (or a safe format)
-
-Source: net-new (2026-05-31), security review finding #5. `main.py:1251` does `torch.load(pt_path, weights_only=False)` on cached voice prompts in `QWEN_VOICES_DIR`. The file is app-written and the sidecar binds loopback, so it's not network-reachable — but `weights_only=False` deserialises arbitrary pickled objects, so anyone who can drop a `.pt` into the voices dir gets RCE in the sidecar process.
+#### `side-12` — Load Qwen voice `.pt` prompts with `weights_only=True` (or a safe format) ([#428](https://github.com/dudarenok-maker/AudioBook-Generator/issues/428))
 
 - _What:_ switch the voice-prompt load to `weights_only=True`; if the saved payload isn't a pure tensor/state-dict, migrate the design-time save (`design_voice`) to a safe container (safetensors, or JSON sidecar + tensors) so the load no longer needs arbitrary unpickling. One-time read-compat shim for already-cached `.pt` files (re-derive or one-shot re-save).
-- _Acceptance:_ a freshly designed voice round-trips (design → cache → reuse) with `weights_only=True`; a crafted malicious `.pt` no longer executes code on load (raises instead); existing cached voices still work (via shim or re-save). New pytest in the sidecar suite covers the safe-load path + the rejection.
-- _Key files:_ `server/tts-sidecar/main.py` (the `torch.load` at ~L1251 + the `design_voice` save site that writes the `.pt`); `server/tts-sidecar/tests/` (new case).
-- _Depends on:_ none.
 - _Benefit (technical):_ removes a local RCE-on-untrusted-file footgun; aligns with torch's `weights_only` default direction.
+_Full detail + acceptance:_ [#428](https://github.com/dudarenok-maker/AudioBook-Generator/issues/428).
 
 ### Ops, CI & distribution
 
-#### `ops-9` — Enable server-side branch protection on `main` (when Pro/public)
-
-Source: net-new (2026-06-01). GitHub's "main isn't protected" nudge points at branch protection / rulesets, both **403** on this free private repo. Plan 163 enforces the force-push/deletion ban locally via a `pre-push` guard; this item is the server-side counterpart, unblocked the day the repo upgrades to GitHub Pro or goes public.
+#### `ops-9` — Enable server-side branch protection on `main` (when Pro/public) ([#429](https://github.com/dudarenok-maker/AudioBook-Generator/issues/429))
 
 - _What:_ create an active ruleset on the default branch blocking deletion + non-fast-forward (force) pushes. Ready command:
-  ```bash
-  gh api -X POST repos/dudarenok-maker/AudioBook-Generator/rulesets --input - <<'JSON'
-  { "name": "protect-main", "target": "branch", "enforcement": "active",
-    "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
-    "rules": [ { "type": "deletion" }, { "type": "non_fast_forward" } ] }
-  JSON
-  ```
-- _Acceptance:_ `gh api repos/…/rulesets` lists the ruleset; a `git push --force`/delete to `main` is refused by the remote (not just the local hook).
-- _Depends on:_ GitHub Pro upgrade OR making the repo public (the gating blocker).
 - _Benefit (technical):_ server-side enforcement that no `--no-verify` local bypass or fresh clone can sidestep; the local guard (plan 163) becomes belt-and-suspenders. Required status checks deliberately excluded (would deadlock doc-only PRs that skip `verify.yml`).
+_Full detail + acceptance:_ [#429](https://github.com/dudarenok-maker/AudioBook-Generator/issues/429).
 
-#### `ops-7` — Pin SHA256 for model + wheel downloads
-
-Source: net-new (2026-05-31), security review finding #6 (supply-chain). `scripts/install-kokoro.ps1` downloads GitHub-release `.onnx`/`.bin` and `server/tts-sidecar/scripts/install-qwen3.mjs` runs `pip install -U qwen-tts` plus a third-party community FlashAttention wheel from `huggingface.co/lldacing/…`. All over HTTPS (wire-MITM covered) but with **no integrity pin** — a compromised upstream account or registry package serves trojaned binaries that execute at load/install time. Matters most because these scripts run on alpha-tester machines from the release bundle.
+#### `ops-7` — Pin SHA256 for model + wheel downloads ([#430](https://github.com/dudarenok-maker/AudioBook-Generator/issues/430))
 
 - _What:_ pin a known-good SHA256 for each downloaded artifact and verify after download (refuse + delete on mismatch): the kokoro `.onnx`/`.bin` release assets, and the FlashAttention wheel URL. For the pip installs, evaluate `pip install --require-hashes` against a pinned requirements set for the opt-in Qwen/FA2 deps (or at minimum pin exact versions). Surface a clear failure message pointing at the expected hash.
-- _Acceptance:_ a tampered/partial download fails the hash check with an actionable error and leaves nothing installed; an untampered install succeeds unchanged; the FA2 wheel install verifies its hash before `pip install`. New Pester case for the PowerShell hash check; the `install-qwen3.mjs` hash check exercised in its existing test harness.
-- _Key files:_ `scripts/install-kokoro.ps1` (post-download `Get-FileHash` compare), `server/tts-sidecar/scripts/install-qwen3.mjs` (`FLASH_ATTN_WHEEL_URL` verify + pip pinning), `scripts/lib/` if a shared verify helper is warranted, `scripts/tests/`.
-- _Depends on:_ none.
 - _Benefit (user / technical):_ closes the supply-chain gap on the binaries that run with the user's privileges on install — the sharpest of these is the single-maintainer community FA2 wheel. Cheap relative to the RCE blast radius.
+_Full detail + acceptance:_ [#430](https://github.com/dudarenok-maker/AudioBook-Generator/issues/430).
 
-#### `srv-4` — Track upstream-blocked deprecation chains (~~jsdom~~ · ~~archiver~~ · @google/genai)
-
-Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation audit in `~/.claude/plans/fancy-bouncing-lovelace.md`. Pure tracking item — no direct fix; we wait for upstream majors. Companion to the now-shipped ESLint 8 → 9 migration (plan 104) and the Multer 1 → 2 upgrade which cover the chains we could fix immediately.
+#### `srv-4` — Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai) ([#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431))
 
 - _What:_ Periodically re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump direct deps whose upstream majors drop one of these transitives. Status of the three tracked chains:
-  - ✅ **RESOLVED 2026-05-23 (plan 104):** `jsdom@25 → html-encoding-sniffer + whatwg-encoding@3.1.1`. Bumped jsdom `^25 → ^29` (29.1.1); the `whatwg-encoding` deprecation warning is gone from the audit. One frontend spec (`src/views/listen.test.tsx` cover-gradient) needed adapting because jsdom 29 canonicalises hex CSS colours to `rgb()` in the CSSOM.
-  - ✅ **RESOLVED 2026-05-23 (plan 104):** `archiver@7 → archiver-utils → glob@10.5.0`. Bumped archiver `^7 → ^8` (8.0.0); the `glob` deprecation warning is gone. archiver 8 is pure ESM and dropped the v7 callable factory, so `scripts/build-release-zip.mjs` now constructs `new ZipArchive(opts)` (pinned by `scripts/tests/archiver-zip.test.mjs`).
-  - ⏳ **STILL TRACKED (re-audited 2026-06-01, plan 164):** `@google/genai → google-auth-library@10.6.2 → gaxios@7.1.4 → node-fetch@3.3.2 → fetch-blob@3.2.0 → node-domexception@1.0.0` — deprecation says "Use your platform's native DOMException". This round bumped `@google/genai` `^2.0.1 → ^2.7.0` (latest 2.x; stay current within the major) — the chain **persists** on 2.7.0 and there is **still no v3**, so it stays blocked. `npm ls glob` on the server tree is empty (the research-flagged `gaxios → glob@10.5.0` sub-chain does NOT apply to our resolved `gaxios@7.1.4`). Waiting for `node-fetch`/`fetch-blob`/`google-auth-library` upstream to migrate to native DOMException, OR for a `@google/genai` v3 that drops the `node-fetch` chain.
-- _Acceptance:_ each time a direct dep is bumped (jsdom, archiver, or @google/genai), re-run the audit and tick off the resolved chain in this entry. Entry is removed from BACKLOG when all three resolve — two of three are done; only the `@google/genai` chain remains (re-confirmed blocked 2026-06-01).
-- _Key files:_ `server/package.json` (`@google/genai` direct, now `^2.7.0`). The jsdom + archiver bumps landed in root `package.json` (plan 104). No source changes for the remaining chain — purely a dep-bump tracking item.
-- _Depends on:_ upstream releases (`@google/genai` v3 or a native-DOMException migration in its `node-fetch` chain). Not on our schedule.
 - _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog. As of 2026-06-01 a fresh root `npm install` prints ZERO deprecation warnings (ESLint 9 + jsdom 29 + archiver 8 all cleared); the only remaining deprecation in the monorepo is the `@google/genai` `node-domexception` chain on the server side.
+_Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431).
 
-#### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip
-
-Source: net-new (2026-05-18). Deferred follow-up to the release-package work ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
+#### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
 
 - _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by the release-package pipeline (plan 49) into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
-- _Acceptance:_ Double-clicking the installer on a clean Windows 11 box yields a runnable app reachable at `http://localhost:5173`, with no terminal interaction required from the deployer. SmartScreen warning cleared after one user "Run anyway" click (full reputation requires an EV code-signing cert — out of scope until the cert is procured).
-- _Key files:_ new `installer/audiobook-generator.iss` (Inno Setup), new `installer/build-installer.ps1`, `.github/workflows/release.yml` (add `installer` job on `windows-latest` that runs after the zip job and uploads to the same release).
-- _Depends on:_ plan 49 release package shipped (the installer wraps the existing zip — no point building before the zip pipeline exists).
 - _Benefit (user):_ friction-free install for non-developers. Today's plan-49 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
+_Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432).
 
-#### `ops-2` — Docker image + compose file for headless / Linux deployment
-
-Source: net-new (2026-05-18). Deferred follow-up to the release-package work ([`49-release-package.md`](features/archive/49-release-package.md), shipped 2026-05-18 as v1.2.2).
+#### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
 
 - _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/audiobook-generator:vX.Y.Z` on tag push.
-- _Acceptance:_ `docker compose up` on a host with NVIDIA Container Toolkit installed brings up the three-service stack reachable on the documented ports. The published image works against a fresh `WORKSPACE_DIR` bind mount; tagged versions are pullable from GHCR.
-- _Key files:_ new `Dockerfile`, new `docker-compose.yml`, new `docs/features/50-docker-image.md` (when this graduates from BACKLOG to active), `.github/workflows/release.yml` (extend with the GHCR push job).
-- _Depends on:_ plan 49 release package shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
+_Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
 
 ### Listener-app handoffs
 
-#### `fe-3` — Apple Books (iOS / macOS) handoff modal
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
+#### `fe-3` — Apple Books (iOS / macOS) handoff modal ([#434](https://github.com/dudarenok-maker/AudioBook-Generator/issues/434))
 
 - _What:_ Wire Apple Books tile with the appropriate handoff: macOS supports drag-into-Books; iOS supports AirDrop or sync via Files. Modal shows the platform-specific flow (detect Mac vs other UA, default to "iOS via AirDrop"). Copy-and-instructions only — no direct integration with Apple Books library API (which is restricted).
-- _Acceptance:_ Click tile → modal shows platform-detected instructions. Vitest covers the UA detection branching.
-- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`.
-- _Depends on:_ plan 18b shipped.
 - _Benefit (user):_ closes one more "Coming soon" tile.
+_Full detail + acceptance:_ [#434](https://github.com/dudarenok-maker/AudioBook-Generator/issues/434).
 
-#### `fs-7` — Plex (self-hosted media server) handoff modal
-
-Source: plan 18 follow-up (2026-05-18). Deferred from plan 18b scope.
+#### `fs-7` — Plex (self-hosted media server) handoff modal ([#435](https://github.com/dudarenok-maker/AudioBook-Generator/issues/435))
 
 - _What:_ Wire Plex tile with two paths: (a) instructions for manual upload to a Plex server library, (b) optional direct upload via the Plex API if the user has provided a Plex token (settings field). Path (b) is the most-complex of the four — Plex auth + library scan trigger.
-- _Acceptance:_ Click tile → modal shows manual upload steps. If a Plex token is configured, an "Upload directly" button hits the Plex API. Vitest covers both modes.
-- _Key files:_ `src/components/app-handoff-modal.tsx`; `src/data/listener-apps.ts`; `src/views/settings.tsx` (Plex token field — see `fe-2` power-user panel); new `server/src/export/plex.ts` for the optional upload path.
-- _Depends on:_ plan 18b shipped; ideally `fe-2` (power-user panel) for the token storage.
 - _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
+_Full detail + acceptance:_ [#435](https://github.com/dudarenok-maker/AudioBook-Generator/issues/435).
 
-#### `fs-8` — PocketBook Cloud direct upload OR `@pbsync.com` email gateway
-
-Source: [`32-audiobook-export.md`](features/archive/32-audiobook-export.md) follow-ups.
+#### `fs-8` — PocketBook Cloud direct upload OR `@pbsync.com` email gateway ([#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436))
 
 - _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
-- _Acceptance:_ A working prototype for one of the two paths; new tile on the export modal; documented size limits + caveats.
-- _Key files:_ new tile config in `src/data/listener-apps.ts`; `src/modals/export-audiobook.tsx`; `server/src/export/` for any new transport.
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
+_Full detail + acceptance:_ [#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436).
 
 ---
 
@@ -521,82 +329,27 @@ Source: [`32-audiobook-export.md`](features/archive/32-audiobook-export.md) foll
 
 Specific items someone might reasonably re-propose. Each carries a _Why parked_ (the v1 design or operational constraint) and a _Wake when_ (the trigger that makes us reopen). The broad "v1 scope freeze" and "no visual redesign" are covered by CLAUDE.md "Out of scope" and don't need restating here — this list is for tracked-specific decisions only.
 
-### `ops-5` — Trim `build` / `e2e` out of the per-PR `verify.yml`
+- `ops-5` — Trim `build` / `e2e` out of the per-PR `verify.yml` ([#437](https://github.com/dudarenok-maker/AudioBook-Generator/issues/437)). _Why parked:_ would shave ~1–3 min off each frontend/server PR run, but the dev box is Windows (case-insensitive FS) and CI is Linux (case-sensitive) — a build break like a wrong-case import would slip past PR CI and only surface in ` … _Wake when:_ the safer round-2 levers prove insufficient AND a Linux-build / e2e signal moves earlier in the pipeline (e.g. …
 
-Source: net-new (2026-05-27), considered and declined during CI cost round 2 ([`118-ci-cost-round-2.md`](features/118-ci-cost-round-2.md)).
+- `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity) ([#438](https://github.com/dudarenok-maker/AudioBook-Generator/issues/438)). _Why parked:_ the perf problem that motivated it is solved — after the plan-113 batching + the concurrent-batch race fix, end-to-end Qwen chapters run at **~RTF 1.15**, and the **2026-05-31 overnight full-book run held aggregate RTF ≈ … _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost) AND a listen-test shows x-vector-only holds identity acceptably.
 
-- _Why parked (2026-05-27):_ would shave ~1–3 min off each frontend/server PR run, but the dev box is Windows (case-insensitive FS) and CI is Linux (case-sensitive) — a build break like a wrong-case import would slip past PR CI and only surface in `release.yml` / `cross-os.yml`. Round 2 chose the safer cost levers (draft-by-default, integration-PR batching, `vitest --changed`, timeout caps) that don't reduce what a green PR has actually proven. e2e is also the suite most likely to catch a router/redux/layout regression a unit test misses, so dropping it from the merge gate trades real safety for a small saving.
-- _Wake when:_ the safer round-2 levers prove insufficient AND a Linux-build / e2e signal moves earlier in the pipeline (e.g. a fast pre-merge Linux build smoke, or merge-queue checks) so dropping it from per-PR no longer leaves a coverage hole.
+- `side-7` — Qwen decode CUDA-graph / static-cache spike (probe-gated) ([#439](https://github.com/dudarenok-maker/AudioBook-Generator/issues/439)). _Why parked:_ the perf goal is met. The 2026-05-31 overnight full-book run rendered 25 real multi-voice chapters at aggregate **RTF ≈ 1.04** (range 0.91–1.26) on the adopted 32/3600 + single-worker config — ~realtime, the target. … _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost). Then run plan-129 Probe 1 first; only fork if it proves still launch-bound.
 
-### `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity)
+- `side-10` — Coalesce consecutive same-speaker short lines before batching ([#440](https://github.com/dudarenok-maker/AudioBook-Generator/issues/440)). _Why parked:_ two reasons. (1) **Perf goal met** — the 2026-05-31 overnight full-book run held aggregate RTF ~1.04 even on multi-voice/dialogue-dense chapters, so the dialogue floor isn't worth chasing. … _Wake when:_ Qwen synthesis becomes a real bottleneck again specifically on dialogue-dense books AND a captions/timing-preservation design + a quality A/B prove the merge doesn't hurt quote-audit fidelity.
 
-Source: net-new (2026-05-26), plan 112. ICL mode drags the reference clip's codec tokens through context every decode step; `x_vector_only_mode=True` drops that for shorter/faster steps, at a fidelity/consistency cost.
+- `ops-4` — Auto-install Ollama / auto-pull models ([#441](https://github.com/dudarenok-maker/AudioBook-Generator/issues/441)). _Why parked:_ installer + `ollama pull` are platform-specific and fragile under the OneDrive workspace path; the README addendum + explicit user opt-in is the v1 contract. _Wake when:_ Ollama upstream ships a stable cross-platform headless installer, OR a CI / dev-container path needs one-command bring-up. Likely two separate items then.
 
-- _Why parked (2026-05-26; confirmed 2026-05-31):_ the perf problem that motivated it is solved — after the plan-113 batching + the concurrent-batch race fix, end-to-end Qwen chapters run at **~RTF 1.15**, and the **2026-05-31 overnight full-book run held aggregate RTF ≈ 1.04 across 25 real multi-voice chapters** (range 0.91–1.26, ~realtime — the target). The perf goal is decisively met, so trading the bespoke-voice identity-consistency this feature exists to guarantee for a marginal further speedup isn't worth it. Closed, not just deferred.
-- _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost) AND a listen-test shows x-vector-only holds identity acceptably.
+- `srv-8` — Multi-model fan-out for Gemini analyzer ([#442](https://github.com/dudarenok-maker/AudioBook-Generator/issues/442)). _Why parked:_ one model per run keeps cost predictable and the SSE stream simple; A/B comparison today is two sequential runs. _Wake when:_ a real product use case for "render the same chapter under two models side-by-side in one view" emerges. The audio-layer a/b audition (plan 20) covers the listening-side intent today.
 
-### `side-7` — Qwen decode CUDA-graph / static-cache spike (probe-gated)
+- `fe-11` — Multi-tab catch-up race resilience ([#443](https://github.com/dudarenok-maker/AudioBook-Generator/issues/443)). _Why parked:_ disk `state.json` is authoritative + single-user-per-workspace, so two tabs on the same book never compete on writes. Tab B catches up by re-reading state on focus. _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `srv-10` — both wake under the same trigger.
 
-Source: net-new (2026-05-29), plan [`129-qwen-decode-cuda-graph-spike.md`](features/129-qwen-decode-cuda-graph-spike.md); **moved Could → Won't 2026-05-31**. Was the blocked "open lever 5" in `docs/tts-performance.md` — the only path past the dispatch-bound ~1–2 RTF floor toward sub-1, but a 2–5-day, correctness-risky fork of `qwen_tts` (it ships `_supports_static_cache=False` + a growing `DynamicCache` + a nested per-step `code_predictor.generate()`) we'd then maintain against upstream.
+- `fe-13` — Live `VITE_USE_MOCKS` toggle in running UI ([#444](https://github.com/dudarenok-maker/AudioBook-Generator/issues/444)). _Why parked:_ the mock layer swaps the entire `api` module at module-load via the env flag; flipping at runtime would need a different architecture (e.g. mock middleware around the api object). _Wake when:_ demo / QA flow requires mid-session real↔mock flipping. Today rebuilding with `VITE_USE_MOCKS=true` takes 5 s — building the runtime toggle would cost more than the friction it removes.
 
-- _Why parked (2026-05-31):_ the perf goal is met. The 2026-05-31 overnight full-book run rendered 25 real multi-voice chapters at aggregate **RTF ≈ 1.04** (range 0.91–1.26) on the adopted 32/3600 + single-worker config — ~realtime, the target. The remaining gap to sub-1 (Kokoro-class) isn't worth a risky talker fork; Kokoro stays the book-length workhorse and Qwen bespoke is already an acceptable overnight render. Even the cheap Probe 1 isn't worth running while the floor is acceptable.
-- _Wake when:_ Qwen synthesis becomes a real bottleneck again (much longer books, a slower GPU, or a per-quote-emotion feature that inflates decode cost). Then run plan-129 Probe 1 first; only fork if it proves still launch-bound.
+- `srv-10` — Conflict resolution for two simultaneous `state.json` writers ([#445](https://github.com/dudarenok-maker/AudioBook-Generator/issues/445)). _Why parked:_ single-user-per-workspace assumption; file locking is advisory at best on Windows network shares. _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `fe-11` — both wake under the same trigger.
 
-### `side-10` — Coalesce consecutive same-speaker short lines before batching
+- `srv-6` — Engine-drift factor polish + `resolvedVoiceName` backfill ([#446](https://github.com/dudarenok-maker/AudioBook-Generator/issues/446)). _Why parked:_ the user is regenerating the whole catalogue with Qwen, so every book will get a fresh post-plan-108 `resolvedVoiceName` snapshot at render time — there are no stranded legacy chapters left for the backfill to rescue. _Wake when:_ a corpus of pre-plan-108 chapters that will _not_ be regenerated needs drift detection after all (e.g. an imported back-catalogue from another deployer). Until then the regen sweep makes the backfill moot.
 
-Source: net-new (2026-05-29), from the plan-136 A/B; **moved Could → Won't 2026-05-31**. Was the one lever left for the dialogue **padding floor** — a batch decodes to its longest item, so a bucket of ultra-short same-speaker lines (avg ~12–30 chars) wastes most decode steps for little audio (measured RTF ~3 even at cap 64); length-bucketing/token-budget can't fix inherently tiny items. The idea: merge runs of consecutive same-character short sentences into one synth item.
-
-- _Why parked (2026-05-31):_ two reasons. (1) **Perf goal met** — the 2026-05-31 overnight full-book run held aggregate RTF ~1.04 even on multi-voice/dialogue-dense chapters, so the dialogue floor isn't worth chasing. (2) **It degrades audit / caption quality** — merging sentences into one synth item is NOT output-equivalent: prosody across a merged boundary differs from separate synth+concat, and sentence-level segment boundaries (→ `sentenceIds`) get coarser, so quote-audit and per-sentence captions/timing lose fidelity. Trading audit fidelity for a dialogue speedup we no longer need isn't a good deal.
-- _Wake when:_ Qwen synthesis becomes a real bottleneck again specifically on dialogue-dense books AND a captions/timing-preservation design + a quality A/B prove the merge doesn't hurt quote-audit fidelity.
-
-### `ops-4` — Auto-install Ollama / auto-pull models
-
-Source: [`29-analyzer-ollama-local.md`](features/archive/29-analyzer-ollama-local.md).
-
-- _Why parked:_ installer + `ollama pull` are platform-specific and fragile under the OneDrive workspace path; the README addendum + explicit user opt-in is the v1 contract.
-- _Wake when:_ Ollama upstream ships a stable cross-platform headless installer, OR a CI / dev-container path needs one-command bring-up. Likely two separate items then.
-
-### `srv-8` — Multi-model fan-out for Gemini analyzer
-
-Source: [`06-analyzer-gemini.md`](features/archive/06-analyzer-gemini.md).
-
-- _Why parked:_ one model per run keeps cost predictable and the SSE stream simple; A/B comparison today is two sequential runs.
-- _Wake when:_ a real product use case for "render the same chapter under two models side-by-side in one view" emerges. The audio-layer a/b audition (plan 20) covers the listening-side intent today.
-
-### `fe-11` — Multi-tab catch-up race resilience
-
-Source: [`32-sticky-analysis.md`](features/archive/32-sticky-analysis.md).
-
-- _Why parked:_ disk `state.json` is authoritative + single-user-per-workspace, so two tabs on the same book never compete on writes. Tab B catches up by re-reading state on focus.
-- _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `srv-10` — both wake under the same trigger.
-
-### `fe-13` — Live `VITE_USE_MOCKS` toggle in running UI
-
-Source: [`23-mock-toggle.md`](features/archive/23-mock-toggle.md).
-
-- _Why parked:_ the mock layer swaps the entire `api` module at module-load via the env flag; flipping at runtime would need a different architecture (e.g. mock middleware around the api object).
-- _Wake when:_ demo / QA flow requires mid-session real↔mock flipping. Today rebuilding with `VITE_USE_MOCKS=true` takes 5 s — building the runtime toggle would cost more than the friction it removes.
-
-### `srv-10` — Conflict resolution for two simultaneous `state.json` writers
-
-Source: [`27-book-state-persistence.md`](features/archive/27-book-state-persistence.md).
-
-- _Why parked:_ single-user-per-workspace assumption; file locking is advisory at best on Windows network shares.
-- _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `fe-11` — both wake under the same trigger.
-
-### `srv-6` — Engine-drift factor polish + `resolvedVoiceName` backfill
-
-Source: net-new (2026-05-24), spun off from [plan 108](features/108-qwen-coexistence.md)'s R5 drift fix; moved Could → Won't 2026-05-26. Would add a one-shot backfill (mirror `scripts/relufs-existing.mjs`) recomputing `resolvedVoiceName` on legacy `segments.json` so chapters rendered before plan 108 participate in override-drift detection.
-
-- _Why parked (2026-05-26):_ the user is regenerating the whole catalogue with Qwen, so every book will get a fresh post-plan-108 `resolvedVoiceName` snapshot at render time — there are no stranded legacy chapters left for the backfill to rescue.
-- _Wake when:_ a corpus of pre-plan-108 chapters that will _not_ be regenerated needs drift detection after all (e.g. an imported back-catalogue from another deployer). Until then the regen sweep makes the backfill moot.
-
-### `srv-5` — Tune per-engine VRAM cost map against real hardware
-
-Source: net-new (2026-05-24), spun off from [plan 108](features/108-qwen-coexistence.md); moved Could → Won't 2026-05-26. The `ENGINE_VRAM_COST` map (`server/src/tts/engine-vram-cost.ts`) + default `GPU_VRAM_BUDGET` shipped as estimates; this item was to measure actual peak VRAM per engine on the 8 GB GPU and correct the constants.
-
-- _Why parked (2026-05-26):_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost map now matters only for **cross-engine** packing (Kokoro 1 + Qwen 1, vs Coqui 3 / analyzer 4). Empirically `GPU_VRAM_BUDGET=2` + `QWEN_BATCH_SIZE=8` ran an end-to-end Qwen chapter (~RTF 1.15) with no VRAM trouble on the 4070, so the provisional constants are good enough in practice. The only unmeasured residual — true per-engine _peak_ VRAM for the cross-engine case — isn't worth a dedicated tuning pass while the empirical config holds.
-- _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. Then measure peak-per-engine and correct `ENGINE_VRAM_COST`.
+- `srv-5` — Tune per-engine VRAM cost map against real hardware ([#447](https://github.com/dudarenok-maker/AudioBook-Generator/issues/447)). _Why parked:_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost … _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. …
 
 ---
 
@@ -609,3 +362,4 @@ external references rotted). Any code comment or plan doc still citing a bare
 matching the comment's described feature to an item above or to its shipping plan —
 or (b) **plan-internal** numbering of the form `plan <NN> Should #M`, which is frozen
 and correct. Don't reintroduce bare-number backlog references.
+
