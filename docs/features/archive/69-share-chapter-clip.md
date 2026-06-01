@@ -75,6 +75,7 @@ Run with `npm run dev` (or any mock-mode build).
 - **Share-clip from the global mini-player.** Only the chapter-row button is wired. The mini-player is global (lives outside the listen view) and doesn't carry chapter context; adding a button there would need to read the active chapter via `selectListenProgress` and dispatch a region-level modal-open action.
 - **Clip preview before download.** Today: confirm → download. Could-have: an inline `<audio>` player in the modal that previews the slice before commit. Costs an extra round-trip and a temp blob; not worth it for the v1 share path.
 - **Share-link (URL someone else can open).** Plan 33 ([BACKLOG #33](../../BACKLOG.md)) carries the slugged-share-URL flow; the Share-clip download is local-only.
+- **Ungenerated-chapter gating.** This plan's spec had no invariant about chapters without audio — the Share-clip button rendered active on a `queued`/`in_progress`/`failed` row, opening a modal that couldn't cut a clip (zero-length window). [Plan 159](../159-listen-ungenerated-chapter-affordances.md) disables the button (and the row's Play button) unless `chapter.state === 'done'`.
 
 ## Ship notes
 
