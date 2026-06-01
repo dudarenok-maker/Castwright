@@ -1130,17 +1130,32 @@ class QwenEngine(Engine):
             log.warning("Qwen voice migration skipped (non-fatal): %s", e)
 
     def unload(self) -> None:
-        """Drop both Qwen models and free VRAM. Idempotent."""
-        had = self._base is not None or self._design is not None
-        self._base = None
-        self._design = None
-        # Drop cached clone-prompt tensors too: they hold GPU memory and would
-        # otherwise survive empty_cache() below, defeating the point of unload.
-        with self._cache_lock:
-            self._prompt_cache.clear()
+        """Drop both Qwen models and free VRAM. Idempotent.
+
+        Acquires `_synth_lock` before nulling the models — like `unload_design`,
+        and for the same reason. Without it, an `/unload` that lands mid-synth
+        nulls `_base` while a clone/synth forward is still running on it; the
+        running thread keeps the old model alive past the null, so the
+        `gc.collect()`+`empty_cache()` below can't reclaim its VRAM, and the
+        next (idempotent) `/load` — seeing `_base is None` — loads a SECOND copy.
+        Two copies cross the 8 GB card into the Windows sysmem fallback and the
+        GPU thrashes (the 2026-06-01 reload spill). Waiting on the lock lets the
+        in-flight forward finish and drop its reference first, so the reload is
+        clean. MUST NOT be called while already holding `_synth_lock` (it is a
+        non-reentrant threading.Lock) — only the /unload route calls this, and
+        it holds no lock."""
+        with self._synth_lock:
+            had = self._base is not None or self._design is not None
+            self._base = None
+            self._design = None
+            # Drop cached clone-prompt tensors too: they hold GPU memory and
+            # would otherwise survive empty_cache() below, defeating the unload.
+            with self._cache_lock:
+                self._prompt_cache.clear()
         if had:
             # Collect the dropped Base + VoiceDesign reference cycles before
             # reclaiming VRAM — see _reclaim_host_and_vram (2026-05-30 leak).
+            _before_reserved = _cuda_vram_mb()[1]
             gc.collect()
             try:
                 import torch  # type: ignore
@@ -1149,7 +1164,19 @@ class QwenEngine(Engine):
                     torch.cuda.empty_cache()
             except Exception:
                 pass
-            log.info("Qwen models unloaded.")
+            # Log the reserved-VRAM delta so a unload that FAILS to free (an
+            # already-spilled/fragmented pool empty_cache can't compact, or a
+            # surviving reference) is visible rather than silent — that's the
+            # state in which a subsequent /load doubles VRAM. The VRAM watchdog
+            # is the backstop: a still-high reserved pool trips its recycle.
+            _after_reserved = _cuda_vram_mb()[1]
+            if _before_reserved is not None and _after_reserved is not None:
+                log.info(
+                    "Qwen models unloaded — reserved VRAM %.0f→%.0fMB (freed %.0fMB).",
+                    _before_reserved, _after_reserved, _before_reserved - _after_reserved,
+                )
+            else:
+                log.info("Qwen models unloaded.")
 
     def unload_design(self) -> None:
         """Drop only the heavy VoiceDesign model, keeping the resident Base
@@ -1610,6 +1637,68 @@ def _process_commit_mb() -> Optional[float]:
         return None
 
 
+def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """(allocated, reserved, total) device VRAM in MB, or (None, None, None) when
+    CUDA is unavailable. `reserved` is the caching allocator's footprint — the
+    metric the VRAM recycle keys on. On Windows torch has no `expandable_segments`
+    (logged at load), so a fragmented reserved pool that creeps past the physical
+    card spills into the NVIDIA sysmem fallback and collapses RTF; `empty_cache()`
+    can't compact it back, so only a fresh process resets it. That's why a
+    reserved-VRAM ceiling (not allocated) is the right recycle trigger."""
+    try:
+        import torch  # type: ignore
+
+        if not torch.cuda.is_available():
+            return (None, None, None)
+        allocated = torch.cuda.memory_allocated() / 1_000_000.0
+        reserved = torch.cuda.memory_reserved() / 1_000_000.0
+        total = torch.cuda.get_device_properties(0).total_memory / 1_000_000.0
+        return (allocated, reserved, total)
+    except Exception:
+        return (None, None, None)
+
+
+# Reserved-VRAM recycle fractions of device total (defaults; absolute MB env
+# overrides below). Soft flags a clean boundary recycle; hard self-exits. Both
+# key on RESERVED crossing the card — the spill trigger on Windows.
+_VRAM_SOFT_FRACTION = 0.90
+_VRAM_HARD_FRACTION = 0.98
+
+
+def _vram_recycle_soft_threshold_mb(total_mb: Optional[float]) -> float:
+    """Reserved-VRAM (MB) at which the watchdog sets `recycle_pending` (the SAME
+    flag the host soft-recycle uses, so the server's chapter-boundary recycle
+    fires unchanged). Default = `_VRAM_SOFT_FRACTION` × device total (auto-scales
+    to the card). Override SIDECAR_VRAM_RECYCLE_SOFT_MB (absolute MB);
+    <=0 / garbage with no readable total → 0 (disabled)."""
+    env = os.environ.get("SIDECAR_VRAM_RECYCLE_SOFT_MB")
+    if env is not None:
+        try:
+            return float(env)
+        except (TypeError, ValueError):
+            pass
+    if total_mb and total_mb > 0:
+        return _VRAM_SOFT_FRACTION * total_mb
+    return 0.0
+
+
+def _vram_restart_threshold_mb(total_mb: Optional[float]) -> float:
+    """Reserved-VRAM (MB) HARD ceiling → self-exit (code 43) so the supervisor
+    respawns a fresh CUDA context (the only thing that resets a spilled pool).
+    Default = `_VRAM_HARD_FRACTION` × device total. Override
+    SIDECAR_VRAM_RESTART_MB (absolute MB); <=0 / garbage with no readable
+    total → 0 (disabled)."""
+    env = os.environ.get("SIDECAR_VRAM_RESTART_MB")
+    if env is not None:
+        try:
+            return float(env)
+        except (TypeError, ValueError):
+            pass
+    if total_mb and total_mb > 0:
+        return _VRAM_HARD_FRACTION * total_mb
+    return 0.0
+
+
 def _mem_restart_threshold_mb() -> float:
     """Committed-private (MB) at which the sidecar self-exits for the supervisor
     to respawn it (process recycling). Default = 70% of total physical RAM so it
@@ -1720,12 +1809,15 @@ def _drain_then_restart(grace_ms: int) -> None:
     threading.Timer(_POISON_EXIT_DELAY_MS / 1000.0, _restart_now).start()
 
 
-def _schedule_restart_exit(commit_mb: float, threshold_mb: float) -> None:
+def _schedule_restart_exit(
+    metric_mb: float, threshold_mb: float, metric_label: str = "committed memory"
+) -> None:
     """Schedule a single hard self-exit so srv-15 respawns a fresh sidecar.
     Idempotent (a later over-ceiling tick won't double-schedule). Flips
     `_restart_pending` (new synth now fast-fails 503) and hands off to a drain
     thread that waits out the in-flight chapter (srv-17c) before the
-    flush-delayed exit."""
+    flush-delayed exit. `metric_label` names the ceiling that tripped (host
+    "committed memory" vs "reserved VRAM") so the log says which one fired."""
     global _restart_scheduled, _restart_pending
     if _restart_scheduled:
         return
@@ -1733,18 +1825,29 @@ def _schedule_restart_exit(commit_mb: float, threshold_mb: float) -> None:
     _restart_pending = True
     grace_ms = _drain_grace_ms()
     log.warning(
-        "sidecar committed memory %.0fMB crossed the restart ceiling %.0fMB — "
+        "sidecar %s %.0fMB crossed the restart ceiling %.0fMB — "
         "draining %d in-flight synth (grace %dms) then self-exiting (code %d) so the "
         "server respawns a fresh process. Completed chapters are skipped (srv-16); "
         "the in-flight chapter finishes here or is re-rendered by the server "
-        "(srv-17c). Raise SIDECAR_RESTART_MB to recycle less often.",
-        commit_mb, threshold_mb, _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
+        "(srv-17c). Raise the ceiling to recycle less often.",
+        metric_label, metric_mb, threshold_mb, _inflight_synth, grace_ms, _RESTART_EXIT_CODE,
     )
     threading.Thread(target=_drain_then_restart, args=(grace_ms,), daemon=True).start()
 
 
 async def _memory_watchdog() -> None:
-    """See the block comment above. Never dies on a transient error."""
+    """See the block comment above. Never dies on a transient error.
+
+    Watches TWO independent pressures, each with a soft+hard tier:
+      * HOST committed-private RAM — the variable-shape side-11 leak (the
+        2026-05-30 OOM). Hard self-exits; soft flags `recycle_pending`.
+      * RESERVED VRAM — a reload/fragmentation pool creeping past the card and
+        spilling into the Windows sysmem fallback (the 2026-06-01 reload spill).
+        Same soft/hard tiers, SAME `recycle_pending` flag so the server's
+        chapter-boundary recycle fires unchanged.
+    Both hard branches are evaluated before either soft branch so a hard ceiling
+    never races the soft signal."""
+    global _recycle_pending
     warn_threshold = _mem_warn_threshold_mb()
     restart_threshold = _mem_restart_threshold_mb()
     soft_threshold = _mem_recycle_soft_threshold_mb()
@@ -1756,25 +1859,50 @@ async def _memory_watchdog() -> None:
             if not rss:
                 continue  # psutil unavailable — nothing to report
             commit = _process_commit_mb()
+            _vram_alloc, vram_reserved, vram_total = _cuda_vram_mb()
+            vram_soft = _vram_recycle_soft_threshold_mb(vram_total)
+            vram_hard = _vram_restart_threshold_mb(vram_total)
             log.info(
-                "sidecar memory: rss=%.0fMB%s",
+                "sidecar memory: rss=%.0fMB%s%s",
                 rss,
                 f" committed={commit:.0f}MB" if commit is not None else "",
+                f" vram_reserved={vram_reserved:.0f}/{vram_total:.0f}MB"
+                if vram_reserved is not None and vram_total is not None
+                else "",
             )
-            # HARD ceiling first — recycling is the only effective lever against
-            # the variable-shape leak, so don't waste a tick on the futile soft
-            # reclaim once we're already at the ceiling. Key on committed-private
-            # (the OOM metric); fall back to RSS only if it's unavailable.
+            # Loud, distinct alarm when reserved VRAM has already crossed the
+            # physical card: on Windows that means the NVIDIA "CUDA – Sysmem
+            # Fallback Policy" is mapping the overflow into host RAM, so the GPU
+            # thrashes over PCIe at ~100% util (RTF collapse) instead of OOM-ing.
+            # The hard branch below recycles us out of it, but the durable fix is
+            # to disable sysmem fallback for python.exe (see the sidecar README).
+            if (
+                vram_reserved is not None
+                and vram_total is not None
+                and vram_reserved > vram_total
+            ):
+                log.warning(
+                    "sidecar VRAM SPILL: reserved %.0fMB exceeds the %.0fMB card — "
+                    "NVIDIA sysmem fallback is mapping VRAM into host RAM (GPU is "
+                    "thrashing, not OOM-ing). Recycling will clear it; disable "
+                    "'CUDA – Sysmem Fallback Policy' for python.exe to prevent it.",
+                    vram_reserved, vram_total,
+                )
+            # HARD ceilings first (host then VRAM) — recycling is the only
+            # effective lever against the variable-shape leak / spilled pool, so
+            # don't waste a tick on the futile soft reclaim once at a ceiling.
+            # Host keys on committed-private (the OOM metric), falling back to RSS.
             recycle_metric = commit if commit is not None else rss
             if _should_restart(recycle_metric, restart_threshold):
                 _schedule_restart_exit(recycle_metric, restart_threshold)
                 continue
-            # SOFT recycle (side-11 item 2): below the hard ceiling, flag a
-            # pending recycle so the generation worker recycles cleanly at the
-            # next chapter boundary. Set once; no drain, no exit here — the hard
-            # branch above remains the backstop.
+            if vram_reserved is not None and _should_restart(vram_reserved, vram_hard):
+                _schedule_restart_exit(vram_reserved, vram_hard, "reserved VRAM")
+                continue
+            # SOFT recycle: below the hard ceilings, flag a pending recycle so the
+            # generation worker recycles cleanly at the next chapter boundary. Set
+            # once; no drain, no exit here — the hard branches remain the backstop.
             if _should_soft_recycle(recycle_metric, soft_threshold, restart_threshold):
-                global _recycle_pending
                 if not _recycle_pending:
                     _recycle_pending = True
                     log.warning(
@@ -1783,6 +1911,18 @@ async def _memory_watchdog() -> None:
                         "/health so the server recycles at the next chapter boundary. "
                         "No exit here (the hard watchdog remains the backstop).",
                         recycle_metric, soft_threshold, restart_threshold,
+                    )
+            if vram_reserved is not None and _should_soft_recycle(
+                vram_reserved, vram_soft, vram_hard
+            ):
+                if not _recycle_pending:
+                    _recycle_pending = True
+                    log.warning(
+                        "sidecar reserved VRAM %.0fMB crossed the SOFT recycle threshold "
+                        "%.0fMB (hard ceiling %.0fMB, card %.0fMB) — surfacing "
+                        "recycle_pending so the server recycles at the next chapter "
+                        "boundary before the pool spills into host RAM. No exit here.",
+                        vram_reserved, vram_soft, vram_hard, vram_total or 0.0,
                     )
             if warn_threshold > 0 and rss >= warn_threshold:
                 await asyncio.to_thread(_reclaim_host_and_vram)
@@ -1807,12 +1947,18 @@ async def _start_memory_watchdog() -> None:
     _mem_watchdog_task = asyncio.create_task(_memory_watchdog())
     restart = _mem_restart_threshold_mb()
     soft = _mem_recycle_soft_threshold_mb()
+    _a, _r, vram_total = _cuda_vram_mb()
+    vram_soft = _vram_recycle_soft_threshold_mb(vram_total)
+    vram_hard = _vram_restart_threshold_mb(vram_total)
     log.info(
         "sidecar memory watchdog started (warn/reclaim at %.0fMB rss; "
-        "soft-recycle at %s; process-recycle at %s).",
+        "host soft-recycle at %s, process-recycle at %s; "
+        "VRAM soft-recycle at %s, process-recycle at %s).",
         _mem_warn_threshold_mb(),
         f"{soft:.0f}MB committed" if soft > 0 else "DISABLED",
         f"{restart:.0f}MB committed" if restart > 0 else "DISABLED",
+        f"{vram_soft:.0f}MB reserved" if vram_soft > 0 else "DISABLED",
+        f"{vram_hard:.0f}MB reserved" if vram_hard > 0 else "DISABLED",
     )
 
 
@@ -1979,6 +2125,7 @@ def health() -> dict[str, Any]:
     model_loaded = False
     loading = False
     device: Optional[str] = None
+    _vram_alloc, _vram_reserved, _vram_total = _cuda_vram_mb()
     # Process-wide — a CUDA context is shared by every engine, so poison is not
     # Coqui-specific (a Qwen / Kokoro CUDA error corrupts it just the same).
     poisoned = _process_poisoned
@@ -2032,12 +2179,15 @@ def health() -> dict[str, Any]:
         "poisoned": poisoned,
         "poison_reason": poison_reason,
         # side-11 item 2 — SOFT recycle signal. `recycle_pending` flips True once
-        # committed crosses SIDECAR_RECYCLE_SOFT_MB (below the hard ceiling); the
-        # generation worker reads it off this same poll and triggers a clean
-        # boundary recycle. `committed_mb` (may be None) gives the boundary
-        # decision observability without a separate /debug/memory hit.
+        # committed crosses SIDECAR_RECYCLE_SOFT_MB OR reserved VRAM crosses the
+        # VRAM soft ceiling (below either hard ceiling); the generation worker
+        # reads it off this same poll and triggers a clean boundary recycle.
+        # `committed_mb` / `vram_reserved_mb` / `vram_total_mb` (may be None) give
+        # the boundary decision observability without a separate /debug/memory hit.
         "recycle_pending": _recycle_pending,
         "committed_mb": _process_commit_mb(),
+        "vram_reserved_mb": _vram_reserved,
+        "vram_total_mb": _vram_total,
     }
 
 
@@ -2088,6 +2238,9 @@ def debug_memory() -> dict[str, Any]:
             cuda = {
                 "allocated_mb": torch.cuda.memory_allocated() / 1_000_000.0,
                 "reserved_mb": torch.cuda.memory_reserved() / 1_000_000.0,
+                # total card size — `reserved_mb` crossing this is the spill line
+                # the VRAM recycle keys on (see _cuda_vram_mb / _memory_watchdog).
+                "total_mb": torch.cuda.get_device_properties(0).total_memory / 1_000_000.0,
             }
     except Exception:
         pass
