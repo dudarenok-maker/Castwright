@@ -205,7 +205,7 @@ export class OllamaAnalyzer implements Analyzer {
     await writeInbox(manuscriptId, key, promptMd);
 
     const skill = await loadSkill(skillName);
-    const systemInstruction = buildSystemInstruction(skill);
+    const systemInstruction = buildSystemInstruction(skill, call.language);
     /* Convert the per-stage Zod schema into a JSON Schema for Ollama 0.5+
        structured-output (constrained decoding). $refStrategy:'none' inlines
        nested schemas (characterSchema inside stage1ChapterSchema, etc.) so
