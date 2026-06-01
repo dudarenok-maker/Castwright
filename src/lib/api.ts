@@ -419,14 +419,33 @@ export interface DesignQwenVoiceArgs {
   sampleVoiceId: string;
   /** The TTS modelKey the sample is cached under (the Qwen sample key). */
   modelKey: TtsModelKey;
+  /** Plan 161 — stage the design under a `-preview` sibling id instead of
+      overwriting the live voice, so the A/B compare can audition it without
+      committing. The drawer promotes it on approve / discards on cancel. */
+  preview?: boolean;
 }
 
 export interface DesignQwenVoiceResponse {
-  /** Derived cache voiceId (the designed-voice embedding id). */
+  /** Derived cache voiceId (the designed-voice embedding id — `…-preview`
+      when designed with `preview: true`). */
   voiceId: string;
   /** Stable URL of the cached audition MP3 (= the 12s sample). Not a blob —
       nothing to revoke. */
   previewUrl: string;
+}
+
+/** Plan 161 — promote a previewed design onto the character's stable voiceId
+    (commit) or discard it (cancel). */
+export interface PromoteQwenVoiceArgs {
+  previewVoiceId: string;
+  sampleVoiceId: string;
+  modelKey: TtsModelKey;
+}
+export interface PromoteQwenVoiceResponse {
+  /** The committed (stable) voiceId. */
+  voiceId: string;
+  /** URL of the audition cached under the committed id. */
+  url: string;
 }
 
 /** Optional scope for a voice-override write (plan 108). Default
@@ -565,12 +584,31 @@ async function mockSetVoiceOverrideLinked(
 async function mockDesignQwenVoice(
   _bookId: string,
   characterId: string,
-  { sampleVoiceId, modelKey }: DesignQwenVoiceArgs,
+  { sampleVoiceId, modelKey, preview }: DesignQwenVoiceArgs,
 ): Promise<DesignQwenVoiceResponse> {
   await wait(120);
-  const voiceId = `qwen-${characterId}`;
-  const previewUrl = `/audio/voices/${sampleVoiceId}-${modelKey}-mock.mp3`;
+  const voiceId = `qwen-${characterId}${preview ? '-preview' : ''}`;
+  const suffix = preview ? '-preview' : '';
+  const previewUrl = `/audio/voices/${sampleVoiceId}-${modelKey}${suffix}-mock.mp3`;
   return { voiceId, previewUrl };
+}
+
+async function mockPromoteQwenVoice(
+  _bookId: string,
+  _characterId: string,
+  { previewVoiceId, sampleVoiceId, modelKey }: PromoteQwenVoiceArgs,
+): Promise<PromoteQwenVoiceResponse> {
+  await wait(60);
+  const voiceId = previewVoiceId.replace(/-preview$/, '');
+  return { voiceId, url: `/audio/voices/${sampleVoiceId}-${modelKey}-mock.mp3` };
+}
+
+async function mockDiscardQwenPreview(
+  _bookId: string,
+  _characterId: string,
+  _args: PromoteQwenVoiceArgs,
+): Promise<void> {
+  await wait(20);
 }
 
 async function mockImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
@@ -1392,7 +1430,7 @@ async function realSetVoiceOverrideLinked(
 async function realDesignQwenVoice(
   bookId: string,
   characterId: string,
-  { persona, sampleVoiceId, modelKey }: DesignQwenVoiceArgs,
+  { persona, sampleVoiceId, modelKey, preview }: DesignQwenVoiceArgs,
 ): Promise<DesignQwenVoiceResponse> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/design-voice`,
@@ -1403,6 +1441,7 @@ async function realDesignQwenVoice(
         ...(persona !== undefined ? { persona } : {}),
         sampleVoiceId,
         modelKey,
+        ...(preview ? { preview: true } : {}),
       }),
     },
   );
@@ -1419,9 +1458,51 @@ async function realDesignQwenVoice(
      which is also the 12s sample the player will hit. */
   const data = (await res.json()) as { voiceId?: string; url?: string };
   return {
-    voiceId: data.voiceId ?? `qwen-${characterId}`,
+    voiceId: data.voiceId ?? `qwen-${characterId}${preview ? '-preview' : ''}`,
     previewUrl: data.url ?? '',
   };
+}
+
+async function realPromoteQwenVoice(
+  bookId: string,
+  characterId: string,
+  { previewVoiceId, sampleVoiceId, modelKey }: PromoteQwenVoiceArgs,
+): Promise<PromoteQwenVoiceResponse> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/promote-voice`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ previewVoiceId, sampleVoiceId, modelKey }),
+    },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Promoting the voice failed (${res.status}).`);
+  }
+  const data = (await res.json()) as { voiceId?: string; url?: string };
+  return { voiceId: data.voiceId ?? '', url: data.url ?? '' };
+}
+
+async function realDiscardQwenPreview(
+  bookId: string,
+  characterId: string,
+  { previewVoiceId, sampleVoiceId, modelKey }: PromoteQwenVoiceArgs,
+): Promise<void> {
+  /* Best-effort cleanup — swallow failures so a Cancel never blocks the UI. */
+  await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/discard-voice`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ previewVoiceId, sampleVoiceId, modelKey }),
+    },
+  ).catch(() => {});
 }
 
 async function realImportManuscript({ text, file, fileName }: UploadArgs): Promise<ImportResponse> {
@@ -4234,6 +4315,8 @@ const real = {
   generateAllVoiceStyles: realGenerateAllVoiceStyles,
   fetchDesignedPersona: realFetchDesignedPersona,
   designQwenVoice: realDesignQwenVoice,
+  promoteQwenVoice: realPromoteQwenVoice,
+  discardQwenPreview: realDiscardQwenPreview,
   overrideLibraryCast: realOverrideLibraryCast,
   getSeriesRoster: realGetSeriesRoster,
   getSeriesCast: realGetSeriesCast,
@@ -4432,6 +4515,8 @@ const mock = {
   generateAllVoiceStyles: mockGenerateAllVoiceStyles,
   fetchDesignedPersona: mockFetchDesignedPersona,
   designQwenVoice: mockDesignQwenVoice,
+  promoteQwenVoice: mockPromoteQwenVoice,
+  discardQwenPreview: mockDiscardQwenPreview,
   overrideLibraryCast: mockOverrideLibraryCast,
   getSeriesRoster: mockGetSeriesRoster,
   getSeriesCast: mockGetSeriesCast,
