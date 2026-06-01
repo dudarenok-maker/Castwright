@@ -11,6 +11,8 @@ import {
   TTS_MODEL_LABELS,
   type TtsModelKey,
 } from './index.js';
+import * as indexModule from './index.js';
+import * as modelKeysModule from './model-keys.js';
 
 describe('engineForModelKey routes each model key to its engine', () => {
   it.each([
@@ -60,5 +62,23 @@ describe('isTtsModelKey', () => {
 describe('TTS_MODEL_LABELS', () => {
   it('has a human label for the qwen key', () => {
     expect(TTS_MODEL_LABELS['qwen3-tts-0.6b']).toBe('Qwen3-TTS 0.6B (local)');
+  });
+});
+
+/* Cycle-break guard. The pure helpers live in the leaf ./model-keys.js so the
+   provider modules (gemini/sidecar) can import them WITHOUT forming an
+   index ↔ provider runtime cycle — that cycle made `importOriginal('../tts/index.js')`
+   return a partially-initialised namespace under parallel load (the intermittent
+   `No "isTtsModelKey" export is defined on the mock` flake that failed the
+   cross-OS release gate). `index.js` must re-export them by reference, not
+   re-declare them — assert identity so a future edit can't silently move a
+   helper back into index and reintroduce the cycle. */
+describe('model-keys re-export identity (cycle-break guard)', () => {
+  it('index re-exports the same helper references as the leaf module', () => {
+    expect(indexModule.isTtsModelKey).toBe(modelKeysModule.isTtsModelKey);
+    expect(indexModule.engineForModelKey).toBe(modelKeysModule.engineForModelKey);
+    expect(indexModule.sidecarModelId).toBe(modelKeysModule.sidecarModelId);
+    expect(indexModule.resolveGeminiModelId).toBe(modelKeysModule.resolveGeminiModelId);
+    expect(indexModule.TTS_MODEL_LABELS).toBe(modelKeysModule.TTS_MODEL_LABELS);
   });
 });
