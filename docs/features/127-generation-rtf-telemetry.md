@@ -7,8 +7,8 @@ owner: null
 # Generation RTF telemetry
 
 > Status: active
-> Key files: `server/tts-sidecar/main.py` (batch log + `SynthBatchResult` genMs/audioMs + frame header), `server/src/tts/sidecar.ts` (parse perf header), `server/src/tts/generation-stats.ts` (chapter + live-batch windows), `server/src/routes/generation-stats.ts`, `server/src/routes/generation.ts` (rollup + `onBatchComplete`), `server/src/tts/synthesise-chapter.ts` (`onBatchComplete`), `src/components/worktrees-rtf-pill.tsx`, `src/lib/api.ts`
-> URL surface: `GET /api/generation/stats`; dev-only top-bar pill
+> Key files: `server/tts-sidecar/main.py` (batch log + `SynthBatchResult` genMs/audioMs + frame header), `server/src/tts/sidecar.ts` (parse perf header), `server/src/tts/generation-stats.ts` (chapter + live-batch windows + per-chapter history ring), `server/src/routes/generation-stats.ts`, `server/src/routes/generation.ts` (rollup + `onBatchComplete`), `server/src/tts/synthesise-chapter.ts` (`onBatchComplete`), `src/components/worktrees-rtf-pill.tsx`, `src/views/worktrees.tsx` (per-chapter throughput table), `src/lib/api.ts`
+> URL surface: `GET /api/generation/stats`; dev-only top-bar pill + dev-only Worktrees-view throughput table
 > OpenAPI ops: none (dev/observability endpoint, not part of the public contract)
 
 ## Benefit / Rationale
@@ -25,7 +25,12 @@ written only at chapter completion) looked stalled when it was fine.
   (updated as each Qwen batch lands) — the figure you can actually act on
   mid-chapter — falling back to the per-chapter rolling figure when no batch is
   recent. The server log also prints a per-chapter rollup (`rtf`, `Nx realtime`,
-  `chapters/hr`) as a lagging summary.
+  `chapters/hr`) as a lagging summary. Clicking the pill opens the dev Worktrees
+  view, which now also renders a **per-chapter throughput table** (newest-first
+  RTF history with a ▲/▼ deterioration cue + a run-summary strip) so the operator
+  can see whether RTF is deteriorating or staying consistent across a run — the
+  same answer that previously required grepping the `[generation] chapter N …
+  rtf=` log lines.
 - **Technical:** the batched forward now emits `qwen batch synth: … rtf=` AND
   reports its `genMs`/`audioMs` in the `/synthesize-batch` frame header, so the
   server can surface a live per-batch RTF — observable and comparable to the
@@ -41,6 +46,14 @@ written only at chapter completion) looked stalled when it was fine.
   idle gap so a stale run never dilutes the current one); `GET
   /api/generation/stats`; `api.getGenerationStats()` (real + mock); the
   `WorktreesRtfPill` component.
+- **Per-chapter history ring (newest-first, capped at `MAX_HISTORY` = 200):** a
+  third in-memory list in `generation-stats.ts`, populated by
+  `recordChapterThroughput` with each finished chapter's own `{ rtf, audioSec,
+  synthSec, title, bookId, modelKey, at }`. Surfaced as
+  `GenerationStatsResponse.recentChapters` and rendered by the
+  `GenerationThroughput` table in `src/views/worktrees.tsx`. In-memory only:
+  survives a sidecar recycle (the Node process persists; only the Python sidecar
+  restarts per-batch), resets on a full server restart.
 - **Invariants preserved:** mock/real api split (mock returns the idle shape);
   the `wt` pill stays dev-only (rendered only when `onOpenWorktrees` is wired,
   which is `import.meta.env.DEV`-gated in `layout.tsx`) and keeps its
@@ -74,6 +87,18 @@ written only at chapter completion) looked stalled when it was fine.
 - `genMs`/`audioMs` are ADDITIVE frame-header keys; an older sidecar that omits
   them leaves `out.genMs` undefined and `synthBatch` simply skips
   `onBatchComplete` (`server/src/tts/sidecar.ts`, `synthesise-chapter.ts`).
+- `recentChapters` is **newest-first**, capped at `MAX_HISTORY`, and **independent
+  of the `RESET_MS` rolling-window reset** — an idle gap blanks the aggregate
+  (`chapters`/`rtf` → null) but must NOT blank the history (its whole value is the
+  cross-pause trend the throughput table draws). The view's deterioration cue
+  relies on `recentChapters[0]` being newest and compares each row to the
+  immediately-older entry (`server/src/tts/generation-stats.ts`,
+  `src/views/worktrees.tsx`).
+- The new `recordChapterThroughput` fields (`title`/`bookId`/`modelKey`) are
+  OPTIONAL and default to `null` — a bare three-field call still records — so the
+  history ring stays back-compatible with existing call sites and tests.
+- Each history `rtf` is `null` (not `0`) when the chapter produced no audio, so
+  the table renders a dash and skips the trend comparison (no `Infinity` row).
 
 ## Test plan
 
@@ -87,19 +112,31 @@ written only at chapter completion) looked stalled when it was fine.
 - Vitest server (`server/src/tts/generation-stats.test.ts`) — per-chapter rolling
   maths + window reset + idle shape, AND the live-batch window (single-batch rtf,
   multi-batch aggregate + latest, idle past `BATCH_IDLE_MS`, independence from the
-  chapter window).
+  chapter window), AND the per-chapter history ring (records every field
+  newest-first, caps at `MAX_HISTORY` keeping the most recent, **survives the
+  rolling-window idle reset**, `rtf=null` on no-audio, back-compat 3-field call,
+  cleared by the reset helper).
 - Vitest server (`server/src/tts/synthesise-chapter.test.ts`) — `onBatchComplete`
   fires once per batch with the sidecar's `genMs`/`audioMs`, and does NOT fire
   when the sidecar omits them.
 - Vitest server (`server/src/routes/generation-stats.test.ts`) — `GET
-  /api/generation/stats` returns the idle shape, then reflects a recorded chapter.
+  /api/generation/stats` returns the idle shape, reflects a recorded chapter, and
+  serialises the per-chapter history with `title`/`bookId`/`modelKey`.
 - Vitest frontend (`src/components/worktrees-rtf-pill.test.tsx`) — idle shows
   just "wt"; generating shows the live per-batch RTF; the live per-batch figure
   is preferred over the per-chapter rollup; falls back to per-chapter when no
   batch is recent; click still navigates; fetch failure degrades to no readout.
+- Vitest frontend (`src/views/worktrees.test.tsx`) — the throughput table renders
+  one row per chapter newest-first; a slower-than-previous chapter is tinted ▲ and
+  a faster one ▼ (oldest row, with nothing to compare, has no glyph); a null-rtf
+  row renders a dash with no trend; the empty-state copy shows when no chapters
+  are recorded; the run-summary strip appears only when a summary figure is set.
 
-Not adding an e2e spec: the pill is dev-only and the readout is a polled number,
-not a router/redux/layout seam — unit coverage is the right bar here.
+Not adding an e2e spec: the pill and the Worktrees view are dev-only and the
+readouts are polled numbers, not a router/redux/layout seam — unit coverage is
+the right bar here. The mock `getGenerationStats` now ships a synthetic
+rising-rtf history so any e2e visiting the dev view exercises the table without
+crashing.
 
 ### Manual acceptance walkthrough
 
@@ -113,6 +150,12 @@ not a router/redux/layout seam — unit coverage is the right bar here.
    `wt 1.1` (the LIVE per-batch RTF, magenta) updating every ~batch; once a
    chapter completes and no batch is mid-flight it shows the per-chapter figure;
    idle → just `wt`. Clicking still opens the worktrees dashboard.
+4. **Dev Worktrees view, during/after a run** → below the worktrees list, the
+   **Generation throughput** table fills newest-first as each chapter completes;
+   its RTF column matches the `[generation] chapter N … rtf=` log lines, a
+   chapter that ran slower than the one before shows a ▲ (rose), faster shows ▼
+   (green); the run-summary strip mirrors the pill's figures. The history
+   persists across a sidecar recycle and clears on a full server restart.
 
 ## Out of scope
 
