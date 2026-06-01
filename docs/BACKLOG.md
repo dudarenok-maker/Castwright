@@ -115,16 +115,6 @@ The Qwen generation forward leaks committed-private host RAM monotonically: ever
 - _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved.
 - _Keep this item open_ until a full-book run holds a flat committed floor with zero recycles; on a pass, note "recycle now a safety net, not load-bearing" and close.
 
-### `srv-19` — Default-bind the server to loopback; require an explicit opt-in to expose all interfaces
-
-Source: net-new (2026-05-31), from the [security review](security/2026-05-31-security-review.md) (findings #1 + #2). The default HTTP dev mode (`app.listen(PORT)` with no host) binds `0.0.0.0`, so on a shared/untrusted network every unauthenticated route — including the `/workspace` static mount that serves all manuscripts + audio + `state.json`/`cast.json` — is reachable by any LAN peer. The opt-in `LAN_HTTPS` mobile flow is *meant* to be reachable; the default dev mode is not.
-
-- _What:_ pass an explicit host to the HTTP `app.listen` so the default bind is `127.0.0.1`, and only bind `0.0.0.0` when LAN mode is on (the existing `isLanHttpsEnabled()` already gates the HTTPS listener — reuse it, plus a `BIND_HOST`/`HOST` env override for power users). The LAN HTTPS path keeps binding all interfaces (unchanged). No new abstraction — one host argument threaded through the existing `listenerCallback` wiring.
-- _Acceptance:_ with no env flags, `npm start` is reachable at `http://127.0.0.1:8080` but NOT from another machine on the LAN (connection refused). `npm run start:lan` (LAN_HTTPS=1) stays reachable on the LAN exactly as today. A `BIND_HOST=0.0.0.0` (or equivalent) escape hatch restores all-interface HTTP for users who want it. New server vitest pins the host argument selection for {default, LAN, override}; the existing LAN-mode tests stay green.
-- _Key files:_ `server/src/index.ts` (the `PORT`/`LAN_HTTPS_PORT` listen block ~L360-362 + `listenerCallback`; reuse `isLanHttpsEnabled()`).
-- _Depends on:_ none.
-- _Benefit (user / technical):_ removes the "any device on the Wi-Fi can read all your books and burn your Gemini quota" exposure in the default mode, at the cost of one host argument — the cheapest meaningful hardening from the review. The deliberate mobile flow is untouched.
-
 ---
 
 ## Could — nice to have, low-cost wins
@@ -248,16 +238,6 @@ Source: [`30-global-model-control.md`](features/archive/30-global-model-control.
 - _Depends on:_ an actual third surface materialising. Product-driven, not architecture-driven — the seam is ready, the trigger isn't.
 - _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
 
-#### `side-5` — Silence the benign Qwen `code_predictor` config-default log
-
-Source: [`108-qwen-coexistence.md`](features/108-qwen-coexistence.md) post-ship `fix/sidecar-qwen-design-ref-text`.
-
-- _What:_ The sidecar logs `code_predictor_config is None. Initializing code_predictor model with default values` around Qwen model load. **The perf question is resolved** (post-ship `fix/sidecar-qwen-design-ref-text`): the line originates in `qwen_tts`'s `Qwen3TTSTalkerConfig.__init__` (`configuration_qwen3_tts.py`) — HuggingFace config-defaulting at `from_pretrained`, NOT a per-sentence recompute. The design slowness that drew the eye was generation-length-bound (the calibration text voiced twice at RTF ~10 on the 1.7B model), fixed by the reference-text split. What remains is purely cosmetic: it's benign log noise that still reads as alarming.
-- _Acceptance:_ Either suppress the line (raise the `qwen_tts` config logger level around the `from_pretrained` call) or add a one-line note in `server/tts-sidecar/README.md` documenting it as benign.
-- _Key files:_ `server/tts-sidecar/main.py` (`QwenEngine._load_qwen_model`); the installed `qwen_tts` package (read-only — the log originates there).
-- _Depends on:_ nothing.
-- _Benefit (technical):_ stops a benign config log masquerading as a problem (it drew the eye during both the plan-108 OOM debugging and the design-timeout debugging).
-
 #### `fs-13` — Exact per-character progress under parallel synthesis
 
 Source: net-new (2026-05-28). Surfaced shipping the generation progress-bounce fix (PR #308, `fix/server-generation-progress-bounce`). That fix made the chapter "line N of M" counter monotonic by deriving it from a shared `completed` GROUP COUNT (plan 107 invariant 6) instead of each in-flight group's narrative position. Side effect: the per-character mini-bars in the Generate view (`linesDoneAt(positions, chapter.currentLine)`) now read `currentLine` as a COUNT, not a narrative watermark — so under genuinely out-of-order completion (`GPU_VRAM_BUDGET`/poolWidth > 1 + Qwen batching) a character whose lines cluster late/early in the chapter can read slightly low/high until the count catches up. Strictly better than the prior backward bounce, but no longer an exact per-character tally.
@@ -299,16 +279,6 @@ Source: net-new (2026-05-21). Plan 81 wave 1 / 2 deferred item.
 - _Key files:_ new `src/components/lan-access-card.tsx`; `src/views/account.tsx` (or wherever account settings render) to mount the card; `src/lib/api.ts` to wrap `GET /api/export/lan` if not already wrapped.
 - _Depends on:_ plan 81 shipped.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected).
-
-#### `fe-17` — "Resume generation" button on the Generate view
-
-Source: net-new (2026-05-29). Plan 137 deferred follow-up.
-
-- _What:_ Plan 137 made auto-enqueue fire ONLY on the explicit "Approve cast & start generating" CTA, so opening / re-opening a book never restarts generation. That leaves no in-view affordance to deliberately continue a book whose run was interrupted (queue drained server-side, some chapters still `queued`). Add a "Resume generation" button on the Generate view that dispatches the same `uiActions.requestStartGeneration()` intent, so a user can restart with one click without round-tripping back to the manuscript CTA. Show it only when the viewed book has `queued` chapters and nothing is currently in flight.
-- _Acceptance:_ Open a book with some unfinished (`queued`) chapters and no live run on the Generate view → a "Resume generation" button appears; clicking it enqueues the remaining chapters and generation begins. While a run is live (or all chapters done) the button is hidden. Opening the book still never auto-starts (plan 137 invariant holds). New Vitest asserts the button dispatches `requestStartGeneration`; a Playwright case covers the resume click.
-- _Key files:_ `src/views/generation.tsx` (the button + visibility predicate off `chapters` state); `src/store/ui-slice.ts` (reuse `requestStartGeneration`, no new action).
-- _Depends on:_ plan 137 shipped.
-- _Benefit (user):_ a deliberate one-click recovery path for interrupted runs, without re-auto-starting on every open — keeps the plan-137 "never auto-start" guarantee while restoring an explicit resume.
 
 #### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant
 
