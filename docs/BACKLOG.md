@@ -370,6 +370,22 @@ Source: net-new (2026-05-31), security review finding #5. `main.py:1251` does `t
 
 ### Ops, CI & distribution
 
+#### `ops-9` — Enable server-side branch protection on `main` (when Pro/public)
+
+Source: net-new (2026-06-01). GitHub's "main isn't protected" nudge points at branch protection / rulesets, both **403** on this free private repo. Plan 163 enforces the force-push/deletion ban locally via a `pre-push` guard; this item is the server-side counterpart, unblocked the day the repo upgrades to GitHub Pro or goes public.
+
+- _What:_ create an active ruleset on the default branch blocking deletion + non-fast-forward (force) pushes. Ready command:
+  ```bash
+  gh api -X POST repos/dudarenok-maker/AudioBook-Generator/rulesets --input - <<'JSON'
+  { "name": "protect-main", "target": "branch", "enforcement": "active",
+    "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+    "rules": [ { "type": "deletion" }, { "type": "non_fast_forward" } ] }
+  JSON
+  ```
+- _Acceptance:_ `gh api repos/…/rulesets` lists the ruleset; a `git push --force`/delete to `main` is refused by the remote (not just the local hook).
+- _Depends on:_ GitHub Pro upgrade OR making the repo public (the gating blocker).
+- _Benefit (technical):_ server-side enforcement that no `--no-verify` local bypass or fresh clone can sidestep; the local guard (plan 163) becomes belt-and-suspenders. Required status checks deliberately excluded (would deadlock doc-only PRs that skip `verify.yml`).
+
 #### `ops-7` — Pin SHA256 for model + wheel downloads
 
 Source: net-new (2026-05-31), security review finding #6 (supply-chain). `scripts/install-kokoro.ps1` downloads GitHub-release `.onnx`/`.bin` and `server/tts-sidecar/scripts/install-qwen3.mjs` runs `pip install -U qwen-tts` plus a third-party community FlashAttention wheel from `huggingface.co/lldacing/…`. All over HTTPS (wire-MITM covered) but with **no integrity pin** — a compromised upstream account or registry package serves trojaned binaries that execute at load/install time. Matters most because these scripts run on alpha-tester machines from the release bundle.
