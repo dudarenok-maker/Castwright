@@ -119,15 +119,10 @@ The Qwen generation forward leaks committed-private host RAM monotonically: ever
 - _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved.
 - _Keep this item open_ until a full-book run holds a flat committed floor with zero recycles; on a pass, note "recycle now a safety net, not load-bearing" and close.
 
-### `ops-8` — Bump GitHub Actions off the deprecated Node-20 runtime
-
-Source: net-new (2026-06-01), surfaced from the v1.5.1 release `cross-os.yml` run annotations.
-
-- _What:_ GitHub is **forcing Node-20 JS actions to run on Node 24 on 2026-06-16** and **removing Node 20 from the runners on 2026-09-16**. Our workflows pin Node-20-runtime action majors — the v1.5.1 cross-OS run flagged `actions/checkout@v4`, `actions/setup-node@v4`, and `actions/cache@v4` (audit every `.github/workflows/*.yml` for others). Bump each to the major that ships the Node-24 runtime (`actions/checkout@v5`, `actions/setup-node@v5`, the current `actions/cache` line, etc.) across all workflows (`verify.yml`, `release.yml`, `cross-os.yml`, the PR-title-lint workflow, the docs-skip config, …). Confirm each bumped action's inputs are still compatible.
-- _Acceptance:_ a fresh run of each workflow shows **no "Node.js 20 actions are deprecated" annotations**; verify / release / cross-OS stay green on the bumped versions.
-- _Key files:_ `.github/workflows/*.yml` (every workflow that uses `checkout` / `setup-node` / `cache` or other JS actions).
-- _Depends on:_ none.
-- _Benefit (technical):_ avoids CI breaking when Node 20 leaves the runners (2026-09-16) and removes the forced-migration uncertainty on 2026-06-16. Cheap, deadline-driven hygiene — do it before mid-June.
+_`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026-06-01** via
+[plan 164](features/164-deps-ci-hygiene.md) — all workflows now pin the latest Node-24 action
+majors (`checkout@v6`, `setup-node@v6`, `cache@v5`, `upload-artifact@v7`). Acceptance is the
+PR's own annotation-free CI run._
 
 ---
 
@@ -403,11 +398,11 @@ Source: net-new (2026-05-22). Surfaced by the full `npm install` deprecation aud
 - _What:_ Periodically re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump direct deps whose upstream majors drop one of these transitives. Status of the three tracked chains:
   - ✅ **RESOLVED 2026-05-23 (plan 104):** `jsdom@25 → html-encoding-sniffer + whatwg-encoding@3.1.1`. Bumped jsdom `^25 → ^29` (29.1.1); the `whatwg-encoding` deprecation warning is gone from the audit. One frontend spec (`src/views/listen.test.tsx` cover-gradient) needed adapting because jsdom 29 canonicalises hex CSS colours to `rgb()` in the CSSOM.
   - ✅ **RESOLVED 2026-05-23 (plan 104):** `archiver@7 → archiver-utils → glob@10.5.0`. Bumped archiver `^7 → ^8` (8.0.0); the `glob` deprecation warning is gone. archiver 8 is pure ESM and dropped the v7 callable factory, so `scripts/build-release-zip.mjs` now constructs `new ZipArchive(opts)` (pinned by `scripts/tests/archiver-zip.test.mjs`).
-  - ⏳ **STILL TRACKED:** `@google/genai@2 → google-auth-library → gaxios → node-fetch → fetch-blob → node-domexception@1.0.0` — deprecation says "Use your platform's native DOMException". Deep transitive via the Gemini SDK; `@google/genai` is still on major 2 (no v3), so this stays blocked. Waiting for `node-fetch`/`fetch-blob`/`google-auth-library` upstream to migrate to native DOMException, OR for a `@google/genai` v3 that drops the `node-fetch` chain.
-- _Acceptance:_ each time a direct dep is bumped (jsdom, archiver, or @google/genai), re-run the audit and tick off the resolved chain in this entry. Entry is removed from BACKLOG when all three resolve — two of three are now done; only the `@google/genai` chain remains.
-- _Key files:_ `server/package.json` (`@google/genai` direct). The jsdom + archiver bumps already landed in root `package.json` (plan 104). No source changes for the remaining chain — purely a dep-bump tracking item.
+  - ⏳ **STILL TRACKED (re-audited 2026-06-01, plan 164):** `@google/genai → google-auth-library@10.6.2 → gaxios@7.1.4 → node-fetch@3.3.2 → fetch-blob@3.2.0 → node-domexception@1.0.0` — deprecation says "Use your platform's native DOMException". This round bumped `@google/genai` `^2.0.1 → ^2.7.0` (latest 2.x; stay current within the major) — the chain **persists** on 2.7.0 and there is **still no v3**, so it stays blocked. `npm ls glob` on the server tree is empty (the research-flagged `gaxios → glob@10.5.0` sub-chain does NOT apply to our resolved `gaxios@7.1.4`). Waiting for `node-fetch`/`fetch-blob`/`google-auth-library` upstream to migrate to native DOMException, OR for a `@google/genai` v3 that drops the `node-fetch` chain.
+- _Acceptance:_ each time a direct dep is bumped (jsdom, archiver, or @google/genai), re-run the audit and tick off the resolved chain in this entry. Entry is removed from BACKLOG when all three resolve — two of three are done; only the `@google/genai` chain remains (re-confirmed blocked 2026-06-01).
+- _Key files:_ `server/package.json` (`@google/genai` direct, now `^2.7.0`). The jsdom + archiver bumps landed in root `package.json` (plan 104). No source changes for the remaining chain — purely a dep-bump tracking item.
 - _Depends on:_ upstream releases (`@google/genai` v3 or a native-DOMException migration in its `node-fetch` chain). Not on our schedule.
-- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog. As of 2026-05-23 a fresh `npm install` at root prints ZERO deprecation warnings (ESLint 9 + jsdom 29 + archiver 8 all cleared); the only remaining deprecation in the monorepo is the `@google/genai` `node-domexception` chain on the server side.
+- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog. As of 2026-06-01 a fresh root `npm install` prints ZERO deprecation warnings (ESLint 9 + jsdom 29 + archiver 8 all cleared); the only remaining deprecation in the monorepo is the `@google/genai` `node-domexception` chain on the server side.
 
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip
 
@@ -428,6 +423,74 @@ Source: net-new (2026-05-18). Deferred follow-up to the release-package work ([`
 - _Key files:_ new `Dockerfile`, new `docker-compose.yml`, new `docs/features/50-docker-image.md` (when this graduates from BACKLOG to active), `.github/workflows/release.yml` (extend with the GHCR push job).
 - _Depends on:_ plan 49 release package shipped (reuses the same tag-push trigger and version source); resolving the workspace-mount question.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
+
+### Dependency major upgrades (deferred)
+
+Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit. The audit cleared the deadline-driven CI-action bump (`ops-8`) + the genuinely-safe minor bumps (TypeScript → latest 5.x, `@google/genai` → 2.7, Node-floor pin) inline, and filed every framework **major** that is now behind here — each researched to "pickup-ready" (current → target, breaking-change surface, blast radius, automated migration path if any, risk). None blocks ship; pick up when time allows. Ordered foundational/low-risk → broad/high-risk. **Note on the React cluster:** `fe-18` (React 19), `fe-21` (router 7), and `fe-19` (Vite/Vitest) are commonly upgraded together — sequence `fe-19` → `fe-18` → `fe-21` in one round.
+
+#### `fe-19` — Vite 5 → 7 + Vitest 2 → 3 + @vitejs/plugin-react 4 → 5 (one unit)
+
+- _What:_ bump `vite ^5.2.0 → 7.x`, `vitest ^2.1.9 → 3.x` (root + `server/`), `@vitejs/plugin-react ^4.3.0 → 5.x` together. Vite 7 requires Node 20.19+/22.12+ — we run Node 24, fine. Vite-7 support lands in **Vitest 3.2+**; plugin-react 5 is Vite-7 compatible. Breaking surface: `build.rollupOptions` `manualChunks` object-form dropped (function-form deprecated), `import.meta.url` no longer polyfilled in UMD/IIFE, default browser target → `baseline-widely-available`, Vitest 3 config/reporter API tweaks. Audit `vite.config.ts`, `server/vitest.config.ts` + `server/vitest.config.slow.ts`, and any `manualChunks`.
+- _Acceptance:_ `npm run build` + all four vitest harnesses (frontend, server fast, server slow, a11y) + e2e green on Vite 7 / Vitest 3; no `manualChunks` deprecation; CI `vitest --changed` path still works.
+- _Key files:_ root + `server/package.json`; `vite.config.ts`; `server/vitest.config.ts`, `server/vitest.config.slow.ts`.
+- _Depends on:_ none (do before/with the React 19 cluster).
+- _Benefit (technical / architectural):_ faster builds + test runner; back on a supported tooling line (currently two majors behind). _Risk: medium._
+
+#### `ops-10` — TypeScript 5 → 6
+
+- _What:_ bump `typescript ^5.9.0 → 6.x` (root + `server/`). TS 6.0 shipped as the latest major (this round held at 5.9.3 as the safe line). Breaking surface: removed long-deprecated compiler options + stricter defaults; re-run `npm run typecheck` (root + server) and `npm run lint` (typescript-eslint must be on a TS-6-compatible release — verify `typescript-eslint ^8` supports it or bump). Low-friction historically, but still a major.
+- _Acceptance:_ `npm run typecheck` + `npm run lint` green on TS 6 across root + server; no removed-option errors; `tsconfig.json` (both) compile clean.
+- _Key files:_ root + `server/package.json` (`typescript`, possibly `typescript-eslint`); `tsconfig.json`, `tsconfig.node.json`, `server/tsconfig.json`.
+- _Depends on:_ none.
+- _Benefit (technical):_ latest compiler + perf; supported line. _Risk: low-medium._
+
+#### `srv-25` — Zod 3 → 4 (and drop `zod-to-json-schema`)
+
+- _What:_ bump `zod ^3.23.8 → 4.x`. Zod 4 ships **native `z.toJSONSchema()`**, so the `zod-to-json-schema` dependency can be **removed** entirely (today it builds the Gemini/Ollama structured-output schemas). Breaking surface: string-format validators moved to top-level (`z.string().email()` → `z.email()`, `.uuid()`, `.url()`), unified error-customization param. Affected: `server/src/analyzer/{ollama,gemini}.ts`, `server/src/handoff/schemas.ts`, `server/src/workspace/user-settings.ts`, `server/src/routes/{user-settings,cast-series-patch}.ts` (8 files). Migration: `npx @zod/codemod --transform v3-to-v4`.
+- _Acceptance:_ all server tests green on Zod 4; `zod-to-json-schema` removed from `server/package.json`; the JSON Schema fed to Gemini/Ollama is equivalent (golden-compare the generated schema before/after, since the analyzer contract depends on its exact shape).
+- _Key files:_ `server/package.json`; the 8 files above; any `zodToJsonSchema(...)` call sites → `z.toJSONSchema(...)`.
+- _Depends on:_ none.
+- _Benefit (technical / architectural):_ large parse/compile perf win, smaller bundle, **deletes a whole dependency**. _Risk: medium (verify the generated schema still satisfies the structured-output contract)._
+
+#### `srv-24` — Express 4 → 5
+
+- _What:_ bump `express ^4.19.2 → 5.x` (GA). Breaking surface: `path-to-regexp` v8 route syntax (`*` → named `/*splat`, optional `:param?` → `{/:param}`), removed legacy signatures (`app.del`, `res.json(status, body)`, `res.send(status)`), rejected-promise propagation in middleware, `req.query` is now a getter. Audit every route under `server/src/routes/` for wildcard/optional params + the removed signatures.
+- _Acceptance:_ all server + supertest route tests green on Express 5; every route still resolves (no path-to-regexp parse errors at boot); e2e audio/upload paths unaffected.
+- _Key files:_ `server/package.json`; `server/src/index.ts` (app + middleware mount order); all `server/src/routes/*.ts`.
+- _Depends on:_ none.
+- _Benefit (technical):_ supported GA major; async-error handling improvements. _Risk: medium (route-syntax migration is the main hazard)._
+
+#### `fe-18` — React 18 → 19
+
+- _What:_ bump `react`/`react-dom ^18.3.1 → 19.x`, `@types/react`/`@types/react-dom → 19`, and — **required for React-19 peer compat (confirmed 2026-06-01)** — `react-redux ^9.1.0 → ^9.2.0+` and `@reduxjs/toolkit ^2.2.0 → ^2.5.0+`. Breaking surface: removed legacy APIs (`propTypes`/`defaultProps` on function components, string refs, legacy context), ref-as-prop, stricter StrictMode/`useEffect` double-invoke. Blast radius: large (all of `src/components`, `src/views`, `src/modals`). Codemod: `npx codemod@latest react/19/migration-recipe`. Pair with a full e2e pass.
+- _Acceptance:_ frontend unit + a11y + e2e green on React 19; no legacy-API warnings in test output; RTK/react-redux on their React-19-compatible minors.
+- _Key files:_ root `package.json`; broad `src/**` (codemod-driven); `src/main.tsx` (root render).
+- _Depends on:_ pairs with `fe-19` (Vite/Vitest) — do Vite/Vitest first or together.
+- _Benefit (technical):_ unblocks React-19-only ecosystem deps; keeps RTK/react-redux on a supported line. _Risk: medium-high (broad surface)._
+
+#### `fe-21` — react-router-dom 6 → 7
+
+- _What:_ bump `react-router-dom ^6.26.0 → 7.x` (used in 10 files incl. `src/main.tsx`, `src/routes/index.tsx`, `src/components/layout.tsx`, `src/views/{generation,upload}.tsx`). v7 requires React 18+ and turns the v6 `future` flags on by default. **Confirm interplay with the custom hash router** (`src/lib/router.ts`) — react-router may own only a thin surface here, which could make this low-effort.
+- _Acceptance:_ routing + the hash-router grammar behave identically on v7; frontend + e2e green; no `future`-flag deprecation warnings.
+- _Key files:_ root `package.json`; the 10 `react-router-dom` consumers; `src/lib/router.ts` (interplay check).
+- _Depends on:_ `fe-18` (React 19) — sequence as a follow-on.
+- _Benefit (technical):_ supported major; aligns with React 19. _Risk: low-medium._
+
+#### `fe-20` — Tailwind 3 → 4
+
+- _What:_ bump `tailwindcss ^3.4.10 → 4.x` + add `@tailwindcss/postcss`. v4 is CSS-first: `@import "tailwindcss"` replaces the `@tailwind` directives; theme moves into `@theme` (the JS `tailwind.config.ts` still works via the `@config` directive for back-compat). **Our setup is unusually well-aligned** — `src/styles.css` already declares design tokens as CSS custom properties (`--peach`, `--ink`, …) and `tailwind.config.ts` references them, which is exactly v4's "every token is a CSS var" model. Run `npx @tailwindcss/upgrade` (automates ~90% incl. class renames). v4 drops the need for `autoprefixer`/`postcss-import` boilerplate.
+- _Acceptance:_ all four core views render pixel-identically; `npm run test:e2e:visual` re-baselined (the snapshots WILL shift — budget a re-bake); lint/build green; design-token CSS-vars contract preserved (no hex literals leak in).
+- _Key files:_ root `package.json`; `src/styles.css` (`@import` + `@theme`); `tailwind.config.ts`; `postcss.config.js`; visual baselines under `e2e/**/visual.spec.ts/`.
+- _Depends on:_ none.
+- _Benefit (technical):_ faster engine, runtime theme switching, simpler toolchain. _Risk: medium — visual-regression baselines shift; needs a snapshot re-bake._
+
+#### `srv-26` — pdfjs-dist 4 → 5
+
+- _What:_ bump `pdfjs-dist ^4.10.38 → 5.x`. ESM-only, Node 20+, worker-setup changes. Single consumer (PDF manuscript parse). Verify the worker wiring + the parse path still resolve under the v5 ESM layout.
+- _Acceptance:_ PDF manuscript upload → parse end-to-end works on v5 (the canonical-recipe regression); server tests green.
+- _Key files:_ `server/package.json`; the PDF-parse consumer in `server/src/` (worker/import setup).
+- _Depends on:_ none.
+- _Benefit (technical):_ supported major + security fixes. _Risk: low-medium._
 
 ### Listener-app handoffs
 
