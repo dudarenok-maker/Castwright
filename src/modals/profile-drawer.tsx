@@ -38,17 +38,30 @@ import { castActions } from '../store/cast-slice';
    user only customises it once per session. */
 const DEFAULT_PREVIEW_TEXT =
   'The quick brown fox jumps over the lazy dog. The sun shone over the field.';
+/* fs-2 — Russian preview pangram (covers the alphabet) so a Russian book's
+   voice preview/calibration default speaks Russian, not the English fox. */
+const RU_PREVIEW_TEXT = 'Съешь же ещё этих мягких французских булок да выпей чаю.';
 const PREVIEW_TEXT_STORAGE_KEY = 'voice-preview-sample-text';
 
-function loadInitialPreviewText(): string {
-  if (typeof window === 'undefined') return DEFAULT_PREVIEW_TEXT;
+/** fs-2 — the default preview text is keyed on the book language so a Russian
+    book doesn't show the English pangram. A user's stored override still wins
+    (their explicit choice). */
+function defaultPreviewTextForLanguage(language?: string): string {
+  return language && language !== 'en' && language.toLowerCase().startsWith('ru')
+    ? RU_PREVIEW_TEXT
+    : DEFAULT_PREVIEW_TEXT;
+}
+
+function loadInitialPreviewText(language?: string): string {
+  const fallback = defaultPreviewTextForLanguage(language);
+  if (typeof window === 'undefined') return fallback;
   try {
     const stored = window.localStorage.getItem(PREVIEW_TEXT_STORAGE_KEY);
     if (stored && stored.trim()) return stored;
   } catch {
     /* Private-browsing / storage-disabled — fall through to default. */
   }
-  return DEFAULT_PREVIEW_TEXT;
+  return fallback;
 }
 
 interface Props {
@@ -196,6 +209,11 @@ export function ProfileDrawer({
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
+  /* fs-2 — the open book's language, so the preview/calibration default speaks
+     the right language (Russian pangram for a Russian book). */
+  const bookLanguage = useAppSelector(
+    (s) => s.library?.books?.find((b) => b.bookId === bookId)?.language ?? 'en',
+  );
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
   const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
   const [overrideError, setOverrideError] = useState<string | null>(null);
@@ -215,7 +233,13 @@ export function ProfileDrawer({
      bespoke Qwen embedding server-side and returns an audition the drawer
      plays; on Save we pin the designed voiceId series-scoped. The
      narrator usually stays default — no character to design a voice for. */
-  const [engineChoice, setEngineChoice] = useState<EngineChoice>(character.ttsEngine ?? 'default');
+  /* fs-2 — a non-English book hard-locks every character to Qwen (Kokoro is
+     English-only). Default the choice to 'qwen' regardless of any stale/reused
+     ttsEngine on disk, matching the server's force-Qwen gate. */
+  const lockedToQwen = bookLanguage !== 'en';
+  const [engineChoice, setEngineChoice] = useState<EngineChoice>(
+    lockedToQwen ? 'qwen' : (character.ttsEngine ?? 'default'),
+  );
   const [persona, setPersona] = useState<string>(character.voiceStyle ?? '');
   const [personaBusy, setPersonaBusy] = useState(false);
   const [designBusy, setDesignBusy] = useState(false);
@@ -255,7 +279,9 @@ export function ProfileDrawer({
      character they audition. Default is a pangram + a short follow-on
      (see DEFAULT_PREVIEW_TEXT). The list of per-candidate preview rows
      is collapsed by default to keep the drawer tidy on first open. */
-  const [previewText, setPreviewText] = useState<string>(loadInitialPreviewText);
+  const [previewText, setPreviewText] = useState<string>(() =>
+    loadInitialPreviewText(bookLanguage),
+  );
   const [showPreviewCandidates, setShowPreviewCandidates] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -887,6 +913,7 @@ export function ProfileDrawer({
               onChange={onSelectEngine}
               installedEngines={['kokoro', 'qwen']}
               defaultEngineLabel={capitalise(ttsEngine)}
+              lockedToQwen={lockedToQwen}
               persona={persona}
               onPersonaChange={setPersona}
               onRegeneratePersona={() => void generatePersona()}

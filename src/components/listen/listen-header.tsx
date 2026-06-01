@@ -36,6 +36,13 @@ import { RestructureChaptersButton } from '../restructure-chapters-button';
 import { formatTime } from '../../lib/time';
 import type { EditableBookMeta, EditableBookMetaField } from '../../store/book-meta-slice';
 
+/* fs-2 — human label for a BCP-47 book language badge. */
+function languageLabel(language: string): string {
+  if (language.toLowerCase().startsWith('ru')) return 'Russian';
+  if (language.toLowerCase().startsWith('en')) return 'English';
+  return language.toUpperCase();
+}
+
 interface CoverArtProps {
   title: string;
   gradient: [string, string] | null;
@@ -155,6 +162,10 @@ interface ListenHeaderProps {
       empty string suppresses the collapsible card. Markdown line breaks
       render via whitespace-pre-wrap (no markdown parsing). */
   notes: string | null;
+  /** fs-2 — BCP-47 book language. A badge is shown only for non-English books
+      (English is the unmarked default, so the existing library gets no new
+      chrome). Optional so test harnesses that omit it keep compiling. */
+  language?: string;
 }
 
 export function ListenHeader({
@@ -179,6 +190,7 @@ export function ListenHeader({
   onOpenRestructure,
   onReplaceManuscript,
   notes,
+  language,
 }: ListenHeaderProps) {
   /* Plan 67 — collapsible Notes card. Default collapsed so the header
      stays compact; expands inline when the user clicks the affordance.
@@ -236,6 +248,17 @@ export function ListenHeader({
           </span>
           <span>·</span>
           <span>FLAC + MP3</span>
+          {language && language !== 'en' && (
+            <>
+              <span>·</span>
+              <span
+                data-testid="listen-language-badge"
+                className="inline-block text-[11px] font-semibold uppercase tracking-[0.08em] text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5"
+              >
+                {languageLabel(language)}
+              </span>
+            </>
+          )}
           <span>·</span>
           <span>
             <span className="font-semibold text-ink">{completedCount}</span> chapters voiced

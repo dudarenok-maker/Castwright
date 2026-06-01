@@ -121,6 +121,9 @@ export interface Book {
   lastWorkedOn: string;
   coverGradient: [string, string];
   pinned?: boolean;
+  /** fs-2 — BCP-47 book language ('en' default). Drives the library language
+      badge + filter pill. Always present on the wire (server pads to 'en'). */
+  language?: string;
 }
 
 /* ── Import + confirm-metadata flow ───────────────────────────────────── */
@@ -140,6 +143,10 @@ export interface ImportCandidate {
   sourceText: string;
   wordCount: number;
   byteSize: number;
+  /* fs-2 — BCP-47 language auto-detected from the manuscript text (Cyrillic
+     ratio). Seeds the confirm-view language selector; user-overridable.
+     Optional because detection runs client-side and older flows omit it. */
+  language?: string;
   /* Per-chapter wordCount is what powers the confirm view's auto-suggest
      heuristic (front-matter detection by length). Optional because older
      server builds didn't expose it. */
@@ -158,6 +165,9 @@ export interface ConfirmBookRequest {
   seriesPosition: number | null;
   title: string;
   isStandalone: boolean;
+  /* fs-2 — BCP-47 manuscript language chosen at confirm (auto-detected,
+     user-overridable). Persisted to BookStateJson.language. Defaults 'en'. */
+  language?: string;
   /* Slugs (server-derived `${id-pad}-${slug(title)}`) for chapters the
      user pre-excluded from analysis at the confirm stage. The server
      re-derives the same slug from its parsed chapter list and matches. */
@@ -234,6 +244,10 @@ export interface BookStateJson {
       pads with `[]` so the wire (`LibraryBook.tags`) always carries an
       array. */
   tags?: string[];
+  /** fs-2 — BCP-47 book language ('en' default). Mirrors the server's
+      BookStateJson; drives the Listen language badge + cast-view Qwen lock
+      for non-English books. */
+  language?: string;
 }
 
 export interface BookStateResponse {
@@ -443,6 +457,10 @@ export interface LibraryBook {
       the field), so the library view's tag-chip filter row can union
       across books without guarding on undefined. */
   tags: string[];
+  /** fs-2 — BCP-47 book language. Present on the wire (server pads to 'en'),
+      but typed optional so the ~20 test fixtures + mock factories that build a
+      LibraryBook don't all need updating; consumers default to 'en'. */
+  language?: string;
 }
 
 export type CoverCandidate = components['schemas']['CoverCandidate'];
