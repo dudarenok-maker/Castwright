@@ -54,7 +54,7 @@ Source: net-new (2026-05-22). Captured during planning of the cross-version upgr
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
 [plan 162](features/162-fs2-multilanguage.md); the library/cast language UX
-polish (`fe-16`) shipped via [plan 163](features/163-fe-15-16-language-and-revision-e2e.md).
+polish (`fe-16`) shipped via [plan 165](features/165-fe-15-16-language-and-revision-e2e.md).
 The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ---
