@@ -258,6 +258,16 @@ Source: net-new (2026-05-28). Surfaced shipping the generation progress-bounce f
 - _Depends on:_ the progress-bounce fix shipped (PR #308) — builds on the same `completed`-count plumbing.
 - _Benefit (user):_ per-character progress bars become exact under parallel synthesis, not a monotonic approximation. Low urgency — the bars are already monotonic and directionally right; this only bites if a user watches a single character's bar closely during a heavily-parallel run.
 
+#### `srv-23` — Opt-in "refresh personas + re-design voices" sweep for existing books
+
+Source: net-new (2026-06-01), deferred half of plan [`160-voicedesign-persona-format.md`](features/160-voicedesign-persona-format.md). Plan 160 upgraded `buildVoiceStylePrompt` to the official Qwen VoiceDesign format (sentence + purpose clause + pitch + objectivity), but only for personas generated FROM NOW ON — existing books keep their old-format `voiceStyle` strings and their already-designed `voices/qwen/<id>.pt` embeddings until manually re-generated and re-designed.
+
+- _What:_ a per-book opt-in action that re-runs `generate-all` voice-style then re-designs every Qwen voice from the refreshed personas, so an existing book can adopt the improved format in one click. Must NOT clobber hand-edited personas without confirmation, and must surface the Gemini-quota + GPU-time cost up front.
+- _Acceptance:_ on a book designed under the old format, the sweep regenerates personas (new format), re-designs each Qwen voice, and the next generation audibly reflects the new designs; a hand-edited persona is preserved or explicitly confirmed before overwrite.
+- _Key files:_ `server/src/routes/voice-style.ts` (`generate-all`), `server/src/routes/qwen-voice.ts` (design), a new batch orchestrator, and the cast/Account UI affordance.
+- _Depends on:_ plan 160 shipped (the new prompt).
+- _Benefit (user):_ existing libraries can adopt the better voice-design format without re-casting by hand. Low urgency — costly (quota + GPU) and only matters for books a user wants to re-render.
+
 ### Workflow, power-user & dev settings
 
 #### `srv-2` — Auto-backup scheduling for `state.json`
