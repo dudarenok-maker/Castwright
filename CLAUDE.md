@@ -58,8 +58,8 @@ Define success criteria, then loop until verified.
 - `npm run dev` — Vite dev server (HMR) on `http://localhost:5173`.
 - `npm run typecheck` — `tsc --noEmit` (frontend + server).
 - `npm test` — Vitest single-run for the frontend.
-- `npm run test:server` — Vitest single-run for the server (parallel, excludes the 5 hot files routed to `test:server-slow`).
-- `npm run test:server-slow` — Vitest single-run for 5 timeout-prone server test files (analyzer/gemini + 4 routes test files), pinned to one fork via `server/vitest.config.slow.ts`. Runs in pre-push `verify` after `test:server`; not in `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
+- `npm run test:server` — Vitest single-run for the server (parallel, excludes the 6 hot files routed to `test:server-slow`).
+- `npm run test:server-slow` — Vitest single-run for 6 timeout-prone server test files (analyzer/gemini + 5 routes test files), pinned to one fork via `server/vitest.config.slow.ts`. Runs in pre-push `verify` after `test:server`; not in `verify:fast` pre-commit. See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
   (log rotation/pruning). Requires Pester >= 5.0; install once with
   `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
