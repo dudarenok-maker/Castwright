@@ -507,6 +507,10 @@ install prefetch subprocess, in `scripts/install-qwen3.mjs`.
 | HF Hub `...cache-system uses symlinks...` | Windows without Developer Mode can't create cache symlinks; HF Hub transparently falls back to file copies. | `HF_HUB_DISABLE_SYMLINKS_WARNING=1` — set in both the install subprocess env and the sidecar runtime env. We do **not** set `HF_HOME`/`HF_HUB_CACHE` (the engine ignores them, so the cache stays at its default location). |
 | `SoX could not be found!` | A transitive torchaudio/coqui probe for the optional SoX backend. We do all audio I/O via soundfile + ffmpeg, so SoX is never used. | Message-scoped `warnings.filterwarnings` (narrowest scope — other `UserWarning`s still surface). |
 | transformers `flash-attn is not installed` banner | SDPA is the correct default attention impl (see **FlashAttention-2** above); FA2 is an opt-in accelerator, not a missing requirement. | Message-scoped `warnings.filterwarnings`. Deployers who install the FA2 wheel silence it the upstream way regardless. |
+| Qwen `code_predictor_config is None. Initializing code_predictor model with default values` | HuggingFace config-defaulting inside `qwen_tts`'s `Qwen3TTSTalkerConfig.__init__` at `from_pretrained` — a one-time load-time `logging.info`, **not** a per-sentence recompute (the design-time slowness that once drew the eye was generation-length-bound, fixed separately). | A logging filter (`_DropSubstringLogFilter`), not a warnings filter: `_suppress_code_predictor_log()` in `main.py` adds it to the root handlers only around the Qwen `from_pretrained` calls and removes it after (load-scoped, zero leak). Pinned by `tests/test_log_filter.py`. |
+
+(The first three rows above are Python `warnings` suppressed via `warning_filters.py`; the
+last row is a `logging` record, so it's dropped by a load-scoped log filter in `main.py` instead.)
 
 Everything else stays visible by design — CUDA poison / OOM detail, model-load
 failures, and the FA2-install warnings (which point at a retry action) are all
