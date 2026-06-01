@@ -106,3 +106,80 @@ describe('generation-stats live per-batch window', () => {
     expect(s.liveBatchRtf).toBeCloseTo(1.5, 5);
   });
 });
+
+describe('generation-stats per-chapter history ring', () => {
+  it('records every field of a finished chapter newest-first', () => {
+    const s = recordChapterThroughput(
+      {
+        chapterId: 12,
+        audioSec: 120,
+        synthMs: 60_000,
+        title: 'Chapter 12',
+        bookId: 'book-a',
+        modelKey: 'qwen3-tts',
+      },
+      T0,
+    );
+    expect(s.recentChapters).toHaveLength(1);
+    expect(s.recentChapters[0]).toEqual({
+      chapterId: 12,
+      title: 'Chapter 12',
+      bookId: 'book-a',
+      modelKey: 'qwen3-tts',
+      rtf: 0.5, // 60 s synth / 120 s audio
+      audioSec: 120,
+      synthSec: 60,
+      at: new Date(T0).toISOString(),
+    });
+  });
+
+  it('keeps the newest chapter first', () => {
+    recordChapterThroughput({ chapterId: 1, audioSec: 100, synthMs: 50_000 }, T0);
+    const s = recordChapterThroughput(
+      { chapterId: 2, audioSec: 100, synthMs: 50_000 },
+      T0 + 60_000,
+    );
+    expect(s.recentChapters.map((c) => c.chapterId)).toEqual([2, 1]);
+  });
+
+  it('caps the ring at MAX_HISTORY (200), keeping the most recent', () => {
+    for (let i = 1; i <= 205; i++) {
+      recordChapterThroughput({ chapterId: i, audioSec: 100, synthMs: 50_000 }, T0 + i * 1000);
+    }
+    const s = getGenerationStats(T0 + 205_000);
+    expect(s.recentChapters).toHaveLength(200);
+    expect(s.recentChapters[0].chapterId).toBe(205); // newest kept
+    expect(s.recentChapters[199].chapterId).toBe(6); // oldest 5 dropped
+  });
+
+  it('survives the rolling-window idle reset — the trend is not blanked', () => {
+    recordChapterThroughput({ chapterId: 3, audioSec: 100, synthMs: 50_000 }, T0);
+    // Read well past RESET_MS: the aggregate empties but the history must not.
+    const s = getGenerationStats(T0 + 11 * 60_000);
+    expect(s.chapters).toBe(0); // rolling window reset
+    expect(s.rtf).toBeNull();
+    expect(s.recentChapters).toHaveLength(1); // history preserved
+    expect(s.recentChapters[0].chapterId).toBe(3);
+  });
+
+  it('records rtf=null (not 0/Infinity) for a chapter with no audio', () => {
+    const s = recordChapterThroughput({ chapterId: 7, audioSec: 0, synthMs: 30_000 }, T0);
+    expect(s.recentChapters[0].rtf).toBeNull();
+  });
+
+  it('defaults title/bookId/modelKey to null for a bare 3-field call (back-compat)', () => {
+    const s = recordChapterThroughput({ chapterId: 9, audioSec: 100, synthMs: 50_000 }, T0);
+    expect(s.recentChapters[0]).toMatchObject({
+      chapterId: 9,
+      title: null,
+      bookId: null,
+      modelKey: null,
+    });
+  });
+
+  it('is cleared by the test reset helper', () => {
+    recordChapterThroughput({ chapterId: 1, audioSec: 100, synthMs: 50_000 }, T0);
+    __resetGenerationStatsForTest();
+    expect(getGenerationStats(T0).recentChapters).toHaveLength(0);
+  });
+});

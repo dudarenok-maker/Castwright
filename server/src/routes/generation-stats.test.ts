@@ -34,4 +34,25 @@ describe('GET /api/generation/stats', () => {
     expect(res.body.rtf).toBeCloseTo(0.5, 5);
     expect(res.body.last.chapterId).toBe(3);
   });
+
+  it('serialises the per-chapter history with title/book/engine', async () => {
+    recordChapterThroughput({
+      chapterId: 5,
+      audioSec: 120,
+      synthMs: 60_000,
+      title: 'Chapter 5',
+      bookId: 'book-a',
+      modelKey: 'qwen3-tts',
+    });
+    const res = await request(app).get('/api/generation/stats');
+    expect(res.status).toBe(200);
+    expect(res.body.recentChapters).toHaveLength(1);
+    expect(res.body.recentChapters[0]).toMatchObject({
+      chapterId: 5,
+      title: 'Chapter 5',
+      bookId: 'book-a',
+      modelKey: 'qwen3-tts',
+      rtf: 0.5,
+    });
+  });
 });
