@@ -35,6 +35,7 @@ import {
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { normaliseBookLanguage } from '../tts/language.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { backgroundFetchCover } from '../cover/openlibrary.js';
 
@@ -166,6 +167,9 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       seriesPosition?: number | null;
       title?: string;
       isStandalone?: boolean;
+      /* fs-2 — BCP-47 manuscript language chosen at confirm (auto-detected
+         on the frontend, user-overridable). Defaults to 'en' when absent. */
+      language?: string;
       /* Slugs (matching the server-derived `${id-pad}-${slug(title)}`
          form) for chapters the user pre-excluded from analysis at the
          confirm stage. The slug is the stable cross-parse key; ids can
@@ -271,6 +275,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       createdAt: now,
       updatedAt: now,
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+      language: normaliseBookLanguage(body.language),
     };
     await writeStateJsonAtomic(stateJsonPath(bookDir), state);
 

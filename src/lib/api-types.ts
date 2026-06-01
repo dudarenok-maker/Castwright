@@ -1915,6 +1915,14 @@ export interface components {
              *     landed continue to load and render the empty chip set.
              */
             tags?: string[];
+            /**
+             * @description fs-2 — BCP-47 manuscript language (e.g. `en`, `ru`). Defaults to
+             *     `en` for books written before the field landed. Drives
+             *     same-language narration (a non-`en` book routes every character,
+             *     incl. the narrator, to a designed Qwen voice and never falls back
+             *     to English Kokoro) and the library language badge + filter pill.
+             */
+            language?: string;
         };
         ImportCandidate: {
             /** @enum {string} */
@@ -1932,6 +1940,12 @@ export interface components {
              *     value is a guess and can override.
              */
             seriesFromTitle?: boolean;
+            /**
+             * @description fs-2 — BCP-47 language auto-detected from the manuscript text
+             *     (≥30% Cyrillic letters → `ru`, else `en`). Seeds the confirm-view
+             *     language selector; the user can override before confirming.
+             */
+            language?: string;
             sourceText: string;
             wordCount: number;
             byteSize: number;
@@ -1955,6 +1969,12 @@ export interface components {
             seriesPosition?: number | null;
             title: string;
             isStandalone: boolean;
+            /**
+             * @description fs-2 — BCP-47 manuscript language chosen at confirm (auto-detected,
+             *     user-overridable). Persisted to `BookStateJson.language`. Defaults
+             *     to `en` when absent.
+             */
+            language?: string;
             /** @description Chapter slugs to seed as excluded=true in state.json. Built client-side from the candidate.chapters[].id + title; the server re-derives the slug to match. */
             excludedSlugs?: string[];
         };

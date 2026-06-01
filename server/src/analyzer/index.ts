@@ -45,6 +45,13 @@ export interface StageCall {
       the wait exceeds ~1s so sub-second jitter doesn't spam the UI.
       The route layer converts these to SSE `throttle` events. */
   onThrottle?: (waitMs: number, reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after') => void;
+  /** fs-2 — the book's BCP-47 language. When non-English, the analyzer
+      prepends a language preamble to the system instruction so attribution
+      handles the script's conventions (Cyrillic names, «…»/— dash dialogue,
+      patronymics). Absent/`'en'` → no preamble (byte-identical to pre-fs-2).
+      Flows verbatim through every `runStage*` of every analyzer
+      implementation, so it never touches a method signature. */
+  language?: string;
 }
 
 export interface Analyzer {

@@ -6,7 +6,7 @@ import { ShareLinkModal } from '../modals/share-link';
 import { parseDuration } from '../lib/time';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
-import { useAppDispatch, useAppSelectorShallow } from '../store';
+import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { listenProgressActions } from '../store/listen-progress-slice';
 import { api } from '../lib/api';
@@ -150,6 +150,10 @@ export function ListenView({
 
   const title = bookMeta?.title ?? '';
   const author = bookMeta?.author ?? '';
+  /* fs-2 — book language for the Listen header badge (non-English only). */
+  const bookLanguage = useAppSelector(
+    (s) => s.library?.books?.find((b) => b.bookId === bookId)?.language ?? 'en',
+  );
   return (
     <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10">
       <ListenHeader
@@ -174,6 +178,7 @@ export function ListenView({
         onOpenRestructure={() => dispatch(uiActions.changeView('restructure'))}
         onReplaceManuscript={() => dispatch(uiActions.startReupload({ bookId }))}
         notes={bookMeta?.notes ?? null}
+        language={bookLanguage}
       />
 
       <ListenPlayerRegion

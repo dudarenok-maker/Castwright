@@ -42,6 +42,7 @@ import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../w
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
 import { linkSeriesReuseAtAnalysis } from '../workspace/series-reuse-link.js';
@@ -1484,6 +1485,19 @@ export interface MainAnalyzerJobOpts {
    Promise.all, back-pressure semaphore engaging in production code
    paths, not just unit tests of the watermark) needs end-to-end
    coverage that drives this body with spy analyzers + a stub record. */
+/* fs-2 — resolve a manuscript's book language for the analyzer preamble.
+   Returns the book's BCP-47 language ('en' default), or 'en' when no book is
+   found on disk yet (analysis can run pre-confirm in some paths). Best-effort:
+   a lookup failure must never block analysis, so it swallows errors to 'en'. */
+export async function resolveBookLanguageForManuscript(manuscriptId: string): Promise<string> {
+  try {
+    const located = await findBookByManuscriptId(manuscriptId);
+    return located ? bookStateLanguage(located.state) : 'en';
+  } catch {
+    return 'en';
+  }
+}
+
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
@@ -1491,6 +1505,9 @@ export async function runMainAnalyzerJob(
   opts: MainAnalyzerJobOpts,
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
+  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate.
+     Resolved once per job; threaded into every runStage* call below. */
+  const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
   const requestedFresh = opts.requestedFresh;
   const allowStage1Shrink = opts.allowStage1Shrink;
   const abortController = job.controller;
@@ -2024,6 +2041,7 @@ export async function runMainAnalyzerJob(
             ),
             {
               signal: abortController.signal,
+              language: bookLanguage,
               onWaiting: (elapsed) => {
                 const slot = castInFlight.get(i);
                 if (slot) slot.elapsedMs = elapsed;
@@ -2676,6 +2694,7 @@ export async function runMainAnalyzerJob(
         buildStage2ChapterInbox(manuscriptId, recordRef.title, phase1Stage1, ch),
         {
           signal: abortController.signal,
+          language: bookLanguage,
           onWaiting: (elapsed) => tickOverall(elapsed),
           /* Per-chunk heartbeat so the user sees evidence of model output
              on each chapter. Stage 2's existing wall-clock heartbeat log
@@ -3312,6 +3331,8 @@ async function runSubsetAnalyzerJob(
   allowStage1ShrinkSubset: boolean,
 ): Promise<void> {
   const manuscriptId = job.manuscriptId;
+  /* fs-2 — book language for the analyzer preamble + Cyrillic token estimate. */
+  const bookLanguage = await resolveBookLanguageForManuscript(manuscriptId);
   const abortController = job.controller;
   const analyzer = selection.analyzer;
   const analyzerLabel = engineLabel(selection.engine, selection.model);
@@ -3424,6 +3445,7 @@ async function runSubsetAnalyzerJob(
           ),
           {
             signal: abortController.signal,
+            language: bookLanguage,
             onThrottle: (waitMs, reason) => {
               send({
                 kind: 'throttle',
@@ -3613,6 +3635,7 @@ async function runSubsetAnalyzerJob(
         buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
         {
           signal: abortController.signal,
+          language: bookLanguage,
           onThrottle: (waitMs, reason) => {
             send({
               kind: 'throttle',
