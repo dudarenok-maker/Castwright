@@ -240,3 +240,64 @@ describe('ListenPlayerRegion — live row sync + pill-hidden-while-playing (plan
     expect(within(row2).getByText(/Resume at/i)).toBeInTheDocument();
   });
 });
+
+/* Ungenerated chapters have no audio to play or share — only a
+   placeholder "0:00" duration. The row stays visible but reads as
+   inert: Play + Share disabled, and a state-aware label
+   (Queued / Generating… / Failed) replaces the misleading "0:00".
+   Regenerate stays active (it can kick off / retry generation). */
+describe('ListenPlayerRegion — ungenerated-chapter affordances', () => {
+  it('disables Play + Share and shows "Queued" instead of 0:00 for a queued chapter', () => {
+    renderRegion([makeChapter(1, { state: 'queued', duration: '0:00' })]);
+    const row = screen.getByTestId('chapter-row-1');
+    expect(screen.getByLabelText('Chapter 1 not yet generated')).toBeDisabled();
+    expect(screen.getByTestId('chapter-row-1-share-clip')).toBeDisabled();
+    expect(within(row).getByText('Queued')).toBeInTheDocument();
+    expect(within(row).queryByText('0:00')).toBeNull();
+  });
+
+  it('shows "Generating…" for an in_progress chapter', () => {
+    renderRegion([makeChapter(1, { state: 'in_progress', duration: '0:00' })]);
+    const row = screen.getByTestId('chapter-row-1');
+    expect(within(row).getByText('Generating…')).toBeInTheDocument();
+    expect(screen.getByLabelText('Chapter 1 not yet generated')).toBeDisabled();
+    expect(screen.getByTestId('chapter-row-1-share-clip')).toBeDisabled();
+  });
+
+  it('shows "Failed" for a failed chapter', () => {
+    renderRegion([makeChapter(1, { state: 'failed', duration: '0:00' })]);
+    const row = screen.getByTestId('chapter-row-1');
+    expect(within(row).getByText('Failed')).toBeInTheDocument();
+    expect(screen.getByLabelText('Chapter 1 not yet generated')).toBeDisabled();
+    expect(screen.getByTestId('chapter-row-1-share-clip')).toBeDisabled();
+  });
+
+  it('keeps Regenerate active on a non-done chapter (it can start generation)', () => {
+    const onRegenerate = vi.fn();
+    render(
+      <Provider store={makeStore()}>
+        <ListenPlayerRegion
+          bookId="test-book"
+          chapters={[makeChapter(1, { state: 'queued', duration: '0:00' })]}
+          listenable={[makeChapter(1, { state: 'queued', duration: '0:00' })]}
+          characters={[]}
+          currentTrack={null}
+          onPlayChapter={vi.fn()}
+          onRegenerate={onRegenerate}
+          onSeekMarker={vi.fn()}
+          onDeleteMarker={vi.fn()}
+        />
+      </Provider>,
+    );
+    const regen = screen.getByLabelText('Regenerate chapter 1');
+    expect(regen).not.toBeDisabled();
+  });
+
+  it('leaves Play + Share active and shows the real duration for a done chapter', () => {
+    renderRegion([makeChapter(1, { state: 'done', duration: '10:00' })]);
+    const row = screen.getByTestId('chapter-row-1');
+    expect(screen.getByLabelText('Play chapter 1')).not.toBeDisabled();
+    expect(screen.getByTestId('chapter-row-1-share-clip')).not.toBeDisabled();
+    expect(within(row).getByText('10:00')).toBeInTheDocument();
+  });
+});
