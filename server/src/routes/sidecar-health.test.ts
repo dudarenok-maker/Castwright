@@ -249,6 +249,44 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.qwenInstallState).toBe('loaded');
   });
 
+  it('forwards the soft-recycle signal as recyclePending / committedMb', async () => {
+    /* side-11 item 2: the generation worker reads `recycle_pending` off this
+       same /health poll to trigger a clean boundary recycle. Wire is snake_case;
+       the API surface is camelCase. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['qwen'],
+          qwen_loaded: true,
+          recycle_pending: true,
+          committed_mb: 30123.5,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.recyclePending).toBe(true);
+    expect(res.body.committedMb).toBe(30123.5);
+  });
+
+  it('defaults recyclePending=false / committedMb=null for an older sidecar', async () => {
+    /* A pre-side-11 sidecar omits both fields. The proxy must coerce so the
+       boundary check reads a definite `false` (never recycles on a stale
+       build) and committedMb is an explicit null, not undefined. */
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, engines: ['qwen'], qwen_loaded: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.recyclePending).toBe(false);
+    expect(res.body.committedMb).toBeNull();
+  });
+
   it('returns unreachable when the sidecar responds non-2xx', async () => {
     fetchMock.mockResolvedValue(
       new Response('nope', { status: 503, statusText: 'Service Unavailable' }),

@@ -48,6 +48,10 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
     ensureReadyCalls += 1;
     return ensureReadyImpl();
   },
+  /* Empty so the side-11 boundary-recycle check (the only SIDECAR_ENGINES
+     consumer) is a no-op here — this suite drives a gemini run and asserts the
+     srv-17c recovery, not the boundary recycle. */
+  SIDECAR_ENGINES: new Set(),
 }));
 vi.mock('../tts/index.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../tts/index.js')>();

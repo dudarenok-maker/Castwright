@@ -36,6 +36,7 @@ const SLOW_FILES_TO_EXCLUDE = [
   'src/routes/book-state.test.ts',
   'src/routes/chapters-restructure.test.ts',
   'src/routes/generation.test.ts',
+  'src/routes/generation-boundary-recycle.test.ts',
 ];
 
 /* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or
