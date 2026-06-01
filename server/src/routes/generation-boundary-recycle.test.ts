@@ -172,7 +172,17 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   await new Promise<void>((resolve) => fakeSidecar.close(() => resolve()));
   const { rm } = await import('node:fs/promises');
-  await rm(workspaceRoot, { recursive: true, force: true });
+  /* Best-effort: a just-finished chapter render may still be flushing audio
+     files when we tear down, which makes a single recursive rm race ENOTEMPTY
+     on Linux. Retry briefly, then swallow — it's a tmpdir the OS reclaims. */
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await rm(workspaceRoot, { recursive: true, force: true });
+      return;
+    } catch {
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
 });
 
 const ENTRY_ID = 'boundary-entry-1';
