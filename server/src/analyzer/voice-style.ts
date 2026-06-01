@@ -2,8 +2,9 @@
 
    Every cast member gets a short natural-language "voice style" persona —
    a Qwen voice-design `instruct` like:
-     "a bright, confident teenage girl, warm and a little playful,
-      mid-paced, with a hint of anxiety"
+     "A bright teenage girl's voice, medium-high pitch and mid-paced, warm
+      and lightly playful with a faintly nervous edge, suited to expressive
+      character dialogue."
    The Qwen sidecar designs a bespoke voice FROM such a persona
    (`POST /qwen/design-voice {voiceId, instruct, …}`), so the persona is the
    editable, durable seed of a character's designed voice.
@@ -60,11 +61,18 @@ function describeTone(tone: CastCharacter['tone']): string | null {
   return parts.length ? parts.join(', ') : null;
 }
 
-/* Build the per-character prompt. Tight by design: a short profile block,
-   up to a handful of representative dialogue quotes, and an explicit
-   instruction to return ONLY the persona phrase. The quotes are the
-   strongest signal for timbre/temperament — the model should lean on how
-   the character actually speaks, not just the analyzer's labels. */
+/* Build the per-character prompt. A short profile block, up to a handful of
+   representative dialogue quotes, and an explicit instruction to return ONLY
+   the persona. The quotes are the strongest signal for timbre/temperament —
+   the model should lean on how the character actually speaks, not just the
+   analyzer's labels.
+
+   The requested OUTPUT shape mirrors Qwen3-TTS's official VoiceDesign
+   guidance (Alibaba Model Studio docs + the HF model card): a 15–40-word
+   descriptive sentence covering gender / age / pitch / pace / timbre / emotion
+   that ENDS with a purpose clause ("…for audiobook narration"), and the five
+   principles — specificity, multidimensionality, objectivity, originality,
+   conciseness. See docs/features/160-voicedesign-persona-format.md. */
 export function buildVoiceStylePrompt(character: CastCharacter): string {
   const hint = buildHintFromCast(character);
   const lines: string[] = [];
@@ -87,15 +95,19 @@ export function buildVoiceStylePrompt(character: CastCharacter): string {
     for (const q of quotes) lines.push(`- "${q}"`);
   }
 
-  return `You design audiobook character voices. From the character profile below, write ONE concise voice-design persona describing the voice to synthesise — its timbre, age, gender, speaking pace, and temperament — and bake in the character's dominant emotional register.
+  return `You design voices for an audiobook. From the character profile below, write ONE voice-design persona that a text-to-speech model will use to synthesise this character's voice. Describe how the voice SOUNDS, then end with a short purpose clause.
+
+Cover these dimensions: gender, apparent age, pitch (high / medium / low), speaking pace, timbre (e.g. warm, crisp, rich, gravelly, bright), and the dominant emotional register. End with the use — "suitable for audiobook narration" for a narrator, otherwise "for expressive character dialogue".
 
 Rules:
-- Output ONLY the persona phrase. No preamble, no quotes, no markdown, no name.
-- One sentence or comma-separated clause, at most ~30 words.
-- Describe the VOICE (how they sound), not the plot.
+- Output ONLY the persona. No preamble, no quotes, no markdown, no name.
+- One to three sentences, roughly 15–40 words. Every word must add a voice quality — don't repeat synonyms.
+- Combine multiple dimensions and be specific ("deep", "crisp", "fast-paced"), never vague ("nice").
+- Describe physical, perceptual voice qualities — NOT the character's feelings, backstory, or plot.
+- Don't imitate a real or famous person.
 - English.
 
-Example output: a bright, confident teenage girl, warm and a little playful, mid-paced, with a hint of anxiety
+Example output: A bright teenage girl's voice, medium-high pitch and mid-paced, warm and lightly playful with a faintly nervous edge, suited to expressive character dialogue.
 
 Character profile:
 ${lines.join('\n')}
