@@ -11,7 +11,7 @@
 
 import { GoogleGenAI } from '@google/genai';
 import type { SynthesizeInput, SynthesizeOutput, TtsProvider } from './index.js';
-import { resolveGeminiModelId } from './index.js';
+import { resolveGeminiModelId } from './model-keys.js';
 import { GEMINI_VOICE_DESCRIPTIONS } from './voice-mapping.js';
 
 interface GeminiTtsOptions {
