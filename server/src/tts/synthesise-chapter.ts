@@ -96,6 +96,23 @@ export class ChapterSynthTimeoutError extends Error {
   }
 }
 
+/* fs-2 — thrown when a character on a non-English book has no designed Qwen
+   voice and the Kokoro fallback is forbidden (`forbidKokoroFallback`). Kokoro
+   is English-only, so silently falling back would read the book's language
+   (e.g. Russian) through an English voice — cross-language garbage. We fail
+   the chapter LOUDLY instead, naming the character so the user can design its
+   voice in the cast view. */
+export class MissingDesignedVoiceError extends Error {
+  constructor(characterName: string, language: string) {
+    super(
+      `Character "${characterName}" has no designed voice for this ${language} book — ` +
+        `design a voice for it (and the narrator) in the cast view before generating. ` +
+        `English Kokoro voices cannot read ${language} text.`,
+    );
+    this.name = 'MissingDesignedVoiceError';
+  }
+}
+
 /* Identify the input that hung when a synth call times out. We couldn't tell
    what the 2026-05-31 ch29 ChapterSynthTimeoutError choked on, so on a timeout
    log the offending group(s): sentence id(s), speaker, the longest item's char
@@ -248,6 +265,17 @@ export interface SynthesiseChapterOpts {
       Requires `resolveForEngine` (to obtain the Kokoro provider). Default
       false. */
   qwenUnavailable?: boolean;
+  /** fs-2 — when true, the Qwen→Kokoro graceful fallback is FORBIDDEN: a
+      Qwen-routed character with no designed voice (or an unavailable Qwen
+      engine) throws `MissingDesignedVoiceError` instead of rendering in
+      Kokoro. Set by generation.ts for non-English books, where a Kokoro
+      fallback would read the book's language through an English-only voice
+      (cross-language garbage). Default false (English books keep the
+      graceful fallback, byte-identical to pre-fs-2). */
+  forbidKokoroFallback?: boolean;
+  /** fs-2 — the book's BCP-47 language, used only to phrase
+      `MissingDesignedVoiceError`. Optional; defaults to a generic message. */
+  bookLanguage?: string;
   /** Notification fired *before* each group's TTS call starts. Needed because
       a single group can be a multi-minute call on CPU (e.g. a long narrator
       block folded into one synth), and without a tick at the start the SSE
@@ -469,6 +497,8 @@ export async function synthesiseChapter(
     engine,
     resolveForEngine,
     qwenUnavailable = false,
+    forbidKokoroFallback = false,
+    bookLanguage,
     onGroupStart,
     onGroupComplete,
     onGroupRetry,
@@ -519,6 +549,12 @@ export async function synthesiseChapter(
     const needsFallback =
       route.engine === 'qwen' && (!voiceName || qwenUnavailable) && !!resolveForEngine;
     if (!needsFallback || !resolveForEngine) return { route, voiceName };
+    /* fs-2 — on a non-English book the Kokoro fallback is forbidden: it would
+       read the book's language through an English-only voice. Fail loudly so
+       the user designs the missing voice instead of shipping garbage audio. */
+    if (forbidKokoroFallback) {
+      throw new MissingDesignedVoiceError(c.name ?? c.id, bookLanguage ?? 'non-English');
+    }
     const kokoro = resolveForEngine('kokoro');
     return {
       route: { engine: 'kokoro', provider: kokoro.provider, modelKey: kokoro.modelKey },

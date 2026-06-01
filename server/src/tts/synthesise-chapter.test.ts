@@ -18,6 +18,7 @@ import {
   resolveQwenTokenBudget,
   DEFAULT_QWEN_BATCH_TOKEN_BUDGET,
   ChapterSynthTimeoutError,
+  MissingDesignedVoiceError,
   type CastCharacter,
 } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
@@ -2072,6 +2073,116 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
     expect(provider.calls).toHaveLength(1);
     const body = result.segments.find((s) => s.kind !== 'title');
     expect(body?.renderedFallbackEngine).toBeUndefined();
+  });
+});
+
+/* fs-2 — never-cross-language: on a non-English book the Kokoro fallback is
+   FORBIDDEN. An undesigned Qwen voice (or unavailable Qwen) must fail the
+   chapter loudly (MissingDesignedVoiceError), never read the book's language
+   through an English-only Kokoro voice. */
+describe('synthesiseChapter — forbidKokoroFallback (fs-2 never-cross-language)', () => {
+  function multiEngine() {
+    const qwen = makeProvider();
+    const kokoro = makeProvider();
+    const resolveForEngine = (e: string) =>
+      e === 'kokoro'
+        ? { provider: kokoro, modelKey: 'kokoro-v1' as const }
+        : { provider: qwen, modelKey: 'qwen3-tts-0.6b' as const };
+    return { qwen, kokoro, resolveForEngine };
+  }
+
+  it('throws MissingDesignedVoiceError for an undesigned Qwen character (no Kokoro render)', async () => {
+    const cast: CastCharacter[] = [{ id: 'sofiya', name: 'Sofiya', gender: 'female' }];
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'sofiya')],
+        cast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        forbidKokoroFallback: true,
+        bookLanguage: 'ru',
+      }),
+    ).rejects.toBeInstanceOf(MissingDesignedVoiceError);
+
+    /* Neither engine renders the body — no cross-language Kokoro audio leaks. */
+    expect(qwen.calls).toHaveLength(0);
+    expect(kokoro.calls).toHaveLength(0);
+  });
+
+  it('throws when Qwen is unavailable even for a designed voice (no silent Kokoro downgrade)', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'sofiya', name: 'Sofiya', gender: 'female', overrideTtsVoices: { qwen: { name: 'sofiya-q' } } },
+    ];
+    const { kokoro, resolveForEngine, qwen } = multiEngine();
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'sofiya')],
+        cast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        qwenUnavailable: true,
+        forbidKokoroFallback: true,
+        bookLanguage: 'ru',
+      }),
+    ).rejects.toBeInstanceOf(MissingDesignedVoiceError);
+    expect(kokoro.calls).toHaveLength(0);
+  });
+
+  it('renders a designed Qwen voice normally when Qwen is available (no throw)', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'sofiya', name: 'Sofiya', gender: 'female', overrideTtsVoices: { qwen: { name: 'sofiya-q' } } },
+    ];
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'sofiya')],
+      cast,
+      provider: qwen,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      resolveForEngine,
+      forbidKokoroFallback: true,
+      bookLanguage: 'ru',
+    });
+
+    expect(qwen.calls).toHaveLength(1);
+    expect(qwen.calls[0].voiceName).toBe('sofiya-q');
+    expect(kokoro.calls).toHaveLength(0);
+    const body = result.segments.find((s) => s.kind !== 'title');
+    expect(body?.renderedFallbackEngine).toBeUndefined();
+  });
+
+  it('blocks the title beat too — an undesigned Qwen narrator throws before any synth', async () => {
+    const cast: CastCharacter[] = [
+      { id: 'narrator', name: 'Narrator', ttsEngine: 'qwen' },
+      { id: 'sofiya', name: 'Sofiya', gender: 'female', overrideTtsVoices: { qwen: { name: 'sofiya-q' } } },
+    ];
+    const { qwen, kokoro, resolveForEngine } = multiEngine();
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'sofiya')],
+        cast,
+        provider: qwen,
+        modelKey: 'qwen3-tts-0.6b',
+        engine: 'qwen',
+        resolveForEngine,
+        forbidKokoroFallback: true,
+        bookLanguage: 'ru',
+        chapterTitleNarration: 'Chapter One.',
+      }),
+    ).rejects.toBeInstanceOf(MissingDesignedVoiceError);
+    /* The narrator title beat is the first synth — it must throw before either
+       engine is called. */
+    expect(qwen.calls).toHaveLength(0);
+    expect(kokoro.calls).toHaveLength(0);
   });
 });
 
