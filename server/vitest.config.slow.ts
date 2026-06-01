@@ -14,6 +14,10 @@ import { defineConfig } from 'vitest/config';
      - src/routes/book-state.test.ts          — Hook timed out
      - src/routes/chapters-restructure.test.ts — Hook timed out
      - src/routes/generation.test.ts          — Hook timed out
+     - src/routes/generation-boundary-recycle.test.ts — cross-file mock
+       contamination (importOriginal "No X export on the mock") + a fake-sidecar
+       HTTP server in beforeAll; flaked sibling generation tests under fast-pool
+       parallelism (side-11/plan 158).
 
    Mirror invariant: each entry in SLOW_FILES below MUST also appear
    in server/vitest.config.ts's `test.exclude` array. Add a file in
@@ -30,6 +34,7 @@ export const SLOW_FILES = [
   'src/routes/book-state.test.ts',
   'src/routes/chapters-restructure.test.ts',
   'src/routes/generation.test.ts',
+  'src/routes/generation-boundary-recycle.test.ts',
 ];
 
 export default defineConfig({
