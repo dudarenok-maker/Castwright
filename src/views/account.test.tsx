@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { accountSlice, fetchAccountSettings, type AccountState } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -641,21 +641,26 @@ describe('AccountView — Models card (plan 61)', () => {
     }
   });
 
-  it('renders the cross-platform Coqui install snippet (both POSIX + PowerShell)', () => {
-
-    /* The card cites both `install-coqui.sh` and `install-coqui.ps1`
-       in the same block — the user must be able to copy/paste their
-       platform's command without scrolling. */
+  it('renders the in-app Coqui XTTS v2 installer card when Coqui is not installed', async () => {
+    /* The display-only copy-paste snippet was replaced by the one-click
+       CoquiInstall component (mirrors QwenInstall). With the detect probe
+       reporting weights-missing, the "Install Coqui XTTS v2" card renders with
+       its value/difference copy. */
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(
-        new Response(JSON.stringify({ installed: false, version: null }), { status: 200 }),
+        new Response(JSON.stringify({ state: 'weights-missing', installed: false }), {
+          status: 200,
+        }),
       );
     try {
       renderView();
-      const pre = screen.getByTestId('account-coqui-install-cmd');
-      expect(pre.textContent).toMatch(/install-coqui\.ps1/);
-      expect(pre.textContent).toMatch(/install-coqui\.sh/);
+      await waitFor(() => {
+        expect(screen.getByTestId('coqui-install-not-detected')).toBeInTheDocument();
+      });
+      const card = within(screen.getByTestId('coqui-install-not-detected'));
+      expect(card.getByText(/zero-shot voice cloning/i)).toBeInTheDocument();
+      expect(card.getByRole('button', { name: /Install Coqui XTTS v2/i })).toBeInTheDocument();
     } finally {
       fetchSpy.mockRestore();
     }
