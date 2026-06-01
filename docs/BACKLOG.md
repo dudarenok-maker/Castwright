@@ -53,9 +53,9 @@ Source: net-new (2026-05-22). Captured during planning of the cross-version upgr
 
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
-[plan 162](features/162-fs2-multilanguage.md). Deferred follow-ups from the
-language half live as `fe-16` (library/cast language UX polish) and `fs-14`
-(Russian UI localization) below._
+[plan 162](features/162-fs2-multilanguage.md); the library/cast language UX
+polish (`fe-16`) shipped via [plan 163](features/163-fe-15-16-language-and-revision-e2e.md).
+The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ---
 
@@ -189,27 +189,7 @@ Source: net-new (2026-05-19). Spun off from plan 55 ship — v1.3.0 plan 55 ship
 - _Depends on:_ plan 55 shipped (slice plumbing already on disk).
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 
-#### `fe-15` — Mock-mode chapters hydration so the revision A/B player opens in e2e
-
-Source: plan 114 ship (2026-05-26). The profile-regen preview gate's full click-through (Preview → A/B → Approve fans out / Reject reverts) can't be e2e'd today because mock mode doesn't hydrate `chapters` from the library payload (`state.json` hydration throws under mocks), so `RevisionDiffPlayer` returns null when the fixture chapterId doesn't resolve. Same gap `e2e/revision-diff.spec.ts` documents — that spec asserts only the toolbar pill and never opens the player. (Supersedes the removed `fe-10`, whose cross-book `regenerateCharacter` stub premise went away with plan 114.)
-
-- _What:_ Seed the chapters slice in mock mode (a mock `getBookState`/`state.json` that hydrates `chapters[]` for the canned complete book, OR a null-safe `RevisionDiffPlayer` fallback that renders from the revision stub alone when the chapter isn't in the slice). Then add `e2e/profile-regen-preview.spec.ts`: change a voice → Regenerate this character → Preview → A/B opens → Approve queues the rest / Reject reverts.
-- _Acceptance:_ `RevisionDiffPlayer` opens under `VITE_USE_MOCKS=true` with a populated chapter; the new e2e drives the preview→approve and preview→reject paths green in chromium.
-- _Key files:_ `src/mocks/*` (chapters/state seed), `src/views/revision-diff.tsx` (optional null-safe fallback), new `e2e/profile-regen-preview.spec.ts`.
-- _Depends on:_ plan 114 shipped (the preview flow + its unit coverage are in; this closes the browser-level seam).
-- _Benefit (technical):_ unblocks browser-level coverage of the preview gate's redux/layout/timing seam (auto-open on `chapter_complete`) that jsdom can lie about; also unblocks the long-deferred revision-diff player e2e.
-
 ### Cast, voice & duplicates
-
-#### `fe-16` — Library/cast language UX polish (fs-2 follow-up)
-
-Source: [plan 162](features/162-fs2-multilanguage.md) ship (2026-06-01) — Out of scope. The fs-2 language half shipped the never-cross-language invariant + core UX (detection, confirm selector, cast Qwen-lock, Listen badge), deferring two discovery/polish surfaces.
-
-- _What:_ Two small frontend additions. **(a) Library En/Ru filter pill** — a dedicated language pill set in `src/components/library/library-chrome.tsx` (rendered only when the library holds >1 language) that ANDs with the existing search/tag filter via `filterBooks` in `src/store/library-slice.ts` (keep it OUT of the user-tag set — language is structured data, not a free-text tag). **(b) Cast-wide banner + Qwen auto-load** — on `#/cast` for a non-English book, a banner ("Design a Qwen voice for the narrator and every speaking character — undesigned characters can't be generated") plus auto-loading Qwen on cast-view entry (reuse `ModelControlPill`/qwen-install machinery), so the user isn't blocked on a manual load.
-- _Acceptance:_ With ≥1 English and ≥1 Russian book imported, the library shows an En/Ru pill set that filters correctly and ANDs with a tag filter; a single-language library shows no pill. Opening a non-English book's cast view shows the banner and triggers a Qwen load. New Vitest on the `filterBooks` language combination + the banner render.
-- _Key files:_ `src/components/library/library-chrome.tsx`, `src/store/library-slice.ts` (`filterBooks`), `src/views/cast.tsx`, `src/components/model-control-pill.tsx`.
-- _Depends on:_ fs-2 language half (shipped, plan 160) — `LibraryBook.language` is already on the wire.
-- _Benefit (user):_ faster discovery of same-language books and a clearer on-ramp to designing Russian voices, on top of the already-enforced invariant.
 
 #### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>`
 

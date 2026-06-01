@@ -30,7 +30,7 @@ import {
 } from '../components/library/library-chrome';
 import { LibraryGrid } from '../components/library/library-grid';
 import { LibraryTable } from '../components/library/library-table';
-import { filterBooks, selectAllTags } from '../store/library-slice';
+import { filterBooks, selectAllTags, selectPresentLanguages } from '../store/library-slice';
 import { PrimaryButton } from '../components/primitives';
 import { IconClose } from '../lib/icons';
 import type { EditBookMetaPatch } from '../modals/edit-book-meta';
@@ -115,6 +115,9 @@ export function BookLibraryView({
      prop interface and the test harness. */
   const [search, setSearch] = useState('');
   const [activeTags, setActiveTags] = useState<string[]>([]);
+  /* fe-16 — active library language filter (BCP-47 codes). ANDs with
+     search + tags; only meaningful when the library spans >1 language. */
+  const [activeLanguages, setActiveLanguages] = useState<string[]>([]);
   const debouncedSearch = useDebouncedValue(search, 150);
   /* Plan 76 — card↔table presentation toggle. Initial read happens once
      at mount (lazy initialiser keeps the localStorage probe out of every
@@ -151,6 +154,12 @@ export function BookLibraryView({
   const libraryBooksForTags = useAppSelector((s) => s.library.books);
   const allTags = useMemo(
     () => selectAllTags({ library: { loaded: true, authors: [], books: libraryBooksForTags, pausedSnapshots: {} } }),
+    [libraryBooksForTags],
+  );
+  /* fe-16 — distinct languages across the library (English first). The chrome
+     renders the language pills only when this holds >1 entry. */
+  const presentLanguages = useMemo(
+    () => selectPresentLanguages(libraryBooksForTags),
     [libraryBooksForTags],
   );
   /* Surface the active workspace root so a stale `WORKSPACE_DIR` override
@@ -198,9 +207,15 @@ export function BookLibraryView({
       prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
     );
   };
+  const toggleLanguage = (lang: string) => {
+    setActiveLanguages((prev) =>
+      prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang],
+    );
+  };
   const clearFilters = () => {
     setSearch('');
     setActiveTags([]);
+    setActiveLanguages([]);
   };
 
   /* Apply status filter + search + tag intersection at the orchestrator
@@ -218,12 +233,13 @@ export function BookLibraryView({
               series.books.filter((b) => matchesFilter(b, filter)),
               debouncedSearch,
               activeTags,
+              activeLanguages,
             ),
           }))
           .filter((series) => series.books.length > 0),
       }))
       .filter((author) => author.series.length > 0);
-  }, [authors, filter, debouncedSearch, activeTags]);
+  }, [authors, filter, debouncedSearch, activeTags, activeLanguages]);
 
   const matchedBookCount = useMemo(
     () =>
@@ -237,7 +253,8 @@ export function BookLibraryView({
   /* "No results" only fires when an active search/tag filter narrowed
      the otherwise-non-empty library to zero rows. An empty library
      still falls through to the existing <EmptyLibrary /> path. */
-  const hasActiveSearchOrTag = debouncedSearch.trim().length > 0 || activeTags.length > 0;
+  const hasActiveSearchOrTag =
+    debouncedSearch.trim().length > 0 || activeTags.length > 0 || activeLanguages.length > 0;
   const showNoResults =
     loaded && authors.length > 0 && hasActiveSearchOrTag && matchedBookCount === 0;
 
@@ -259,6 +276,9 @@ export function BookLibraryView({
         allTags={allTags}
         activeTags={activeTags}
         toggleTag={toggleTag}
+        presentLanguages={presentLanguages}
+        activeLanguages={activeLanguages}
+        toggleLanguage={toggleLanguage}
         clearFilters={clearFilters}
       />
       {showNoResults ? (
