@@ -29,3 +29,13 @@
 export function sampleScopeFor(character: { id: string; voiceId?: string | null }): string {
   return character.voiceId ?? `char-${character.id}`;
 }
+
+/* The server names cached sample files as
+   /audio/voices/{voiceId}-{modelKey}-{paramHash}.mp3 (see
+   server/src/routes/voice-sample.ts). We don't know the hash client-side, so
+   "this voice's sample is currently playing" is detected by prefix match —
+   stable across attribute edits and the cache-busting hash. Shared by the
+   profile drawer, the compare modal, and the A/B audition hook. */
+export function sampleUrlPrefix(voiceId: string, modelKey: string): string {
+  return `/audio/voices/${encodeURIComponent(voiceId)}-${modelKey}`;
+}
