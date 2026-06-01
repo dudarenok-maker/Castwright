@@ -29,6 +29,7 @@ import { buildCharacterHint } from '../lib/build-character-hint';
 import { VoicePreviewButton } from '../components/voice-preview-button';
 import { VoiceOverridePicker } from '../components/voice-override-picker';
 import { VoiceEnginePicker, type EngineChoice } from '../components/voice-engine-picker';
+import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
 
@@ -266,6 +267,15 @@ export function ProfileDrawer({
     playback.isPlaying &&
     !!playback.currentUrl &&
     playback.currentUrl === designPreviewUrlRef.current;
+  /* Plan 161 — when set, the A/B "current vs proposed" compare modal is open
+     with this freshly-staged preview design. Set by `designVoice` after a
+     successful preview design; cleared on approve (stages the promoted voice)
+     or cancel (discards the preview). */
+  const [voiceCompareInitial, setVoiceCompareInitial] = useState<{
+    voiceId: string;
+    previewUrl: string;
+    persona: string;
+  } | null>(null);
   /* The analyzer ships ≥3 evidence quotes sorted longest-first
      (server/src/routes/analysis.ts sortEvidence). The drawer shows the
      first 3 by default — index 0 is also the voice-cloning sample, so
@@ -476,6 +486,25 @@ export function ProfileDrawer({
   const samplePrefix = sampleUrlPrefixFor(sampleVoiceId, effectiveSampleModelKey);
   const isPlayingThis = playback.isPlaying && !!playback.currentUrl?.startsWith(samplePrefix);
 
+  /* Plan 161 — "current voice" for the A/B compare = how the character sounds
+     RIGHT NOW, resolved against its PERSISTED engine (not the edited Qwen
+     selection), so Side A is the genuine pre-design voice in both the
+     first-design (Kokoro/default) and re-design (existing Qwen) cases. */
+  const currentEngine: TtsEngine = character.ttsEngine ?? ttsEngine;
+  const currentModelKey = sampleModelKeyForEngine(currentEngine, ttsModelKey);
+  const currentTtsVoice = resolveTtsVoiceForCharacter(character, currentEngine);
+  const currentSubject: Voice = voice ?? {
+    id: sampleVoiceId,
+    character: character.name,
+    bookTitle: '',
+    bookId: '',
+    attributes: character.attributes ?? [],
+    gradient: gradientForTtsVoice(currentTtsVoice.name, sampleVoiceId),
+    usedIn: 0,
+    source: 'current' as const,
+    ttsVoice: currentTtsVoice,
+  };
+
   /* Card-line voice descriptor — resolved against the CHARACTER's engine
      (live `engineChoice`, falling back to the project default) rather than
      the project engine, so switching this character to Qwen updates the
@@ -678,10 +707,12 @@ export function ProfileDrawer({
         persona: trimmed,
         sampleVoiceId,
         modelKey: effectiveSampleModelKey,
+        preview: true,
       });
-      designPreviewUrlRef.current = previewUrl;
-      setDesignedVoiceId(voiceId);
-      await playback.play(previewUrl);
+      /* Open the A/B compare with the staged preview. Staging into the drawer
+         (designedVoiceId / persona) is deferred to the modal's approve, so
+         Cancel leaves the character's live voice untouched. */
+      setVoiceCompareInitial({ voiceId, previewUrl, persona: trimmed });
     } catch (e) {
       setEngineError((e as Error).message || 'Voice design failed.');
     } finally {
@@ -924,6 +955,34 @@ export function ProfileDrawer({
               designedVoiceId={designedVoiceId}
               error={engineError}
             />
+
+            {voiceCompareInitial && bookId && (
+              <VoiceCompareModal
+                bookId={bookId}
+                character={character}
+                currentSubject={currentSubject}
+                currentSampleVoiceId={sampleVoiceId}
+                currentModelKey={currentModelKey}
+                designModelKey={effectiveSampleModelKey}
+                sampleVoiceId={sampleVoiceId}
+                initial={voiceCompareInitial}
+                onApprove={({ voiceId, persona: approvedPersona, previewUrl }) => {
+                  /* Stage the PROMOTED (stable) voice into the drawer; Save
+                     persists it series-scoped exactly as before. */
+                  setPersona(approvedPersona);
+                  setDesignedVoiceId(voiceId);
+                  designPreviewUrlRef.current = previewUrl;
+                  dispatch(
+                    castActions.setVoiceStyle({
+                      characterId: character.id,
+                      voiceStyle: approvedPersona,
+                    }),
+                  );
+                  setVoiceCompareInitial(null);
+                }}
+                onClose={() => setVoiceCompareInitial(null)}
+              />
+            )}
 
             {/* Preset (Coqui/Kokoro/Gemini) speaker picker — shown only when
                 this character will actually synthesise with a PRESET engine.

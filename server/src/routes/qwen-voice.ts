@@ -26,10 +26,11 @@
    that cached file. A sidecar that's down → 502 with a clear message. */
 
 import { Router, type Request, type Response } from 'express';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, rename, rm, copyFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
-import { castJsonPath, qwenVoiceSidecarPath } from '../workspace/paths.js';
+import { castJsonPath, qwenVoiceSidecarPath, qwenVoicesDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS } from '../tts/index.js';
@@ -68,6 +69,25 @@ const DESIGN_TIMEOUT_MS = 180_000;
    else the local character id. */
 export function deriveQwenVoiceId(character: CastCharacter, characterId: string): string {
   return `qwen-${character.voiceId ?? characterId}`;
+}
+
+/* Preview/promote (plan 161). The A/B "current vs proposed" audition must NOT
+   overwrite a character's live bespoke voice while the user is still deciding —
+   but `deriveQwenVoiceId` is stable per character and the design route always
+   (over)writes that embedding. So a comparison design stages under a sibling
+   `-preview` id (a separate `.pt`/`.json` + a distinct audition cache file,
+   since the cache key folds in the voiceId); the real voice is untouched until
+   the user approves. `promote-voice` then moves the preview onto the real id
+   (and evicts the sidecar's in-memory cache so the swap is seen); Cancel hits
+   `discard-voice` to drop the preview. Keeping the COMMITTED id stable
+   (`qwen-<id>`) avoids rippling the reuse/series/duplicate-detection logic that
+   keys on it. */
+const PREVIEW_SUFFIX = '-preview';
+function previewVoiceIdFor(realVoiceId: string): string {
+  return `${realVoiceId}${PREVIEW_SUFFIX}`;
+}
+function qwenVoicePtPath(name: string): string {
+  return join(qwenVoicesDir(), `${name}.pt`);
 }
 
 /* GET /api/books/:bookId/cast/:characterId/designed-persona
@@ -120,6 +140,7 @@ qwenVoiceRouter.post(
       persona?: unknown;
       sampleVoiceId?: unknown;
       modelKey?: unknown;
+      preview?: unknown;
     };
 
     const located = await findBookByBookId(bookId);
@@ -171,7 +192,12 @@ qwenVoiceRouter.post(
     }
     const modelKey = body.modelKey;
 
-    const voiceId = deriveQwenVoiceId(character, characterId);
+    /* Plan 161 — `preview:true` stages the design under a `-preview` sibling id
+       so the live voice isn't overwritten during an A/B comparison; the drawer
+       promotes it on approve. Default false keeps the original in-place design. */
+    const voiceId = body.preview === true
+      ? previewVoiceIdFor(deriveQwenVoiceId(character, characterId))
+      : deriveQwenVoiceId(character, characterId);
     /* The audition speaks the character's own line — the longest evidence
        quote, picked exactly as voice-sample.ts's buildSampleText does, so the
        text component of the cache key matches the player's by construction. */
@@ -259,5 +285,146 @@ qwenVoiceRouter.post(
           : `TTS sidecar (${sidecarUrl}) is unreachable — ${err.message || 'request failed'}.`,
       });
     }
+  },
+);
+
+/* POST /api/books/:bookId/cast/:characterId/promote-voice
+
+   Plan 161 — commit a previewed design (from the drawer's A/B "Design &
+   compare") onto the character's stable `qwen-<id>` voice. Moves the preview
+   `.pt`/`.json` onto the real id, refreshes the cached audition under the real
+   id so "Play 12s" serves the approved take, and evicts the sidecar's
+   in-memory prompt cache so a synth that loaded the OLD embedding earlier this
+   session can't keep serving it. Body: `{ previewVoiceId, sampleVoiceId,
+   modelKey }`. Returns `{ voiceId, url }` (the real id + its audition URL). */
+qwenVoiceRouter.post(
+  '/:bookId/cast/:characterId/promote-voice',
+  async (req: Request, res: Response) => {
+    const { bookId, characterId } = req.params;
+    const body = (req.body ?? {}) as {
+      previewVoiceId?: unknown;
+      sampleVoiceId?: unknown;
+      modelKey?: unknown;
+    };
+
+    const located = await findBookByBookId(bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
+    const character = cast?.characters?.find((c) => c.id === characterId);
+    if (!character) {
+      return res.status(404).json({ error: `Character "${characterId}" not found.` });
+    }
+
+    const realVoiceId = deriveQwenVoiceId(character, characterId);
+    const expectedPreview = previewVoiceIdFor(realVoiceId);
+    const previewVoiceId =
+      typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '';
+    if (previewVoiceId !== expectedPreview) {
+      return res.status(400).json({ error: `previewVoiceId must be "${expectedPreview}".` });
+    }
+    const sampleVoiceId = typeof body.sampleVoiceId === 'string' ? body.sampleVoiceId.trim() : '';
+    if (!sampleVoiceId) return res.status(400).json({ error: '`sampleVoiceId` is required.' });
+    if (!isTtsModelKey(body.modelKey)) {
+      return res
+        .status(400)
+        .json({ error: `modelKey must be one of: ${Object.keys(TTS_MODEL_LABELS).join(', ')}` });
+    }
+    const modelKey = body.modelKey;
+
+    /* Move the staged embedding onto the stable id. rm-then-rename so a Windows
+       rename over an existing file can't EPERM. A missing preview `.pt` means
+       nothing was staged (e.g. a double-promote) → 409. */
+    try {
+      await rm(qwenVoicePtPath(realVoiceId), { force: true });
+      await rename(qwenVoicePtPath(previewVoiceId), qwenVoicePtPath(realVoiceId));
+    } catch (e) {
+      return res
+        .status(409)
+        .json({ error: `No staged preview voice to promote (${(e as Error).message}).` });
+    }
+    await rm(qwenVoiceSidecarPath(realVoiceId), { force: true }).catch(() => {});
+    await rename(qwenVoiceSidecarPath(previewVoiceId), qwenVoiceSidecarPath(realVoiceId)).catch(
+      () => {},
+    );
+
+    /* Refresh the cached audition under the real id (same text, voiceName flips
+       preview → real). Best-effort — a miss just means the next "Play 12s"
+       synthesises fresh from the promoted `.pt`. */
+    const calibrationText = buildSampleText(toVoiceLike(character), buildHintFromCast(character));
+    const previewMp3 = voiceSampleFilePath(
+      voiceSampleFileName({ cacheScope: sampleVoiceId, modelKey, text: calibrationText, voiceName: previewVoiceId }),
+    );
+    const realFileName = voiceSampleFileName({
+      cacheScope: sampleVoiceId,
+      modelKey,
+      text: calibrationText,
+      voiceName: realVoiceId,
+    });
+    await copyFile(previewMp3, voiceSampleFilePath(realFileName)).catch(() => {});
+    await rm(previewMp3, { force: true }).catch(() => {});
+
+    /* Evict the real id from the sidecar's in-memory prompt cache. Best-effort:
+       a down/empty sidecar has nothing cached, and generation reads the fresh
+       `.pt` from disk regardless. */
+    try {
+      await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId: realVoiceId }),
+      });
+    } catch {
+      /* sidecar unreachable — non-fatal */
+    }
+
+    return res.status(200).json({ voiceId: realVoiceId, url: voiceSamplePublicUrl(realFileName) });
+  },
+);
+
+/* POST /api/books/:bookId/cast/:characterId/discard-voice
+
+   Plan 161 — drop a staged preview design (Cancel in the A/B compare).
+   Best-effort cleanup of the preview `.pt`/`.json` + its cached audition;
+   never touches the live voice. Body: `{ previewVoiceId, sampleVoiceId?,
+   modelKey? }`. Always 200 `{ ok: true }` once the id is validated. */
+qwenVoiceRouter.post(
+  '/:bookId/cast/:characterId/discard-voice',
+  async (req: Request, res: Response) => {
+    const { bookId, characterId } = req.params;
+    const body = (req.body ?? {}) as {
+      previewVoiceId?: unknown;
+      sampleVoiceId?: unknown;
+      modelKey?: unknown;
+    };
+
+    const located = await findBookByBookId(bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
+    const character = cast?.characters?.find((c) => c.id === characterId);
+    if (!character) {
+      return res.status(404).json({ error: `Character "${characterId}" not found.` });
+    }
+
+    const expectedPreview = previewVoiceIdFor(deriveQwenVoiceId(character, characterId));
+    const previewVoiceId =
+      typeof body.previewVoiceId === 'string' ? body.previewVoiceId.trim() : '';
+    if (previewVoiceId !== expectedPreview) {
+      return res.status(400).json({ error: `previewVoiceId must be "${expectedPreview}".` });
+    }
+
+    await rm(qwenVoicePtPath(previewVoiceId), { force: true }).catch(() => {});
+    await rm(qwenVoiceSidecarPath(previewVoiceId), { force: true }).catch(() => {});
+    if (typeof body.sampleVoiceId === 'string' && isTtsModelKey(body.modelKey)) {
+      const calibrationText = buildSampleText(toVoiceLike(character), buildHintFromCast(character));
+      const previewMp3 = voiceSampleFilePath(
+        voiceSampleFileName({
+          cacheScope: body.sampleVoiceId.trim(),
+          modelKey: body.modelKey,
+          text: calibrationText,
+          voiceName: previewVoiceId,
+        }),
+      );
+      await rm(previewMp3, { force: true }).catch(() => {});
+    }
+    return res.status(200).json({ ok: true });
   },
 );

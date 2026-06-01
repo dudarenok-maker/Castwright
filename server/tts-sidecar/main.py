@@ -2496,6 +2496,32 @@ async def qwen_design_voice(req: Request) -> Response:
     )
 
 
+@app.post("/qwen/evict-voice")
+async def qwen_evict_voice(req: Request) -> Response:
+    """Drop a designed voice from the in-memory clone-prompt cache so the next
+    synth re-reads its embedding from disk.
+
+    Used by the server's voice-design 'promote' step (plan 161), which moves a
+    previewed embedding onto a stable voiceId behind the sidecar's back. Without
+    this, a voiceId already resident in `_prompt_cache` from an earlier
+    generation would keep serving the OLD embedding (the cache has no on-disk
+    mtime check — it's only evicted on (re)design of that id or a full unload).
+    Idempotent: a miss is a no-op `evicted: false`."""
+    try:
+        body = await req.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body must be JSON.")
+    voice_id = body.get("voiceId")
+    if not isinstance(voice_id, str) or not voice_id.strip():
+        raise HTTPException(status_code=400, detail="`voiceId` is required.")
+    qwen = ENGINES.get("qwen")
+    evicted = False
+    if isinstance(qwen, QwenEngine):
+        with qwen._cache_lock:
+            evicted = qwen._prompt_cache.pop(voice_id.strip(), None) is not None
+    return JSONResponse({"ok": True, "evicted": evicted})
+
+
 @app.post("/synthesize")
 async def synthesize(req: Request) -> Response:
     try:

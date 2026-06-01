@@ -7,9 +7,10 @@ import { goToConfirm, waitForRouteReady } from './helpers';
  * Drives a fresh book to the confirm-cast view, opens a character's
  * profile drawer, switches the per-character TTS engine to Qwen, and
  * exercises the bespoke voice-design sub-flow: the persona auto-fills
- * (mock returns a canned persona), the Design & preview button calls the
- * mock design route (which returns a tiny silent-WAV blob), and Save
- * closes the drawer.
+ * (mock returns a canned persona), the "Design & compare" button stages a
+ * preview design and opens the A/B "current vs proposed" compare modal
+ * (plan 161), "Use proposed voice" promotes + stages it, the designed
+ * confirmation surfaces, and Save closes the drawer.
  *
  * Why browser-level: the engine selector → Qwen panel reveal crosses
  * redux (Character.ttsEngine state), the design fetch returns a binary
@@ -52,11 +53,21 @@ test.describe('cast view → profile drawer → per-character Qwen voice', () =>
     /* The preset Model-voice picker is hidden while Qwen is selected. */
     await expect(page.getByText(/Model voice/i)).toHaveCount(0);
 
-    /* Design & preview — mock returns a silent-WAV blob; the designed
-       confirmation surfaces. */
+    /* Design & compare — stages a preview design (mock) and opens the A/B
+       "current vs proposed" compare modal (plan 161). */
     const designBtn = page.getByTestId('qwen-design-voice');
     await expect(designBtn).toBeEnabled();
     await designBtn.click();
+    await expect(page.getByTestId('voice-compare-overlay')).toBeVisible({ timeout: 5_000 });
+    /* Both audition sides + the editable proposed persona render. */
+    await expect(page.getByTestId('voice-compare-current-play')).toBeVisible();
+    await expect(page.getByTestId('voice-compare-proposed-play')).toBeVisible();
+    await expect(page.getByTestId('voice-compare-persona')).not.toHaveValue('');
+
+    /* Keep the proposed voice → promotes (mock) + stages it; the modal closes
+       and the designed confirmation surfaces back in the drawer. */
+    await page.getByTestId('voice-compare-approve').click();
+    await expect(page.getByTestId('voice-compare-overlay')).toHaveCount(0, { timeout: 5_000 });
     await expect(page.getByTestId('qwen-designed-confirm')).toBeVisible({ timeout: 5_000 });
 
     /* Save — the drawer closes (the engine picker detaches). */
