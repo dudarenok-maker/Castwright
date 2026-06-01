@@ -266,7 +266,7 @@ and the bypassed commit will need fixing before any PR is reviewed.
 GitHub issues hold the **detail** for tracked work and are the home for **bug
 tracking**. [`docs/BACKLOG.md`](docs/BACKLOG.md) stays the thin, prioritized
 MoSCoW planning view; the issue is where the spec, discussion, and PR-linking
-live. Regression plan: [docs/features/165-github-issues-backlog-integration.md](docs/features/165-github-issues-backlog-integration.md).
+live. Regression plan: [docs/features/166-github-issues-backlog-integration.md](docs/features/166-github-issues-backlog-integration.md).
 
 ### Backlog items ↔ issues
 

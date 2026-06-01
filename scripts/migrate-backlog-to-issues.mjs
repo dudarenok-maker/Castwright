@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Bulk-migrate docs/BACKLOG.md items into GitHub issues (plan 165).
+// Bulk-migrate docs/BACKLOG.md items into GitHub issues (plan 166).
 //
 // Each backlog item (`<prefix>-<n>` — e.g. fs-1, srv-13) becomes ONE issue
 // titled `<prefix>-<n> — <one-line what>`, labelled by area + MoSCoW tier +
