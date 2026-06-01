@@ -1562,6 +1562,13 @@ _restart_scheduled = False
 # is all the drain needs.
 _restart_pending = False
 _inflight_synth = 0
+# side-11 item 2 — SOFT recycle signal. Set True by the watchdog once committed
+# crosses SIDECAR_RECYCLE_SOFT_MB (below the HARD SIDECAR_RESTART_MB ceiling).
+# Advisory only: it does NOT drain or exit — it is surfaced in /health so the
+# generation worker can trigger a CLEAN recycle (POST /recycle) at the next
+# chapter boundary, before the hard watchdog would fire mid-chapter. Plain bool
+# read under the GIL, no lock (same reasoning as _restart_pending above).
+_recycle_pending = False
 
 
 def _disable_mkldnn() -> bool:
@@ -1625,10 +1632,34 @@ def _mem_restart_threshold_mb() -> float:
     return 0.0
 
 
+def _mem_recycle_soft_threshold_mb() -> float:
+    """Committed-private (MB) at which the sidecar sets `recycle_pending` in
+    /health (the side-11 item-2 SOFT signal — does NOT exit). The generation
+    worker reads it and triggers a CLEAN recycle at the next chapter boundary,
+    so the recycle lands between chapters and EARLIER than the hard ceiling
+    (sustained RTF). Default 0 (DISABLED) — opt-in until a live GPU run tunes it
+    (same default-OFF convention as SIDECAR_DISABLE_MKLDNN). Override
+    SIDECAR_RECYCLE_SOFT_MB (absolute MB); <=0 / garbage → 0 (disabled).
+    Recommended live value: a few GB below SIDECAR_RESTART_MB."""
+    try:
+        return float(os.environ.get("SIDECAR_RECYCLE_SOFT_MB", "0"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _should_restart(commit_mb: float, threshold_mb: float) -> bool:
     """Pure decision: recycle when a positive ceiling is set and committed
     memory meets it."""
     return threshold_mb > 0 and commit_mb >= threshold_mb
+
+
+def _should_soft_recycle(commit_mb: float, soft_mb: float, hard_mb: float) -> bool:
+    """Pure decision for the SOFT recycle signal (side-11 item 2): flag a
+    pending recycle when a positive soft ceiling is set and committed meets it,
+    but ONLY while still below the hard ceiling. At/above the hard ceiling the
+    watchdog's existing hard branch owns the exit, so the two thresholds never
+    race."""
+    return soft_mb > 0 and commit_mb >= soft_mb and not _should_restart(commit_mb, hard_mb)
 
 
 def _restart_now() -> None:  # pragma: no cover - hard process exit; patched in tests
@@ -1716,6 +1747,7 @@ async def _memory_watchdog() -> None:
     """See the block comment above. Never dies on a transient error."""
     warn_threshold = _mem_warn_threshold_mb()
     restart_threshold = _mem_restart_threshold_mb()
+    soft_threshold = _mem_recycle_soft_threshold_mb()
     while True:
         try:
             await asyncio.sleep(_MEM_WATCHDOG_INTERVAL)
@@ -1737,6 +1769,21 @@ async def _memory_watchdog() -> None:
             if _should_restart(recycle_metric, restart_threshold):
                 _schedule_restart_exit(recycle_metric, restart_threshold)
                 continue
+            # SOFT recycle (side-11 item 2): below the hard ceiling, flag a
+            # pending recycle so the generation worker recycles cleanly at the
+            # next chapter boundary. Set once; no drain, no exit here — the hard
+            # branch above remains the backstop.
+            if _should_soft_recycle(recycle_metric, soft_threshold, restart_threshold):
+                global _recycle_pending
+                if not _recycle_pending:
+                    _recycle_pending = True
+                    log.warning(
+                        "sidecar committed %.0fMB crossed the SOFT recycle threshold "
+                        "%.0fMB (hard ceiling %.0fMB) — surfacing recycle_pending in "
+                        "/health so the server recycles at the next chapter boundary. "
+                        "No exit here (the hard watchdog remains the backstop).",
+                        recycle_metric, soft_threshold, restart_threshold,
+                    )
             if warn_threshold > 0 and rss >= warn_threshold:
                 await asyncio.to_thread(_reclaim_host_and_vram)
                 after = _process_mem().get("rss_mb", rss)
@@ -1759,10 +1806,12 @@ async def _start_memory_watchdog() -> None:
     global _mem_watchdog_task
     _mem_watchdog_task = asyncio.create_task(_memory_watchdog())
     restart = _mem_restart_threshold_mb()
+    soft = _mem_recycle_soft_threshold_mb()
     log.info(
         "sidecar memory watchdog started (warn/reclaim at %.0fMB rss; "
-        "process-recycle at %s).",
+        "soft-recycle at %s; process-recycle at %s).",
         _mem_warn_threshold_mb(),
+        f"{soft:.0f}MB committed" if soft > 0 else "DISABLED",
         f"{restart:.0f}MB committed" if restart > 0 else "DISABLED",
     )
 
@@ -1982,6 +2031,13 @@ def health() -> dict[str, Any]:
         "device": device,
         "poisoned": poisoned,
         "poison_reason": poison_reason,
+        # side-11 item 2 — SOFT recycle signal. `recycle_pending` flips True once
+        # committed crosses SIDECAR_RECYCLE_SOFT_MB (below the hard ceiling); the
+        # generation worker reads it off this same poll and triggers a clean
+        # boundary recycle. `committed_mb` (may be None) gives the boundary
+        # decision observability without a separate /debug/memory hit.
+        "recycle_pending": _recycle_pending,
+        "committed_mb": _process_commit_mb(),
     }
 
 
@@ -2180,6 +2236,23 @@ async def unload_model(req: Request) -> JSONResponse:
     if isinstance(coqui, CoquiEngine):
         await asyncio.to_thread(coqui.unload)
     return JSONResponse({"status": "idle"})
+
+
+@app.post("/recycle")
+async def recycle() -> JSONResponse:
+    """Server-triggered CLEAN recycle (side-11 item 2). The generation worker
+    POSTs this at a chapter boundary after seeing `recycle_pending` in /health,
+    so the leak-forced recycle lands BETWEEN chapters rather than mid-chapter at
+    the hard ceiling. Reuses the hard watchdog's drain->exit path verbatim:
+    `_schedule_restart_exit` flips `_restart_pending` (new synth fast-fails 503),
+    drains `_inflight_synth` bounded by SIDECAR_DRAIN_GRACE_MS, then os._exit(43)
+    so srv-15 respawns a fresh process; the server's readiness gate rides out the
+    respawn. Idempotent — a second call (or a concurrent hard tick) is a no-op via
+    the `_restart_scheduled` guard. Returns 202 immediately; the drain runs on a
+    daemon thread."""
+    commit = _process_commit_mb() or 0.0
+    _schedule_restart_exit(commit, commit)
+    return JSONResponse({"status": "recycling", "committed_mb": commit}, status_code=202)
 
 
 @app.get("/speakers")

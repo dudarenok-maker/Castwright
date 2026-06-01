@@ -29,7 +29,7 @@ import type { TtsEngine } from './index.js';
 /* Engines whose model lives in the local sidecar and must be loaded before
    synth. Gemini is a cloud API (nothing to preload); unknown engines are left
    to the per-call path. */
-const SIDECAR_ENGINES: ReadonlySet<TtsEngine> = new Set(['qwen', 'kokoro', 'coqui']);
+export const SIDECAR_ENGINES: ReadonlySet<TtsEngine> = new Set(['qwen', 'kokoro', 'coqui']);
 
 /* Per-/load-attempt timeout. A cold XTTS pull can take ~90s; Qwen/Kokoro are
    far faster but share the ceiling (over-budgeted is safe). */
