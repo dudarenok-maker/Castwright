@@ -1,0 +1,58 @@
+name: Backlog item
+description: A planned feature or chore tracked on the MoSCoW backlog (docs/BACKLOG.md).
+title: "<prefix>-<n> — <one-line what>"
+labels: ["type:feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Canonical detail home for one backlog item. The thin row in
+        [`docs/BACKLOG.md`](../../docs/BACKLOG.md) links here. Title format:
+        `<prefix>-<n> — <one-line what>` (e.g. `srv-1 — Merge journal for alias un-link`);
+        the `<prefix>-<n>` ID is permanent and never reused. After filing, add the
+        `area:<prefix>` and `moscow:<tier>` labels (a `type:feature` is applied for you;
+        switch to `type:chore` + `tracking` for a watchdog item).
+  - type: textarea
+    id: what
+    attributes:
+      label: What
+      description: One concrete sentence — actionable from this issue alone.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: Observable criteria for "done", so future-you knows when to close this.
+    validations:
+      required: true
+  - type: textarea
+    id: key-files
+    attributes:
+      label: Key files
+      description: Starting points so the next pick-up doesn't spend an hour spelunking.
+    validations:
+      required: true
+  - type: textarea
+    id: depends-on
+    attributes:
+      label: Depends on
+      description: Real prerequisites only — leave "none" otherwise.
+    validations:
+      required: false
+  - type: textarea
+    id: benefit
+    attributes:
+      label: Benefit (axis)
+      description: The why — user / technical / architectural.
+    validations:
+      required: true
+  - type: input
+    id: plan
+    attributes:
+      label: Regression plan
+      description: >-
+        docs/features/NN-*.md if this is substantial/cross-cutting (also add the
+        needs-plan label); leave blank for small work that goes straight issue→PR.
+    validations:
+      required: false
