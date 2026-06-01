@@ -4,7 +4,7 @@ shipped: null
 owner: null
 ---
 
-# 165 — GitHub Issues for backlog detail + bug tracking
+# 166 — GitHub Issues for backlog detail + bug tracking
 
 > Status: active — tooling + conventions + docs land in PR 1 (this plan); the bulk migration + BACKLOG.md thinning run as PRs 2–3 against the live repo.
 > Key files: `scripts/{gh-labels,migrate-backlog-to-issues,thin-backlog}.mjs`, `.github/ISSUE_TEMPLATE/{backlog-item,bug,config}.yml`, `docs/BACKLOG.md`, `CONTRIBUTING.md` (§Issues), `CLAUDE.md` (§The backlog).

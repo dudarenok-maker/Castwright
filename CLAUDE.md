@@ -171,7 +171,7 @@ is the GitHub-native auto-close hook. **Bugs are GitHub issues with the `bug`
 label and stay off `docs/BACKLOG.md`** (still out-of-band — the user files
 them as they hit them). The label taxonomy, issue forms, and the full
 convention live in [CONTRIBUTING.md "Issues"](CONTRIBUTING.md#issues); plan
-[165](docs/features/165-github-issues-backlog-integration.md) is the rationale.
+[166](docs/features/166-github-issues-backlog-integration.md) is the rationale.
 
 When you ship a backlog item:
 

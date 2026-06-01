@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Thin docs/BACKLOG.md to the prioritized planning view once the items have
-// been migrated to GitHub issues (plan 165, run AFTER migrate-backlog-to-issues
+// been migrated to GitHub issues (plan 166, run AFTER migrate-backlog-to-issues
 // --apply has written docs/backlog-issue-map.json).
 //
 // The canonical detail (What / Acceptance / Key files / Depends on) now lives in

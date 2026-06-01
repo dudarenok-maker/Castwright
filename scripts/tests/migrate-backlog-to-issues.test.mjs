@@ -1,6 +1,6 @@
 // Unit coverage for the pure parse/ID helpers in migrate-backlog-to-issues.mjs.
 // No `gh`, no network — exercises the BACKLOG.md shapes the migration depends on
-// (plan 165). The idempotency guarantee rests on issueIdFromTitle round-tripping
+// (plan 166). The idempotency guarantee rests on issueIdFromTitle round-tripping
 // the title issuePayload produces, so that's asserted explicitly.
 
 import { test } from 'node:test';
