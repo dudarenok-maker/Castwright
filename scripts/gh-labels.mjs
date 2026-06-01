@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Reconcile the GitHub issue-label taxonomy for plan 165. This file IS the
+// Reconcile the GitHub issue-label taxonomy for plan 166. This file IS the
 // source of truth for the labels — version-controlled so a fresh clone (or the
 // day the repo goes public) can reproduce them with one command.
 //
