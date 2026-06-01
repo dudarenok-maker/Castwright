@@ -1671,3 +1671,128 @@ describe('GenerationView — stuck-queued escape hatch + generated-time (side: s
     expect(screen.queryByText(/^Generated /)).toBeNull();
   });
 });
+
+/* fe-17 — the explicit "Resume generation" button. Plan 137 made opening a
+   book never auto-enqueue; this button is the deliberate one-click way to
+   continue a book whose run was interrupted (queue drained server-side, some
+   chapters still `queued`). It dispatches the same plan-137 pure-signal
+   `requestStartGeneration` intent the "Approve cast & start generating" CTA
+   uses, and is shown ONLY when there's queued work, nothing in flight, and
+   no halting error. Pairs with docs/features/archive/137-reopen-never-auto-enqueues.md. */
+describe('GenerationView — Resume generation button (fe-17)', () => {
+  function makeResumeStore(chapters: Chapter[]) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters,
+        sentences,
+      } as any),
+    );
+    return store;
+  }
+
+  function renderResume(chapters: Chapter[]) {
+    const store = makeResumeStore(chapters);
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={chapters}
+          characters={characters}
+          paused
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    return store;
+  }
+
+  const inProgressChapter2: Chapter = { ...chapter2, state: 'in_progress' };
+
+  it('renders and dispatches requestStartGeneration when there is queued work and nothing in flight', () => {
+    /* chapter1 done, chapter2 queued → queued > 0, inProgress = 0, no error.
+       Spy on dispatch BEFORE render so the view's useDispatch captures the
+       spy, not the original store method. */
+    const store = makeResumeStore([chapter1, chapter2]);
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    const btn = screen.getByTestId('generation-view-resume');
+    expect(btn).toBeInTheDocument();
+
+    fireEvent.click(btn);
+    expect(dispatchSpy).toHaveBeenCalledWith(uiSlice.actions.requestStartGeneration());
+  });
+
+  it('is hidden while a chapter is in progress (a run is live)', () => {
+    renderResume([chapter1, inProgressChapter2]);
+    expect(screen.queryByTestId('generation-view-resume')).toBeNull();
+  });
+
+  it('is hidden when generation is halted on a stream-level error', () => {
+    const store = makeResumeStore([chapter1, chapter2]);
+    /* Stream-level failure (no chapterId) sets chapters.lastError → "halted". */
+    store.dispatch(
+      chaptersSlice.actions.applyGenerationTick({
+        type: 'chapter_failed',
+        chapterId: null,
+        errorReason: 'Sidecar unreachable.',
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.queryByTestId('generation-view-resume')).toBeNull();
+  });
+
+  it('is hidden when every chapter is done (no queued work)', () => {
+    renderResume([chapter1, { ...chapter2, state: 'done', progress: 1 }]);
+    expect(screen.queryByTestId('generation-view-resume')).toBeNull();
+  });
+});
