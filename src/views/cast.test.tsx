@@ -16,10 +16,14 @@ import { castSlice } from '../store/cast-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { CastView, compareCastRows } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
+import { api } from '../lib/api';
 import type { Character, Voice } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
-  api: {},
+  api: {
+    /* fe-16 — the cast view auto-loads Qwen on entry for non-English books. */
+    loadSidecar: vi.fn().mockResolvedValue({}),
+  },
 }));
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
@@ -1083,5 +1087,67 @@ describe('CastView status filter', () => {
     expect(isPresent('Blank')).toBe(true);
     /* Clear disappears once no filter is active. */
     expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
+  });
+});
+
+describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
+  function renderWithLanguage(bookLanguage: string) {
+    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    return render(
+      <Provider store={store}>
+        <CastView
+          characters={[narrator, Marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="Северный путь"
+          bookLanguage={bookLanguage}
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.mocked(api.loadSidecar).mockClear();
+  });
+
+  it('hides the banner and never auto-loads Qwen for an English book', async () => {
+    /* QwenStatusNotice (mounted in the cast view) independently probes
+       /api/qwen/detect for its install nudge, so we don't assert on fetch
+       itself — the auto-load is distinguished by api.loadSidecar NOT firing. */
+    const fetchSpy = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ installed: true }) });
+    vi.stubGlobal('fetch', fetchSpy);
+    renderWithLanguage('en');
+    expect(screen.queryByTestId('cast-qwen-language-banner')).toBeNull();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled()); // QwenStatusNotice probe settled
+    expect(api.loadSidecar).not.toHaveBeenCalled();
+  });
+
+  it('shows the banner and auto-loads Qwen when installed for a non-English book', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ installed: true }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    renderWithLanguage('ru');
+    expect(screen.getByTestId('cast-qwen-language-banner')).toBeInTheDocument();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/qwen/detect'));
+    await waitFor(() => expect(api.loadSidecar).toHaveBeenCalledWith({ engine: 'qwen' }));
+  });
+
+  it('shows the banner but does NOT load Qwen when it is not installed', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ installed: false }),
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    renderWithLanguage('ru');
+    expect(screen.getByTestId('cast-qwen-language-banner')).toBeInTheDocument();
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(api.loadSidecar).not.toHaveBeenCalled();
   });
 });
