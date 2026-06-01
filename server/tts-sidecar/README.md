@@ -139,6 +139,43 @@ removes clock-sag as a variable and helps the *compute-bound* engines
 batching + the blocked CUDA-graph fork (`docs/features/129-qwen-decode-cuda-graph-spike.md`),
 not clocks.
 
+### VRAM headroom — disable the sysmem fallback (prevent the silent spill)
+
+On Windows the NVIDIA driver defaults to a **"CUDA – Sysmem Fallback Policy"**
+that, when a CUDA allocation would exceed the physical card, *silently maps the
+overflow into system RAM* instead of failing. It looks like the program keeps
+running — but every access to the spilled memory now crosses PCIe, so the GPU
+sits at ~100% util while throughput collapses (RTF goes from ~1 to ~5+). This is
+the 2026-06-01 stall: a Qwen model reload had stacked a second copy past the
+8 GB card (plan 161), reserved VRAM climbed to ~17 GB, and generation crawled
+instead of erroring.
+
+The sidecar already recycles itself out of a spill (the reserved-VRAM watchdog,
+plan 161), and `unload()` no longer stacks copies — but you should also disable
+the fallback so a genuine over-card allocation **OOMs cleanly** (fast, the
+recycle catches it) rather than thrashing invisibly:
+
+1. **NVIDIA Control Panel → Manage 3D settings → Program Settings → `python.exe`
+   (the sidecar interpreter) → "CUDA – Sysmem Fallback Policy" → "Prefer No
+   Sysmem Fallback".** GUI-only on GeForce (driver R546+). Set it per-program so
+   it doesn't affect other apps.
+2. **Curb allocator fragmentation** (which is what creeps the reserved pool past
+   the card on long variable-shape runs) by setting in `server/.env` *before*
+   starting the sidecar — it inherits the server env, so a running sidecar must
+   be restarted to pick it up:
+
+   ```
+   PYTORCH_CUDA_ALLOC_CONF=garbage_collection_threshold:0.8,max_split_size_mb:256
+   ```
+
+   `expandable_segments` is **unsupported on Windows** (torch logs a warning) —
+   do not set it.
+
+The watchdog logs `sidecar memory: … vram_reserved=R/T MB` each tick and a loud
+`VRAM SPILL` warning if `R > T`; `/health` and `/debug/memory` expose
+`vram_reserved_mb` / `vram_total_mb` so you can watch headroom without
+`nvidia-smi`.
+
 ### Optional: DeepSpeed (extra ~1.5–2× on top of CUDA + fp16)
 
 DeepSpeed fuses the kernel launches in XTTS's autoregressive GPT decoder,
