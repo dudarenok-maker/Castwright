@@ -1298,7 +1298,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       const synthSec = (Date.now() - synthStartMs) / 1000;
       const audioSec = result.durationSec;
       const chapterRtf = audioSec > 0 ? synthSec / audioSec : 0;
-      const roll = recordChapterThroughput({ chapterId: chapter.id, audioSec, synthMs: Date.now() - synthStartMs });
+      const roll = recordChapterThroughput({
+        chapterId: chapter.id,
+        audioSec,
+        synthMs: Date.now() - synthStartMs,
+        title: chapter.title ?? null,
+        bookId: job.bookId,
+        modelKey,
+      });
       console.info(
         `[generation] chapter ${chapter.id} "${chapter.title ?? ''}" rendered: ` +
           `lines=${totalLines} groups=${result.segments.length} ` +
