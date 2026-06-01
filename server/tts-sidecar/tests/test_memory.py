@@ -12,6 +12,8 @@ threshold parsing behave, (3) /debug/memory exposes the diagnostic surface.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import sys
 import threading
 import time
@@ -456,3 +458,159 @@ def test_debug_memory_endpoint_shape(monkeypatch):
     assert qwen["design_loaded"] is False
     assert qwen["prompt_cache_entries"] == 0
     assert "cuda" in body
+
+
+# --- side-11 item 2: SOFT recycle (recycle_pending → clean boundary recycle) ---
+
+
+class _StopLoop(BaseException):
+    """Breaks the watchdog's `while True` from a fake asyncio.sleep. A BaseException
+    so neither the loop's `except asyncio.CancelledError` nor `except Exception`
+    swallows it — it propagates straight out of the coroutine."""
+
+
+def _fake_sleep_breaking_after(n: int):
+    """Return an async sleep stub that returns for the first (n-1) calls then
+    raises _StopLoop, so the watchdog runs exactly (n-1) full iterations."""
+    state = {"calls": 0}
+
+    async def _sleep(_seconds):
+        state["calls"] += 1
+        if state["calls"] >= n:
+            raise _StopLoop()
+
+    return _sleep
+
+
+def test_recycle_soft_threshold_parsing(monkeypatch):
+    """Default 0 (DISABLED — opt-in); explicit override honoured; 0 / negative /
+    garbage all disable. Mirrors the SIDECAR_DISABLE_MKLDNN default-OFF convention."""
+    monkeypatch.delenv("SIDECAR_RECYCLE_SOFT_MB", raising=False)
+    assert main._mem_recycle_soft_threshold_mb() == 0.0
+
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "30000")
+    assert main._mem_recycle_soft_threshold_mb() == 30000.0
+
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "0")
+    assert main._mem_recycle_soft_threshold_mb() == 0.0
+
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "garbage")
+    assert main._mem_recycle_soft_threshold_mb() == 0.0
+
+
+def test_should_soft_recycle():
+    """Soft-recycle iff a positive soft ceiling is set, committed meets it, AND
+    committed is still BELOW the hard ceiling (above it the hard exit owns it)."""
+    # soft <= commit < hard → flag it
+    assert main._should_soft_recycle(32000, 30000, 35000) is True
+    assert main._should_soft_recycle(30000, 30000, 35000) is True  # inclusive
+    # below soft → no
+    assert main._should_soft_recycle(29999, 30000, 35000) is False
+    # at/above hard → hard branch owns it, soft must NOT also fire
+    assert main._should_soft_recycle(35000, 30000, 35000) is False
+    assert main._should_soft_recycle(40000, 30000, 35000) is False
+    # soft disabled (0) → never
+    assert main._should_soft_recycle(99999, 0, 35000) is False
+
+
+def test_watchdog_sets_recycle_pending_below_hard(monkeypatch):
+    """One watchdog tick with soft <= committed < hard sets `_recycle_pending`
+    and does NOT schedule an exit — the soft signal is advisory only."""
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "30000")
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "35000")
+    monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")  # skip the futile reclaim branch
+    monkeypatch.setattr(main, "_recycle_pending", False)
+    monkeypatch.setattr(main, "_process_mem", lambda: {"rss_mb": 20000.0})
+    monkeypatch.setattr(main, "_process_commit_mb", lambda: 32000.0)  # soft < c < hard
+    scheduled: list = []
+    monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
+    monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(2))
+
+    with pytest.raises(_StopLoop):
+        asyncio.run(main._memory_watchdog())
+
+    assert main._recycle_pending is True
+    assert scheduled == [], "soft recycle must NOT trigger the hard self-exit"
+
+
+def test_watchdog_hard_ceiling_still_exits_when_soft_set(monkeypatch):
+    """With the soft threshold ALSO configured, crossing the HARD ceiling still
+    schedules the exit (backstop intact) and short-circuits before the soft
+    branch, so `_recycle_pending` is not also flipped."""
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "30000")
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "35000")
+    monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")
+    monkeypatch.setattr(main, "_recycle_pending", False)
+    monkeypatch.setattr(main, "_process_mem", lambda: {"rss_mb": 20000.0})
+    monkeypatch.setattr(main, "_process_commit_mb", lambda: 36000.0)  # >= hard
+    scheduled: list = []
+    monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
+    monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(2))
+
+    with pytest.raises(_StopLoop):
+        asyncio.run(main._memory_watchdog())
+
+    assert len(scheduled) == 1, "hard ceiling must still schedule the recycle exit"
+    assert main._recycle_pending is False, "hard branch continues before the soft branch"
+
+
+def test_health_reports_recycle_pending(monkeypatch):
+    """/health surfaces `recycle_pending` (default False) + `committed_mb` so the
+    generation worker reads the soft signal off the same poll. Flipping the flag
+    is reflected on the next poll."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main, "_recycle_pending", False)
+    with TestClient(main.app) as client:
+        r = client.get("/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["recycle_pending"] is False
+        assert "committed_mb" in body
+        assert body["committed_mb"] is not None and body["committed_mb"] > 0
+
+        main._recycle_pending = True  # restored by the monkeypatch.setattr teardown
+        assert client.get("/health").json()["recycle_pending"] is True
+
+
+def test_recycle_endpoint_schedules_clean_exit(monkeypatch):
+    """POST /recycle reuses the drain->exit path: 202 + `recycling`, flips
+    `_restart_pending`, fires exactly ONE exit, and a second POST is a no-op
+    (idempotent via `_restart_scheduled`)."""
+    calls: list[int] = []
+    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
+    monkeypatch.setattr(main, "_restart_scheduled", False)
+    monkeypatch.setattr(main, "_restart_pending", False)
+    monkeypatch.setattr(main, "_inflight_synth", 0)  # nothing to drain → immediate
+
+    resp = asyncio.run(main.recycle())
+    assert resp.status_code == 202
+    body = json.loads(resp.body)
+    assert body["status"] == "recycling"
+    assert "committed_mb" in body
+    assert main._restart_pending is True
+
+    asyncio.run(main.recycle())  # second POST must NOT schedule a second exit
+
+    time.sleep(main._POISON_EXIT_DELAY_MS / 1000.0 + 0.4)
+    assert calls == [1]
+
+
+def test_recycle_endpoint_drains_inflight_before_exit(monkeypatch):
+    """A /recycle while a synth is in flight holds the exit (the drain fence)
+    until the in-flight count reaches 0 — the in-flight chapter finishes here."""
+    calls: list[int] = []
+    monkeypatch.setattr(main, "_restart_now", lambda: calls.append(1))
+    monkeypatch.setattr(main, "_POISON_EXIT_DELAY_MS", 50)
+    monkeypatch.setattr(main, "_restart_scheduled", False)
+    monkeypatch.setattr(main, "_restart_pending", False)
+    monkeypatch.setattr(main, "_inflight_synth", 1)  # one chapter mid-synth
+
+    asyncio.run(main.recycle())
+    time.sleep(0.3)
+    assert calls == [], "must still be draining — no exit while synth in flight"
+
+    monkeypatch.setattr(main, "_inflight_synth", 0)  # synth finished
+    time.sleep(0.6 + 0.05 + 0.25)  # one poll + flush + margin
+    assert calls == [1]
