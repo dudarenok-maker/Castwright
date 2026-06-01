@@ -20,6 +20,7 @@ import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { formatDuration } from '../audio/format-duration.js';
+import { normaliseBookLanguage } from '../tts/language.js';
 
 export type LibraryBookStatus =
   | 'not_analysed'
@@ -155,6 +156,16 @@ export interface BookStateJson {
      `[]` so the wire shape always carries the array. Edits round-trip
      through PUT /api/books/:bookId/state with `slice: 'state'`. */
   tags?: string[];
+  /* BCP-47 manuscript language (fs-2). Default `'en'`. Drives same-language
+     narration: a non-`'en'` book forces every character — INCLUDING the
+     narrator — onto a designed Qwen voice and BLOCKS the Kokoro
+     cross-language fallback (Kokoro is English-only). Optional on disk so
+     books written before fs-2 keep loading; the read path defaults at the
+     seam (`bookStateLanguage` below) so callers never read `state.language`
+     directly. Additive optional field — `CURRENT_STATE_SCHEMA` does NOT bump
+     (plan 27 rename-vs-add policy). Set at confirm time by
+     `server/src/routes/import.ts`. */
+  language?: string;
 }
 
 /** Resolved chapter audio format for a book — `audioFormat` from
@@ -164,6 +175,15 @@ export interface BookStateJson {
  *  stays in one place. */
 export function bookStateAudioFormat(state: BookStateJson): 'mp3' | 'aac-m4a' | 'opus' {
   return state.audioFormat ?? 'mp3';
+}
+
+/** Resolved BCP-47 language for a book — `language` from state.json when
+ *  present, else `'en'` (backward compat for state files written before
+ *  fs-2). Use everywhere the value drives narration routing or the analyzer
+ *  preamble; never read `state.language` directly so the default and
+ *  normalisation stay in one place. */
+export function bookStateLanguage(state: BookStateJson): string {
+  return normaliseBookLanguage(state.language);
 }
 
 export interface LibraryBook {
@@ -199,6 +219,10 @@ export interface LibraryBook {
       field) so the chip-filter row in the library view doesn't need
       to handle the undefined case. */
   tags: string[];
+  /** fs-2 — BCP-47 book language. Always present on the wire (defaults to
+      `'en'` for books whose state.json predates the field) so the library
+      card's language badge + filter pill have a non-optional source. */
+  language: string;
 }
 
 export interface LibrarySeries {
@@ -480,6 +504,9 @@ async function scanBook(
        row rather than tripping the frontend's `book.tags.includes()`
        guard. */
     tags: Array.isArray(state?.tags) ? [...state!.tags] : [],
+    /* fs-2 — surface the book language onto the wire, defaulting to 'en'
+       at the seam so the card badge / filter pill never see undefined. */
+    language: state ? bookStateLanguage(state) : normaliseBookLanguage(undefined),
   };
 }
 
