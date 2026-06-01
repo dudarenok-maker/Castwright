@@ -122,4 +122,76 @@ describe('sidecar supervisor (srv-15)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(spawn.fn).toHaveBeenCalledTimes(1);
   });
+
+  /* Adopt-supervision: when the server honours an ALREADY-listening sidecar
+     (no child spawned, so no onExit can fire), the supervisor must watch the
+     port and respawn an OWNED child once that adopted sidecar disappears.
+     Without this, a self-recycle of an adopted sidecar — e.g. after a `tsx
+     watch` dev reload re-adopted the orphan (the 2026-06-01 stall) — is never
+     recovered and generation wedges on "sidecar not reachable". */
+  it('watches an adopted sidecar and respawns an owned child when it vanishes', async () => {
+    const handles: ReturnType<typeof makeHandle>[] = [];
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        // A fresh sidecar is already listening → honour it, announce the adopt.
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      const h = makeHandle();
+      handles.push(h);
+      return h as SidecarHandle;
+    });
+    // The adopted sidecar answers two polls, then the port goes silent.
+    const probes = [true, true, false];
+    let pi = 0;
+    const probeFn = vi.fn(async () => probes[Math.min(pi++, probes.length - 1)]);
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn,
+      delayFn: async () => {},
+      adoptedPollMs: 1,
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    expect(spawnFn).toHaveBeenCalledTimes(1); // adopted — nothing spawned yet
+    expect(sup.current()).toBeNull();
+    // Watcher polls; on the silent poll it respawns an owned, supervised child.
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+    expect(sup.current()).toBe(handles[0]);
+  });
+
+  it('stops watching an adopted sidecar after stop() (no respawn)', async () => {
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      return makeHandle() as SidecarHandle;
+    });
+    // Gate the watcher's first delay so we can stop() before it polls.
+    let releaseDelay = () => {};
+    const delayFn = () => new Promise<void>((r) => (releaseDelay = r));
+    const probeFn = vi.fn(async () => false); // would trigger a respawn if reached
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn,
+      delayFn,
+      adoptedPollMs: 1,
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    await sup.stop();
+    releaseDelay(); // watcher resumes, sees stopped → bails before probing
+    await new Promise((r) => setTimeout(r, 20));
+    expect(probeFn).not.toHaveBeenCalled();
+    expect(spawnFn).toHaveBeenCalledTimes(1); // no respawn after stop
+  });
 });
