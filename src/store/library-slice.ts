@@ -88,11 +88,36 @@ export function selectAllTags(state: { library: LibraryState }): string[] {
   return Array.from(set).sort((a, b) => a.localeCompare(b));
 }
 
+/* fe-16 — display labels for the library language filter pills. A book's
+   `language` is a BCP-47 code (server pads missing to 'en'); the pill renders
+   the human label. Unknown codes fall back to the raw code so a future
+   third language still surfaces a (less polished) pill instead of vanishing. */
+export const LANGUAGE_LABELS: Record<string, string> = {
+  en: 'English',
+  ru: 'Русский',
+};
+
+export function languageLabel(code: string): string {
+  return LANGUAGE_LABELS[code] ?? code;
+}
+
+/** fe-16 — the distinct set of languages present across the library, sorted
+ *  with English first then alphabetically. A missing `language` counts as
+ *  'en'. The orchestrator renders the language filter pills only when this
+ *  returns more than one entry (a single-language library shows no pills). */
+export function selectPresentLanguages(books: LibraryBook[]): string[] {
+  const set = new Set<string>();
+  for (const b of books) set.add(b.language ?? 'en');
+  return [...set].sort((a, c) => (a === 'en' ? -1 : c === 'en' ? 1 : a.localeCompare(c)));
+}
+
 /** Plan 73 — applies the search + active-tag filters to the library's
  *  flat book list. `search` matches case-insensitively against title
  *  OR author; `activeTags` requires every active tag to be present on
  *  the book (intersection semantics so picking two chips narrows, not
- *  widens). Empty `search` and empty `activeTags` → pass-through.
+ *  widens). fe-16 — `activeLanguages` (when non-empty) keeps only books
+ *  whose language (missing → 'en') is in the set; it ANDs with search +
+ *  tags. Empty `search`, `activeTags`, and `activeLanguages` → pass-through.
  *
  *  Lives as a pure helper so it can be exercised in isolation by
  *  library-slice.test.ts and reused from the orchestrator. */
@@ -100,6 +125,7 @@ export function filterBooks(
   books: LibraryBook[],
   search: string,
   activeTags: string[],
+  activeLanguages: string[] = [],
 ): LibraryBook[] {
   const q = search.trim().toLowerCase();
   return books.filter((b) => {
@@ -112,6 +138,9 @@ export function filterBooks(
       for (const t of activeTags) {
         if (!bookTags.includes(t)) return false;
       }
+    }
+    if (activeLanguages.length > 0 && !activeLanguages.includes(b.language ?? 'en')) {
+      return false;
     }
     return true;
   });

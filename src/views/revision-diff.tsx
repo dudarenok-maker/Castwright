@@ -192,7 +192,11 @@ export function RevisionDiffPlayer({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-canvas overflow-y-auto fade-in">
+    <div
+      className="fixed inset-0 z-50 bg-canvas overflow-y-auto fade-in"
+      data-testid="revision-diff-player"
+      data-mode={isPreview ? 'preview' : 'review'}
+    >
       <header className="sticky top-0 z-10 bg-canvas/90 backdrop-blur-md border-b border-ink/10">
         <div className="max-w-[1400px] mx-auto px-6 h-16 flex items-center gap-4">
           <button onClick={onClose} className="p-2 rounded-full hover:bg-ink/5 text-ink/60">

@@ -90,6 +90,9 @@ export const MOCK_LIBRARY: LibraryResponse = {
               lastWorkedOn: 'Just now',
               coverGradient: ['#A43C6C', '#3C194F'],
               tags: ['favourite'],
+              /* fe-16 — the workspace's one Russian book, so the library spans
+                 >1 language and the En/Русский filter pills render under mocks. */
+              language: 'ru',
             },
           ],
         },
