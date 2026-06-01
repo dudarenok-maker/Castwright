@@ -121,6 +121,47 @@
   --gradient-image-wash: linear-gradient(90deg, var(--canvas), var(--peach) 80%);
 }
 
+/* High-contrast mode (fe-2) -------------------------------------------------
+   Activated by <html data-contrast="high"> — set by useAccessibilitySettings
+   from the device-local settings slice. Pushes the paint tokens to maximum
+   legibility (pure black/white ink + canvas, darker brand-as-text hues) and
+   firms up the faint ink-alpha hairline borders. Composes with both light and
+   dark; the dark+high pairing keeps the inversion correct. Opt-in WCAG 1.4.3 /
+   1.4.11 helper — independent of the light/dark theme. */
+[data-contrast='high'] {
+  --ink: #000000;
+  --ink-soft: #000000;
+  --ink-rgb: 0, 0, 0;
+  --canvas: #ffffff;
+  --canvas-warm: #ffffff;
+  /* Darken the brand-as-text hues so magenta / purple labels clear AA on the
+     now-pure-white canvas (#A43C6C is only 4.0:1; #7A1B49 lifts past 7:1). */
+  --magenta: #7a1b49;
+  --purple-deep: #2a0f38;
+  --magenta-rgb: 122, 27, 73;
+  --purple-deep-rgb: 42, 15, 56;
+}
+
+[data-theme='dark'][data-contrast='high'] {
+  --ink: #ffffff;
+  --ink-soft: #ffffff;
+  --ink-rgb: 255, 255, 255;
+  --canvas: #000000;
+  --canvas-warm: #000000;
+  --magenta: #ffc2dd;
+  --purple-deep: #ddc8f5;
+  --magenta-rgb: 255, 194, 221;
+  --purple-deep-rgb: 221, 200, 245;
+}
+
+/* Firm up the most common faint hairline borders so cards/controls have a
+   visible edge in high-contrast mode. These Tailwind utilities are generated
+   as escaped-slash selectors — same override shape as the dark-mode block. */
+[data-contrast='high'] .border-ink\/5,
+[data-contrast='high'] .border-ink\/10 {
+  border-color: rgba(var(--ink-rgb), 0.55);
+}
+
 /* Tailwind utility overrides under dark mode. `bg-white` is used in
    ~100 places across components as the standard raised-surface
    background — migrating each to a `bg-surface` token would be
