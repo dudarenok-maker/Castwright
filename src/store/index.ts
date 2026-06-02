@@ -52,6 +52,7 @@ import { notificationsSlice } from './notifications-slice';
 import { listenProgressSlice } from './listen-progress-slice';
 import { queueSlice } from './queue-slice';
 import { rebaselineSlice } from './rebaseline-slice';
+import { upgradeSlice } from './upgrade-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
@@ -163,6 +164,7 @@ export const store = configureStore({
     listenProgress: listenProgressSlice.reducer,
     queue: queueSlice.reducer,
     rebaseline: rebaselineSlice.reducer,
+    upgrade: upgradeSlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({

@@ -190,6 +190,15 @@ export const userSettingsSchema = z.object({
   backupEnabled: z.boolean().optional(),
   backupCadence: z.enum(BACKUP_CADENCE_VALUES).optional(),
   backupRetention: z.number().int().min(1).max(365).optional(),
+  /* fs-1 — upgrade bookkeeping. NOT user-editable: stripped from the general
+     PUT via FORBIDDEN_KEYS and written only by the boot upgrade-coordinator
+     and the /api/info dismiss endpoint (writeUpgradeMeta). All optional/absent
+     on a fresh file. `lastSeenAppVersion` gates the once-per-upgrade migration;
+     `showWhatsNew` drives the post-upgrade banner until the user dismisses it;
+     `schemaVersion` is this file's own stamp (v1 today). */
+  schemaVersion: z.number().int().optional(),
+  lastSeenAppVersion: z.string().max(40).optional(),
+  showWhatsNew: z.boolean().optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -348,6 +357,11 @@ const FORBIDDEN_KEYS = new Set([
   'apiKey',
   'gemini_api_key',
   'GEMINI_API_KEY',
+  /* fs-1 upgrade bookkeeping — written only by writeUpgradeMeta, never by a
+     client PUT. */
+  'schemaVersion',
+  'lastSeenAppVersion',
+  'showWhatsNew',
 ]);
 
 function stripForbiddenKeys(value: unknown): Record<string, unknown> {
@@ -542,6 +556,26 @@ export function getResolvedGeminiApiKey(): string | null {
   const fromSettings = cached?.geminiApiKey?.trim();
   if (fromSettings && fromSettings.length > 0) return fromSettings;
   return null;
+}
+
+/** fs-1 — dedicated write path for upgrade bookkeeping fields. The general
+    writeUserSettings() strips these (FORBIDDEN_KEYS), so the only sanctioned
+    writers are the boot upgrade-coordinator and the /api/info dismiss endpoint.
+    Serialised through the same writeChain as the other writers. */
+export async function writeUpgradeMeta(patch: {
+  lastSeenAppVersion?: string;
+  showWhatsNew?: boolean;
+  schemaVersion?: number;
+}): Promise<UserSettings> {
+  const next = writeChain.then(async () => {
+    const current = await readUserSettings();
+    const merged: UserSettings = { ...current, ...patch };
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    cached = merged;
+    return merged;
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
 }
 
 /** Test-only: drop the in-process cache so the next read re-parses disk. */
