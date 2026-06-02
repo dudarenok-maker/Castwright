@@ -716,7 +716,7 @@ describe('AccountView — Advanced (power-user) card (fe-2)', () => {
     fireEvent.click(screen.getByTestId('account-rebind-play-pause'));
     fireEvent.keyDown(window, { key: 'k' });
     expect(store.getState().settings.keybindings['play-pause']).toBe('K');
-    fireEvent.click(screen.getByRole('button', { name: /^Reset$/ }));
+    fireEvent.click(screen.getByTestId('account-reset-play-pause'));
     expect(store.getState().settings.keybindings['play-pause']).toBe('Space');
   });
 
@@ -738,6 +738,44 @@ describe('AccountView — Advanced (power-user) card (fe-2)', () => {
     fireEvent.change(input, { target: { value: '999999' } });
     fireEvent.blur(input);
     expect(store.getState().settings.autosaveDebounceMs).toBe(10_000);
+  });
+
+  it('toggles auto-advance through the slice (fe-23)', () => {
+    const { store } = renderView();
+    expect(store.getState().settings.autoAdvance).toBe(true);
+    fireEvent.click(screen.getByTestId('account-auto-advance'));
+    expect(store.getState().settings.autoAdvance).toBe(false);
+  });
+
+  it('rebinds skip-forward and skip-back through the slice (fe-24)', () => {
+    const { store } = renderView();
+    fireEvent.click(screen.getByTestId('account-rebind-skip-forward'));
+    fireEvent.keyDown(window, { key: 'p' });
+    expect(store.getState().settings.keybindings['skip-forward']).toBe('P');
+    expect(screen.getByTestId('account-skip-forward-binding').textContent).toBe('P');
+
+    fireEvent.click(screen.getByTestId('account-rebind-skip-back'));
+    fireEvent.keyDown(window, { key: 'b' });
+    expect(store.getState().settings.keybindings['skip-back']).toBe('B');
+    expect(screen.getByTestId('account-skip-back-binding').textContent).toBe('B');
+  });
+
+  it('commits clamped skip deltas on blur (fe-24)', () => {
+    const { store } = renderView();
+    const fwd = screen.getByTestId('account-skip-forward-sec');
+    fireEvent.change(fwd, { target: { value: '45' } });
+    fireEvent.blur(fwd);
+    expect(store.getState().settings.skipForwardSec).toBe(45);
+    /* Above the ceiling clamps to 120. */
+    fireEvent.change(fwd, { target: { value: '999' } });
+    fireEvent.blur(fwd);
+    expect(store.getState().settings.skipForwardSec).toBe(120);
+
+    const back = screen.getByTestId('account-skip-back-sec');
+    fireEvent.change(back, { target: { value: '1' } });
+    fireEvent.blur(back);
+    /* Below the floor clamps to 5. */
+    expect(store.getState().settings.skipBackSec).toBe(5);
   });
 });
 
