@@ -96,7 +96,7 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
                           className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold tabular-nums ${
                             isPreview
                               ? 'bg-peach text-ink'
-                              : 'bg-ink/[0.04] text-ink/70 border border-ink/10'
+                              : 'bg-ink/4 text-ink/70 border border-ink/10'
                           }`}
                           title={stripChapterPrefix(ch.title)}
                         >
@@ -119,7 +119,7 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
                   <button
                     key={r.id}
                     onClick={() => setReason(r.id)}
-                    className={`w-full text-left p-3 rounded-2xl border transition-all flex items-start gap-3 ${reason === r.id ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'}`}
+                    className={`w-full text-left p-3 rounded-2xl border transition-all flex items-start gap-3 ${reason === r.id ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
                   >
                     <span
                       className={`w-4 h-4 rounded-full border-2 grid place-items-center mt-0.5 shrink-0 ${reason === r.id ? 'border-peach' : 'border-ink/20'}`}
@@ -136,7 +136,7 @@ export function CharacterRegenerateModal({ character, chapters, onClose, onConfi
                           value={note}
                           onChange={(e) => setNote(e.target.value)}
                           placeholder="What changed?"
-                          className="mt-2 w-full px-3 py-2 rounded-xl bg-white border border-ink/10 text-sm focus:outline-none focus:border-peach"
+                          className="mt-2 w-full px-3 py-2 rounded-xl bg-white border border-ink/10 text-sm focus:outline-hidden focus:border-peach"
                         />
                       )}
                     </span>

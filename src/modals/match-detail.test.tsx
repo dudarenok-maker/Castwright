@@ -77,13 +77,15 @@ describe('MatchDetailDrawer stacking contract', () => {
     const { container } = renderDrawer();
     const backdrop = container.querySelector('.fixed.inset-0');
     expect(backdrop).not.toBeNull();
-    expect(backdrop?.className).toMatch(/z-\[60\]|z-\[7\d\]|z-\[8\d\]|z-\[9\d\]/);
+    // Tailwind 4 emits z-60 (bare); v3 emitted z-[60]. Accept either form.
+    expect(backdrop?.className).toMatch(/z-\[?(?:60|7\d|8\d|9\d)\]?/);
   });
 
   it('aside carries a z-index ≥ 70 (above profile-drawer aside at z-50)', () => {
     const { container } = renderDrawer();
     const aside = container.querySelector('aside');
     expect(aside).not.toBeNull();
-    expect(aside?.className).toMatch(/z-\[70\]|z-\[8\d\]|z-\[9\d\]/);
+    // Tailwind 4 emits z-70 (bare); v3 emitted z-[70]. Accept either form.
+    expect(aside?.className).toMatch(/z-\[?(?:70|8\d|9\d)\]?/);
   });
 });

@@ -57,7 +57,7 @@ export function AnalysisModelPicker({
         aria-expanded={open}
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
-        className="w-full sm:w-auto min-h-[44px] px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-none focus:border-peach disabled:opacity-50 inline-flex items-center justify-between gap-2 text-sm"
+        className="w-full sm:w-auto min-h-[44px] px-3 py-1.5 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 focus:outline-hidden focus:border-peach disabled:opacity-50 inline-flex items-center justify-between gap-2 text-sm"
       >
         <span className="truncate">{triggerLabel}</span>
         <IconChevD className="w-3.5 h-3.5 text-ink/50 shrink-0" />
