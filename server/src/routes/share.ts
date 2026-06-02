@@ -19,7 +19,8 @@
    "Build an M4B first" message rather than the 404 a casual reader would
    read as "broken link." */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -186,6 +187,10 @@ sharePublicRouter.get('/share/:slug', async (req: Request, res: Response) => {
         )}"`,
         'Cache-Control': 'no-cache',
       },
+      /* The M4B lives under the book's `.audiobook/exports/` dir. Express 5's
+         send defaults dotfiles:'ignore', which 404s any path with a
+         dot-segment (Express 4's res.sendFile served it) — allow it. */
+      dotfiles: 'allow',
     },
     (err) => {
       if (err && !res.headersSent) res.status(500).end();

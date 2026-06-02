@@ -46,10 +46,10 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
   }
   return (
     <>
-      <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-[60] fade-in" />
-      <aside className="fixed top-0 right-0 bottom-0 w-full max-w-[560px] bg-white shadow-drawer z-[70] overflow-y-auto slide-in-right">
+      <div onClick={onClose} className="fixed inset-0 bg-ink/30 z-60 fade-in" />
+      <aside className="fixed top-0 right-0 bottom-0 w-full max-w-[560px] bg-white shadow-drawer z-70 overflow-y-auto slide-in-right">
         <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
-          <span className="w-9 h-9 rounded-full bg-purple-deep/[0.06] grid place-items-center text-purple-deep">
+          <span className="w-9 h-9 rounded-full bg-purple-deep/6 grid place-items-center text-purple-deep">
             <IconCheckCircle className="w-5 h-5" />
           </span>
           <div className="flex-1 min-w-0">
@@ -88,7 +88,7 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
               <p className="mt-3 font-bold text-ink truncate">{character.name}</p>
               <p className="text-xs text-ink/60 mt-0.5 truncate">{character.role}</p>
             </div>
-            <div className="p-4 rounded-2xl bg-purple-deep/[0.04] border border-purple-deep/15 text-center">
+            <div className="p-4 rounded-2xl bg-purple-deep/4 border border-purple-deep/15 text-center">
               <p className="text-[11px] uppercase tracking-wider text-purple-deep/70 font-semibold mb-3">
                 From your library
               </p>
@@ -124,7 +124,7 @@ export function MatchDetailDrawer({ character, voice, onClose, onConfirm, onDecl
                       {Math.round(f.score * 100)}%
                     </span>
                   </div>
-                  <div className="h-1 rounded-full bg-ink/[0.06] overflow-hidden mb-2">
+                  <div className="h-1 rounded-full bg-ink/6 overflow-hidden mb-2">
                     <div
                       className="h-full rounded-full bg-gradient-progress"
                       style={{ width: `${f.score * 100}%` }}

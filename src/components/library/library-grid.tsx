@@ -178,7 +178,7 @@ function BookCard({
       onClick={onOpen}
       className={`group relative bg-white rounded-3xl border shadow-card hover:shadow-float transition-all cursor-pointer overflow-hidden ${active ? 'border-peach ring-1 ring-peach/30' : 'border-ink/10 hover:border-ink/20'}`}
     >
-      <div className="aspect-[16/10] relative overflow-hidden" style={{ background: grad }}>
+      <div className="aspect-16/10 relative overflow-hidden" style={{ background: grad }}>
         <svg viewBox="0 0 320 200" className="absolute inset-0 w-full h-full opacity-20">
           <circle cx="60" cy="100" r="80" fill="none" stroke="white" strokeWidth="0.5" />
           <circle cx="60" cy="100" r="60" fill="none" stroke="white" strokeWidth="0.5" />
@@ -244,7 +244,7 @@ function BookCard({
                   setMenuOpen(false);
                   setEditOpen(true);
                 }}
-                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
               >
                 <IconPencil className="w-4 h-4" /> Edit details
               </button>
@@ -253,7 +253,7 @@ function BookCard({
                   setMenuOpen(false);
                   setCoverPickerOpen(true);
                 }}
-                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
               >
                 <IconImage className="w-4 h-4" /> Find cover image
               </button>
@@ -262,7 +262,7 @@ function BookCard({
                   setMenuOpen(false);
                   setConfirmReparse(true);
                 }}
-                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
               >
                 <IconRefresh className="w-4 h-4" /> Re-parse manuscript
               </button>
@@ -312,7 +312,7 @@ function BookCard({
                 {Math.round(book.progress * 100)}%
               </span>
             </div>
-            <div className="h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+            <div className="h-1 rounded-full bg-ink/6 overflow-hidden">
               <div
                 className="h-full bg-gradient-progress rounded-full"
                 style={{ width: `${book.progress * 100}%` }}
@@ -328,7 +328,7 @@ function BookCard({
                 {Math.round(book.progress * 100)}%
               </span>
             </div>
-            <div className="h-1 rounded-full bg-ink/[0.06] overflow-hidden relative">
+            <div className="h-1 rounded-full bg-ink/6 overflow-hidden relative">
               <div
                 className="h-full bg-gradient-progress rounded-full pulse-bar"
                 style={{ width: `${book.progress * 100}%` }}
@@ -460,7 +460,7 @@ function NewBookCard({ onStartNew }: { onStartNew: () => void }) {
   return (
     <button
       onClick={onStartNew}
-      className="group bg-canvas rounded-3xl border-2 border-dashed border-ink/15 hover:border-peach hover:bg-peach/[0.04] transition-all min-h-[180px] grid place-items-center text-center p-8"
+      className="group bg-canvas rounded-3xl border-2 border-dashed border-ink/15 hover:border-peach hover:bg-peach/4 transition-all min-h-[180px] grid place-items-center text-center p-8"
     >
       <div>
         <span className="w-14 h-14 mx-auto rounded-full bg-white border border-ink/10 grid place-items-center group-hover:bg-peach group-hover:border-peach group-hover:text-white transition-colors text-ink">

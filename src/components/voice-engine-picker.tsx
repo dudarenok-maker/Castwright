@@ -103,7 +103,7 @@ export function VoiceEnginePicker({
         value={lockedToQwen ? 'qwen' : value}
         disabled={lockedToQwen}
         onChange={(e) => onChange(e.target.value as EngineChoice)}
-        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0 disabled:opacity-70 disabled:cursor-not-allowed"
+        className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0 disabled:opacity-70 disabled:cursor-not-allowed"
       >
         {lockedToQwen ? (
           <option value="qwen">{ENGINE_LABELS.qwen}</option>
@@ -155,7 +155,7 @@ export function VoiceEnginePicker({
               onChange={(e) => onPersonaChange(e.target.value)}
               rows={3}
               placeholder="a warm, confident voice…"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 resize-y"
             />
             <p className="mt-1 text-[10px] text-ink/40 leading-relaxed">
               A short natural-language description Qwen uses to design a bespoke voice. Edit it,
@@ -189,7 +189,9 @@ export function VoiceEnginePicker({
             ) : (
               <>
                 <IconSparkle className="w-4 h-4" />
-                <span>Design &amp; compare</span>
+                {/* "compare" only when a bespoke voice already exists to put on
+                    Side A of the A/B; a first design just previews (no compare). */}
+                <span>{designedVoiceId ? 'Design & compare' : 'Design & preview'}</span>
               </>
             )}
           </button>

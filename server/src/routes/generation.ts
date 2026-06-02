@@ -19,7 +19,8 @@
    time we replay `chapter_complete` ticks for every already-done chapter so
    a reconnecting client reconciles state in one round-trip. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {

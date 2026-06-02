@@ -1074,15 +1074,25 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     });
   });
 
-  it('Design & compare stages a PREVIEW design and opens the A/B modal; approve stages it (plan 161)', async () => {
+  it('RE-design (existing voice) stages a PREVIEW + opens the A/B compare; approve promotes it (plan 161)', async () => {
+    /* A character that ALREADY has a designed bespoke voice has something to
+       put on Side A, so re-designing opens the A/B compare against it. */
     designQwenVoice.mockClear();
     promoteQwenVoice.mockClear();
-    renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
+    renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceId: 'v_hal',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      voiceStyle: 'a steady adult voice',
+    });
     selectQwen();
+    /* The button reads "Design & compare" when there's an existing voice. */
+    expect(screen.getByTestId('qwen-design-voice').textContent).toMatch(/Design & compare/i);
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     await waitFor(() => {
-      /* The persona still flows through; preview:true stages a sibling id so
-         the live voice isn't overwritten while the user compares. */
+      /* preview:true stages a `…-preview` sibling so the live voice isn't
+         overwritten while the user compares. */
       expect(designQwenVoice).toHaveBeenCalledWith(
         'book-1',
         'halloran',
@@ -1094,16 +1104,45 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
         }),
       );
     });
-    /* The compare modal opens; the designed-confirm is NOT shown yet (staging
-       is deferred to approve). */
+    /* The compare modal opens; staging the promoted voice is deferred to approve
+       (promote not called until the user keeps the proposed voice). */
     await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
-    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+    expect(promoteQwenVoice).not.toHaveBeenCalled();
 
-    /* Approve → promote the preview, then the drawer stages the real voice and
-       surfaces the designed confirmation. */
     fireEvent.click(screen.getByTestId('voice-compare-approve'));
     await waitFor(() => expect(promoteQwenVoice).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId('voice-compare-overlay')).toBeNull());
+  });
+
+  it('FIRST design (no existing voice) auditions in place — no compare modal (nothing to compare)', async () => {
+    /* A/B compare is only useful when there is something to compare to. A
+       first-time design has no current bespoke voice, so it falls back to the
+       one-shot "Design & preview": design in place (preview:false), stage it,
+       and play — without opening the compare modal. */
+    designQwenVoice.mockClear();
+    promoteQwenVoice.mockClear();
+    renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
+    selectQwen();
+    /* No existing voice → the button reads "Design & preview". */
+    expect(screen.getByTestId('qwen-design-voice').textContent).toMatch(/Design & preview/i);
+    fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    await waitFor(() => {
+      expect(designQwenVoice).toHaveBeenCalledWith(
+        'book-1',
+        'halloran',
+        expect.objectContaining({
+          persona: 'a steady adult voice',
+          modelKey: 'qwen3-tts-0.6b',
+          sampleVoiceId: expect.any(String),
+          preview: false,
+        }),
+      );
+    });
+    /* Stages the voice directly (designed-confirm) and never opens the compare
+       modal or promotes (there's no preview to promote). */
     await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
+    expect(screen.queryByTestId('voice-compare-overlay')).toBeNull();
+    expect(promoteQwenVoice).not.toHaveBeenCalled();
   });
 
   it('on Save writes ttsEngine=qwen + the qwen override series-scoped', async () => {
@@ -1111,11 +1150,10 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     const onSave = vi.fn();
     renderWithBook({ ...baseChar, voiceId: 'v_hal', voiceStyle: 'a steady adult voice' }, onSave);
     selectQwen();
-    /* Design opens the compare modal; approving promotes + stages the voiceId. */
+    /* First design (no existing voice) stages the designed voiceId directly —
+       no compare modal — then Save persists it. */
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
     await waitFor(() => expect(designQwenVoice).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByTestId('voice-compare-approve')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('voice-compare-approve'));
     await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
@@ -1213,11 +1251,9 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     expect(
       (screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
-    /* Design → compare → approve stages the voiceId returned by the mock
-       (qwen-halloran). */
+    /* First design (one-shot, no compare) stages the voiceId returned by the
+       mock (qwen-halloran) directly. */
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
-    await waitFor(() => expect(screen.getByTestId('voice-compare-approve')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('voice-compare-approve'));
     await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
     const playBtn = screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement;
     expect(playBtn.disabled).toBe(false);

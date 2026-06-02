@@ -201,12 +201,12 @@ export function VoiceSwatch({
 type PillColor = 'neutral' | 'success' | 'warning' | 'danger' | 'peach' | 'library';
 export function Pill({ children, color = 'neutral' }: { children: ReactNode; color?: PillColor }) {
   const map: Record<PillColor, string> = {
-    neutral: 'bg-ink/[0.04] text-ink/70 border-ink/10',
+    neutral: 'bg-ink/4 text-ink/70 border-ink/10',
     success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
     warning: 'bg-amber-50 text-amber-700 border-amber-200',
     danger: 'bg-rose-50 text-rose-700 border-rose-200',
     peach: 'bg-peach/15 text-magenta border-peach/30',
-    library: 'bg-purple-deep/[0.06] text-purple-deep border-purple-deep/15',
+    library: 'bg-purple-deep/6 text-purple-deep border-purple-deep/15',
   };
   return (
     <span
@@ -227,7 +227,7 @@ export function ReusedBadge() {
     <span
       data-testid="reused-badge"
       title="Voice reused from a prior book in this series"
-      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium text-purple-deep/70 bg-purple-deep/[0.04]"
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium text-purple-deep/70 bg-purple-deep/4"
     >
       <IconLink className="w-2.5 h-2.5" />
       Reused

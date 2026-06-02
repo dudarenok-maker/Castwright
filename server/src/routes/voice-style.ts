@@ -17,7 +17,8 @@
    `voiceId` / `gender` / the override map — it's part of the character's
    voice identity and round-trips through analysis reparses + reloads. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';

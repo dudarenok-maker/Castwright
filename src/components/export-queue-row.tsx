@@ -58,11 +58,11 @@ export function ExportQueueRow({ item, onDownload, onCopyLink, onRetry, onRemove
   /* Buttons are enabled only when the parent wired a handler. The Listen
      rail passes no handlers — its rows are passive history; the modal
      wires onDownload for the active job. */
-  const interactiveClass = 'p-1.5 rounded-full text-ink/60 hover:text-ink hover:bg-ink/[0.04]';
+  const interactiveClass = 'p-1.5 rounded-full text-ink/60 hover:text-ink hover:bg-ink/4';
   const disabledClass = 'p-1.5 rounded-full text-ink/30 cursor-not-allowed';
 
   return (
-    <div className="grid grid-cols-[44px_1fr_120px_120px_140px_120px] items-center gap-4 px-5 py-3.5 text-sm hover:bg-ink/[0.02] transition-colors">
+    <div className="grid grid-cols-[44px_1fr_120px_120px_140px_120px] items-center gap-4 px-5 py-3.5 text-sm hover:bg-ink/2 transition-colors">
       <span
         className="w-10 h-10 rounded-xl grid place-items-center text-white font-bold text-[10px] tracking-wider"
         style={{ background: formatBadge.color }}
@@ -79,7 +79,7 @@ export function ExportQueueRow({ item, onDownload, onCopyLink, onRetry, onRemove
           <span className="block text-[11px] text-ink/55 truncate mt-0.5">{item.destination}</span>
         )}
         {item.status === 'in_progress' && (
-          <div className="mt-1.5 h-1 rounded-full bg-ink/[0.06] overflow-hidden max-w-[280px] relative">
+          <div className="mt-1.5 h-1 rounded-full bg-ink/6 overflow-hidden max-w-[280px] relative">
             <div
               className="h-full rounded-full bg-gradient-progress pulse-bar"
               style={{ width: `${(item.progress || 0) * 100}%` }}

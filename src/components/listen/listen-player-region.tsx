@@ -257,7 +257,7 @@ function ChapterListenRow({
   return (
     <div
       data-testid={`chapter-row-${chapter.id}`}
-      className={`px-4 sm:px-5 py-3 sm:py-4 transition-colors ${isPlaying ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}
+      className={`px-4 sm:px-5 py-3 sm:py-4 transition-colors ${isPlaying ? 'bg-peach/6' : 'hover:bg-ink/2'}`}
     >
       {/* On <md the row stacks the title block above a control strip
           (play + waveform + duration + actions) so the chapter title
@@ -343,7 +343,7 @@ function ChapterListenRow({
               title="Rename chapter"
               aria-label={`Rename chapter ${chapter.id}`}
               data-testid={`chapter-row-${chapter.id}-rename`}
-              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/[0.04]"
+              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/4"
             >
               <IconPencil className="w-4 h-4" />
             </button>
@@ -351,7 +351,7 @@ function ChapterListenRow({
               onClick={() => onRegenerate(chapter)}
               title="Regenerate"
               aria-label={`Regenerate chapter ${chapter.id}`}
-              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/[0.04]"
+              className="text-ink/40 hover:text-magenta grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full hover:bg-ink/4"
             >
               <IconRefresh className="w-4 h-4" />
             </button>
@@ -367,7 +367,7 @@ function ChapterListenRow({
               data-testid={`chapter-row-${chapter.id}-share-clip`}
               className={`grid place-items-center w-11 h-11 md:w-8 md:h-8 rounded-full ${
                 hasAudio
-                  ? 'text-ink/40 hover:text-magenta hover:bg-ink/[0.04]'
+                  ? 'text-ink/40 hover:text-magenta hover:bg-ink/4'
                   : 'text-ink/20 opacity-50 cursor-not-allowed'
               }`}
             >
@@ -491,7 +491,7 @@ function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps)
                     onClick={() => onDelete(m.id)}
                     aria-label="Delete marker"
                     data-testid={`listen-marker-delete-${m.id}`}
-                    className="shrink-0 w-11 h-11 md:w-8 md:h-8 grid place-items-center rounded-full text-ink/40 hover:text-rose-500 hover:bg-ink/[0.04]"
+                    className="shrink-0 w-11 h-11 md:w-8 md:h-8 grid place-items-center rounded-full text-ink/40 hover:text-rose-500 hover:bg-ink/4"
                   >
                     ×
                   </button>

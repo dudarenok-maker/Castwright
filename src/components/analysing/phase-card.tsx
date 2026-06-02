@@ -138,7 +138,7 @@ function LiveCastPreview() {
         {characters.map((c) => (
           <span
             key={c.id}
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-ink/[0.04] text-ink/70"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-ink/4 text-ink/70"
           >
             {c.name}
           </span>
@@ -216,12 +216,12 @@ function DroppedQuotesPanel({
       </summary>
       <ul className="mt-2 space-y-2">
         {groups.map(([name, entries]) => (
-          <li key={name} className="rounded-2xl border border-ink/[0.08] bg-white/60 px-3 py-2">
+          <li key={name} className="rounded-2xl border border-ink/8 bg-white/60 px-3 py-2">
             <div className="font-semibold text-ink/80">{name}</div>
             <ul className="mt-1 space-y-1.5">
               {entries.map((e, i) => (
                 <li key={i} className="border-l-2 border-amber-300/70 pl-2">
-                  <div className="font-mono text-ink/70 italic break-words">
+                  <div className="font-mono text-ink/70 italic wrap-break-word">
                     "{e.quote}"
                     {e.truncated && <span className="ml-1 text-ink/40">[truncated]</span>}
                   </div>
@@ -418,7 +418,7 @@ export function PhaseCard({
         </p>
         {isActive && (
           <>
-            <div className="mt-3 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+            <div className="mt-3 h-1 rounded-full bg-ink/6 overflow-hidden">
               <div
                 className="h-full bg-gradient-progress rounded-full"
                 style={{ width: `${phaseProgress * 100}%` }}

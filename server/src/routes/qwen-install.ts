@@ -11,7 +11,8 @@
    refreshed so getResolvedTtsModelKey flips the default to Qwen immediately
    (no waiting for the next /health poll). */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {

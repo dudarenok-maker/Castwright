@@ -417,7 +417,7 @@ function ConfirmCharacterCard({
           onOpenProfile();
         }
       }}
-      className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors cursor-pointer hover:border-ink/25 focus:outline-none focus-visible:ring-2 focus-visible:ring-peach/60 ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}
+      className={`bg-white rounded-3xl border shadow-card overflow-hidden transition-colors cursor-pointer hover:border-ink/25 focus:outline-hidden focus-visible:ring-2 focus-visible:ring-peach/60 ${matched ? 'border-purple-deep/15' : 'border-ink/10'}`}
     >
       {/* Plan 81 wave 3 — phone (<sm:) stacks the decision-tile column
           below the avatar+info row so the fixed 340 px decision panel
@@ -610,12 +610,12 @@ function DecisionTile({
     <button
       onClick={onClick}
       disabled={readonly}
-      className={`text-left p-3 min-h-[44px] rounded-2xl border transition-all ${active ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'} ${readonly ? 'cursor-default' : 'cursor-pointer'}`}
+      className={`text-left p-3 min-h-[44px] rounded-2xl border transition-all ${active ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'} ${readonly ? 'cursor-default' : 'cursor-pointer'}`}
     >
       <div className="flex items-start gap-3">
         {swatch ? (
           <span
-            className="rounded-full shrink-0 shadow-sm"
+            className="rounded-full shrink-0 shadow-xs"
             style={{
               width: 32,
               height: 32,
