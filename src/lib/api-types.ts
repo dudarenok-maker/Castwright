@@ -1384,6 +1384,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/generation/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Per-run resource telemetry for the Admin trend panel (fs-20)
+         * @description Returns per-chapter resource telemetry — RTF + audio/wall seconds
+         *     alongside the GPU (reserved/total VRAM) and host-RAM figures captured
+         *     right after each chapter rendered — NEWEST-FIRST. Backs the Admin
+         *     console's "Resource trends" panel so the operator can watch resource
+         *     pressure climb across a long run (the slow creep that precedes a VRAM
+         *     spill / host OOM). Best-effort store (workspace JSONL, capped); a read
+         *     failure yields an empty list rather than a 500.
+         */
+        get: operations["getResourceTelemetry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/diagnostics": {
         parameters: {
             query?: never;
@@ -3060,6 +3086,30 @@ export interface components {
             inFlight: number;
             /** @description Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU. */
             max: number;
+        };
+        /**
+         * @description One per-chapter telemetry sample captured right after a chapter
+         *     rendered: throughput (RTF, audio/wall seconds) + GPU and host-RAM
+         *     figures from a best-effort sidecar /health probe (null when the probe
+         *     timed out / the sidecar was down).
+         */
+        ResourceTelemetryRecord: {
+            /** Format: date-time */
+            at: string;
+            bookId: string | null;
+            chapterId: number | string;
+            title: string | null;
+            modelKey: string | null;
+            /** @description synth wall ÷ audio (< 1 = faster than realtime). */
+            rtf: number | null;
+            audioSec: number;
+            wallSec: number;
+            vramReservedMb: number | null;
+            vramTotalMb: number | null;
+            committedHostMb: number | null;
+        };
+        ResourceTelemetryResponse: {
+            records: components["schemas"]["ResourceTelemetryRecord"][];
         };
         DiagnosticsCheck: {
             /**
@@ -5220,6 +5270,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GpuQueueState"];
+                };
+            };
+        };
+    };
+    getResourceTelemetry: {
+        parameters: {
+            query?: {
+                /** @description Cap the number of (newest-first) records returned. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-run resource telemetry, newest-first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceTelemetryResponse"];
                 };
             };
         };

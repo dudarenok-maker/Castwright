@@ -13,11 +13,16 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 
 /* Stub the actual archive build so the fire-and-forget job in WARN/OFF mode
-   never touches disk (and so the temp-dir teardown can't race a real ffmpeg/zip
-   write). The disk guard runs BEFORE the build, so this doesn't affect the gate
-   under test. */
+   doesn't spawn ffmpeg/zip — but DO write the expected partial file so the
+   route's renameWithRetry succeeds and the job reaches `done` quickly and
+   cleanly (no dangling fs work that could outlive the test and crash the
+   worker fork). The disk guard runs BEFORE the build, so this stub doesn't
+   affect the gate under test. */
 vi.mock('../export/build-mp3-zip.js', () => ({
-  buildMp3Zip: vi.fn(async () => ({ sizeBytes: 1024 })),
+  buildMp3Zip: vi.fn(async (opts: { outPath: string }) => {
+    writeFileSync(opts.outPath, Buffer.from('PK stub-zip'));
+    return { sizeBytes: 16, entries: 1 };
+  }),
   sanitiseForZip: (s: string) => s,
   ExportIncompleteError: class ExportIncompleteError extends Error {},
 }));
