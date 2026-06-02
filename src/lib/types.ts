@@ -158,6 +158,36 @@ export interface ImportResponse {
   candidate: Omit<ImportCandidate, 'tempId'>;
 }
 
+/* fs-1 — GET /api/info: version + schema + what's-new state. */
+export interface AppInfo {
+  appVersion: string;
+  sidecarVersion: string | null;
+  schemas: Record<string, number>;
+  lastSeenAppVersion: string | null;
+  showWhatsNew: boolean;
+  releaseNotes: string;
+}
+
+/* fs-1 — POST /api/upgrade/stage result. */
+export interface UpgradeStageResult {
+  candidateVersion: string;
+  runningVersion: string;
+  reqHash: string | null;
+  requiresPipInstall: boolean;
+  isDowngrade: boolean;
+}
+
+export type UpgradePhase = 'idle' | 'staged' | 'applying' | 'restarting' | 'error';
+
+/* fs-1 — GET /api/upgrade/state. */
+export interface UpgradeStatePayload {
+  phase: UpgradePhase;
+  candidateVersion?: string;
+  error?: string;
+  busy: boolean;
+  busyReason?: { generationBooks: string[]; analysisManuscripts: string[] };
+}
+
 export interface ConfirmBookRequest {
   tempId: string;
   author: string;
