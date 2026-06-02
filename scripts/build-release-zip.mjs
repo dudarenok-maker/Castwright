@@ -7,12 +7,36 @@
 // Usage:
 //   node scripts/build-release-zip.mjs --version v1.2.3 [--out path] [--dry-run]
 
-import { createWriteStream, mkdirSync, statSync } from 'node:fs';
+import { createWriteStream, mkdirSync, statSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
+
+/* fs-1 — bake RELEASE_NOTES.md at the release root from the annotated tag body
+   (or a passed --notes-file), so GET /api/info can surface it as the in-app
+   what's-new copy. Best-effort: a missing tag/notes falls back to a one-line
+   placeholder rather than failing the build. Returns the path written. */
+export function generateReleaseNotes(version, notesFile) {
+  const out = resolve(repoRoot, 'RELEASE_NOTES.md');
+  if (notesFile && existsSync(notesFile)) {
+    copyFileSync(notesFile, out);
+    return out;
+  }
+  let body = '';
+  try {
+    body = execFileSync('git', ['tag', '-l', '--format=%(contents)', version], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    body = '';
+  }
+  writeFileSync(out, body || `# ${version}\n\nSee the GitHub release for details.\n`, 'utf8');
+  return out;
+}
 
 // Patterns use POSIX-style forward slashes; we normalize repo-relative
 // paths to that style before matching.
@@ -31,6 +55,11 @@ export const MANIFEST = {
     'README.md',
     'INSTALL.md',
     '.gitignore',
+
+    // fs-1 — bundled release notes (generated from the tag annotation at build
+    // time). GET /api/info reads it from the release root for the what's-new
+    // banner. Gitignored — a build artefact, not committed.
+    'RELEASE_NOTES.md',
 
     // fs-1 — stable launcher for the versioned-dir install. Ships inside every
     // release; setup-versioned-install.mjs copies it to the install root once.
@@ -190,11 +219,12 @@ function globMatch(p, pattern) {
 }
 
 function parseArgs(argv) {
-  const out = { version: null, out: null, dryRun: false };
+  const out = { version: null, out: null, dryRun: false, notesFile: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--version') out.version = argv[++i];
     else if (a === '--out') out.out = argv[++i];
+    else if (a === '--notes-file') out.notesFile = argv[++i];
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--help' || a === '-h') {
       process.stdout.write(
@@ -249,6 +279,10 @@ async function main() {
     args.out ?? `release/audiobook-generator-${args.version}.zip`,
   );
   mkdirSync(dirname(outPath), { recursive: true });
+
+  // fs-1 — bake RELEASE_NOTES.md so it's picked up by the manifest walk below.
+  const notesPath = generateReleaseNotes(args.version, args.notesFile);
+  info(`[NOTES] wrote ${notesPath}`);
 
   info(`[SCAN] walking repo from ${repoRoot}`);
   const candidates = await walkRepo();
