@@ -15,8 +15,18 @@ import { gpuSemaphore } from '../gpu/semaphore.js';
 
 export const gpuQueueRouter = Router();
 
-gpuQueueRouter.get('/queue', (_req: Request, res: Response) => {
-  res.json({
+export interface GpuQueueState {
+  depth: number;
+  inFlight: number;
+  max: number;
+  budget: number;
+  usedTokens: number;
+}
+
+/* Pure synchronous read of the GpuSemaphore singleton. Extracted so the
+   /api/diagnostics aggregator (fs-18) can reuse it in-process. */
+export function readGpuQueueState(): GpuQueueState {
+  return {
     depth: gpuSemaphore.queueDepth,
     inFlight: gpuSemaphore.inFlight,
     /* `max` is the legacy field the frontend pill reads; kept aliased to the
@@ -25,5 +35,9 @@ gpuQueueRouter.get('/queue', (_req: Request, res: Response) => {
     max: gpuSemaphore.maxConcurrency,
     budget: gpuSemaphore.budget,
     usedTokens: gpuSemaphore.usedTokens,
-  });
+  };
+}
+
+gpuQueueRouter.get('/queue', (_req: Request, res: Response) => {
+  res.json(readGpuQueueState());
 });
