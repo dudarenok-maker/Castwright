@@ -7,8 +7,8 @@ owner: null
 # Generation RTF telemetry
 
 > Status: active
-> Key files: `server/tts-sidecar/main.py` (batch log + `SynthBatchResult` genMs/audioMs + frame header), `server/src/tts/sidecar.ts` (parse perf header), `server/src/tts/generation-stats.ts` (chapter + live-batch windows + per-chapter history ring), `server/src/routes/generation-stats.ts`, `server/src/routes/generation.ts` (rollup + `onBatchComplete`), `server/src/tts/synthesise-chapter.ts` (`onBatchComplete`), `src/components/worktrees-rtf-pill.tsx`, `src/views/worktrees.tsx` (per-chapter throughput table), `src/lib/api.ts`
-> URL surface: `GET /api/generation/stats`; dev-only top-bar pill + dev-only Worktrees-view throughput table
+> Key files: `server/tts-sidecar/main.py` (batch log + `SynthBatchResult` genMs/audioMs + frame header), `server/src/tts/sidecar.ts` (parse perf header), `server/src/tts/generation-stats.ts` (chapter + live-batch windows + per-chapter history ring), `server/src/routes/generation-stats.ts`, `server/src/routes/generation.ts` (rollup + `onBatchComplete`), `server/src/tts/synthesise-chapter.ts` (`onBatchComplete`), `src/components/admin-pill.tsx`, `src/views/admin.tsx` (per-chapter throughput table), `src/lib/api.ts`
+> URL surface: `GET /api/generation/stats`; top-bar Admin pill (all-users since [[171-admin-watch-console]]) + Admin-view throughput table
 > OpenAPI ops: none (dev/observability endpoint, not part of the public contract)
 
 ## Benefit / Rationale
@@ -20,13 +20,13 @@ that actually does generation, target RTF ~1) logged **nothing** — so the only
 RTF in the log was misleadingly slow, and a long in-progress chapter (audio is
 written only at chapter completion) looked stalled when it was fine.
 
-- **User:** can self-monitor generation speed without grepping logs. The dev
-  top-bar `wt` pill shows a **live per-batch RTF** that moves every ~batch
+- **User:** can self-monitor generation speed without grepping logs. The
+  top-bar Admin pill shows a **live per-batch RTF** that moves every ~batch
   (updated as each Qwen batch lands) — the figure you can actually act on
   mid-chapter — falling back to the per-chapter rolling figure when no batch is
   recent. The server log also prints a per-chapter rollup (`rtf`, `Nx realtime`,
-  `chapters/hr`) as a lagging summary. Clicking the pill opens the dev Worktrees
-  view, which now also renders a **per-chapter throughput table** (newest-first
+  `chapters/hr`) as a lagging summary. Clicking the pill opens the Admin watch
+  console ([[171-admin-watch-console]]), which also renders a **per-chapter throughput table** (newest-first
   RTF history with a ▲/▼ deterioration cue + a run-summary strip) so the operator
   can see whether RTF is deteriorating or staying consistent across a run — the
   same answer that previously required grepping the `[generation] chapter N …
@@ -55,11 +55,11 @@ written only at chapter completion) looked stalled when it was fine.
   survives a sidecar recycle (the Node process persists; only the Python sidecar
   restarts per-batch), resets on a full server restart.
 - **Invariants preserved:** mock/real api split (mock returns the idle shape);
-  the `wt` pill stays dev-only (rendered only when `onOpenWorktrees` is wired,
-  which is `import.meta.env.DEV`-gated in `layout.tsx`) and keeps its
-  `data-testid="topbar-worktrees-link"` + click-to-worktrees behaviour. The
-  sidecar batch path's audio output is byte-identical — only a log line was
-  added.
+  the RTF readout keeps its `data-testid="topbar-rtf"` and the live/per-chapter
+  fallback behaviour. Since [[171-admin-watch-console]] the pill is the all-users
+  `AdminPill` (always rendered; testid `topbar-admin-link`, click → `#/admin`),
+  not the old dev-gated `wt` pill. The sidecar batch path's audio output is
+  byte-identical — only a log line was added.
 - **RTF convention:** `synth-wall ÷ audio` everywhere (< 1 = faster than
   realtime), matching the existing sidecar single-call line and `bench-tts.py`.
   The sidecar `batch synth` line is pure-compute (`gen_ms ÷ Σ audio_ms`); the
@@ -70,9 +70,9 @@ written only at chapter completion) looked stalled when it was fine.
 
 ## Invariants to preserve
 
-- `WorktreesRtfPill` is the ONLY renderer of the dev pill; it must keep
-  `data-testid="topbar-worktrees-link"` and fire `onClick` (worktrees nav) so
-  existing top-bar coverage and e2e stay green (`src/components/worktrees-rtf-pill.tsx`).
+- `AdminPill` is the ONLY renderer of the RTF readout; it must keep
+  `data-testid="topbar-rtf"` for the RTF span and fire `onClick` (→ `#/admin`) so
+  existing top-bar coverage and e2e stay green (`src/components/admin-pill.tsx`).
 - The sidecar batch line uses the same `rtf=` token as the single line
   (`server/tts-sidecar/main.py`), so a grep for `rtf=` catches both; `batch
   synth` vs `synth` is the only distinguisher.
@@ -146,12 +146,12 @@ crashing.
 2. **`tail -f logs/tts.err.log`** during a batched chapter → `qwen batch synth:
    items=8 voices=… … rtf=…` lines (the ~1 target), distinct from the slow
    `qwen synth:` audition lines.
-3. **Dev frontend, top bar** → while a book renders, the `wt` pill shows
-   `wt 1.1` (the LIVE per-batch RTF, magenta) updating every ~batch; once a
+3. **Frontend, top bar** → while a book renders, the Admin pill shows
+   `Admin 1.1` (the LIVE per-batch RTF, magenta) updating every ~batch; once a
    chapter completes and no batch is mid-flight it shows the per-chapter figure;
-   idle → just `wt`. Clicking still opens the worktrees dashboard.
-4. **Dev Worktrees view, during/after a run** → below the worktrees list, the
-   **Generation throughput** table fills newest-first as each chapter completes;
+   idle → just `Admin` + the health dot. Clicking opens the Admin watch console.
+4. **Admin view, during/after a run** → in the **Generation throughput**
+   section, the table fills newest-first as each chapter completes;
    its RTF column matches the `[generation] chapter N … rtf=` log lines, a
    chapter that ran slower than the one before shows a ▲ (rose), faster shows ▼
    (green); the run-summary strip mirrors the pill's figures. The history

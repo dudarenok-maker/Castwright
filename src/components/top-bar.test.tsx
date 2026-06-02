@@ -13,6 +13,21 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
+
+/* TopBar now always renders the <AdminPill>, which self-polls
+   api.getGenerationStats + api.getDiagnostics. Stub just those two so the pill
+   stays quiet (no real fetch in jsdom) without disturbing the rest of api. */
+vi.mock('../lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/api')>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      getGenerationStats: vi.fn().mockResolvedValue({ chapters: 0, rtf: null, liveBatchRtf: null }),
+      getDiagnostics: vi.fn().mockResolvedValue({ ts: '', overall: 'ok', checks: [] }),
+    },
+  };
+});
 import {
   TopBar,
   AnalysisPill,
@@ -47,6 +62,7 @@ function makeProps(
     onOpenVoices: vi.fn(),
     onOpenChangelog: vi.fn(),
     onOpenAccount: vi.fn(),
+    onOpenAdmin: vi.fn(),
     userDisplayName: 'Mike Dudarenok',
     statusSummary: IDLE_SUMMARY,
     statusDetail: STATUS_DETAIL,

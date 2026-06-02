@@ -69,6 +69,7 @@ import { ollamaHealthRouter } from './routes/ollama-health.js';
 import { qwenInstallRouter } from './routes/qwen-install.js';
 import { coquiInstallRouter } from './routes/coqui-install.js';
 import { gpuQueueRouter } from './routes/gpu-queue.js';
+import { diagnosticsRouter } from './routes/diagnostics.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
@@ -203,6 +204,7 @@ app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM ana
 app.use('/api/qwen', qwenInstallRouter); // in-app Qwen3-TTS installer (detect/install/poll/recheck)
 app.use('/api/coqui', coquiInstallRouter); // in-app Coqui XTTS v2 installer (detect/install/poll/recheck)
 app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inFlight for the top-bar pill)
+app.use('/api/diagnostics', diagnosticsRouter); // fs-18 — GET / one-shot health board (admin console)
 
 /* Production-mode frontend serving. Helper resolves whether to mount based
    on NODE_ENV=production OR the existence of dist/index.html. Mounted AFTER

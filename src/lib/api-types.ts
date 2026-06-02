@@ -1384,6 +1384,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One-shot health board for the Admin watch console (fs-18)
+         * @description Runs every operational health probe in one shot and returns a
+         *     green/amber/red board: GPU + VRAM headroom, TTS sidecar reachability
+         *     and resident models, analyzer (Ollama or Gemini) connectivity, ffmpeg
+         *     and ffprobe presence, and free disk on the workspace volume.
+         *
+         *     Consolidates the ad-hoc probes the operator otherwise runs by hand
+         *     (`/api/sidecar/health`, `/api/ollama/health`, `nvidia-smi`). Powers the
+         *     all-users Admin view (`src/views/admin.tsx`) and the top-bar status dot.
+         *     Each check runs independently — a single failing probe yields a `fail`
+         *     row, never a 500. Safe to poll (~30 s cadence). `overall` is the worst
+         *     severity across the checks.
+         */
+        get: operations["getDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/export/lan": {
         parameters: {
             query?: never;
@@ -2956,6 +2986,37 @@ export interface components {
             inFlight: number;
             /** @description Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU. */
             max: number;
+        };
+        DiagnosticsCheck: {
+            /**
+             * @description Stable identifier for the check (drives the UI row key).
+             * @enum {string}
+             */
+            id: "gpu" | "sidecar" | "analyzer" | "gemini" | "ffmpeg" | "disk";
+            /** @description Friendly display label, e.g. "GPU / VRAM". */
+            label: string;
+            /**
+             * @description Per-check severity.
+             * @enum {string}
+             */
+            status: "ok" | "warn" | "fail";
+            /** @description Human-readable technical line, e.g. "cuda · 1.2 / 8.0 GB reserved". */
+            detail: string;
+            /** @description Optional compact machine value the UI can render (GB free, model name, etc.). */
+            value?: (string | number) | null;
+        };
+        DiagnosticsResponse: {
+            /**
+             * Format: date-time
+             * @description ISO timestamp the board was produced.
+             */
+            ts: string;
+            /**
+             * @description Worst severity across all checks — drives the top-bar status dot.
+             * @enum {string}
+             */
+            overall: "ok" | "warn" | "fail";
+            checks: components["schemas"]["DiagnosticsCheck"][];
         };
         /**
          * @description The OTHER side of a cross-book pair. The source side comes from the
@@ -5085,6 +5146,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GpuQueueState"];
+                };
+            };
+        };
+    };
+    getDiagnostics: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aggregated diagnostics board */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticsResponse"];
                 };
             };
         };

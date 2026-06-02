@@ -100,7 +100,35 @@ function deriveQwenInstallState(body: SidecarHealthBody): QwenInstallState {
   return normaliseQwenInstallState(body.qwen_install_state);
 }
 
-sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
+/* Shape returned by probeSidecarHealth(). The /health route forwards this
+   verbatim; the /api/diagnostics aggregator (fs-18) consumes it in-process so
+   it never has to HTTP self-call this route (and never double-fires the
+   setLastKnownQwenInstallState side effect against a different code path). */
+export interface SidecarHealthResult {
+  status: 'reachable' | 'unreachable';
+  url: string;
+  proxy: 'sidecar';
+  engines?: string[];
+  modelLoaded?: boolean;
+  loading?: boolean;
+  kokoroLoaded?: boolean;
+  kokoroLoading?: boolean;
+  qwenLoaded?: boolean;
+  qwenLoading?: boolean;
+  qwenPackageInstalled?: boolean;
+  qwenWeightsPresent?: boolean;
+  qwenInstallState?: QwenInstallState;
+  device?: string | null;
+  recyclePending?: boolean;
+  committedMb?: number | null;
+  vramReservedMb?: number | null;
+  vramTotalMb?: number | null;
+  error?: string;
+}
+
+/* Probe the sidecar's /health once and normalise the result. Extracted from
+   the route handler so /api/diagnostics can reuse it (plan: admin console). */
+export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
   const url = getResolvedSidecarUrl();
   const target = `${url}/health`;
   const controller = new AbortController();
@@ -109,12 +137,12 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
     const response = await fetch(target, { method: 'GET', signal: controller.signal });
     clearTimeout(timer);
     if (!response.ok) {
-      return res.json({
+      return {
         status: 'unreachable',
         url,
         proxy: 'sidecar',
         error: `Sidecar returned ${response.status} ${response.statusText}`,
-      });
+      };
     }
     const body = (await response.json().catch(() => ({}))) as SidecarHealthBody;
     const qwenInstallState = deriveQwenInstallState(body);
@@ -129,7 +157,7 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
        a reachable response — an unreachable poll leaves the last-known state
        intact (a transient timeout shouldn't downgrade a known-ready Qwen). */
     setLastKnownQwenInstallState(qwenInstallState);
-    return res.json({
+    return {
       status: 'reachable',
       url,
       proxy: 'sidecar',
@@ -151,12 +179,12 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
-    });
+    };
   } catch (e) {
     clearTimeout(timer);
     const err = e as { name?: string; message?: string };
     const isTimeout = err.name === 'AbortError';
-    return res.json({
+    return {
       status: 'unreachable',
       url,
       /* Hop tag — we reached Node fine (this handler ran), the failure was
@@ -169,8 +197,12 @@ sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
       error: isTimeout
         ? `No response from ${url} within ${PROBE_TIMEOUT_MS}ms — the sidecar may be loading a model or stuck on a long synth.`
         : err.message || 'Sidecar fetch failed.',
-    });
+    };
   }
+}
+
+sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
+  res.json(await probeSidecarHealth());
 });
 
 /* POST /api/sidecar/load — proxies to the sidecar's /load endpoint with a
