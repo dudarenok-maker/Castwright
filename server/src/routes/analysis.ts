@@ -5,7 +5,8 @@
    The frontend's `real.analyseManuscript` reads this with fetch + ReadableStream. */
 
 import { rm } from 'node:fs/promises';
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { type AnalyzerSelection } from '../analyzer/index.js';
 import {

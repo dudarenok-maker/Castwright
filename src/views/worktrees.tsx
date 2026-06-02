@@ -134,7 +134,7 @@ export function WorktreesView() {
                   window.open(`http://localhost:${r.vitePort}`, '_blank');
                 }
               }}
-              className={`w-full text-left px-4 py-3 hover:bg-ink/[0.03] flex items-center gap-3 transition-colors ${
+              className={`w-full text-left px-4 py-3 hover:bg-ink/3 flex items-center gap-3 transition-colors ${
                 r.alive ? 'cursor-pointer' : 'cursor-default opacity-60'
               }`}
               data-testid={`worktree-row-${r.branch ?? 'detached'}`}

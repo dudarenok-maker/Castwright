@@ -242,7 +242,7 @@ export function TopBar({
             the leftover space and scrolls horizontally when narrow. */}
         <div className="flex-1 min-w-0 flex items-center gap-3 overflow-x-auto scrollbar-thin">
           {stage === 'ready' && (
-            <nav className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-1 shrink-0">
+            <nav className="flex items-center gap-1 bg-ink/4 rounded-full p-1 shrink-0">
               {TABS.map((t) => (
                 <button
                   key={t.id}
@@ -255,7 +255,7 @@ export function TopBar({
             </nav>
           )}
           {showGlobalNav && (
-            <nav className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-1 shrink-0">
+            <nav className="flex items-center gap-1 bg-ink/4 rounded-full p-1 shrink-0">
               {GLOBAL_NAV.map((t) => (
                 <button
                   key={t.id}
@@ -299,7 +299,7 @@ export function TopBar({
             type="button"
             onClick={onOpenAccount}
             aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
-            className={`rounded-full transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
+            className={`rounded-full transition-transform hover:scale-105 focus:outline-hidden focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
           >
             <Avatar name={userDisplayName || 'You'} color="halloran" size={32} />
           </button>
@@ -315,7 +315,7 @@ const STATUS_TONE_CLASS: Record<StatusTone, string> = {
   rose: 'bg-rose-100 hover:bg-rose-200 text-rose-800',
   amber: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
   peach: 'bg-peach/15 hover:bg-peach/25 text-magenta',
-  neutral: 'bg-ink/[0.06] hover:bg-ink/10 text-ink/70',
+  neutral: 'bg-ink/6 hover:bg-ink/10 text-ink/70',
 };
 const STATUS_ICON: Record<StatusSummary['icon'], ReactNode> = {
   spinner: <IconSpinner className="w-3.5 h-3.5" />,
@@ -471,7 +471,7 @@ export function AnalysisPill({ data }: { data: AnalysisPillData }) {
         label: 'Stalled',
       },
       paused: {
-        className: 'bg-ink/[0.06] hover:bg-ink/10 text-ink/70',
+        className: 'bg-ink/6 hover:bg-ink/10 text-ink/70',
         icon: <IconClock className="w-3.5 h-3.5" />,
         label: 'Paused',
       },

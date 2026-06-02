@@ -435,7 +435,7 @@ export function ListenMetadataEditor({
                 placeholder="About this audiobook — travels into M4B desc/ldes atoms on export."
                 rows={4}
                 data-testid="meta-description"
-                className="mt-1.5 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+                className="mt-1.5 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink placeholder:text-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 resize-y"
               />
             </label>
           </div>
@@ -457,7 +457,7 @@ export function ListenMetadataEditor({
                 placeholder="Editorial notes — source attribution, license, narration intent. Workspace-internal (never exported)."
                 rows={4}
                 data-testid="meta-notes"
-                className="mt-1.5 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink placeholder:text-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+                className="mt-1.5 w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink placeholder:text-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 resize-y"
               />
             </label>
           </div>
@@ -473,7 +473,7 @@ export function ListenMetadataEditor({
                   onClick={onReplaceCover}
                   title="Upload a new cover from disk"
                   data-testid="meta-cover-replace"
-                  className="min-h-[44px] px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/4 inline-flex items-center gap-1.5 transition-colors"
                 >
                   <IconUpload className="w-3.5 h-3.5" /> Replace
                 </button>
@@ -482,7 +482,7 @@ export function ListenMetadataEditor({
                   onClick={onRegenerateCover}
                   title="Search OpenLibrary for a fresh cover candidate"
                   data-testid="meta-cover-regenerate"
-                  className="min-h-[44px] px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/[0.04] inline-flex items-center gap-1.5 transition-colors"
+                  className="min-h-[44px] px-3 py-2 rounded-full border border-ink/15 text-xs font-medium text-ink/80 hover:text-ink hover:bg-ink/4 inline-flex items-center gap-1.5 transition-colors"
                 >
                   <IconRefresh className="w-3.5 h-3.5" /> Regenerate
                 </button>
@@ -525,7 +525,7 @@ function MetaField({ label, value, onChange, type = 'text' }: MetaFieldProps) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label={label}
-        className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30"
+        className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-hidden focus:border-ink/30"
       />
     </label>
   );

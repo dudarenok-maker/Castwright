@@ -51,7 +51,7 @@ export function AppHandoffModal({ app, onClose, onComplete }: Props) {
               background: `linear-gradient(135deg, ${app.gradient[0]}, ${app.gradient[1]})`,
             }}
           >
-            <span className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-sm grid place-items-center text-white font-bold text-sm">
+            <span className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-xs grid place-items-center text-white font-bold text-sm">
               {app.glyph}
             </span>
             <div className="flex-1 min-w-0">
@@ -67,7 +67,7 @@ export function AppHandoffModal({ app, onClose, onComplete }: Props) {
 
           <div className="px-6 pt-5 flex items-center gap-2">
             {steps.map((_, i) => (
-              <div key={i} className="flex-1 h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+              <div key={i} className="flex-1 h-1 rounded-full bg-ink/6 overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all ${i < step ? 'bg-ink' : i === step ? 'bg-gradient-progress' : 'bg-transparent'}`}
                   style={{ width: i <= step ? '100%' : '0%' }}
@@ -94,7 +94,7 @@ export function AppHandoffModal({ app, onClose, onComplete }: Props) {
                   type={current.input.type}
                   defaultValue={current.input.value}
                   placeholder={current.input.placeholder}
-                  className="w-full px-4 py-3 rounded-xl bg-canvas border border-ink/10 text-sm font-mono text-ink focus:outline-none focus:border-peach"
+                  className="w-full px-4 py-3 rounded-xl bg-canvas border border-ink/10 text-sm font-mono text-ink focus:outline-hidden focus:border-peach"
                 />
               </div>
             )}
@@ -127,7 +127,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
   if (kind === 'server') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 grid place-items-center relative overflow-hidden">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 grid place-items-center relative overflow-hidden">
         <div className="grid grid-cols-3 gap-3 w-2/3">
           {[0, 1, 2].map((i) => (
             <div
@@ -157,7 +157,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   }
   if (kind === 'folder') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 p-5 flex items-center gap-3">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 p-5 flex items-center gap-3">
         <span
           className="w-12 h-12 rounded-xl grid place-items-center text-white"
           style={{ background: grad }}
@@ -181,7 +181,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   }
   if (kind === 'device-grid') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 grid grid-cols-3 gap-3 p-4">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 grid grid-cols-3 gap-3 p-4">
         {['iOS', 'Android', 'Web'].map((p) => (
           <div
             key={p}
@@ -203,7 +203,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   }
   if (kind === 'airdrop' || kind === 'airdrop-flow') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 grid grid-cols-[1fr_auto_1fr] items-center gap-4 p-5">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 grid grid-cols-[1fr_auto_1fr] items-center gap-4 p-5">
         <div className="rounded-xl border border-ink/10 bg-white p-3 text-center">
           <IconUpload className="w-5 h-5 mx-auto text-ink/60 mb-1" />
           <span className="text-[10px] uppercase tracking-wider text-ink/60">Mac</span>
@@ -228,7 +228,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   }
   if (kind === 'qr-code') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 grid grid-cols-[auto_1fr] gap-5 items-center p-5">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 grid grid-cols-[auto_1fr] gap-5 items-center p-5">
         <span
           className="w-28 h-28 rounded-xl grid place-items-center text-white"
           style={{ background: grad }}
@@ -246,7 +246,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   }
   if (kind === 'folder-android') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 p-5 flex flex-col items-center justify-center gap-3">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 p-5 flex flex-col items-center justify-center gap-3">
         <div className="flex items-center gap-2 text-xs font-mono text-ink/60">
           <IconMobile className="w-4 h-4" />
           <span>/storage/emulated/0/</span>
@@ -265,7 +265,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   }
   if (kind === 'share-sheet') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 p-5 flex items-center gap-3">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 p-5 flex items-center gap-3">
         <span className="w-12 h-12 rounded-xl bg-white border border-ink/10 grid place-items-center">
           <IconShare className="w-5 h-5 text-ink/60" />
         </span>
@@ -286,7 +286,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   }
   if (kind === 'app-listing') {
     return (
-      <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 p-4">
+      <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 p-4">
         <div className="bg-white rounded-xl border border-ink/10 p-3 flex items-center gap-3">
           <span className="w-12 h-12 rounded-lg shrink-0" style={{ background: grad }} />
           <div className="flex-1 min-w-0">
@@ -294,7 +294,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
             <p className="text-xs text-ink/55 truncate">Mike Dudarenok · 4h 38m</p>
             <div className="mt-1.5 flex items-center gap-1.5">
               <span className="text-[10px] tabular-nums text-ink/50">CH 01</span>
-              <div className="flex-1 h-0.5 rounded-full bg-ink/[0.08]">
+              <div className="flex-1 h-0.5 rounded-full bg-ink/8">
                 <div className="w-0 h-full rounded-full bg-ink" />
               </div>
               <span className="text-[10px] tabular-nums text-ink/50">0%</span>
@@ -307,7 +307,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
   if (kind === 'complete') {
     return (
       <div
-        className="aspect-[2/1] rounded-2xl grid place-items-center text-center p-6"
+        className="aspect-2/1 rounded-2xl grid place-items-center text-center p-6"
         style={{ background: `${from}10` }}
       >
         <div>
@@ -335,7 +335,7 @@ function HandoffIllustration({ kind, app }: IllustrationProps) {
         <AndroidFiles app={app} />
       </PhoneFrame>
     );
-  return <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10" />;
+  return <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10" />;
 }
 
 function PhoneFrame({
@@ -346,11 +346,11 @@ function PhoneFrame({
   children: ReactNode;
 }) {
   return (
-    <div className="aspect-[2/1] rounded-2xl bg-canvas border border-ink/10 grid place-items-center p-4 overflow-hidden">
+    <div className="aspect-2/1 rounded-2xl bg-canvas border border-ink/10 grid place-items-center p-4 overflow-hidden">
       <div className="relative" style={{ width: 240, height: 380 }}>
         <div className="absolute inset-0 rounded-[34px] bg-ink shadow-float" />
         <div className="absolute inset-[3px] rounded-[31px] bg-ink" />
-        <div className="absolute inset-[6px] rounded-[28px] bg-white overflow-hidden flex flex-col">
+        <div className="absolute inset-[6px] rounded-xl bg-white overflow-hidden flex flex-col">
           <div className="h-7 px-5 flex items-center justify-between text-[10px] font-semibold text-ink/90 shrink-0">
             <span className="tabular-nums">9:41</span>
             <div className="flex items-center gap-1">
@@ -394,7 +394,7 @@ function IOSShareSheet({ app }: { app: ListenerApp }) {
   ];
   return (
     <div className="absolute inset-0 flex flex-col">
-      <div className="flex-1 bg-ink/[0.02] flex items-center justify-center text-[10px] text-ink/40">
+      <div className="flex-1 bg-ink/2 flex items-center justify-center text-[10px] text-ink/40">
         Files · Downloads
       </div>
       <div className="bg-white border-t border-ink/10 rounded-t-2xl shadow-float p-3 space-y-2">
@@ -499,7 +499,7 @@ function AndroidFiles({ app }: { app: ListenerApp }) {
         </div>
         {['Solway_Bay.m4b', 'Carricks_Compass_sample.m4a'].map((name, i) => (
           <div key={name} className="px-3 py-2.5 flex items-center gap-2 border-t border-ink/5">
-            <span className="w-8 h-8 rounded-md bg-ink/[0.06] grid place-items-center text-ink/40 text-[8px] font-bold shrink-0">
+            <span className="w-8 h-8 rounded-md bg-ink/6 grid place-items-center text-ink/40 text-[8px] font-bold shrink-0">
               {name.endsWith('m4b') ? 'M4B' : 'M4A'}
             </span>
             <div className="min-w-0 flex-1">

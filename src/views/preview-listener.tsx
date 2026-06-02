@@ -66,7 +66,7 @@ export function PreviewListenerView({
               </span>
               Listen to chapter one
             </button>
-            <button className="px-5 py-3 rounded-full bg-white/10 backdrop-blur-sm text-white hover:bg-white/20 text-sm font-medium inline-flex items-center gap-2 border border-white/20">
+            <button className="px-5 py-3 rounded-full bg-white/10 backdrop-blur-xs text-white hover:bg-white/20 text-sm font-medium inline-flex items-center gap-2 border border-white/20">
               <IconShare className="w-4 h-4" /> Copy link
             </button>
           </div>
@@ -91,7 +91,7 @@ export function PreviewListenerView({
             return (
               <div
                 key={ch.id}
-                className={`grid grid-cols-[40px_60px_1fr_180px_100px] items-center gap-4 px-5 py-4 ${free ? 'hover:bg-ink/[0.02]' : 'opacity-60'}`}
+                className={`grid grid-cols-[40px_60px_1fr_180px_100px] items-center gap-4 px-5 py-4 ${free ? 'hover:bg-ink/2' : 'opacity-60'}`}
               >
                 <button
                   onClick={() => {

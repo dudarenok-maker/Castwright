@@ -16,7 +16,8 @@
    larger than 50 MB would be the audio-heavy case; the limit can be
    raised per-deployment via a future env knob. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import multer from 'multer';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

@@ -699,6 +699,12 @@ export function ProfileDrawer({
     }
     setDesignBusy(true);
     setEngineError(null);
+    /* The A/B "current vs proposed" compare is only meaningful when the
+       character ALREADY has a designed bespoke voice to put on Side A. On a
+       FIRST design there is nothing to compare against, so fall back to the
+       one-shot "design & preview": design in place and play it. `designedVoiceId`
+       is non-null iff a bespoke voice already exists for this character. */
+    const isRedesign = designedVoiceId !== null;
     try {
       /* Pass the same cache identity the "Play 12s" player uses so the
          audition is rendered straight into the sample cache — designing here
@@ -707,12 +713,22 @@ export function ProfileDrawer({
         persona: trimmed,
         sampleVoiceId,
         modelKey: effectiveSampleModelKey,
-        preview: true,
+        /* Re-design stages a `…-preview` sibling so the live voice survives a
+           Cancel; first design has no live voice to protect, so design in place. */
+        preview: isRedesign,
       });
-      /* Open the A/B compare with the staged preview. Staging into the drawer
-         (designedVoiceId / persona) is deferred to the modal's approve, so
-         Cancel leaves the character's live voice untouched. */
-      setVoiceCompareInitial({ voiceId, previewUrl, persona: trimmed });
+      if (isRedesign) {
+        /* Open the A/B compare with the staged preview. Staging into the drawer
+           (designedVoiceId / persona) is deferred to the modal's approve, so
+           Cancel leaves the character's live voice untouched. */
+        setVoiceCompareInitial({ voiceId, previewUrl, persona: trimmed });
+      } else {
+        /* One-shot: stage the freshly designed voice straight into the drawer
+           and audition it (no compare modal — there's nothing to compare to). */
+        designPreviewUrlRef.current = previewUrl;
+        setDesignedVoiceId(voiceId);
+        await playback.play(previewUrl);
+      }
     } catch (e) {
       setEngineError((e as Error).message || 'Voice design failed.');
     } finally {
@@ -754,7 +770,7 @@ export function ProfileDrawer({
                       setNameError(null);
                     }
                   }}
-                  className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-ink/20 bg-white text-base font-bold text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0"
+                  className="flex-1 min-w-0 px-2 py-1 rounded-lg border border-ink/20 bg-white text-base font-bold text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[44px] sm:min-h-0"
                 />
                 <button
                   aria-label="Save name"
@@ -1077,12 +1093,12 @@ export function ProfileDrawer({
             )}
 
             <div className="mt-3 grid grid-cols-2 gap-2">
-              <button className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/[0.04] text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5">
+              <button className="px-3 py-2 rounded-xl border border-ink/10 hover:bg-ink/4 text-xs font-medium text-ink inline-flex items-center justify-center gap-1.5">
                 <IconStar className="w-3.5 h-3.5" /> Save to library
               </button>
               <button
                 onClick={() => onLock(character)}
-                className={`px-3 py-2 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 ${character.voiceState === 'locked' ? 'border-ink/30 bg-ink/[0.06] text-ink' : 'border-ink/10 hover:bg-ink/[0.04] text-ink'}`}
+                className={`px-3 py-2 rounded-xl border text-xs font-medium inline-flex items-center justify-center gap-1.5 ${character.voiceState === 'locked' ? 'border-ink/30 bg-ink/6 text-ink' : 'border-ink/10 hover:bg-ink/4 text-ink'}`}
               >
                 <IconLock className="w-3.5 h-3.5" />{' '}
                 {character.voiceState === 'locked' ? 'Locked' : 'Lock'}
@@ -1139,7 +1155,7 @@ export function ProfileDrawer({
                 <select
                   value={gender}
                   onChange={(e) => setGender(e.target.value as CharGender | '')}
-                  className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+                  className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
                 >
                   <option value="">— unset —</option>
                   {GENDER_OPTIONS.map((o) => (
@@ -1154,7 +1170,7 @@ export function ProfileDrawer({
                 <select
                   value={ageRange}
                   onChange={(e) => setAgeRange(e.target.value as CharAgeRange | '')}
-                  className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+                  className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
                 >
                   <option value="">— unset —</option>
                   {AGE_OPTIONS.map((o) => (
@@ -1247,7 +1263,7 @@ export function ProfileDrawer({
                             }
                           }}
                           placeholder="alias name"
-                          className="px-2 py-0.5 rounded-full border border-ink/20 bg-white text-[11px] text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 min-h-[28px] sm:min-h-0"
+                          className="px-2 py-0.5 rounded-full border border-ink/20 bg-white text-[11px] text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 min-h-[28px] sm:min-h-0"
                         />
                         <button
                           aria-label="Save alias"
@@ -1356,7 +1372,7 @@ export function ProfileDrawer({
                     aria-expanded={mergeTargetPickerOpen}
                     disabled={mergeBusy}
                     onClick={() => setMergeTargetPickerOpen((v) => !v)}
-                    className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+                    className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
                   >
                     <span
                       className={`truncate text-left flex-1 ${mergeTargetId ? '' : 'text-ink/50'}`}
@@ -1469,7 +1485,7 @@ export function ProfileDrawer({
                     aria-label="Downgrade to Unknown male"
                     disabled={mergeBusy}
                     onClick={() => void runMergeTo(UNKNOWN_MALE_ID)}
-                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/[0.04] text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
                   >
                     Unknown male
                   </button>
@@ -1477,7 +1493,7 @@ export function ProfileDrawer({
                     aria-label="Downgrade to Unknown female"
                     disabled={mergeBusy}
                     onClick={() => void runMergeTo(UNKNOWN_FEMALE_ID)}
-                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/[0.04] text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
+                    className="px-3 py-2 rounded-xl border border-ink/15 hover:border-ink/30 hover:bg-ink/4 text-xs font-medium text-ink/70 disabled:opacity-50 disabled:cursor-wait"
                   >
                     Unknown female
                   </button>
@@ -1819,7 +1835,7 @@ function ModelVoiceOverridePicker({
                 onClick={() => setEngineTab(engine)}
                 className={`px-3 py-1.5 text-[11px] font-medium rounded-lg transition-colors inline-flex items-center gap-1.5 ${
                   isCurrent
-                    ? 'bg-white text-ink shadow-sm'
+                    ? 'bg-white text-ink shadow-xs'
                     : 'text-ink/60 hover:text-ink hover:bg-white/60'
                 }`}
               >
@@ -1875,7 +1891,7 @@ function ModelVoiceOverridePicker({
                 value={previewText}
                 onChange={(e) => onPreviewTextChange(e.target.value)}
                 rows={2}
-                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 resize-y"
               />
               <span className="block text-[10px] text-ink/40 mt-1">
                 Saved across drawer opens. Edit once, audition many.
@@ -1962,7 +1978,7 @@ export function ToneSlider({ label, value, onChange, leftLabel, rightLabel }: To
           className="absolute inset-0 w-full opacity-0 cursor-pointer"
         />
         <span
-          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white border border-ink/30 shadow pointer-events-none"
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-white border border-ink/30 shadow-sm pointer-events-none"
           style={{ left: `${value}%` }}
         />
       </div>

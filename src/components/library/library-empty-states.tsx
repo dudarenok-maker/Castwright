@@ -39,17 +39,17 @@ export function LibrarySkeleton() {
   return (
     <div className="space-y-10" data-testid="library-skeleton" aria-hidden="true">
       <section>
-        <div className="h-6 w-40 rounded bg-ink/[0.06] animate-pulse mb-3" />
+        <div className="h-6 w-40 rounded bg-ink/6 animate-pulse mb-3" />
         <div className="mt-4 space-y-8">
           <div>
             <div className="flex items-baseline justify-between mb-3">
-              <div className="h-3 w-28 rounded bg-ink/[0.06] animate-pulse" />
-              <div className="h-3 w-14 rounded bg-ink/[0.04] animate-pulse" />
+              <div className="h-3 w-28 rounded bg-ink/6 animate-pulse" />
+              <div className="h-3 w-14 rounded bg-ink/4 animate-pulse" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse" />
-              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse" />
-              <div className="min-h-[180px] rounded-3xl bg-ink/[0.04] animate-pulse" />
+              <div className="min-h-[180px] rounded-3xl bg-ink/4 animate-pulse" />
+              <div className="min-h-[180px] rounded-3xl bg-ink/4 animate-pulse" />
+              <div className="min-h-[180px] rounded-3xl bg-ink/4 animate-pulse" />
             </div>
           </div>
         </div>

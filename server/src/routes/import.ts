@@ -14,7 +14,8 @@
        so the existing analysis pipeline keeps working, evicts the staging entry.
      Response: { bookId, manuscriptId, paths: { bookDir, manuscript, dotAudiobook } } */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { existsSync } from 'node:fs';

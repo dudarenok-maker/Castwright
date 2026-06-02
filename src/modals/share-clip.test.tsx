@@ -100,7 +100,7 @@ describe('ShareClipModal', () => {
     fireEvent.change(screen.getByTestId('share-clip-start-input'), {
       target: { value: '2:00' },
     });
-    /* End was 1:45 — start must clamp to end-1 = 1:44 */
+    /* End was 1:45 — start must clamp to inset-e-1 = 1:44 */
     const start = screen.getByTestId('share-clip-start-input') as HTMLInputElement;
     expect(start.value).toBe('1:44');
   });
