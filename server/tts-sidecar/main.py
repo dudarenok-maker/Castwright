@@ -1575,7 +1575,13 @@ async def _stop_design_idle_watchdog() -> None:
 #     have fired too late (private hits the cliff long before RSS reaches it).
 #     (This replaces the earlier "never self-exit" stance, correct ONLY before
 #     srv-15 added respawn — a bare exit used to just stall the run.)
-_MEM_WATCHDOG_INTERVAL = 60.0
+_MEM_WATCHDOG_INTERVAL = 60.0  # how often to LOG the memory line + run the reclaim
+# How often to SAMPLE + evaluate the ceilings — finer than the log cadence so a
+# transient committed spike between batches (the leak oscillates ~8→39 GB per
+# batch) is OBSERVED and trips the soft recycle promptly, instead of a
+# once-a-minute sample landing in a trough and missing it (the 2026-06-02 run
+# grazed the soft ceiling for minutes without ever flipping recycle_pending).
+_MEM_WATCHDOG_SAMPLE_INTERVAL = 15.0
 _mem_watchdog_task: "Optional[asyncio.Task[None]]" = None
 _restart_scheduled = False
 # srv-17c — drain-before-recycle. `_restart_pending` flips True the moment a
@@ -1851,9 +1857,15 @@ async def _memory_watchdog() -> None:
     warn_threshold = _mem_warn_threshold_mb()
     restart_threshold = _mem_restart_threshold_mb()
     soft_threshold = _mem_recycle_soft_threshold_mb()
+    # Rolling peaks across the (slower) log window — reported on the periodic log
+    # line so the operator sees how high committed/VRAM spiked between samples,
+    # even though the recycle DECISION is made per-sample below.
+    commit_peak = 0.0
+    vram_peak = 0.0
+    elapsed_since_log = 0.0
     while True:
         try:
-            await asyncio.sleep(_MEM_WATCHDOG_INTERVAL)
+            await asyncio.sleep(_MEM_WATCHDOG_SAMPLE_INTERVAL)
             mem = _process_mem()
             rss = mem.get("rss_mb", 0.0)
             if not rss:
@@ -1862,37 +1874,16 @@ async def _memory_watchdog() -> None:
             _vram_alloc, vram_reserved, vram_total = _cuda_vram_mb()
             vram_soft = _vram_recycle_soft_threshold_mb(vram_total)
             vram_hard = _vram_restart_threshold_mb(vram_total)
-            log.info(
-                "sidecar memory: rss=%.0fMB%s%s",
-                rss,
-                f" committed={commit:.0f}MB" if commit is not None else "",
-                f" vram_reserved={vram_reserved:.0f}/{vram_total:.0f}MB"
-                if vram_reserved is not None and vram_total is not None
-                else "",
-            )
-            # Loud, distinct alarm when reserved VRAM has already crossed the
-            # physical card: on Windows that means the NVIDIA "CUDA – Sysmem
-            # Fallback Policy" is mapping the overflow into host RAM, so the GPU
-            # thrashes over PCIe at ~100% util (RTF collapse) instead of OOM-ing.
-            # The hard branch below recycles us out of it, but the durable fix is
-            # to disable sysmem fallback for python.exe (see the sidecar README).
-            if (
-                vram_reserved is not None
-                and vram_total is not None
-                and vram_reserved > vram_total
-            ):
-                log.warning(
-                    "sidecar VRAM SPILL: reserved %.0fMB exceeds the %.0fMB card — "
-                    "NVIDIA sysmem fallback is mapping VRAM into host RAM (GPU is "
-                    "thrashing, not OOM-ing). Recycling will clear it; disable "
-                    "'CUDA – Sysmem Fallback Policy' for python.exe to prevent it.",
-                    vram_reserved, vram_total,
-                )
             # HARD ceilings first (host then VRAM) — recycling is the only
             # effective lever against the variable-shape leak / spilled pool, so
             # don't waste a tick on the futile soft reclaim once at a ceiling.
             # Host keys on committed-private (the OOM metric), falling back to RSS.
+            # Evaluated EACH sample (every _MEM_WATCHDOG_SAMPLE_INTERVAL) so a
+            # spike is caught promptly, not once a minute.
             recycle_metric = commit if commit is not None else rss
+            commit_peak = max(commit_peak, recycle_metric)
+            if vram_reserved is not None:
+                vram_peak = max(vram_peak, vram_reserved)
             if _should_restart(recycle_metric, restart_threshold):
                 _schedule_restart_exit(recycle_metric, restart_threshold)
                 continue
@@ -1924,16 +1915,52 @@ async def _memory_watchdog() -> None:
                         "boundary before the pool spills into host RAM. No exit here.",
                         vram_reserved, vram_soft, vram_hard, vram_total or 0.0,
                     )
-            if warn_threshold > 0 and rss >= warn_threshold:
-                await asyncio.to_thread(_reclaim_host_and_vram)
-                after = _process_mem().get("rss_mb", rss)
-                log.warning(
-                    "sidecar memory crossed %.0fMB (rss=%.0fMB) — forced "
-                    "gc+empty_cache reclaimed %.0fMB (now %.0fMB). If this "
-                    "recurs the leak is outliving model unload (expected for the "
-                    "variable-shape leak; the restart ceiling is the real guard).",
-                    warn_threshold, rss, rss - after, after,
+            # Throttled (every _MEM_WATCHDOG_INTERVAL): the memory log line, the
+            # VRAM-spill alarm, and the (heavier, mostly-futile) gc reclaim — none
+            # of which need to run on every fine sample.
+            elapsed_since_log += _MEM_WATCHDOG_SAMPLE_INTERVAL
+            if elapsed_since_log >= _MEM_WATCHDOG_INTERVAL:
+                elapsed_since_log = 0.0
+                log.info(
+                    "sidecar memory: rss=%.0fMB%s%s",
+                    rss,
+                    f" committed={commit:.0f}MB (peak {commit_peak:.0f}MB)"
+                    if commit is not None
+                    else "",
+                    f" vram_reserved={vram_reserved:.0f}/{vram_total:.0f}MB (peak {vram_peak:.0f}MB)"
+                    if vram_reserved is not None and vram_total is not None
+                    else "",
                 )
+                # Loud, distinct alarm when reserved VRAM has already crossed the
+                # physical card: on Windows that means the NVIDIA "CUDA – Sysmem
+                # Fallback Policy" is mapping the overflow into host RAM, so the GPU
+                # thrashes over PCIe at ~100% util (RTF collapse) instead of OOM-ing.
+                # The hard branch above recycles us out of it, but the durable fix is
+                # to disable sysmem fallback for python.exe (see the sidecar README).
+                if (
+                    vram_reserved is not None
+                    and vram_total is not None
+                    and vram_reserved > vram_total
+                ):
+                    log.warning(
+                        "sidecar VRAM SPILL: reserved %.0fMB exceeds the %.0fMB card — "
+                        "NVIDIA sysmem fallback is mapping VRAM into host RAM (GPU is "
+                        "thrashing, not OOM-ing). Recycling will clear it; disable "
+                        "'CUDA – Sysmem Fallback Policy' for python.exe to prevent it.",
+                        vram_reserved, vram_total,
+                    )
+                if warn_threshold > 0 and rss >= warn_threshold:
+                    await asyncio.to_thread(_reclaim_host_and_vram)
+                    after = _process_mem().get("rss_mb", rss)
+                    log.warning(
+                        "sidecar memory crossed %.0fMB (rss=%.0fMB) — forced "
+                        "gc+empty_cache reclaimed %.0fMB (now %.0fMB). If this "
+                        "recurs the leak is outliving model unload (expected for the "
+                        "variable-shape leak; the restart ceiling is the real guard).",
+                        warn_threshold, rss, rss - after, after,
+                    )
+                commit_peak = recycle_metric
+                vram_peak = vram_reserved if vram_reserved is not None else 0.0
         except asyncio.CancelledError:
             raise
         except Exception as e:  # a watchdog must never die on a transient error
