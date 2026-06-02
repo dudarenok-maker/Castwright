@@ -26,7 +26,8 @@
    src/store/cast-slice.ts `applyVoiceMatches` and only fires when at least
    one candidate is returned for a character. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import {
   scanLibraryCharacters,
   type LibraryCharacterRecord,

@@ -18,7 +18,8 @@
    list for a book outside any series so the modal can degrade to its
    anchor-only cast instead of treating it as an error. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 
 export const seriesCastRouter = Router();

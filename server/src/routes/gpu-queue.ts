@@ -9,7 +9,8 @@
    full state. A separate endpoint keeps each surface answering exactly
    one question. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 
 export const gpuQueueRouter = Router();
