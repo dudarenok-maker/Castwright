@@ -2983,6 +2983,14 @@ export interface components {
             createdAt: string;
             /** @description ISO timestamp once status leaves in_progress. */
             completedAt?: string | null;
+            /**
+             * @description srv-28 — non-fatal disk-space advisory, present only on the POST
+             *     201 response body when the pre-flight disk guard is in `warn` mode
+             *     and free space is tight. The build still proceeds; the export modal
+             *     surfaces this next to the queued job. Absent when the guard was ok /
+             *     off, and never present on a poll (GET) response.
+             */
+            warning?: string;
         };
         BookShareLink: {
             /**
