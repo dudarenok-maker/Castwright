@@ -189,7 +189,9 @@ export function VoiceEnginePicker({
             ) : (
               <>
                 <IconSparkle className="w-4 h-4" />
-                <span>Design &amp; compare</span>
+                {/* "compare" only when a bespoke voice already exists to put on
+                    Side A of the A/B; a first design just previews (no compare). */}
+                <span>{designedVoiceId ? 'Design & compare' : 'Design & preview'}</span>
               </>
             )}
           </button>
