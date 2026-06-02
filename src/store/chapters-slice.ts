@@ -273,6 +273,9 @@ export const chaptersSlice = createSlice({
               !done.has(c.slug) && c.generationState === 'failed'
                 ? c.generationRemediation
                 : undefined,
+            /* srv-27 — carry the advisory QA verdict for done chapters so the
+               "Suspect" badge survives a reload. */
+            audioQa: done.has(c.slug) ? c.audioQa : undefined,
             progress: done.has(c.slug) ? 1 : 0,
             characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
             /* Persist the user's per-chapter exclude choice across hydrate so
@@ -414,6 +417,10 @@ export const chaptersSlice = createSlice({
            is tolerated (older server before this field landed) — the
            chapter stays at its previously-hydrated value. */
         if (ev.audioModelKey) ch.audioModelKey = ev.audioModelKey;
+        /* srv-27 — stamp the advisory QA verdict so the "Suspect" badge can
+           appear the moment the Done pill flips, without a state.json reload.
+           Absent on an older server → leave the hydrated value. */
+        if (ev.audioQa) ch.audioQa = ev.audioQa;
         /* Duration fallback: chapter_assembling is the primary carrier,
            but it can be dropped between the server and this reducer
            (cross-book guard at line 309, plan-87 parallel-chapter

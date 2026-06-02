@@ -39,6 +39,8 @@ export type Revision = components['schemas']['Revision'];
    comparisons on twoPass === true — single-pass values are nominal
    target values, not real post-filter measurements. */
 export type ChapterLoudness = components['schemas']['ChapterLoudness'];
+/* srv-27 — advisory post-synthesis audio QA verdict. */
+export type ChapterQaVerdict = components['schemas']['ChapterQaVerdict'];
 export type DriftEvent = components['schemas']['DriftEvent'];
 export type TimelineEntry = components['schemas']['TimelineEntry'];
 export type MatchFactor = components['schemas']['MatchFactor'];
@@ -255,6 +257,9 @@ export interface BookStateJson {
     /** fs-19 — concrete "what to do about it" copy for the failure. Mirror of
         the server's BookStateJson type. */
     generationRemediation?: string;
+    /** srv-27 — advisory post-synthesis QA verdict for this chapter's audio.
+        Mirror of the server's BookStateJson type; drives the "Suspect" badge. */
+    audioQa?: ChapterQaVerdict;
   }>;
   coverGradient: [string, string];
   createdAt: string;

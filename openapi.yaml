@@ -2826,6 +2826,13 @@ components:
             for a state.json reload (which would otherwise let an
             engine-drift badge appear only after page navigation). See
             `docs/features/archive/35-engine-drift-detection.md`.
+        audioQa:
+          allOf:
+            - $ref: '#/components/schemas/ChapterQaVerdict'
+          description: |
+            srv-27 — Only on `chapter_complete` — the advisory post-synthesis
+            QA verdict, so the frontend can stamp a "Suspect" badge the moment
+            the Done pill flips without a state.json reload.
         errorReason: { type: string, nullable: true }
         errorCode:
           allOf:
@@ -3743,6 +3750,35 @@ components:
         - auth
         - unknown
 
+    ChapterQaVerdict:
+      type: object
+      description: |
+        srv-27 — advisory post-synthesis audio QA verdict for a rendered
+        chapter. ADVISORY only: a `suspect` status drives a badge but never
+        gates completion (the chapter still flips to done). Stamped at render
+        time and surfaced on the Chapter shape + the `chapter_complete` tick.
+      required: [status, reasons, measuredLufs, truePeakDb, durationSec, expectedSec, checkedAt]
+      properties:
+        status: { type: string, enum: [ok, suspect] }
+        reasons:
+          type: array
+          items: { type: string }
+          description: Human-readable reasons behind a `suspect` verdict; empty when ok.
+        measuredLufs:
+          type: number
+          nullable: true
+          description: Integrated loudness (LUFS) checked, or null when loudnorm was disabled.
+        truePeakDb:
+          type: number
+          nullable: true
+          description: True peak (dBTP) checked, or null when not measured.
+        durationSec: { type: number }
+        expectedSec:
+          type: number
+          nullable: true
+          description: Text-derived expected length (s), or null when no estimate was available.
+        checkedAt: { type: string, format: date-time }
+
     Chapter:
       type: object
       required: [id, title, duration, state, progress, characters]
@@ -3776,6 +3812,14 @@ components:
             fs-19 — concrete "what to do about it" copy for the last synthesis
             failure. Surfaced under the error reason on the failed chapter row.
             Absent on never-failed chapters; cleared on a successful render.
+        audioQa:
+          allOf:
+            - $ref: '#/components/schemas/ChapterQaVerdict'
+          nullable: true
+          description: |
+            srv-27 — advisory post-synthesis QA verdict for this chapter's
+            audio. Stamped on a successful render; drives the "Suspect" badge.
+            Absent on never-rendered / legacy chapters.
         excluded:
           {
             type: boolean,
