@@ -1148,6 +1148,12 @@ function ChapterRow({
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold text-rose-900">Synthesis failed</p>
             <p className="text-xs text-rose-800/90 mt-0.5 leading-relaxed">{chapter.errorReason}</p>
+            {/* fs-19 — concrete "what to do about it" line under the reason. */}
+            {chapter.generationRemediation && (
+              <p className="text-xs text-rose-700/80 mt-1.5 leading-relaxed">
+                <span className="font-semibold">What to do:</span> {chapter.generationRemediation}
+              </p>
+            )}
           </div>
           <button
             onClick={(e) => {
