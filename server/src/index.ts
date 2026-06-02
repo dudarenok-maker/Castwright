@@ -166,6 +166,8 @@ app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog
 app.use('/api/user/settings', userSettingsRouter); // GET + PUT — account defaults + non-secret env overrides
 import { upgradeRouter } from './routes/upgrade.js';
 app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
+import { infoRouter } from './routes/info.js';
+app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new state
 app.use('/api/library', libraryRouter);
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);

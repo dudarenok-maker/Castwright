@@ -423,6 +423,18 @@ def test_health_reports_protocol_version(kokoro_unloaded_client) -> None:
     assert isinstance(body["protocol_version"], int)
 
 
+def test_health_reports_version(kokoro_unloaded_client) -> None:
+    """/health carries __version__ (fs-1): the sidecar app version (from
+    version.py, rewritten in lockstep by bump-version.mjs) that the Node
+    server's GET /api/info surfaces next to the server appVersion. Distinct
+    from protocol_version, which gates stale-sidecar replacement."""
+    client, _engine = kokoro_unloaded_client
+    body = client.get("/health").json()
+    assert "__version__" in body
+    assert isinstance(body["__version__"], str)
+    assert body["__version__"] == main.__sidecar_version__
+
+
 def test_load_kokoro_engine_warms_kokoro(kokoro_unloaded_client) -> None:
     """POST /load with `engine: 'kokoro'` warms the Kokoro engine specifically
     and leaves Coqui alone. The response is the same `{ status: 'ready' }`
