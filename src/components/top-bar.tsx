@@ -3,7 +3,7 @@ import { IconArrowLeft, IconSpinner, IconClock, IconWarning } from '../lib/icons
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
 import { StatusPopover } from './status-popover';
-import { WorktreesRtfPill } from './worktrees-rtf-pill';
+import { AdminPill } from './admin-pill';
 import type { Stage, View } from '../lib/types';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
@@ -133,9 +133,9 @@ interface TopBarProps {
       (sourced from the account slice in the wrapping component), so it acts
       as the single discoverable entry-point to account settings. */
   onOpenAccount: () => void;
-  /** Plan 86 — optional dev-only entry to the worktree dashboard.
-      Production passes undefined; the chip is hidden when undefined. */
-  onOpenWorktrees?: () => void;
+  /** fs-18 — entry to the all-users Admin watch console. Always present now
+      (the dev-only worktree list lives inside the view). */
+  onOpenAdmin: () => void;
   /** Display name rendered as the avatar's initials. Sourced from the
       account slice — the persisted user-level value, with a built-in
       seed default. */
@@ -186,7 +186,7 @@ export function TopBar({
   onOpenVoices,
   onOpenChangelog,
   onOpenAccount,
-  onOpenWorktrees,
+  onOpenAdmin,
   userDisplayName,
   statusSummary,
   statusDetail,
@@ -279,9 +279,7 @@ export function TopBar({
           )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
-          {onOpenWorktrees && (
-            <WorktreesRtfPill onClick={onOpenWorktrees} active={stage === 'worktrees'} />
-          )}
+          <AdminPill onClick={onOpenAdmin} active={stage === 'admin'} />
           {(queueCount ?? 0) > 0 && onOpenQueue && (
             <button
               type="button"

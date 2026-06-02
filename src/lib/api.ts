@@ -4054,6 +4054,53 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
   return { depth: 0, inFlight: 0, max: 1 };
 }
 
+/* fs-18 — one-shot diagnostics board for the Admin watch console. Mirrors the
+   DiagnosticsResponse schema in openapi.yaml; see server/src/routes/diagnostics.ts.
+   Polled by the Admin view + the top-bar status dot (~30 s cadence). */
+export type DiagnosticsStatus = 'ok' | 'warn' | 'fail';
+export type DiagnosticsCheckId = 'gpu' | 'sidecar' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
+
+export interface DiagnosticsCheck {
+  id: DiagnosticsCheckId;
+  label: string;
+  status: DiagnosticsStatus;
+  detail: string;
+  value?: string | number | null;
+}
+
+export interface DiagnosticsResponse {
+  ts: string;
+  overall: DiagnosticsStatus;
+  checks: DiagnosticsCheck[];
+}
+
+async function realGetDiagnostics(): Promise<DiagnosticsResponse> {
+  const res = await fetch('/api/diagnostics');
+  if (!res.ok) {
+    throw new Error(`Diagnostics probe HTTP ${res.status}`);
+  }
+  return (await res.json()) as DiagnosticsResponse;
+}
+
+async function mockGetDiagnostics(): Promise<DiagnosticsResponse> {
+  /* Mocks have no real processes to probe — generation is local + synchronous
+     under VITE_USE_MOCKS=true. Return a contract-correct all-green board so the
+     Admin view + status dot render their healthy state in tests / demos. */
+  await wait(40);
+  return {
+    ts: '2026-01-01T00:00:00.000Z',
+    overall: 'ok',
+    checks: [
+      { id: 'gpu', label: 'GPU / VRAM', status: 'ok', detail: 'cuda · 1.2 / 8.0 GB reserved', value: '1.2/8.0 GB' },
+      { id: 'sidecar', label: 'TTS sidecar', status: 'ok', detail: 'reachable · kokoro, qwen', value: 'kokoro, qwen' },
+      { id: 'analyzer', label: 'Analyzer (Ollama)', status: 'ok', detail: 'reachable · model resident' },
+      { id: 'gemini', label: 'Analyzer (Gemini)', status: 'ok', detail: 'not in use' },
+      { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'ok', detail: 'both present' },
+      { id: 'disk', label: 'Free disk', status: 'ok', detail: '142 GB free', value: 142 },
+    ],
+  };
+}
+
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
@@ -4360,6 +4407,7 @@ const real = {
   pauseAnalysis: realPauseAnalysis,
   getSidecarHealth: realGetSidecarHealth,
   getGpuQueueState: realGetGpuQueueState,
+  getDiagnostics: realGetDiagnostics,
   getOllamaHealth: realGetOllamaHealth,
   loadSidecar: realLoadSidecar,
   unloadSidecar: realUnloadSidecar,
@@ -4560,6 +4608,7 @@ const mock = {
   pauseAnalysis: mockPauseAnalysis,
   getSidecarHealth: mockGetSidecarHealth,
   getGpuQueueState: mockGetGpuQueueState,
+  getDiagnostics: mockGetDiagnostics,
   getOllamaHealth: mockGetOllamaHealth,
   loadSidecar: mockLoadSidecar,
   unloadSidecar: mockUnloadSidecar,
