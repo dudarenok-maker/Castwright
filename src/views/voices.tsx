@@ -946,7 +946,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'}`}
+            className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${tab === t.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
           >
             {t.label}
           </button>
@@ -1165,7 +1165,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                     ? `Merge "${mergeSource?.name}" into "${mergeTarget.name}" — keeps "${mergeTarget.name}" as the survivor and stores "${mergeSource?.name}" as an alias`
                     : (mergeDisabledReason ?? undefined)
                 }
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed max-w-[14rem] truncate"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 disabled:opacity-40 disabled:cursor-not-allowed max-w-56 truncate"
               >
                 {mergeBusy ? 'Merging…' : mergeTarget ? `Merge into ${mergeTarget.name}` : 'Merge'}
               </button>
@@ -1179,7 +1179,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               <button
                 onClick={() => openDuplicateReview(selectionDuplicateCandidate)}
                 title="Same person across books — review and link, or mark as intentional variant"
-                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 max-w-[14rem] truncate"
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-canvas/15 text-canvas text-xs font-bold hover:bg-canvas/25 max-w-56 truncate"
               >
                 Review duplicate ↗
               </button>
@@ -1578,7 +1578,7 @@ function VoiceFamilySection({
           <button
             type="button"
             onClick={() => onPlay(family)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink/[0.04] hover:bg-ink/[0.08] text-xs font-medium text-ink transition-colors"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink/4 hover:bg-ink/8 text-xs font-medium text-ink transition-colors"
           >
             <IconPlay className="w-3.5 h-3.5" /> Audition base voice
           </button>
@@ -1592,7 +1592,7 @@ function VoiceFamilySection({
              series-scoped write propagates to the whole series. */
           const repBookId = sg.series ? representativeBookIdBySeries.get(sg.series) : undefined;
           return (
-            <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/[0.06]">
+            <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/6">
               {sg.series && (
                 <div className="flex items-center justify-between gap-3 mb-2 pl-2 flex-wrap">
                   <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/40">
@@ -1696,7 +1696,7 @@ function QwenStatusSection({
         {seriesGroups.map((sg) => {
           const repBookId = sg.series ? representativeBookIdBySeries.get(sg.series) : undefined;
           return (
-            <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/[0.06]">
+            <div key={sg.series ?? '~standalone'} className="pl-2 border-l-2 border-ink/6">
               {sg.series && (
                 <div className="flex items-center justify-between gap-3 mb-2 pl-2 flex-wrap">
                   <p className="text-[11px] uppercase tracking-wider font-semibold text-ink/40">
@@ -1890,7 +1890,7 @@ function TtsEngineModelPicker({ modelKey, onChange }: TtsEngineModelPickerProps)
             if (!nextGroup) return;
             onChange(nextGroup.models[0].id);
           }}
-          className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04] focus:outline-none focus:ring-2 focus:ring-magenta/30"
+          className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/4 focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           title={engineGroup.hint}
         >
           {TTS_ENGINES.map((g) => (
@@ -1905,7 +1905,7 @@ function TtsEngineModelPicker({ modelKey, onChange }: TtsEngineModelPickerProps)
         <select
           value={modelKey}
           onChange={(e) => onChange(e.target.value as TtsModelKey)}
-          className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04] focus:outline-none focus:ring-2 focus:ring-magenta/30"
+          className="px-3 py-2 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink hover:bg-ink/4 focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         >
           {engineGroup.models.map((m) => (
             <option key={m.id} value={m.id}>

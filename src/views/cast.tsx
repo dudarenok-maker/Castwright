@@ -490,7 +490,7 @@ export function CastView({
           <div
             role="status"
             data-testid="cast-qwen-language-banner"
-            className="w-full mb-4 p-4 rounded-3xl border border-purple-deep/20 bg-purple-deep/[0.05] flex items-center gap-4 text-left"
+            className="w-full mb-4 p-4 rounded-3xl border border-purple-deep/20 bg-purple-deep/5 flex items-center gap-4 text-left"
           >
             <span className="w-10 h-10 rounded-full bg-purple-deep/10 grid place-items-center text-purple-deep shrink-0">
               <IconAlertTri className="w-5 h-5" />
@@ -512,7 +512,7 @@ export function CastView({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search characters"
-              className="w-full min-h-[44px] pl-11 pr-4 py-2.5 rounded-full bg-white border border-ink/10 text-sm focus:outline-none focus:border-ink/30"
+              className="w-full min-h-[44px] pl-11 pr-4 py-2.5 rounded-full bg-white border border-ink/10 text-sm focus:outline-hidden focus:border-ink/30"
             />
           </div>
         </div>
@@ -537,7 +537,7 @@ export function CastView({
                   className={`min-h-[44px] sm:min-h-0 inline-flex items-center gap-1.5 px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
                     active
                       ? 'bg-ink text-canvas'
-                      : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/[0.04]'
+                      : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/4'
                   }`}
                 >
                   <span>{b.key}</span>
@@ -605,7 +605,7 @@ export function CastView({
                   }
                   onOpenProfile(c.id);
                 }}
-                className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-4 items-center text-left text-sm hover:bg-ink/[0.02] transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/[0.04]' : ''}`}
+                className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-4 items-center text-left text-sm hover:bg-ink/2 transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/4' : ''}`}
               >
                 <span
                   onClick={(e) => {
@@ -728,7 +728,7 @@ export function CastView({
                         ? 'bg-magenta/10 text-magenta cursor-wait'
                         : isPlayingThis
                           ? 'bg-magenta text-white hover:bg-magenta/90'
-                          : 'bg-ink/[0.06] text-ink/80 hover:bg-magenta/15 hover:text-magenta'
+                          : 'bg-ink/6 text-ink/80 hover:bg-magenta/15 hover:text-magenta'
                     }`}
                   >
                     {row?.loading ? (
@@ -799,7 +799,7 @@ export function CastView({
                   }
                   onOpenProfile(c.id);
                 }}
-                className={`bg-white rounded-2xl border border-ink/10 shadow-card p-4 flex flex-col gap-3 text-left cursor-pointer transition-colors ${isDropTarget ? 'drop-active' : ''} ${selected ? 'bg-peach/[0.04]' : ''}`}
+                className={`bg-white rounded-2xl border border-ink/10 shadow-card p-4 flex flex-col gap-3 text-left cursor-pointer transition-colors ${isDropTarget ? 'drop-active' : ''} ${selected ? 'bg-peach/4' : ''}`}
               >
                 <div className="flex items-start gap-3">
                   <button
@@ -928,7 +928,7 @@ export function CastView({
                         ? 'bg-magenta/10 text-magenta cursor-wait'
                         : isPlayingThis
                           ? 'bg-magenta text-white hover:bg-magenta/90'
-                          : 'bg-ink/[0.06] text-ink/80 hover:bg-magenta/15 hover:text-magenta'
+                          : 'bg-ink/6 text-ink/80 hover:bg-magenta/15 hover:text-magenta'
                     }`}
                   >
                     {row?.loading ? (

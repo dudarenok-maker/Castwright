@@ -82,7 +82,7 @@ export function RegenerateModal({
                   <button
                     key={r.id}
                     onClick={() => setReason(r.id)}
-                    className={`w-full text-left p-3 rounded-2xl border transition-all flex items-start gap-3 ${reason === r.id ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'}`}
+                    className={`w-full text-left p-3 rounded-2xl border transition-all flex items-start gap-3 ${reason === r.id ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
                   >
                     <span
                       className={`w-4 h-4 rounded-full border-2 grid place-items-center mt-0.5 shrink-0 ${reason === r.id ? 'border-peach' : 'border-ink/20'}`}
@@ -99,7 +99,7 @@ export function RegenerateModal({
                           value={note}
                           onChange={(e) => setNote(e.target.value)}
                           placeholder="What changed?"
-                          className="mt-2 w-full px-3 py-2 rounded-xl bg-white border border-ink/10 text-sm focus:outline-none focus:border-peach"
+                          className="mt-2 w-full px-3 py-2 rounded-xl bg-white border border-ink/10 text-sm focus:outline-hidden focus:border-peach"
                         />
                       )}
                     </span>
@@ -115,7 +115,7 @@ export function RegenerateModal({
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setScope('this')}
-                  className={`text-left p-3 rounded-2xl border transition-all ${scope === 'this' ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'}`}
+                  className={`text-left p-3 rounded-2xl border transition-all ${scope === 'this' ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
                 >
                   <p className="text-sm font-semibold text-ink">Just this chapter</p>
                   <p className="text-xs text-ink/55 mt-0.5">
@@ -124,7 +124,7 @@ export function RegenerateModal({
                 </button>
                 <button
                   onClick={() => setScope('forward')}
-                  className={`text-left p-3 rounded-2xl border transition-all ${scope === 'forward' ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 hover:border-ink/20'}`}
+                  className={`text-left p-3 rounded-2xl border transition-all ${scope === 'forward' ? 'border-peach bg-peach/6' : 'border-ink/10 hover:border-ink/20'}`}
                 >
                   <p className="text-sm font-semibold text-ink">This and all subsequent</p>
                   <p className="text-xs text-ink/55 mt-0.5">

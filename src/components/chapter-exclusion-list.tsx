@@ -112,7 +112,7 @@ export function ChapterExclusionList({
               return (
                 <label
                   key={ch.id}
-                  className="flex items-center gap-3 py-1.5 px-2 rounded-lg hover:bg-ink/[0.03] cursor-pointer"
+                  className="flex items-center gap-3 py-1.5 px-2 rounded-lg hover:bg-ink/3 cursor-pointer"
                 >
                   <input
                     type="checkbox"

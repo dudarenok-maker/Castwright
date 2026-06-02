@@ -415,7 +415,7 @@ function SearchPanel({
           <p className="text-sm text-red-700 mb-4">{state.message}</p>
           <button
             onClick={onRetry}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink hover:bg-ink/[0.04]"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/15 bg-white text-sm font-medium text-ink hover:bg-ink/4"
           >
             <IconRefresh className="w-4 h-4" /> Try again
           </button>
@@ -441,7 +441,7 @@ function SearchPanel({
               data-testid={`cover-candidate-${c.openLibraryId}`}
               onClick={() => onPick(c)}
               disabled={busy}
-              className={`group relative rounded-2xl overflow-hidden border bg-canvas aspect-[2/3] focus:outline-none transition-shadow ${submitting === c.openLibraryId ? 'border-magenta ring-2 ring-magenta/30' : 'border-ink/10 hover:shadow-card hover:border-ink/20'} disabled:cursor-not-allowed disabled:opacity-50`}
+              className={`group relative rounded-2xl overflow-hidden border bg-canvas aspect-2/3 focus:outline-hidden transition-shadow ${submitting === c.openLibraryId ? 'border-magenta ring-2 ring-magenta/30' : 'border-ink/10 hover:shadow-card hover:border-ink/20'} disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <img
                 src={c.coverUrl}
@@ -489,7 +489,7 @@ function UploadPanel({
           const f = e.dataTransfer.files?.[0];
           if (f) onPick(f);
         }}
-        className={`relative rounded-2xl border-2 border-dashed py-12 px-6 text-center transition-colors ${dragOver ? 'border-magenta bg-magenta/[0.04]' : 'border-ink/15 bg-canvas'} ${uploading ? 'opacity-70 pointer-events-none' : ''}`}
+        className={`relative rounded-2xl border-2 border-dashed py-12 px-6 text-center transition-colors ${dragOver ? 'border-magenta bg-magenta/4' : 'border-ink/15 bg-canvas'} ${uploading ? 'opacity-70 pointer-events-none' : ''}`}
       >
         <IconImage className="w-8 h-8 mx-auto text-ink/30" />
         <p className="mt-3 text-sm text-ink/70">Drag and drop a cover image here, or</p>
@@ -497,7 +497,7 @@ function UploadPanel({
           type="button"
           onClick={() => inputRef.current?.click()}
           disabled={uploading}
-          className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/20 bg-white text-sm font-semibold text-ink hover:bg-ink/[0.04] disabled:opacity-50"
+          className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/20 bg-white text-sm font-semibold text-ink hover:bg-ink/4 disabled:opacity-50"
         >
           {uploading ? 'Uploading…' : 'Choose file'}
         </button>
@@ -577,7 +577,7 @@ function FramePanel({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-[1fr,auto] gap-5 items-start">
+      <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-5 items-start">
         <div
           ref={boxRef}
           data-testid="frame-preview"
@@ -615,7 +615,7 @@ function FramePanel({
             type="button"
             data-testid="frame-reset"
             onClick={onReset}
-            className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-semibold text-ink hover:bg-ink/[0.04]"
+            className="mt-2 inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-semibold text-ink hover:bg-ink/4"
           >
             Reset framing
           </button>
@@ -629,7 +629,7 @@ function CoverGridSkeleton() {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3" aria-hidden>
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="rounded-2xl bg-ink/[0.06] aspect-[2/3] pulse-bar" />
+        <div key={i} className="rounded-2xl bg-ink/6 aspect-2/3 pulse-bar" />
       ))}
     </div>
   );

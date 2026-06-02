@@ -246,7 +246,7 @@ function DiffRow({ entry }: { entry: SentenceDiff }) {
   if (entry.type === 'delete') {
     return (
       <li
-        className="grid grid-cols-2 gap-4 text-sm px-3 py-1.5 rounded-lg bg-magenta/[0.06]"
+        className="grid grid-cols-2 gap-4 text-sm px-3 py-1.5 rounded-lg bg-magenta/6"
         data-testid="diff-row-delete"
       >
         <p className="text-ink/70">
@@ -262,7 +262,7 @@ function DiffRow({ entry }: { entry: SentenceDiff }) {
   const spans = charDiff(entry.oldText, entry.newText);
   return (
     <li
-      className="grid grid-cols-2 gap-4 text-sm px-3 py-1.5 rounded-lg bg-ink/[0.02]"
+      className="grid grid-cols-2 gap-4 text-sm px-3 py-1.5 rounded-lg bg-ink/2"
       data-testid="diff-row-replace"
     >
       <p className="text-ink/80" data-testid="diff-row-replace-old">

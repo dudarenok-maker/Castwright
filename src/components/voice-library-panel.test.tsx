@@ -277,7 +277,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         onToggleSelect={vi.fn()}
       />,
     );
-    /* The peach tint variant is `bg-peach/[0.04]` — same DOM rule as
+    /* The peach tint variant is `bg-peach/4` — same DOM rule as
        cast.tsx for the selected-row highlight. */
     expect(card.className).toMatch(/bg-peach/);
   });

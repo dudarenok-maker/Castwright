@@ -725,7 +725,7 @@ function CharacterToggleRow({
   return (
     <li>
       <label
-        className="flex items-center gap-3 p-3 rounded-2xl border border-ink/10 bg-white hover:bg-ink/[0.02] cursor-pointer min-h-[44px]"
+        className="flex items-center gap-3 p-3 rounded-2xl border border-ink/10 bg-white hover:bg-ink/2 cursor-pointer min-h-[44px]"
         data-testid={`rebaseline-row-${character.id}`}
       >
         <input
@@ -863,12 +863,12 @@ function ProposeStep({
                       type="button"
                       onClick={() => onPlayCurrent(character)}
                       data-testid={`rebaseline-play-current-${p.characterId}`}
-                      className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-ink/[0.06] text-ink/70 hover:text-ink text-[11px] font-medium min-h-[32px]"
+                      className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-ink/6 text-ink/70 hover:text-ink text-[11px] font-medium min-h-[32px]"
                     >
                       <IconPlay className="w-3 h-3" /> Audition
                     </button>
                   </div>
-                  <div className="rounded-xl border border-magenta/20 bg-magenta/[0.04] p-3">
+                  <div className="rounded-xl border border-magenta/20 bg-magenta/4 p-3">
                     <p className="text-[10px] uppercase tracking-wider font-semibold text-magenta/70 mb-1">
                       Proposed (Qwen)
                     </p>
@@ -922,7 +922,7 @@ function ProposeStep({
                             p.persona.trim().length === 0
                           }
                           data-testid={`rebaseline-redesign-${p.characterId}`}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold bg-ink/[0.06] text-ink/70 hover:text-ink disabled:opacity-40 disabled:cursor-wait min-h-[32px]"
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold bg-ink/6 text-ink/70 hover:text-ink disabled:opacity-40 disabled:cursor-wait min-h-[32px]"
                         >
                           <IconSparkle className="w-3 h-3" /> Re-design
                         </button>
@@ -944,7 +944,7 @@ function ProposeStep({
                       value={p.persona}
                       onChange={(e) => onPersonaChange(p.characterId, e.target.value)}
                       rows={2}
-                      className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+                      className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 resize-y"
                     />
                   </div>
                 )}

@@ -797,7 +797,7 @@ function MarkerDraftForm({ chapterId, sec, onCommit, onCancel }: MarkerDraftForm
         }}
         placeholder="Label (optional)…"
         data-testid="mini-player-marker-input"
-        className="flex-1 bg-transparent border-b border-canvas/20 text-sm text-canvas placeholder:text-canvas/30 focus:outline-none focus:border-canvas/60 py-1"
+        className="flex-1 bg-transparent border-b border-canvas/20 text-sm text-canvas placeholder:text-canvas/30 focus:outline-hidden focus:border-canvas/60 py-1"
       />
       <button
         type="submit"

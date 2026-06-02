@@ -724,7 +724,7 @@ describe('AccountView — Advanced (power-user) card (fe-2)', () => {
     expect(store.getState().settings.textScale).toBe('larger');
   });
 
-  it('commits a clamped autosave debounce on blur', () => {
+  it('commits a clamped autosave debounce on blur-sm', () => {
     const { store } = renderView();
     const input = screen.getByTestId('account-autosave-debounce');
     fireEvent.change(input, { target: { value: '2000' } });
