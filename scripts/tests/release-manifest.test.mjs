@@ -45,6 +45,11 @@ const INCLUDED = [
   'scripts/stop-app.mjs',
   'scripts/preflight-ffmpeg.cjs',
 
+  // fs-1 upgrade machinery (stable launcher + restarter + one-time setup)
+  'launch.mjs',
+  'scripts/restart-after-upgrade.mjs',
+  'scripts/setup-versioned-install.mjs',
+
   // Empty-dir markers stay so the runtime layout matches what the server expects
   'server/handoff/inbox/.gitkeep',
   'server/handoff/outbox/.gitkeep',

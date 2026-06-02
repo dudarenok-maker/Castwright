@@ -32,6 +32,10 @@ export const MANIFEST = {
     'INSTALL.md',
     '.gitignore',
 
+    // fs-1 — stable launcher for the versioned-dir install. Ships inside every
+    // release; setup-versioned-install.mjs copies it to the install root once.
+    'launch.mjs',
+
     // Frontend source + pre-built bundle
     'src/**',
     'dist/**',
@@ -53,6 +57,9 @@ export const MANIFEST = {
     'scripts/stop-app.mjs',
     'scripts/stop-app.ps1',
     'scripts/preflight-ffmpeg.cjs',
+    // fs-1 upgrade machinery the deployer/runtime needs.
+    'scripts/restart-after-upgrade.mjs',
+    'scripts/setup-versioned-install.mjs',
   ],
   exclude: [
     // Installed deps + venv (deployer runs npm ci / pip install).

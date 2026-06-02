@@ -237,15 +237,40 @@ The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android t
 
 ## Updating
 
-A new release is just a new zip — there's no in-app auto-update yet. Tracked as [`docs/BACKLOG.md`](docs/BACKLOG.md) MUST #1 (in-app upgrade pathway): when that ships, the five-step manual sequence below becomes a single click in the Account tab. For now, work the manual path.
+From **v1.6.0 onward, upgrading is one click in the Account tab** — open **Account → Application updates**, pick the new `audiobook-generator-vX.Y.Z.zip`, confirm the version delta, and the app stages, validates, swaps, reinstalls deps, migrates your book data (with an automatic backup first), and restarts itself. No terminal commands.
 
-1. `npm run stop:prod` in the existing install folder.
-2. Download the new `audiobook-generator-vX.Y.Z.zip`.
-3. Extract OVER the existing folder, or extract to a fresh folder and copy your `server/.env` across. Your account settings live in `~/.audiobook-generator/user-settings.json`, outside the install folder, so they carry over automatically. (Upgrading from a pre-1.4 install? The server migrates a legacy `server/user-settings.json` to that shared path automatically on first launch.)
-4. `npm ci && npm --prefix server ci` (catches any new deps).
-5. `npm run start:prod`.
+This works because 1.6.0 introduces a **versioned-directory layout**: each release lives in its own `releases/vX.Y.Z/` folder, a stable `launch.mjs` at the install root always runs the current one, and your data lives in shared siblings outside the release folders. An upgrade extracts the new release into a *fresh* folder and only flips a pointer once it's ready — the running version is never touched, so a failed upgrade just keeps running the old one.
 
-Your workspace (`WORKSPACE_DIR` from `server/.env`) is separate from the install folder and survives across upgrades unchanged.
+```
+<install>/
+  launch.mjs            <- start the app from here (shortcut / start-app.bat points at it)
+  .current-version      <- "1.6.0"
+  releases/v1.6.0/      <- the code (one extracted zip)
+  workspace/            <- your library (books, voices)
+  venv/  models/kokoro/ <- shared python venv + ~330 MB Kokoro weights
+  logs/  .run/
+```
+
+### One-time conversion when you adopt v1.6.0 (from v1.5.x)
+
+A v1.5.x install is a single flat checkout with none of this machinery, so the **jump into 1.6.0 is still manual** — run the bundled converter once:
+
+1. `npm run stop:prod` in your existing v1.5.x folder.
+2. Download and extract `audiobook-generator-v1.6.0.zip` to a temporary folder.
+3. From the extracted folder, dry-run the converter (prints exactly what it will move):
+   ```
+   node scripts/setup-versioned-install.mjs --install <new-install-dir> --from <old-v1.5.x-dir>
+   ```
+4. Re-run with `--apply` to execute. It creates `<new-install-dir>/releases/v1.6.0/`, writes the pointer, places `launch.mjs` at the root, and **moves** (not re-downloads) your `audiobook-workspace`, the sidecar `.venv`, and the Kokoro weights into the shared siblings.
+5. Start the app: `node <new-install-dir>/launch.mjs`.
+
+Your account settings live in `~/.audiobook-generator/user-settings.json` (outside any install folder) and carry over automatically; copy your old `server/.env` into `releases/v1.6.0/server/.env` if you had custom keys.
+
+**After this one-time step, every later upgrade is the one-click Account flow above** — the first self-upgrade you'll experience is 1.6.0 → 1.7.0. (1.6.0 ships the mechanism; it can't upgrade *into* itself.)
+
+### Manual fallback (any version)
+
+The in-app flow is just orchestration — you can always swap by hand: `npm run stop:prod`, extract the new release into a new `releases/vX.Y.Z/`, set `.current-version`, `npm ci && npm --prefix server ci`, then `node launch.mjs`. Your `workspace/`, `venv/`, and `models/` are untouched.
 
 ### v1.4.0 → v1.5.0 notes
 
