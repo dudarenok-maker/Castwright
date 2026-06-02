@@ -304,6 +304,17 @@ function ChapterListenRow({
                 <Pill color="library">Resume at {formatTime(resume.currentSec)}</Pill>
               )}
               <LoudnessBadge chapter={chapter} />
+              {/* srv-27 — advisory QA flag. Renders only when the rendered audio
+                  was flagged suspect; the reasons sit in the tooltip. */}
+              {chapter.state === 'done' && chapter.audioQa?.status === 'suspect' && (
+                <span
+                  className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+                  title={chapter.audioQa.reasons.join(' ')}
+                  data-testid={`chapter-row-${chapter.id}-qa-suspect`}
+                >
+                  Suspect
+                </span>
+              )}
             </span>
             <span className="block text-xs text-ink/50 truncate mt-0.5">
               With{' '}

@@ -68,7 +68,12 @@ import {
   writeChapterLufsFile,
   writeChapterPeaksFile,
 } from '../tts/mp3.js';
-import { DEFAULT_LOUDNORM_OPTIONS, type LoudnormOptions } from '../tts/loudnorm.js';
+import {
+  DEFAULT_LOUDNORM_OPTIONS,
+  type LoudnormOptions,
+  type LoudnormSidecarJson,
+} from '../tts/loudnorm.js';
+import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
 import { formatDuration } from '../audio/format-duration.js';
 import {
   synthesiseChapter,
@@ -478,6 +483,9 @@ interface ChapterSegmentsFile {
       because pre-existing segments files written before this field landed
       have no snapshots; the revisions route treats them as "no signal". */
   characterSnapshots?: Record<string, CharacterSnapshot>;
+  /** srv-27 — advisory post-synthesis QA verdict for this render. Optional;
+      absent on segments files written before the field landed. */
+  qa?: ChapterQaVerdict;
 }
 
 generationRouter.post('/:bookId/generation', async (req: Request, res: Response) => {
@@ -1091,6 +1099,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     }
 
     const totalLines = sentences.length;
+    /* srv-27 — expected audio length for the post-synthesis QA gate. ~14 chars
+       per second is a typical narration rate (≈150 wpm at ~5.5 chars/word incl.
+       spaces); used only as a coarse band (0.5×–2.5×) to flag truncated /
+       runaway renders, so the exact constant isn't load-bearing. */
+    const QA_CHARS_PER_SEC = 14;
+    const totalChars = sentences.reduce((sum, s) => sum + (s.text?.length ?? 0), 0);
+    const expectedSec = totalChars > 0 ? totalChars / QA_CHARS_PER_SEC : null;
+    /* Captured by the loudnorm onLoudnessMeasured callback below (post-norm
+       i/tp in two-pass mode); fed into the QA verdict in the assembly block. */
+    let loudnormStats: LoudnormSidecarJson | null = null;
     const initialTick = {
       chapterId: chapter.id,
       characterId: null,
@@ -1342,6 +1360,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         quality: 2,
         loudnorm,
         onLoudnessMeasured: async (stats) => {
+          /* srv-27 — stash the measured loudness for the QA verdict below. */
+          loudnormStats = stats;
           try {
             await writeChapterLufsFile(stats, lufsPath);
           } catch (err) {
@@ -1364,6 +1384,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          now separate dispatcher POSTs) never collide on the same temp
          path. */
       bumpProgress(); // encode (2-pass loudnorm) done — the long assembly step
+      /* srv-27 — ADVISORY post-synthesis QA. The chapter still completes; a
+         `suspect` verdict just drives a badge. `loudnormStats` is null when
+         loudnorm is disabled (only the duration check runs then); in two-pass
+         mode `i`/`tp` are post-normalisation values (see audio-qa.ts). */
+      const measured = loudnormStats as LoudnormSidecarJson | null;
+      const audioQa: ChapterQaVerdict = evaluateChapterQa({
+        durationSec: result.durationSec,
+        expectedSec,
+        lufs: measured ? measured.i : null,
+        truePeakDb: measured ? measured.tp : null,
+      });
+      if (audioQa.status === 'suspect') {
+        console.warn(
+          `[generation] chapter ${chapter.id} (${chapter.slug}) flagged SUSPECT by audio QA: ` +
+            audioQa.reasons.join(' '),
+        );
+      }
       const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
       await writeFile(tmpAudio, audioBuffer);
       /* Snapshot the cast character attributes for every character that
@@ -1421,6 +1458,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         synthesizedAt: new Date().toISOString(),
         segments: result.segments,
         characterSnapshots,
+        qa: audioQa,
       };
       /* Rollback preservation: rename the live `<slug>.mp3` +
          `.segments.json` to `.previous.*` BEFORE the new render lands.
@@ -1474,6 +1512,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                   duration: formatted,
                   audioModelKey: modelKey,
                   audioRenderedAt: segmentsFile.synthesizedAt,
+                  /* srv-27 — advisory QA verdict for the freshly-rendered audio
+                     so the failed/suspect badge survives a reload. */
+                  audioQa,
                   /* A successful render clears any stale persisted failure so
                      the chapter no longer hydrates as "Failed" after reload. */
                   generationState: undefined,
@@ -1549,6 +1590,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            the Listen view shows the real audio length by the time the
            Done pill flips, even if assembling was lost on the wire. */
         durationSec: result.durationSec,
+        /* srv-27 — advisory QA verdict so the frontend can stamp a "Suspect"
+           badge the moment the Done pill flips, without a state.json reload. */
+        audioQa,
       });
 
       /* srv-16 — server-authoritative completion. The chapter is rendered +
