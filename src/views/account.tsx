@@ -18,7 +18,7 @@ import type {
 import type { ThemePreference } from '../lib/use-theme';
 import { api } from '../lib/api';
 import { UpgradeCard } from '../components/upgrade-card';
-import { selectLibraryBooks } from '../store/library-slice';
+import { selectLibraryBooks, libraryActions } from '../store/library-slice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import {
@@ -941,6 +941,7 @@ function FieldRow({
    "Restore" (confirm-gated). Feedback is inline text — the Account view
    has no toast surface. */
 function BackupRestoreSection() {
+  const dispatch = useAppDispatch();
   const books = useAppSelector(selectLibraryBooks);
   const [bookId, setBookId] = useState<string>('');
   const [snapshots, setSnapshots] = useState<BackupSnapshot[]>([]);
@@ -1003,6 +1004,12 @@ function BackupRestoreSection() {
     try {
       await api.restoreBookBackup(bookId, file);
       setStatus(`Restored from ${file}.`);
+      /* srv-2 (#424) — a restore overwrites state.json, so the library's
+         cached metadata (title, cover, chapter counts) may now be stale.
+         Re-hydrate from the authoritative server scan so the library view
+         reflects the restored state. */
+      const refreshed = await api.getLibrary().catch(() => null);
+      if (refreshed) dispatch(libraryActions.hydrate(refreshed));
     } catch (e) {
       setError((e as Error).message);
     } finally {
