@@ -51,6 +51,7 @@ import {
   type EngineFamily,
 } from '../store/engines-in-use-selector';
 import { useTheme } from '../lib/use-theme';
+import { useAccessibilitySettings } from '../lib/use-accessibility-settings';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
@@ -880,6 +881,9 @@ export function Layout() {
      hydrate, OS scheme flip). Return value unused at this layer —
      the paint surface is CSS, not React. */
   useTheme();
+  /* fe-2 — apply device-local accessibility settings (high-contrast +
+     text-scale) to <html>, same single-mount shape as useTheme. */
+  useAccessibilitySettings();
   const priorRoster = bookId ? (priorRosterByBook.get(bookId) ?? []) : [];
   const ctx: LayoutContext = { showInfo, showError, pushToast, ttsLifecycle, priorRoster };
 
