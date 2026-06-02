@@ -18,14 +18,21 @@ import { Provider } from 'react-redux';
 import { MiniPlayer } from './mini-player';
 import type { Chapter, ChapterAudio } from '../lib/types';
 import { listenProgressSlice } from '../store/listen-progress-slice';
+import { settingsSlice } from '../store/settings-slice';
 
 /* Plan 53 — every MiniPlayer render now needs a Redux store
    because the component reads/writes the listen-progress slice for
    per-book playbackRate + markers. A fresh store per render keeps
-   the existing chapter-switch + plan-47 specs hermetic. */
+   the existing chapter-switch + plan-47 specs hermetic.
+   fe-23/fe-24 — the settings slice carries auto-advance + the skip
+   deltas; including it lets the continuity specs flip those without
+   relying on the optional-chained defaults. */
 function makeStore() {
   return configureStore({
-    reducer: { listenProgress: listenProgressSlice.reducer },
+    reducer: {
+      listenProgress: listenProgressSlice.reducer,
+      settings: settingsSlice.reducer,
+    },
   });
 }
 
@@ -543,5 +550,176 @@ describe('MiniPlayer — plan 125 live playhead → Redux', () => {
       unmount();
     });
     expect(store.getState().listenProgress.livePlayback).toBeNull();
+  });
+});
+
+describe('MiniPlayer — fe-24 skip forward/back', () => {
+  function makeAudioWithDuration(audioEl: HTMLAudioElement, durationSec: number) {
+    Object.defineProperty(audioEl, 'duration', { configurable: true, value: durationSec });
+  }
+  function seedCurrentTime(audioEl: HTMLAudioElement, sec: number) {
+    Object.defineProperty(audioEl, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: sec,
+    });
+  }
+  async function fireLoadedMetadata(audioEl: HTMLAudioElement) {
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('loadedmetadata'));
+    });
+  }
+
+  it('skip-forward advances currentTime by the configured delta (default 30 s)', async () => {
+    const store = makeStore();
+    const { container, getByTestId } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    makeAudioWithDuration(audioEl, 600);
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl);
+    /* Seed AFTER load — the audio.url effect resets currentTime to 0 on
+       every src swap, so a pre-load seed would be clobbered. */
+    seedCurrentTime(audioEl, 10);
+    await act(async () => {
+      getByTestId('mini-player-skip-forward').click();
+    });
+    expect(audioEl.currentTime).toBe(40);
+  });
+
+  it('skip-back from t=5 with delta 15 floors at 0', async () => {
+    const store = makeStore();
+    const { container, getByTestId } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    makeAudioWithDuration(audioEl, 600);
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl);
+    seedCurrentTime(audioEl, 5);
+    await act(async () => {
+      getByTestId('mini-player-skip-back').click();
+    });
+    expect(audioEl.currentTime).toBe(0);
+  });
+
+  it('skip-forward clamps at the chapter duration', async () => {
+    const store = makeStore();
+    const { container, getByTestId } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    makeAudioWithDuration(audioEl, 600);
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await fireLoadedMetadata(audioEl);
+    seedCurrentTime(audioEl, 590);
+    await act(async () => {
+      getByTestId('mini-player-skip-forward').click();
+    });
+    expect(audioEl.currentTime).toBe(600);
+  });
+});
+
+describe('MiniPlayer — fe-23 auto-advance onEnded matrix', () => {
+  /* Drive a fully-mounted player to the onEnded event, returning the
+     onNext spy + the audio element so each case can assert advance vs.
+     stop. The settings slice's autoAdvance flag is flipped via dispatch
+     before the event fires. */
+  async function mountAndEnd(opts: {
+    autoAdvance: boolean;
+    nextAvailable: boolean;
+    armEndOfChapter?: boolean;
+  }) {
+    const store = makeStore();
+    store.dispatch(settingsSlice.actions.setAutoAdvance(opts.autoAdvance));
+    const onNext = vi.fn();
+    const { container, getByTestId } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={onNext}
+          prevAvailable={false}
+          nextAvailable={opts.nextAvailable}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio') as HTMLAudioElement;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    if (opts.armEndOfChapter) {
+      /* Open the sleep menu + pick end-of-chapter so the onEnded path
+         sees a fired sleep timer. */
+      await act(async () => {
+        getByTestId('mini-player-sleep-toggle').click();
+      });
+      await act(async () => {
+        getByTestId('mini-player-sleep-option-end-of-chapter').click();
+      });
+    }
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('ended'));
+    });
+    return { onNext, audioEl };
+  }
+
+  it('autoAdvance=true + nextAvailable=true + sleep not fired → calls onNext and stays playing', async () => {
+    const { onNext, audioEl } = await mountAndEnd({ autoAdvance: true, nextAvailable: true });
+    expect(onNext).toHaveBeenCalledTimes(1);
+    /* `playing` stays true: the player effect calls play() (jsdom stub),
+       it never paused. The component never called setPlaying(false). */
+    expect(HTMLMediaElement.prototype.pause).not.toHaveBeenCalled();
+    expect(audioEl).not.toBeNull();
+  });
+
+  it('nextAvailable=false → does NOT call onNext (last chapter stops)', async () => {
+    const { onNext } = await mountAndEnd({ autoAdvance: true, nextAvailable: false });
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it('autoAdvance=false → does NOT call onNext', async () => {
+    const { onNext } = await mountAndEnd({ autoAdvance: false, nextAvailable: true });
+    expect(onNext).not.toHaveBeenCalled();
+  });
+
+  it('end-of-chapter sleep timer fired → does NOT call onNext (stops)', async () => {
+    const { onNext } = await mountAndEnd({
+      autoAdvance: true,
+      nextAvailable: true,
+      armEndOfChapter: true,
+    });
+    expect(onNext).not.toHaveBeenCalled();
   });
 });
