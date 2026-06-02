@@ -83,6 +83,8 @@ describe('spawnSidecar', () => {
       reachable: true,
       looksLikeSidecar: true,
       protocolVersion: 1,
+      committedMb: 9000, // a healthy fresh load — well under the adopt ceiling
+      recyclePending: false,
     }));
 
     const handle = await spawnSidecar({
@@ -110,6 +112,8 @@ describe('spawnSidecar', () => {
       reachable: true,
       looksLikeSidecar: true,
       protocolVersion: 1,
+      committedMb: 9000,
+      recyclePending: false,
     }));
     const onAdoptExisting = vi.fn();
 
@@ -142,6 +146,8 @@ describe('spawnSidecar', () => {
       reachable: true,
       looksLikeSidecar: false,
       protocolVersion: null,
+      committedMb: null,
+      recyclePending: false,
     }));
     const findPidFn = vi.fn(async () => 999);
 
@@ -171,6 +177,8 @@ describe('spawnSidecar', () => {
       reachable: true,
       looksLikeSidecar: true,
       protocolVersion: null, // stale: pre-side-8 build omits protocol_version
+      committedMb: null,
+      recyclePending: false,
     }));
     const findPidFn = vi.fn(async () => null);
 
@@ -190,7 +198,7 @@ describe('spawnSidecar', () => {
 
     expect(handle).toBeNull();
     expect(spawnFn).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('STALE sidecar'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('UNFIT sidecar'));
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('could not identify the PID'));
   });
 
@@ -205,6 +213,8 @@ describe('spawnSidecar', () => {
         reachable: true,
         looksLikeSidecar: true,
         protocolVersion: null, // stale
+        committedMb: null,
+        recyclePending: false,
       }));
       const findPidFn = vi.fn(async () => 68624);
 
@@ -231,11 +241,104 @@ describe('spawnSidecar', () => {
       });
 
       /* Replaced: taskkill'd the stale PID, then spawned the current build. */
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('STALE sidecar'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('UNFIT sidecar'));
       expect(calls[0]).toEqual({ cmd: 'taskkill', args: ['/PID', '68624', '/T', '/F'] });
       expect(calls[1].cmd).toBe('powershell.exe');
       expect(handle).not.toBeNull();
       expect(log).toHaveBeenCalledWith(expect.stringContaining('replaced stale sidecar'));
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it('replaces a leak-saturated adopt target (committed over the ceiling) with a fresh process', async () => {
+    /* 2026-06-02 "stuck after restart": the restart adopted an orphan at ~26 GB
+       committed (fresh load ~10 GB) and wedged. A protocol-fresh but
+       leak-saturated sidecar must be killed + respawned, not adopted. */
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      probeFn.mockResolvedValueOnce(true).mockResolvedValue(false);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1, // protocol is current...
+        committedMb: 26000, // ...but it's leak-saturated (≥ 20 GB default ceiling)
+        recyclePending: false,
+      }));
+      const findPidFn = vi.fn(async () => 4242);
+      const onAdoptExisting = vi.fn();
+      const calls: Array<{ cmd: string; args: string[] }> = [];
+      const trackingSpawn = vi.fn((cmd: string, args: string[]) => {
+        calls.push({ cmd, args });
+        const child = makeFakeChild();
+        if (cmd === 'taskkill') setImmediate(() => child.emit('exit', 0, null));
+        return child;
+      });
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'qwen3-tts-0.6b',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+        onAdoptExisting,
+      });
+
+      expect(onAdoptExisting).not.toHaveBeenCalled(); // NOT adopted
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('UNFIT sidecar'));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('leak-saturated'));
+      expect(calls[0]).toEqual({ cmd: 'taskkill', args: ['/PID', '4242', '/T', '/F'] });
+      expect(handle).not.toBeNull(); // fresh process spawned
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it('replaces an adopt target that reports recycle_pending', async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      probeFn.mockResolvedValueOnce(true).mockResolvedValue(false);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1,
+        committedMb: 12000, // below the ceiling, but...
+        recyclePending: true, // ...it's about to self-recycle
+      }));
+      const findPidFn = vi.fn(async () => 7777);
+      const onAdoptExisting = vi.fn();
+      const trackingSpawn = vi.fn((cmd: string) => {
+        const child = makeFakeChild();
+        if (cmd === 'taskkill') setImmediate(() => child.emit('exit', 0, null));
+        return child;
+      });
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'qwen3-tts-0.6b',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+        onAdoptExisting,
+      });
+
+      expect(onAdoptExisting).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('recycle_pending'));
+      expect(handle).not.toBeNull();
     } finally {
       Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
     }
