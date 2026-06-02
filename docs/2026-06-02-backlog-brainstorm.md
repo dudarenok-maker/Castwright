@@ -5,12 +5,13 @@ A one-pass brainstorm that added **29 net-new backlog items** (issues
 across five lenses. Every item was checked as **net-new or an explicit extension** of an
 existing backlog item before filing — nothing here re-lists something already queued.
 
-**Status:** all 29 are filed as GitHub issues and listed in
-[`docs/BACKLOG.md`](BACKLOG.md) under a dated subsection of **Should**, labelled
-`moscow:should` as a **placeholder**. They have **not** been ranked against the rest of
-the backlog yet. This doc is the durable context for the upcoming **whole-backlog
-priority pass**; once that pass re-buckets these into their real MoSCoW slots, this
-snapshot is superseded by `docs/BACKLOG.md` and can be archived.
+**Status (updated 2026-06-02):** the whole-backlog **priority pass ran in this same PR**.
+The 29 items are now distributed into their real MoSCoW slots in
+[`docs/BACKLOG.md`](BACKLOG.md) (8 → Should, 21 → Could; `side-13`→Could gates the sharing
+cluster), with their GitHub `moscow:` labels updated to match. The same pass promoted
+`side-11`→Must and `srv-2`→Should and demoted `fe-1`/`fe-5`→Could. **`docs/BACKLOG.md` is
+now authoritative for bucket + rank** — this snapshot is **superseded** and kept only as
+the lens-grouped rationale + dependency-ordering record for the sharing cluster (E1–E5).
 
 Size key: **S** ≈ ½–1 day · **M** ≈ one PR · **L** ≈ its own plan (filed with `needs-plan`).
 
