@@ -62,8 +62,8 @@ const AccountView = lazy(() =>
 const RestructureView = lazy(() =>
   import('../views/restructure').then((m) => ({ default: m.RestructureView })),
 );
-const WorktreesView = lazy(() =>
-  import('../views/worktrees').then((m) => ({ default: m.WorktreesView })),
+const AdminView = lazy(() =>
+  import('../views/admin').then((m) => ({ default: m.AdminView })),
 );
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
@@ -310,12 +310,12 @@ function AccountRoute() {
   return <AccountView />;
 }
 
-/* Plan 86 — dev-only worktree dashboard. The route exists in all builds
-   (so the back-button doesn't crash if a user manually types it) but the
-   top-bar entry is hidden in production and the server route 404s. */
-function WorktreesRoute() {
-  useHydrateStage({ kind: 'worktrees' }, []);
-  return <WorktreesView />;
+/* fs-18 — all-users Admin watch console (was the dev-only Worktrees route,
+   plan 86). The view is shown to everyone; the git-worktree list inside it
+   stays gated behind import.meta.env.DEV. */
+function AdminRoute() {
+  useHydrateStage({ kind: 'admin' }, []);
+  return <AdminView />;
 }
 
 export function ChangelogRoute() {
@@ -878,7 +878,9 @@ export const router = createHashRouter([
       { path: 'voices', element: <VoicesRoute /> },
       { path: 'log', element: <ChangelogRoute /> },
       { path: 'account', element: <AccountRoute /> },
-      { path: 'worktrees', element: <WorktreesRoute /> },
+      { path: 'admin', element: <AdminRoute /> },
+      /* Inbound alias for old dev bookmarks; stageToHash canonicalises to #/admin. */
+      { path: 'worktrees', element: <AdminRoute /> },
       { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },
       { path: 'books/:bookId/confirm', element: <ConfirmRoute /> },
       { path: 'books/:bookId/:view', element: <ReadyRoute /> },
