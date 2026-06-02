@@ -41,6 +41,7 @@ import type {
   BaseVoice,
   TtsEngine,
   ChapterLoudness,
+  ResourceTelemetryRecord,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
@@ -4631,6 +4632,21 @@ const real = {
     }
     return res.json();
   },
+  /* fs-20 — per-run resource telemetry for the Admin trend panel (GET
+     /api/generation/telemetry). Newest-first; empty when nothing recorded. */
+  getResourceTelemetry: async (
+    limit?: number,
+  ): Promise<{ records: ResourceTelemetryRecord[] }> => {
+    const qs = limit != null ? `?limit=${encodeURIComponent(limit)}` : '';
+    const res = await fetch(`/api/generation/telemetry${qs}`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(
+        `Resource telemetry fetch failed (${res.status}): ${detail || res.statusText}`,
+      );
+    }
+    return res.json();
+  },
 };
 
 const mock = {
@@ -4785,7 +4801,34 @@ const mock = {
       recentChapters,
     };
   },
+  /* fs-20 — mock per-run resource telemetry. Mirrors the throughput mock's
+     newest-first shape; VRAM climbs slightly across the run so the trend
+     panel's sparkline has a visible slope in mock mode. */
+  getResourceTelemetry: async (
+    limit?: number,
+  ): Promise<{ records: ResourceTelemetryRecord[] }> => {
+    const records: ResourceTelemetryRecord[] = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map(
+      (rtf, i) => ({
+        at: new Date(Date.parse('2026-06-01T09:00:00Z') + (6 - i) * 9 * 60_000).toISOString(),
+        bookId: 'mock-book',
+        chapterId: 7 - i,
+        title: `Chapter ${7 - i}`,
+        modelKey: 'qwen3-tts-0.6b',
+        rtf,
+        audioSec: 600,
+        wallSec: Math.round(600 * rtf),
+        vramReservedMb: 3000 + i * 120,
+        vramTotalMb: 8192,
+        committedHostMb: 4000 + i * 200,
+      }),
+    );
+    return { records: limit != null ? records.slice(0, limit) : records };
+  },
 };
+
+/* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
+   record type from the same `../lib/api` surface as the other admin types. */
+export type { ResourceTelemetryRecord } from './types';
 
 /** One finished chapter's own throughput, for the dev Worktrees throughput
     table. `rtf` is synth-wall ÷ audio (< 1 = faster than realtime) or null when

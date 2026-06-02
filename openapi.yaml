@@ -1808,6 +1808,31 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/GpuQueueState' }
 
+  /api/generation/telemetry:
+    get:
+      summary: Per-run resource telemetry for the Admin trend panel (fs-20)
+      operationId: getResourceTelemetry
+      description: |
+        Returns per-chapter resource telemetry — RTF + audio/wall seconds
+        alongside the GPU (reserved/total VRAM) and host-RAM figures captured
+        right after each chapter rendered — NEWEST-FIRST. Backs the Admin
+        console's "Resource trends" panel so the operator can watch resource
+        pressure climb across a long run (the slow creep that precedes a VRAM
+        spill / host OOM). Best-effort store (workspace JSONL, capped); a read
+        failure yields an empty list rather than a 500.
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: Cap the number of (newest-first) records returned.
+      responses:
+        '200':
+          description: Per-run resource telemetry, newest-first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceTelemetryResponse' }
+
   /api/diagnostics:
     get:
       summary: One-shot health board for the Admin watch console (fs-18)
@@ -4060,6 +4085,40 @@ components:
           type: integer
           minimum: 1
           description: "Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU."
+
+    # --- Per-run resource telemetry (fs-20) ---------------------------
+    ResourceTelemetryRecord:
+      type: object
+      required:
+        [at, bookId, chapterId, title, modelKey, rtf, audioSec, wallSec, vramReservedMb, vramTotalMb, committedHostMb]
+      description: |
+        One per-chapter telemetry sample captured right after a chapter
+        rendered: throughput (RTF, audio/wall seconds) + GPU and host-RAM
+        figures from a best-effort sidecar /health probe (null when the probe
+        timed out / the sidecar was down).
+      properties:
+        at: { type: string, format: date-time }
+        bookId: { type: string, nullable: true }
+        chapterId:
+          oneOf:
+            - type: integer
+            - type: string
+        title: { type: string, nullable: true }
+        modelKey: { type: string, nullable: true }
+        rtf: { type: number, nullable: true, description: 'synth wall ÷ audio (< 1 = faster than realtime).' }
+        audioSec: { type: number }
+        wallSec: { type: number }
+        vramReservedMb: { type: number, nullable: true }
+        vramTotalMb: { type: number, nullable: true }
+        committedHostMb: { type: number, nullable: true }
+
+    ResourceTelemetryResponse:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceTelemetryRecord' }
 
     # --- Admin diagnostics board (fs-18) ------------------------------
     DiagnosticsCheck:

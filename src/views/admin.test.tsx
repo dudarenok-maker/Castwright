@@ -2,15 +2,26 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import { AdminView } from './admin';
 import { api } from '../lib/api';
-import type { GenerationStatsResponse, RecentChapter, DiagnosticsResponse } from '../lib/api';
+import type {
+  GenerationStatsResponse,
+  RecentChapter,
+  DiagnosticsResponse,
+  ResourceTelemetryRecord,
+} from '../lib/api';
 
 vi.mock('../lib/api', () => ({
-  api: { getWorktrees: vi.fn(), getGenerationStats: vi.fn(), getDiagnostics: vi.fn() },
+  api: {
+    getWorktrees: vi.fn(),
+    getGenerationStats: vi.fn(),
+    getDiagnostics: vi.fn(),
+    getResourceTelemetry: vi.fn(),
+  },
 }));
 
 const mockWorktrees = vi.mocked(api.getWorktrees);
 const mockStats = vi.mocked(api.getGenerationStats);
 const mockDiag = vi.mocked(api.getDiagnostics);
+const mockTelemetry = vi.mocked(api.getResourceTelemetry);
 
 const idleStats: GenerationStatsResponse = {
   chapters: 0,
@@ -53,11 +64,27 @@ const chapter = (over: Partial<RecentChapter>): RecentChapter => ({
   ...over,
 });
 
+const telemetry = (over: Partial<ResourceTelemetryRecord>): ResourceTelemetryRecord => ({
+  at: '2026-06-01T09:00:00Z',
+  bookId: 'book-a',
+  chapterId: 1,
+  title: 'Chapter 1',
+  modelKey: 'qwen3-tts-0.6b',
+  rtf: 1.2,
+  audioSec: 600,
+  wallSec: 720,
+  vramReservedMb: 3200,
+  vramTotalMb: 8192,
+  committedHostMb: 4096,
+  ...over,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockWorktrees.mockResolvedValue({ worktrees: [] });
   mockStats.mockResolvedValue(idleStats);
   mockDiag.mockResolvedValue(healthyBoard);
+  mockTelemetry.mockResolvedValue({ records: [] });
 });
 
 afterEach(() => {
@@ -192,5 +219,41 @@ describe('AdminView — generation throughput table', () => {
     render(<AdminView />);
     await screen.findByTestId('generation-throughput-table');
     expect(screen.queryByTestId('throughput-summary')).toBeNull();
+  });
+});
+
+describe('AdminView — fs-20 resource trends panel', () => {
+  it('renders a row per telemetry record incl. RTF + wall + VRAM columns, plus a sparkline', async () => {
+    mockTelemetry.mockResolvedValue({
+      records: [
+        telemetry({ chapterId: 3, title: 'Gamma', rtf: 2.1, wallSec: 1260, vramReservedMb: 3600 }),
+        telemetry({ chapterId: 2, title: 'Beta', rtf: 1.4, wallSec: 840, vramReservedMb: 3300 }),
+        telemetry({ chapterId: 1, title: 'Alpha', rtf: 1.0, wallSec: 600, vramReservedMb: 3000 }),
+      ],
+    });
+    render(<AdminView />);
+
+    const panel = await screen.findByTestId('resource-trends');
+    const rows = within(panel).getAllByTestId(/^resource-row-/);
+    expect(rows.map((r) => r.getAttribute('data-testid'))).toEqual([
+      'resource-row-3',
+      'resource-row-2',
+      'resource-row-1',
+    ]);
+    /* RTF + VRAM columns render. */
+    expect(within(rows[0]).getByText('2.10')).toBeInTheDocument();
+    expect(within(rows[0]).getByText(/3\.5 \/ 8\.0 GB/)).toBeInTheDocument();
+    /* Wall-time column (sm+) renders the formatted duration (1260s = 21:00). */
+    expect(within(rows[0]).getByText('21:00')).toBeInTheDocument();
+    /* Hand-rolled sparkline present (>= 2 points). */
+    expect(within(panel).getByTestId('resource-rtf-sparkline')).toBeInTheDocument();
+  });
+
+  it('shows the empty-state copy when no telemetry has been recorded', async () => {
+    mockTelemetry.mockResolvedValue({ records: [] });
+    render(<AdminView />);
+    await waitFor(() => expect(mockTelemetry).toHaveBeenCalled());
+    expect(screen.queryByTestId('resource-trends')).toBeNull();
+    expect(screen.getByText(/No telemetry recorded yet/i)).toBeInTheDocument();
   });
 });
