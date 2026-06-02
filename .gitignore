@@ -3,6 +3,8 @@ node_modules/
 dist/
 .vite/
 *.tsbuildinfo
+# fs-1 — generated at release time by build-release-zip.mjs (from the tag body)
+RELEASE_NOTES.md
 
 # Env
 .env

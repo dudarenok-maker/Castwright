@@ -30,6 +30,9 @@ const LOAD_TIMEOUT_MS = 90_000;
 
 interface SidecarHealthBody {
   engines?: string[];
+  /* fs-1 — sidecar app version (server/tts-sidecar/version.py), surfaced by
+     /api/info next to the server version. Absent on an older sidecar → null. */
+  __version__?: string;
   model_loaded?: boolean;
   loading?: boolean;
   /* Kokoro mirrors the Coqui pair. Distinct names (not a generic map) so

@@ -62,6 +62,14 @@ LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 # server. (Plan 135 / side-8 — stale-sidecar incident 2026-05-29.)
 SIDECAR_PROTOCOL_VERSION = 1
 
+# fs-1 — informational app version, surfaced in /health for the Node /api/info.
+# Rewritten in lockstep with the package.jsons by scripts/bump-version.mjs. A
+# fresh clone / older sidecar without version.py falls back to "0.0.0".
+try:
+    from version import __version__ as __sidecar_version__
+except Exception:  # pragma: no cover - version.py always ships in a release
+    __sidecar_version__ = "0.0.0"
+
 logging.basicConfig(
     level=logging.INFO,
     format=LOG_FORMAT,
@@ -2255,6 +2263,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "protocol_version": SIDECAR_PROTOCOL_VERSION,
+        "__version__": __sidecar_version__,
         "engines": sorted(ENGINES.keys()),
         "model_loaded": model_loaded,
         "loading": loading,
