@@ -221,6 +221,61 @@ def test_design_voice_falls_back_to_calibration_pangram_when_unset(fake_qwen_run
     assert engine._base.clone_calls[-1][0] == [engine.CALIBRATION_TEXT]
 
 
+# ── design-model race / idle-watchdog (2026-06-02 regression) ────────────
+
+def test_design_voice_survives_design_model_freed_in_the_gap(
+    fake_qwen_runtime, monkeypatch
+) -> None:
+    """The idle watchdog (or a concurrent /synthesize's unload_design) can null
+    `_design` in the unguarded window between `_ensure_design_loaded()` and the
+    `_synth_lock` forward. design_voice used to crash there with
+    "'NoneType' object has no attribute 'generate_voice_design'". The fix
+    re-ensures the model UNDER the lock, so the design completes regardless of a
+    free landing in the gap.
+
+    We simulate the free deterministically (no threads): wrap `_ensure_base_loaded`
+    — which runs in that gap — to null `_design` on its FIRST call only (the
+    pre-lock ensure), leaving the re-ensure inside the lock to reload it."""
+    engine = fake_qwen_runtime["engine"]
+    orig_ensure_base = engine._ensure_base_loaded
+    fired = {"n": 0}
+
+    def racing_ensure_base() -> None:
+        orig_ensure_base()
+        if fired["n"] == 0:  # only the pre-lock ensure, not the in-lock re-ensure
+            fired["n"] += 1
+            engine._design = None  # a watchdog free lands in the gap
+
+    monkeypatch.setattr(engine, "_ensure_base_loaded", racing_ensure_base)
+
+    # Must NOT raise AttributeError: 'NoneType' … generate_voice_design.
+    result = engine.design_voice("dex", "a witty teenage boy", "English", None)
+
+    assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
+    assert result.sample_rate == 24000
+    assert fired["n"] == 1  # the model really was nulled in the gap …
+    assert engine._design is not None  # … and re-ensured under the lock
+
+
+def test_watchdog_does_not_free_design_while_in_flight(fake_qwen_runtime) -> None:
+    """`maybe_free_idle_design` must refuse to free the VoiceDesign model while a
+    design is in flight (`_design_in_flight` > 0), even past the idle TTL — the
+    plan-161 race where a long compare-modal dwell crosses the TTL mid-design.
+    Once nothing is in flight, an idle model is freed as before."""
+    engine = fake_qwen_runtime["engine"]
+    engine._ensure_design_loaded()
+    assert engine._design is not None
+    engine._design_last_used = 0.0  # ancient → past any ttl
+
+    engine._design_in_flight = 1
+    assert engine.maybe_free_idle_design(0.0) is False
+    assert engine._design is not None  # NOT freed while a design is in flight
+
+    engine._design_in_flight = 0
+    assert engine.maybe_free_idle_design(0.0) is True
+    assert engine._design is None  # freed once idle AND not in flight
+
+
 def test_synthesize_reuses_cached_voice(fake_qwen_runtime) -> None:
     engine = fake_qwen_runtime["engine"]
     engine.design_voice("biana", "a bright, confident teenage girl", "English", None)
