@@ -9,7 +9,8 @@
    atomically writes the matching JSON file. Used by the persistence
    middleware in Phase 5. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { mkdir, readFile, readdir, rm, rmdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';

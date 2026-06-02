@@ -25,7 +25,8 @@
    boundary; ffmpeg writes to stdout (pipe:1) which we pipe straight
    into the response. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { spawn } from 'node:child_process';
 import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';

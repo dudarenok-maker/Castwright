@@ -5,7 +5,8 @@
    so a repeat click is instant and engine-specific. Encoded to MP3 via the
    same `encodePcmToAudio` boundary used by chapter audio (plan 28). */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import {

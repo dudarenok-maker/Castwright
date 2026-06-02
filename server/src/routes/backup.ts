@@ -5,7 +5,7 @@
    The scheduled sweep + the on-disk shape live in workspace/auto-backup.ts. */
 
 import { Router } from 'express';
-import type { Request, Response } from 'express';
+import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { listBackups, backupBook, restoreBackup, BackupRestoreError } from '../workspace/auto-backup.js';
 import { getResolvedBackupConfig } from '../workspace/user-settings.js';

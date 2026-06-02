@@ -28,7 +28,8 @@
    route is opaque, survives renames, and doesn't depend on URL-encoding
    every path segment correctly. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
