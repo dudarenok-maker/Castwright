@@ -78,10 +78,23 @@ test.describe('Account — Qwen install card', () => {
     await waitForRouteReady(page);
 
     /* The display-only snippet was replaced by the one-click QwenInstall
-       component. With no reachable /api/qwen/detect in mock mode the probe
-       stays unresolved, so the default "not installed" card renders with the
-       Install action. */
+       component. The /api/qwen/detect probe is stubbed not-installed (see
+       stubAccountModelProbes), so the "Install Qwen3-TTS" card renders. */
     await expect(page.getByTestId('qwen-install-not-detected')).toBeVisible();
     await expect(page.getByRole('button', { name: /Install Qwen3-TTS/i })).toBeVisible();
+  });
+});
+
+test.describe('Account — Coqui install card', () => {
+  test('renders the in-app Coqui XTTS v2 installer card', async ({ page }) => {
+    await page.goto('/#/account');
+    await waitForRouteReady(page);
+
+    /* The display-only install snippet was replaced by the one-click
+       CoquiInstall component. The /api/coqui/detect probe is stubbed
+       weights-missing (see stubAccountModelProbes), so the "Install Coqui
+       XTTS v2" card renders with its value/difference copy. */
+    await expect(page.getByTestId('coqui-install-not-detected')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Install Coqui XTTS v2/i })).toBeVisible();
   });
 });

@@ -118,7 +118,7 @@ export async function waitForLibraryViewReady(page: Page): Promise<void> {
 
 /* The Account view mounts QwenInstall + OllamaInstall (+ model-pull-status),
  * which probe the backend with RAW `fetch` — `/api/qwen/detect`,
- * `/api/ollama/detect`, `/api/ollama/refresh` — bypassing the VITE_USE_MOCKS
+ * `/api/coqui/detect`, `/api/ollama/detect`, `/api/ollama/refresh` — bypassing the VITE_USE_MOCKS
  * client layer that every other e2e surface goes through. The e2e Vite server
  * proxies `/api` to `localhost:8080` (vite.config), so on a dev box with the
  * real app running these resolve to the MACHINE's actual install state (Qwen /
@@ -138,6 +138,9 @@ export async function stubAccountModelProbes(page: Page): Promise<void> {
   });
   await page.route('**/api/qwen/detect', (route) =>
     route.fulfill(json({ state: 'not-installed', installed: false })),
+  );
+  await page.route('**/api/coqui/detect', (route) =>
+    route.fulfill(json({ state: 'weights-missing', installed: false })),
   );
   await page.route('**/api/ollama/detect', (route) =>
     route.fulfill(json({ installed: false, version: null })),

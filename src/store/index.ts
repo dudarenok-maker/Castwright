@@ -30,6 +30,7 @@ import {
 } from 'redux-persist';
 import storage from 'redux-persist/lib/storage';
 import { uiSlice, type UiState } from './ui-slice';
+import { settingsSlice, type SettingsState } from './settings-slice';
 import { accountSlice } from './account-slice';
 import { castSlice } from './cast-slice';
 import { chaptersSlice } from './chapters-slice';
@@ -90,6 +91,10 @@ export const MANUSCRIPT_PERSIST_WHITELIST: ReadonlyArray<keyof ManuscriptState> 
 const UI_PERSIST_VERSION = 2;
 const MANUSCRIPT_PERSIST_VERSION = 1;
 
+/* fe-2 — the whole settings slice persists device-local (every field is a
+   per-browser preference). Bump when the shape changes incompatibly. */
+const SETTINGS_PERSIST_VERSION = 1;
+
 const uiPersistConfig: PersistConfig<UiState> = {
   key: 'ui',
   version: UI_PERSIST_VERSION,
@@ -106,8 +111,16 @@ const manuscriptPersistConfig: PersistConfig<ManuscriptState> = {
   whitelist: MANUSCRIPT_PERSIST_WHITELIST as unknown as string[],
 };
 
+/* No whitelist: every settings field is a persisted preference. */
+const settingsPersistConfig: PersistConfig<SettingsState> = {
+  key: 'settings',
+  version: SETTINGS_PERSIST_VERSION,
+  storage,
+};
+
 const persistedUiReducer = persistReducer(uiPersistConfig, uiSlice.reducer);
 const persistedManuscriptReducer = persistReducer(manuscriptPersistConfig, manuscriptSlice.reducer);
+const persistedSettingsReducer = persistReducer(settingsPersistConfig, settingsSlice.reducer);
 
 /* Single shared SSE-stream runner (plan 102 Should #6). Both the
    generation-stream-middleware (same-book opens) and the
@@ -128,6 +141,7 @@ const getStreamRunner = (): StreamRunner => {
 export const store = configureStore({
   reducer: {
     ui: persistedUiReducer,
+    settings: persistedSettingsReducer,
     account: accountSlice.reducer,
     cast: castSlice.reducer,
     chapters: chaptersSlice.reducer,
