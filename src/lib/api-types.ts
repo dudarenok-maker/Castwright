@@ -2182,6 +2182,12 @@ export interface components {
              * @enum {string}
              */
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * @description srv-27 — Only on `chapter_complete` — the advisory post-synthesis
+             *     QA verdict, so the frontend can stamp a "Suspect" badge the moment
+             *     the Done pill flips without a state.json reload.
+             */
+            audioQa?: components["schemas"]["ChapterQaVerdict"];
             errorReason?: string | null;
             /**
              * @description Only on `chapter_failed` — fs-19 stable machine code for the failure
@@ -2818,6 +2824,27 @@ export interface components {
          * @enum {string}
          */
         FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown";
+        /**
+         * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
+         *     chapter. ADVISORY only: a `suspect` status drives a badge but never
+         *     gates completion (the chapter still flips to done). Stamped at render
+         *     time and surfaced on the Chapter shape + the `chapter_complete` tick.
+         */
+        ChapterQaVerdict: {
+            /** @enum {string} */
+            status: "ok" | "suspect";
+            /** @description Human-readable reasons behind a `suspect` verdict; empty when ok. */
+            reasons: string[];
+            /** @description Integrated loudness (LUFS) checked, or null when loudnorm was disabled. */
+            measuredLufs: number | null;
+            /** @description True peak (dBTP) checked, or null when not measured. */
+            truePeakDb: number | null;
+            durationSec: number;
+            /** @description Text-derived expected length (s), or null when no estimate was available. */
+            expectedSec: number | null;
+            /** Format: date-time */
+            checkedAt: string;
+        };
         Chapter: {
             id: number;
             title: string;
@@ -2845,6 +2872,12 @@ export interface components {
              *     Absent on never-failed chapters; cleared on a successful render.
              */
             generationRemediation?: string | null;
+            /**
+             * @description srv-27 — advisory post-synthesis QA verdict for this chapter's
+             *     audio. Stamped on a successful render; drives the "Suspect" badge.
+             *     Absent on never-rendered / legacy chapters.
+             */
+            audioQa?: components["schemas"]["ChapterQaVerdict"] | null;
             /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
             excluded?: boolean;
             /**

@@ -1137,7 +1137,20 @@ function ChapterRow({
             chapter.duration
           )}
         </span>
-        <span>{stateConfig.badge}</span>
+        <span className="flex items-center gap-1.5">
+          {/* srv-27 — advisory QA badge. Renders only when the rendered audio
+              was flagged suspect (near-silent / clipped / duration drift); the
+              chapter is still Done. The reasons sit in the tooltip. */}
+          {chapter.state === 'done' && chapter.audioQa?.status === 'suspect' && (
+            <span
+              className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+              title={chapter.audioQa.reasons.join(' ')}
+            >
+              Suspect
+            </span>
+          )}
+          {stateConfig.badge}
+        </span>
         <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}>
           <IconArrowDn className="w-4 h-4" />
         </span>
