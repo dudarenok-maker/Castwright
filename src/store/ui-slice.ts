@@ -150,11 +150,11 @@ export const uiSlice = createSlice({
     openAccount: (s) => {
       s.stage = { kind: 'account' };
     },
-    /* Plan 86 — dev-only worktree dashboard. The top-bar entry guards the
-     dispatch behind import.meta.env.DEV so the action never fires in
-     production. */
-    openWorktrees: (s) => {
-      s.stage = { kind: 'worktrees' };
+    /* fs-18 — all-users Admin watch console (was openWorktrees, plan 86).
+       Always dispatchable now; the dev-only worktree list lives inside the
+       view behind import.meta.env.DEV. */
+    openAdmin: (s) => {
+      s.stage = { kind: 'admin' };
     },
     startNewBook: (s) => {
       s.stage = { kind: 'upload' };

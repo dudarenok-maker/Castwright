@@ -1,19 +1,30 @@
-/* Plan 86 — Live worktree dashboard. Shows every git worktree visible to
-   `git worktree list --porcelain` with its branch, ports (from .env.local),
-   and a TCP probe against the dev server's VITE_PORT. Auto-refreshes
-   every 10 s. Dev-only — production builds hide the top-bar entry and
-   the server route 404s.
+/* fs-18 — Admin watch console. An all-users diagnostics surface that turns
+   "why is it broken?" into a glanceable board, without dropping to logs or a
+   debug window. Three stacked sections:
 
-   Click a row → opens that worktree's dev URL in a new tab.
+     1. Health board (all users) — GPU/VRAM, sidecar + resident models,
+        analyzer connectivity, ffmpeg, free disk; one GET /api/diagnostics poll.
+     2. Generation throughput (all users) — per-chapter RTF history fed by
+        GET /api/generation/stats (the same source as the top-bar Admin pill).
+     3. Worktrees (DEV-only) — the original plan-86 git-worktree dashboard;
+        still gated behind import.meta.env.DEV (server route 404s in prod).
 
-   Plan 127 — also renders a per-chapter generation-throughput table fed by
-   GET /api/generation/stats (the same source as the top-bar `wt` RTF pill), so
-   the operator can see whether RTF is deteriorating or staying consistent across
-   a run without grepping logs. */
+   Plan 86 (worktrees) + plan 127 (throughput) folded into this view. */
 
 import { useEffect, useState } from 'react';
-import { api, type GenerationStatsResponse, type RecentChapter } from '../lib/api';
+import {
+  api,
+  type GenerationStatsResponse,
+  type RecentChapter,
+  type DiagnosticsResponse,
+  type DiagnosticsStatus,
+} from '../lib/api';
 import { formatDuration } from '../lib/time';
+
+/* Diagnostics poll cadence. The probes spawn processes + do disk I/O, and
+   health isn't fast-moving, so 30 s (matching the sidecar/ollama health polls)
+   is plenty — 4 s would be wasteful. */
+const DIAGNOSTICS_POLL_MS = 30000;
 
 interface WorktreeRow {
   path: string;
@@ -54,11 +65,142 @@ const TREND_STYLE: Record<Trend, { cls: string; glyph: string; label: string }> 
   none: { cls: 'text-ink/70', glyph: '', label: '' },
 };
 
-export function WorktreesView() {
+export function AdminView() {
+  const [stats, setStats] = useState<GenerationStatsResponse | null>(null);
+
+  /* Throughput poller — ticks at the pill's 4 s cadence. Best-effort: a stats
+     failure leaves the last good snapshot in place. */
+  useEffect(() => {
+    let cancelled = false;
+    const fetchStats = () =>
+      api
+        .getGenerationStats()
+        .then((res) => {
+          if (!cancelled) setStats(res);
+        })
+        .catch(() => {
+          /* Telemetry is best-effort; leave the last good snapshot in place. */
+        });
+    fetchStats();
+    const t = setInterval(fetchStats, STATS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <h2 className="text-2xl md:text-3xl font-medium leading-[1.1] tracking-tight text-ink mb-4">
+        Admin
+      </h2>
+      <p className="text-sm text-ink/60 mb-6">
+        A live watch console for the generation pipeline — health checks and throughput at a glance,
+        no logs required.
+      </p>
+
+      <HealthBoard />
+      <GenerationThroughput stats={stats} />
+      {import.meta.env.DEV && <WorktreesSection />}
+    </div>
+  );
+}
+
+const HEALTH_DOT: Record<DiagnosticsStatus, string> = {
+  ok: 'bg-green-500',
+  warn: 'bg-amber-500',
+  fail: 'bg-rose-500',
+};
+
+const HEALTH_DOT_LABEL: Record<DiagnosticsStatus, string> = {
+  ok: 'healthy',
+  warn: 'warning',
+  fail: 'failing',
+};
+
+/* fs-18 health board — one GET /api/diagnostics poll, rendered as a row per
+   check with a green/amber/red dot, a friendly label, and a technical detail
+   line. Self-polls every 30 s; a fetch failure leaves the last good board in
+   place (and shows a "couldn't refresh" note rather than blanking). */
+function HealthBoard() {
+  const [diag, setDiag] = useState<DiagnosticsResponse | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [staleError, setStaleError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchOnce = () =>
+      api
+        .getDiagnostics()
+        .then((res) => {
+          if (cancelled) return;
+          setDiag(res);
+          setStaleError(false);
+          setLoaded(true);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setStaleError(true);
+          setLoaded(true);
+        });
+    fetchOnce();
+    const t = setInterval(fetchOnce, DIAGNOSTICS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  return (
+    <section className="mb-10">
+      <h3 className="text-lg font-medium tracking-tight text-ink mb-1">Health</h3>
+      <p className="text-sm text-ink/60 mb-4">
+        GPU &amp; VRAM, TTS sidecar, analyzer, ffmpeg and free disk. Re-checked every 30 s.
+      </p>
+
+      {!loaded && <p className="text-sm text-ink/50">Running diagnostics…</p>}
+
+      {diag && (
+        <div
+          className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden divide-y divide-ink/5"
+          data-testid="health-board"
+        >
+          {diag.checks.map((c) => (
+            <div
+              key={c.id}
+              className="flex items-center gap-3 px-4 py-3"
+              data-testid={`health-row-${c.id}`}
+              data-status={c.status}
+            >
+              <span
+                className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${HEALTH_DOT[c.status]}`}
+                aria-label={`${c.label}: ${HEALTH_DOT_LABEL[c.status]}`}
+              />
+              <span className="font-semibold text-ink text-sm w-40 shrink-0">{c.label}</span>
+              <span className="text-sm text-ink/60 min-w-0 truncate">{c.detail}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {staleError && (
+        <p className="text-xs text-ink/50 mt-2">
+          Couldn&apos;t refresh diagnostics — showing the last result.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/* DEV-only git-worktree dashboard (plan 86). Lists every worktree from
+   `git worktree list --porcelain` with its ports + a live TCP probe of each
+   VITE_PORT; click a green row to open that worktree's dev URL. The whole
+   section is gated behind import.meta.env.DEV by the caller, and the
+   `/api/worktrees` server route 404s in production. */
+function WorktreesSection() {
   const [rows, setRows] = useState<WorktreeRow[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [stats, setStats] = useState<GenerationStatsResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,33 +226,10 @@ export function WorktreesView() {
     };
   }, []);
 
-  /* Separate poller so a stats failure can't blank the worktree list (and vice
-     versa), and so it ticks at the pill's 4 s cadence not the 10 s refresh. */
-  useEffect(() => {
-    let cancelled = false;
-    const fetchStats = () =>
-      api
-        .getGenerationStats()
-        .then((res) => {
-          if (!cancelled) setStats(res);
-        })
-        .catch(() => {
-          /* Telemetry is best-effort; leave the last good snapshot in place. */
-        });
-    fetchStats();
-    const t = setInterval(fetchStats, STATS_POLL_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(t);
-    };
-  }, []);
-
   return (
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
-      <h2 className="text-2xl md:text-3xl font-medium leading-[1.1] tracking-tight text-ink mb-4">
-        Worktrees
-      </h2>
-      <p className="text-sm text-ink/60 mb-6">
+    <section className="mt-10">
+      <h3 className="text-lg font-medium tracking-tight text-ink mb-1">Worktrees</h3>
+      <p className="text-sm text-ink/60 mb-4">
         Active git worktrees plus their port assignments and a live TCP probe of each VITE_PORT.
         Click a row with a green dot to open that worktree&apos;s dev URL in a new tab.
         Auto-refresh every 10 s. Dev-only.
@@ -160,9 +279,7 @@ export function WorktreesView() {
           ))}
         </div>
       )}
-
-      <GenerationThroughput stats={stats} />
-    </div>
+    </section>
   );
 }
 

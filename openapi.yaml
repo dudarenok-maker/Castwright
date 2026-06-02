@@ -1808,6 +1808,29 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/GpuQueueState' }
 
+  /api/diagnostics:
+    get:
+      summary: One-shot health board for the Admin watch console (fs-18)
+      operationId: getDiagnostics
+      description: |
+        Runs every operational health probe in one shot and returns a
+        green/amber/red board: GPU + VRAM headroom, TTS sidecar reachability
+        and resident models, analyzer (Ollama or Gemini) connectivity, ffmpeg
+        and ffprobe presence, and free disk on the workspace volume.
+
+        Consolidates the ad-hoc probes the operator otherwise runs by hand
+        (`/api/sidecar/health`, `/api/ollama/health`, `nvidia-smi`). Powers the
+        all-users Admin view (`src/views/admin.tsx`) and the top-bar status dot.
+        Each check runs independently — a single failing probe yields a `fail`
+        row, never a 500. Safe to poll (~30 s cadence). `overall` is the worst
+        severity across the checks.
+      responses:
+        '200':
+          description: Aggregated diagnostics board
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DiagnosticsResponse' }
+
   /api/export/lan:
     get:
       summary: Enumerate the server's reachable LAN URLs
@@ -3936,6 +3959,47 @@ components:
           type: integer
           minimum: 1
           description: "Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU."
+
+    # --- Admin diagnostics board (fs-18) ------------------------------
+    DiagnosticsCheck:
+      type: object
+      required: [id, label, status, detail]
+      properties:
+        id:
+          type: string
+          enum: [gpu, sidecar, analyzer, gemini, ffmpeg, disk]
+          description: Stable identifier for the check (drives the UI row key).
+        label:
+          type: string
+          description: Friendly display label, e.g. "GPU / VRAM".
+        status:
+          type: string
+          enum: [ok, warn, fail]
+          description: Per-check severity.
+        detail:
+          type: string
+          description: Human-readable technical line, e.g. "cuda · 1.2 / 8.0 GB reserved".
+        value:
+          nullable: true
+          description: Optional compact machine value the UI can render (GB free, model name, etc.).
+          oneOf:
+            - type: string
+            - type: number
+    DiagnosticsResponse:
+      type: object
+      required: [ts, overall, checks]
+      properties:
+        ts:
+          type: string
+          format: date-time
+          description: ISO timestamp the board was produced.
+        overall:
+          type: string
+          enum: [ok, warn, fail]
+          description: Worst severity across all checks — drives the top-bar status dot.
+        checks:
+          type: array
+          items: { $ref: '#/components/schemas/DiagnosticsCheck' }
 
     # --- Cross-book duplicate "not linked to" (plan 101 + fs-11) -----
     NotLinkedToRequest:

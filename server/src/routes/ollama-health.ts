@@ -59,7 +59,22 @@ interface OllamaPsResponse {
   models?: Array<{ name?: string; model?: string; expires_at?: string }>;
 }
 
-ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
+/* Shape returned by probeOllamaHealth(). The /health route forwards this
+   verbatim; the /api/diagnostics aggregator (fs-18) consumes it in-process. */
+export interface OllamaHealthResult {
+  status: 'reachable' | 'unreachable';
+  url: string;
+  models?: string[];
+  expectedModel?: string;
+  modelPulled?: boolean;
+  resident?: string[];
+  modelResident?: boolean;
+  error?: string;
+}
+
+/* Probe the Ollama daemon once (tags + ps in parallel) and normalise the
+   result. Extracted from the route handler so /api/diagnostics can reuse it. */
+export async function probeOllamaHealth(): Promise<OllamaHealthResult> {
   const url = getResolvedOllamaUrl();
   const expectedModel = getResolvedOllamaModel();
   /* Two probes in parallel: /api/tags for "is it pulled" and /api/ps for
@@ -79,11 +94,11 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
     ]);
     clearTimeout(timer);
     if (!tagsResp.ok) {
-      return res.json({
+      return {
         status: 'unreachable',
         url,
         error: `Ollama returned ${tagsResp.status} ${tagsResp.statusText}`,
-      });
+      };
     }
     const tagsBody = (await tagsResp.json().catch(() => ({}))) as OllamaTagsResponse;
     const models = Array.isArray(tagsBody.models)
@@ -115,7 +130,7 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
           (m.split(':')[0] === expectedRoot && m.startsWith(`${expectedRoot}:`)),
       );
     }
-    return res.json({
+    return {
       status: 'reachable',
       url,
       models,
@@ -123,12 +138,12 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
       modelPulled: hasExpected,
       resident,
       modelResident: expectedResident,
-    });
+    };
   } catch (e) {
     clearTimeout(timer);
     const err = e as { name?: string; message?: string };
     const isTimeout = err.name === 'AbortError';
-    return res.json({
+    return {
       status: 'unreachable',
       url,
       /* Same distinction the sidecar probe makes: "process down" vs
@@ -137,8 +152,12 @@ ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
       error: isTimeout
         ? `No response from ${url} within ${PROBE_TIMEOUT_MS}ms — Ollama may be loading a model or stuck on a long generation.`
         : err.message || 'Ollama fetch failed.',
-    });
+    };
   }
+}
+
+ollamaHealthRouter.get('/health', async (_req: Request, res: Response) => {
+  res.json(await probeOllamaHealth());
 });
 
 /* Ollama doesn't expose a dedicated load/unload pair — instead it interprets

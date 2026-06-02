@@ -81,12 +81,6 @@ _Full detail + acceptance:_ [#458](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ cheap; avoids deep-run failures from running out of space mid-book.
 _Full detail + acceptance:_ [#466](https://github.com/dudarenok-maker/AudioBook-Generator/issues/466).
 
-### `fs-18` — One-click diagnostics / health board ([#468](https://github.com/dudarenok-maker/AudioBook-Generator/issues/468))
-
-- _What:_ A "Run diagnostics" readout with green/red per check — GPU + VRAM headroom, sidecar reachability + resident models, analyzer connectivity, ffmpeg, free disk — consolidating the ad-hoc probes the user runs today (`/api/sidecar/health`, `/debug/memory`, nvidia-smi).
-- _Benefit (user / technical):_ turns "why is it broken?" into a glanceable surface the user owns.
-_Full detail + acceptance:_ [#468](https://github.com/dudarenok-maker/AudioBook-Generator/issues/468).
-
 ### `fs-19` — Structured failure taxonomy + plain-language remediation ([#469](https://github.com/dudarenok-maker/AudioBook-Generator/issues/469))
 
 - _What:_ Map the recurring failure modes (VRAM spill, sidecar down, analyzer rate-limit, OOM, disk-full, model-not-loaded) to a small taxonomy with human-readable messages and a "what to do next" line, instead of raw error strings in `state.json.generationError` and toasts.
