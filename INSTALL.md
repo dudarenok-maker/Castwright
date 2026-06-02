@@ -8,7 +8,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
 
 ## Prerequisites (all platforms)
 
-- **Node.js 20.6 or newer** — <https://nodejs.org>
+- **Node.js 20.19 or newer** (Vite 8 needs ≥20.19 / ≥22.12; the repo targets Node 24) — <https://nodejs.org>
 - **Python 3.11**
   - Windows: <https://python.org> installer (tick "Add to PATH" during setup)
   - macOS: `brew install python@3.11`
