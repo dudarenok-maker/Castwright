@@ -200,9 +200,10 @@ describe('OllamaAnalyzer — keep_alive policy (per-model VRAM residency)', () =
 
 describe('OllamaAnalyzer — schema-constrained `format`', () => {
   /* The wire-level contract for Ollama 0.5+ structured output. The exact
-     conversion is owned by zod-to-json-schema; we assert just enough that
-     a regression to `format: 'json'` (the old soft-hint) or to a $ref-using
-     shape (which some Ollama builds can't follow) would fail this test. */
+     conversion is owned by Zod 4's native z.toJSONSchema; we assert just
+     enough that a regression to `format: 'json'` (the old soft-hint) or to a
+     $ref-using shape (which some Ollama builds can't follow) would fail this
+     test. The JSON-Schema shape itself is pinned in handoff/schemas.test.ts. */
   it('sends the per-stage Zod schema as a strict JSON Schema in `format` for stage1Chapter', async () => {
     fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
     const { OllamaAnalyzer } = await import('./ollama.js');
@@ -216,7 +217,7 @@ describe('OllamaAnalyzer — schema-constrained `format`', () => {
     expect(body.format.additionalProperties).toBe(false);
     expect(body.format.required).toContain('characters');
     expect(body.format.properties?.characters?.type).toBe('array');
-    /* characterSchema is also .strict() — confirm $refStrategy:'none' inlined
+    /* characterSchema is also .strict() — confirm reused:'inline' inlined
        it (so Ollama doesn't have to follow $ref/definitions). */
     const charItems = body.format.properties.characters.items;
     expect(charItems.type).toBe('object');
