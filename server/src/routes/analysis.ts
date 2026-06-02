@@ -1081,6 +1081,20 @@ export function isAnalysisJobRunning(manuscriptId: string): boolean {
   return !!subset && !subset.controller.signal.aborted;
 }
 
+/** fs-1 — true when ANY analyzer job (main or subset) is in flight. The upgrade
+    gate refuses to restart the server out from under an active analysis. Returns
+    the busy manuscript ids so the 409 can name them. */
+export function activeAnalysisManuscripts(): string[] {
+  const out = new Set<string>();
+  for (const [id, job] of inFlightAnalysisByManuscript) {
+    if (!job.controller.signal.aborted) out.add(id);
+  }
+  for (const [id, job] of inFlightSubsetByManuscript) {
+    if (!job.controller.signal.aborted) out.add(id);
+  }
+  return [...out];
+}
+
 /** Snapshot the in-flight analyzer's state for the cold-boot
     discovery endpoint (GET /api/books/:bookId/analysis/state).
     Returns null when no job is running OR the job's controller has
