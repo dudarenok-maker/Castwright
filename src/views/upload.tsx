@@ -357,7 +357,7 @@ export function UploadView() {
               value={pastedText}
               onChange={(e) => setPastedText(e.target.value)}
               placeholder="# Chapter 1&#10;&#10;Paste your manuscript here…"
-              className="w-full h-44 rounded-xl border border-ink/10 px-3 sm:px-4 py-3 text-sm font-mono text-ink/80 focus:outline-none focus:border-peach"
+              className="w-full h-44 rounded-xl border border-ink/10 px-3 sm:px-4 py-3 text-sm font-mono text-ink/80 focus:outline-hidden focus:border-peach"
             />
             {/* Right-aligned on all viewports — PrimaryButton doesn't take
                 className so a full-width phone variant would require touching

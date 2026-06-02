@@ -386,7 +386,7 @@ export function ExportAudiobookModal({
 
           {!tileHint && (
             <div className="px-6 pt-4 flex items-center justify-between gap-4 flex-wrap">
-              <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
+              <div className="flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs">
                 {(
                   [
                     { id: 'download', label: 'Download to phone' },
@@ -407,7 +407,7 @@ export function ExportAudiobookModal({
                 <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
                   Format
                 </span>
-                <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
+                <div className="flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs">
                   {(
                     [
                       { id: 'm4b', label: 'M4B' },
@@ -639,7 +639,7 @@ function SyncFolderTab({
           onChange={(e) => setDraft(e.target.value)}
           onBlur={onBlur}
           placeholder="C:\Users\you\OneDrive\Audiobooks"
-          className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
+          className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-hidden focus:border-ink/30 font-mono"
           aria-label="Sync folder"
           data-testid="sync-folder-input"
         />
@@ -705,7 +705,7 @@ function TileBody({
           onChange={(e) => setDraft(e.target.value)}
           onBlur={onBlur}
           placeholder="C:\Users\you\OneDrive\Audiobooks"
-          className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30 font-mono"
+          className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-hidden focus:border-ink/30 font-mono"
           aria-label={hint.folderInputLabel}
           data-testid="sync-folder-input"
         />
@@ -765,14 +765,14 @@ function SyncFolderControls({
           onClick={runProbe}
           disabled={!canProbe}
           data-testid="sync-folder-test"
-          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink/[0.04] text-ink hover:bg-ink/[0.08] disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink/4 text-ink hover:bg-ink/8 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {probing ? 'Testing…' : 'Test'}
         </button>
         <button
           onClick={onSave}
           disabled={!isDirty || saving}
-          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink/[0.04] text-ink hover:bg-ink/[0.08] disabled:opacity-40 disabled:cursor-not-allowed"
+          className="text-xs font-semibold px-3 py-1.5 rounded-full bg-ink/4 text-ink hover:bg-ink/8 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? 'Saving…' : isDirty ? 'Save folder' : 'Saved'}
         </button>

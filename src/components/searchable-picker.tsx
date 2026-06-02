@@ -267,14 +267,14 @@ export function SearchablePicker<T>({
               }}
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
-              className="w-full rounded-lg border border-ink/10 bg-white pl-7 pr-2 py-1.5 text-xs text-ink placeholder:text-ink/40 focus:outline-none focus:border-peach"
+              className="w-full rounded-lg border border-ink/10 bg-white pl-7 pr-2 py-1.5 text-xs text-ink placeholder:text-ink/40 focus:outline-hidden focus:border-peach"
             />
           </label>
         </div>
       )}
       <div
         ref={listRef}
-        className="max-h-[calc(12*36px)] overflow-y-auto scrollbar-thin"
+        className="max-h-[432px] overflow-y-auto scrollbar-thin"
         role="listbox"
       >
         {flat.length === 0 && (
@@ -298,7 +298,7 @@ export function SearchablePicker<T>({
                 onMouseEnter={() => !isDisabled && setHighlight(idx)}
                 onClick={() => pick(row.item)}
                 className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm min-h-[36px] ${
-                  isHighlighted && !isDisabled ? 'bg-ink/[0.06]' : 'hover:bg-ink/[0.04]'
+                  isHighlighted && !isDisabled ? 'bg-ink/6' : 'hover:bg-ink/4'
                 } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 {renderItem(row.item.data, {

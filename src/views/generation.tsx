@@ -771,7 +771,7 @@ export function GenerationView({
             {Math.round(totalProgress * 100)}%
           </span>
         </div>
-        <div className="relative h-3 rounded-full bg-ink/[0.06] overflow-hidden">
+        <div className="relative h-3 rounded-full bg-ink/6 overflow-hidden">
           <div
             className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all"
             style={{ width: `${totalProgress * 100}%` }}
@@ -1015,7 +1015,7 @@ function ChapterRow({
       icon: <IconCheck className="w-4 h-4 text-emerald-600" />,
     },
     in_progress: {
-      tint: rowStalled ? 'bg-amber-50/60' : 'bg-peach/[0.06]',
+      tint: rowStalled ? 'bg-amber-50/60' : 'bg-peach/6',
       badge: inProgressPill,
       icon: inProgressIcon,
     },
@@ -1369,7 +1369,7 @@ function ChapterRow({
                       }}
                       title={`Regenerate ${c.name} in this chapter`}
                       aria-label={`Regenerate ${c.name} in this chapter`}
-                      className="sm:opacity-0 sm:group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-7 sm:h-7 rounded-full hover:bg-ink/[0.06] transition-all"
+                      className="sm:opacity-0 sm:group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-7 sm:h-7 rounded-full hover:bg-ink/6 transition-all"
                     >
                       <IconRefresh className="w-3.5 h-3.5" />
                     </button>
@@ -1441,7 +1441,7 @@ function ExcludedChapterRow({
   const throttleActive = running?.throttle != null && running.throttle.until > Date.now();
 
   return (
-    <div className="rounded-3xl border border-ink/10 bg-ink/[0.03] overflow-hidden">
+    <div className="rounded-3xl border border-ink/10 bg-ink/3 overflow-hidden">
       <div className="grid grid-cols-[24px_44px_minmax(0,1fr)_auto] sm:grid-cols-[32px_52px_minmax(0,1fr)_auto] items-center gap-2 sm:gap-3 px-4 sm:px-5 py-3">
         <span className="grid place-items-center text-ink/30">
           <span className="w-4 h-4 rounded-full border border-ink/15" />
@@ -1499,7 +1499,7 @@ function ExcludedChapterRow({
            fills 0→1 across the active phase; the phase label above is
            the user's cue that there's a Phase 0a → Phase 1 handoff. */
         <div className="px-5 pb-3 -mt-1">
-          <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
+          <div className="relative h-1.5 rounded-full bg-ink/6 overflow-hidden">
             <div
               className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-700"
               style={{ width: `${Math.max(0, Math.min(1, running.progress)) * 100}%` }}
@@ -1533,7 +1533,7 @@ function ChapterProgressBar({
   paused: boolean;
   assembling: boolean;
 }) {
-  if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/[0.06]" />;
+  if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/6" />;
   if (state === 'done')
     return (
       <div className="h-1.5 rounded-full bg-emerald-200">
@@ -1550,7 +1550,7 @@ function ChapterProgressBar({
     return (
       /* Disk-write phase — neutral ink-tone bar with stripe motion to read as
        "near done, busy" rather than the magenta synthesis gradient. */
-      <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
+      <div className="relative h-1.5 rounded-full bg-ink/6 overflow-hidden">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-ink/40"
           style={{ width: `${progress * 100}%` }}
@@ -1560,7 +1560,7 @@ function ChapterProgressBar({
       </div>
     );
   return (
-    <div className="relative h-1.5 rounded-full bg-ink/[0.06] overflow-hidden">
+    <div className="relative h-1.5 rounded-full bg-ink/6 overflow-hidden">
       <div
         className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-700 ${paused ? '' : 'pulse-bar'}`}
         style={{ width: `${progress * 100}%` }}
@@ -1588,7 +1588,7 @@ function CharStatusBar({
   paused: boolean;
 }) {
   if (status === 'failed') return <div className="h-1 rounded-full bg-rose-400" />;
-  if (status === 'skipped') return <div className="h-1 rounded-full bg-ink/[0.04]" />;
+  if (status === 'skipped') return <div className="h-1 rounded-full bg-ink/4" />;
   if (fullyDone) return <div className="h-1 rounded-full bg-emerald-400" />;
 
   const pct = Math.max(0, Math.min(100, fraction * 100));
@@ -1600,7 +1600,7 @@ function CharStatusBar({
        animation overlaying so it reads as "still working". Previously the
        bar was a fixed 60 %-width sliver regardless of how many lines were
        actually done. */
-      <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+      <div className="relative h-1 rounded-full bg-ink/6 overflow-hidden">
         <div
           className={`absolute inset-y-0 left-0 bg-gradient-progress rounded-full transition-all duration-500 ${paused ? '' : 'pulse-bar'}`}
           style={{ width: `${Math.max(pct, 8)}%` }}
@@ -1615,7 +1615,7 @@ function CharStatusBar({
       /* Has spoken some lines but isn't the active speaker right now — show
        the real synthesised fraction in emerald so the user sees "1 of 13
        done" instead of the previous "Done" lie. */
-      <div className="relative h-1 rounded-full bg-ink/[0.06] overflow-hidden">
+      <div className="relative h-1 rounded-full bg-ink/6 overflow-hidden">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-emerald-300"
           style={{ width: `${pct}%` }}
@@ -1623,7 +1623,7 @@ function CharStatusBar({
       </div>
     );
 
-  return <div className="h-1 rounded-full bg-ink/[0.08]" />;
+  return <div className="h-1 rounded-full bg-ink/8" />;
 }
 
 /* Visual confirmation that this chapter's audio was assembled in narrative
@@ -1664,7 +1664,7 @@ function ChapterSegmentStrip({
       <p className="text-[10px] uppercase tracking-wider text-ink/50 font-semibold mb-1.5">
         Narrative order
       </p>
-      <div className="flex h-2 rounded-full overflow-hidden bg-ink/[0.04]">
+      <div className="flex h-2 rounded-full overflow-hidden bg-ink/4">
         {audio.segments.map((seg, i) => {
           const start = seg.start ?? 0;
           const end = seg.end ?? start;

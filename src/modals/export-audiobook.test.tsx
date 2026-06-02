@@ -356,7 +356,7 @@ describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', ()
    never saved, modal reopens empty). The blur autosave + visible error
    banner + Test probe close that loop. */
 describe('ExportAudiobookModal — sync-folder UX (plan 79)', () => {
-  it('auto-saves on input blur when the draft differs from the saved value', async () => {
+  it('auto-saves on input blur-sm when the draft differs from the saved value', async () => {
     mockedApi.putUserSettings.mockResolvedValue({
       exportSyncFolder: 'G:\\My Drive\\Audiobooks',
     } as never);
@@ -371,7 +371,7 @@ describe('ExportAudiobookModal — sync-folder UX (plan 79)', () => {
     });
   });
 
-  it('does NOT auto-save on blur when the draft equals the saved value', () => {
+  it('does NOT auto-save on blur-sm when the draft equals the saved value', () => {
     renderModal({ prefill: { format: 'm4b', destination: 'sync-folder', appHint: 'voice' } });
     /* Voice body opens with an empty draft (no saved folder yet); blurring
        without typing anything must NOT fire a PUT. */

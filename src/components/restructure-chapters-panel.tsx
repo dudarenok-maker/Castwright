@@ -441,7 +441,7 @@ export function RestructureChaptersPanel({
   return (
     <div className="flex flex-col gap-4" data-testid="restructure-panel">
       <div
-        className="sticky top-16 z-30 -mx-4 px-4 py-2 bg-canvas/95 backdrop-blur-sm border-b border-ink/10 flex items-center gap-2 flex-wrap"
+        className="sticky top-16 z-30 -mx-4 px-4 py-2 bg-canvas/95 backdrop-blur-xs border-b border-ink/10 flex items-center gap-2 flex-wrap"
         data-testid="restructure-toolbar"
       >
         {onBack && (

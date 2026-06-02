@@ -52,7 +52,7 @@ export function ThemeToggleButton() {
       data-theme-mode={currentMode}
       aria-label={LABELS[currentMode]}
       title={LABELS[currentMode]}
-      className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-ink/[0.04] hover:bg-ink/[0.08] text-ink/70 hover:text-ink transition-colors focus:outline-none focus:ring-2 focus:ring-magenta/40"
+      className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-ink/4 hover:bg-ink/8 text-ink/70 hover:text-ink transition-colors focus:outline-hidden focus:ring-2 focus:ring-magenta/40"
     >
       {iconFor(currentMode)}
     </button>

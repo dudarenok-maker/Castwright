@@ -797,7 +797,7 @@ function ReparseResultBody({
         <select
           value={selectedModel}
           onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
-          className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+          className="px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         >
           {MODEL_OPTION_GROUPS.map((g) => (
             <optgroup key={g.engine} label={g.label}>

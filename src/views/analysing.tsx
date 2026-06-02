@@ -1114,7 +1114,7 @@ export function AnalysingView({
                 </button>
                 <button
                   onClick={() => dispatch(uiActions.goHome())}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-semibold text-ink/80 hover:bg-ink/[0.04]"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-ink/15 bg-white text-xs font-semibold text-ink/80 hover:bg-ink/4"
                 >
                   Back to library
                 </button>
@@ -1128,13 +1128,13 @@ export function AnalysingView({
                   ? 'Daily free-tier quota exhausted'
                   : 'Analysis failed'}
               </p>
-              <p className="mt-1 text-sm text-red-800 break-words">{error.message}</p>
+              <p className="mt-1 text-sm text-red-800 wrap-break-word">{error.message}</p>
               {error.detail && (
                 <details className="mt-2 text-xs text-red-800/90">
                   <summary className="cursor-pointer font-medium hover:text-red-900">
                     Show upstream detail
                   </summary>
-                  <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-red-100/60 p-3 text-[11px] font-mono whitespace-pre-wrap break-words">
+                  <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-red-100/60 p-3 text-[11px] font-mono whitespace-pre-wrap wrap-break-word">
                     {error.detail}
                   </pre>
                 </details>
@@ -1152,7 +1152,7 @@ export function AnalysingView({
                   <select
                     value={model ?? MODEL_OPTIONS[0].id}
                     onChange={(e) => dispatch(uiActions.setSelectedModel(e.target.value))}
-                    className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-none focus:ring-2 focus:ring-red-400/40"
+                    className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-red-400/40"
                   >
                     {MODEL_OPTION_GROUPS.map((g) => (
                       <optgroup key={g.engine} label={g.label}>
@@ -1199,7 +1199,7 @@ export function AnalysingView({
               {Math.round(overall * 100)}%
             </span>
           </div>
-          <div className="relative h-2 rounded-full bg-ink/[0.06] overflow-hidden">
+          <div className="relative h-2 rounded-full bg-ink/6 overflow-hidden">
             <div
               className="absolute inset-y-0 left-0 bg-gradient-progress rounded-full"
               style={{ width: `${overall * 100}%` }}
@@ -1312,7 +1312,7 @@ export function AnalysingView({
                       <p className="text-sm font-semibold text-ink truncate" title={title}>
                         {title}
                       </p>
-                      <p className="mt-0.5 text-xs text-ink/60 break-words">{f.message}</p>
+                      <p className="mt-0.5 text-xs text-ink/60 wrap-break-word">{f.message}</p>
                     </div>
                     <button
                       type="button"

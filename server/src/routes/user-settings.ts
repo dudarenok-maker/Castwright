@@ -11,7 +11,8 @@
    field). The general GET still surfaces only apiKeyStatus 'set'|'unset',
    never the plaintext. Env-var GEMINI_API_KEY still wins when set. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { z } from 'zod';
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';

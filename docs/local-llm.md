@@ -155,8 +155,8 @@ Three reasons, in order of weight:
    own working set. We can take a chapter spike (long chapter, big sentence
    list) without paging.
 2. **Schema-constrained decoding makes the "smarter model" gain shrink.** We
-   pass each Zod schema through `zod-to-json-schema` (`runStage` at
-   `server/src/analyzer/ollama.ts:150`) and Ollama's sampler is constrained
+   pass each Zod schema through Zod 4's native `z.toJSONSchema` (`runStage` in
+   `server/src/analyzer/ollama.ts`) and Ollama's sampler is constrained
    to only emit tokens that keep the output a valid prefix of a value
    matching that schema. The 4B can't go off the rails structurally; the
    remaining variance is semantic, which is where bigger models help — but

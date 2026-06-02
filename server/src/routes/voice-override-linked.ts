@@ -28,7 +28,8 @@
    Response: { canonicalVoiceId, updated: [{bookId,bookTitle,characterId}],
    failed: [{bookId,bookTitle,error}] }. 207 when failed.length>0, else 200. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';

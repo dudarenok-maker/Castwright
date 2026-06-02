@@ -25,7 +25,8 @@
    synthesis, not two. The response is JSON `{ voiceId, url }` pointing at
    that cached file. A sidecar that's down → 502 with a clear message. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { mkdir, writeFile, rename, rm, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';

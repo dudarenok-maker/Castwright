@@ -139,7 +139,7 @@ export function LibraryTable({
               onClick={() => setCollapsed((m) => ({ ...m, [group.id]: !isCollapsed }))}
               aria-expanded={!isCollapsed}
               aria-controls={`library-table-body-${group.id}`}
-              className="w-full flex items-center justify-between gap-3 mb-3 px-1 py-1 rounded-lg hover:bg-ink/[0.03] transition-colors"
+              className="w-full flex items-center justify-between gap-3 mb-3 px-1 py-1 rounded-lg hover:bg-ink/3 transition-colors"
             >
               <span className="inline-flex items-center gap-2">
                 {isCollapsed ? (
@@ -161,7 +161,7 @@ export function LibraryTable({
                 className="rounded-2xl border border-ink/10 bg-white overflow-hidden shadow-card"
               >
                 <table className="w-full text-sm">
-                  <thead className="bg-ink/[0.02] text-[11px] uppercase tracking-wider text-ink/55">
+                  <thead className="bg-ink/2 text-[11px] uppercase tracking-wider text-ink/55">
                     <tr>
                       <th scope="col" className="w-[60px] py-2 pl-3 text-left font-semibold">
                         <span className="sr-only">Cover</span>
@@ -281,7 +281,7 @@ function BookRow({
     <tr
       data-testid={`library-table-row-${book.bookId}`}
       onClick={onOpen}
-      className={`border-t border-ink/5 cursor-pointer transition-colors ${active ? 'bg-peach/[0.06]' : 'hover:bg-ink/[0.02]'}`}
+      className={`border-t border-ink/5 cursor-pointer transition-colors ${active ? 'bg-peach/6' : 'hover:bg-ink/2'}`}
     >
       <td className="py-2 pl-3 align-middle">
         <span
@@ -343,7 +343,7 @@ function BookRow({
               e.stopPropagation();
               setMenuOpen((o) => !o);
             }}
-            className="w-7 h-7 grid place-items-center rounded-full text-ink/55 hover:text-ink hover:bg-ink/[0.06] transition-colors"
+            className="w-7 h-7 grid place-items-center rounded-full text-ink/55 hover:text-ink hover:bg-ink/6 transition-colors"
           >
             <IconMore className="w-4 h-4" />
           </button>
@@ -357,7 +357,7 @@ function BookRow({
                   setMenuOpen(false);
                   setEditOpen(true);
                 }}
-                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
               >
                 <IconPencil className="w-4 h-4" /> Edit details
               </button>
@@ -366,7 +366,7 @@ function BookRow({
                   setMenuOpen(false);
                   setCoverPickerOpen(true);
                 }}
-                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
               >
                 <IconImage className="w-4 h-4" /> Find cover image
               </button>
@@ -375,7 +375,7 @@ function BookRow({
                   setMenuOpen(false);
                   setConfirmReparse(true);
                 }}
-                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/[0.04] inline-flex items-center gap-2 border-b border-ink/5"
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
               >
                 <IconRefresh className="w-4 h-4" /> Re-parse manuscript
               </button>
