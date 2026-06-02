@@ -18,7 +18,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath } from '../bump-version.mjs';
+import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -435,4 +436,31 @@ test('pickWorkflowRun picks the newest among multiple matches', () => {
 test('pickWorkflowRun returns null for empty or non-array input', () => {
   assert.equal(pickWorkflowRun([], { headSha: PICK_SHA, sinceMs: PICK_NOW }), null);
   assert.equal(pickWorkflowRun(null, { headSha: PICK_SHA, sinceMs: PICK_NOW }), null);
+});
+
+// fs-1 — sidecar version.py lockstep helpers.
+test('readSidecarVersion / writeSidecarVersion round-trip and preserve the docstring', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bump-sidecar-'));
+  try {
+    const py = sidecarVersionPath(dir);
+    mkdirSync(dirname(py), { recursive: true });
+    writeFileSync(py, '"""docstring."""\n\n__version__ = "1.5.1"\n');
+    assert.equal(readSidecarVersion(dir), '1.5.1');
+
+    writeSidecarVersion(dir, '1.6.0');
+    assert.equal(readSidecarVersion(dir), '1.6.0');
+    // The docstring above the version line survives the rewrite.
+    assert.match(readFileSync(py, 'utf8'), /"""docstring\."""/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readSidecarVersion returns null when version.py is absent', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bump-sidecar-none-'));
+  try {
+    assert.equal(readSidecarVersion(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
