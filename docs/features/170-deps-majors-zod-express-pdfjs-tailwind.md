@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-02
 owner: null
 ---
 
 # 170 — Dependency major upgrades round 2 (srv-25 Zod 4 · srv-24 Express 5 · srv-26 pdfjs 5 · fe-20 Tailwind 4)
 
-> Status: active (one branch `chore/deps-majors-plan-170`, four commits)
+> Status: stable (shipped 2026-06-02 via PR #489, merge `ffc3016`)
 > Key files: `server/package.json`, `package.json`, `server/src/analyzer/ollama.ts`,
 > `server/src/handoff/schemas.ts`, `server/src/http.ts`, `server/src/error-handler.ts`,
 > `server/src/parsers/pdf.ts`, `src/styles.css`, `postcss.config.js`, `tailwind.config.ts` (deleted)
@@ -102,8 +102,10 @@ Gate (green on `chore/deps-majors-plan-170`):
 
 ## Ship notes
 
-- _Pending merge._ Fill shipped date + merge SHA; flip `status: stable` and `git mv`
-  to `archive/`.
+- **Shipped 2026-06-02** via PR #489 (merge commit `ffc3016`), closing #405/#406/#410/#409.
+  CI `npm run verify` green (16m02s) on Linux — the Windows-only `analysis-pipelining`
+  contention flake (180s timeout under full-parallel load; 6/6 in 3.4s isolated, PR #292)
+  did not recur on CI. Local battery run green leg-by-leg before push.
 - **Linux visual baselines owed:** Tailwind 4 shifts the Linux baselines too, but CI's
   `test:e2e` excludes the visual spec, so PR CI is unaffected. After merge, run the
   `regen-visual-baselines.yml` workflow (`workflow_dispatch`) to regenerate the Linux
