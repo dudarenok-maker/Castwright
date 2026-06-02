@@ -24,6 +24,7 @@ import { writeFile } from 'node:fs/promises';
 
 import type { UserSettings } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT } from '../workspace/paths.js';
+import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
 
 export type TtsModelKey = UserSettings['defaultTtsModelKey'];
@@ -397,8 +398,11 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   }
 
   const startScript = join(repoRoot, 'server', 'tts-sidecar', 'start.ps1');
-  const logDir = join(repoRoot, 'logs');
-  const runDir = join(repoRoot, '.run');
+  /* logs/ + .run/ default to repoRoot but honour APP_LOG_DIR / APP_RUN_DIR so
+     a versioned-dir install (fs-1) parks them in a shared sibling — otherwise
+     tts.pid lands inside the per-release tree that an upgrade swaps out. */
+  const logDir = resolveLogDir(repoRoot);
+  const runDir = resolveRunDir(repoRoot);
 
   /* The default engine honours its own eager-load toggle; the non-default
      engine always stays LAZY as the on-demand fallback (it warms in ~1 s at
@@ -406,6 +410,12 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
      Qwen default → PRELOAD_QWEN follows eagerLoadQwen, Kokoro forced off.
      Kokoro/Coqui default → PRELOAD_QWEN off, Kokoro follows eagerLoadKokoro. */
   const isQwenDefault = modelKey === 'qwen3-tts-0.6b';
+  /* The `...process.env` spread carries the parent's full environment to the
+     sidecar — including KOKORO_MODEL_PATH / KOKORO_VOICES_PATH when the
+     versioned-dir launcher (fs-1) points the ~330 MB Kokoro weights at a shared
+     `models/kokoro` sibling. Keep that spread: replacing it with an allowlist
+     would orphan the weights inside the per-release tree on every upgrade.
+     (spawn-sidecar.test.ts pins this pass-through.) */
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
