@@ -47,7 +47,7 @@ const SLOW_FILES_TO_EXCLUDE = [
    (tsconfig allowJs:false). */
 const lowConcurrency =
   process.env.LOW_CONCURRENCY === '1' || process.env.LOW_CONCURRENCY === 'true';
-const maxForks = lowConcurrency ? 1 : 2;
+const maxWorkers = lowConcurrency ? 1 : 2;
 
 export default defineConfig({
   test: {
@@ -61,12 +61,10 @@ export default defineConfig({
     testTimeout: 15_000,
     hookTimeout: 30_000,
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        maxForks,
-        minForks: 1,
-      },
-    },
+    /* Vitest 4 removed `poolOptions`; `poolOptions.forks.maxForks` is now the
+       top-level `maxWorkers` (and `minForks` was dropped). `pool: 'forks'`
+       stays — this subprocess-heavy suite still needs fork isolation. */
+    maxWorkers,
     retry: 1,
   },
 });

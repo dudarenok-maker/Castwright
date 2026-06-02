@@ -35,10 +35,16 @@ function makeFakeChild(pid = 12345): FakeChild {
 }
 
 describe('spawnSidecar', () => {
+  // Vitest 4: vi.fn() is typed Mock<Procedure | Constructable> and no longer
+  // assigns to a specific function param — pin probeFn/log/warn to spawnSidecar's
+  // own option signatures so the mocks stay assignable (and self-maintaining).
+  // spawnFn is cast `as unknown as typeof spawn` at each call site, so it's fine
+  // left untyped.
+  type SpawnArgs = Parameters<typeof spawnSidecar>[0];
   let spawnFn: ReturnType<typeof vi.fn>;
-  let probeFn: ReturnType<typeof vi.fn>;
-  let log: ReturnType<typeof vi.fn>;
-  let warn: ReturnType<typeof vi.fn>;
+  let probeFn: ReturnType<typeof vi.fn<NonNullable<SpawnArgs['probeFn']>>>;
+  let log: ReturnType<typeof vi.fn<NonNullable<SpawnArgs['log']>>>;
+  let warn: ReturnType<typeof vi.fn<NonNullable<SpawnArgs['warn']>>>;
   /* A real, writable temp dir per test — spawnSidecar opens the sidecar log
      files (logs/tts.log, logs/tts.err.log) and writes .run/tts.pid under
      repoRoot, so it must point at a directory we can actually create files
@@ -48,9 +54,9 @@ describe('spawnSidecar', () => {
 
   beforeEach(() => {
     spawnFn = vi.fn(() => makeFakeChild());
-    probeFn = vi.fn(async () => false);
-    log = vi.fn();
-    warn = vi.fn();
+    probeFn = vi.fn<NonNullable<SpawnArgs['probeFn']>>(async () => false);
+    log = vi.fn<NonNullable<SpawnArgs['log']>>();
+    warn = vi.fn<NonNullable<SpawnArgs['warn']>>();
     repoRoot = mkdtempSync(join(tmpdir(), 'wt-sidecar-'));
   });
 
