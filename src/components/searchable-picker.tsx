@@ -59,7 +59,7 @@ export interface SearchablePickerProps<T> {
   ) => ReactNode;
   onPick: (data: T) => void;
   onClose: () => void;
-  anchorRef: RefObject<HTMLElement>;
+  anchorRef: RefObject<HTMLElement | null>;
   placement?: 'bottom-start' | 'bottom-end';
   minWidth?: number;
   searchPlaceholder?: string;

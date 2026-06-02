@@ -45,7 +45,7 @@ interface CharacterSearchPickerProps {
   onPickRosterEntry?: (entry: SeriesRosterEntry) => void;
   onClose: () => void;
   /** Trigger element the popover anchors against. */
-  anchorRef: RefObject<HTMLElement>;
+  anchorRef: RefObject<HTMLElement | null>;
   /** Horizontal alignment. `end` (default) right-aligns the popover to
       the trigger — what the row dropdown wants. `start` left-aligns —
       what the inspector segment-level / per-sentence pickers want. */
