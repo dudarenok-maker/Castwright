@@ -39,7 +39,8 @@
    manuscript-edits.json + analysis-cache on either side are NOT touched
    — those reference characters by id, which is preserved. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';

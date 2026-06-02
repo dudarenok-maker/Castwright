@@ -54,12 +54,12 @@ export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) 
       return { tone: 'text-emerald-700 bg-emerald-100/70', dot: 'bg-emerald-500 animate-pulse' };
     }
     if (state === 'warming') {
-      return { tone: 'text-ink/50 bg-ink/[0.05]', dot: 'bg-ink/30' };
+      return { tone: 'text-ink/50 bg-ink/5', dot: 'bg-ink/30' };
     }
     if (state === 'done') {
       return { tone: 'text-emerald-700 bg-emerald-100/70', dot: 'bg-emerald-500' };
     }
-    return { tone: 'text-ink/50 bg-ink/[0.05]', dot: 'bg-ink/30' };
+    return { tone: 'text-ink/50 bg-ink/5', dot: 'bg-ink/30' };
   })();
 
   /* Warm-up only means something when the split is actually engaged — Phase 1

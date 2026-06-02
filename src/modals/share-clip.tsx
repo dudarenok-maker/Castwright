@@ -218,7 +218,7 @@ export function ShareClipModal({
                     onClick={() => adjustStart(-5)}
                     data-testid="share-clip-start-down"
                     aria-label="Move start back 5 seconds"
-                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/[0.04]"
+                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/4"
                   >
                     −
                   </button>
@@ -229,14 +229,14 @@ export function ShareClipModal({
                     value={formatTime(startSec)}
                     onChange={(e) => onStartInput(e.target.value)}
                     aria-label="Clip start time"
-                    className="flex-1 text-center tabular-nums font-semibold text-ink rounded-full bg-canvas border border-ink/15 px-3 py-1.5 focus:outline-none focus:border-ink/40"
+                    className="flex-1 text-center tabular-nums font-semibold text-ink rounded-full bg-canvas border border-ink/15 px-3 py-1.5 focus:outline-hidden focus:border-ink/40"
                   />
                   <button
                     type="button"
                     onClick={() => adjustStart(5)}
                     data-testid="share-clip-start-up"
                     aria-label="Move start forward 5 seconds"
-                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/[0.04]"
+                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/4"
                   >
                     +
                   </button>
@@ -253,7 +253,7 @@ export function ShareClipModal({
                     onClick={() => adjustEnd(-5)}
                     data-testid="share-clip-end-down"
                     aria-label="Move end back 5 seconds"
-                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/[0.04]"
+                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/4"
                   >
                     −
                   </button>
@@ -264,14 +264,14 @@ export function ShareClipModal({
                     value={formatTime(endSec)}
                     onChange={(e) => onEndInput(e.target.value)}
                     aria-label="Clip end time"
-                    className="flex-1 text-center tabular-nums font-semibold text-ink rounded-full bg-canvas border border-ink/15 px-3 py-1.5 focus:outline-none focus:border-ink/40"
+                    className="flex-1 text-center tabular-nums font-semibold text-ink rounded-full bg-canvas border border-ink/15 px-3 py-1.5 focus:outline-hidden focus:border-ink/40"
                   />
                   <button
                     type="button"
                     onClick={() => adjustEnd(5)}
                     data-testid="share-clip-end-up"
                     aria-label="Move end forward 5 seconds"
-                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/[0.04]"
+                    className="w-7 h-7 rounded-full border border-ink/15 text-ink/60 hover:bg-ink/4"
                   >
                     +
                   </button>

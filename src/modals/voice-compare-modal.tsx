@@ -224,7 +224,7 @@ export function VoiceCompareModal({
               value={persona}
               onChange={(e) => setPersona(e.target.value)}
               rows={3}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30 resize-y"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30 resize-y"
             />
           </div>
           <button
@@ -346,7 +346,7 @@ function PlayButton({
           ? 'bg-magenta/10 text-magenta cursor-wait'
           : playing
             ? 'bg-magenta text-white hover:bg-magenta/90'
-            : 'bg-ink/[0.06] text-ink/80 hover:bg-magenta/15 hover:text-magenta'
+            : 'bg-ink/6 text-ink/80 hover:bg-magenta/15 hover:text-magenta'
       }`}
     >
       {row.loading ? (

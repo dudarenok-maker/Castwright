@@ -27,4 +27,5 @@ src/lib/api-types.ts text eol=lf
 *.mp3 binary
 *.wav binary
 *.m4b binary
+*.pdf binary
 *.zip binary

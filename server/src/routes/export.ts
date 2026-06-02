@@ -18,7 +18,8 @@
    new same-format build reaches `done`, older manifests of that format
    are revoked so the queue de-dupes naturally. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';

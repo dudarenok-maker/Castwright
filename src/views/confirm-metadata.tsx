@@ -200,7 +200,7 @@ export function ConfirmMetadataView() {
               disabled={busy}
               onChange={(e) => setAuthor(e.target.value)}
               placeholder="e.g. Ursula K. Le Guin"
-              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-hidden focus:border-peach disabled:opacity-50"
             />
           </Field>
 
@@ -230,7 +230,7 @@ export function ConfirmMetadataView() {
                       setSeriesFromTitle(false);
                     }}
                     placeholder="e.g. Earthsea"
-                    className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+                    className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-hidden focus:border-peach disabled:opacity-50"
                   />
                 </Field>
                 <Field label="Book #" required>
@@ -247,13 +247,13 @@ export function ConfirmMetadataView() {
                       setSeriesFromTitle(false);
                     }}
                     placeholder="1"
-                    className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50 tabular-nums"
+                    className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-hidden focus:border-peach disabled:opacity-50 tabular-nums"
                   />
                 </Field>
               </div>
               {seriesFromTitle && (
                 <p className="-mt-2">
-                  <span className="inline-block text-[10px] uppercase tracking-[0.10em] font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
+                  <span className="inline-block text-[10px] uppercase tracking-widest font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
                     Auto-extracted from title — verify
                   </span>
                 </p>
@@ -276,7 +276,7 @@ export function ConfirmMetadataView() {
               disabled={busy}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. A Wizard of Earthsea"
-              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-hidden focus:border-peach disabled:opacity-50"
             />
           </Field>
 
@@ -289,7 +289,7 @@ export function ConfirmMetadataView() {
                 setLanguage(e.target.value);
                 setLanguageTouched(true);
               }}
-              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-none focus:border-peach disabled:opacity-50"
+              className="w-full rounded-xl border border-ink/15 bg-white text-ink px-4 py-2.5 text-sm focus:outline-hidden focus:border-peach disabled:opacity-50"
             >
               {LANGUAGE_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>
@@ -299,7 +299,7 @@ export function ConfirmMetadataView() {
             </select>
             {!languageTouched && language === 'ru' && (
               <p className="mt-1.5">
-                <span className="inline-block text-[10px] uppercase tracking-[0.10em] font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
+                <span className="inline-block text-[10px] uppercase tracking-widest font-semibold text-magenta bg-magenta/10 border border-magenta/20 rounded-full px-2.5 py-0.5">
                   Auto-detected Russian — verify
                 </span>
               </p>

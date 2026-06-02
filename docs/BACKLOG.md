@@ -80,31 +80,7 @@ _Full detail + acceptance:_ [#402](https://github.com/dudarenok-maker/AudioBook-
 
 ### Dependency major upgrades
 
-Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit. The audit cleared the deadline-driven CI-action bump (`ops-8`) + the genuinely-safe minor bumps (TypeScript → latest 5.x, `@google/genai` → 2.7, Node-floor pin) inline, and filed every framework **major** that is now behind here — each researched to "pickup-ready" (current → target, breaking-change surface, blast radius, automated migration path if any, risk). None blocks ship; pick up when time allows. Ordered foundational/low-risk → broad/high-risk. **Shipped 2026-06-02** — the React cluster (`fe-19` Vite **8** + Vitest **4**, `fe-18` React 19, `fe-21` react-router 7) + `ops-10` (TypeScript 6) landed together via [plan 167](features/167-fe-react-cluster-upgrade.md). Targets moved past the original research: latest majors are now Vite 8 (Rolldown) / Vitest 4, taken over the conservative Vite 7 / Vitest 3. `fe-18` and `fe-21` proved **coupled** — react-router 6 isn't React-19-compatible — so they shipped as one commit.
-
-#### `srv-25` — Zod 3 → 4 (and drop `zod-to-json-schema`) ([#405](https://github.com/dudarenok-maker/AudioBook-Generator/issues/405))
-
-- _What:_ bump `zod ^3.23.8 → 4.x`. Zod 4 ships **native `z.toJSONSchema()`**, so the `zod-to-json-schema` dependency can be **removed** entirely (today it builds the Gemini/Ollama structured-output schemas). Breaking surface: string-format validators moved to top-level (`z.string().email()` → `z.email()`, `.uuid()`, `.url()`), unified error-customization param. Affected: `server/src/analyzer/{ollama,gemini}.ts`, `server/src/handoff/schemas.ts`, `server/src/workspace/user-settings.ts`, `server/src/routes/{user-settings,cast-series-patch}.ts` (8 files). Migration: `npx @zod/codemod --transform v3-to-v4`.
-- _Benefit (technical / architectural):_ large parse/compile perf win, smaller bundle, **deletes a whole dependency**. _Risk: medium (verify the generated schema still satisfies the structured-output contract)._
-_Full detail + acceptance:_ [#405](https://github.com/dudarenok-maker/AudioBook-Generator/issues/405).
-
-#### `srv-24` — Express 4 → 5 ([#406](https://github.com/dudarenok-maker/AudioBook-Generator/issues/406))
-
-- _What:_ bump `express ^4.19.2 → 5.x` (GA). Breaking surface: `path-to-regexp` v8 route syntax (`*` → named `/*splat`, optional `:param?` → `{/:param}`), removed legacy signatures (`app.del`, `res.json(status, body)`, `res.send(status)`), rejected-promise propagation in middleware, `req.query` is now a getter. Audit every route under `server/src/routes/` for wildcard/optional params + the removed signatures.
-- _Benefit (technical):_ supported GA major; async-error handling improvements. _Risk: medium (route-syntax migration is the main hazard)._
-_Full detail + acceptance:_ [#406](https://github.com/dudarenok-maker/AudioBook-Generator/issues/406).
-
-#### `fe-20` — Tailwind 3 → 4 ([#409](https://github.com/dudarenok-maker/AudioBook-Generator/issues/409))
-
-- _What:_ bump `tailwindcss ^3.4.10 → 4.x` + add `@tailwindcss/postcss`. v4 is CSS-first: `@import "tailwindcss"` replaces the `@tailwind` directives; theme moves into `@theme` (the JS `tailwind.config.ts` still works via the `@config` directive for back-compat). **Our setup is unusually well-aligned** — `src/styles.css` already declares design tokens as CSS custom properties (`--peach`, `--ink`, …) and `tailwind.config.ts` references them, which is exactly v4's "every token is a CSS var" model. Run `npx @tailwindcss/upgrade` (automates ~90% incl. class renames). v4 drops the need for `autoprefixer`/`postcss-import` boilerplate.
-- _Benefit (technical):_ faster engine, runtime theme switching, simpler toolchain. _Risk: medium — visual-regression baselines shift; needs a snapshot re-bake._
-_Full detail + acceptance:_ [#409](https://github.com/dudarenok-maker/AudioBook-Generator/issues/409).
-
-#### `srv-26` — pdfjs-dist 4 → 5 ([#410](https://github.com/dudarenok-maker/AudioBook-Generator/issues/410))
-
-- _What:_ bump `pdfjs-dist ^4.10.38 → 5.x`. ESM-only, Node 20+, worker-setup changes. Single consumer (PDF manuscript parse). Verify the worker wiring + the parse path still resolve under the v5 ESM layout.
-- _Benefit (technical):_ supported major + security fixes. _Risk: low-medium._
-_Full detail + acceptance:_ [#410](https://github.com/dudarenok-maker/AudioBook-Generator/issues/410).
+Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit, which filed every framework **major** then behind as a research-complete BACKLOG item. **All shipped — this section is now empty.** Round 1 (**2026-06-02**, [plan 167](features/167-fe-react-cluster-upgrade.md)): the React cluster (`fe-19` Vite 8 + Vitest 4, `fe-18` React 19, `fe-21` react-router 7) + `ops-10` (TypeScript 6). Round 2 (**2026-06-02**, [plan 170](features/170-deps-majors-zod-express-pdfjs-tailwind.md)): `srv-25` Zod 4 (deletes `zod-to-json-schema`), `srv-24` Express 5, `srv-26` pdfjs-dist 5, `fe-20` Tailwind 4 — closes #405/#406/#410/#409.
 
 _`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026-06-01** via
 [plan 164](features/164-deps-ci-hygiene.md) — all workflows now pin the latest Node-24 action

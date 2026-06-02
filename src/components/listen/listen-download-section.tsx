@@ -179,7 +179,7 @@ function DownloadCard({
         className={
           live
             ? 'min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink/90'
-            : 'min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed'
+            : 'min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink/3 text-ink/40 cursor-not-allowed'
         }
       >
         <IconDownload className="w-4 h-4" /> Download
@@ -309,7 +309,7 @@ function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerApp
           disabled
           title={`${app.sendVerb} — coming soon`}
           data-testid={`listener-app-action-${app.id}`}
-          className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed"
+          className="min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink/3 text-ink/40 cursor-not-allowed"
         >
           <IconExternal className="w-4 h-4" /> {app.sendVerb}
         </button>
@@ -351,7 +351,7 @@ function ExportQueue({
     <section className="mb-8 md:mb-12">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Export queue</SectionLabel>
-        <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs flex-wrap">
+        <div className="flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs flex-wrap">
           {filters.map((f) => (
             <button
               key={f.id}

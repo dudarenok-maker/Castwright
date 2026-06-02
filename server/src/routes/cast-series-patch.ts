@@ -27,7 +27,8 @@
    standalone — `failed` is empty in that case). HTTP 207 (Multi-Status)
    when `failed.length > 0`; 200 otherwise. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { z } from 'zod';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';

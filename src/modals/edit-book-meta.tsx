@@ -273,7 +273,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
                   <span
                     key={tag}
                     data-testid={`tag-chip-${tag}`}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-deep/[0.06] text-purple-deep border border-purple-deep/15"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-purple-deep/6 text-purple-deep border border-purple-deep/15"
                   >
                     {tag}
                     <button
@@ -298,7 +298,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
                   onBlur={() => setTimeout(() => setSuggestionsOpen(false), 120)}
                   aria-label="Add tag"
                   placeholder={tags.length === 0 ? 'Add tags (Enter or comma to add)' : ''}
-                  className="flex-1 min-w-[120px] bg-transparent text-sm text-ink focus:outline-none py-0.5"
+                  className="flex-1 min-w-[120px] bg-transparent text-sm text-ink focus:outline-hidden py-0.5"
                 />
               </div>
               {suggestionsOpen && suggestions.length > 0 && (
@@ -320,7 +320,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
                           setTagInput('');
                           tagInputRef.current?.focus();
                         }}
-                        className="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-ink/[0.04]"
+                        className="w-full text-left px-3 py-1.5 text-sm text-ink hover:bg-ink/4"
                       >
                         {s}
                       </button>
@@ -379,7 +379,7 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
 }
 
 const inputClasses =
-  'mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30';
+  'mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-hidden focus:border-ink/30';
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
