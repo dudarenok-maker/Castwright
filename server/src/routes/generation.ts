@@ -73,6 +73,7 @@ import {
   synthesiseChapter,
   toVoiceLike,
   buildHintFromCast,
+  ChapterStallError,
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
@@ -99,6 +100,22 @@ export const generationRouter = Router();
    so it is excluded here and still surfaces immediately (only a restart fixes
    a poisoned context). */
 const MAX_RECYCLE_RECOVERIES = 2;
+
+/* Per-chapter no-progress watchdog (2026-06-02 stellarlune ch52 stall). A
+   chapter that makes NO forward progress — no group/batch completes and no
+   assembly milestone lands — for this long is aborted and recorded as a
+   `generationError`, instead of hanging the queue forever with no breadcrumb.
+   This is the whole-chapter catch-all that complements the per-CALL
+   `SIDECAR_CALL_TIMEOUT_MS`: it covers the post-synth assembly phase (encode /
+   ffmpeg loudnorm / disk), which has no per-call ceiling, AND any synth wedge
+   that survives a disabled/raised call timeout. Generous default (12 min) —
+   comfortably above the longest legitimate single batch (~5 min observed) and
+   the 10-min per-call ceiling, so a normally-slow batch or a recycle-respawn
+   ride-out never false-trips. `0` disables. */
+function chapterNoProgressMs(): number {
+  const raw = Number(process.env.CHAPTER_NO_PROGRESS_MS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 720_000;
+}
 
 /* side-11 item 2 — soft recycle at the chapter boundary. The sidecar raises
    `recycle_pending` in /health once committed-private memory crosses the SOFT
@@ -1032,7 +1049,38 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     job.lastProgressTick = initialTick;
     broadcast(job, { type: 'progress', ...initialTick });
 
+    /* Per-chapter no-progress watchdog (2026-06-02 stellarlune ch52). A
+       chapter-scoped controller chained to the job controller: a pause /
+       displacement abort still propagates, but the watchdog can also abort
+       JUST this chapter without touching sibling work. `bumpProgress` is called
+       on every real forward step (group/batch completion + each assembly
+       milestone); if none lands within `noProgressMs`, `stallGuard` rejects with
+       a ChapterStallError. We Promise.race the body against `stallGuard` so even
+       a synchronously-hung await (e.g. a wedged ffmpeg in assembly that ignores
+       the abort) is escaped — aborting `chapterCtrl` is best-effort cancellation
+       on top. */
+    const chapterCtrl = new AbortController();
+    const onParentAbort = () => chapterCtrl.abort();
+    if (controller.signal.aborted) chapterCtrl.abort();
+    else controller.signal.addEventListener('abort', onParentAbort, { once: true });
+    let lastProgressAt = Date.now();
+    let stallPhase: 'synthesis' | 'assembly' = 'synthesis';
+    const bumpProgress = () => {
+      lastProgressAt = Date.now();
+    };
+    const noProgressMs = chapterNoProgressMs();
+    let watchdogFired = false;
+    let stallTimer: ReturnType<typeof setInterval> | null = null;
+    let rejectStall: ((e: unknown) => void) | null = null;
+    const stallGuard =
+      noProgressMs > 0
+        ? new Promise<never>((_, reject) => {
+            rejectStall = reject;
+          })
+        : null;
+
     try {
+      const renderBody = async (chapterSignal: AbortSignal): Promise<void> => {
       /* Build the spoken chapter-title phrase from chapter.id + chapter.title.
          Returns null only when both inputs are unusable (defensive — every
          confirmed chapter has at least an id), in which case `?? undefined`
@@ -1045,7 +1093,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          racing the lazy load. Idempotent + best-effort (the sidecar
          `_base_load_lock` is the correctness guarantee; this is the explicit
          "wait until ready" on top). Honours the run abort. */
-      await ensureSidecarEngineReady(engine, controller.signal);
+      await ensureSidecarEngineReady(engine, chapterSignal);
       /* Warm Kokoro ONLY when this chapter will actually render a Qwen→Kokoro
          fallback — either the whole-cast `qwenUnavailable` case, or a confirmed
          per-character undesigned-voice fallback (an unconfirmed one parked the
@@ -1063,7 +1111,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             engine,
           ).length > 0);
       if (willFallBackToKokoro) {
-        await ensureSidecarEngineReady('kokoro', controller.signal);
+        await ensureSidecarEngineReady('kokoro', chapterSignal);
       }
       /* Wall around the synth phase only (all TTS — title beat + body groups;
          encode/disk happens after and is excluded) — drives the RTF rollup +
@@ -1090,7 +1138,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            fallback (forbidKokoroFallback = false). */
         forbidKokoroFallback: nonEnglishBook,
         bookLanguage,
-        signal: controller.signal,
+        signal: chapterSignal,
         chapterTitleNarration,
         narratorCharacterId: 'narrator',
         /* Title-beat ticks so the SSE stream doesn't go silent while the
@@ -1098,6 +1146,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            a short phrase, the stall detector fires at 30 s). currentLine: 0
            keeps the UI's "line N of M" caption at the pre-body state. */
         onTitleStart: () => {
+          bumpProgress();
           const tick = {
             chapterId: chapter.id,
             characterId: 'narrator',
@@ -1137,6 +1186,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           broadcast(job, { type: 'progress', ...tick });
         },
         onGroupComplete: ({ group, totalGroups, completed }) => {
+          /* Real forward progress — a group finished. (We deliberately do NOT
+             bump on onGroupStart: withHeartbeat re-fires it every ~10s as a
+             local timer regardless of sidecar liveness, so bumping there would
+             mask a genuinely wedged synth from the watchdog.) */
+          bumpProgress();
           const progress = Math.min(0.99, completed / Math.max(1, totalGroups));
           const tick = {
             chapterId: chapter.id,
@@ -1152,6 +1206,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            rolling live-batch window so the dev pill shows throughput that moves
            mid-chapter, not just the per-chapter rollup below. */
         onBatchComplete: ({ genMs, audioMs }) => {
+          bumpProgress();
           recordBatchThroughput({ genMs, audioMs });
         },
           });
@@ -1176,7 +1231,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           if (
             (synthErr as { name?: string })?.name === 'AbortError' ||
             (!isTransient(synthErr) && !isRecycleTimeout) ||
-            controller.signal.aborted ||
+            chapterSignal.aborted ||
             recovery >= MAX_RECYCLE_RECOVERIES
           ) {
             throw synthErr;
@@ -1190,14 +1245,18 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           );
           /* Polls through the supervisor respawn (srv-17b, 120 s budget); throws
              AbortError if the run is paused/displaced mid-wait. */
-          await ensureSidecarEngineReady(engine, controller.signal);
+          await ensureSidecarEngineReady(engine, chapterSignal);
         }
       }
 
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
          state.json update). Tell the client so it stops looking like a
-         frozen 99 %. */
+         frozen 99 %. This phase has no per-call timeout, so the no-progress
+         watchdog is the only ceiling on a wedged ffmpeg/encode here — mark the
+         phase (so a stall names "assembly") and bump as we enter it. */
+      stallPhase = 'assembly';
+      bumpProgress();
       broadcast(job, {
         type: 'chapter_assembling',
         chapterId: chapter.id,
@@ -1252,6 +1311,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          concurrent chapter writes (sibling chapter jobs of the same book,
          now separate dispatcher POSTs) never collide on the same temp
          path. */
+      bumpProgress(); // encode (2-pass loudnorm) done — the long assembly step
       const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
       await writeFile(tmpAudio, audioBuffer);
       /* Snapshot the cast character attributes for every character that
@@ -1445,6 +1505,30 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       if (job.queueEntryId != null && job.chapterId === chapter.id) {
         void markQueueEntryDoneOnDisk(job.queueEntryId, chapter.id);
       }
+      }; /* end renderBody */
+
+      if (stallGuard) {
+        stallTimer = setInterval(
+          () => {
+            if (Date.now() - lastProgressAt >= noProgressMs) {
+              watchdogFired = true;
+              chapterCtrl.abort(); // best-effort cancel of any abort-aware in-flight synth
+              rejectStall?.(new ChapterStallError(noProgressMs, stallPhase));
+            }
+          },
+          Math.min(noProgressMs, 15_000),
+        );
+        const body = renderBody(chapterCtrl.signal).catch((err) => {
+          /* After the watchdog fires, the body's own AbortError (the expected
+             downstream of our chapterCtrl.abort) is swallowed so stallGuard's
+             ChapterStallError is the rejection the outer catch sees. */
+          if (watchdogFired) return;
+          throw err;
+        });
+        await Promise.race([body, stallGuard]);
+      } else {
+        await renderBody(chapterCtrl.signal);
+      }
     } catch (e) {
       /* AbortError = our own controller fired (regen displacement or
          explicit /pause). Don't report it as a chapter failure — silently
@@ -1455,9 +1539,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         job.runInProgress.delete(chapter.id);
         return;
       }
-      const initial = describeSynthesisError(e, engine);
+      /* A ChapterStallError is the no-progress watchdog firing — record the
+         clear stall message (non-fatal: a single stalled chapter fails and the
+         queue advances; the cascade counter below still escalates if stalls
+         repeat across chapters, which signals a systemic wedge). */
+      const isStall = (e as { name?: string })?.name === 'ChapterStallError';
+      const initial = isStall
+        ? { errorReason: (e as Error).message, fatal: false }
+        : describeSynthesisError(e, engine);
       let { errorReason, fatal } = initial;
-      console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
+      if (isStall) {
+        console.error(
+          `[generation] chapter ${chapter.id} (${chapter.slug}) STALLED during ${stallPhase}: ` +
+            `no progress for ${Math.round(noProgressMs / 1000)}s — recorded as failed so the queue advances.`,
+        );
+      } else {
+        console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
+      }
       if (!fatal) {
         const cascadeResult = recordNonFatal(cascade, errorReason);
         if (cascadeResult.fatal) {
@@ -1509,6 +1607,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         cascadeFatal = true;
         if (!controller.signal.aborted) controller.abort();
       }
+    } finally {
+      /* Tear down the no-progress watchdog + the parent-abort bridge on every
+         exit path (success, failure, stall, pause) so neither leaks a timer or
+         a listener across chapters. */
+      if (stallTimer) clearInterval(stallTimer);
+      controller.signal.removeEventListener('abort', onParentAbort);
     }
   };
 
