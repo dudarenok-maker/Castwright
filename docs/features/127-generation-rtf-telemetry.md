@@ -8,7 +8,7 @@ owner: null
 
 > Status: active
 > Key files: `server/tts-sidecar/main.py` (batch log + `SynthBatchResult` genMs/audioMs + frame header), `server/src/tts/sidecar.ts` (parse perf header), `server/src/tts/generation-stats.ts` (chapter + live-batch windows + per-chapter history ring), `server/src/routes/generation-stats.ts`, `server/src/routes/generation.ts` (rollup + `onBatchComplete`), `server/src/tts/synthesise-chapter.ts` (`onBatchComplete`), `src/components/admin-pill.tsx`, `src/views/admin.tsx` (per-chapter throughput table), `src/lib/api.ts`
-> URL surface: `GET /api/generation/stats`; top-bar Admin pill (all-users since [[171-admin-watch-console]]) + Admin-view throughput table
+> URL surface: `GET /api/generation/stats`; top-bar Admin pill (all-users since [[172-admin-watch-console]]) + Admin-view throughput table
 > OpenAPI ops: none (dev/observability endpoint, not part of the public contract)
 
 ## Benefit / Rationale
@@ -26,7 +26,7 @@ written only at chapter completion) looked stalled when it was fine.
   mid-chapter — falling back to the per-chapter rolling figure when no batch is
   recent. The server log also prints a per-chapter rollup (`rtf`, `Nx realtime`,
   `chapters/hr`) as a lagging summary. Clicking the pill opens the Admin watch
-  console ([[171-admin-watch-console]]), which also renders a **per-chapter throughput table** (newest-first
+  console ([[172-admin-watch-console]]), which also renders a **per-chapter throughput table** (newest-first
   RTF history with a ▲/▼ deterioration cue + a run-summary strip) so the operator
   can see whether RTF is deteriorating or staying consistent across a run — the
   same answer that previously required grepping the `[generation] chapter N …
@@ -56,7 +56,7 @@ written only at chapter completion) looked stalled when it was fine.
   restarts per-batch), resets on a full server restart.
 - **Invariants preserved:** mock/real api split (mock returns the idle shape);
   the RTF readout keeps its `data-testid="topbar-rtf"` and the live/per-chapter
-  fallback behaviour. Since [[171-admin-watch-console]] the pill is the all-users
+  fallback behaviour. Since [[172-admin-watch-console]] the pill is the all-users
   `AdminPill` (always rendered; testid `topbar-admin-link`, click → `#/admin`),
   not the old dev-gated `wt` pill. The sidecar batch path's audio output is
   byte-identical — only a log line was added.
