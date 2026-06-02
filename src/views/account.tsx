@@ -32,6 +32,8 @@ import {
   type TextScale,
   AUTOSAVE_DEBOUNCE_MIN_MS,
   AUTOSAVE_DEBOUNCE_MAX_MS,
+  SKIP_SEC_MIN,
+  SKIP_SEC_MAX,
 } from '../store/settings-slice';
 import { formatKeyLabel, normalizeKeyEvent } from '../lib/keybindings';
 import { OllamaInstall } from '../components/ollama-install';
@@ -1325,6 +1327,9 @@ function AdvancedCard() {
   const highContrast = useAppSelector((s) => s.settings.highContrast);
   const textScale = useAppSelector((s) => s.settings.textScale);
   const autosaveDebounceMs = useAppSelector((s) => s.settings.autosaveDebounceMs);
+  const autoAdvance = useAppSelector((s) => s.settings.autoAdvance);
+  const skipForwardSec = useAppSelector((s) => s.settings.skipForwardSec);
+  const skipBackSec = useAppSelector((s) => s.settings.skipBackSec);
 
   const [capturing, setCapturing] = useState<KeyboardActionId | null>(null);
   /* Local mirror so partial typing (e.g. clearing the field) doesn't clamp
@@ -1333,6 +1338,15 @@ function AdvancedCard() {
   useEffect(() => {
     setDebounceDraft(String(autosaveDebounceMs));
   }, [autosaveDebounceMs]);
+  /* fe-24 — same draft-then-clamp pattern for the two skip deltas. */
+  const [skipForwardDraft, setSkipForwardDraft] = useState(String(skipForwardSec));
+  const [skipBackDraft, setSkipBackDraft] = useState(String(skipBackSec));
+  useEffect(() => {
+    setSkipForwardDraft(String(skipForwardSec));
+  }, [skipForwardSec]);
+  useEffect(() => {
+    setSkipBackDraft(String(skipBackSec));
+  }, [skipBackSec]);
 
   /* Rebind capture — while armed, the next keydown is swallowed and bound.
      Capture phase so it preempts any other global shortcut; Escape cancels;
@@ -1359,6 +1373,14 @@ function AdvancedCard() {
   const commitDebounce = () => {
     const n = Number(debounceDraft);
     dispatch(settingsActions.setAutosaveDebounceMs(Number.isFinite(n) ? n : autosaveDebounceMs));
+  };
+  const commitSkipForward = () => {
+    const n = Number(skipForwardDraft);
+    dispatch(settingsActions.setSkipForwardSec(Number.isFinite(n) ? n : skipForwardSec));
+  };
+  const commitSkipBack = () => {
+    const n = Number(skipBackDraft);
+    dispatch(settingsActions.setSkipBackSec(Number.isFinite(n) ? n : skipBackSec));
   };
 
   return (
@@ -1398,11 +1420,156 @@ function AdvancedCard() {
             <button
               type="button"
               onClick={() => dispatch(settingsActions.resetKeybinding('play-pause'))}
+              data-testid="account-reset-play-pause"
               className="px-3 py-1.5 min-h-[36px] rounded-full text-xs text-ink/60 hover:text-ink"
             >
               Reset
             </button>
           </div>
+        </div>
+
+        {/* fe-24 — keyboard shortcut — skip back */}
+        <div>
+          <span className="block text-sm font-medium text-ink">Keyboard shortcut — skip back</span>
+          <span className="block text-xs text-ink/55 mt-0.5">
+            Rewinds the mini-player by the skip-back delta below. Default is J (mirrors YouTube).
+          </span>
+          <div className="mt-2 flex items-center gap-3">
+            <kbd
+              data-testid="account-skip-back-binding"
+              className="px-2.5 py-1 rounded-lg border border-ink/15 bg-ink/4 text-xs font-mono text-ink min-w-12 text-center"
+            >
+              {formatKeyLabel(keybindings['skip-back'])}
+            </kbd>
+            <button
+              type="button"
+              onClick={() => setCapturing('skip-back')}
+              data-testid="account-rebind-skip-back"
+              aria-pressed={capturing === 'skip-back'}
+              className="px-3 py-1.5 min-h-[36px] rounded-full border border-ink/15 bg-white text-xs text-ink hover:bg-ink/4"
+            >
+              {capturing === 'skip-back' ? 'Press a key… (Esc to cancel)' : 'Rebind'}
+            </button>
+            <button
+              type="button"
+              onClick={() => dispatch(settingsActions.resetKeybinding('skip-back'))}
+              className="px-3 py-1.5 min-h-[36px] rounded-full text-xs text-ink/60 hover:text-ink"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {/* fe-24 — keyboard shortcut — skip forward */}
+        <div>
+          <span className="block text-sm font-medium text-ink">Keyboard shortcut — skip forward</span>
+          <span className="block text-xs text-ink/55 mt-0.5">
+            Fast-forwards the mini-player by the skip-forward delta below. Default is L (mirrors
+            YouTube).
+          </span>
+          <div className="mt-2 flex items-center gap-3">
+            <kbd
+              data-testid="account-skip-forward-binding"
+              className="px-2.5 py-1 rounded-lg border border-ink/15 bg-ink/4 text-xs font-mono text-ink min-w-12 text-center"
+            >
+              {formatKeyLabel(keybindings['skip-forward'])}
+            </kbd>
+            <button
+              type="button"
+              onClick={() => setCapturing('skip-forward')}
+              data-testid="account-rebind-skip-forward"
+              aria-pressed={capturing === 'skip-forward'}
+              className="px-3 py-1.5 min-h-[36px] rounded-full border border-ink/15 bg-white text-xs text-ink hover:bg-ink/4"
+            >
+              {capturing === 'skip-forward' ? 'Press a key… (Esc to cancel)' : 'Rebind'}
+            </button>
+            <button
+              type="button"
+              onClick={() => dispatch(settingsActions.resetKeybinding('skip-forward'))}
+              className="px-3 py-1.5 min-h-[36px] rounded-full text-xs text-ink/60 hover:text-ink"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+
+        {/* fe-24 — skip deltas (seconds) */}
+        <div className="flex flex-wrap gap-x-8 gap-y-4">
+          <div>
+            <label htmlFor="account-skip-back-sec" className="block text-sm font-medium text-ink">
+              Skip-back amount (s)
+            </label>
+            <span className="block text-xs text-ink/55 mt-0.5">
+              {SKIP_SEC_MIN}–{SKIP_SEC_MAX} s.
+            </span>
+            <input
+              id="account-skip-back-sec"
+              type="number"
+              min={SKIP_SEC_MIN}
+              max={SKIP_SEC_MAX}
+              step={5}
+              value={skipBackDraft}
+              onChange={(e) => setSkipBackDraft(e.target.value)}
+              onBlur={commitSkipBack}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitSkipBack();
+                }
+              }}
+              data-testid="account-skip-back-sec"
+              className="mt-2 w-24 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm tabular-nums text-ink focus:ring-2 focus:ring-magenta/30"
+            />
+          </div>
+          <div>
+            <label htmlFor="account-skip-forward-sec" className="block text-sm font-medium text-ink">
+              Skip-forward amount (s)
+            </label>
+            <span className="block text-xs text-ink/55 mt-0.5">
+              {SKIP_SEC_MIN}–{SKIP_SEC_MAX} s.
+            </span>
+            <input
+              id="account-skip-forward-sec"
+              type="number"
+              min={SKIP_SEC_MIN}
+              max={SKIP_SEC_MAX}
+              step={5}
+              value={skipForwardDraft}
+              onChange={(e) => setSkipForwardDraft(e.target.value)}
+              onBlur={commitSkipForward}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitSkipForward();
+                }
+              }}
+              data-testid="account-skip-forward-sec"
+              className="mt-2 w-24 rounded-lg border border-ink/15 bg-white px-3 py-2 text-sm tabular-nums text-ink focus:ring-2 focus:ring-magenta/30"
+            />
+          </div>
+        </div>
+
+        {/* fe-23 — auto-advance to next chapter */}
+        <div>
+          <span className="block text-sm font-medium text-ink">Auto-advance chapters</span>
+          <span className="block text-xs text-ink/55 mt-0.5">
+            When a chapter finishes, automatically start the next one (continuous playback). The
+            sleep timer's "end of chapter" mode still stops playback.
+          </span>
+          <label className="mt-2 inline-flex items-center gap-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={autoAdvance}
+              onChange={(e) => dispatch(settingsActions.setAutoAdvance(e.target.checked))}
+              data-testid="account-auto-advance"
+              className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+            />
+            <span className="text-sm text-ink">
+              {autoAdvance
+                ? 'On — plays continuously through the book.'
+                : 'Off — stops at the end of each chapter.'}
+            </span>
+          </label>
         </div>
 
         {/* High-contrast */}
