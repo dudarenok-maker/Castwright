@@ -48,13 +48,9 @@ export default defineConfig({
        Vitest's defaults — jsdom suites are CPU-bound, not subprocess-
        bound; the server suite is where the worker-crash pattern lives. */
     retry: 1,
-    ...(poolCap
-      ? {
-          poolOptions: {
-            threads: { maxThreads: poolCap, minThreads: 1 },
-            forks: { maxForks: poolCap, minForks: 1 },
-          },
-        }
-      : {}),
+    /* Vitest 4 removed `poolOptions`; `maxThreads`/`maxForks` collapsed into a
+       single top-level `maxWorkers` (and `minWorkers` was dropped — only the
+       cap affects scheduling). The contention throttle now just sets that cap. */
+    ...(poolCap ? { maxWorkers: poolCap } : {}),
   },
 });
