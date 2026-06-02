@@ -37,12 +37,16 @@ function buildGroups(): PickerGroup<Fruit>[] {
 }
 
 describe('SearchablePicker', () => {
-  let onPick: ReturnType<typeof vi.fn>;
-  let onClose: ReturnType<typeof vi.fn>;
+  // Vitest 4: vi.fn() is typed Mock<Procedure | Constructable> and no longer
+  // assigns to a specific function prop — pin the signature via the component's
+  // own prop types so the mocks stay assignable (and self-maintaining).
+  type PickerProps = React.ComponentProps<typeof SearchablePicker<Fruit>>;
+  let onPick: ReturnType<typeof vi.fn<NonNullable<PickerProps['onPick']>>>;
+  let onClose: ReturnType<typeof vi.fn<NonNullable<PickerProps['onClose']>>>;
 
   beforeEach(() => {
-    onPick = vi.fn();
-    onClose = vi.fn();
+    onPick = vi.fn<NonNullable<PickerProps['onPick']>>();
+    onClose = vi.fn<NonNullable<PickerProps['onClose']>>();
   });
 
   function Harness(

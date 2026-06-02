@@ -14,6 +14,11 @@ const baseCatalog: BaseVoice[] = [
   { engine: 'coqui', name: 'Damien Black' },
 ];
 
+// Vitest 4: vi.fn() is typed Mock<Procedure | Constructable> and no longer
+// assigns to a specific function prop — pin onChange's signature via the
+// component's own prop type so the mocks stay assignable (self-maintaining).
+type OnChange = NonNullable<React.ComponentProps<typeof VoiceOverridePicker>['onChange']>;
+
 function defaultProps(overrides: Partial<React.ComponentProps<typeof VoiceOverridePicker>> = {}) {
   return {
     voiceId: 'v_Brann',
@@ -23,15 +28,15 @@ function defaultProps(overrides: Partial<React.ComponentProps<typeof VoiceOverri
     voicesForTab: baseCatalog,
     selectedValue: 'auto',
     baseVoicesLoaded: true,
-    onChange: vi.fn(),
+    onChange: vi.fn<OnChange>(),
     ...overrides,
   };
 }
 
 describe('VoiceOverridePicker', () => {
-  let onChange: ReturnType<typeof vi.fn>;
+  let onChange: ReturnType<typeof vi.fn<OnChange>>;
   beforeEach(() => {
-    onChange = vi.fn();
+    onChange = vi.fn<OnChange>();
   });
 
   it('shows the Auto resolved-voice label on the trigger when selectedValue is auto', () => {
