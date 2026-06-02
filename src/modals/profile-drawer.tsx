@@ -699,6 +699,12 @@ export function ProfileDrawer({
     }
     setDesignBusy(true);
     setEngineError(null);
+    /* The A/B "current vs proposed" compare is only meaningful when the
+       character ALREADY has a designed bespoke voice to put on Side A. On a
+       FIRST design there is nothing to compare against, so fall back to the
+       one-shot "design & preview": design in place and play it. `designedVoiceId`
+       is non-null iff a bespoke voice already exists for this character. */
+    const isRedesign = designedVoiceId !== null;
     try {
       /* Pass the same cache identity the "Play 12s" player uses so the
          audition is rendered straight into the sample cache — designing here
@@ -707,12 +713,22 @@ export function ProfileDrawer({
         persona: trimmed,
         sampleVoiceId,
         modelKey: effectiveSampleModelKey,
-        preview: true,
+        /* Re-design stages a `…-preview` sibling so the live voice survives a
+           Cancel; first design has no live voice to protect, so design in place. */
+        preview: isRedesign,
       });
-      /* Open the A/B compare with the staged preview. Staging into the drawer
-         (designedVoiceId / persona) is deferred to the modal's approve, so
-         Cancel leaves the character's live voice untouched. */
-      setVoiceCompareInitial({ voiceId, previewUrl, persona: trimmed });
+      if (isRedesign) {
+        /* Open the A/B compare with the staged preview. Staging into the drawer
+           (designedVoiceId / persona) is deferred to the modal's approve, so
+           Cancel leaves the character's live voice untouched. */
+        setVoiceCompareInitial({ voiceId, previewUrl, persona: trimmed });
+      } else {
+        /* One-shot: stage the freshly designed voice straight into the drawer
+           and audition it (no compare modal — there's nothing to compare to). */
+        designPreviewUrlRef.current = previewUrl;
+        setDesignedVoiceId(voiceId);
+        await playback.play(previewUrl);
+      }
     } catch (e) {
       setEngineError((e as Error).message || 'Voice design failed.');
     } finally {

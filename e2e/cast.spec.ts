@@ -7,10 +7,12 @@ import { goToConfirm, waitForRouteReady } from './helpers';
  * Drives a fresh book to the confirm-cast view, opens a character's
  * profile drawer, switches the per-character TTS engine to Qwen, and
  * exercises the bespoke voice-design sub-flow: the persona auto-fills
- * (mock returns a canned persona), the "Design & compare" button stages a
- * preview design and opens the A/B "current vs proposed" compare modal
- * (plan 161), "Use proposed voice" promotes + stages it, the designed
- * confirmation surfaces, and Save closes the drawer.
+ * (mock returns a canned persona). The FIRST design has nothing to compare
+ * against, so "Design & preview" auditions in place (no compare modal) and
+ * the designed confirmation surfaces. A second design — now that a voice
+ * exists — reads "Design & compare", stages a preview, and opens the A/B
+ * "current vs proposed" modal (plan 161); "Use proposed voice" promotes +
+ * stages it. Save then closes the drawer.
  *
  * Why browser-level: the engine selector → Qwen panel reveal crosses
  * redux (Character.ttsEngine state), the design fetch returns a binary
@@ -53,10 +55,19 @@ test.describe('cast view → profile drawer → per-character Qwen voice', () =>
     /* The preset Model-voice picker is hidden while Qwen is selected. */
     await expect(page.getByText(/Model voice/i)).toHaveCount(0);
 
-    /* Design & compare — stages a preview design (mock) and opens the A/B
-       "current vs proposed" compare modal (plan 161). */
+    /* First design — nothing to compare against yet, so this is the one-shot
+       "Design & preview": no compare modal, the designed confirmation surfaces
+       directly. */
     const designBtn = page.getByTestId('qwen-design-voice');
+    await expect(designBtn).toHaveText(/Design & preview/i);
     await expect(designBtn).toBeEnabled();
+    await designBtn.click();
+    await expect(page.getByTestId('qwen-designed-confirm')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId('voice-compare-overlay')).toHaveCount(0);
+
+    /* Re-design — now a voice exists, so the button reads "Design & compare"
+       and opens the A/B "current vs proposed" modal (plan 161). */
+    await expect(designBtn).toHaveText(/Design & compare/i);
     await designBtn.click();
     await expect(page.getByTestId('voice-compare-overlay')).toBeVisible({ timeout: 5_000 });
     /* Both audition sides + the editable proposed persona render. */
