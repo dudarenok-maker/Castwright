@@ -25,6 +25,7 @@ vi.mock('../lib/api', () => ({
     listBookBackups: vi.fn(),
     backupBookNow: vi.fn(),
     restoreBookBackup: vi.fn(),
+    getLibrary: vi.fn(),
   },
 }));
 
@@ -187,5 +188,47 @@ describe('AccountView — Backups card (srv-2)', () => {
     });
     expect(await screen.findByText('state.2026-05-31.json')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^restore$/i })).toBeInTheDocument();
+  });
+
+  it('refreshes the library from the server after a successful restore (#424)', async () => {
+    (api.listBookBackups as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { file: '20260531-080000.json', sizeBytes: 18_432, createdAt: '2026-05-31T08:00:00.000Z' },
+    ]);
+    (api.restoreBookBackup as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    /* getLibrary returns the book with a different (restored) title so we can
+       assert the slice was re-hydrated, not just that the call fired. */
+    (api.getLibrary as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      authors: [
+        {
+          name: 'Mike Dudarenok',
+          series: [
+            {
+              name: 'Northern Coast Trilogy',
+              books: [{ ...SB_BOOK, title: 'Solway Bay (restored)' }],
+            },
+          ],
+        },
+      ],
+    });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const user = userEvent.setup();
+    const { store } = renderView();
+    await user.selectOptions(screen.getByTestId('account-backup-book-picker'), 'sb');
+    await screen.findByText('20260531-080000.json');
+
+    await user.click(screen.getByRole('button', { name: /^restore$/i }));
+
+    await waitFor(() => {
+      expect(api.restoreBookBackup).toHaveBeenCalledWith('sb', '20260531-080000.json');
+    });
+    await waitFor(() => {
+      expect(api.getLibrary).toHaveBeenCalledTimes(1);
+    });
+    await waitFor(() => {
+      expect(store.getState().library.books[0].title).toBe('Solway Bay (restored)');
+    });
+
+    confirmSpy.mockRestore();
   });
 });
