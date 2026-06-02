@@ -121,7 +121,7 @@ export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props)
                   }
                 }}
                 maxLength={MAX_TITLE_LEN}
-                className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-none focus:border-ink/30"
+                className="mt-1 w-full px-3 py-2 rounded-xl bg-canvas border border-ink/10 text-sm text-ink focus:outline-hidden focus:border-ink/30"
               />
             </label>
           </div>

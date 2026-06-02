@@ -122,7 +122,7 @@ export function LibraryChrome({
                 type="button"
                 onClick={() => importInputRef.current?.click()}
                 data-testid="library-import-portable-button"
-                className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-white border border-ink/15 text-ink hover:bg-ink/[0.04]"
+                className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold transition-colors bg-white border border-ink/15 text-ink hover:bg-ink/4"
                 title="Import a .portable.zip bundle exported from another machine"
               >
                 <IconDownload className="w-4 h-4" />
@@ -154,13 +154,13 @@ export function LibraryChrome({
           aria-label="Search books"
           placeholder="Search by title or author…"
           data-testid="library-search-input"
-          className="flex-1 min-w-[240px] max-w-md px-4 py-2 rounded-full bg-canvas border border-ink/10 text-sm text-ink placeholder:text-ink/40 focus:outline-none focus:border-ink/30"
+          className="flex-1 min-w-[240px] max-w-md px-4 py-2 rounded-full bg-canvas border border-ink/10 text-sm text-ink placeholder:text-ink/40 focus:outline-hidden focus:border-ink/30"
         />
         {hasActiveFilter && (
           <button
             onClick={clearFilters}
             data-testid="library-clear-filters"
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium text-ink/60 hover:text-ink hover:bg-ink/[0.04]"
+            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium text-ink/60 hover:text-ink hover:bg-ink/4"
           >
             <IconClose className="w-3 h-3" />
             Clear filters
@@ -184,7 +184,7 @@ export function LibraryChrome({
                 className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
                   active
                     ? 'bg-purple-deep text-white border-purple-deep'
-                    : 'bg-white text-ink/70 border-ink/10 hover:bg-ink/[0.04]'
+                    : 'bg-white text-ink/70 border-ink/10 hover:bg-ink/4'
                 }`}
               >
                 {tag}
@@ -212,7 +212,7 @@ export function LibraryChrome({
                 className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
                   active
                     ? 'bg-purple-deep text-white border-purple-deep'
-                    : 'bg-white text-ink/70 border-ink/10 hover:bg-ink/[0.04]'
+                    : 'bg-white text-ink/70 border-ink/10 hover:bg-ink/4'
                 }`}
               >
                 {languageLabel(lang)}
@@ -228,7 +228,7 @@ export function LibraryChrome({
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}
-              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${filter === f.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'}`}
+              className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${filter === f.id ? 'bg-ink text-canvas' : 'text-ink/60 hover:text-ink hover:bg-ink/4'}`}
             >
               {f.label}
             </button>
@@ -238,14 +238,14 @@ export function LibraryChrome({
           data-testid="library-view-mode-toggle"
           role="group"
           aria-label="Library view mode"
-          className="inline-flex items-center gap-0.5 p-0.5 rounded-full bg-ink/[0.04] border border-ink/10"
+          className="inline-flex items-center gap-0.5 p-0.5 rounded-full bg-ink/4 border border-ink/10"
         >
           <button
             type="button"
             onClick={() => setViewMode('card')}
             aria-pressed={viewMode === 'card'}
             data-testid="library-view-mode-card"
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'card' ? 'bg-white text-ink shadow-sm' : 'text-ink/55 hover:text-ink'}`}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'card' ? 'bg-white text-ink shadow-xs' : 'text-ink/55 hover:text-ink'}`}
           >
             Cards
           </button>
@@ -254,7 +254,7 @@ export function LibraryChrome({
             onClick={() => setViewMode('table')}
             aria-pressed={viewMode === 'table'}
             data-testid="library-view-mode-table"
-            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'table' ? 'bg-white text-ink shadow-sm' : 'text-ink/55 hover:text-ink'}`}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === 'table' ? 'bg-white text-ink shadow-xs' : 'text-ink/55 hover:text-ink'}`}
           >
             Table
           </button>
@@ -295,7 +295,7 @@ function WorkspacePathRow({ info }: { info: WorkspaceInfo }) {
       <span className="truncate max-w-[520px]">{info.root}</span>
       <button
         onClick={onCopy}
-        className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] uppercase tracking-wider font-semibold text-ink/55 hover:text-ink hover:bg-ink/[0.05] transition-colors"
+        className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] uppercase tracking-wider font-semibold text-ink/55 hover:text-ink hover:bg-ink/5 transition-colors"
       >
         <IconCopy className="w-3 h-3" />
         {copied ? 'copied' : 'copy'}

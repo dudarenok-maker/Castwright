@@ -314,14 +314,14 @@ export function LoudnessReport({ chapters }: LoudnessReportProps) {
 function EmptyState() {
   return (
     <div data-testid="loudness-report-empty" className="flex items-start gap-4">
-      <div className="grid place-items-center w-9 h-9 rounded-full bg-ink/[0.04] text-ink/60 shrink-0">
+      <div className="grid place-items-center w-9 h-9 rounded-full bg-ink/4 text-ink/60 shrink-0">
         <IconWaveform className="w-4 h-4" />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-semibold text-ink">No loudness data yet</p>
         <p className="text-xs text-ink/60 leading-relaxed mt-1">
           EBU R128 measurements are captured when chapters generate with{' '}
-          <code className="text-[11px] bg-ink/[0.04] px-1 py-0.5 rounded">
+          <code className="text-[11px] bg-ink/4 px-1 py-0.5 rounded">
             AUDIO_LOUDNORM_ENABLED
           </code>{' '}
           (default on). Re-render older chapters to capture per-chapter loudness

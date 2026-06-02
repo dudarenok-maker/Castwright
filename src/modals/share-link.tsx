@@ -131,7 +131,7 @@ export function ShareLinkModal({ open, url, onClose, onCopyFailed }: ShareLinkMo
                 readOnly
                 value={url ?? ''}
                 placeholder={url == null ? 'Generating link…' : ''}
-                className="flex-1 min-w-0 rounded-full border border-ink/10 px-4 py-2 text-xs font-mono text-ink/80 bg-ink/[0.03] focus:outline-none focus:ring-2 focus:ring-magenta/40"
+                className="flex-1 min-w-0 rounded-full border border-ink/10 px-4 py-2 text-xs font-mono text-ink/80 bg-ink/3 focus:outline-hidden focus:ring-2 focus:ring-magenta/40"
                 aria-label="Share URL"
               />
               <button
@@ -144,7 +144,7 @@ export function ShareLinkModal({ open, url, onClose, onCopyFailed }: ShareLinkMo
                     : copyState === 'failed'
                       ? 'inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-colors bg-red-50 text-red-700'
                       : url == null
-                        ? 'inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-colors bg-ink/[0.03] text-ink/40 cursor-not-allowed'
+                        ? 'inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-colors bg-ink/3 text-ink/40 cursor-not-allowed'
                         : 'inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition-colors bg-ink text-canvas hover:bg-ink/90'
                 }
               >

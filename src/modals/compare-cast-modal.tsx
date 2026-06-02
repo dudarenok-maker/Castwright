@@ -383,7 +383,7 @@ function SidePanel({
       {propagatesAcrossSeries && (
         <p
           role="note"
-          className="text-[11px] text-ink/60 leading-snug bg-ink/[0.03] border border-ink/10 rounded-lg px-3 py-2"
+          className="text-[11px] text-ink/60 leading-snug bg-ink/3 border border-ink/10 rounded-lg px-3 py-2"
           title="The server propagates this save to every book in the same series whose cast contains a matching character (name or alias)."
         >
           Saves propagate to every book in this series where this character appears.
@@ -403,7 +403,7 @@ function SidePanel({
           <select
             value={draft.gender}
             onChange={(e) => setDraft({ ...draft, gender: e.target.value as CharGender | '' })}
-            className="text-sm rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 focus:outline-none focus:border-ink/40"
+            className="text-sm rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 focus:outline-hidden focus:border-ink/40"
             aria-label={`Gender for ${character.name}`}
           >
             <option value="">—</option>
@@ -418,7 +418,7 @@ function SidePanel({
           <select
             value={draft.ageRange}
             onChange={(e) => setDraft({ ...draft, ageRange: e.target.value as CharAgeRange | '' })}
-            className="text-sm rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 focus:outline-none focus:border-ink/40"
+            className="text-sm rounded-lg border border-ink/15 bg-white px-2.5 py-1.5 focus:outline-hidden focus:border-ink/40"
             aria-label={`Age range for ${character.name}`}
           >
             <option value="">—</option>
@@ -498,7 +498,7 @@ function SidePanel({
               ? 'bg-magenta/10 text-magenta cursor-wait'
               : isPlayingThis
                 ? 'bg-magenta text-white hover:bg-magenta/90'
-                : 'bg-ink/[0.06] text-ink/80 hover:bg-magenta/15 hover:text-magenta'
+                : 'bg-ink/6 text-ink/80 hover:bg-magenta/15 hover:text-magenta'
           }`}
         >
           {rowState.loading ? (
