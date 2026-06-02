@@ -85,6 +85,7 @@ import { ensureSidecarEngineReady, SIDECAR_ENGINES } from '../tts/ensure-sidecar
 import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 import type { FailureCode } from './failure-taxonomy.js';
+import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 
 export const generationRouter = Router();
 
@@ -731,6 +732,44 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return !chapterAudioExists(audioRoot, c.slug);
   });
   const targetIdSet = new Set(targetChapters.map((c) => c.id));
+
+  /* srv-28 — pre-flight disk-space guard. Estimate this run's footprint
+     (target chapters × AVG_CHAPTER_BYTES) and compare against the free space on
+     the audio volume. Default mode WARN rides the existing toast path; BLOCK
+     short-circuits with a disk-full failure before any chapter renders; OFF
+     skips. Best-effort: a probe failure (statfs throw) never blocks the run. */
+  const diskMode = diskGuardMode();
+  if (diskMode !== 'off' && targetChapters.length > 0) {
+    try {
+      const verdict = await evaluateDiskGuard(
+        audioRoot,
+        {
+          estimatedBytes: targetChapters.length * AVG_CHAPTER_BYTES,
+          basis: 'generation',
+          chapters: targetChapters.length,
+        },
+        { mode: diskMode },
+      );
+      if (verdict.status === 'warn') {
+        send({ type: 'warning', code: 'disk_low', message: verdict.message });
+      } else if (verdict.status === 'block') {
+        /* Mirror the pre-flight guard short-circuit shape (a chapter_failed +
+           res.end). Carry the fs-19 disk-full code + remediation so the
+           frontend renders the same "what to do" line a mid-run ENOSPC would. */
+        send({
+          type: 'chapter_failed',
+          errorReason: verdict.message,
+          errorCode: 'disk-full',
+          remediation:
+            'Free up disk space on the workspace volume (delete old exports, or move the ' +
+            'workspace to a larger drive), then start the run again.',
+        });
+        return res.end();
+      }
+    } catch (e) {
+      console.warn('[generation] disk guard probe failed (continuing):', (e as Error).message);
+    }
+  }
 
   /* srv-16 — if this queue-driven POST's sole target chapter already has audio
      on disk (rendered before a crash/restart, so it's excluded from

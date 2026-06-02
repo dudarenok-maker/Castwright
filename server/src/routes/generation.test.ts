@@ -58,6 +58,18 @@ vi.mock('../tts/ensure-sidecar-loaded.js', () => ({
   SIDECAR_ENGINES: new Set(),
 }));
 
+/* srv-28 — control the disk-space probe so the disk guard is deterministic.
+   Default: ample free space (guard → ok, no tick) so the existing cases are
+   untouched. A test flips `diskFreeGb` low to exercise the warn-tick path. */
+let diskFreeGb = 9999;
+vi.mock('../diagnostics/disk.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../diagnostics/disk.js')>();
+  return {
+    ...actual,
+    probeDiskSpace: async (path: string) => ({ status: 'ok' as const, freeGb: diskFreeGb, path }),
+  };
+});
+
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
 const TITLE = 'Generation Route Test';
@@ -153,6 +165,10 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  /* Default: ample disk + DISK_GUARD_MODE unset (defaults to warn, but the
+     ample free space keeps the guard at ok so no tick is emitted). */
+  diskFreeGb = 9999;
+  delete process.env.DISK_GUARD_MODE;
   /* Default: every synthesise call succeeds with a one-segment PCM body. */
   synthesiseImpl = async () => ({
     pcm: Buffer.alloc(2),
@@ -206,6 +222,36 @@ describe('POST /api/books/:bookId/generation', () => {
     expect(ticks[0].type).toBe('chapter_failed');
     expect(ticks[0].chapterId).toBeUndefined();
     expect(ticks[0].errorReason).toMatch(/modelKey/i);
+  });
+
+  it('srv-28: emits a disk_low warning tick (warn mode) when free space is tight, run proceeds', async () => {
+    diskFreeGb = 0.5; // well below the estimate + headroom
+    process.env.DISK_GUARD_MODE = 'warn';
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    const warn = ticks.find((t) => t.type === 'warning' && t.code === 'disk_low');
+    expect(warn).toBeDefined();
+    expect(String(warn!.message)).toMatch(/disk space/i);
+    /* Warn is non-blocking — the chapters still render. */
+    expect(ticks.some((t) => t.type === 'chapter_complete')).toBe(true);
+  });
+
+  it('srv-28: block mode short-circuits with a disk-full chapter_failed and ends', async () => {
+    diskFreeGb = 0.2;
+    process.env.DISK_GUARD_MODE = 'block';
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    expect(ticks).toHaveLength(1);
+    expect(ticks[0].type).toBe('chapter_failed');
+    expect(ticks[0].errorCode).toBe('disk-full');
+    expect(ticks[0].chapterId).toBeUndefined();
+    expect(String(ticks[0].remediation)).toMatch(/free up disk space/i);
   });
 
   /* ── Pause endpoint + sticky-across-reload contract ──────────────── */

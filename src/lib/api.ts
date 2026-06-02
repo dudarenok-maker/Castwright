@@ -3858,7 +3858,17 @@ async function realCreateBookExport(
     body: JSON.stringify(body),
   });
   if (res.status === 409) {
-    const err = (await res.json().catch(() => ({}))) as { missing?: string[] };
+    const err = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      missing?: string[];
+      message?: string;
+    };
+    /* srv-28 — the disk guard's block verdict also 409s, but it carries
+       `error: 'disk_full'` + a `message`, not a `missing` list. Surface its
+       message verbatim rather than mislabelling it as an incomplete export. */
+    if (err.error === 'disk_full') {
+      throw new Error(err.message ?? 'Not enough disk space to export this book.');
+    }
     throw new ExportIncompleteError(err.missing ?? []);
   }
   if (!res.ok)
