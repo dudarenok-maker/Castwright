@@ -28,7 +28,13 @@ import {
   REGISTER,
   type PersistConfig,
 } from 'redux-persist';
-import storage from 'redux-persist/lib/storage';
+// Import the ESM build of the storage engine. The CJS `lib/storage` default
+// export (`exports.default = createWebStorage('local')`) is left wrapped as a
+// namespace by Vite 8 / Rolldown's interop, so `storage.getItem` came back
+// undefined and redux-persist threw at rehydrate (fe-19). The `es/` build uses
+// a real `export default`, which Rolldown unwraps correctly — and matches how
+// the main `redux-persist` import already resolves (its `module` field is es/).
+import storage from 'redux-persist/es/storage';
 import { uiSlice, type UiState } from './ui-slice';
 import { settingsSlice, type SettingsState } from './settings-slice';
 import { accountSlice } from './account-slice';

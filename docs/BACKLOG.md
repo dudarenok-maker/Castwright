@@ -80,19 +80,7 @@ _Full detail + acceptance:_ [#402](https://github.com/dudarenok-maker/AudioBook-
 
 ### Dependency major upgrades
 
-Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit. The audit cleared the deadline-driven CI-action bump (`ops-8`) + the genuinely-safe minor bumps (TypeScript → latest 5.x, `@google/genai` → 2.7, Node-floor pin) inline, and filed every framework **major** that is now behind here — each researched to "pickup-ready" (current → target, breaking-change surface, blast radius, automated migration path if any, risk). None blocks ship; pick up when time allows. Ordered foundational/low-risk → broad/high-risk. **Note on the React cluster:** `fe-18` (React 19), `fe-21` (router 7), and `fe-19` (Vite/Vitest) are commonly upgraded together — sequence `fe-19` → `fe-18` → `fe-21` in one round.
-
-#### `fe-19` — Vite 5 → 7 + Vitest 2 → 3 + @vitejs/plugin-react 4 → 5 (one unit) ([#403](https://github.com/dudarenok-maker/AudioBook-Generator/issues/403))
-
-- _What:_ bump `vite ^5.2.0 → 7.x`, `vitest ^2.1.9 → 3.x` (root + `server/`), `@vitejs/plugin-react ^4.3.0 → 5.x` together. Vite 7 requires Node 20.19+/22.12+ — we run Node 24, fine. Vite-7 support lands in **Vitest 3.2+**; plugin-react 5 is Vite-7 compatible. Breaking surface: `build.rollupOptions` `manualChunks` object-form dropped (function-form deprecated), `import.meta.url` no longer polyfilled in UMD/IIFE, default browser target → `baseline-widely-available`, Vitest 3 config/reporter API tweaks. Audit `vite.config.ts`, `server/vitest.config.ts` + `server/vitest.config.slow.ts`, and any `manualChunks`.
-- _Benefit (technical / architectural):_ faster builds + test runner; back on a supported tooling line (currently two majors behind). _Risk: medium._
-_Full detail + acceptance:_ [#403](https://github.com/dudarenok-maker/AudioBook-Generator/issues/403).
-
-#### `ops-10` — TypeScript 5 → 6 ([#404](https://github.com/dudarenok-maker/AudioBook-Generator/issues/404))
-
-- _What:_ bump `typescript ^5.9.0 → 6.x` (root + `server/`). TS 6.0 shipped as the latest major (this round held at 5.9.3 as the safe line). Breaking surface: removed long-deprecated compiler options + stricter defaults; re-run `npm run typecheck` (root + server) and `npm run lint` (typescript-eslint must be on a TS-6-compatible release — verify `typescript-eslint ^8` supports it or bump). Low-friction historically, but still a major.
-- _Benefit (technical):_ latest compiler + perf; supported line. _Risk: low-medium._
-_Full detail + acceptance:_ [#404](https://github.com/dudarenok-maker/AudioBook-Generator/issues/404).
+Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit. The audit cleared the deadline-driven CI-action bump (`ops-8`) + the genuinely-safe minor bumps (TypeScript → latest 5.x, `@google/genai` → 2.7, Node-floor pin) inline, and filed every framework **major** that is now behind here — each researched to "pickup-ready" (current → target, breaking-change surface, blast radius, automated migration path if any, risk). None blocks ship; pick up when time allows. Ordered foundational/low-risk → broad/high-risk. **Shipped 2026-06-02** — the React cluster (`fe-19` Vite **8** + Vitest **4**, `fe-18` React 19, `fe-21` react-router 7) + `ops-10` (TypeScript 6) landed together via [plan 167](features/167-fe-react-cluster-upgrade.md). Targets moved past the original research: latest majors are now Vite 8 (Rolldown) / Vitest 4, taken over the conservative Vite 7 / Vitest 3. `fe-18` and `fe-21` proved **coupled** — react-router 6 isn't React-19-compatible — so they shipped as one commit.
 
 #### `srv-25` — Zod 3 → 4 (and drop `zod-to-json-schema`) ([#405](https://github.com/dudarenok-maker/AudioBook-Generator/issues/405))
 
@@ -105,18 +93,6 @@ _Full detail + acceptance:_ [#405](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ bump `express ^4.19.2 → 5.x` (GA). Breaking surface: `path-to-regexp` v8 route syntax (`*` → named `/*splat`, optional `:param?` → `{/:param}`), removed legacy signatures (`app.del`, `res.json(status, body)`, `res.send(status)`), rejected-promise propagation in middleware, `req.query` is now a getter. Audit every route under `server/src/routes/` for wildcard/optional params + the removed signatures.
 - _Benefit (technical):_ supported GA major; async-error handling improvements. _Risk: medium (route-syntax migration is the main hazard)._
 _Full detail + acceptance:_ [#406](https://github.com/dudarenok-maker/AudioBook-Generator/issues/406).
-
-#### `fe-18` — React 18 → 19 ([#407](https://github.com/dudarenok-maker/AudioBook-Generator/issues/407))
-
-- _What:_ bump `react`/`react-dom ^18.3.1 → 19.x`, `@types/react`/`@types/react-dom → 19`, and — **required for React-19 peer compat (confirmed 2026-06-01)** — `react-redux ^9.1.0 → ^9.2.0+` and `@reduxjs/toolkit ^2.2.0 → ^2.5.0+`. Breaking surface: removed legacy APIs (`propTypes`/`defaultProps` on function components, string refs, legacy context), ref-as-prop, stricter StrictMode/`useEffect` double-invoke. Blast radius: large (all of `src/components`, `src/views`, `src/modals`). Codemod: `npx codemod@latest react/19/migration-recipe`. Pair with a full e2e pass.
-- _Benefit (technical):_ unblocks React-19-only ecosystem deps; keeps RTK/react-redux on a supported line. _Risk: medium-high (broad surface)._
-_Full detail + acceptance:_ [#407](https://github.com/dudarenok-maker/AudioBook-Generator/issues/407).
-
-#### `fe-21` — react-router-dom 6 → 7 ([#408](https://github.com/dudarenok-maker/AudioBook-Generator/issues/408))
-
-- _What:_ bump `react-router-dom ^6.26.0 → 7.x` (used in 10 files incl. `src/main.tsx`, `src/routes/index.tsx`, `src/components/layout.tsx`, `src/views/{generation,upload}.tsx`). v7 requires React 18+ and turns the v6 `future` flags on by default. **Confirm interplay with the custom hash router** (`src/lib/router.ts`) — react-router may own only a thin surface here, which could make this low-effort.
-- _Benefit (technical):_ supported major; aligns with React 19. _Risk: low-medium._
-_Full detail + acceptance:_ [#408](https://github.com/dudarenok-maker/AudioBook-Generator/issues/408).
 
 #### `fe-20` — Tailwind 3 → 4 ([#409](https://github.com/dudarenok-maker/AudioBook-Generator/issues/409))
 

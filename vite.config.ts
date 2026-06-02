@@ -105,28 +105,23 @@ export default defineConfig(({ mode }) => {
              vendor↔react cross-references can't form a circular chunk
              graph. The smaller per-view bundles depend on this chunk
              stably across navigations. `vendor` carries the long tail
-             of utility libs that don't reach into the react runtime. */
-          manualChunks: (id) => {
-            if (!id.includes('node_modules')) return undefined;
-            if (
-              id.includes('node_modules/react/') ||
-              id.includes('node_modules/react-dom/') ||
-              id.includes('node_modules/react-is') ||
-              id.includes('node_modules/react-router') ||
-              id.includes('node_modules/react-redux') ||
-              id.includes('node_modules/scheduler') ||
-              id.includes('node_modules/use-sync-external-store') ||
-              id.includes('node_modules/@reduxjs/toolkit') ||
-              id.includes('node_modules/redux/') ||
-              id.includes('node_modules/redux-thunk') ||
-              id.includes('node_modules/redux-persist') ||
-              id.includes('node_modules/immer/') ||
-              id.includes('node_modules/reselect') ||
-              id.includes('node_modules/hoist-non-react-statics')
-            ) {
-              return 'react';
-            }
-            return 'vendor';
+             of utility libs that don't reach into the react runtime.
+
+             fe-19 (Vite 8 / Rolldown): the function-form `manualChunks`
+             this replaced is deprecated under Rolldown; migrated to
+             `advancedChunks.groups`. Groups are first-match-wins in order,
+             so the `react` group (matched on the same node_modules paths the
+             old predicate used) must precede the `vendor` catch-all. The app
+             code falls through both (neither matches a non-node_modules id)
+             and keeps Rolldown's default per-entry/lazy chunking. */
+          advancedChunks: {
+            groups: [
+              {
+                name: 'react',
+                test: /node_modules\/(?:react\/|react-dom\/|react-is|react-router|react-redux|scheduler|use-sync-external-store|@reduxjs\/toolkit|redux\/|redux-thunk|redux-persist|immer\/|reselect|hoist-non-react-statics)/,
+              },
+              { name: 'vendor', test: /node_modules\// },
+            ],
           },
         },
       },
