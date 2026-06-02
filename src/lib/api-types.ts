@@ -2184,6 +2184,17 @@ export interface components {
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
             errorReason?: string | null;
             /**
+             * @description Only on `chapter_failed` — fs-19 stable machine code for the failure
+             *     class. Lets the frontend render the matching remediation + persist
+             *     it without parsing `errorReason`.
+             */
+            errorCode?: components["schemas"]["FailureCode"];
+            /**
+             * @description Only on `chapter_failed` — fs-19 concrete "what to do about it" copy
+             *     for the failure, surfaced under the error reason.
+             */
+            remediation?: string;
+            /**
              * @description Only on `warning` — a stable machine-readable warning code
              *     (e.g. `qwen_unavailable_kokoro_fallback`,
              *     `dual_model_off_multi_engine`). Lets the frontend dedupe and
@@ -2798,6 +2809,15 @@ export interface components {
                 confidence?: number;
             } | null;
         };
+        /**
+         * @description fs-19 — stable machine-readable class for a synthesis (or analysis)
+         *     failure. Maps a recurring failure mode to a friendly message +
+         *     remediation server-side (server/src/routes/failure-taxonomy.ts); the
+         *     frontend switches on it for per-class styling. `unknown` is the
+         *     catch-all for an unmapped error (the raw message is surfaced verbatim).
+         * @enum {string}
+         */
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown";
         Chapter: {
             id: number;
             title: string;
@@ -2812,6 +2832,19 @@ export interface components {
                 [key: string]: "queued" | "in_progress" | "done" | "skipped" | "failed";
             };
             errorReason?: string | null;
+            /**
+             * @description fs-19 — stable machine code for the last synthesis FAILURE's class
+             *     (e.g. `vram-spill`, `disk-full`, `cuda-poisoned`). Drives the
+             *     frontend's remediation rendering. Absent on never-failed chapters;
+             *     cleared on a successful render.
+             */
+            generationErrorCode?: components["schemas"]["FailureCode"] | null;
+            /**
+             * @description fs-19 — concrete "what to do about it" copy for the last synthesis
+             *     failure. Surfaced under the error reason on the failed chapter row.
+             *     Absent on never-failed chapters; cleared on a successful render.
+             */
+            generationRemediation?: string | null;
             /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
             excluded?: boolean;
             /**

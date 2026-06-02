@@ -263,6 +263,16 @@ export const chaptersSlice = createSlice({
                 : 'queued',
             errorReason:
               !done.has(c.slug) && c.generationState === 'failed' ? c.generationError : undefined,
+            /* fs-19 — re-hydrate the structured failure class + remediation so a
+               failed chapter shows its "what to do" line after a reload. */
+            generationErrorCode:
+              !done.has(c.slug) && c.generationState === 'failed'
+                ? c.generationErrorCode
+                : undefined,
+            generationRemediation:
+              !done.has(c.slug) && c.generationState === 'failed'
+                ? c.generationRemediation
+                : undefined,
             progress: done.has(c.slug) ? 1 : 0,
             characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
             /* Persist the user's per-chapter exclude choice across hydrate so
@@ -358,6 +368,11 @@ export const chaptersSlice = createSlice({
           ch.state = 'failed';
           ch.phase = null;
           ch.errorReason = ev.errorReason ?? 'Synthesis failed.';
+          /* fs-19 — carry the structured failure class + remediation onto the
+             row so the failed-state box can render a "what to do" line under
+             the reason without a state.json reload. */
+          ch.generationErrorCode = ev.errorCode;
+          ch.generationRemediation = ev.remediation;
         }
         return;
       }
@@ -463,6 +478,8 @@ export const chaptersSlice = createSlice({
           progress: c.id === chapterId ? 0.05 : 0,
           phase: null,
           errorReason: undefined,
+          generationErrorCode: undefined,
+          generationRemediation: undefined,
           /* Reset line counters so the expanded row's derived per-character
              progress (which counts manuscript line positions ≤ currentLine)
              doesn't show stale fractions in the gap between regenerate
@@ -502,6 +519,8 @@ export const chaptersSlice = createSlice({
           progress: isHead ? 0.05 : 0,
           phase: null,
           errorReason: undefined,
+          generationErrorCode: undefined,
+          generationRemediation: undefined,
           currentLine: 0,
           characters: Object.fromEntries(
             Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v]),
@@ -560,6 +579,8 @@ export const chaptersSlice = createSlice({
         ch.currentLine = undefined;
         ch.totalLines = undefined;
         ch.errorReason = undefined;
+        ch.generationErrorCode = undefined;
+        ch.generationRemediation = undefined;
       }
     },
 

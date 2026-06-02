@@ -84,6 +84,7 @@ import { recordBatchThroughput, recordChapterThroughput } from '../tts/generatio
 import { ensureSidecarEngineReady, SIDECAR_ENGINES } from '../tts/ensure-sidecar-loaded.js';
 import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
+import type { FailureCode } from './failure-taxonomy.js';
 
 export const generationRouter = Router();
 
@@ -1438,6 +1439,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                      the chapter no longer hydrates as "Failed" after reload. */
                   generationState: undefined,
                   generationError: undefined,
+                  generationErrorCode: undefined,
+                  generationRemediation: undefined,
                 }
               : c,
           ),
@@ -1557,9 +1560,20 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          repeat across chapters, which signals a systemic wedge). */
       const isStall = (e as { name?: string })?.name === 'ChapterStallError';
       const initial = isStall
-        ? { errorReason: (e as Error).message, fatal: false }
+        ? {
+            errorReason: (e as Error).message,
+            fatal: false,
+            code: 'synth-timeout' as FailureCode,
+            remediation:
+              'Click Retry on this chapter. If it stalls repeatedly, restart the TTS sidecar to ' +
+              'clear a wedged GPU state, then retry.',
+          }
         : describeSynthesisError(e, engine);
       let { errorReason, fatal } = initial;
+      /* fs-19 — the structured code + remediation ride alongside the legacy
+         reason on both the broadcast and the persisted state. Const (not part of
+         the cascade re-write below, which only touches the human reason). */
+      const { code: errorCode, remediation } = initial;
       if (isStall) {
         console.error(
           `[generation] chapter ${chapter.id} (${chapter.slug}) STALLED during ${stallPhase}: ` +
@@ -1582,6 +1596,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         type: 'chapter_failed',
         chapterId: chapter.id,
         errorReason,
+        /* fs-19 — structured failure class + remediation so the frontend can
+           render a concrete "what to do" line under the reason without parsing
+           it. */
+        errorCode,
+        remediation,
       });
       /* Durably record the failure in state.json so the chapter survives a
          reload / queue-clear as "Failed · reason" instead of re-hydrating as
@@ -1597,7 +1616,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             ...prev,
             chapters: prev.chapters.map((c) =>
               c.id === chapter.id
-                ? { ...c, generationState: 'failed', generationError: errorReason }
+                ? {
+                    ...c,
+                    generationState: 'failed',
+                    generationError: errorReason,
+                    /* fs-19 — persist the structured class + remediation so a
+                       reloaded failed chapter re-hydrates with its "what to do"
+                       line, not just the reason. */
+                    generationErrorCode: errorCode,
+                    generationRemediation: remediation,
+                  }
                 : c,
             ),
             updatedAt: new Date().toISOString(),

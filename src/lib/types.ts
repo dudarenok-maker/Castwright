@@ -249,6 +249,12 @@ export interface BookStateJson {
     /** Human-readable reason behind `generationState: 'failed'`; surfaced on
         the chapter row's failed-state error box + Retry control. */
     generationError?: string;
+    /** fs-19 — stable machine code for the failure class (drives the failed-row
+        remediation rendering). Mirror of the server's BookStateJson type. */
+    generationErrorCode?: string;
+    /** fs-19 — concrete "what to do about it" copy for the failure. Mirror of
+        the server's BookStateJson type. */
+    generationRemediation?: string;
   }>;
   coverGradient: [string, string];
   createdAt: string;
