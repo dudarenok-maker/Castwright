@@ -18,7 +18,8 @@
    The auto-fetch on import lives in routes/import.ts and bypasses this
    router — it calls backgroundFetchCover directly. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
@@ -108,9 +109,12 @@ coverRouter.get('/:bookId/cover', async (req: Request, res: Response) => {
     /* sendFile sets Content-Type from the path extension. Pin it
        explicitly since cover.jpg is always JPEG and we want a stable
        Cache-Control header on the response. The 1-hour max-age matches
-       the workspace /audio static cache (see server/src/index.ts:56). */
+       the workspace /audio static cache (see server/src/index.ts:56).
+       dotfiles:'allow' — cover.jpg lives under the book's `.audiobook/`
+       dir; Express 5's send defaults dotfiles:'ignore', which would 404 any
+       path with a dot-segment (Express 4's res.sendFile served it). */
     res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.sendFile(path, { headers: { 'Content-Type': 'image/jpeg' } }, (err) => {
+    res.sendFile(path, { headers: { 'Content-Type': 'image/jpeg' }, dotfiles: 'allow' }, (err) => {
       if (err) {
         if (!res.headersSent) {
           res.status(500).json({ error: 'Failed to send cover.' });

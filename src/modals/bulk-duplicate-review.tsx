@@ -166,9 +166,9 @@ export function BulkDuplicateReviewModal({
           single-pair modal. The single-pair modal renders its own overlay;
           this strip floats over it at the top so the user always sees where
           they are in the queue. */}
-      <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[60] fade-in pointer-events-none">
+      <div className="fixed top-6 left-1/2 -translate-x-1/2 z-60 fade-in pointer-events-none">
         <div className="floating-pill-inverse rounded-full shadow-float px-4 py-2 flex items-center gap-3 pointer-events-auto">
-          <span className="text-xs text-canvas/70 font-medium truncate max-w-[14rem]">
+          <span className="text-xs text-canvas/70 font-medium truncate max-w-56">
             {seriesName}
           </span>
           <span className="px-2 py-0.5 rounded-full bg-canvas/15 text-canvas font-bold text-sm tabular-nums">

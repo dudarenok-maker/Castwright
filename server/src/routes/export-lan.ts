@@ -24,7 +24,8 @@
    / mic / camera APIs become available on phone Safari/Chrome). */
 
 import { networkInterfaces } from 'node:os';
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 
 export const exportLanRouter = Router();
 

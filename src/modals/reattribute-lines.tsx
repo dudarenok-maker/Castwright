@@ -178,7 +178,7 @@ export function ReattributeLinesModal({
                                 className={`min-h-11 px-2.5 py-1 rounded-full text-[11px] font-semibold ${
                                   isOnSource
                                     ? 'bg-ink text-white'
-                                    : 'bg-ink/[0.06] text-ink/70 hover:bg-ink/10'
+                                    : 'bg-ink/6 text-ink/70 hover:bg-ink/10'
                                 }`}
                               >
                                 {sourceCharacterName}

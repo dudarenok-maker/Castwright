@@ -24,7 +24,8 @@
    The route is synchronous — Phase 1 re-analysis is NOT triggered.
    See `docs/features/archive/51-restructure-chapters.md` for the full design. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import {
   applyMerge,
   applySplit,

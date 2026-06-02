@@ -171,8 +171,8 @@ export function ChangeLogView({
                 isActive
                   ? 'bg-ink text-canvas'
                   : isEmpty
-                    ? 'text-ink/30 hover:text-ink/55 hover:bg-ink/[0.02]'
-                    : 'text-ink/60 hover:text-ink hover:bg-ink/[0.04]'
+                    ? 'text-ink/30 hover:text-ink/55 hover:bg-ink/2'
+                    : 'text-ink/60 hover:text-ink hover:bg-ink/4'
               }`}
             >
               {f.label} <span className="tabular-nums">({f.count})</span>
@@ -211,7 +211,7 @@ export function ChangeLogView({
         ))}
         {visible.length === 0 && (
           <div className="bg-white rounded-3xl border border-ink/10 shadow-card px-8 py-12 text-center">
-            <span className="inline-flex w-12 h-12 rounded-full bg-ink/[0.04] text-ink/40 items-center justify-center mb-4">
+            <span className="inline-flex w-12 h-12 rounded-full bg-ink/4 text-ink/40 items-center justify-center mb-4">
               <IconHistory className="w-5 h-5" />
             </span>
             {isActivityEmpty ? (
@@ -266,7 +266,7 @@ function ChangeLogEntry({ event }: { event: ChangeLogEvent }) {
     label: event.type,
   };
   return (
-    <div className="grid grid-cols-[auto_1fr_auto] gap-3 px-4 py-2.5 hover:bg-ink/[0.02] transition-colors">
+    <div className="grid grid-cols-[auto_1fr_auto] gap-3 px-4 py-2.5 hover:bg-ink/2 transition-colors">
       <span
         className="w-7 h-7 rounded-full grid place-items-center text-white shrink-0 mt-0.5"
         style={{ background: t.color }}

@@ -8,7 +8,8 @@
    refresh — without the user having to navigate to the specific
    book's analysing route first to discover it. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { scanLibrary } from '../workspace/scan.js';
 import { scanActiveAnalyses } from '../workspace/active-analyses.js';
 

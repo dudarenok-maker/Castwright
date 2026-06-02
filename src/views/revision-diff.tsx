@@ -279,7 +279,7 @@ export function RevisionDiffPlayer({
             <button
               onClick={() => setAutoCompare(!autoCompare)}
               disabled={!playable || !hasPreviousAudio || totalChanged === 0}
-              className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/[0.04] text-ink hover:bg-ink/[0.08]'}`}
+              className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/4 text-ink hover:bg-ink/8'}`}
             >
               {autoCompare ? (
                 <>
@@ -455,7 +455,7 @@ function ABCard({
   const c = character ? CHAR_COLORS[character.color as CharColor] : null;
   return (
     <div
-      className={`rounded-3xl border p-5 transition-all ${isNew ? 'border-peach bg-peach/[0.06]' : 'border-ink/10 bg-white'} shadow-card`}
+      className={`rounded-3xl border p-5 transition-all ${isNew ? 'border-peach bg-peach/6' : 'border-ink/10 bg-white'} shadow-card`}
     >
       <div className="flex items-center justify-between mb-3">
         <p
@@ -524,7 +524,7 @@ function SegmentDiffRow({
   const isSelectedB = selectedVersion === 'B';
   return (
     <div
-      className={`p-4 rounded-2xl border transition-all ${seg.changed ? (isSelectedB ? 'border-peach bg-peach/[0.04]' : 'border-ink/10 bg-white') : 'border-ink/5 bg-canvas/60'}`}
+      className={`p-4 rounded-2xl border transition-all ${seg.changed ? (isSelectedB ? 'border-peach bg-peach/4' : 'border-ink/10 bg-white') : 'border-ink/5 bg-canvas/60'}`}
     >
       <div className="flex items-start gap-3">
         <span
@@ -545,7 +545,7 @@ function SegmentDiffRow({
                   onPlayA();
                 }}
                 disabled={aDisabled}
-                className={`group flex items-center gap-2 p-2 rounded-xl transition-all border text-left disabled:opacity-40 disabled:cursor-not-allowed ${selectedVersion === 'A' ? 'border-ink bg-ink/[0.04]' : 'border-ink/10 hover:border-ink/20'}`}
+                className={`group flex items-center gap-2 p-2 rounded-xl transition-all border text-left disabled:opacity-40 disabled:cursor-not-allowed ${selectedVersion === 'A' ? 'border-ink bg-ink/4' : 'border-ink/10 hover:border-ink/20'}`}
               >
                 <span
                   className={`w-7 h-7 rounded-full grid place-items-center transition-colors ${isPlayingA ? 'bg-ink text-canvas' : 'bg-white border border-ink/15 text-ink/60 group-hover:text-ink'}`}
@@ -578,7 +578,7 @@ function SegmentDiffRow({
                   onPlayB();
                 }}
                 disabled={bDisabled}
-                className={`group flex items-center gap-2 p-2 rounded-xl transition-all border text-left disabled:opacity-40 disabled:cursor-not-allowed ${selectedVersion === 'B' ? 'border-peach bg-peach/[0.10]' : 'border-ink/10 hover:border-ink/20'}`}
+                className={`group flex items-center gap-2 p-2 rounded-xl transition-all border text-left disabled:opacity-40 disabled:cursor-not-allowed ${selectedVersion === 'B' ? 'border-peach bg-peach/10' : 'border-ink/10 hover:border-ink/20'}`}
               >
                 <span
                   className={`w-7 h-7 rounded-full grid place-items-center transition-colors ${isPlayingB ? 'bg-magenta text-white' : 'bg-white border border-ink/15 text-ink/60 group-hover:text-magenta'}`}

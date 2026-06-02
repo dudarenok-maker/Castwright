@@ -60,7 +60,7 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
         onChange={(e) => onChange(e.target.value)}
         data-testid={`phase-model-swap-${phaseId}`}
         title={`Swap the Phase ${phaseId} model. Applies from the next chapter; the in-flight chapter completes on the current model.`}
-        className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-medium text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+        className="px-2.5 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         aria-label={`Phase ${phaseId} model swap`}
       >
         <option value="">(use server default)</option>

@@ -91,7 +91,7 @@ export function VoiceLibraryPanel({
             ? 'Drag a voice onto a character, or tap "Assign" then tap a character.'
             : 'Drag onto a character to reuse.'}
         </p>
-        <div className="flex items-center gap-1 bg-ink/[0.04] rounded-full p-0.5 text-xs">
+        <div className="flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs">
           {tabs.map((t) => (
             <button
               key={t.id}
@@ -110,7 +110,7 @@ export function VoiceLibraryPanel({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search voices"
             aria-label="Search voices"
-            className="w-full min-h-[44px] sm:min-h-0 pl-9 pr-3 py-2 rounded-full bg-ink/[0.04] border border-ink/10 text-xs focus:outline-none focus:border-ink/30"
+            className="w-full min-h-[44px] sm:min-h-0 pl-9 pr-3 py-2 rounded-full bg-ink/4 border border-ink/10 text-xs focus:outline-hidden focus:border-ink/30"
           />
         </div>
       </div>
@@ -227,7 +227,7 @@ export function VoiceCard({
             }
           : undefined
       }
-      className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 cursor-grab active:cursor-grabbing transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''} ${selectable && selected ? 'bg-peach/[0.04]' : ''}`}
+      className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 cursor-grab active:cursor-grabbing transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''} ${selectable && selected ? 'bg-peach/4' : ''}`}
     >
       {selectable && (
         <span
@@ -273,7 +273,7 @@ export function VoiceCard({
               }}
               aria-label={pinned ? 'Unpin voice' : 'Pin voice'}
               aria-pressed={pinned}
-              className={`ml-auto w-6 h-6 grid place-items-center rounded-full transition-colors shrink-0 ${pinned ? 'bg-peach text-ink' : 'text-ink/30 hover:text-ink hover:bg-ink/[0.06]'}`}
+              className={`ml-auto w-6 h-6 grid place-items-center rounded-full transition-colors shrink-0 ${pinned ? 'bg-peach text-ink' : 'text-ink/30 hover:text-ink hover:bg-ink/6'}`}
             >
               <IconStar className="w-3.5 h-3.5" />
             </button>
@@ -307,7 +307,7 @@ export function VoiceCard({
           }}
           aria-label={isAssigningTarget ? `Cancel assigning ${voice.character}` : `Assign ${voice.character} to a character`}
           aria-pressed={isAssigningTarget}
-          className={`shrink-0 min-h-[44px] min-w-[44px] px-3 inline-flex items-center justify-center rounded-full text-xs font-semibold transition-colors ${isAssigningTarget ? 'bg-magenta text-white hover:bg-magenta/90' : 'bg-ink/[0.06] text-ink/70 hover:bg-ink/10 hover:text-ink'}`}
+          className={`shrink-0 min-h-[44px] min-w-[44px] px-3 inline-flex items-center justify-center rounded-full text-xs font-semibold transition-colors ${isAssigningTarget ? 'bg-magenta text-white hover:bg-magenta/90' : 'bg-ink/6 text-ink/70 hover:bg-ink/10 hover:text-ink'}`}
         >
           {isAssigningTarget ? 'Cancel' : 'Assign'}
         </button>

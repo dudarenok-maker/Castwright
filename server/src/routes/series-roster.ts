@@ -14,7 +14,8 @@
    stable "no prior characters" state instead of treating it as an
    error. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 
 export const seriesRosterRouter = Router();

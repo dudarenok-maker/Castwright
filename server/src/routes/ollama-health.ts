@@ -7,7 +7,8 @@
    second-most-common operational error after "daemon down": daemon up,
    but the configured model tag isn't pulled. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
 import { ANALYZER_NUM_CTX, ANALYZER_NUM_GPU } from '../analyzer/ollama.js';
 import {
