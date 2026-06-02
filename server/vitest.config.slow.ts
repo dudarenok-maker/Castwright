@@ -47,12 +47,9 @@ export default defineConfig({
     testTimeout: 15_000,
     hookTimeout: 30_000,
     pool: 'forks',
-    poolOptions: {
-      forks: {
-        maxForks: 1,
-        minForks: 1,
-      },
-    },
+    /* Vitest 4 removed `poolOptions`; the single-fork serialisation
+       (`maxForks: 1`) is now the top-level `maxWorkers: 1`. */
+    maxWorkers: 1,
     retry: 1,
   },
 });
