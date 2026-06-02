@@ -12,8 +12,13 @@
  * (re)spawn registers a fresh exit handler, so supervision continues across
  * respawns. `buildOpts` is async + re-evaluated per respawn so a settings
  * change (eager-load prefs, model key) is picked up by the next process. */
-import type { SidecarHandle, SpawnSidecarOpts } from './spawn-sidecar.js';
-import { spawnSidecar, probeListening } from './spawn-sidecar.js';
+import type { SidecarHandle, SidecarHealthProbe, SpawnSidecarOpts } from './spawn-sidecar.js';
+import {
+  spawnSidecar,
+  probeListening,
+  probeSidecarHealth,
+  adoptCommittedCeilingMb,
+} from './spawn-sidecar.js';
 
 /* A child that dies faster than this counts toward the crash-loop cap; one
    that lived longer is treated as a fresh incident and resets the counter, so
@@ -27,6 +32,13 @@ const DEFAULT_MAX_CONSECUTIVE_FAILURES = 5;
    owned child respawned inside the generation path's ride-out window, but not
    so chatty that it spams the port during a normal multi-minute drain. */
 const DEFAULT_ADOPTED_POLL_MS = 1_500;
+/* How often to /health-poll an adopted sidecar for FITNESS (recycle_pending /
+   committed over the adopt ceiling), on top of the cheap TCP disappearance
+   probe. Slower cadence — a leak builds over minutes, and /health is heavier
+   than a TCP connect. The 2026-06-02 incident left a fresh server bolted onto a
+   leak-saturated adopted orphan with no replacement because the watchdog only
+   watched for EXIT; this catches the alive-but-unfit case. */
+const DEFAULT_ADOPTED_HEALTH_POLL_MS = 20_000;
 
 export interface SidecarSupervisorOpts {
   /** Builds the base spawn opts for each (re)spawn. Async so it can re-read
@@ -43,8 +55,12 @@ export interface SidecarSupervisorOpts {
   maxConsecutiveFailures?: number;
   /* Probe whether something still holds the adopted sidecar's port. */
   probeFn?: (host: string, port: number) => Promise<boolean>;
-  /* Poll interval for the adopted-sidecar watchdog. */
+  /* /health probe used by the adopted-sidecar FITNESS watchdog. */
+  healthProbeFn?: (host: string, port: number) => Promise<SidecarHealthProbe>;
+  /* Poll interval for the adopted-sidecar disappearance watchdog. */
   adoptedPollMs?: number;
+  /* Poll interval for the adopted-sidecar fitness (/health) watchdog. */
+  adoptedHealthPollMs?: number;
 }
 
 export interface SidecarSupervisor {
@@ -69,7 +85,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     backoffsMs = DEFAULT_BACKOFFS_MS,
     maxConsecutiveFailures = DEFAULT_MAX_CONSECUTIVE_FAILURES,
     probeFn = probeListening,
+    healthProbeFn = probeSidecarHealth,
     adoptedPollMs = DEFAULT_ADOPTED_POLL_MS,
+    adoptedHealthPollMs = DEFAULT_ADOPTED_HEALTH_POLL_MS,
   } = opts;
 
   let stopped = false;
@@ -94,38 +112,60 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     handle = await spawnFn({ ...base, onExit: onChildExit, onAdoptExisting: onAdopt });
   }
 
-  /* Watch an adopted (already-listening, not-owned) sidecar. When its port goes
-     silent — e.g. the committed-memory soft-recycle self-exit (code 43) — bring
-     up a fresh OWNED child via spawnOnce, which re-establishes full onExit
-     supervision (or re-arms this watch if it adopts again). */
+  /* Watch an adopted (already-listening, not-owned) sidecar on two axes:
+       1. DISAPPEARANCE (cheap TCP probe each tick) — e.g. the committed-memory
+          soft-recycle self-exit (code 43); and
+       2. FITNESS (a slower /health poll) — recycle_pending, or committed memory
+          over the adopt ceiling. The 2026-06-02 "stuck after restart" left a
+          fresh server bolted onto a leak-saturated adopted orphan that never
+          EXITED, so a disappearance-only watch never replaced it.
+     Either trigger brings up a fresh OWNED child via spawnOnce — whose
+     spawnSidecar adopt-gate kills the unfit process and spawns clean, then
+     re-establishes full onExit supervision (or re-arms this watch if it adopts
+     a now-fit process). */
   function onAdopt(info: { host: string; port: number }): void {
     if (stopped || adoptedWatching) return;
     adoptedWatching = true;
     log(
       `[sidecar] supervisor: watching adopted sidecar on :${info.port} ` +
-        `(not our child) — will respawn an owned process if it exits.`,
+        `(not our child) — will respawn an owned process if it exits or becomes unfit.`,
     );
     void (async () => {
-      while (!stopped) {
-        await delayFn(adoptedPollMs);
-        if (stopped) break;
-        if (await probeFn(info.host, info.port)) continue; // still up
-        /* Gone. Release the flag BEFORE respawning so a re-adopt inside
-           spawnOnce can arm a fresh watch, then respawn an owned child. */
+      const respawn = async (why: string): Promise<void> => {
+        /* Release the flag BEFORE respawning so a re-adopt inside spawnOnce can
+           arm a fresh watch. */
         adoptedWatching = false;
-        warn(
-          `[sidecar] supervisor: adopted sidecar on :${info.port} disappeared ` +
-            `(likely a self-recycle) — respawning a supervised child.`,
-        );
+        warn(`[sidecar] supervisor: adopted sidecar on :${info.port} ${why} — respawning a supervised child.`);
         try {
           await spawnOnce();
         } catch (err) {
-          warn(
-            `[sidecar] supervisor: respawn after adopted-exit failed ` +
-              `(${(err as Error).message}).`,
-          );
+          warn(`[sidecar] supervisor: respawn after adopted ${why} failed (${(err as Error).message}).`);
         }
-        return;
+      };
+      let sinceHealthMs = 0;
+      while (!stopped) {
+        await delayFn(adoptedPollMs);
+        if (stopped) break;
+        if (!(await probeFn(info.host, info.port))) {
+          await respawn('disappeared (likely a self-recycle)');
+          return;
+        }
+        sinceHealthMs += adoptedPollMs;
+        if (sinceHealthMs < adoptedHealthPollMs) continue;
+        sinceHealthMs = 0;
+        const health = await healthProbeFn(info.host, info.port);
+        if (!health.reachable || !health.looksLikeSidecar) continue; // transient /health miss — let TCP own liveness
+        const ceiling = adoptCommittedCeilingMb();
+        const overCeiling =
+          ceiling > 0 && health.committedMb !== null && health.committedMb >= ceiling;
+        if (health.recyclePending || overCeiling) {
+          await respawn(
+            health.recyclePending
+              ? 'reports recycle_pending'
+              : `is leak-saturated (committed ${Math.round(health.committedMb ?? 0)}MB ≥ ${ceiling}MB)`,
+          );
+          return;
+        }
       }
       adoptedWatching = false;
     })();
