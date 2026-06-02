@@ -164,6 +164,8 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)
 app.use('/api/user/settings', userSettingsRouter); // GET + PUT — account defaults + non-secret env overrides
+import { upgradeRouter } from './routes/upgrade.js';
+app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
 app.use('/api/library', libraryRouter);
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
