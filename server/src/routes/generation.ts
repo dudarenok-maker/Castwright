@@ -74,6 +74,8 @@ import {
   type LoudnormSidecarJson,
 } from '../tts/loudnorm.js';
 import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
+import { appendTelemetry } from '../tts/resource-telemetry.js';
+import { probeSidecarHealth } from './sidecar-health.js';
 import { formatDuration } from '../audio/format-duration.js';
 import {
   synthesiseChapter,
@@ -1573,6 +1575,44 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           `run: ${roll.chapters} ch, ${roll.rtf != null ? `rtf=${roll.rtf.toFixed(2)}` : 'rtf=–'}` +
           (roll.chaptersPerHour != null ? `, ${roll.chaptersPerHour.toFixed(1)} ch/hr` : ''),
       );
+
+      /* fs-20 — per-run resource telemetry. FIRE-AND-FORGET: never await, never
+         block the hot path. A best-effort sidecar /health probe (its own 2 s
+         budget) supplies the VRAM + committed-host figures; a timeout / down
+         sidecar just records nulls. */
+      void (async () => {
+        let vramReservedMb: number | null = null;
+        let vramTotalMb: number | null = null;
+        let committedHostMb: number | null = null;
+        /* Only probe the sidecar for a sidecar-backed engine — a cloud engine
+           (gemini) has no local model to report VRAM for, and probing it would
+           touch the sidecar needlessly (side-11 boundary-recycle guard). */
+        if (SIDECAR_ENGINES.has(engine)) {
+          try {
+            const health = await probeSidecarHealth();
+            if (health.status === 'reachable') {
+              vramReservedMb = health.vramReservedMb ?? null;
+              vramTotalMb = health.vramTotalMb ?? null;
+              committedHostMb = health.committedMb ?? null;
+            }
+          } catch {
+            /* leave nulls — the probe is best-effort observability. */
+          }
+        }
+        await appendTelemetry({
+          at: new Date().toISOString(),
+          bookId: job.bookId,
+          chapterId: chapter.id,
+          title: chapter.title ?? null,
+          modelKey,
+          rtf: audioSec > 0 ? chapterRtf : null,
+          audioSec,
+          wallSec: synthSec,
+          vramReservedMb,
+          vramTotalMb,
+          committedHostMb,
+        });
+      })();
 
       broadcast(job, {
         type: 'chapter_complete',

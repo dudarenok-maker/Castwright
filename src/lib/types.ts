@@ -41,6 +41,8 @@ export type Revision = components['schemas']['Revision'];
 export type ChapterLoudness = components['schemas']['ChapterLoudness'];
 /* srv-27 — advisory post-synthesis audio QA verdict. */
 export type ChapterQaVerdict = components['schemas']['ChapterQaVerdict'];
+/* fs-20 — per-run resource telemetry record (admin trend panel). */
+export type ResourceTelemetryRecord = components['schemas']['ResourceTelemetryRecord'];
 export type DriftEvent = components['schemas']['DriftEvent'];
 export type TimelineEntry = components['schemas']['TimelineEntry'];
 export type MatchFactor = components['schemas']['MatchFactor'];
