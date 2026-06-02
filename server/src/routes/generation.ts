@@ -351,6 +351,17 @@ export function isGenerationActive(bookId: string): boolean {
   return (inFlightByBook.get(bookId)?.size ?? 0) > 0;
 }
 
+/** fs-1 — true when ANY book has a generation job in flight. The upgrade gate
+    refuses to swap the running code out from under an active render. Returns the
+    busy book ids so the 409 can name them. */
+export function activeGenerationBooks(): string[] {
+  const out: string[] = [];
+  for (const [bookId, set] of inFlightByBook) {
+    if (set.size > 0) out.push(bookId);
+  }
+  return out;
+}
+
 function broadcast(job: RunningJob, ev: unknown): void {
   /* Inject run-level aggregates into every outgoing tick (Bug E).
      Done = chapters that were already on disk at job-start (not in

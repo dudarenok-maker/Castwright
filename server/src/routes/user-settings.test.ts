@@ -233,7 +233,10 @@ describe('user-settings router', () => {
      disk. The key list is derived from the schema, so a future field added
      without a sample value fails the guard below — forcing it to be
      covered. geminiApiKey is excluded: it's intentionally stripped from the
-     general PUT (see the secret-stripping test) and has its own endpoint. */
+     general PUT (see the secret-stripping test) and has its own endpoint. The
+     fs-1 upgrade-bookkeeping fields (schemaVersion / lastSeenAppVersion /
+     showWhatsNew) are likewise non-writable — stripped from the general PUT and
+     set only by writeUpgradeMeta / the /api/info dismiss endpoint. */
   it('PUT round-trips every writable field onto disk and back (no silent drops)', async () => {
     const SAMPLE_VALUES: Record<string, unknown> = {
       displayName: 'Round Trip User',
@@ -273,7 +276,13 @@ describe('user-settings router', () => {
 
     /* Guard: every writable schema field has a sample value here. A field
        added to userSettingsSchema without one trips this assertion. */
-    const writableKeys = Object.keys(userSettingsSchema.shape).filter((k) => k !== 'geminiApiKey');
+    const NON_WRITABLE = new Set([
+      'geminiApiKey',
+      'schemaVersion',
+      'lastSeenAppVersion',
+      'showWhatsNew',
+    ]);
+    const writableKeys = Object.keys(userSettingsSchema.shape).filter((k) => !NON_WRITABLE.has(k));
     for (const key of writableKeys) {
       expect(SAMPLE_VALUES, `add a SAMPLE_VALUES entry for new field "${key}"`).toHaveProperty(key);
     }

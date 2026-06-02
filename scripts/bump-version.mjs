@@ -21,7 +21,7 @@
 // be run only from a clean working tree, on `main`, by a maintainer.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -84,6 +84,28 @@ function readVersion(pkgPath) {
     die(`${pkgPath} has no version field.`);
   }
   return json.version;
+}
+
+/* fs-1 — the sidecar carries its version in server/tts-sidecar/version.py
+   (__version__ = "x.y.z"), kept in lockstep with the two package.jsons so
+   /health and GET /api/info report the same number. */
+export const SIDECAR_VERSION_RE = /^(__version__\s*=\s*)["']([^"']*)["']/m;
+
+export function sidecarVersionPath(repoRootDir) {
+  return resolve(repoRootDir, 'server', 'tts-sidecar', 'version.py');
+}
+
+export function readSidecarVersion(repoRootDir) {
+  const p = sidecarVersionPath(repoRootDir);
+  if (!existsSync(p)) return null;
+  const m = SIDECAR_VERSION_RE.exec(readFileSync(p, 'utf8'));
+  return m ? m[2] : null;
+}
+
+export function writeSidecarVersion(repoRootDir, version) {
+  const p = sidecarVersionPath(repoRootDir);
+  const content = readFileSync(p, 'utf8');
+  writeFileSync(p, content.replace(SIDECAR_VERSION_RE, `$1"${version}"`), 'utf8');
 }
 
 export function semverBump(current, level) {
@@ -297,6 +319,14 @@ async function main() {
         `Manually align them before running bump-version.`,
     );
   }
+  // fs-1 — three-way lockstep: the sidecar version.py must agree too.
+  const sidecarVersion = readSidecarVersion(repoRoot);
+  if (sidecarVersion !== null && sidecarVersion !== rootVersion) {
+    die(
+      `Lockstep invariant violated: root=${rootVersion} sidecar(version.py)=${sidecarVersion}. ` +
+        `Manually align them before running bump-version.`,
+    );
+  }
 
   const newVersion = semverBump(rootVersion, args.level);
   const newTag = `v${newVersion}`;
@@ -370,6 +400,12 @@ async function main() {
   npm(['version', newVersion, '--no-git-tag-version']);
   info('[STEP] npm version (server) ...');
   npm(['version', newVersion, '--no-git-tag-version'], { cwd: resolve(repoRoot, 'server') });
+  // fs-1 — rewrite the sidecar version.py in lockstep so /health + /api/info
+  // report the new number.
+  if (existsSync(sidecarVersionPath(repoRoot))) {
+    info('[STEP] rewrite sidecar version.py ...');
+    writeSidecarVersion(repoRoot, newVersion);
+  }
 
   // Stage + commit. The narrative doc is only staged when it exists AND
   // code-stats actually changed it (git add of an unchanged/absent path is a
@@ -381,6 +417,9 @@ async function main() {
     'server/package.json',
     'server/package-lock.json',
   ];
+  if (existsSync(sidecarVersionPath(repoRoot))) {
+    addPaths.push('server/tts-sidecar/version.py');
+  }
   if (existsSync(resolve(repoRoot, 'docs', 'project-narrative.md'))) {
     addPaths.push('docs/project-narrative.md');
   }

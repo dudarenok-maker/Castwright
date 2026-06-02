@@ -6,7 +6,12 @@
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-$venvPython = Join-Path $here ".venv\Scripts\python.exe"
+# The venv defaults to .venv next to this script (the single-checkout layout),
+# but SIDECAR_VENV_DIR overrides it so a versioned-dir install (fs-1) can share
+# ONE multi-GB venv across releases instead of rebuilding it inside every
+# releases\vX.Y.Z\ tree. The launcher exports it to <install>\venv.
+$venvDir = if ($env:SIDECAR_VENV_DIR) { $env:SIDECAR_VENV_DIR } else { Join-Path $here ".venv" }
+$venvPython = Join-Path $venvDir "Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {
     Write-Error @"
 Local TTS sidecar venv not found at $venvPython.

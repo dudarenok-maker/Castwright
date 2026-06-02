@@ -14,6 +14,7 @@ import './load-env.js';
    stamp. Runtime logging (route handlers, app.listen callback, …) all
    fires after this call, so every line in logs/server.log is stamped. */
 import { installTimestamps } from './logger.js';
+import { resolveRunDir } from './app-dirs.js';
 installTimestamps();
 
 /* Install crash handlers ASAP — right after console is timestamp-patched — so a
@@ -28,7 +29,7 @@ installCrashHandlers();
 import express from 'express';
 import { createServer as createHttpsServer } from 'node:https';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { mountFrontendStatic } from './frontend-static.js';
 import { fileURLToPath } from 'node:url';
 import { manuscriptsRouter } from './routes/manuscripts.js';
@@ -74,13 +75,17 @@ import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
-import { WORKSPACE_ROOT, ensureWorkspace } from './workspace/paths.js';
+import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
+import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
+import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
 import { resetOrphanedQueueEntries } from './workspace/queue-boot.js';
 import { startBackupScheduler, stopBackupScheduler } from './workspace/auto-backup.js';
 import {
   readUserSettings,
+  writeUpgradeMeta,
+  USER_SETTINGS_PATH,
   getResolvedSidecarUrl,
   getResolvedAutoStartSidecar,
   getResolvedTtsModelKey,
@@ -159,6 +164,10 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)
 app.use('/api/user/settings', userSettingsRouter); // GET + PUT — account defaults + non-secret env overrides
+import { upgradeRouter } from './routes/upgrade.js';
+app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
+import { infoRouter } from './routes/info.js';
+app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new state
 app.use('/api/library', libraryRouter);
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
@@ -251,8 +260,11 @@ let sidecarSupervisor: SidecarSupervisor | null = null;
 const lanHttps = isLanHttpsEnabled();
 const bindHost = selectBindHost(lanHttps);
 const repoRoot = resolve(__dirname, '..', '..');
-const LAN_CERT_FILE = resolve(repoRoot, '.run', 'certs', 'lan-cert.pem');
-const LAN_KEY_FILE = resolve(repoRoot, '.run', 'certs', 'lan-key.pem');
+/* .run/ honours APP_RUN_DIR so a versioned-dir install (fs-1) shares one cert
+   store across releases instead of regenerating per release. */
+const runDir = resolveRunDir(repoRoot);
+const LAN_CERT_FILE = resolve(runDir, 'certs', 'lan-cert.pem');
+const LAN_KEY_FILE = resolve(runDir, 'certs', 'lan-key.pem');
 
 const listenerCallback = () => {
   const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
@@ -367,6 +379,36 @@ await resetOrphanedQueueEntries()
     }
   })
   .catch((err) => console.warn('[queue] orphan reset skipped:', err));
+
+/* fs-1 — boot upgrade coordinator. On a version increase since last boot it
+   backs up every workspace JSON to <WORKSPACE_ROOT>/.upgrade-backups/ BEFORE
+   running any schema migration, records the new version, and flags the
+   what's-new banner. AWAITED before listen so no request hits half-migrated
+   data; the inner .catch keeps a backup/IO error from blocking startup (the
+   coordinator is idempotent and retries next boot). releasesDir is the parent
+   of repoRoot ONLY in a versioned-dir install (repoRoot == releases/vX.Y.Z),
+   else null — so prune is a no-op in a dev checkout. */
+const releasesParent = dirname(repoRoot);
+const releasesDir = basename(releasesParent) === 'releases' ? releasesParent : null;
+await runUpgradeCoordinator({
+  appVersion: getAppVersion(),
+  workspaceRoot: WORKSPACE_ROOT,
+  booksRoot: BOOKS_ROOT,
+  userSettingsPath: USER_SETTINGS_PATH,
+  readLastSeenAppVersion: async () => (await readUserSettings()).lastSeenAppVersion,
+  writeMeta: writeUpgradeMeta,
+  releasesDir,
+  log: (m) => console.log(m),
+})
+  .then((r) => {
+    if (r.action === 'upgrade') {
+      console.log(
+        `[upgrade] v${r.fromVersion} → v${r.toVersion}: ${r.backedUp?.length ?? 0} file(s) backed up, ` +
+          `${r.migrated?.length ?? 0} migrated, ${r.prunedReleases?.length ?? 0} old release(s) pruned.`,
+      );
+    }
+  })
+  .catch((err) => console.warn('[upgrade] coordinator skipped:', err));
 
 if (lanHttps) {
   if (!existsSync(LAN_CERT_FILE) || !existsSync(LAN_KEY_FILE)) {

@@ -520,3 +520,48 @@ describe('getResolvedTtsModelKey — Qwen-when-installed default', () => {
     expect(mod.getResolvedTtsModelKey()).toBe('coqui-xtts-v2');
   });
 });
+
+describe('userSettingsSchema — fs-1 upgrade bookkeeping', () => {
+  beforeEach(async () => {
+    const mod = await import('./user-settings.js');
+    rmSync(mod.USER_SETTINGS_PATH, { force: true });
+    mod._resetUserSettingsCache();
+    await mod.readUserSettings();
+  });
+
+  it('parses the additive fields and treats them as optional (legacy files load)', () => {
+    const parsed = userSettingsSchema.parse({
+      ...DEFAULT_USER_SETTINGS,
+      lastSeenAppVersion: '1.5.1',
+      showWhatsNew: true,
+      schemaVersion: 1,
+    });
+    expect(parsed.lastSeenAppVersion).toBe('1.5.1');
+    expect(parsed.showWhatsNew).toBe(true);
+    // Absent on a fresh document (no migration needed for old files).
+    expect(userSettingsSchema.parse(DEFAULT_USER_SETTINGS).lastSeenAppVersion).toBeUndefined();
+  });
+
+  it('writeUpgradeMeta persists the version + banner flag and reads them back', async () => {
+    const mod = await import('./user-settings.js');
+    await mod.writeUpgradeMeta({ lastSeenAppVersion: '1.6.0', showWhatsNew: true });
+    mod._resetUserSettingsCache();
+    const reread = await mod.readUserSettings();
+    expect(reread.lastSeenAppVersion).toBe('1.6.0');
+    expect(reread.showWhatsNew).toBe(true);
+  });
+
+  it('the general PUT path STRIPS the upgrade fields (only writeUpgradeMeta may set them)', async () => {
+    const mod = await import('./user-settings.js');
+    await mod.writeUpgradeMeta({ lastSeenAppVersion: '1.6.0', showWhatsNew: true });
+    // A client PUT trying to forge these must be ignored.
+    const after = await mod.writeUserSettings({
+      displayName: 'Tamperer',
+      lastSeenAppVersion: '9.9.9',
+      showWhatsNew: false,
+    } as unknown);
+    expect(after.displayName).toBe('Tamperer'); // legit field applied
+    expect(after.lastSeenAppVersion).toBe('1.6.0'); // forged field stripped
+    expect(after.showWhatsNew).toBe(true);
+  });
+});

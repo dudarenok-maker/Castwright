@@ -17,6 +17,7 @@ import type {
 } from '../lib/types';
 import type { ThemePreference } from '../lib/use-theme';
 import { api } from '../lib/api';
+import { UpgradeCard } from '../components/upgrade-card';
 import { selectLibraryBooks } from '../store/library-slice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -350,6 +351,7 @@ export function AccountView() {
       </div>
 
       <div className="space-y-6">
+        <UpgradeCard />
         <FormCard title="Profile" hint="How you appear in the top bar and the change log.">
           <FieldRow label="Display name">
             <input

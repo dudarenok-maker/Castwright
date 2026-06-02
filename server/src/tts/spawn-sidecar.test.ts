@@ -569,6 +569,78 @@ describe('spawnSidecar', () => {
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('log file open failed'));
   });
 
+  it('parks tts.pid + logs under APP_RUN_DIR / APP_LOG_DIR when set (fs-1 versioned-dir)', async () => {
+    /* A versioned-dir install points logs/.run at a shared sibling OUTSIDE the
+       per-release tree, so tts.pid (which stop-app + the upgrade restarter
+       reap) survives a release swap. With the env set, NOTHING lands under
+       repoRoot. */
+    const sharedRun = mkdtempSync(join(tmpdir(), 'wt-run-'));
+    const sharedLog = mkdtempSync(join(tmpdir(), 'wt-log-'));
+    const prevRun = process.env.APP_RUN_DIR;
+    const prevLog = process.env.APP_LOG_DIR;
+    process.env.APP_RUN_DIR = sharedRun;
+    process.env.APP_LOG_DIR = sharedLog;
+    try {
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        log,
+        warn,
+      });
+      expect(handle).not.toBeNull();
+      expect(readdirSync(sharedLog).sort()).toEqual(['tts.err.log', 'tts.log']);
+      expect(readdirSync(sharedRun)).toContain('tts.pid');
+      /* repoRoot stays clean — no logs/ or .run/ created inside the release. */
+      expect(() => readdirSync(join(repoRoot, 'logs'))).toThrow();
+      expect(() => readdirSync(join(repoRoot, '.run'))).toThrow();
+    } finally {
+      if (prevRun === undefined) delete process.env.APP_RUN_DIR;
+      else process.env.APP_RUN_DIR = prevRun;
+      if (prevLog === undefined) delete process.env.APP_LOG_DIR;
+      else process.env.APP_LOG_DIR = prevLog;
+      rmSync(sharedRun, { recursive: true, force: true });
+      rmSync(sharedLog, { recursive: true, force: true });
+    }
+  });
+
+  it('passes KOKORO_MODEL_PATH / KOKORO_VOICES_PATH through to the sidecar (fs-1 shared weights)', async () => {
+    /* The versioned-dir launcher points the ~330 MB Kokoro weights at a shared
+       models/kokoro sibling via these env vars; the spawn must forward them so
+       the sidecar doesn't re-resolve to its __file__-relative (per-release)
+       default. Carried by the `...process.env` spread — this pins it so a
+       future allowlist refactor can't silently drop them. */
+    const prevModel = process.env.KOKORO_MODEL_PATH;
+    const prevVoices = process.env.KOKORO_VOICES_PATH;
+    process.env.KOKORO_MODEL_PATH = join('/shared', 'models', 'kokoro', 'kokoro-v1.0.onnx');
+    process.env.KOKORO_VOICES_PATH = join('/shared', 'models', 'kokoro', 'voices-v1.0.bin');
+    try {
+      await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        log,
+        warn,
+      });
+      const [, , options] = spawnFn.mock.calls[0];
+      expect(options.env.KOKORO_MODEL_PATH).toBe(process.env.KOKORO_MODEL_PATH);
+      expect(options.env.KOKORO_VOICES_PATH).toBe(process.env.KOKORO_VOICES_PATH);
+    } finally {
+      if (prevModel === undefined) delete process.env.KOKORO_MODEL_PATH;
+      else process.env.KOKORO_MODEL_PATH = prevModel;
+      if (prevVoices === undefined) delete process.env.KOKORO_VOICES_PATH;
+      else process.env.KOKORO_VOICES_PATH = prevVoices;
+    }
+  });
+
   it('logs a warning when the spawned child exits unexpectedly', async () => {
     const child = makeFakeChild(54321);
     spawnFn.mockReturnValueOnce(child);
