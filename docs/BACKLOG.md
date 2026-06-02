@@ -111,6 +111,63 @@ _`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026
 majors (`checkout@v6`, `setup-node@v6`, `cache@v5`, `upload-artifact@v7`). Acceptance is the
 PR's own annotation-free CI run._
 
+### 2026-06-02 brainstorm round — net-new, **pending priority pass**
+
+These 29 items were filed in one brainstorm pass on 2026-06-02 across five lenses
+(Listener experience · Reliability & quality · Distribution & onboarding · Net-new
+capabilities · Voice & cast sharing). They are labelled `moscow:should` as a
+**placeholder only** — they have NOT yet been ranked against the rest of the backlog.
+The next whole-backlog priority pass will re-bucket them (several of the S-sized
+listener / quick-win items are really `could`; a few may be `must`). Grouped by lens
+below; full What / Acceptance / Key files / Benefit live in each issue. Size key:
+S ≈ ½–1 day · M ≈ one PR · L ≈ its own plan.
+
+#### Listener experience
+
+- `fe-23` — Auto-advance / continuous playback (S) ([#458](https://github.com/dudarenok-maker/AudioBook-Generator/issues/458)). _Mini-player `onEnded` stops dead at every chapter; add hands-free advance behind a default-on toggle._ _Benefit (user):_ the biggest everyday-listening gap.
+- `fe-24` — Skip forward/back buttons (±15s / ±30s) (S) ([#459](https://github.com/dudarenok-maker/AudioBook-Generator/issues/459)). _Prev/next jump whole chapters only; add intra-chapter seek + key bindings._ _Benefit (user):_ the most-used audiobook control, currently absent.
+- `fe-25` — Wire (or remove) the mini-player volume control (S) ([#460](https://github.com/dudarenok-maker/AudioBook-Generator/issues/460)). _The `IconVolume` button has no `onClick` — a dead placeholder._ _Benefit (user):_ finish/remove a broken affordance.
+- `fe-26` — Marker export + shareable notes (S) ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461)). _Export per-book markers (note + re-record) to a file._ _Benefit (user):_ makes re-record markers actionable outside the app.
+- `fs-15` — Continue listening: global cross-book resume (M) ([#462](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462)). _Aggregate per-book resume bookmarks into a one-tap "most recent across any book" surface._ _Benefit (user):_ one-tap re-entry; rewards the multi-book workflow.
+- `fs-16` — Listening-stats dashboard (M) ([#463](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463)). _Total hours, books finished, per-book completion %, streak — from existing progress records._ _Benefit (user):_ engagement / progress sense.
+- `fs-17` — Read-along: sentence highlight synced to audio (L) ([#464](https://github.com/dudarenok-maker/AudioBook-Generator/issues/464)). _Highlight the current sentence as audio plays, off existing per-segment timing._ _Benefit (user):_ immersion / accessibility; differentiating.
+
+#### Reliability & quality
+
+- `srv-27` — Post-synthesis audio QA gate (M) ([#465](https://github.com/dudarenok-maker/AudioBook-Generator/issues/465)). _Validate duration / silence / clipping / truncation before a chapter flips to `done`._ _Benefit (user):_ catches bad renders before the listener hits them.
+- `srv-28` — Pre-flight disk-space guard (S) ([#466](https://github.com/dudarenok-maker/AudioBook-Generator/issues/466)). _Warn before a run/export when free space is tight._ _Benefit (user):_ avoids deep-run failures.
+- `ops-11` — Golden-audio regression harness (M) ([#467](https://github.com/dudarenok-maker/AudioBook-Generator/issues/467)). _Deterministic fixture book asserted on duration/hash to catch engine/sidecar drift._ _Benefit (technical):_ locks the audio-output contract.
+- `fs-18` — One-click diagnostics / health board (M) ([#468](https://github.com/dudarenok-maker/AudioBook-Generator/issues/468)). _Green/red board: GPU/VRAM, sidecar + models, analyzer, ffmpeg, disk._ _Benefit (user / technical):_ glanceable "why is it broken?" surface.
+- `fs-19` — Structured failure taxonomy + plain-language remediation (M) ([#469](https://github.com/dudarenok-maker/AudioBook-Generator/issues/469)). _Map recurring failure modes to human messages + "what to do" lines._ _Benefit (user):_ self-service recovery.
+- `fs-20` — Per-run resource telemetry log + trend view (M) ([#470](https://github.com/dudarenok-maker/AudioBook-Generator/issues/470)). _Persist RTF / VRAM / host-RAM / wall-time per chapter and chart it._ _Benefit (technical):_ perf-regression visibility.
+
+#### Distribution & onboarding
+
+- `fe-27` — In-app update notifier (S) ([#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471)). _Surface "vX available" + changelog when behind; complements `fs-1`'s upgrade mechanism._ _Benefit (user):_ closes the distribution loop.
+- `fe-28` — Onboarding empty states + first-run checklist (S) ([#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472)). _Guided empty library + four-step checklist._ _Benefit (user):_ reduces first-session bounce.
+- `fe-29` — In-app help / troubleshooting panel (S) ([#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473)). _Offline help: workflows, shortcuts, common-failure remediations (shares copy with `fs-19`)._ _Benefit (user):_ support deflection.
+- `fs-21` — First-run setup wizard (L) ([#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474)). _GPU check → model install → defaults → one-sentence smoke synth._ _Benefit (user):_ biggest adoption lever for non-technical deployers.
+- `fs-22` — Bundled demo book, real / generate-able (S) ([#475](https://github.com/dudarenok-maker/AudioBook-Generator/issues/475)). _A tiny public-domain manuscript that runs the real pipeline._ _Benefit (user):_ instant "wow" + end-to-end smoke test.
+- `fs-23` — In-app model manager (M) ([#476](https://github.com/dudarenok-maker/AudioBook-Generator/issues/476)). _One home for installed models: sizes, disk, install/remove/update (+ `ops-7` integrity)._ _Benefit (user):_ demystifies the engine zoo.
+
+#### Net-new capabilities
+
+- `fe-30` — Voice-actor (multi-narrator) view (M) ([#477](https://github.com/dudarenok-maker/AudioBook-Generator/issues/477)). _Group characters by assigned voice + bulk reassign; the inverse axis of the cast view._ _Benefit (user):_ manage a cast at the voice level.
+- `fs-24` — Per-character pronunciation lexicon (M) ([#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478)). _Per-book pronunciation overrides for invented names, applied at synth._ _Benefit (user):_ fixes the #1 fiction narration complaint.
+- `fs-25` — Per-quote expressive / emotion synthesis (L) ([#479](https://github.com/dudarenok-maker/AudioBook-Generator/issues/479)). _Per-line emotion tags driving synthesis — the deferred Qwen "per-quote emotion."_ _Benefit (user):_ step-change in expressiveness.
+- `fs-26` — Line-level re-record / splice (L) ([#480](https://github.com/dudarenok-maker/AudioBook-Generator/issues/480)). _Re-synth one sentence and splice it in, vs a whole-chapter regen (consumes the `rerecord` marker)._ _Benefit (user):_ surgical fixes, big time/VRAM saver.
+- `fs-27` — Chapter recaps / "previously…" summaries (M) ([#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481)). _LLM recap per chapter, optionally spoken, on resume after a gap._ _Benefit (user):_ graceful re-entry into long books.
+
+#### Voice & cast sharing
+
+Build bottom-up: `side-13` gates everything; `fs-28` is the format the rest build on. Scoped to **synthetic/designed** voices with a consent/licensing note throughout.
+
+- `fs-28` — Voice export/import bundle (M) ([#482](https://github.com/dudarenok-maker/AudioBook-Generator/issues/482)). _Portable bundle (embedding + persona + provenance); the sharing **foundation**._ _Benefit (user):_ share a voice + back up the library. _Depends on `side-13`; blocks `fs-29`/`fs-30`/`fs-31`._
+- `fs-29` — Cast/profile pack sharing (M) ([#483](https://github.com/dudarenok-maker/AudioBook-Generator/issues/483)). _Export/import a book's full cast (personas + assignments)._ _Benefit (user):_ reuse a curated cast. _Depends on `fs-28`._
+- `fs-30` — Whole voice-library export/import (M) ([#484](https://github.com/dudarenok-maker/AudioBook-Generator/issues/484)). _Bulk archive for backup/migration/sharing._ _Benefit (user / technical):_ portability + disaster recovery. _Depends on `fs-28`._
+- `side-13` — Import safety + provenance for shared voice artifacts (M) ([#485](https://github.com/dudarenok-maker/AudioBook-Generator/issues/485)). _`weights_only` safe-load + provenance for **untrusted** `.pt`; extends `side-12`._ _Benefit (technical / security):_ makes the whole sharing theme safe. _Gates `fs-28`/`fs-29`/`fs-30`/`fs-31`._
+- `fs-31` — Community voice registry / share-by-link (L) ([#486](https://github.com/dudarenok-maker/AudioBook-Generator/issues/486)). _Publish/pull voices by link — the flagship, externally-facing version._ _Benefit (user):_ a community library. _Needs a hosting + licensing/abuse design; after `fs-28` + `side-13`._
+
 ---
 
 ## Could — nice to have, low-cost wins
