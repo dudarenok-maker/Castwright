@@ -4,7 +4,8 @@
    knows the LOCAL_TTS_URL env var; the frontend doesn't, so the indirection
    lives here. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { getCachedCatalogAudit, runCatalogAudit } from '../tts/coqui-catalog-audit.js';
 import {
   getResolvedSidecarUrl,

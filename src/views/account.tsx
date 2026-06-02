@@ -357,7 +357,7 @@ export function AccountView() {
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
               placeholder="Your name"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
           </FieldRow>
         </FormCard>
@@ -370,7 +370,7 @@ export function AccountView() {
             <select
               value={defaultAnalysisModel}
               onChange={(e) => setDefaultAnalysisModel(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               {MODEL_OPTION_GROUPS.map((g) => (
                 <optgroup key={g.engine} label={g.label}>
@@ -387,7 +387,7 @@ export function AccountView() {
             <select
               value={defaultTtsEngine}
               onChange={(e) => setDefaultTtsEngine(e.target.value as TtsEngineId)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               {TTS_ENGINES.map((g) => (
                 <option key={g.id} value={g.id} title={g.hint}>
@@ -400,7 +400,7 @@ export function AccountView() {
             <select
               value={defaultTtsModelKey}
               onChange={(e) => setDefaultTtsModelKey(e.target.value as TtsModelKey)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               {engineGroup.models.map((m) => (
                 <option key={m.id} value={m.id} title={m.hint}>
@@ -420,7 +420,7 @@ export function AccountView() {
             return (
               <p
                 data-testid="analyzer-split-status"
-                className="rounded-xl border border-ink/10 bg-ink/[0.02] px-3 py-2 text-xs text-ink/70"
+                className="rounded-xl border border-ink/10 bg-ink/2 px-3 py-2 text-xs text-ink/70"
               >
                 {on ? (
                   <>
@@ -458,7 +458,7 @@ export function AccountView() {
                 setAnalyzerPhase0Model(e.target.value === '' ? null : e.target.value)
               }
               data-testid="account-analyzer-phase0-model"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               <option value="">(use server default)</option>
               {MODEL_OPTION_GROUPS.map((g) => (
@@ -482,7 +482,7 @@ export function AccountView() {
                 setAnalyzerPhase1Model(e.target.value === '' ? null : e.target.value)
               }
               data-testid="account-analyzer-phase1-model"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               <option value="">(use server default)</option>
               {MODEL_OPTION_GROUPS.map((g) => (
@@ -524,7 +524,7 @@ export function AccountView() {
               }}
               placeholder="(use server default)"
               data-testid="account-analyzer-phase1-min-lag"
-              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
           </FieldRow>
         </FormCard>
@@ -553,7 +553,7 @@ export function AccountView() {
                   setMinorCastMinLines(Math.max(0, Math.min(50, parsed)));
                 }
               }}
-              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
           </FieldRow>
         </FormCard>
@@ -569,7 +569,7 @@ export function AccountView() {
             <select
               value={coverPickerDefaultTab}
               onChange={(e) => setCoverPickerDefaultTab(e.target.value as 'search' | 'upload')}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               <option value="search">Search OpenLibrary (default)</option>
               <option value="upload">Upload local</option>
@@ -589,7 +589,7 @@ export function AccountView() {
               value={defaultThemePreference}
               onChange={(e) => setDefaultThemePreference(e.target.value as ThemePreference)}
               data-testid="account-default-theme"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               <option value="system">System (follows OS — default)</option>
               <option value="light">Light</option>
@@ -733,7 +733,7 @@ export function AccountView() {
                 }
               }}
               data-testid="account-generation-workers"
-              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
           </FieldRow>
         </FormCard>
@@ -769,7 +769,7 @@ export function AccountView() {
               value={backupCadence}
               onChange={(e) => setBackupCadence(e.target.value as 'daily' | 'weekly')}
               data-testid="account-backup-cadence"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               <option value="daily">Daily</option>
               <option value="weekly">Weekly</option>
@@ -793,7 +793,7 @@ export function AccountView() {
                 }
               }}
               data-testid="account-backup-retention"
-              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
           </FieldRow>
           <BackupRestoreSection />
@@ -812,7 +812,7 @@ export function AccountView() {
               value={sidecarUrl}
               onChange={(e) => setSidecarUrl(e.target.value)}
               placeholder="http://localhost:9000"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
           </FieldRow>
           <FieldRow
@@ -824,7 +824,7 @@ export function AccountView() {
             <select
               value={analysisEngine}
               onChange={(e) => setAnalysisEngine(e.target.value as 'local' | 'gemini')}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             >
               <option value="gemini">Gemini API (default — direct)</option>
               <option value="local">Local Ollama (on-device, with Gemini fallback)</option>
@@ -841,7 +841,7 @@ export function AccountView() {
               value={ollamaUrl}
               onChange={(e) => setOllamaUrl(e.target.value)}
               placeholder="http://localhost:11434"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
           </FieldRow>
           <FieldRow
@@ -853,7 +853,7 @@ export function AccountView() {
               value={workspaceDirOverride}
               onChange={(e) => setWorkspaceDirOverride(e.target.value)}
               placeholder="(leave empty to use server/.env)"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
             />
             {workspaceDirty && (
               <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
@@ -1019,7 +1019,7 @@ function BackupRestoreSection() {
           value={bookId}
           onChange={(e) => onPickBook(e.target.value)}
           data-testid="account-backup-book-picker"
-          className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+          className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         >
           <option value="">Select a book…</option>
           {books.map((b) => (
@@ -1049,7 +1049,7 @@ function BackupRestoreSection() {
               <div
                 key={s.file}
                 data-testid="account-backup-snapshot"
-                className="flex items-center justify-between gap-3 rounded-xl border border-ink/10 bg-ink/[0.02] px-3 py-2"
+                className="flex items-center justify-between gap-3 rounded-xl border border-ink/10 bg-ink/2 px-3 py-2"
               >
                 <div className="min-w-0">
                   <div className="text-xs font-mono text-ink truncate">{s.file}</div>
@@ -1061,7 +1061,7 @@ function BackupRestoreSection() {
                   type="button"
                   onClick={() => onRestore(s.file)}
                   disabled={busy}
-                  className="shrink-0 min-h-[44px] sm:min-h-0 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/[0.04] disabled:opacity-50"
+                  className="shrink-0 min-h-[44px] sm:min-h-0 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/4 disabled:opacity-50"
                 >
                   Restore
                 </button>
@@ -1094,7 +1094,7 @@ function ReadOnlyRow({
       {sublabel && <span className="block text-xs text-ink/55 mt-0.5">{sublabel}</span>}
       <div className="mt-2">
         {children ?? (
-          <div className="w-full px-3 py-2 rounded-xl border border-ink/10 bg-ink/[0.03] text-sm text-ink/70 font-mono break-all">
+          <div className="w-full px-3 py-2 rounded-xl border border-ink/10 bg-ink/3 text-sm text-ink/70 font-mono break-all">
             {value}
           </div>
         )}
@@ -1184,7 +1184,7 @@ function GeminiKeyField({
           onChange={(e) => setDraft(e.target.value)}
           placeholder={placeholder}
           aria-label="Gemini API key"
-          className="flex-1 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-none focus:ring-2 focus:ring-magenta/30"
+          className="flex-1 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
         />
         <ApiKeyPill status={status} />
       </div>
@@ -1201,7 +1201,7 @@ function GeminiKeyField({
             type="button"
             onClick={handleClear}
             disabled={busy !== null}
-            className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/[0.04] disabled:opacity-50"
+            className="px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/4 disabled:opacity-50"
           >
             {busy === 'clear' ? 'Clearing…' : 'Clear'}
           </button>
@@ -1380,7 +1380,7 @@ function AdvancedCard() {
           <div className="mt-2 flex items-center gap-3">
             <kbd
               data-testid="account-play-pause-binding"
-              className="px-2.5 py-1 rounded-lg border border-ink/15 bg-ink/[0.04] text-xs font-mono text-ink min-w-[3rem] text-center"
+              className="px-2.5 py-1 rounded-lg border border-ink/15 bg-ink/4 text-xs font-mono text-ink min-w-12 text-center"
             >
               {formatKeyLabel(keybindings['play-pause'])}
             </kbd>
@@ -1389,7 +1389,7 @@ function AdvancedCard() {
               onClick={() => setCapturing('play-pause')}
               data-testid="account-rebind-play-pause"
               aria-pressed={capturing === 'play-pause'}
-              className="px-3 py-1.5 min-h-[36px] rounded-full border border-ink/15 bg-white text-xs text-ink hover:bg-ink/[0.04]"
+              className="px-3 py-1.5 min-h-[36px] rounded-full border border-ink/15 bg-white text-xs text-ink hover:bg-ink/4"
             >
               {capturing === 'play-pause' ? 'Press a key… (Esc to cancel)' : 'Rebind'}
             </button>

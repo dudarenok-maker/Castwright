@@ -111,7 +111,7 @@ export function VoiceOverridePicker({
         aria-expanded={open}
         disabled={!baseVoicesLoaded}
         onClick={() => setOpen((v) => !v)}
-        className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-none focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
+        className="w-full inline-flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink hover:border-ink/30 focus:outline-hidden focus:ring-2 focus:ring-magenta/30 disabled:opacity-60 disabled:cursor-not-allowed min-h-[44px] sm:min-h-0"
       >
         <span className="truncate text-left flex-1">
           {baseVoicesLoaded ? triggerLabel : 'Loading base voice catalog…'}

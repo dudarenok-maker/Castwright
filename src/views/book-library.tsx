@@ -356,7 +356,7 @@ function NoResults({ onClear }: { onClear: () => void }) {
       className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center"
       data-testid="library-no-results"
     >
-      <span className="w-16 h-16 mx-auto rounded-full bg-ink/[0.05] grid place-items-center text-ink/55">
+      <span className="w-16 h-16 mx-auto rounded-full bg-ink/5 grid place-items-center text-ink/55">
         <IconClose className="w-7 h-7" />
       </span>
       <h3 className="mt-5 font-serif text-2xl font-bold text-ink">No books match your filters</h3>

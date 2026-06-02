@@ -90,6 +90,7 @@ import {
   type SidecarSupervisor,
 } from './tts/sidecar-supervisor.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
+import { errorHandler } from './error-handler.js';
 
 const app = express();
 
@@ -217,6 +218,11 @@ app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inF
     console.warn(`[server] frontend NOT mounted: ${result.reason}`);
   }
 }
+
+/* Express-5 async-rejection backstop — registered LAST, after every route and
+   the frontend static mount, so it catches anything the per-route try/catch
+   blocks miss. See error-handler.ts. */
+app.use(errorHandler);
 
 const PORT = Number(process.env.PORT ?? 8080);
 const LAN_HTTPS_PORT = Number(process.env.LAN_HTTPS_PORT ?? 8443);

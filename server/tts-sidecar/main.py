@@ -951,6 +951,17 @@ class QwenEngine(Engine):
         # back-to-back designs stay warm (no reload) while a pause reclaims
         # ~4–5 GB. 0.0 until the first design.
         self._design_last_used: float = 0.0
+        # Count of in-flight design_voice() calls. The idle watchdog must NOT
+        # free the VoiceDesign model out from under an active design — the
+        # plan-161 A/B compare makes the user dwell long enough for the idle TTL
+        # to elapse mid-design, and a watchdog free in the unguarded window
+        # between _ensure_design_loaded() and the _synth_lock forward nulls
+        # `_design` → "'NoneType' object has no attribute 'generate_voice_design'".
+        # Incremented at entry / decremented in a finally; `maybe_free_idle_design`
+        # bails while it's > 0. Read/written under the GIL (simple int), which is
+        # sufficient here: the airtight backstop is the re-ensure under _synth_lock
+        # inside design_voice — this guard just stops the wasteful, racy free.
+        self._design_in_flight: int = 0
         # Designed-voice embeddings cache. Default lives next to this file
         # under voices/qwen/ (exact back-compat when QWEN_VOICES_DIR unset).
         # The Node server points QWEN_VOICES_DIR at the per-workspace tree
@@ -1207,12 +1218,39 @@ class QwenEngine(Engine):
         `ttl_seconds` since the last design. Returns True if it freed. Driven by
         the startup watchdog: rapid back-to-back designs keep it warm (no
         per-design reload — the user's explicit preference), but a quiet pause
-        reclaims ~4–5 GB. Cheap no-op when nothing is resident."""
-        if self._design is None:
+        reclaims ~4–5 GB. Cheap no-op when nothing is resident.
+
+        The idle test is re-validated UNDER `_synth_lock` and skipped entirely
+        while a design is in flight (`_design_in_flight`), so the watchdog can
+        never free `_design` out from under an active design — the plan-161
+        race. Nulls `_design` inline rather than calling `unload_design()`
+        (which re-acquires the non-reentrant `_synth_lock` → deadlock); the
+        gc/empty_cache reclaim runs after the lock is released."""
+        # Cheap, lock-free fast-outs first (no model, or recently used).
+        if self._design is None or self._design_in_flight > 0:
             return False
         if time.monotonic() - self._design_last_used <= ttl_seconds:
             return False
-        self.unload_design()
+        # Re-validate under the lock: design_voice refreshes `_design_last_used`
+        # and runs its forward while holding `_synth_lock`, so a check that still
+        # finds it idle here cannot be mid-forward.
+        with self._synth_lock:
+            if self._design is None or self._design_in_flight > 0:
+                return False
+            if time.monotonic() - self._design_last_used <= ttl_seconds:
+                return False
+            self._design = None
+        # Mirror unload_design()'s reclaim: collect the dropped VoiceDesign
+        # reference cycles before freeing VRAM (the 2026-05-30 host leak).
+        gc.collect()
+        try:
+            import torch  # type: ignore
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        log.info("Qwen VoiceDesign unloaded (Base stays resident).")
         return True
 
     def list_voices(self) -> list[str]:
@@ -1251,66 +1289,84 @@ class QwenEngine(Engine):
         # caller sent nothing.
         audition_text = (calibration_text or self.CALIBRATION_TEXT).strip() or self.CALIBRATION_TEXT
 
-        # Mark the design model active up front so the idle watchdog can't free
-        # it out from under this in-flight design; refreshed again on completion
-        # so the TTL counts idle from when the design finished.
+        # Mark the design model active up front AND register an in-flight design
+        # so the idle watchdog can't free the VoiceDesign model out from under
+        # it. The timestamp alone is a TOCTOU (the watchdog can read a stale value
+        # and free in the gap before the _synth_lock forward); `_design_in_flight`
+        # + the re-ensure under the lock below close that race. Decremented in the
+        # finally so a failure can't leave the guard stuck > 0.
         self._design_last_used = time.monotonic()
-        self._ensure_design_loaded()
-        self._ensure_base_loaded()
-        # Serialise the GPU forwards against any concurrent synth/design — see
-        # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-        with self._synth_lock:
-            # 1. design a reference clip from the persona instruction.
-            ref_wavs, ref_sr = self._design.generate_voice_design(
-                text=ref_text, language=lang, instruct=instruct
-            )
-            ref_audio = ref_wavs[0]
+        self._design_in_flight += 1
+        try:
+            self._ensure_design_loaded()
+            self._ensure_base_loaded()
+            # Serialise the GPU forwards against any concurrent synth/design — see
+            # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+            with self._synth_lock:
+                # Re-ensure the models UNDER the lock. Every in-place nuller of
+                # `_design`/`_base` (the idle watchdog, a concurrent
+                # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
+                # so a model ensured before we took the lock may have been freed
+                # in the gap. Re-ensuring here is the airtight backstop against
+                # "'NoneType' object has no attribute 'generate_voice_design'".
+                # Idempotent / a no-op on the warm path; `_ensure_*` don't take
+                # `_synth_lock`, so this can't deadlock.
+                self._ensure_design_loaded()
+                self._ensure_base_loaded()
+                # 1. design a reference clip from the persona instruction.
+                ref_wavs, ref_sr = self._design.generate_voice_design(
+                    text=ref_text, language=lang, instruct=instruct
+                )
+                ref_audio = ref_wavs[0]
 
-            # 2. distil into a reusable clone prompt on the Base model.
-            prompt = self._base.create_voice_clone_prompt(
-                ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-            )
+                # 2. distil into a reusable clone prompt on the Base model.
+                prompt = self._base.create_voice_clone_prompt(
+                    ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                )
 
-        # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
-        os.makedirs(self._voices_dir, exist_ok=True)
-        pt_path, json_path = self._voice_paths(voice_id)
-        torch.save(prompt, pt_path)
-        import json as _json
+            # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
+            os.makedirs(self._voices_dir, exist_ok=True)
+            pt_path, json_path = self._voice_paths(voice_id)
+            torch.save(prompt, pt_path)
+            import json as _json
 
-        with open(json_path, "w", encoding="utf-8") as fh:
-            _json.dump(
-                {
-                    "voiceId": voice_id,
-                    "instruct": instruct,
-                    "language": lang,
-                    "refText": ref_text,
-                    "baseModel": self.BASE_MODEL,
-                    "designModel": self.VOICEDESIGN_MODEL,
-                },
-                fh,
-                ensure_ascii=False,
-                indent=2,
-            )
-        log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
+            with open(json_path, "w", encoding="utf-8") as fh:
+                _json.dump(
+                    {
+                        "voiceId": voice_id,
+                        "instruct": instruct,
+                        "language": lang,
+                        "refText": ref_text,
+                        "baseModel": self.BASE_MODEL,
+                        "designModel": self.VOICEDESIGN_MODEL,
+                    },
+                    fh,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            log.info("Designed + cached Qwen voice '%s' (instruct=%r).", voice_id, instruct[:80])
 
-        # Evict any stale in-memory entry so a RE-designed voice can't keep
-        # serving the previous embedding — the next synth reloads the fresh
-        # .pt we just wrote. (We don't warm it here: the audition preview
-        # below uses `prompt` directly, and the first real synth's single
-        # disk load is negligible.)
-        with self._cache_lock:
-            self._prompt_cache.pop(voice_id, None)
+            # Evict any stale in-memory entry so a RE-designed voice can't keep
+            # serving the previous embedding — the next synth reloads the fresh
+            # .pt we just wrote. (We don't warm it here: the audition preview
+            # below uses `prompt` directly, and the first real synth's single
+            # disk load is negligible.)
+            with self._cache_lock:
+                self._prompt_cache.pop(voice_id, None)
 
-        # 4. audition preview — speak the caller's calibration line in the new
-        #    voice (the full evidence quote, NOT the short reference text).
-        with self._synth_lock:
-            wavs, sr = self._base.generate_voice_clone(
-                text=[audition_text], language=[lang], voice_clone_prompt=prompt
-            )
-        # Idle clock starts now (design finished) — back-to-back designs keep
-        # the model warm; a pause past the TTL lets the watchdog reclaim it.
-        self._design_last_used = time.monotonic()
-        return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
+            # 4. audition preview — speak the caller's calibration line in the new
+            #    voice (the full evidence quote, NOT the short reference text).
+            with self._synth_lock:
+                self._ensure_base_loaded()  # re-ensure under the lock — see above
+                wavs, sr = self._base.generate_voice_clone(
+                    text=[audition_text], language=[lang], voice_clone_prompt=prompt
+                )
+            # Idle clock starts now (design finished) — back-to-back designs keep
+            # the model warm; a pause past the TTL lets the watchdog reclaim it.
+            self._design_last_used = time.monotonic()
+            return SynthResult(pcm=_float_audio_to_int16_le(wavs[0]), sample_rate=int(sr))
+        finally:
+            self._design_in_flight -= 1
 
     def _load_voice_prompt(self, voice: str) -> tuple[Any, str, bool]:
         """Return (clone_prompt, language, cache_hit) for a designed voice.
@@ -1377,6 +1433,10 @@ class QwenEngine(Engine):
         gen_start = time.perf_counter()
         # Serialise the forward — see `_synth_lock` in __init__.
         with self._synth_lock:
+            # Re-ensure under the lock: a concurrent /unload (analyzer/XTTS evict)
+            # holds `_synth_lock` to null `_base`, so a model ensured before the
+            # lock can be gone in the gap. No-op on the warm path.
+            self._ensure_base_loaded()
             wavs, sr = self._base.generate_voice_clone(
                 text=[text], language=[lang], voice_clone_prompt=prompt
             )
@@ -1453,6 +1513,9 @@ class QwenEngine(Engine):
         # on shared model state → "size of tensor a (8) must match tensor b (7)".
         gen_start = time.perf_counter()
         with self._synth_lock:
+            # Re-ensure under the lock — a concurrent /unload holds `_synth_lock`
+            # to null `_base`; see synthesize(). No-op on the warm path.
+            self._ensure_base_loaded()
             wavs, sr = self._base.generate_voice_clone(
                 text=texts, language=langs, voice_clone_prompt=prompts
             )

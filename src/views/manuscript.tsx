@@ -611,7 +611,7 @@ export function ManuscriptView({
         <div className="mb-6">
           <SectionLabel>Manuscript analysis</SectionLabel>
           <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-start md:gap-6">
-            <h1 className="flex-1 min-w-0 break-words text-2xl md:text-3xl lg:text-4xl font-medium leading-[1.1] tracking-tight">
+            <h1 className="flex-1 min-w-0 wrap-break-word text-2xl md:text-3xl lg:text-4xl font-medium leading-[1.1] tracking-tight">
               Chapter {currentChapter.id} —{' '}
               <span className="font-bold">{stripChapterPrefix(currentChapter.title)}</span>
               {currentChapter.excluded && (
@@ -845,7 +845,7 @@ function SidebarPanels({
         <div className="shrink-0 px-5 pt-5 pb-3">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-bold text-ink">Chapters</h2>
-            <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
+            <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/6 text-[11px] font-semibold text-ink/60 tabular-nums">
               {chapterFilter.trim()
                 ? `${filteredChapters.length}/${chapters.length}`
                 : chapters.length}
@@ -859,7 +859,7 @@ function SidebarPanels({
               onChange={(e) => setChapterFilter(e.target.value)}
               placeholder="Filter chapters…"
               aria-label="Filter chapters"
-              className="w-full rounded-lg border border-ink/10 bg-white pl-8 pr-2 py-1.5 text-xs text-ink placeholder:text-ink/40 focus:outline-none focus:border-peach"
+              className="w-full rounded-lg border border-ink/10 bg-white pl-8 pr-2 py-1.5 text-xs text-ink placeholder:text-ink/40 focus:outline-hidden focus:border-peach"
             />
           </label>
         </div>
@@ -881,7 +881,7 @@ function SidebarPanels({
                     if (el) chapterRowRefs.current?.set(ch.id, el);
                     else chapterRowRefs.current?.delete(ch.id);
                   }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors relative ${active ? 'bg-ink/[0.05]' : 'hover:bg-ink/[0.03]'}`}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-left transition-colors relative ${active ? 'bg-ink/5' : 'hover:bg-ink/3'}`}
                   title={
                     excluded ? 'Excluded — not analyzed, no audio will be generated.' : undefined
                   }
@@ -938,7 +938,7 @@ function SidebarPanels({
       <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
         <div className="shrink-0 px-5 pt-5 pb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-ink">Detected</h2>
-          <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/[0.06] text-[11px] font-semibold text-ink/60 tabular-nums">
+          <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/6 text-[11px] font-semibold text-ink/60 tabular-nums">
             {characters.length}
           </span>
         </div>
@@ -958,7 +958,7 @@ function SidebarPanels({
                 <li key={c.id}>
                   <div
                     data-character-id={c.id}
-                    className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/[0.03]'} ${silent ? 'opacity-60' : ''}`}
+                    className={`group/char relative w-full flex items-center gap-2 px-3 py-2 rounded-xl text-left transition-colors ${active ? '' : 'hover:bg-ink/3'} ${silent ? 'opacity-60' : ''}`}
                     style={
                       active
                         ? { background: cc.tint, boxShadow: `inset 0 0 0 1px ${cc.ring}` }
@@ -998,7 +998,7 @@ function SidebarPanels({
                         onClick={() => onOpenProfile(c.id)}
                         title={`Open ${c.name} profile`}
                         aria-label={`Open ${c.name} profile`}
-                        className={`min-w-11 min-h-11 p-1.5 inline-flex items-center justify-center rounded-lg text-ink/40 hover:text-ink hover:bg-ink/[0.05] transition-opacity ${active ? 'opacity-100' : 'opacity-0 group-hover/char:opacity-100 focus:opacity-100'}`}
+                        className={`min-w-11 min-h-11 p-1.5 inline-flex items-center justify-center rounded-lg text-ink/40 hover:text-ink hover:bg-ink/5 transition-opacity ${active ? 'opacity-100' : 'opacity-0 group-hover/char:opacity-100 focus:opacity-100'}`}
                       >
                         <IconEye className="w-4 h-4" />
                       </button>
@@ -1173,7 +1173,7 @@ function SegmentRow({
 
   return (
     <div
-      className={`group relative -mx-4 px-4 py-2 rounded-xl transition-all cursor-pointer ${dimmed ? 'opacity-40' : ''} ${selected ? 'ring-1 ring-peach/40' : 'hover:bg-ink/[0.02]'}`}
+      className={`group relative -mx-4 px-4 py-2 rounded-xl transition-all cursor-pointer ${dimmed ? 'opacity-40' : ''} ${selected ? 'ring-1 ring-peach/40' : 'hover:bg-ink/2'}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={onSelect}
@@ -1438,7 +1438,7 @@ function SegmentInspector({
             onClick={() => onOpenProfile(c.id)}
             title={`Open ${c.name} profile`}
             aria-label={`Open ${c.name} profile`}
-            className="inline-flex items-center gap-1.5 px-2.5 min-h-11 py-1.5 rounded-full text-[11px] font-semibold text-ink/70 hover:text-ink hover:bg-ink/[0.05]"
+            className="inline-flex items-center gap-1.5 px-2.5 min-h-11 py-1.5 rounded-full text-[11px] font-semibold text-ink/70 hover:text-ink hover:bg-ink/5"
           >
             <IconEye className="w-3.5 h-3.5" /> Profile
           </button>
@@ -1558,7 +1558,7 @@ function renderSentenceText(text: string) {
         <span
           key={i}
           data-text-offset={startOffset}
-          className="inline-block align-baseline mx-[1px] px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-peach/15 text-magenta border border-peach/30 select-text"
+          className="inline-block align-baseline mx-px px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-peach/15 text-magenta border border-peach/30 select-text"
           title={`Audio cue: ${sp.tag}`}
         >
           {sp.raw}
@@ -1677,7 +1677,7 @@ function SelectionPopover({ sel, characters, onAssign }: SelectionPopoverProps) 
               e.preventDefault();
               onAssign(c.id);
             }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink/[0.04] text-left"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink/4 text-left"
           >
             <ColorDot color={c.color as CharColor} />
             <span className="text-sm text-ink">{c.name}</span>

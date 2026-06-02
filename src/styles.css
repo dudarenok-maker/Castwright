@@ -1,6 +1,68 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+@theme {
+  --color-canvas: var(--canvas);
+  --color-canvas-warm: var(--canvas-warm);
+
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+
+  --color-peach: var(--peach);
+  --color-peach-soft: var(--peach-soft);
+
+  --color-magenta: var(--magenta);
+
+  --color-purple-deep: var(--purple-deep);
+
+  --font-sans: 'General Sans', 'Neue Montreal', Inter, system-ui, sans-serif;
+  --font-serif: Lora, Georgia, serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --background-image-gradient-cta: var(--gradient-cta);
+  --background-image-gradient-cta-horizontal: var(--gradient-cta-horizontal);
+  --background-image-gradient-progress: var(--gradient-progress);
+  --background-image-gradient-hero-wash: var(--gradient-hero-wash);
+  --background-image-gradient-image-wash: var(--gradient-image-wash);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-card-hover: var(--shadow-card-hover);
+  --shadow-float: var(--shadow-float);
+  --shadow-drawer: var(--shadow-drawer);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-2xl: 40px;
+  --radius-3xl: 56px;
+}
+
+/* Plan 81 wave 4 — pointer-type variants (were addVariant() plugins in the
+   deleted tailwind.config.ts). `coarse-pointer:` matches touchscreens,
+   `fine-pointer:` matches mice. Used by hover-reveal affordances so touch
+   devices keep a faint fallback, e.g.
+   `opacity-0 group-hover:opacity-100 coarse-pointer:opacity-60`
+   (src/views/manuscript.tsx, src/modals/profile-drawer.tsx). */
+@custom-variant coarse-pointer (@media (pointer: coarse));
+@custom-variant fine-pointer (@media (pointer: fine));
+
+/*
+  The default border color has changed to `currentcolor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-gray-200, currentcolor);
+  }
+}
 
 /* ===========================================================================
    Audiobook prototype — design system

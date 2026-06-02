@@ -25,7 +25,8 @@
  * cancel button keeps its "pause first" guard). updateProgress remains a
  * queue-io helper without a route. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { queueJsonPath } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import {

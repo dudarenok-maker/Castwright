@@ -31,7 +31,8 @@
    matchedFrom on the source side. The frontend is expected to gate the
    call on user intent (one click = one POST). */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { randomBytes } from 'node:crypto';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';

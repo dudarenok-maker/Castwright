@@ -11,7 +11,8 @@
    ALTERNATE engine, never auto-selected as the default, so install-state never
    feeds getResolvedTtsModelKey. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CoquiInstallBootstrap } from '../tts/coqui-install-bootstrap.js';

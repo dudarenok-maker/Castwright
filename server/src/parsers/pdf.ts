@@ -24,14 +24,20 @@ interface OutlineEntry {
 
 /* Pull the top-level outline titles via pdfjs-dist. Returns null on any
    failure (no outline, parse error, unexpected shape) — caller treats
-   null as "no outline available, fall back to parseText titles". */
-async function readPdfOutlineTitles(buffer: Buffer): Promise<string[] | null> {
+   null as "no outline available, fall back to parseText titles".
+   Exported for pdf-outline.real.test.ts, which exercises the real pdfjs v5
+   getDocument/getOutline path against a committed fixture (pdf.test.ts mocks
+   pdfjs, so it can't catch an ESM/worker-wiring regression). */
+export async function readPdfOutlineTitles(buffer: Buffer): Promise<string[] | null> {
   try {
     const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
     /* pdfjs mutates the input buffer (transferable-friendly). Pass a
-       copy via Uint8Array to keep pdf-parse's earlier read untouched. */
+       copy via Uint8Array to keep pdf-parse's earlier read untouched.
+       pdfjs-dist 5 removed `isEvalSupported` (the eval-based font path it
+       gated is gone); we only read the outline, never render, so it was a
+       no-op for us anyway. */
     const data = new Uint8Array(buffer);
-    const doc = await getDocument({ data, isEvalSupported: false, useSystemFonts: false }).promise;
+    const doc = await getDocument({ data, useSystemFonts: false }).promise;
     try {
       const outline = (await doc.getOutline()) as OutlineEntry[] | null;
       if (!Array.isArray(outline) || outline.length === 0) return null;

@@ -25,7 +25,7 @@ export function ToastStack() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-20 right-6 z-[60] flex flex-col gap-2"
+      className="fixed bottom-20 right-6 z-60 flex flex-col gap-2"
     >
       {toasts.map((t) => (
         <ToastItem key={t.id} toast={t} />

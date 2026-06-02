@@ -47,7 +47,7 @@ export class ErrorBoundary extends Component<Props, State> {
               for the full stack.
             </p>
           </div>
-          <pre className="text-xs bg-ink/[0.04] text-ink/80 rounded-xl p-3 overflow-auto max-h-40 whitespace-pre-wrap">
+          <pre className="text-xs bg-ink/4 text-ink/80 rounded-xl p-3 overflow-auto max-h-40 whitespace-pre-wrap">
             {this.state.error.message || String(this.state.error)}
           </pre>
           <button
