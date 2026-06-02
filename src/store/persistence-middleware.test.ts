@@ -82,6 +82,20 @@ describe('persistenceMiddleware — debounce', () => {
     });
   });
 
+  it('honors a user-tuned autosave debounce from the settings slice (fe-2)', async () => {
+    const next = vi.fn((x) => x);
+    /* settings.autosaveDebounceMs = 2000 → the write must wait 2s, not 500ms. */
+    const state = baseState({ settings: { autosaveDebounceMs: 2000 } });
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    mw({ type: 'cast/setCharacters' });
+    await advance(500);
+    expect(putBookState).not.toHaveBeenCalled(); // would have fired at the old default
+
+    await advance(1500);
+    expect(putBookState).toHaveBeenCalledOnce();
+  });
+
   it('coalesces multiple rapid actions within the debounce window into one PUT', async () => {
     const next = vi.fn((x) => x);
     const mw = persistenceMiddleware(makeStore(baseState()))(next);

@@ -30,9 +30,22 @@ interface PersistableRootState {
   revisions: RevisionsState;
   changeLog: ChangeLogState;
   bookMeta: BookMetaState;
+  /* fe-2 — user-tunable autosave debounce. Optional so this type stays
+     decoupled from the settings slice's full shape (and tests that build a
+     partial root state don't have to supply it). */
+  settings?: { autosaveDebounceMs?: number };
 }
 
-const DEBOUNCE_MS = 500;
+const DEFAULT_DEBOUNCE_MS = 500;
+
+/* Read the user-tuned autosave debounce (fe-2) at flush-scheduling time so a
+   change in the Account → Advanced panel takes effect on the next edit, with no
+   reload. Falls back to the default when the slice is absent (older persisted
+   blob / partial test state). */
+function debounceMs(s: PersistableRootState): number {
+  const v = s.settings?.autosaveDebounceMs;
+  return typeof v === 'number' && Number.isFinite(v) ? v : DEFAULT_DEBOUNCE_MS;
+}
 
 /* Action types that should trigger a persist. Hydration actions
    (hydrateFromAnalysis, hydrateFromBookState, applyPoll for initial load,
@@ -255,7 +268,7 @@ export const persistenceMiddleware: Middleware = (store) => {
     if (prev) clearTimeout(prev);
     timers.set(
       rule.slice,
-      setTimeout(() => flush(bookId, rule.slice), DEBOUNCE_MS),
+      setTimeout(() => flush(bookId, rule.slice), debounceMs(after)),
     );
     return result;
   };

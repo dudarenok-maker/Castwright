@@ -4,10 +4,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { accountSlice, fetchAccountSettings, type AccountState } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
+import { settingsSlice } from '../store/settings-slice';
 import { AccountView } from './account';
 import type { UserSettings } from '../lib/types';
 
@@ -51,6 +52,7 @@ function renderView(initial: Partial<UserSettings> = {}) {
     reducer: {
       account: accountSlice.reducer,
       ui: uiSlice.reducer,
+      settings: settingsSlice.reducer,
     },
     preloadedState: { account: preloaded },
   });
@@ -219,6 +221,7 @@ describe('AccountView — hydration sync', () => {
       reducer: {
         account: accountSlice.reducer,
         ui: uiSlice.reducer,
+        settings: settingsSlice.reducer,
       },
     });
     render(
@@ -249,6 +252,7 @@ describe('AccountView — hydration sync', () => {
       reducer: {
         account: accountSlice.reducer,
         ui: uiSlice.reducer,
+        settings: settingsSlice.reducer,
       },
     });
     render(
@@ -641,21 +645,26 @@ describe('AccountView — Models card (plan 61)', () => {
     }
   });
 
-  it('renders the cross-platform Coqui install snippet (both POSIX + PowerShell)', () => {
-
-    /* The card cites both `install-coqui.sh` and `install-coqui.ps1`
-       in the same block — the user must be able to copy/paste their
-       platform's command without scrolling. */
+  it('renders the in-app Coqui XTTS v2 installer card when Coqui is not installed', async () => {
+    /* The display-only copy-paste snippet was replaced by the one-click
+       CoquiInstall component (mirrors QwenInstall). With the detect probe
+       reporting weights-missing, the "Install Coqui XTTS v2" card renders with
+       its value/difference copy. */
     const fetchSpy = vi
       .spyOn(globalThis, 'fetch')
       .mockResolvedValue(
-        new Response(JSON.stringify({ installed: false, version: null }), { status: 200 }),
+        new Response(JSON.stringify({ state: 'weights-missing', installed: false }), {
+          status: 200,
+        }),
       );
     try {
       renderView();
-      const pre = screen.getByTestId('account-coqui-install-cmd');
-      expect(pre.textContent).toMatch(/install-coqui\.ps1/);
-      expect(pre.textContent).toMatch(/install-coqui\.sh/);
+      await waitFor(() => {
+        expect(screen.getByTestId('coqui-install-not-detected')).toBeInTheDocument();
+      });
+      const card = within(screen.getByTestId('coqui-install-not-detected'));
+      expect(card.getByText(/zero-shot voice cloning/i)).toBeInTheDocument();
+      expect(card.getByRole('button', { name: /Install Coqui XTTS v2/i })).toBeInTheDocument();
     } finally {
       fetchSpy.mockRestore();
     }
@@ -677,6 +686,54 @@ describe('AccountView — Models card (plan 61)', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+});
+
+describe('AccountView — Advanced (power-user) card (fe-2)', () => {
+  it('shows the default play/pause binding (Space) and the four controls', () => {
+    renderView();
+    const card = within(screen.getByTestId('account-advanced-card'));
+    expect(card.getByTestId('account-play-pause-binding').textContent).toBe('Space');
+    expect(card.getByTestId('account-high-contrast')).toBeInTheDocument();
+    expect(card.getByTestId('account-text-scale')).toBeInTheDocument();
+    expect(card.getByTestId('account-autosave-debounce')).toBeInTheDocument();
+  });
+
+  it('rebinds play/pause to a pressed key and reflects it in the slice', () => {
+    const { store } = renderView();
+    fireEvent.click(screen.getByTestId('account-rebind-play-pause'));
+    fireEvent.keyDown(window, { key: 'k' });
+    expect(store.getState().settings.keybindings['play-pause']).toBe('K');
+    expect(screen.getByTestId('account-play-pause-binding').textContent).toBe('K');
+  });
+
+  it('Reset restores the default Space binding', () => {
+    const { store } = renderView();
+    fireEvent.click(screen.getByTestId('account-rebind-play-pause'));
+    fireEvent.keyDown(window, { key: 'k' });
+    expect(store.getState().settings.keybindings['play-pause']).toBe('K');
+    fireEvent.click(screen.getByRole('button', { name: /^Reset$/ }));
+    expect(store.getState().settings.keybindings['play-pause']).toBe('Space');
+  });
+
+  it('toggles high-contrast and changes text scale through the slice', () => {
+    const { store } = renderView();
+    fireEvent.click(screen.getByTestId('account-high-contrast'));
+    expect(store.getState().settings.highContrast).toBe(true);
+    fireEvent.change(screen.getByTestId('account-text-scale'), { target: { value: 'larger' } });
+    expect(store.getState().settings.textScale).toBe('larger');
+  });
+
+  it('commits a clamped autosave debounce on blur', () => {
+    const { store } = renderView();
+    const input = screen.getByTestId('account-autosave-debounce');
+    fireEvent.change(input, { target: { value: '2000' } });
+    fireEvent.blur(input);
+    expect(store.getState().settings.autosaveDebounceMs).toBe(2000);
+    /* Above the ceiling clamps. */
+    fireEvent.change(input, { target: { value: '999999' } });
+    fireEvent.blur(input);
+    expect(store.getState().settings.autosaveDebounceMs).toBe(10_000);
   });
 });
 
