@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { accountSlice, fetchAccountSettings, type AccountState } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
 import { settingsSlice } from '../store/settings-slice';
+import { upgradeSlice } from '../store/upgrade-slice';
 import { AccountView } from './account';
 import type { UserSettings } from '../lib/types';
 
@@ -53,6 +54,7 @@ function renderView(initial: Partial<UserSettings> = {}) {
       account: accountSlice.reducer,
       ui: uiSlice.reducer,
       settings: settingsSlice.reducer,
+      upgrade: upgradeSlice.reducer,
     },
     preloadedState: { account: preloaded },
   });
@@ -222,6 +224,7 @@ describe('AccountView — hydration sync', () => {
         account: accountSlice.reducer,
         ui: uiSlice.reducer,
         settings: settingsSlice.reducer,
+        upgrade: upgradeSlice.reducer,
       },
     });
     render(
@@ -253,6 +256,7 @@ describe('AccountView — hydration sync', () => {
         account: accountSlice.reducer,
         ui: uiSlice.reducer,
         settings: settingsSlice.reducer,
+        upgrade: upgradeSlice.reducer,
       },
     });
     render(
