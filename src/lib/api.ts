@@ -5,6 +5,9 @@
    Toggle with VITE_USE_MOCKS=true (.env.development). */
 
 import type {
+  AppInfo,
+  UpgradeStageResult,
+  UpgradeStatePayload,
   UploadResponse,
   AnalyseResponse,
   VoiceMatchResponse,
@@ -3670,6 +3673,77 @@ async function realPutGeminiKey(key: string | null): Promise<UserSettings> {
   return res.json();
 }
 
+/* fs-1 — in-app upgrade + app-info endpoints. */
+async function realGetAppInfo(): Promise<AppInfo> {
+  const res = await fetch('/api/info');
+  if (!res.ok)
+    throw new Error(`App info fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+async function realDismissWhatsNew(): Promise<void> {
+  const res = await fetch('/api/info/dismiss-whats-new', { method: 'POST' });
+  if (!res.ok)
+    throw new Error(`Dismiss what's-new failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+async function realUpgradeStage(file: File): Promise<UpgradeStageResult> {
+  const form = new FormData();
+  form.append('zip', file, file.name);
+  const res = await fetch('/api/upgrade/stage', { method: 'POST', body: form });
+  if (!res.ok)
+    throw new Error(`Upgrade staging failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+async function realUpgradeApply(): Promise<void> {
+  const res = await fetch('/api/upgrade/apply', { method: 'POST' });
+  if (!res.ok)
+    throw new Error(`Upgrade apply failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+async function realUpgradeAbort(): Promise<void> {
+  const res = await fetch('/api/upgrade/abort', { method: 'POST' });
+  if (!res.ok)
+    throw new Error(`Upgrade abort failed (${res.status}): ${(await res.text()) || res.statusText}`);
+}
+async function realUpgradeState(): Promise<UpgradeStatePayload> {
+  const res = await fetch('/api/upgrade/state');
+  if (!res.ok)
+    throw new Error(`Upgrade state failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+/* fs-1 — mock upgrade surface. The mock is "always up to date" (showWhatsNew
+   off, no newer release to stage) so the mock-mode app never offers a phantom
+   upgrade; the e2e drives these via page.route stubs instead. */
+let mockAppInfo: AppInfo = {
+  appVersion: '1.6.0',
+  sidecarVersion: '1.6.0',
+  schemas: { state: 1, cast: 1, manuscriptEdits: 1, revisions: 1, listenProgress: 1, voices: 1 },
+  lastSeenAppVersion: '1.6.0',
+  showWhatsNew: false,
+  releaseNotes: '# v1.6.0\n\n- In-app upgrades.\n',
+};
+async function mockGetAppInfo(): Promise<AppInfo> {
+  await wait(40);
+  return { ...mockAppInfo };
+}
+async function mockDismissWhatsNew(): Promise<void> {
+  await wait(20);
+  mockAppInfo = { ...mockAppInfo, showWhatsNew: false };
+}
+async function mockUpgradeStage(_file: File): Promise<UpgradeStageResult> {
+  await wait(50);
+  return { candidateVersion: '1.7.0', runningVersion: '1.6.0', reqHash: 'mock', requiresPipInstall: false, isDowngrade: false };
+}
+async function mockUpgradeApply(): Promise<void> {
+  await wait(30);
+}
+async function mockUpgradeAbort(): Promise<void> {
+  await wait(20);
+}
+async function mockUpgradeState(): Promise<UpgradeStatePayload> {
+  await wait(20);
+  return { phase: 'idle', busy: false };
+}
+
 async function mockGetUserSettings(): Promise<UserSettings> {
   await wait(50);
   return { ...MOCK_USER_SETTINGS };
@@ -4349,6 +4423,12 @@ const real = {
   getUserSettings: realGetUserSettings,
   putUserSettings: realPutUserSettings,
   putGeminiKey: realPutGeminiKey,
+  getAppInfo: realGetAppInfo,
+  dismissWhatsNew: realDismissWhatsNew,
+  upgradeStage: realUpgradeStage,
+  upgradeApply: realUpgradeApply,
+  upgradeAbort: realUpgradeAbort,
+  upgradeState: realUpgradeState,
   testSyncFolderPath: realTestSyncFolderPath,
   getLibrary: realGetLibrary,
   getVoices: realGetVoices,
@@ -4550,6 +4630,12 @@ const mock = {
   getUserSettings: mockGetUserSettings,
   putUserSettings: mockPutUserSettings,
   putGeminiKey: mockPutGeminiKey,
+  getAppInfo: mockGetAppInfo,
+  dismissWhatsNew: mockDismissWhatsNew,
+  upgradeStage: mockUpgradeStage,
+  upgradeApply: mockUpgradeApply,
+  upgradeAbort: mockUpgradeAbort,
+  upgradeState: mockUpgradeState,
   testSyncFolderPath: mockTestSyncFolderPath,
   getLibrary: mockGetLibrary,
   getVoices: mockGetVoices,

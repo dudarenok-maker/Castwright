@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { IconArrowLeft, IconSpinner, IconClock, IconWarning } from '../lib/icons';
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
+import { useAppInfo } from '../lib/use-app-info';
+import { buildInfo } from '../lib/build-info';
 import { StatusPopover } from './status-popover';
 import { AdminPill } from './admin-pill';
 import type { Stage, View } from '../lib/types';
@@ -292,6 +294,7 @@ export function TopBar({
               Queue · {queueCount}
             </button>
           )}
+          <VersionPill onClick={onOpenAccount} />
           <ThemeToggleButton />
           <button
             type="button"
@@ -331,6 +334,31 @@ const STATUS_ICON: Record<StatusSummary['icon'], ReactNode> = {
                     clears it.
    The popover is portaled (escapes the top bar's overflow-x-auto) and carries
    no backdrop, so clicking its buttons never dismisses an open cast drawer. */
+/* fs-1 — compact version pill. Prefers the SERVER version (GET /api/info) over
+   the baked-in build stamp, since a stale cached bundle's __APP_VERSION__ can
+   lie. Click opens Account (where the upgrade card lives). Tooltip shows the
+   sidecar version too. */
+function VersionPill({ onClick }: { onClick: () => void }) {
+  const { info } = useAppInfo();
+  const version = info?.appVersion ?? buildInfo.version;
+  const title =
+    info?.sidecarVersion != null
+      ? `App v${version} · Sidecar v${info.sidecarVersion}`
+      : `App v${version}`;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={`Version v${version} — open Account`}
+      data-testid="version-pill"
+      className="hidden sm:inline-flex items-center rounded-full border border-ink/10 px-2.5 py-1 text-xs font-medium text-ink/60 hover:bg-ink/5 focus:outline-hidden focus:ring-2 focus:ring-magenta/40"
+    >
+      v{version}
+    </button>
+  );
+}
+
 function StatusPill({ summary, detail }: { summary: StatusSummary; detail: StatusDetail }) {
   const pillRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
