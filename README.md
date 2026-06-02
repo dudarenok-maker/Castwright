@@ -17,7 +17,7 @@ voice cloning.
 
 **Prerequisites**
 
-- Node 20.6 or newer
+- Node 20.19 or newer (Vite 8 requires ≥20.19 / ≥22.12; the repo targets Node 24 via `.nvmrc`)
 - Python 3.11 (for the TTS sidecar)
 - ffmpeg on `PATH` (checked by `npm run dev` via `scripts/preflight-ffmpeg.cjs`)
 - Windows 11 with PowerShell 5.1+ — the harness ships Windows-native start
@@ -93,7 +93,7 @@ e2e/build), `npm run test:e2e` (Playwright only).
 ## Layout
 
 ```
-src/                  Vite + React 18 + Redux Toolkit frontend
+src/                  Vite 8 (Rolldown) + React 19 + Redux Toolkit frontend
   store/              RTK slices (ui, cast, chapters, revisions, manuscript,
                       book-meta, notifications, broadcast-middleware,
                       engines-in-use-selector)
