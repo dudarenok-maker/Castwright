@@ -3,7 +3,8 @@
    - application/json with `text` (and optional `title`).
    Response shape matches UploadResponse in openapi.yaml. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import multer from 'multer';
 import { nanoid } from 'nanoid';
 import { parseManuscript, UnsupportedFormatError, UnusableMediaError } from '../parsers/index.js';

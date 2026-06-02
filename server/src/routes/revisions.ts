@@ -13,7 +13,8 @@
    means a chapter with a severe drift event doesn't automatically queue a
    regen — the user still chooses. */
 
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
+import type { Request, Response } from '../http.js';
 import { castJsonPath, revisionsJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
