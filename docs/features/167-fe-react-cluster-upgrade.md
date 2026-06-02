@@ -1,12 +1,15 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-02
 owner: null
 ---
 
 # 167 — Frontend React-cluster + TypeScript major upgrade (fe-19 / ops-10 / fe-18 / fe-21)
 
-> Status: active (branch `build/frontend-react-cluster-upgrade`; PR pending)
+> Status: stable (shipped 2026-06-02 via PR #454, merge `8793214`)
+> NOTE: plan number 167 collides with `archive/167-coqui-in-app-installer.md`
+> (a parallel session, PR #450). Both kept per the repo's collision policy —
+> disambiguate by slug. See INDEX.md "Plan-number collisions".
 > Key files: `package.json`, `server/package.json`, `vite.config.ts`,
 > `vitest.config.ts`, `server/vitest.config.ts`, `server/vitest.config.slow.ts`,
 > `src/store/index.ts`
@@ -116,7 +119,13 @@ Gate (all green on `build/frontend-react-cluster-upgrade`):
 
 ## Ship notes
 
-- Branch `build/frontend-react-cluster-upgrade`. Commits: fe-19 `510591e`,
-  ops-10 `aa41c24`, fe-18+fe-21 `45d27b0`, win32 visual re-bake `7ec99f8`.
-- Fill shipped date + merge SHA on merge; `git mv` to `archive/` and flip
-  `status: stable`.
+- **Shipped 2026-06-02** via PR #454 (merge commit `8793214`), closing
+  #403 / #404 / #407 / #408. CI `npm run verify` green (15m42s); rebased onto
+  `main` @ #453 before merge and re-verified (frontend 2170, server 1743, e2e 127).
+- fe-18 and fe-21 landed as one atomic commit — react-router 6.26 is not
+  React-19-compatible (`navigate()` from the Layout stage→URL effect is dropped),
+  router 7 fixes it with zero code changes.
+- Win32 `library` visual baseline re-baked in the PR (stale on `main` since the
+  2026-06-01 language-UX feature `a4e0ec2`). Linux baselines regenerated post-merge
+  via `regen-visual-baselines.yml` (which itself needed a `--no-verify` push fix —
+  same PR series — because its pre-push hook required ffmpeg the runner lacks).
