@@ -23,7 +23,7 @@
    Three steps: setup (toggle characters) → propose (design per character,
    current-vs-proposed rows) → approve (series-scoped write). */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
 import { createPortal } from 'react-dom';
 import {
   IconClose,
