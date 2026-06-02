@@ -141,7 +141,13 @@ jobs:
 
           Merging this PR un-skips the visual specs on Linux CI (see the
           directory-level skip at e2e/responsive/visual.spec.ts:85)."
-          git push -u origin "${branch}"
+          # --no-verify: this push is a CI-generated baseline commit, not dev
+          # work. The husky pre-push hook runs the full `npm run verify` battery,
+          # which fails on this ubuntu runner because the server-test preflight
+          # requires ffmpeg (not installed here — the runner only needs Vite +
+          # Playwright for the visual specs). The auto-PR's own Verify run is the
+          # real gate; skip the local hook so the regen can push.
+          git push --no-verify -u origin "${branch}"
 
       - name: Open PR
         env:
