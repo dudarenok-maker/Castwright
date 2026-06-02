@@ -13,8 +13,14 @@ import net from 'node:net';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
-const runDir = resolve(repoRoot, '.run');
-const logDir = resolve(repoRoot, 'logs');
+/* runDir / logDir default to repoRoot but honour APP_RUN_DIR / APP_LOG_DIR so a
+   versioned-dir install (fs-1) parks server.pid + logs in a shared sibling
+   OUTSIDE releases/vX.Y.Z/ — the restarter waits on this server.pid across the
+   swap, so it must NOT live inside the dir being replaced. Mirror of the
+   resolveRunDir/resolveLogDir helper in server/src/app-dirs.ts (this script is
+   plain ESM and can't import the compiled server module). */
+const runDir = process.env.APP_RUN_DIR ? resolve(process.env.APP_RUN_DIR) : resolve(repoRoot, '.run');
+const logDir = process.env.APP_LOG_DIR ? resolve(process.env.APP_LOG_DIR) : resolve(repoRoot, 'logs');
 const distIndex = resolve(repoRoot, 'dist', 'index.html');
 const serverEntry = resolve(repoRoot, 'server', 'dist', 'index.js');
 

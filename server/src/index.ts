@@ -14,6 +14,7 @@ import './load-env.js';
    stamp. Runtime logging (route handlers, app.listen callback, …) all
    fires after this call, so every line in logs/server.log is stamped. */
 import { installTimestamps } from './logger.js';
+import { resolveRunDir } from './app-dirs.js';
 installTimestamps();
 
 /* Install crash handlers ASAP — right after console is timestamp-patched — so a
@@ -251,8 +252,11 @@ let sidecarSupervisor: SidecarSupervisor | null = null;
 const lanHttps = isLanHttpsEnabled();
 const bindHost = selectBindHost(lanHttps);
 const repoRoot = resolve(__dirname, '..', '..');
-const LAN_CERT_FILE = resolve(repoRoot, '.run', 'certs', 'lan-cert.pem');
-const LAN_KEY_FILE = resolve(repoRoot, '.run', 'certs', 'lan-key.pem');
+/* .run/ honours APP_RUN_DIR so a versioned-dir install (fs-1) shares one cert
+   store across releases instead of regenerating per release. */
+const runDir = resolveRunDir(repoRoot);
+const LAN_CERT_FILE = resolve(runDir, 'certs', 'lan-cert.pem');
+const LAN_KEY_FILE = resolve(runDir, 'certs', 'lan-key.pem');
 
 const listenerCallback = () => {
   const protocol: 'http' | 'https' = lanHttps ? 'https' : 'http';
