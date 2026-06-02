@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-02
 owner: null
 ---
 
 # fe-2 — power-user tuning panel (keyboard shortcut, accessibility, autosave debounce)
 
-> Status: active (code + automated coverage complete; pending merge)
+> Status: stable
 > Key files: `src/store/settings-slice.ts`, `src/lib/keybindings.ts`, `src/lib/use-accessibility-settings.ts`, `src/views/account.tsx` (AdvancedCard), `src/components/mini-player.tsx`, `src/store/persistence-middleware.ts`, `src/styles.css`
 > URL surface: `#/account` → "Advanced (power-user)" card
 > OpenAPI ops: none (device-local, localStorage via redux-persist)
@@ -62,4 +62,4 @@ owner: null
 
 ## Ship notes
 
-Pending merge — ships with the Coqui installer in one combined PR (branch `feat/frontend-coqui-installer-fe2`). Closes #400. Scope trimmed vs. the original backlog spec per the decisions above (Account-card home, no SSE knob, no concurrency duplication). Flip to `stable` + `git mv` to `archive/` on merge.
+Shipped 2026-06-02 with the Coqui installer in one combined PR — #450, merge commit `8a8cd25`. Closes #400. Scope trimmed vs. the original backlog spec per the decisions above (Account-card home, no SSE knob, no concurrency duplication).
