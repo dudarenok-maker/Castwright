@@ -13,6 +13,12 @@
 BeforeAll {
     $script:startScript = Join-Path $PSScriptRoot "..\..\server\tts-sidecar\start.ps1"
 
+    # The PowerShell host running these tests: powershell.exe on Windows,
+    # pwsh on the Linux CI runner. Hardcoding 'powershell.exe' fails on Linux
+    # ("No such file or directory"); resolve the current host instead. The
+    # start.ps1 venv-check we exercise is portable enough to run under either.
+    $script:pwshExe = (Get-Process -Id $PID).Path
+
     # Run start.ps1 in a child PowerShell and capture exit code + output.
     # NB: use Start-Process with redirected files, NOT `& powershell ... 2>&1`
     # — in 5.1 a native command's stderr becomes ErrorRecords that, under
@@ -30,7 +36,7 @@ BeforeAll {
         $outFile = [System.IO.Path]::GetTempFileName()
         $errFile = [System.IO.Path]::GetTempFileName()
         try {
-            $p = Start-Process -FilePath 'powershell.exe' `
+            $p = Start-Process -FilePath $script:pwshExe `
                 -ArgumentList @('-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', $ScriptPath) `
                 -Wait -PassThru -NoNewWindow `
                 -RedirectStandardOutput $outFile -RedirectStandardError $errFile
