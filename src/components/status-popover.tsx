@@ -36,10 +36,10 @@ const VIEWPORT_MARGIN = 8;
 interface StatusPopoverProps {
   open: boolean;
   /** The pill button — anchor for positioning. */
-  anchorRef: RefObject<HTMLElement>;
+  anchorRef: RefObject<HTMLElement | null>;
   /** Forwarded to the panel root so the StatusPill's outside-click + hover
       logic can test `contains(target)`. */
-  panelRef: RefObject<HTMLDivElement>;
+  panelRef: RefObject<HTMLDivElement | null>;
   /** Hover-bridge: keep the popover open while the pointer is over the panel. */
   onPointerEnter: () => void;
   onPointerLeave: () => void;

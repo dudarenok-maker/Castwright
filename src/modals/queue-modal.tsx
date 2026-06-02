@@ -15,7 +15,7 @@
  * touch-equivalence rule for desktop AND mobile in one path, keeping the
  * shipped modal small. Touch targets are ≥44×44 px per WCAG 2.5.5. */
 
-import { useMemo, useEffect, useState } from 'react';
+import { useMemo, useEffect, useState, type JSX } from 'react';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   selectActiveGenerationView,

@@ -5,6 +5,7 @@
    import via the grid. The map keys `LibraryBookStatus` 1:1 — the
    `library-status-ui.test.ts` round-trip locks the contract. */
 
+import type { JSX } from 'react';
 import {
   IconCheck,
   IconCheckCircle,
