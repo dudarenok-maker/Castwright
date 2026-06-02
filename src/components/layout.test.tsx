@@ -84,6 +84,17 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
+/* Stub the route-prefetch thunks. Layout fires importUploadView() /
+   importGenerationView() from stage-keyed effects to warm lazy chunks; those
+   real dynamic imports resolve AFTER a test finishes, and Vitest 4 now fails
+   the run on the resulting post-teardown EnvironmentTeardownError (Vitest 2
+   swallowed it). Prefetch is a pure perf optimisation, never under test here,
+   so no-op it to keep the imports from outliving the jsdom environment. */
+vi.mock('../routes/prefetch', () => ({
+  importGenerationView: vi.fn(() => Promise.resolve({})),
+  importUploadView: vi.fn(() => Promise.resolve({})),
+}));
+
 import { Layout } from './layout';
 import { api } from '../lib/api';
 import { uiActions } from '../store/ui-slice';

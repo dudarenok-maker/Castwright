@@ -41,14 +41,22 @@ const roster: SeriesRosterEntry[] = [
 ];
 
 describe('CharacterSearchPicker', () => {
-  let onPick: ReturnType<typeof vi.fn>;
-  let onAddFromSeriesRoster: ReturnType<typeof vi.fn>;
-  let onClose: ReturnType<typeof vi.fn>;
+  // Vitest 4: vi.fn() is typed Mock<Procedure | Constructable> and no longer
+  // assigns to a specific function prop — pin the signature via the component's
+  // own prop types so the mocks stay assignable (and self-maintaining).
+  type PickerProps = React.ComponentProps<typeof CharacterSearchPicker>;
+  let onPick: ReturnType<typeof vi.fn<NonNullable<PickerProps['onPick']>>>;
+  let onAddFromSeriesRoster: ReturnType<
+    typeof vi.fn<NonNullable<PickerProps['onAddFromSeriesRoster']>>
+  >;
+  let onClose: ReturnType<typeof vi.fn<NonNullable<PickerProps['onClose']>>>;
 
   beforeEach(() => {
-    onPick = vi.fn();
-    onClose = vi.fn();
-    onAddFromSeriesRoster = vi.fn(async (e: SeriesRosterEntry) => `${e.id}_local`);
+    onPick = vi.fn<NonNullable<PickerProps['onPick']>>();
+    onClose = vi.fn<NonNullable<PickerProps['onClose']>>();
+    onAddFromSeriesRoster = vi.fn<NonNullable<PickerProps['onAddFromSeriesRoster']>>(
+      async (e: SeriesRosterEntry) => `${e.id}_local`,
+    );
   });
 
   /* Tiny harness that owns an anchor button + the picker. Mirrors the
