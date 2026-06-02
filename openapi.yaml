@@ -2827,6 +2827,18 @@ components:
             engine-drift badge appear only after page navigation). See
             `docs/features/archive/35-engine-drift-detection.md`.
         errorReason: { type: string, nullable: true }
+        errorCode:
+          allOf:
+            - $ref: '#/components/schemas/FailureCode'
+          description: |
+            Only on `chapter_failed` — fs-19 stable machine code for the failure
+            class. Lets the frontend render the matching remediation + persist
+            it without parsing `errorReason`.
+        remediation:
+          type: string
+          description: |
+            Only on `chapter_failed` — fs-19 concrete "what to do about it" copy
+            for the failure, surfaced under the error reason.
         code:
           type: string
           description: |
@@ -3710,6 +3722,27 @@ components:
             bookTitle: { type: string }
             confidence: { type: number, minimum: 0, maximum: 1 }
 
+    FailureCode:
+      type: string
+      description: |
+        fs-19 — stable machine-readable class for a synthesis (or analysis)
+        failure. Maps a recurring failure mode to a friendly message +
+        remediation server-side (server/src/routes/failure-taxonomy.ts); the
+        frontend switches on it for per-class styling. `unknown` is the
+        catch-all for an unmapped error (the raw message is surfaced verbatim).
+      enum:
+        - vram-spill
+        - sidecar-unreachable
+        - analyzer-rate-limit
+        - oom
+        - disk-full
+        - model-not-loaded
+        - synth-timeout
+        - xtts-speaker-desync
+        - cuda-poisoned
+        - auth
+        - unknown
+
     Chapter:
       type: object
       required: [id, title, duration, state, progress, characters]
@@ -3727,6 +3760,22 @@ components:
             type: string
             enum: [queued, in_progress, done, skipped, failed]
         errorReason: { type: string, nullable: true }
+        generationErrorCode:
+          allOf:
+            - $ref: '#/components/schemas/FailureCode'
+          nullable: true
+          description: |
+            fs-19 — stable machine code for the last synthesis FAILURE's class
+            (e.g. `vram-spill`, `disk-full`, `cuda-poisoned`). Drives the
+            frontend's remediation rendering. Absent on never-failed chapters;
+            cleared on a successful render.
+        generationRemediation:
+          type: string
+          nullable: true
+          description: |
+            fs-19 — concrete "what to do about it" copy for the last synthesis
+            failure. Surfaced under the error reason on the failed chapter row.
+            Absent on never-failed chapters; cleared on a successful render.
         excluded:
           {
             type: boolean,

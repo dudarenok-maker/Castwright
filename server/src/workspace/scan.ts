@@ -88,6 +88,14 @@ export interface BookStateJson {
     /** Human-readable reason for the persisted `generationState: 'failed'`.
         Mirrors the `chapter_failed` SSE broadcast's `errorReason`. */
     generationError?: string;
+    /** fs-19 — stable machine code for the failure class (drives the
+        frontend's remediation rendering). Mirrors the `chapter_failed`
+        broadcast's `errorCode`. Cleared on a successful render. */
+    generationErrorCode?: string;
+    /** fs-19 — concrete "what to do about it" copy for the failure.
+        Mirrors the `chapter_failed` broadcast's `remediation`. Cleared on
+        a successful render. */
+    generationRemediation?: string;
   }>;
   coverGradient: [string, string];
   /** Cached cover-image metadata. Bytes live next to state.json at
