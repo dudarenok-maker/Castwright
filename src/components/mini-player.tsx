@@ -102,6 +102,15 @@ export function MiniPlayer({
      minimal test store that omits the settings slice still renders (the real
      store always wires it — store/index.ts). */
   const playPauseKey = useAppSelector((s) => s.settings?.keybindings?.['play-pause'] ?? 'Space');
+  /* fe-23 — auto-advance to the next chapter when one finishes. Default on
+     (the slice's initialState), optional-chained so a minimal test store that
+     omits the settings slice still defaults sensibly. */
+  const autoAdvance = useAppSelector((s) => s.settings?.autoAdvance ?? true);
+  /* fe-24 — skip-back/forward deltas + their rebindable keys (default J / L). */
+  const skipForwardSec = useAppSelector((s) => s.settings?.skipForwardSec ?? 30);
+  const skipBackSec = useAppSelector((s) => s.settings?.skipBackSec ?? 15);
+  const skipForwardKey = useAppSelector((s) => s.settings?.keybindings?.['skip-forward'] ?? 'L');
+  const skipBackKey = useAppSelector((s) => s.settings?.keybindings?.['skip-back'] ?? 'J');
   const [playbackRate, setPlaybackRate] = useState<number>(() => getPlaybackRate(persisted));
   /* Ref so onLoadedMetadata + the audio.url effect can set
      el.playbackRate without re-running on every rate change. */
@@ -395,6 +404,30 @@ export function MiniPlayer({
   const togglePlay = useCallback(() => setPlaying((v) => !v), []);
   useKeyBinding(playPauseKey, togglePlay, Boolean(chapter));
 
+  /* fe-24 — seek the playhead by `delta` seconds (negative = back), clamped to
+     [0, duration]. Duration comes from the live element when finite, else the
+     server-provided durationSec (the browser estimate is unreliable for legacy
+     Xing-less MP3s — see the plan 109 note). Mirrors the local currentSec +
+     currentSecRef so the scrubber + flush-on-unmount stay accurate. */
+  const seekBy = useCallback(
+    (delta: number) => {
+      const el = audioRef.current;
+      if (!el) return;
+      const dur =
+        Number.isFinite(el.duration) && el.duration > 0 ? el.duration : audio.durationSec;
+      const base = Number.isFinite(el.currentTime) ? el.currentTime : currentSecRef.current;
+      const next = Math.max(0, Math.min(dur > 0 ? dur : base + delta, base + delta));
+      el.currentTime = next;
+      setCurrentSec(next);
+      currentSecRef.current = next;
+    },
+    [audio.durationSec],
+  );
+  const skipForward = useCallback(() => seekBy(skipForwardSec), [seekBy, skipForwardSec]);
+  const skipBack = useCallback(() => seekBy(-skipBackSec), [seekBy, skipBackSec]);
+  useKeyBinding(skipForwardKey, skipForward, Boolean(chapter));
+  useKeyBinding(skipBackKey, skipBack, Boolean(chapter));
+
   /* Plan 53 — sleep-timer countdown tick. Only mounted while the
      timer is in the countdown state; ticks once per second. End-of-
      chapter mode is driven by the audio onEnded handler below. */
@@ -463,6 +496,21 @@ export function MiniPlayer({
             >
               <IconRewind className="w-4 h-4" />
             </button>
+            {/* fe-24 — skip back N seconds (default 15). Smaller icon than the
+                prev/next chapter buttons so the transport group still fits the
+                412 px mobile layout; touch target stays ≥44 px. */}
+            <button
+              onClick={skipBack}
+              aria-label={`Skip back ${skipBackSec} seconds`}
+              data-testid="mini-player-skip-back"
+              title={`Skip back ${skipBackSec}s (${skipBackKey})`}
+              className="relative p-2 min-w-[44px] min-h-[44px] rounded-full hover:bg-canvas/10 grid place-items-center"
+            >
+              <IconRewind className="w-3.5 h-3.5" />
+              <span className="absolute bottom-0.5 right-0.5 text-[8px] font-semibold tabular-nums text-canvas/70">
+                {skipBackSec}
+              </span>
+            </button>
             <button
               onClick={() => setPlaying(!playing)}
               aria-label={playing ? 'Pause' : 'Play'}
@@ -473,6 +521,19 @@ export function MiniPlayer({
               ) : (
                 <IconPlay className="w-4 h-4 ml-0.5" />
               )}
+            </button>
+            {/* fe-24 — skip forward N seconds (default 30). */}
+            <button
+              onClick={skipForward}
+              aria-label={`Skip forward ${skipForwardSec} seconds`}
+              data-testid="mini-player-skip-forward"
+              title={`Skip forward ${skipForwardSec}s (${skipForwardKey})`}
+              className="relative p-2 min-w-[44px] min-h-[44px] rounded-full hover:bg-canvas/10 grid place-items-center"
+            >
+              <IconForward className="w-3.5 h-3.5" />
+              <span className="absolute bottom-0.5 right-0.5 text-[8px] font-semibold tabular-nums text-canvas/70">
+                {skipForwardSec}
+              </span>
             </button>
             <button
               onClick={onNext}
@@ -736,11 +797,24 @@ export function MiniPlayer({
             }
           }}
           onEnded={() => {
-            setPlaying(false);
             /* Plan 53 — feed the chapter-end event into the sleep
                timer state machine. End-of-chapter mode transitions
-               to fired here; countdown / idle states ignore it. */
-            setSleepTimer((prev) => sleepNotifyChapterEnded(prev));
+               to fired here; countdown / idle states ignore it.
+               fe-23 — compute the sleep transition FIRST so we can tell
+               whether the end-of-chapter timer just fired (which must
+               stop playback, not advance). */
+            const nextSleep = sleepNotifyChapterEnded(sleepTimer);
+            setSleepTimer(nextSleep);
+            /* fe-23 — auto-advance: roll into the next chapter only when the
+               user opted in, there IS a next chapter, and the sleep timer
+               didn't just fire on this chapter's end. Keep `playing` true so
+               the next chapter starts immediately. Last/single-chapter books
+               fall out naturally via nextAvailable === false. */
+            if (autoAdvance && nextAvailable && !sleepIsFired(nextSleep)) {
+              onNext();
+            } else {
+              setPlaying(false);
+            }
           }}
           onError={() => setError('Audio failed to load.')}
           className="hidden"
