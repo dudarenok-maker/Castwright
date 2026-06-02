@@ -640,7 +640,8 @@ export type Stage =
   | { kind: 'voices' }
   | { kind: 'changelog' }
   | { kind: 'account' }
-  /* Plan 86 — dev-only worktree dashboard. The top-bar entry + the
-     `/api/worktrees` server route are both gated behind dev mode so
-     production users never see it. */
-  | { kind: 'worktrees' };
+  /* fs-18 — all-users Admin watch console (was the dev-only Worktrees
+     dashboard, plan 86). Health board + generation throughput are visible to
+     everyone; the git-worktree list inside the view stays gated behind
+     `import.meta.env.DEV` (and its `/api/worktrees` server route 404s in prod). */
+  | { kind: 'admin' };

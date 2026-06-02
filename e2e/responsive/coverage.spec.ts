@@ -120,6 +120,17 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('admin (global) view', async ({ page }) => {
+    await page.goto('/#/admin');
+    await expect(page.getByRole('heading', { name: 'Admin', level: 2 })).toBeVisible({
+      timeout: 5_000,
+    });
+    /* Health board hydrates from the mocked GET /api/diagnostics. */
+    await expect(page.getByTestId('health-board')).toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
   test('queue modal (plan 102)', async ({ page }) => {
     /* Intercept /api/queue so the layout's mount-effect loadQueue
        resolves and the modal can render — mock-mode otherwise has no
