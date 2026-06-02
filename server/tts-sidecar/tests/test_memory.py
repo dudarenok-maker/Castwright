@@ -533,6 +533,32 @@ def test_watchdog_sets_recycle_pending_below_hard(monkeypatch):
     assert scheduled == [], "soft recycle must NOT trigger the hard self-exit"
 
 
+def test_watchdog_finer_sampling_catches_transient_committed_spike(monkeypatch):
+    """The leak oscillates per batch, so a once-a-minute sample can land in a
+    trough and miss the spike — the 2026-06-02 run grazed the soft ceiling for
+    minutes without ever flipping recycle_pending. The watchdog now evaluates the
+    soft ceiling against EACH sample (every _MEM_WATCHDOG_SAMPLE_INTERVAL), so a
+    single spike above soft — even with troughs on either side — flips
+    recycle_pending without crossing the hard ceiling."""
+    monkeypatch.setenv("SIDECAR_RECYCLE_SOFT_MB", "30000")
+    monkeypatch.setenv("SIDECAR_RESTART_MB", "46000")
+    monkeypatch.setenv("SIDECAR_RSS_WARN_MB", "0")
+    monkeypatch.setattr(main, "_recycle_pending", False)
+    monkeypatch.setattr(main, "_process_mem", lambda: {"rss_mb": 9000.0})
+    samples = iter([9000.0, 36000.0, 9000.0])  # trough, SPIKE (≥ soft, < hard), trough
+    monkeypatch.setattr(main, "_process_commit_mb", lambda: next(samples, 9000.0))
+    monkeypatch.setattr(main, "_cuda_vram_mb", lambda: (None, None, None))
+    scheduled: list = []
+    monkeypatch.setattr(main, "_schedule_restart_exit", lambda *a: scheduled.append(a))
+    monkeypatch.setattr(main.asyncio, "sleep", _fake_sleep_breaking_after(4))  # 3 iterations
+
+    with pytest.raises(_StopLoop):
+        asyncio.run(main._memory_watchdog())
+
+    assert main._recycle_pending is True, "a transient spike above soft must flip recycle_pending"
+    assert scheduled == [], "the spike is below the hard ceiling — no self-exit"
+
+
 def test_watchdog_hard_ceiling_still_exits_when_soft_set(monkeypatch):
     """With the soft threshold ALSO configured, crossing the HARD ceiling still
     schedules the exit (backstop intact) and short-circuits before the soft

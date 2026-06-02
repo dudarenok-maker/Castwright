@@ -164,6 +164,49 @@ describe('sidecar supervisor (srv-15)', () => {
     expect(sup.current()).toBe(handles[0]);
   });
 
+  /* Fitness watchdog: an adopted sidecar that stays TCP-up but becomes
+     leak-saturated (committed over the adopt ceiling) must be replaced too —
+     the 2026-06-02 "stuck after restart" left a fresh server bolted onto a
+     26 GB adopted orphan that never exited, so a disappearance-only watch never
+     recovered it. */
+  it('replaces an adopted sidecar that becomes leak-saturated (fitness watchdog)', async () => {
+    const handles: ReturnType<typeof makeHandle>[] = [];
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      const h = makeHandle();
+      handles.push(h);
+      return h as SidecarHandle;
+    });
+    const probeFn = vi.fn(async () => true); // port stays up the whole time
+    const healths = [
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 9000, recyclePending: false },
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 26000, recyclePending: false },
+    ];
+    let hi = 0;
+    const healthProbeFn = vi.fn(async () => healths[Math.min(hi++, healths.length - 1)]);
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn,
+      healthProbeFn,
+      delayFn: async () => {},
+      adoptedPollMs: 1,
+      adoptedHealthPollMs: 1, // health-check every tick
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    expect(spawnFn).toHaveBeenCalledTimes(1); // adopted
+    // First health poll is fit; the second crosses the ceiling → respawn an owned child.
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+    expect(sup.current()).toBe(handles[0]);
+  });
+
   it('stops watching an adopted sidecar after stop() (no respawn)', async () => {
     let calls = 0;
     const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {

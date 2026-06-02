@@ -96,6 +96,27 @@ export class ChapterSynthTimeoutError extends Error {
   }
 }
 
+/** Thrown by the generation loop's per-chapter no-progress watchdog when a
+    chapter makes NO forward progress (no group/batch completes, and no assembly
+    milestone lands) for longer than the configured window. Distinct from
+    {@link ChapterSynthTimeoutError} (a single synth CALL ceiling) — this is the
+    whole-chapter catch-all that also covers the post-synth assembly phase
+    (encode / ffmpeg loudnorm / disk), which has no per-call timeout. It is NOT
+    an AbortError, so the generation loop records it as a durable
+    `generationError` instead of silently swallowing it as a pause. The
+    2026-06-02 stellarlune ch52 stall was exactly this: no progress, no error,
+    no breadcrumb. */
+export class ChapterStallError extends Error {
+  constructor(ms: number, phase: 'synthesis' | 'assembly') {
+    super(
+      `Chapter made no progress for ${Math.round(ms / 1000)}s during ${phase} — ` +
+        `aborting so the failure is recorded and the queue can advance. ` +
+        `Check the TTS sidecar (it may be wedged or memory-saturated).`,
+    );
+    this.name = 'ChapterStallError';
+  }
+}
+
 /* fs-2 — thrown when a character on a non-English book has no designed Qwen
    voice and the Kokoro fallback is forbidden (`forbidKokoroFallback`). Kokoro
    is English-only, so silently falling back would read the book's language
