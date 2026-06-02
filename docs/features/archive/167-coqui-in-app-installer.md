@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-02
 owner: null
 ---
 
 # Coqui XTTS v2 in-app installer (engine install parity with Qwen)
 
-> Status: active (code + automated coverage complete; pending merge)
+> Status: stable
 > Key files: `src/components/coqui-install.tsx`, `src/views/account.tsx` (Models card), `server/src/routes/coqui-install.ts`, `server/src/tts/coqui-install-bootstrap.ts`, `server/src/tts/coqui-install-detect.ts`, `server/tts-sidecar/scripts/install-coqui.mjs`
 > URL surface: `#/account` → Models card (Coqui subsection)
 > OpenAPI ops: none (local install routes, like `/api/qwen/*`)
@@ -55,4 +55,4 @@ owner: null
 
 ## Ship notes
 
-Pending merge — ships with fe-2 in one combined PR (branch `feat/frontend-coqui-installer-fe2`; server commit `fb5f9c3`). Detection path validated against the live sidecar venv's `TTS.utils.manage.ModelManager` (`%LOCALAPPDATA%\tts\tts_models--…--xtts_v2\model.pth`). Flip to `stable` + `git mv` to `archive/` on merge.
+Shipped 2026-06-02 with fe-2 in one combined PR — #450, merge commit `8a8cd25` (server commit `fb5f9c3`). No behaviour delta vs. spec. Detection path validated against the live sidecar venv's `TTS.utils.manage.ModelManager` (`%LOCALAPPDATA%\tts\tts_models--…--xtts_v2\model.pth`).
