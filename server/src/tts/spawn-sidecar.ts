@@ -93,6 +93,19 @@ const HEALTH_PROBE_TIMEOUT_MS = 2_000;
 const PORT_FREE_TIMEOUT_MS = 5_000;
 const PORT_FREE_POLL_MS = 200;
 
+/* Committed-private ceiling (MB) above which an otherwise-fresh sidecar is too
+   leak-saturated to ADOPT — we kill+respawn a clean process instead of bolting
+   a fresh server onto it. The 2026-06-02 "stuck after restart" was exactly this:
+   the restart adopted an orphan sitting at ~26 GB committed (a fresh load is
+   ~10 GB) and the new server wedged driving it. Default 20 GB — well above a
+   fresh load + a light run, well below the deep-leak zone. Override
+   SIDECAR_ADOPT_MAX_COMMITTED_MB; `0` disables the committed check (recycle
+   _pending still gates). */
+export function adoptCommittedCeilingMb(): number {
+  const raw = Number(process.env.SIDECAR_ADOPT_MAX_COMMITTED_MB);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 20_000;
+}
+
 export interface SidecarHealthProbe {
   /** TCP-reachable AND returned an HTTP 2xx. */
   reachable: boolean;
@@ -103,6 +116,14 @@ export interface SidecarHealthProbe {
   /** Reported `protocol_version`, or null when absent — an older (pre-side-8)
       sidecar omits it, which reads as "stale". */
   protocolVersion: number | null;
+  /** Committed-private memory (MB) the sidecar reports in /health, or null when
+      absent/unparseable. Drives the adopt-fitness gate (don't inherit a
+      leak-saturated orphan). */
+  committedMb: number | null;
+  /** The sidecar's SOFT recycle signal — true once it has crossed the soft
+      committed/VRAM ceiling and intends to recycle at the next boundary. An
+      adopt target reporting this is about to self-exit, so we replace it. */
+  recyclePending: boolean;
 }
 
 /** Probe a listening process's /health to decide whether it's the CURRENT
@@ -119,14 +140,29 @@ export async function probeSidecarHealth(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetchImpl(`http://${host}:${port}/health`, { signal: controller.signal });
-    if (!res.ok) return { reachable: true, looksLikeSidecar: false, protocolVersion: null };
+    if (!res.ok)
+      return {
+        reachable: true,
+        looksLikeSidecar: false,
+        protocolVersion: null,
+        committedMb: null,
+        recyclePending: false,
+      };
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     const looksLikeSidecar = body.ok === true && Array.isArray(body.engines);
     const protocolVersion =
       typeof body.protocol_version === 'number' ? body.protocol_version : null;
-    return { reachable: true, looksLikeSidecar, protocolVersion };
+    const committedMb = typeof body.committed_mb === 'number' ? body.committed_mb : null;
+    const recyclePending = body.recycle_pending === true;
+    return { reachable: true, looksLikeSidecar, protocolVersion, committedMb, recyclePending };
   } catch {
-    return { reachable: false, looksLikeSidecar: false, protocolVersion: null };
+    return {
+      reachable: false,
+      looksLikeSidecar: false,
+      protocolVersion: null,
+      committedMb: null,
+      recyclePending: false,
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -302,10 +338,23 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
        /health omitted qwen_install_state, so every Qwen book fell back to
        Kokoro). side-8: detect & replace, don't just reuse. */
     const health = await healthProbeFn(host, port);
-    const fresh =
+    const freshProtocol =
       health.looksLikeSidecar &&
       health.protocolVersion !== null &&
       health.protocolVersion >= EXPECTED_PROTOCOL_VERSION;
+    /* Even a protocol-fresh sidecar is UNFIT to adopt if it is leak-saturated or
+       already intends to recycle: inheriting it bolts a fresh server onto a
+       dying process (the 2026-06-02 "stuck after restart" — adopted a ~26 GB
+       orphan). Replace it with a clean process instead. */
+    const adoptCeiling = adoptCommittedCeilingMb();
+    const unfitReason = !health.looksLikeSidecar
+      ? null // not-ours is handled separately below
+      : health.recyclePending
+        ? 'reports recycle_pending (about to self-recycle)'
+        : adoptCeiling > 0 && health.committedMb !== null && health.committedMb >= adoptCeiling
+          ? `committed ${Math.round(health.committedMb)}MB ≥ the ${adoptCeiling}MB adopt ceiling (leak-saturated)`
+          : null;
+    const fresh = freshProtocol && unfitReason === null;
     if (fresh) {
       log(
         `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), skipping spawn (current sidecar honoured)`,
@@ -321,11 +370,13 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       );
       return null;
     }
-    /* It IS our sidecar, but stale (missing/old protocol_version). Replace it. */
-    const reported =
-      health.protocolVersion === null ? 'missing' : `v${health.protocolVersion}`;
+    /* It IS our sidecar, but unfit to adopt — stale protocol OR leak-saturated /
+       recycle-pending. Replace it with a fresh process. */
+    const reason = !freshProtocol
+      ? `protocol ${health.protocolVersion === null ? 'missing' : `v${health.protocolVersion}`} < v${EXPECTED_PROTOCOL_VERSION}`
+      : (unfitReason ?? 'unfit');
     warn(
-      `[sidecar] STALE sidecar on :${port} (protocol ${reported} < v${EXPECTED_PROTOCOL_VERSION}) — replacing it with the current build to stop silent capability drift (e.g. Qwen→Kokoro fallback).`,
+      `[sidecar] UNFIT sidecar on :${port} (${reason}) — replacing it with a fresh process to avoid inheriting a stale build or a leak-saturated/recycling one.`,
     );
     const stalePid = await findPidFn(port);
     if (stalePid === null) {
