@@ -11,8 +11,7 @@
    silently burn Gemini quota; if Ollama is up at all, we trust the error. */
 
 import { writeFile } from 'node:fs/promises';
-import type { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
@@ -207,13 +206,15 @@ export class OllamaAnalyzer implements Analyzer {
     const skill = await loadSkill(skillName);
     const systemInstruction = buildSystemInstruction(skill, call.language);
     /* Convert the per-stage Zod schema into a JSON Schema for Ollama 0.5+
-       structured-output (constrained decoding). $refStrategy:'none' inlines
+       structured-output (constrained decoding). reused:'inline' inlines
        nested schemas (characterSchema inside stage1ChapterSchema, etc.) so
        Ollama doesn't have to resolve $ref — safer across engine versions.
-       The resulting schema preserves .strict() as additionalProperties:false
-       and .min(1) as minItems:1, which is the whole point: the model can't
-       emit malformed JSON or extra fields by construction. */
-    const responseFormat = zodToJsonSchema(schema, { $refStrategy: 'none' });
+       target:'draft-07' keeps the same dialect zod-to-json-schema emitted
+       before the Zod 4 bump. The resulting schema preserves .strict() as
+       additionalProperties:false and .min(1) as minItems:1, which is the
+       whole point: the model can't emit malformed JSON or extra fields by
+       construction. */
+    const responseFormat = z.toJSONSchema(schema, { target: 'draft-07', reused: 'inline' });
 
     const start = Date.now();
     const tick = call.onWaiting
