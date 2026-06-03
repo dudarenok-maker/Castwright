@@ -56,7 +56,7 @@ import {
   type TtsProvider,
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
-import { pickVoiceForEngine } from '../tts/voice-mapping.js';
+import { buildCharacterSnapshots } from '../audio/character-snapshots.js';
 import {
   getCachedUserSettings,
   getLastKnownQwenInstallState,
@@ -76,11 +76,10 @@ import {
 import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
 import { appendTelemetry } from '../tts/resource-telemetry.js';
 import { probeSidecarHealth } from './sidecar-health.js';
+import { abortInFlightSplice } from './chapter-job-coordination.js';
 import { formatDuration } from '../audio/format-duration.js';
 import {
   synthesiseChapter,
-  toVoiceLike,
-  buildHintFromCast,
   ChapterStallError,
   type CastCharacter,
   type ChapterSegment,
@@ -263,6 +262,15 @@ const inFlightByBook: Map<string, Set<RunningJob>> = new Map();
 
 function chapterKey(bookId: string, chapterId: number | null): string {
   return `${bookId}::${chapterId == null ? '*' : chapterId}`;
+}
+
+/* fs-26 — let the splice route displace an in-flight generation of the same
+   chapter (and the back-compat `*` job that may be rendering it) before it
+   reads the chapter's audio for splicing, so the two never race on the same
+   files. Aborting is idempotent; a no-op when nothing is in flight. */
+export function abortInFlightChapterJob(bookId: string, chapterId: number): void {
+  inFlightByChapter.get(chapterKey(bookId, chapterId))?.controller.abort();
+  inFlightByChapter.get(chapterKey(bookId, null))?.controller.abort();
 }
 
 /* srv-16 — serialise every server-side `.queue.json` read-modify-write through
@@ -939,6 +947,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      forced request for chapter X must not abort sibling chapter Y. */
   const existing = inFlightByChapter.get(key);
   if (existing) existing.controller.abort();
+  /* fs-26 — a fresh regen of this chapter also displaces any in-flight splice
+     of it, so the two never race on the same `<slug>.mp3`/.segments.json pair. */
+  abortInFlightSplice(bookId, jobChapterId);
   const controller = new AbortController();
   /* Bug E — seed run-level aggregates from disk state. runTotal = all
      non-excluded chapters; runDoneBase = non-excluded chapters whose
@@ -1426,38 +1437,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       for (const s of result.segments) {
         if (s.renderedFallbackEngine) fallbackByChar.set(s.characterId, s.renderedFallbackEngine);
       }
-      const characterSnapshots: Record<string, CharacterSnapshot> = {};
-      for (const c of cast.characters) {
-        if (!speakingIds.has(c.id)) continue;
-        /* Per-character engine + the voice NAME actually rendered (plan 108).
-           voiceEngine was the global run engine before; now it's this
-           character's resolved engine. resolvedVoiceName captures the real
-           pickVoiceForEngine output so the drift detector can catch an
-           override-only change (same voiceId, different override) — see the
-           revisions.ts comparison added in Wave 4. */
-        const charEngine = resolveCharacterEngine(c, engine);
-        const resolvedVoiceName = pickVoiceForEngine(
-          charEngine,
-          toVoiceLike(c),
-          buildHintFromCast(c),
-        );
-        characterSnapshots[c.id] = {
-          tone: c.tone,
-          gender: c.gender,
-          ageRange: c.ageRange,
-          voiceId: c.voiceId,
-          voiceEngine: charEngine,
-          resolvedVoiceName: resolvedVoiceName || undefined,
-          renderedFallbackEngine: fallbackByChar.get(c.id),
-          /* Sorted for stable comparison — the analyzer's attribute order
-             isn't deterministic across runs, so without the sort an
-             order-only change would look like drift to the detector. */
-          attributes:
-            Array.isArray(c.attributes) && c.attributes.length
-              ? [...c.attributes].sort((a, b) => a.localeCompare(b))
-              : undefined,
-        };
-      }
+      /* Per-character engine + the voice NAME actually rendered (plan 108),
+         keyed by characterId for the drift detector. Shared with the fs-26
+         splice path via buildCharacterSnapshots so a re-record/re-mix updates
+         the detector identically to a full regen. */
+      const characterSnapshots = buildCharacterSnapshots(
+        cast.characters,
+        speakingIds,
+        engine,
+        fallbackByChar,
+      );
 
       const segmentsFile: ChapterSegmentsFile = {
         bookId,

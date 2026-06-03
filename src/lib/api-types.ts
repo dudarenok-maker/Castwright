@@ -913,6 +913,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/{chapterId}/splice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Per-character re-record / re-mix splice (fs-26)
+         * @description Re-renders or re-mixes ONE character's segments in an already-rendered
+         *     chapter and splices the result back into the chapter audio, instead of
+         *     regenerating the whole chapter. Streams SSE `data: <json>` frames:
+         *     `splice_start`, `chapter_assembling`, then `splice_complete` (or
+         *     `chapter_failed`). Decodes the chapter audio, substitutes the target
+         *     segments (a `volume` gain for `remix`, fresh synthesis for `rerecord`),
+         *     re-runs the whole-chapter loudnorm so the splice is seamless, preserves
+         *     the prior take as `.previous.*` (the A/B + rollback substrate), and
+         *     updates `segments.json` + duration. A splice and a full regen of the
+         *     same chapter mutually displace each other so they never race the files.
+         */
+        post: operations["spliceChapter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/chapters/{chapterId}/audio": {
         parameters: {
             query?: never;
@@ -4650,6 +4679,62 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": components["schemas"]["GenerationTick"];
+                };
+            };
+        };
+    };
+    spliceChapter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description `remix` applies a dB gain (no GPU — the fix for "too quiet"); `rerecord` re-synthesises the character's sentences.
+                     * @enum {string}
+                     */
+                    mode: "remix" | "rerecord";
+                    /** @description The character whose segments in this chapter are re-mixed or re-recorded. */
+                    characterId: string;
+                    /** @description remix only — signed dB gain applied to the character's segments, clamped to [-24, +24]. */
+                    gainDb?: number;
+                    /** @description rerecord only — optional subset of the character's segments to re-record; omitted = all of them. */
+                    segmentIndices?: number[];
+                    /**
+                     * @description Required for rerecord — TTS model key to synthesise with.
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                };
+            };
+        };
+        responses: {
+            /** @description SSE splice progress + completion stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": {
+                        /** @enum {string} */
+                        type?: "splice_start" | "chapter_assembling" | "splice_complete" | "chapter_failed";
+                        chapterId?: number;
+                        characterId?: string;
+                        /** @enum {string} */
+                        mode?: "remix" | "rerecord";
+                        durationSec?: number;
+                        segmentCount?: number;
+                        hasPreviousAudio?: boolean;
+                        progress?: number;
+                        errorReason?: string;
+                    };
                 };
             };
         };
