@@ -12,6 +12,16 @@ import type { ChapterSegment } from '../tts/synthesise-chapter.js';
 import type { SegmentReplacement } from './splice-chapter.js';
 import { resamplePcm16 } from '../tts/resample-pcm16.js';
 
+/** A segment can be re-recorded only if it's backed by manuscript sentences.
+    The synthetic chapter-title beat (`kind:'title'`, empty `sentenceIds`) has
+    no text to re-synthesise — re-recording it would feed empty input to the
+    synth and splice silence over the title narration. The title carries the
+    narrator's characterId, so without this filter picking the narrator for a
+    re-record would sweep the title beat in and wipe it. */
+export function isRerecordableSegment(seg: ChapterSegment): boolean {
+  return seg.kind !== 'title' && seg.sentenceIds.length > 0;
+}
+
 export interface SynthOutput {
   pcm: Buffer;
   sampleRate: number;
