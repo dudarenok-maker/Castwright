@@ -1,10 +1,9 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { IconRefresh, IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
-import { revisionsActions } from '../store/revisions-slice';
+import { spliceActions } from '../store/splice-slice';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
-import { api, type SpliceTick } from '../lib/api';
 
 /* fs-26 — per-character "Fix audio" modal, opened from the cast profile drawer.
    Two modes share the server's splice engine:
@@ -12,8 +11,10 @@ import { api, type SpliceTick } from '../lib/api';
        the fix for "too quiet". A relative boost survives the chapter loudnorm.
      - Re-record: re-synthesise the character's lines (GPU).
    The user picks which RENDERED chapters to apply it to (default: every chapter
-   the character appears in). Chapters run one at a time; each completed splice
-   drops a pending A/B revision so the user can audition + accept/reject. */
+   the character appears in). The actual work runs in splice-runner-middleware
+   (one splice per chapter, in the background), so closing this modal doesn't
+   stop it — a global toast tracks progress and each chapter drops a pending A/B
+   revision to audition + accept/reject. */
 
 interface Props {
   characterId: string | null;
@@ -22,8 +23,6 @@ interface Props {
   onClose: () => void;
 }
 
-type RowStatus = 'pending' | 'running' | 'done' | 'failed';
-
 const GAIN_MIN = -12;
 const GAIN_MAX = 12;
 
@@ -31,6 +30,11 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
   const dispatch = useAppDispatch();
   const chapters = useAppSelector((s) => s.chapters.chapters);
   const modelKey = useAppSelector((s) => s.ui.ttsModelKey);
+  /* Track the batch THIS modal started by id so we keep seeing it through the
+     'done' state (a "running-only" selector would drop it the moment it
+     finishes and the summary would never render). */
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const batch = useAppSelector((s) => (batchId ? (s.splice?.batches?.[batchId] ?? null) : null));
 
   /* Candidate chapters: RENDERED (has audio) AND the character speaks in them.
      A chapter is rendered once it carries an audioModelKey (or flips done). */
@@ -48,12 +52,10 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
   const [mode, setMode] = useState<'remix' | 'rerecord'>('remix');
   const [gainDb, setGainDb] = useState(3);
   const [selected, setSelected] = useState<Set<number>>(() => new Set(candidates.map((c) => c.id)));
-  const [running, setRunning] = useState(false);
-  const [statusById, setStatusById] = useState<Record<number, RowStatus>>({});
-  const abortRef = useRef<AbortController | null>(null);
 
   if (!characterId) return null;
   const firstName = characterName.split(' ')[0] || characterName;
+  const running = batch?.status === 'running';
 
   const toggle = (id: number) =>
     setSelected((prev) => {
@@ -65,56 +67,30 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
 
   const selectedIds = candidates.filter((c) => selected.has(c.id)).map((c) => c.id);
 
-  const run = async () => {
-    if (!selectedIds.length) return;
-    setRunning(true);
-    const controller = new AbortController();
-    abortRef.current = controller;
-    for (const chapterId of selectedIds) {
-      if (controller.signal.aborted) break;
-      setStatusById((s) => ({ ...s, [chapterId]: 'running' }));
-      const revisionId = `splice-${bookId}-${chapterId}-${characterId}-${chapterId}`;
-      dispatch(
-        revisionsActions.enqueuePending({
-          id: revisionId,
-          chapterId,
-          characterId,
-          playable: false,
-          hasPreviousAudio: true,
-          triggeredBy: mode === 'remix' ? `Loudness fix (${firstName})` : `Re-record (${firstName})`,
-          segments: [],
-        }),
-      );
-      const onTick = (ev: SpliceTick) => {
-        if (ev.type === 'splice_complete') {
-          dispatch(revisionsActions.markRevisionPlayable({ chapterId }));
-          setStatusById((s) => ({ ...s, [chapterId]: 'done' }));
-        } else if (ev.type === 'chapter_failed') {
-          setStatusById((s) => ({ ...s, [chapterId]: 'failed' }));
-        }
-      };
-      await api.streamSplice({
+  const run = () => {
+    if (!selectedIds.length || running) return;
+    const id = `splice-${bookId}-${characterId}-${selectedIds.join('.')}-${selectedIds.length}`;
+    setBatchId(id);
+    dispatch(
+      spliceActions.startBatch({
+        id,
         bookId,
-        chapterId,
-        mode,
         characterId,
+        characterName,
+        mode,
         ...(mode === 'remix' ? { gainDb } : { modelKey }),
-        onTick,
-        signal: controller.signal,
-      });
-    }
-    setRunning(false);
-    abortRef.current = null;
+        chapterIds: selectedIds,
+      }),
+    );
   };
 
-  const doneCount = Object.values(statusById).filter((v) => v === 'done').length;
-  const failedCount = Object.values(statusById).filter((v) => v === 'failed').length;
-  const allFinished = running === false && doneCount + failedCount > 0;
+  const processed = batch ? batch.succeeded + batch.failed : 0;
+  const allFinished = batch != null && batch.status !== 'running';
 
   return (
     <>
       <div
-        onClick={running ? undefined : onClose}
+        onClick={onClose}
         className="fixed inset-0 bg-ink/40 z-50 fade-in"
         data-testid="fix-audio-backdrop"
       />
@@ -132,8 +108,7 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
             </div>
             <button
               onClick={onClose}
-              disabled={running}
-              className="p-2 rounded-full hover:bg-ink/5 text-ink/60 disabled:opacity-40"
+              className="p-2 rounded-full hover:bg-ink/5 text-ink/60"
             >
               <IconClose className="w-4 h-4" />
             </button>
@@ -186,6 +161,11 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
                   className="w-full accent-magenta"
                   aria-label="Loudness boost in decibels"
                 />
+                <p className="text-xs text-ink/55 mt-2 leading-relaxed">
+                  The boost is <span className="font-semibold">relative to the current audio</span> —
+                  applying it again stacks on top. Tip: apply to one chapter first and audition it in
+                  the revisions panel before doing the rest.
+                </p>
               </section>
             )}
 
@@ -213,37 +193,37 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
                 </p>
               ) : (
                 <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
-                  {candidates.map((c) => {
-                    const st = statusById[c.id];
-                    return (
-                      <label
-                        key={c.id}
-                        className={`flex items-center gap-3 p-2.5 rounded-xl border min-h-[44px] cursor-pointer ${selected.has(c.id) ? 'border-peach/60 bg-peach/4' : 'border-ink/10'}`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected.has(c.id)}
-                          disabled={running}
-                          onChange={() => toggle(c.id)}
-                          className="accent-magenta w-4 h-4"
-                        />
-                        <span className="flex-1 min-w-0 text-sm text-ink truncate">
-                          CH {String(c.id).padStart(2, '0')} · {stripChapterPrefix(c.title)}
-                        </span>
-                        {st === 'running' && <span className="text-xs text-ink/50">…</span>}
-                        {st === 'done' && <span className="text-xs text-green-600 font-semibold">✓</span>}
-                        {st === 'failed' && <span className="text-xs text-red-500 font-semibold">failed</span>}
-                      </label>
-                    );
-                  })}
+                  {candidates.map((c) => (
+                    <label
+                      key={c.id}
+                      className={`flex items-center gap-3 p-2.5 rounded-xl border min-h-[44px] cursor-pointer ${selected.has(c.id) ? 'border-peach/60 bg-peach/4' : 'border-ink/10'}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.has(c.id)}
+                        disabled={running}
+                        onChange={() => toggle(c.id)}
+                        className="accent-magenta w-4 h-4"
+                      />
+                      <span className="flex-1 min-w-0 text-sm text-ink truncate">
+                        CH {String(c.id).padStart(2, '0')} · {stripChapterPrefix(c.title)}
+                      </span>
+                    </label>
+                  ))}
                 </div>
               )}
             </section>
 
+            {running && (
+              <p className="text-sm text-ink/70">
+                Working in the background — {processed}/{batch!.total} chapters. You can close this
+                and keep working; a notification tracks progress.
+              </p>
+            )}
             {allFinished && (
               <p className="text-sm text-ink/70" data-testid="fix-audio-summary">
-                Done — {doneCount} chapter{doneCount === 1 ? '' : 's'} updated
-                {failedCount > 0 ? `, ${failedCount} failed` : ''}. Review the new takes in the
+                Done — {batch!.succeeded} chapter{batch!.succeeded === 1 ? '' : 's'} updated
+                {batch!.failed > 0 ? `, ${batch!.failed} failed` : ''}. Review the new takes in the
                 revisions panel.
               </p>
             )}
@@ -252,18 +232,13 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
           <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-end gap-3">
             <button
               onClick={onClose}
-              disabled={running}
-              className="text-sm font-medium text-ink/60 hover:text-ink disabled:opacity-40"
+              className="text-sm font-medium text-ink/60 hover:text-ink"
             >
-              {allFinished ? 'Close' : 'Cancel'}
+              {running || allFinished ? 'Close' : 'Cancel'}
             </button>
-            <PrimaryButton
-              variant="dark"
-              onClick={run}
-              disabled={running || selectedIds.length === 0}
-            >
+            <PrimaryButton variant="dark" onClick={run} disabled={running || selectedIds.length === 0}>
               {running
-                ? `Working… ${doneCount}/${selectedIds.length}`
+                ? `Working… ${processed}/${batch!.total}`
                 : mode === 'remix'
                   ? `Apply to ${selectedIds.length} chapter${selectedIds.length === 1 ? '' : 's'}`
                   : `Re-record ${selectedIds.length} chapter${selectedIds.length === 1 ? '' : 's'}`}

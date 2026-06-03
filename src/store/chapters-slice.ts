@@ -122,6 +122,22 @@ export const chaptersSlice = createSlice({
       s.lastError = null;
     },
 
+    /** fs-26 — after a per-character splice rewrites a chapter's audio in
+        place, refresh the Listen row: update its duration (re-record changes
+        it; a gain remix doesn't) and stamp a fresh `audioRenderedAt`. The
+        mini-player's audio-meta fetch keys on `audioRenderedAt`, so this is
+        the signal that the bytes changed even when the URL + duration are
+        identical (the gain case) — it forces a cache-busted re-fetch. */
+    markChapterAudioUpdated: (
+      s,
+      a: PayloadAction<{ chapterId: number; durationSec?: number; renderedAt: string }>,
+    ) => {
+      const ch = s.chapters.find((c) => c.id === a.payload.chapterId);
+      if (!ch) return;
+      if (a.payload.durationSec != null) ch.duration = formatDuration(a.payload.durationSec);
+      ch.audioRenderedAt = a.payload.renderedAt;
+    },
+
     /** Records which book's rows `chapters` currently reflects. Dispatched
         by Layout's per-book hydration effect (immediately after
         hydrateFromBookState/hydrateFromAnalysis seed the slice) and on

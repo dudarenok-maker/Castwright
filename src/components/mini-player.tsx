@@ -155,7 +155,17 @@ export function MiniPlayer({
     api
       .getChapterAudio({ bookId, chapterId, duration: chapter.duration })
       .then((meta) => {
-        if (!cancelled) setAudio(meta);
+        if (cancelled) return;
+        /* fs-26 — cache-bust the audio URL with the chapter's render stamp so a
+           splice that rewrote the bytes in place (gain remix keeps the same URL
+           AND duration) still reloads fresh audio rather than the browser's
+           cached copy. No-op when audioRenderedAt is absent (legacy chapters). */
+        const stamp = chapter.audioRenderedAt;
+        const url =
+          meta.url && stamp
+            ? `${meta.url}${meta.url.includes('?') ? '&' : '?'}v=${encodeURIComponent(stamp)}`
+            : meta.url;
+        setAudio({ ...meta, url });
       })
       .catch((e) => {
         if (!cancelled) setError((e as Error).message);
@@ -198,7 +208,7 @@ export function MiniPlayer({
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bookId, chapter?.id, chapter?.duration]);
+  }, [bookId, chapter?.id, chapter?.duration, chapter?.audioRenderedAt]);
 
   /* When the URL lands, point the audio element at it. Resetting src + load
      also clears any prior playback state from the previous chapter.
