@@ -9,7 +9,7 @@ owner: null
 > Status: draft — design approved, implementation staged in waves below.
 > Key files: `openapi.yaml` (Sentence + Character.overrideTtsVoices), `server/src/handoff/schemas.ts`, `server/src/analyzer/` (Phase-1 attribution), `server/src/tts/synthesise-chapter.ts` + `server/src/tts/voice-mapping.ts` (voice resolution), `server/src/routes/qwen-voice.ts` (variant design), `src/views/manuscript.tsx`, `src/views/cast.tsx` / profile drawer.
 > URL surface: `#/books/<id>/manuscript` (per-quote emotion picker), `#/books/<id>/cast` (design emotion variants).
-> OpenAPI ops: reuses `POST /api/books/{bookId}/cast/{characterId}/design-voice` (adds optional `emotion`); no new synth op — `/synthesize` + `/synthesize-batch` contracts are unchanged.
+> OpenAPI ops: reuses `POST /api/books/{bookId}/cast/{characterId}/design-voice` (adds optional `emotion`); adds `POST /api/books/{bookId}/annotate-emotion` (Wave 4b emotion-only backfill); no new synth op — `/synthesize` + `/synthesize-batch` contracts are unchanged.
 > GitHub issue: [#479](https://github.com/dudarenok-maker/AudioBook-Generator/issues/479). Backlog id `fs-25`.
 
 ## Benefit / Rationale
@@ -79,9 +79,17 @@ Each wave is its own commit on `feat/server-fs25-per-quote-emotion`; the branch 
 - Sidecar: **no change** — `design_voice(voice_id, instruct, …)` already handles an arbitrary voiceId + instruct.
 - Tests: server route test (mock sidecar) — designing with `emotion=angry` writes the variant slot + an augmented instruct; pytest sidecar — a variant voiceId synthesises like any designed voice (and Kokoro/XTTS are untouched).
 
-**Wave 4 — analyzer (optional emotion inference).**
-- Add optional per-sentence `emotion` to the Phase-1 attribution schema + skill prompt (`skills/audiobook-sentence-attribution.md`) and both the gemini and manual parsers. Strictly optional; low confidence → omit (renders neutral). Gate behind the existing warm-up-window convention so early chapters aren't noisy.
-- Tests: parse-and-repair accepts/ignores the field; an attribution payload with emotions round-trips into sentences.
+**Wave 4 — analyzer emotion inference (two paths; existing books get it WITHOUT a full re-analysis).**
+
+Emotion is per-sentence, so a brand-new analysis can emit it inline — but **existing, already-analyzed books** (cached sentences predate FS-25) need a backfill. Build BOTH paths; the annotation pass is the default for existing books because a full re-analysis re-runs attribution (analyzer quota + risk of perturbing who-said-what / manual cast tweaks — the "verify re-analysis is actually needed" caution).
+
+_4a — Phase-1 inline (covers new books + any re-analysis triggered for other reasons)._
+- Add optional per-sentence `emotion` to the Phase-1 attribution schema + skill prompt (`skills/audiobook-sentence-attribution.md`) and both the gemini and manual parsers. Strictly optional; low confidence → omit (renders neutral). Gate behind the existing warm-up-window convention so early chapters aren't noisy. So a fresh analysis (or a reparse done for any reason) now carries emotion for free.
+
+_4b — Emotion-only annotation pass (default backfill for existing books; non-destructive)._
+- A new lightweight analyzer pass + skill (`audiobook-emotion-annotation`) that reads the book's already-attributed cached sentences and returns ONLY `{ sentenceId, emotion }` — it does **not** re-attribute, so `characterId`/cast/manual reassignments are untouched. New route (e.g. `POST /api/books/:bookId/annotate-emotion`, streaming progress like the analysis stream), cost surfaced up front (cf. `fs-27`). Writes emotion onto the cached sentences.
+- **Precedence (both paths):** a user's hand-set per-quote emotion (manuscript-edits) ALWAYS wins over analyzer-inferred emotion — annotation/re-analysis fills only sentences with no manual override, never clobbers a manual tag.
+- Tests: `parse-and-repair` accepts/ignores the field (4a); the annotation pass returns emotion-only and leaves `characterId` untouched, and a sentence with a manual emotion override is not overwritten (4b); cost estimate surfaces before the run.
 
 **Wave 5 — UI.** (Split into 5a manuscript, 5b cast-design, 5c cast-indicator+filter so each lands with its own test.)
 
@@ -109,7 +117,8 @@ _Tests (Wave 5)._
 - `server/src/tts/synthesise-chapter.test.ts` — all-neutral chapter byte-identical voice resolution on every engine; Qwen variant selection per tagged sentence; missing-variant fallback (Wave 2). **This is the Kokoro/XTTS safety net.**
 - `server/src/routes/qwen-voice.test.ts` — `design-voice` with `emotion` writes the variant slot + augmented instruct (Wave 3).
 - `server/tts-sidecar/tests/test_synthesize.py` (+ a variant case) — a Qwen variant voiceId renders; Kokoro/XTTS unaffected (Wave 3).
-- `server/src/analyzer/parse-and-repair.test.ts` — emotion field parse/ignore (Wave 4).
+- `server/src/analyzer/parse-and-repair.test.ts` — Phase-1 emotion field parse/ignore (Wave 4a).
+- annotation-pass route test — returns emotion-only, leaves `characterId` untouched, never overwrites a manual emotion override; cost estimate surfaces pre-run (Wave 4b).
 - `src/views/manuscript.test.tsx` + `e2e/` spec — per-quote emotion edit round-trip (Wave 5).
 
 ### Manual acceptance walkthrough (real sidecar, GPU — owed; CI has no sidecar venv)
