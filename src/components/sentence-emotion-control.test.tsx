@@ -5,7 +5,6 @@ import { Provider } from 'react-redux';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { SentenceEmotionControl } from './sentence-emotion-control';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeStore(sentences: any[]) {
   return configureStore({
     reducer: { manuscript: manuscriptSlice.reducer },
