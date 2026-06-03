@@ -10,7 +10,24 @@ import { rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
+import { extractInlineEmotion } from '../handoff/emotion-from-tags.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+
+/* fs-25 — absorb any legacy inline audio-tag in a freshly-analysed sentence
+   into the structured `emotion` field and strip the bracket from the stored
+   text, so the retired tag system leaves no residue in new caches. Idempotent:
+   already-clean sentences pass through unchanged, and an existing `emotion`
+   (manual or analyzer-set) is never overridden. */
+function seedEmotionsFromTags(chapters: Record<number, SentenceOutput[]>): Record<number, SentenceOutput[]> {
+  const out: Record<number, SentenceOutput[]> = {};
+  for (const [chapterId, sentences] of Object.entries(chapters)) {
+    out[Number(chapterId)] = sentences.map((s) => {
+      const { text, emotion } = extractInlineEmotion(s.text, s.emotion);
+      return text === s.text && emotion === s.emotion ? s : { ...s, text, emotion };
+    });
+  }
+  return out;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = resolve(__dirname, '..', '..', 'handoff', 'cache');
@@ -67,6 +84,7 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
 export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
   await writeJsonAtomic(cachePath(manuscriptId), {
     ...cache,
+    chapters: seedEmotionsFromTags(cache.chapters ?? {}),
     updatedAt: new Date().toISOString(),
   });
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { stage1Schema, stage2Schema, characterSchema } from './schemas.js';
+import { stage1Schema, stage2Schema, characterSchema, sentenceSchema, EMOTIONS } from './schemas.js';
 
 /* The Ollama analyzer (server/src/analyzer/ollama.ts) feeds these per-stage
    schemas through `z.toJSONSchema(schema, { target: 'draft-07', reused: 'inline' })`
@@ -49,5 +49,36 @@ describe('handoff schemas → Ollama structured-output JSON Schema', () => {
       expect(keys.has('$defs')).toBe(false);
       expect(keys.has('definitions')).toBe(false);
     }
+  });
+});
+
+describe('fs-25 — sentence emotion (Phase-1 inline, 4a)', () => {
+  const base = { id: 1, chapterId: 1, characterId: 'narrator', text: 'hello' };
+
+  it('exposes the fixed emotion enum', () => {
+    expect([...EMOTIONS]).toEqual(['neutral', 'whisper', 'angry', 'excited', 'sad']);
+  });
+
+  it('accepts a valid emotion', () => {
+    expect(sentenceSchema.parse({ ...base, emotion: 'angry' }).emotion).toBe('angry');
+  });
+
+  it('accepts a sentence with no emotion (back-compat)', () => {
+    expect(sentenceSchema.parse(base).emotion).toBeUndefined();
+  });
+
+  it('rejects an out-of-enum emotion', () => {
+    expect(sentenceSchema.safeParse({ ...base, emotion: 'furious' }).success).toBe(false);
+  });
+
+  it('carries emotion into the Ollama JSON schema as an enum', () => {
+    const json = z.toJSONSchema(stage2Schema, JSON_SCHEMA_OPTS) as Record<string, any>;
+    expect(json.properties.sentences.items.properties.emotion.enum).toEqual([
+      'neutral',
+      'whisper',
+      'angry',
+      'excited',
+      'sad',
+    ]);
   });
 });
