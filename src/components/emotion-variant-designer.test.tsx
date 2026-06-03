@@ -8,7 +8,6 @@ import { EmotionVariantDesigner } from './emotion-variant-designer';
 const designQwenVoice = vi.fn();
 vi.mock('../lib/api', () => ({ api: { designQwenVoice: (...a: unknown[]) => designQwenVoice(...a) } }));
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeStore(characters: any[]) {
   return configureStore({
     reducer: { cast: castSlice.reducer },
