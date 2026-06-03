@@ -434,11 +434,28 @@ export const chaptersSlice = createSlice({
       /* type === 'progress' — flip the live character and advance counters.
          Use the real `characterId` from the tick rather than progress
          thresholds; the server emits one per same-speaker group. */
+      /* fs-13 — a progress tick on a chapter that wasn't already in_progress
+         means a (re)start (queued→running, or a regenerate of a done/failed
+         chapter). Clear any completed-id set carried over from a prior run
+         BEFORE flipping the state below, so last run's exact bars can't leak
+         into the fresh one. Covers every restart path in one place. */
+      if (ch.state !== 'in_progress') ch.completedSentenceIds = [];
       ch.state = 'in_progress';
       ch.phase = null;
       ch.progress = ev.progress ?? ch.progress;
       if (ev.currentLine != null) ch.currentLine = ev.currentLine;
       if (ev.totalLines != null) ch.totalLines = ev.totalLines;
+      /* fs-13 — union the just-completed group's sentence ids into the
+         chapter's completed SET (the view intersects this with each
+         character's sentence ids for an EXACT done count under out-of-order
+         completion). Idempotent: a heartbeat-replayed id is absorbed by the
+         Set. Only completion ticks carry this; the onGroupStart heartbeat
+         omits it, so a started-but-unfinished group never counts as done. */
+      if (ev.completedSentenceIds && ev.completedSentenceIds.length > 0) {
+        const merged = new Set(ch.completedSentenceIds ?? []);
+        for (const id of ev.completedSentenceIds) merged.add(id);
+        ch.completedSentenceIds = [...merged];
+      }
       if (ev.characterId) {
         /* Only reconcile per-character state when the tick names a character
            we can promote. If the live speaker isn't in this chapter's cast
@@ -492,6 +509,10 @@ export const chaptersSlice = createSlice({
              doesn't show stale fractions in the gap between regenerate
              firing and the first fresh `progress` tick landing. */
           currentLine: 0,
+          /* fs-13 — drop the prior run's completed-id set so the gap between
+             regenerate firing and the first fresh progress tick doesn't show
+             stale exact bars (the first tick clears it again, belt-and-suspenders). */
+          completedSentenceIds: [],
           characters: Object.fromEntries(
             Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v]),
           ) as Chapter['characters'],
@@ -529,6 +550,8 @@ export const chaptersSlice = createSlice({
           generationErrorCode: undefined,
           generationRemediation: undefined,
           currentLine: 0,
+          /* fs-13 — see regenerate-from reducer above. */
+          completedSentenceIds: [],
           characters: Object.fromEntries(
             Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v]),
           ) as Chapter['characters'],

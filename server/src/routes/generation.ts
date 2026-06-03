@@ -1270,6 +1270,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             progress,
             currentLine: completed,
             totalLines,
+            /* fs-13 — carry the just-completed group's sentence ids so the
+               frontend can track an EXACT per-character done SET under
+               out-of-order completion (poolWidth > 1 + Qwen batching), instead
+               of approximating each character's bar from the chapter-wide
+               `currentLine` count. The chapter-level count above is unchanged
+               (still the monotonic group count). Only the completion tick
+               carries this — the onGroupStart heartbeat must NOT, or a started-
+               but-unfinished group would read as done. */
+            completedSentenceIds: group.sentenceIds,
           };
           job.lastProgressTick = tick;
           broadcast(job, { type: 'progress', ...tick });

@@ -212,6 +212,71 @@ describe('POST /api/books/:bookId/generation', () => {
     }
   });
 
+  it('progress tick from a group completion carries that group\'s completed sentence ids (fs-13)', async () => {
+    /* fs-13: each completed-group tick must carry the just-completed group's
+       sentence ids + its character, so the frontend can track an EXACT per-
+       character done set under out-of-order completion — while the chapter
+       counter (currentLine) stays the monotonic group count it is today.
+       Fire two completions out of narrative order (a late-clustered character
+       finishes first) to mirror parallel dispatch. */
+    synthesiseImpl = async (args: unknown) => {
+      const opts = args as {
+        onGroupComplete?: (e: {
+          group: { index: number; characterId: string; sentenceIds: number[] };
+          totalGroups: number;
+          accumulatedSec: number;
+          completed: number;
+        }) => void;
+      };
+      opts.onGroupComplete?.({
+        group: { index: 7, characterId: 'sophie', sentenceIds: [14, 15] },
+        totalGroups: 10,
+        accumulatedSec: 0,
+        completed: 1,
+      });
+      opts.onGroupComplete?.({
+        group: { index: 0, characterId: 'narrator', sentenceIds: [1] },
+        totalGroups: 10,
+        accumulatedSec: 0,
+        completed: 2,
+      });
+      return {
+        pcm: Buffer.alloc(2),
+        sampleRate: 24000,
+        durationSec: 1,
+        segments: [
+          {
+            characterId: 'narrator',
+            voiceName: 'Zephyr',
+            sampleStart: 0,
+            sampleEnd: 1,
+            sentenceIds: [1],
+          },
+        ],
+      };
+    };
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    const completed = ticks.filter(
+      (t) => t.type === 'progress' && Array.isArray((t as { completedSentenceIds?: unknown }).completedSentenceIds),
+    ) as Array<ParsedTick & { completedSentenceIds: number[]; characterId: string; currentLine: number }>;
+    /* Each completed group surfaces its own sentence ids + character. */
+    expect(
+      completed.some((t) => t.characterId === 'sophie' && t.completedSentenceIds.join(',') === '14,15'),
+    ).toBe(true);
+    expect(
+      completed.some((t) => t.characterId === 'narrator' && t.completedSentenceIds.join(',') === '1'),
+    ).toBe(true);
+    /* currentLine stays monotonic within a chapter's completed-group ticks
+       (the chapter-level count is unchanged by fs-13; it resets per chapter). */
+    const ch1Lines = completed.filter((t) => t.chapterId === 1).map((t) => t.currentLine);
+    expect(ch1Lines.length).toBeGreaterThan(0);
+    expect(ch1Lines).toEqual([...ch1Lines].sort((a, b) => a - b));
+  });
+
   it('rejects an unsupported modelKey with a stream-level chapter_failed and ends', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
