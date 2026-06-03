@@ -3236,9 +3236,29 @@ components:
               name:
                 type: string
                 description: "Engine-specific speaker handle for this engine's slot."
+              variants:
+                type: object
+                description: |
+                  fs-25 — per-emotion voice variants (Qwen only). Keyed by the
+                  non-neutral `Emotion` values (`whisper`/`angry`/`excited`/`sad`);
+                  each entry is an independently designed voiceId. `name` above
+                  stays the neutral base. Absent → every emotion falls back to
+                  the base voice. Variants travel with the base across reuse
+                  links (plan 177 Wave 6a).
+                additionalProperties:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                      description: 'Designed variant voiceId for this emotion.'
           example:
             coqui: { name: 'Asya Anara' }
             kokoro: { name: 'am_onyx' }
+            qwen:
+              name: 'qwen-sophie'
+              variants:
+                angry: { name: 'qwen-sophie__angry' }
         overrideTtsVoice:
           deprecated: true
           allOf:
@@ -3730,6 +3750,20 @@ components:
               name:
                 type: string
                 description: "Engine-specific speaker handle (designed voiceId for Qwen)."
+              variants:
+                type: object
+                description: |
+                  fs-25 — per-emotion Qwen voice variants (keyed by non-neutral
+                  `Emotion`); each is an independently designed voiceId. Absent →
+                  emotions fall back to the base `name`. Travels with the base
+                  across reuse links (plan 177 Wave 6a).
+                additionalProperties:
+                  type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+                      description: 'Designed variant voiceId for this emotion.'
         evidence:
           type: array
           items:
@@ -3890,6 +3924,19 @@ components:
         characterId: { type: string }
         startMs: { type: integer }
         endMs: { type: integer }
+        emotion:
+          $ref: '#/components/schemas/Emotion'
+
+    Emotion:
+      type: string
+      enum: [neutral, whisper, angry, excited, sad]
+      description: |
+        fs-25 — per-quote delivery emotion. Absent or `neutral` renders exactly
+        as today on every engine. The four expressive values each select a
+        pre-designed Qwen voice variant at synth time (`Character.overrideTtsVoices.qwen.variants`);
+        on Kokoro/XTTS the tag is a documented no-op. Source per quote from the
+        analyzer (Phase-1 inline or the emotion-annotation pass) or a hand-set
+        manuscript edit (manual wins). See `docs/features/177-fs25-per-quote-emotion.md`.
 
     ChapterRestructureResponse:
       type: object
