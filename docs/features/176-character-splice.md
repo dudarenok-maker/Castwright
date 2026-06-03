@@ -52,4 +52,4 @@ Manual (owed — live GPU + sidecar):
 
 ## Ship notes
 
-_Pending._
+Merged to `main` 2026-06-03 via **PR #500** (merge commit `25bf3aa`). `Refs #480` — fs-26's substantive capability (per-character remix + rerecord engine, route, cast-drawer UI) shipped; the literal line-level Listen-view per-sentence entry stays open under #480. Status remains `active` (not `stable`) until the owed **live-GPU re-record acceptance** runs (remix/gain validated with real ffmpeg in CI; the GPU synth path needs a sidecar run on the canonical manuscript). Follow-up `srv-29` (#501) tracks converging generation.ts onto `finalizeChapterAudioWrite`.
