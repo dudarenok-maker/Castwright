@@ -23,6 +23,15 @@ export type Character = components['schemas']['Character'] & {
 export type Chapter = components['schemas']['Chapter'] & {
   phase?: 'assembling' | null;
   lufs?: components['schemas']['ChapterLoudness'] | null;
+  /* fs-13 — accumulated SET (as a Redux-serialisable array) of manuscript
+     sentence ids whose same-speaker group has COMPLETED during the live run.
+     Unioned from each progress tick's `completedSentenceIds`; cleared when the
+     chapter (re)starts. Lets the Generate view derive each character's EXACT
+     done count under out-of-order completion (poolWidth > 1 + Qwen batching)
+     instead of approximating from the chapter-wide `currentLine` count.
+     UI-only / not persisted. Absent → fall back to the `currentLine`
+     approximation (older server, or before the first completion tick). */
+  completedSentenceIds?: number[];
 };
 
 /* Sentence follows the OpenAPI spec; the optional `confidence` is a UI-only

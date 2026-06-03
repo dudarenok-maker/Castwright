@@ -2168,6 +2168,20 @@ export interface components {
             currentLine?: number;
             totalLines?: number;
             /**
+             * @description fs-13 — only on a `progress` tick fired at a GROUP COMPLETION: the
+             *     manuscript sentence ids of the just-finished same-speaker group
+             *     (the tick's `characterId` is that group's character). The frontend
+             *     unions these into a per-chapter completed-id SET so each character's
+             *     mini-bar reads its EXACT done count under out-of-order completion
+             *     (poolWidth > 1 + Qwen batching), rather than approximating from the
+             *     chapter-wide `currentLine` count. Absent on the onGroupStart
+             *     heartbeat tick and on older servers — the frontend then falls back
+             *     to the `currentLine`-derived approximation. The chapter-level
+             *     `currentLine`/`progress` are unchanged (still the monotonic group
+             *     count).
+             */
+            completedSentenceIds?: number[];
+            /**
              * @description Aggregate run progress — number of non-excluded chapters in
              *     this book that are currently "done" (audio on disk). Sourced
              *     from server state, NOT computed from the slice, so the global
