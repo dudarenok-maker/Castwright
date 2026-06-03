@@ -89,13 +89,16 @@ _4a — Phase-1 inline (covers new books + any re-analysis triggered for other r
 
 _4b — Emotion-only annotation pass (default backfill for existing books; non-destructive)._
 - A new lightweight analyzer pass + skill (`audiobook-emotion-annotation`) that reads the book's already-attributed cached sentences and returns ONLY `{ sentenceId, emotion }` — it does **not** re-attribute, so `characterId`/cast/manual reassignments are untouched. New route (e.g. `POST /api/books/:bookId/annotate-emotion`, streaming progress like the analysis stream), cost surfaced up front (cf. `fs-27`). Writes emotion onto the cached sentences.
+- **UI trigger (lands with Wave 5a, the manuscript surface where emotion chips live):** a **"Detect emotions"** action in the **manuscript view** header/toolbar (`src/views/manuscript.tsx`, `#/books/<id>/manuscript`). Click → a confirm that surfaces the cost estimate (sentence count + model) → runs the pass → inline streaming progress (reusing the analysis-stream progress pattern) → emotion chips populate when done. Scope defaults to the whole book with a per-chapter option (the view is already chapter-segmented). Re-runnable; respects manual-override precedence below (won't overwrite hand-set tags). An "Emotions detected / N untagged" hint sits beside the action so the user knows whether a backfill is worthwhile. This is the ONLY UI entry point for 4b — new books get emotion via 4a at analysis time and need no button.
 - **Precedence (both paths):** a user's hand-set per-quote emotion (manuscript-edits) ALWAYS wins over analyzer-inferred emotion — annotation/re-analysis fills only sentences with no manual override, never clobbers a manual tag.
-- Tests: `parse-and-repair` accepts/ignores the field (4a); the annotation pass returns emotion-only and leaves `characterId` untouched, and a sentence with a manual emotion override is not overwritten (4b); cost estimate surfaces before the run.
+- Tests: `parse-and-repair` accepts/ignores the field (4a); the annotation pass returns emotion-only and leaves `characterId` untouched, and a sentence with a manual emotion override is not overwritten (4b); cost estimate surfaces before the run; (UI trigger test lands in Wave 5a).
 
 **Wave 5 — UI.** (Split into 5a manuscript, 5b cast-design, 5c cast-indicator+filter so each lands with its own test.)
 
-_5a — Manuscript per-quote tagging._
+_5a — Manuscript per-quote tagging + the "Detect emotions" trigger._
 - Manuscript view (`src/views/manuscript.tsx`): a per-sentence emotion chip/menu on a quote (shows analyzer value, editable; neutral hidden/muted). Respects the 44px touch-target + `coarse-pointer` rules. Persists the override through the existing manuscript-edits store.
+- The **"Detect emotions"** action (the Wave 4b trigger) lives in this view's header/toolbar: cost-confirm → run the annotation pass → inline streaming progress → chips populate; whole-book default + per-chapter option; an "N untagged" hint beside it. This is where existing books get bulk emotion without a re-analysis.
+- Tests: editing a quote's emotion dispatches + persists; clicking "Detect emotions" confirms cost then streams + populates chips, and leaves manually-tagged quotes untouched.
 
 _5b — Cast: design the variants (gated, all-or-some)._
 - The variant-design affordance lives on the Qwen voice section of the cast row / profile drawer and is **gated on the neutral base voice existing** — i.e. `overrideTtsVoices.qwen.name` is present (the base voice has been designed). Until then the variant controls are hidden/disabled with a one-line "Design the main voice first" hint. **Neutral is never a "variant"** — it IS the base voice; the variant set is the 4 expressive emotions only.
@@ -137,7 +140,7 @@ _Tests (Wave 5)._
 2. Design that character's **neutral base** voice → variant controls become enabled, showing all 4 emotions as "not designed" with individual Design buttons + a "Design all remaining" action.
 3. Design **just** the `angry` variant (leave the others) → its control flips to "designed"; cast.json gains `overrideTtsVoices.qwen.variants.angry`; the character now shows the additive **"Variants" badge** under its Qwen voice label, with its existing lifecycle + any `Reused` badge unchanged; the "Has emotion variants" filter chip now appears with count 1 and narrows the grid to this character.
 3a. **Play the `angry` variant's sample** from the cast row AND the profile drawer (and it's auditionable from the other sample surfaces too) → you hear the angry-voiced calibration line, distinct from the neutral base sample; the neutral base still plays its own sample; an undesigned variant offers no play control.
-4. Manuscript view → tag one of that character's quotes `angry` (leave a neighbouring quote neutral).
+4. Manuscript view → click **"Detect emotions"** → cost-confirm → progress streams → emotion chips populate across the book (a previously hand-tagged quote is left untouched). Then manually tag one of that character's quotes `angry` (leave a neighbouring quote neutral) to confirm hand-edits override.
 5. Generate the chapter on Qwen → the tagged line is audibly angrier; the neutral neighbour is unchanged; log shows the variant voiceId for the tagged item only.
 6. Switch the same book to Kokoro (or XTTS) and regenerate → output is byte-for-byte what an untagged run produces (emotion ignored); no errors.
 7. Tag a quote with an emotion that has **no** variant (e.g. `sad`) → generation completes, that line renders in the base voice, and the fallback is surfaced (not a failure).
