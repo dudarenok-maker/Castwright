@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   auditEngineCatalog,
   pickVoiceForEngine,
+  pickEmotionVariantVoice,
   resolveVoiceAssignment,
   KOKORO_PROFILE_VOICES,
 } from './voice-mapping.js';
@@ -275,5 +276,36 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
       unrouted: [],
       routedCount: 0,
     });
+  });
+});
+
+describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selection)', () => {
+  const variants = { angry: { name: 'sophie__angry' }, whisper: { name: 'sophie__whisper' } };
+
+  it('returns the variant voiceId for a tagged emotion on Qwen', () => {
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'sophie-base')).toBe('sophie__angry');
+  });
+
+  it('falls back to the base voice when the tagged emotion has no variant', () => {
+    expect(pickEmotionVariantVoice('qwen', variants, 'sad', 'sophie-base')).toBe('sophie-base');
+  });
+
+  it('returns the base for neutral / undefined emotion', () => {
+    expect(pickEmotionVariantVoice('qwen', variants, 'neutral', 'sophie-base')).toBe('sophie-base');
+    expect(pickEmotionVariantVoice('qwen', variants, undefined, 'sophie-base')).toBe('sophie-base');
+  });
+
+  it('is a STRICT no-op for non-Qwen engines — emotion is never read', () => {
+    // The Kokoro/XTTS safety net: even with variants present + a tagged emotion,
+    // the base voice is returned unchanged so non-Qwen synth is byte-identical.
+    expect(pickEmotionVariantVoice('kokoro', variants, 'angry', 'am_onyx')).toBe('am_onyx');
+    expect(pickEmotionVariantVoice('coqui', variants, 'angry', 'Asya Anara')).toBe('Asya Anara');
+  });
+
+  it('handles a missing/empty variants map by returning the base', () => {
+    expect(pickEmotionVariantVoice('qwen', undefined, 'angry', 'sophie-base')).toBe('sophie-base');
+    expect(pickEmotionVariantVoice('qwen', { angry: { name: '  ' } }, 'angry', 'sophie-base')).toBe(
+      'sophie-base',
+    );
   });
 });
