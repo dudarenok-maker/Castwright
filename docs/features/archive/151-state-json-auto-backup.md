@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 ---
 
 # 151 — Per-book `state.json` auto-backup (srv-2)
@@ -66,6 +66,10 @@ per-book restore picker).
   matches the id the restore route looks up — no drift between write and read.
 - A corrupt source `state.json` is never kept as a snapshot (parse-gated).
 - Restore rotates the current `state.json` aside before overwriting — undoable.
+- A successful restore re-hydrates the library slice from `api.getLibrary()` (#424
+  acceptance "library view refreshes after restore") — the restored `state.json`
+  may carry different title/cover/chapter-count metadata, so the cached library
+  list must not stay stale (`src/views/account.tsx` `BackupRestoreSection.onRestore`).
 - Scheduler timers are `unref()`'d — they never keep the process alive.
 - Legacy `user-settings.json` without the backup fields loads unchanged
   (resolver falls back to the ON/daily/14 defaults).
@@ -76,7 +80,21 @@ per-book restore picker).
   N (16 daily → 14 kept); `minIntervalMs` skip; `runBackupSweep` over a 2-book
   workspace; restore reverts; restore error paths (invalid filename, book not
   found, corrupt snapshot).
-- Frontend: Account "Backups" card render + settings round-trip; restore flow.
+- `server/src/routes/backup.test.ts` — route-contract test (added in the
+  close-out round): drives the real router against a real temp workspace
+  (`WORKSPACE_DIR` + `vi.resetModules` + dynamic import, no fs mocks) and asserts
+  the live status codes — `GET /:bookId/backups` → 200 list / 200 empty array /
+  404 unknown book; `POST /:bookId/backups/now` → 200 `{ ok, file }` / 404
+  unknown book (a folder with no `state.json` is undiscoverable via
+  `findBookByBookId`); `POST /:bookId/backups/restore` → 200 / 400 (missing
+  field, invalid filename) / 404 (unknown book, missing snapshot) / 409 (corrupt
+  snapshot). The 409 "no state.json to back up" branch on `/now` is a TOCTOU edge
+  (`state.json` must exist at lookup yet vanish before `backupBook` reads it), so
+  it isn't deterministically reachable over HTTP — the `backupBook`-returns-null
+  contract behind it is pinned in `auto-backup.test.ts`.
+- Frontend: Account "Backups" card render + settings round-trip; restore flow;
+  restore-success re-hydrates the library from the server scan (#424 — see
+  Invariants).
 
 ## Acceptance walkthrough
 
@@ -89,5 +107,9 @@ per-book restore picker).
 
 ## Ship notes
 
-- Shipped: 2026-05-31 (integration round with ops-3 / ops-6 / fe-17 / side-5).
-- Commit: _(filled at merge)_.
+- Shipped: 2026-05-31 (integration round with ops-3 / ops-6 / fe-17 / side-5),
+  commit `1feccba`.
+- Close-out round (2026-06-03, branch `chore/srv-2-closeout`): added the missing
+  route-contract test (`server/src/routes/backup.test.ts`) and the
+  restore-success library refresh (#424 acceptance), then flipped this plan to
+  `stable` and archived it.
