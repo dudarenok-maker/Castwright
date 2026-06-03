@@ -86,6 +86,12 @@ const PERSIST_RULES: Record<
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences }),
   },
+  /* fs-25 — a hand-set per-quote emotion persists like a reassignment, so the
+     manual override survives reload and wins over analyzer/seed emotion. */
+  'manuscript/setSentenceEmotion': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences }),
+  },
   'manuscript/splitSentence': {
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences }),
