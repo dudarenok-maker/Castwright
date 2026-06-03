@@ -45,7 +45,7 @@ import {
   secToByteOffset,
   type SegmentReplacement,
 } from '../audio/splice-chapter.js';
-import { buildSynthReplacements } from '../audio/build-synth-replacement.js';
+import { buildSynthReplacements, isRerecordableSegment } from '../audio/build-synth-replacement.js';
 import {
   finalizeChapterAudioWrite,
   type ChapterSegmentsFile,
@@ -158,6 +158,16 @@ chapterSpliceRouter.post(
       }
       targetIndices = [...new Set(requested)].sort((a, b) => a - b);
       if (!targetIndices.length) return fail('segmentIndices selected no segments.');
+    }
+    /* Re-record only re-synthesises sentence-backed segments. Drop the title
+       beat (narrator's characterId, empty sentenceIds) so re-recording the
+       narrator can't splice silence over the chapter title. Remix (gain) keeps
+       the title — boosting the narrator should boost the title beat too. */
+    if (mode === 'rerecord') {
+      targetIndices = targetIndices.filter((i) => isRerecordableSegment(segFile.segments[i]));
+      if (!targetIndices.length) {
+        return fail('No re-recordable lines for this character in this chapter (title-only).');
+      }
     }
 
     /* Cast (hydrated like generation) so the rewritten segments file carries
