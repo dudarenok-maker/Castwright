@@ -68,7 +68,14 @@ import {
   writeChapterLufsFile,
   writeChapterPeaksFile,
 } from '../tts/mp3.js';
-import { DEFAULT_LOUDNORM_OPTIONS, type LoudnormOptions } from '../tts/loudnorm.js';
+import {
+  DEFAULT_LOUDNORM_OPTIONS,
+  type LoudnormOptions,
+  type LoudnormSidecarJson,
+} from '../tts/loudnorm.js';
+import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
+import { appendTelemetry } from '../tts/resource-telemetry.js';
+import { probeSidecarHealth } from './sidecar-health.js';
 import { formatDuration } from '../audio/format-duration.js';
 import {
   synthesiseChapter,
@@ -84,6 +91,8 @@ import { recordBatchThroughput, recordChapterThroughput } from '../tts/generatio
 import { ensureSidecarEngineReady, SIDECAR_ENGINES } from '../tts/ensure-sidecar-loaded.js';
 import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
+import type { FailureCode } from './failure-taxonomy.js';
+import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
 
 export const generationRouter = Router();
 
@@ -476,6 +485,9 @@ interface ChapterSegmentsFile {
       because pre-existing segments files written before this field landed
       have no snapshots; the revisions route treats them as "no signal". */
   characterSnapshots?: Record<string, CharacterSnapshot>;
+  /** srv-27 — advisory post-synthesis QA verdict for this render. Optional;
+      absent on segments files written before the field landed. */
+  qa?: ChapterQaVerdict;
 }
 
 generationRouter.post('/:bookId/generation', async (req: Request, res: Response) => {
@@ -730,6 +742,44 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     return !chapterAudioExists(audioRoot, c.slug);
   });
   const targetIdSet = new Set(targetChapters.map((c) => c.id));
+
+  /* srv-28 — pre-flight disk-space guard. Estimate this run's footprint
+     (target chapters × AVG_CHAPTER_BYTES) and compare against the free space on
+     the audio volume. Default mode WARN rides the existing toast path; BLOCK
+     short-circuits with a disk-full failure before any chapter renders; OFF
+     skips. Best-effort: a probe failure (statfs throw) never blocks the run. */
+  const diskMode = diskGuardMode();
+  if (diskMode !== 'off' && targetChapters.length > 0) {
+    try {
+      const verdict = await evaluateDiskGuard(
+        audioRoot,
+        {
+          estimatedBytes: targetChapters.length * AVG_CHAPTER_BYTES,
+          basis: 'generation',
+          chapters: targetChapters.length,
+        },
+        { mode: diskMode },
+      );
+      if (verdict.status === 'warn') {
+        send({ type: 'warning', code: 'disk_low', message: verdict.message });
+      } else if (verdict.status === 'block') {
+        /* Mirror the pre-flight guard short-circuit shape (a chapter_failed +
+           res.end). Carry the fs-19 disk-full code + remediation so the
+           frontend renders the same "what to do" line a mid-run ENOSPC would. */
+        send({
+          type: 'chapter_failed',
+          errorReason: verdict.message,
+          errorCode: 'disk-full',
+          remediation:
+            'Free up disk space on the workspace volume (delete old exports, or move the ' +
+            'workspace to a larger drive), then start the run again.',
+        });
+        return res.end();
+      }
+    } catch (e) {
+      console.warn('[generation] disk guard probe failed (continuing):', (e as Error).message);
+    }
+  }
 
   /* srv-16 — if this queue-driven POST's sole target chapter already has audio
      on disk (rendered before a crash/restart, so it's excluded from
@@ -1051,6 +1101,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     }
 
     const totalLines = sentences.length;
+    /* srv-27 — expected audio length for the post-synthesis QA gate. ~14 chars
+       per second is a typical narration rate (≈150 wpm at ~5.5 chars/word incl.
+       spaces); used only as a coarse band (0.5×–2.5×) to flag truncated /
+       runaway renders, so the exact constant isn't load-bearing. */
+    const QA_CHARS_PER_SEC = 14;
+    const totalChars = sentences.reduce((sum, s) => sum + (s.text?.length ?? 0), 0);
+    const expectedSec = totalChars > 0 ? totalChars / QA_CHARS_PER_SEC : null;
+    /* Captured by the loudnorm onLoudnessMeasured callback below (post-norm
+       i/tp in two-pass mode); fed into the QA verdict in the assembly block. */
+    let loudnormStats: LoudnormSidecarJson | null = null;
     const initialTick = {
       chapterId: chapter.id,
       characterId: null,
@@ -1302,6 +1362,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         quality: 2,
         loudnorm,
         onLoudnessMeasured: async (stats) => {
+          /* srv-27 — stash the measured loudness for the QA verdict below. */
+          loudnormStats = stats;
           try {
             await writeChapterLufsFile(stats, lufsPath);
           } catch (err) {
@@ -1324,6 +1386,23 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          now separate dispatcher POSTs) never collide on the same temp
          path. */
       bumpProgress(); // encode (2-pass loudnorm) done — the long assembly step
+      /* srv-27 — ADVISORY post-synthesis QA. The chapter still completes; a
+         `suspect` verdict just drives a badge. `loudnormStats` is null when
+         loudnorm is disabled (only the duration check runs then); in two-pass
+         mode `i`/`tp` are post-normalisation values (see audio-qa.ts). */
+      const measured = loudnormStats as LoudnormSidecarJson | null;
+      const audioQa: ChapterQaVerdict = evaluateChapterQa({
+        durationSec: result.durationSec,
+        expectedSec,
+        lufs: measured ? measured.i : null,
+        truePeakDb: measured ? measured.tp : null,
+      });
+      if (audioQa.status === 'suspect') {
+        console.warn(
+          `[generation] chapter ${chapter.id} (${chapter.slug}) flagged SUSPECT by audio QA: ` +
+            audioQa.reasons.join(' '),
+        );
+      }
       const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
       await writeFile(tmpAudio, audioBuffer);
       /* Snapshot the cast character attributes for every character that
@@ -1381,6 +1460,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         synthesizedAt: new Date().toISOString(),
         segments: result.segments,
         characterSnapshots,
+        qa: audioQa,
       };
       /* Rollback preservation: rename the live `<slug>.mp3` +
          `.segments.json` to `.previous.*` BEFORE the new render lands.
@@ -1434,10 +1514,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                   duration: formatted,
                   audioModelKey: modelKey,
                   audioRenderedAt: segmentsFile.synthesizedAt,
+                  /* srv-27 — advisory QA verdict for the freshly-rendered audio
+                     so the failed/suspect badge survives a reload. */
+                  audioQa,
                   /* A successful render clears any stale persisted failure so
                      the chapter no longer hydrates as "Failed" after reload. */
                   generationState: undefined,
                   generationError: undefined,
+                  generationErrorCode: undefined,
+                  generationRemediation: undefined,
                 }
               : c,
           ),
@@ -1491,6 +1576,44 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           (roll.chaptersPerHour != null ? `, ${roll.chaptersPerHour.toFixed(1)} ch/hr` : ''),
       );
 
+      /* fs-20 — per-run resource telemetry. FIRE-AND-FORGET: never await, never
+         block the hot path. A best-effort sidecar /health probe (its own 2 s
+         budget) supplies the VRAM + committed-host figures; a timeout / down
+         sidecar just records nulls. */
+      void (async () => {
+        let vramReservedMb: number | null = null;
+        let vramTotalMb: number | null = null;
+        let committedHostMb: number | null = null;
+        /* Only probe the sidecar for a sidecar-backed engine — a cloud engine
+           (gemini) has no local model to report VRAM for, and probing it would
+           touch the sidecar needlessly (side-11 boundary-recycle guard). */
+        if (SIDECAR_ENGINES.has(engine)) {
+          try {
+            const health = await probeSidecarHealth();
+            if (health.status === 'reachable') {
+              vramReservedMb = health.vramReservedMb ?? null;
+              vramTotalMb = health.vramTotalMb ?? null;
+              committedHostMb = health.committedMb ?? null;
+            }
+          } catch {
+            /* leave nulls — the probe is best-effort observability. */
+          }
+        }
+        await appendTelemetry({
+          at: new Date().toISOString(),
+          bookId: job.bookId,
+          chapterId: chapter.id,
+          title: chapter.title ?? null,
+          modelKey,
+          rtf: audioSec > 0 ? chapterRtf : null,
+          audioSec,
+          wallSec: synthSec,
+          vramReservedMb,
+          vramTotalMb,
+          committedHostMb,
+        });
+      })();
+
       broadcast(job, {
         type: 'chapter_complete',
         chapterId: chapter.id,
@@ -1507,6 +1630,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            the Listen view shows the real audio length by the time the
            Done pill flips, even if assembling was lost on the wire. */
         durationSec: result.durationSec,
+        /* srv-27 — advisory QA verdict so the frontend can stamp a "Suspect"
+           badge the moment the Done pill flips, without a state.json reload. */
+        audioQa,
       });
 
       /* srv-16 — server-authoritative completion. The chapter is rendered +
@@ -1557,9 +1683,20 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          repeat across chapters, which signals a systemic wedge). */
       const isStall = (e as { name?: string })?.name === 'ChapterStallError';
       const initial = isStall
-        ? { errorReason: (e as Error).message, fatal: false }
+        ? {
+            errorReason: (e as Error).message,
+            fatal: false,
+            code: 'synth-timeout' as FailureCode,
+            remediation:
+              'Click Retry on this chapter. If it stalls repeatedly, restart the TTS sidecar to ' +
+              'clear a wedged GPU state, then retry.',
+          }
         : describeSynthesisError(e, engine);
       let { errorReason, fatal } = initial;
+      /* fs-19 — the structured code + remediation ride alongside the legacy
+         reason on both the broadcast and the persisted state. Const (not part of
+         the cascade re-write below, which only touches the human reason). */
+      const { code: errorCode, remediation } = initial;
       if (isStall) {
         console.error(
           `[generation] chapter ${chapter.id} (${chapter.slug}) STALLED during ${stallPhase}: ` +
@@ -1582,6 +1719,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         type: 'chapter_failed',
         chapterId: chapter.id,
         errorReason,
+        /* fs-19 — structured failure class + remediation so the frontend can
+           render a concrete "what to do" line under the reason without parsing
+           it. */
+        errorCode,
+        remediation,
       });
       /* Durably record the failure in state.json so the chapter survives a
          reload / queue-clear as "Failed · reason" instead of re-hydrating as
@@ -1597,7 +1739,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
             ...prev,
             chapters: prev.chapters.map((c) =>
               c.id === chapter.id
-                ? { ...c, generationState: 'failed', generationError: errorReason }
+                ? {
+                    ...c,
+                    generationState: 'failed',
+                    generationError: errorReason,
+                    /* fs-19 — persist the structured class + remediation so a
+                       reloaded failed chapter re-hydrates with its "what to do"
+                       line, not just the reason. */
+                    generationErrorCode: errorCode,
+                    generationRemediation: remediation,
+                  }
                 : c,
             ),
             updatedAt: new Date().toISOString(),
