@@ -107,6 +107,12 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (technical):_ locks the audio-output contract; aligns with the project's testing discipline.
 _Full detail + acceptance:_ [#467](https://github.com/dudarenok-maker/AudioBook-Generator/issues/467).
 
+#### `srv-29` — Converge generation.ts chapter-write tail onto `finalizeChapterAudioWrite` ([#501](https://github.com/dudarenok-maker/AudioBook-Generator/issues/501))
+
+- _What:_ fs-26 (plan 176) extracted the chapter encode/persist tail into `finalize-chapter-write.ts` (used by the splice route); `generation.ts` still inlines its equivalent. Converge generation onto the shared helper (an `onEncoded` callback covers its `bumpProgress` seam) so the two can't diverge. Behaviour-neutral; existing generation tests stay green.
+- _Benefit (technical):_ single source of truth for the chapter-write tail — a future loudnorm/preservation/QA change can't silently apply to one path and not the other.
+_Full detail + acceptance:_ [#501](https://github.com/dudarenok-maker/AudioBook-Generator/issues/501).
+
 ### Listener experience & playback
 
 #### `fe-25` — Wire (or remove) the mini-player volume control ([#460](https://github.com/dudarenok-maker/AudioBook-Generator/issues/460))
