@@ -83,7 +83,7 @@ _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-
 
 ### Dependency major upgrades — _all shipped (section empty)_
 
-Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit, which filed every framework **major** then behind as a research-complete BACKLOG item. **All shipped — this section is now empty.** Round 1 (**2026-06-02**, [plan 167](features/167-fe-react-cluster-upgrade.md)): the React cluster (`fe-19` Vite 8 + Vitest 4, `fe-18` React 19, `fe-21` react-router 7) + `ops-10` (TypeScript 6). Round 2 (**2026-06-02**, [plan 170](features/170-deps-majors-zod-express-pdfjs-tailwind.md)): `srv-25` Zod 4 (deletes `zod-to-json-schema`), `srv-24` Express 5, `srv-26` pdfjs-dist 5, `fe-20` Tailwind 4 — closes #405/#406/#410/#409.
+Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit, which filed every framework **major** then behind as a research-complete BACKLOG item. **All shipped — this section is now empty.** Round 1 (**2026-06-02**, [plan 167](features/archive/167-fe-react-cluster-upgrade.md)): the React cluster (`fe-19` Vite 8 + Vitest 4, `fe-18` React 19, `fe-21` react-router 7) + `ops-10` (TypeScript 6). Round 2 (**2026-06-02**, [plan 170](features/archive/170-deps-majors-zod-express-pdfjs-tailwind.md)): `srv-25` Zod 4 (deletes `zod-to-json-schema`), `srv-24` Express 5, `srv-26` pdfjs-dist 5, `fe-20` Tailwind 4 — closes #405/#406/#410/#409.
 
 _`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026-06-01** via
 [plan 164](features/164-deps-ci-hygiene.md) — all workflows now pin the latest Node-24 action

@@ -1,5 +1,5 @@
 ---
-status: active
+status: deferred
 shipped: 2026-05-30
 owner: null
 ---
