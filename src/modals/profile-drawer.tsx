@@ -36,6 +36,7 @@ import { buildCharacterHint } from '../lib/build-character-hint';
 import { VoicePreviewButton } from '../components/voice-preview-button';
 import { VoiceOverridePicker } from '../components/voice-override-picker';
 import { VoiceEnginePicker, type EngineChoice } from '../components/voice-engine-picker';
+import { EmotionVariantDesigner } from '../components/emotion-variant-designer';
 import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
@@ -975,6 +976,19 @@ export function ProfileDrawer({
               designedVoiceId={designedVoiceId}
               error={engineError}
             />
+
+            {/* fs-25 — Qwen-only emotion variant design (gated on the base voice
+                existing, handled inside the component). */}
+            {effectiveEngine === 'qwen' && bookId && (
+              <EmotionVariantDesigner
+                bookId={bookId}
+                characterId={character.id}
+                sampleVoiceId={sampleVoiceId}
+                modelKey={effectiveSampleModelKey}
+                baseDesigned={!!designedVoiceId}
+                variants={character.overrideTtsVoices?.qwen?.variants}
+              />
+            )}
 
             {voiceCompareInitial && bookId && (
               <VoiceCompareModal
