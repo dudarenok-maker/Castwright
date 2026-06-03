@@ -211,8 +211,8 @@ _Full detail + acceptance:_ [#415](https://github.com/dudarenok-maker/AudioBook-
 
 #### `fs-26` — Line-level re-record / splice ([#480](https://github.com/dudarenok-maker/AudioBook-Generator/issues/480))
 
-- _What:_ Re-synthesize (or record) a single sentence and splice it into the existing chapter audio, instead of regenerating the whole chapter. The markers slice already has a `rerecord` kind — this is the workflow that consumes it: pick a sentence, re-render just that segment, splice via ffmpeg using the per-segment timing, update `segments.json` + duration + a revision entry.
-- _Benefit (user):_ surgical fixes without a full-chapter regen — a big time + VRAM saver on long books. (Large; audio-splice integrity is the risk — owes its own plan.)
+- _Mostly shipped (plan 176)._ The splice **engine** (decode → substitute target segments → re-time → re-encode + loudnorm + `.previous.*`), both **remix (gain)** and **rerecord** modes, the `POST /chapters/:id/splice` route, and a per-character "Fix audio" UI on the cast drawer all landed. The route already accepts `segmentIndices`, so the engine is line-level capable.
+- _Remaining (follow-up):_ a Listen-view **per-sentence** entry point — pick a single sentence on the timeline (consuming the markers slice's `rerecord` kind) and re-record/splice just it. The plumbing exists; this is purely the timeline UI affordance.
 _Full detail + acceptance:_ [#480](https://github.com/dudarenok-maker/AudioBook-Generator/issues/480).
 
 ### Voice & cast sharing
