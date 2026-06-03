@@ -223,7 +223,16 @@ export function TopBar({
      without changing the desktop sizing. */
   return (
     <header className="sticky top-0 z-40 bg-canvas/85 backdrop-blur-md border-b border-ink/10">
-      <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8">
+      {/* overflow-x-clip — sticky chrome must never create page-level horizontal
+          scroll. On a book route the breadcrumb + the shrink-0 right cluster can
+          tip a hair past the 412px phone viewport (a 9px overflow that surfaced
+          only on the Linux mobile-chrome runner, where font metrics render
+          wider than Windows/macOS); the middle strip already scrolls. Paired
+          with hiding the redundant VersionPill on phone (below) so the clip is
+          pure insurance and never cuts a visible control. clip (not hidden)
+          leaves the y-axis visible so the portaled status/account popovers are
+          unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
+      <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8 overflow-x-clip">
         <button
           onClick={onHome}
           className="font-bold text-base tracking-tight inline-flex items-center gap-1 hover:opacity-80 transition-opacity shrink-0 min-h-[44px]"
@@ -294,7 +303,12 @@ export function TopBar({
               Queue · {queueCount}
             </button>
           )}
-          <VersionPill onClick={onOpenAccount} />
+          {/* Hidden on phone — the version is also in the footer + Account, and
+              dropping it here gives the book-route top bar comfortable margin at
+              the 412px viewport (see overflow-x-clip note above). */}
+          <span className="hidden sm:inline-flex">
+            <VersionPill onClick={onOpenAccount} />
+          </span>
           <ThemeToggleButton />
           <button
             type="button"
