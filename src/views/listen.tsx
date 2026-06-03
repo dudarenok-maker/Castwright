@@ -155,13 +155,7 @@ export function ListenView({
     (s) => s.library?.books?.find((b) => b.bookId === bookId)?.language ?? 'en',
   );
   return (
-    /* overflow-x-clip — the Listen view is a vertical reading column and must
-       never scroll sideways. Guards against sub-pixel horizontal drift on the
-       phone viewport (a 9px overflow surfaced only on the Linux mobile-chrome
-       runner, where classic scrollbar metrics + scrollbar-gutter:stable on the
-       in-card lists render a hair wider than Windows/macOS). Desktop layout is
-       unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */
-    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10 overflow-x-clip">
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-6 sm:py-10">
       <ListenHeader
         title={title}
         author={author}
