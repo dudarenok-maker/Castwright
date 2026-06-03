@@ -41,6 +41,26 @@ describe('resolveReusedVoiceFields', () => {
     expect(r).toEqual({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-Garrow' } } });
   });
 
+  it('fs-25 — carries the source book\'s emotion variants onto the reused character', async () => {
+    const reused: ReuseHydratable = {
+      id: 'Wren',
+      matchedFrom: { bookId: 'book1', characterId: 'Wren' },
+    };
+    const source: ReuseHydratable = {
+      id: 'Wren',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-Wren', variants: { angry: { name: 'qwen-Wren__angry' } } },
+      },
+    };
+    const hydrated = await hydrateCharacterVoice(reused, loaderFrom({ book1: [source] }));
+    // the variant travels with the base voice into the reused book (Wave 6a).
+    expect(hydrated.overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-Wren',
+      variants: { angry: { name: 'qwen-Wren__angry' } },
+    });
+  });
+
   it('follows a multi-hop matchedFrom chain to the book that holds the override', async () => {
     /* C → B (reused, no override) → A (holds the designed voice). */
     const inC: ReuseHydratable = { id: 'Garrow', matchedFrom: { bookId: 'B', characterId: 'Garrow' } };
