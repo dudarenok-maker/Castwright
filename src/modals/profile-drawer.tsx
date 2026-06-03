@@ -13,7 +13,14 @@ import {
 import type { SeriesRosterEntry } from '../lib/api';
 import { TTS_MODEL_OPTIONS, engineForModelKey } from '../lib/tts-models';
 import type { BaseVoice, TtsEngine, TtsModelKey } from '../lib/types';
-import { Avatar, VoiceSwatch, Pill, PrimaryButton, ReusedBadge } from '../components/primitives';
+import {
+  Avatar,
+  VoiceSwatch,
+  Pill,
+  PrimaryButton,
+  ReusedBadge,
+  VariantsBadge,
+} from '../components/primitives';
 import { resolveVoiceStatus } from '../lib/voice-status';
 import { CHAR_COLORS } from '../lib/colors';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -822,16 +829,13 @@ export function ProfileDrawer({
                     4th arg (fe-16) surfaces "Fallback (Kokoro)" when this
                     character actually rendered in Kokoro last generation. */}
                 {(() => {
-                  const { lifecycle, reused } = resolveVoiceStatus(
-                    character,
-                    voice,
-                    effectiveEngine,
-                    renderedFallbackEngine,
-                  );
+                  const { lifecycle, reused, hasEmotionVariants, variantCount } =
+                    resolveVoiceStatus(character, voice, effectiveEngine, renderedFallbackEngine);
                   return (
                     <>
                       {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
                       {reused && <ReusedBadge />}
+                      {hasEmotionVariants && <VariantsBadge count={variantCount} />}
                     </>
                   );
                 })()}

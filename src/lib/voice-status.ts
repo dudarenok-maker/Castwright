@@ -36,6 +36,18 @@ export interface VoiceStatusBadges {
       later tune/lock, which flips `voiceState` away from 'reused' but keeps
       the match provenance. */
   reused: boolean;
+  /** fs-25 — true when the character has ≥1 designed Qwen emotion variant.
+      Drives the ADDITIVE "Variants" badge (rendered under the Qwen voice
+      label) + the "Has emotion variants" cast filter. Orthogonal to
+      `lifecycle`/`reused` — it never alters either. */
+  hasEmotionVariants: boolean;
+  /** Number of designed emotion variants (for the badge count). */
+  variantCount: number;
+}
+
+/** fs-25 — count a character's designed Qwen emotion variants. */
+function countEmotionVariants(c: Character): number {
+  return Object.keys(c.overrideTtsVoices?.qwen?.variants ?? {}).length;
 }
 
 function resolveLifecyclePill(
@@ -99,9 +111,12 @@ export function resolveVoiceStatus(
       pill renders as before. */
   renderedFallbackEngine?: string | null,
 ): VoiceStatusBadges {
+  const variantCount = countEmotionVariants(c);
   return {
     lifecycle: resolveLifecyclePill(c, voice, effectiveEngine, renderedFallbackEngine),
     reused: !!c.matchedFrom,
+    hasEmotionVariants: variantCount > 0,
+    variantCount,
   };
 }
 
@@ -116,8 +131,9 @@ export function statusFilterKeys(
   voice: Voice | undefined,
   effectiveEngine: TtsEngine,
 ): string[] {
-  const { lifecycle, reused } = resolveVoiceStatus(c, voice, effectiveEngine);
+  const { lifecycle, reused, hasEmotionVariants } = resolveVoiceStatus(c, voice, effectiveEngine);
   const keys = [lifecycle?.label ?? 'Unset'];
   if (reused) keys.push('Reused');
+  if (hasEmotionVariants) keys.push('Variants');
   return keys;
 }
