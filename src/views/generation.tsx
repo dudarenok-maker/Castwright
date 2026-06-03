@@ -59,6 +59,7 @@ import { stripChapterPrefix } from '../lib/format-chapter-title';
 import {
   characterLinePositionsByChapter,
   characterRowProgress,
+  characterSentenceIdsByChapter,
   characterStatsByChapter,
   overallProgress,
   sentencesPerChapter,
@@ -404,6 +405,11 @@ export function GenerationView({
      fractional bar in the expanded row instead of the slice's "active
      speaker only" status field. See generation-progress.ts. */
   const characterPositions = useMemo(() => characterLinePositionsByChapter(sentences), [sentences]);
+  /* fs-13 — per-character sentence ids inside each chapter. Intersected with
+     the chapter's live completed-id set for an EXACT per-character done count
+     under out-of-order completion (the positions+currentLine map above is the
+     fallback when the set is absent). */
+  const characterSentenceIds = useMemo(() => characterSentenceIdsByChapter(sentences), [sentences]);
 
   /* SSE ownership lives in src/store/generation-stream-middleware.ts so the
      stream survives navigating away from this view. The view is a pure
@@ -810,6 +816,7 @@ export function GenerationView({
               stalled={stalled}
               charStats={characterStats[ch.id]}
               charPositions={characterPositions[ch.id]}
+              charSentenceIds={characterSentenceIds[ch.id]}
               onRegenerate={onRegenerate}
               onGenerateChapter={handleGenerateChapter}
               onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
@@ -917,6 +924,9 @@ interface ChapterRowProps {
   stalled: boolean;
   charStats: Record<string, { lines: number; words: number }> | undefined;
   charPositions: Record<string, number[]> | undefined;
+  /** fs-13 — per-character sentence ids in this chapter, intersected with
+      `chapter.completedSentenceIds` for an EXACT per-character done count. */
+  charSentenceIds: Record<string, number[]> | undefined;
   onRegenerate: (ch: Chapter) => void;
   /** Escape hatch for a stuck/never-rendered `queued` row: enqueues this one
       chapter directly (no reason prompt) so the dispatcher picks it up. */
@@ -955,6 +965,7 @@ function ChapterRow({
   stalled,
   charStats,
   charPositions,
+  charSentenceIds,
   onRegenerate,
   onGenerateChapter,
   onRegenerateCharacterInChapter,
@@ -967,6 +978,19 @@ function ChapterRow({
   subsetProgress,
   activeModelKey,
 }: ChapterRowProps) {
+  /* fs-13 — the chapter's live completed sentence-id SET, built once per row
+     render and shared by every per-character bar below. Absent (undefined)
+     when the server hasn't sent any `completedSentenceIds` yet (older server,
+     or pre-first-completion) — characterRowProgress then falls back to the
+     currentLine approximation. Declared before the early return so the hook
+     order stays stable. */
+  const completedSet = useMemo(
+    () =>
+      chapter.completedSentenceIds && chapter.completedSentenceIds.length > 0
+        ? new Set(chapter.completedSentenceIds)
+        : undefined,
+    [chapter.completedSentenceIds],
+  );
   /* Render the greyed-out variant when the chapter is excluded OR a
      subset re-analysis is in flight for it. The transitional case
      (excluded flipped to false server-side but analysis is still
@@ -1316,6 +1340,11 @@ function ChapterRow({
                 linesTotal,
                 positions: charPositions?.[cid],
                 currentLine: chapter.currentLine ?? 0,
+                /* fs-13 — when the live completed-id set is present, derive this
+                   character's done count EXACTLY (set ∩ their sentence ids);
+                   otherwise fall back to the positions+currentLine count. */
+                sentenceIds: charSentenceIds?.[cid],
+                completedSet,
               });
               return (
                 <div
