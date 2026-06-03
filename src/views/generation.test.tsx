@@ -1796,3 +1796,74 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
     expect(screen.queryByTestId('generation-view-resume')).toBeNull();
   });
 });
+
+describe('GenerationView — srv-27 advisory QA badge', () => {
+  function renderWithChapters(rows: Chapter[]) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    store.dispatch(accountSlice.actions.setDefaultTtsModelKey('coqui-xtts-v2'));
+    store.dispatch(chaptersSlice.actions.setChapters(rows));
+    return render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={rows}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('renders a Suspect badge on a done chapter flagged suspect', () => {
+    const suspect: Chapter = {
+      ...chapter1,
+      audioQa: {
+        status: 'suspect',
+        reasons: ['Suspiciously short — 10s rendered vs ~60s expected (possible truncation).'],
+        measuredLufs: -16,
+        truePeakDb: -1.5,
+        durationSec: 10,
+        expectedSec: 60,
+        checkedAt: new Date().toISOString(),
+      },
+    };
+    renderWithChapters([suspect]);
+    const badge = screen.getByText('Suspect');
+    expect(badge).toBeInTheDocument();
+    expect(badge).toHaveAttribute('title', expect.stringMatching(/short/i));
+  });
+
+  it('renders no Suspect badge when the QA verdict is ok', () => {
+    const ok: Chapter = {
+      ...chapter1,
+      audioQa: {
+        status: 'ok',
+        reasons: [],
+        measuredLufs: -16,
+        truePeakDb: -1.5,
+        durationSec: 62,
+        expectedSec: 60,
+        checkedAt: new Date().toISOString(),
+      },
+    };
+    renderWithChapters([ok]);
+    expect(screen.queryByText('Suspect')).toBeNull();
+  });
+});

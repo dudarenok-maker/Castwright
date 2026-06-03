@@ -1808,6 +1808,31 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/GpuQueueState' }
 
+  /api/generation/telemetry:
+    get:
+      summary: Per-run resource telemetry for the Admin trend panel (fs-20)
+      operationId: getResourceTelemetry
+      description: |
+        Returns per-chapter resource telemetry — RTF + audio/wall seconds
+        alongside the GPU (reserved/total VRAM) and host-RAM figures captured
+        right after each chapter rendered — NEWEST-FIRST. Backs the Admin
+        console's "Resource trends" panel so the operator can watch resource
+        pressure climb across a long run (the slow creep that precedes a VRAM
+        spill / host OOM). Best-effort store (workspace JSONL, capped); a read
+        failure yields an empty list rather than a 500.
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1 }
+          description: Cap the number of (newest-first) records returned.
+      responses:
+        '200':
+          description: Per-run resource telemetry, newest-first
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ResourceTelemetryResponse' }
+
   /api/diagnostics:
     get:
       summary: One-shot health board for the Admin watch console (fs-18)
@@ -2826,7 +2851,26 @@ components:
             for a state.json reload (which would otherwise let an
             engine-drift badge appear only after page navigation). See
             `docs/features/archive/35-engine-drift-detection.md`.
+        audioQa:
+          allOf:
+            - $ref: '#/components/schemas/ChapterQaVerdict'
+          description: |
+            srv-27 — Only on `chapter_complete` — the advisory post-synthesis
+            QA verdict, so the frontend can stamp a "Suspect" badge the moment
+            the Done pill flips without a state.json reload.
         errorReason: { type: string, nullable: true }
+        errorCode:
+          allOf:
+            - $ref: '#/components/schemas/FailureCode'
+          description: |
+            Only on `chapter_failed` — fs-19 stable machine code for the failure
+            class. Lets the frontend render the matching remediation + persist
+            it without parsing `errorReason`.
+        remediation:
+          type: string
+          description: |
+            Only on `chapter_failed` — fs-19 concrete "what to do about it" copy
+            for the failure, surfaced under the error reason.
         code:
           type: string
           description: |
@@ -3710,6 +3754,56 @@ components:
             bookTitle: { type: string }
             confidence: { type: number, minimum: 0, maximum: 1 }
 
+    FailureCode:
+      type: string
+      description: |
+        fs-19 — stable machine-readable class for a synthesis (or analysis)
+        failure. Maps a recurring failure mode to a friendly message +
+        remediation server-side (server/src/routes/failure-taxonomy.ts); the
+        frontend switches on it for per-class styling. `unknown` is the
+        catch-all for an unmapped error (the raw message is surfaced verbatim).
+      enum:
+        - vram-spill
+        - sidecar-unreachable
+        - analyzer-rate-limit
+        - oom
+        - disk-full
+        - model-not-loaded
+        - synth-timeout
+        - xtts-speaker-desync
+        - cuda-poisoned
+        - auth
+        - unknown
+
+    ChapterQaVerdict:
+      type: object
+      description: |
+        srv-27 — advisory post-synthesis audio QA verdict for a rendered
+        chapter. ADVISORY only: a `suspect` status drives a badge but never
+        gates completion (the chapter still flips to done). Stamped at render
+        time and surfaced on the Chapter shape + the `chapter_complete` tick.
+      required: [status, reasons, measuredLufs, truePeakDb, durationSec, expectedSec, checkedAt]
+      properties:
+        status: { type: string, enum: [ok, suspect] }
+        reasons:
+          type: array
+          items: { type: string }
+          description: Human-readable reasons behind a `suspect` verdict; empty when ok.
+        measuredLufs:
+          type: number
+          nullable: true
+          description: Integrated loudness (LUFS) checked, or null when loudnorm was disabled.
+        truePeakDb:
+          type: number
+          nullable: true
+          description: True peak (dBTP) checked, or null when not measured.
+        durationSec: { type: number }
+        expectedSec:
+          type: number
+          nullable: true
+          description: Text-derived expected length (s), or null when no estimate was available.
+        checkedAt: { type: string, format: date-time }
+
     Chapter:
       type: object
       required: [id, title, duration, state, progress, characters]
@@ -3727,6 +3821,30 @@ components:
             type: string
             enum: [queued, in_progress, done, skipped, failed]
         errorReason: { type: string, nullable: true }
+        generationErrorCode:
+          allOf:
+            - $ref: '#/components/schemas/FailureCode'
+          nullable: true
+          description: |
+            fs-19 — stable machine code for the last synthesis FAILURE's class
+            (e.g. `vram-spill`, `disk-full`, `cuda-poisoned`). Drives the
+            frontend's remediation rendering. Absent on never-failed chapters;
+            cleared on a successful render.
+        generationRemediation:
+          type: string
+          nullable: true
+          description: |
+            fs-19 — concrete "what to do about it" copy for the last synthesis
+            failure. Surfaced under the error reason on the failed chapter row.
+            Absent on never-failed chapters; cleared on a successful render.
+        audioQa:
+          allOf:
+            - $ref: '#/components/schemas/ChapterQaVerdict'
+          nullable: true
+          description: |
+            srv-27 — advisory post-synthesis QA verdict for this chapter's
+            audio. Stamped on a successful render; drives the "Suspect" badge.
+            Absent on never-rendered / legacy chapters.
         excluded:
           {
             type: boolean,
@@ -3905,6 +4023,14 @@ components:
             nullable: true,
             description: 'ISO timestamp once status leaves in_progress.',
           }
+        warning:
+          type: string
+          description: |
+            srv-28 — non-fatal disk-space advisory, present only on the POST
+            201 response body when the pre-flight disk guard is in `warn` mode
+            and free space is tight. The build still proceeds; the export modal
+            surfaces this next to the queued job. Absent when the guard was ok /
+            off, and never present on a poll (GET) response.
 
     BookShareLink:
       type: object
@@ -3959,6 +4085,40 @@ components:
           type: integer
           minimum: 1
           description: "Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU."
+
+    # --- Per-run resource telemetry (fs-20) ---------------------------
+    ResourceTelemetryRecord:
+      type: object
+      required:
+        [at, bookId, chapterId, title, modelKey, rtf, audioSec, wallSec, vramReservedMb, vramTotalMb, committedHostMb]
+      description: |
+        One per-chapter telemetry sample captured right after a chapter
+        rendered: throughput (RTF, audio/wall seconds) + GPU and host-RAM
+        figures from a best-effort sidecar /health probe (null when the probe
+        timed out / the sidecar was down).
+      properties:
+        at: { type: string, format: date-time }
+        bookId: { type: string, nullable: true }
+        chapterId:
+          oneOf:
+            - type: integer
+            - type: string
+        title: { type: string, nullable: true }
+        modelKey: { type: string, nullable: true }
+        rtf: { type: number, nullable: true, description: 'synth wall ÷ audio (< 1 = faster than realtime).' }
+        audioSec: { type: number }
+        wallSec: { type: number }
+        vramReservedMb: { type: number, nullable: true }
+        vramTotalMb: { type: number, nullable: true }
+        committedHostMb: { type: number, nullable: true }
+
+    ResourceTelemetryResponse:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: array
+          items: { $ref: '#/components/schemas/ResourceTelemetryRecord' }
 
     # --- Admin diagnostics board (fs-18) ------------------------------
     DiagnosticsCheck:

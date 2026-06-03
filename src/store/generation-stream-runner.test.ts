@@ -181,6 +181,29 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(runner.takeChapterFailure('b1', 2)).toBeNull();
   });
 
+  it('surfaces a chapter_failed tick carrying remediation + errorCode onto the failed row (fs-19)', () => {
+    /* The runner dispatches applyGenerationTick for the VIEWED book, so the
+       slice carries the structured failure class + the "what to do" copy onto
+       the chapter row — the failed-state box renders it under the reason. */
+    const { store, runner } = makeRunner();
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    store.dispatch(
+      chaptersSlice.actions.setChapters([ch(2, { state: 'in_progress', progress: 0.5 })]),
+    );
+    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    onTickFor('b1', 2)({
+      type: 'chapter_failed',
+      chapterId: 2,
+      errorReason: 'The workspace volume is out of disk space — the chapter audio could not be written.',
+      errorCode: 'disk-full',
+      remediation: 'Free up disk space on the workspace volume, then retry the chapter.',
+    } as unknown as GenerationTick);
+    const row = store.getState().chapters.chapters.find((c) => c.id === 2);
+    expect(row?.state).toBe('failed');
+    expect(row?.generationErrorCode).toBe('disk-full');
+    expect(row?.generationRemediation).toMatch(/free up disk space/i);
+  });
+
   it('records a CROSS-BOOK chapter_failed even when the slice is on another book', () => {
     const { store, runner } = makeRunner();
     store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));

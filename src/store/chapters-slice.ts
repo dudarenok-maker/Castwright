@@ -263,6 +263,19 @@ export const chaptersSlice = createSlice({
                 : 'queued',
             errorReason:
               !done.has(c.slug) && c.generationState === 'failed' ? c.generationError : undefined,
+            /* fs-19 — re-hydrate the structured failure class + remediation so a
+               failed chapter shows its "what to do" line after a reload. */
+            generationErrorCode:
+              !done.has(c.slug) && c.generationState === 'failed'
+                ? c.generationErrorCode
+                : undefined,
+            generationRemediation:
+              !done.has(c.slug) && c.generationState === 'failed'
+                ? c.generationRemediation
+                : undefined,
+            /* srv-27 — carry the advisory QA verdict for done chapters so the
+               "Suspect" badge survives a reload. */
+            audioQa: done.has(c.slug) ? c.audioQa : undefined,
             progress: done.has(c.slug) ? 1 : 0,
             characters: done.has(c.slug) ? seedDone(c.id) : seedQueued(c.id),
             /* Persist the user's per-chapter exclude choice across hydrate so
@@ -358,6 +371,11 @@ export const chaptersSlice = createSlice({
           ch.state = 'failed';
           ch.phase = null;
           ch.errorReason = ev.errorReason ?? 'Synthesis failed.';
+          /* fs-19 — carry the structured failure class + remediation onto the
+             row so the failed-state box can render a "what to do" line under
+             the reason without a state.json reload. */
+          ch.generationErrorCode = ev.errorCode;
+          ch.generationRemediation = ev.remediation;
         }
         return;
       }
@@ -399,6 +417,10 @@ export const chaptersSlice = createSlice({
            is tolerated (older server before this field landed) — the
            chapter stays at its previously-hydrated value. */
         if (ev.audioModelKey) ch.audioModelKey = ev.audioModelKey;
+        /* srv-27 — stamp the advisory QA verdict so the "Suspect" badge can
+           appear the moment the Done pill flips, without a state.json reload.
+           Absent on an older server → leave the hydrated value. */
+        if (ev.audioQa) ch.audioQa = ev.audioQa;
         /* Duration fallback: chapter_assembling is the primary carrier,
            but it can be dropped between the server and this reducer
            (cross-book guard at line 309, plan-87 parallel-chapter
@@ -463,6 +485,8 @@ export const chaptersSlice = createSlice({
           progress: c.id === chapterId ? 0.05 : 0,
           phase: null,
           errorReason: undefined,
+          generationErrorCode: undefined,
+          generationRemediation: undefined,
           /* Reset line counters so the expanded row's derived per-character
              progress (which counts manuscript line positions ≤ currentLine)
              doesn't show stale fractions in the gap between regenerate
@@ -502,6 +526,8 @@ export const chaptersSlice = createSlice({
           progress: isHead ? 0.05 : 0,
           phase: null,
           errorReason: undefined,
+          generationErrorCode: undefined,
+          generationRemediation: undefined,
           currentLine: 0,
           characters: Object.fromEntries(
             Object.entries(c.characters).map(([k, v]) => [k, v === 'done' ? 'queued' : v]),
@@ -560,6 +586,8 @@ export const chaptersSlice = createSlice({
         ch.currentLine = undefined;
         ch.totalLines = undefined;
         ch.errorReason = undefined;
+        ch.generationErrorCode = undefined;
+        ch.generationRemediation = undefined;
       }
     },
 
