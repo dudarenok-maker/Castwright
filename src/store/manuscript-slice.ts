@@ -261,6 +261,23 @@ export const manuscriptSlice = createSlice({
       if (sent) sent.characterId = a.payload.characterId;
     },
 
+    /* fs-25 — User edit: set (or clear) a quote's delivery emotion. Scoped by
+       (chapterId, sentenceId) like setSentenceCharacter. `'neutral'` clears the
+       field back to undefined (the default render on every engine) so the store
+       never carries a redundant neutral. A hand-set emotion always wins over
+       analyzer/seed emotion (this is the manual-override write site). */
+    setSentenceEmotion: (
+      s,
+      a: PayloadAction<{ chapterId: number; sentenceId: number; emotion: string }>,
+    ) => {
+      const sent = s.sentences.find(
+        (x) => x.chapterId === a.payload.chapterId && x.id === a.payload.sentenceId,
+      );
+      if (!sent) return;
+      if (a.payload.emotion === 'neutral') delete sent.emotion;
+      else sent.emotion = a.payload.emotion as typeof sent.emotion;
+    },
+
     /* User edit: reassign a batch of sentences at once. Used by the
        boundary-drag handle and the segment inspector. Scoped to one
        chapter — the caller batches ids from a single chapter's segments. */
