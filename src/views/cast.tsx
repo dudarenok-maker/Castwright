@@ -17,6 +17,7 @@ import {
   Pill,
   VoiceSwatch,
   ReusedBadge,
+  VariantsBadge,
 } from '../components/primitives';
 import { resolveVoiceStatus, statusFilterKeys, type StatusPillColor } from '../lib/voice-status';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
@@ -92,6 +93,8 @@ const CHIP_ORDER = [
   'Locked',
   'Unset',
   'Reused',
+  /* fs-25 — "Has emotion variants" provenance/capability chip, last. */
+  'Variants',
 ];
 
 export function CastView({
@@ -1151,17 +1154,18 @@ function StatusPill({
   /* Effective engine = the character's own override folded over the project
      default — so a default-engine character on a Qwen project follows the Qwen
      lifecycle (e.g. "Needs voice"), not a stale preset `voiceState` pill. */
-  const { lifecycle, reused } = resolveVoiceStatus(
+  const { lifecycle, reused, hasEmotionVariants, variantCount } = resolveVoiceStatus(
     c,
     voice,
     c.ttsEngine ?? projectEngine,
     renderedFallbackEngine,
   );
-  if (!lifecycle && !reused) return null;
+  if (!lifecycle && !reused && !hasEmotionVariants) return null;
   return (
     <span className="inline-flex items-center gap-1.5 flex-wrap">
       {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
       {reused && <ReusedBadge />}
+      {hasEmotionVariants && <VariantsBadge count={variantCount} />}
     </span>
   );
 }
