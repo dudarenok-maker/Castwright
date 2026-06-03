@@ -59,6 +59,7 @@ So an emotion variant = an independently designed voiceId (its own `.pt` + manif
 6. **Neutral is the base voice, not a variant.** `overrideTtsVoices.qwen.name` = neutral base; `…qwen.variants` holds ONLY the 4 expressive emotions. Variant design is gated on the base existing — the cast UI hides/disables variant controls until `…qwen.name` is set.
 7. **The "Variants" cast indicator is additive.** It is a new indicator derived in `src/lib/voice-status.ts`, placed under the Qwen voice label/section; it must NOT change `resolveVoiceStatus`'s lifecycle output (`Designed`/`Generated`/`Tuned`/`Locked`) or the `Reused` badge. Existing cast-status tests must stay green unchanged.
 8. **Variant sample playback reuses the existing per-voiceId machinery.** A variant audition goes through `playSampleWithAutoLoad`/`playBaseVoiceSampleWithAutoLoad` keyed on the variant voiceId and the existing per-voiceId `voice-sample-cache.ts` — no new cache scheme, no new lifecycle path. Every current sample-play surface (cast, profile drawer + `voice-preview-button`, match-detail, compare-cast, rebaseline) must be able to audition a variant; none may diverge onto a private play path.
+9. **Staleness reuses the existing `ui.staleAudio` path** (plan 114, `stale-audio-banner.tsx`). Emotion edits + variant (re)design feed it; FS-25 adds no parallel "needs regen" mechanism.
 
 ## Implementation waves
 
@@ -115,14 +116,22 @@ _5d — Variant sample playback across ALL sample-play surfaces._
   - Rebaseline modal — `src/modals/rebaseline-modal.tsx` (`useSamplePlayback`).
 - The cast surface + drawer expose a per-emotion play control (neutral base + each designed variant); a not-yet-designed variant shows no play control (nothing to audition). Auditions stay read-only (no cast commit), reusing `useTtsLifecycle` for the Load/Stop affordance exactly as today.
 
+_5e — UI/UX completeness (cross-cutting gaps found in review)._
+- **Audio staleness on edit.** Changing/adding a per-quote emotion, OR (re)designing a variant that existing tags reference, marks the affected chapters stale via the EXISTING `ui.staleAudio` banner (`src/components/stale-audio-banner.tsx`, set in `layout.tsx`'s save handler, plan 114) — keyed by character + chapterIds — so the user is prompted to regenerate the impacted chapters. No auto-regen; FS-25 adds no parallel staleness path.
+- **Missing-variant discoverability (BEFORE generation).** When a quote is tagged with an emotion the speaker has no designed variant for, show a non-blocking hint at both edit sites: an inline marker on that quote in the manuscript ("no `angry` variant for Wren — renders neutral") and a small count on the cast row ("2 tags need a variant"). So the silent base-fallback (Wave 2) is discoverable up front, not only in post-run telemetry.
+- **Qwen-only gating of the variant UI.** Variant design controls, the Variants badge, the filter chip, and per-variant play appear ONLY for Qwen-engine characters. On a non-Qwen (e.g. Kokoro) character the manuscript STILL lets you tag emotion (additive data that survives an engine switch) but shows a muted "applies on Qwen" note so the inaudibility on Kokoro/XTTS isn't a mystery.
+- **Voices-view parity (free).** Because the badge + filter derive from the shared `src/lib/voice-status.ts`, the Variants badge and "Has emotion variants" filter also surface in the cross-book Voices view (`#/voices`, plan 117) with no extra wiring — same resolver, no divergence.
+- **Remove a variant.** Each designed variant row carries a small remove affordance (drops `overrideTtsVoices.qwen.variants[emotion]` + its `.pt`), so a bad design is discardable without touching the base voice.
+- **Responsive (mobile protocol, plan 81).** The per-emotion design grid + play controls collapse to a compact stacked list on phone (≥44px targets); the "Detect emotions" cost-confirm is a full-screen sheet on phone, dialog on tablet/desktop. Verify at all three viewports and add a `e2e/responsive/coverage.spec.ts` case.
+
 _5c — Cast: indicator + filter (additive, must not disturb existing statuses)._
 - Add a small **"Variants" badge** that is ADDITIVE and composes with — never replaces — the existing lifecycle pill (`Designed`/`Generated`/`Tuned`/`Locked`) and the `Reused` badge. It is a new indicator like `ReusedBadge` in *kind* (additive provenance/capability marker), but **placement-wise it sits under the Qwen voice label/section** (e.g. beneath the `qwen_Wren` voice line), not crowded next to `Reused` — best use of screen space, final position settled during implementation. Source it from a new derived flag (e.g. `hasEmotionVariants` = `overrideTtsVoices.qwen.variants` has ≥1 key), computed in the shared resolver `src/lib/voice-status.ts` (the same place `resolveVoiceStatus` already splits provenance from lifecycle, plan 123) so cast view + drawer can't drift. The badge optionally shows the count (e.g. "Variants · 3") and/or which emotions on hover/tap.
 - Add a cast **filter chip** for "Has emotion variants" to the plan-131 status-filter row: extend `statusFilterKeys` (`voice-status.ts`) so the chip appears (with a live count, like the others) only when ≥1 cast member has variants, and filters the post-search copy in both the desktop grid and mobile cards. Additive to the existing multi-select OR filter — never replaces a status chip.
 - Both surfaces (cast view + profile drawer) read the same `hasEmotionVariants`/badge from `voice-status.ts` so they can't drift (same discipline as plan 123's shared resolver).
 
 _Tests (Wave 5)._
-- Vitest — editing a quote's emotion dispatches the edit + persists (5a); the variant-design controls are hidden/disabled until the base voice exists, and enabled after (5b); `resolveVoiceStatus`/`hasEmotionVariants` yields the Variants badge + the filter chip + count only when variants exist, and the badge composes with `Reused`/lifecycle without altering them (5c); a variant play control calls `playSampleWithAutoLoad` with the variant voiceId, and a not-yet-designed variant shows no play control (5d).
-- Playwright e2e — the per-quote picker round-trips in a real browser (5a); the cast filter chip narrows the grid to variant-bearing characters (5c); a variant audition plays from the cast/drawer (5d).
+- Vitest — editing a quote's emotion dispatches the edit + persists (5a); the variant-design controls are hidden/disabled until the base voice exists, and enabled after (5b); `resolveVoiceStatus`/`hasEmotionVariants` yields the Variants badge + the filter chip + count only when variants exist, and the badge composes with `Reused`/lifecycle without altering them (5c); a variant play control calls `playSampleWithAutoLoad` with the variant voiceId, and a not-yet-designed variant shows no play control (5d); an emotion edit on a rendered chapter raises the `ui.staleAudio` banner, a tag with no matching variant shows the missing-variant hint, variant UI is hidden for a non-Qwen character, and remove drops the variant slot (5e).
+- Playwright e2e — the per-quote picker round-trips in a real browser (5a); the cast filter chip narrows the grid to variant-bearing characters (5c); a variant audition plays from the cast/drawer (5d); the variant grid + Detect-emotions confirm render correctly at phone/tablet/desktop via `e2e/responsive/coverage.spec.ts` (5e).
 
 ## Test plan
 
@@ -143,12 +152,16 @@ _Tests (Wave 5)._
 4. Manuscript view → click **"Detect emotions"** → cost-confirm → progress streams → emotion chips populate across the book (a previously hand-tagged quote is left untouched). Then manually tag one of that character's quotes `angry` (leave a neighbouring quote neutral) to confirm hand-edits override.
 5. Generate the chapter on Qwen → the tagged line is audibly angrier; the neutral neighbour is unchanged; log shows the variant voiceId for the tagged item only.
 6. Switch the same book to Kokoro (or XTTS) and regenerate → output is byte-for-byte what an untagged run produces (emotion ignored); no errors.
-7. Tag a quote with an emotion that has **no** variant (e.g. `sad`) → generation completes, that line renders in the base voice, and the fallback is surfaced (not a failure).
+7. Tag a quote with an emotion that has **no** variant (e.g. `sad`) → BEFORE generating, the manuscript shows a "no `sad` variant — renders neutral" hint on that quote and the cast row shows a "needs a variant" count (5e missing-variant discoverability). Generate → that line renders in the base voice; the fallback is surfaced (not a failure).
+8. With the chapter already rendered, change one quote's emotion (or remove/redesign a referenced variant) → the **stale-audio banner** appears for that chapter (5e), offering regeneration; no auto-regen fires.
+9. On a non-Qwen (Kokoro) character → no variant-design controls / Variants badge / filter appear; the manuscript still lets you tag emotion but shows a muted "applies on Qwen" note. Resize to phone + tablet → the variant grid and Detect-emotions confirm stay usable (≥44px targets).
 
 ## Out of scope
 - Per-quote emotion on **Kokoro/XTTS** as audible output — they have no expressive lever; the tag is a documented no-op. (A future item could map emotion → speed/pacing for Kokoro, but that is not this plan.)
 - Free-form / continuous emotion (intensity sliders). The enum is fixed; revisit only if the variant-design UX proves out.
 - Auto-designing variants on demand at generation time (would reintroduce the ~10 RTF VoiceDesign cost mid-run). Variants are designed ahead of time, explicitly.
+- **Series/rebaseline propagation of emotion variants.** Variants are per-character and designed explicitly; designing them series-wide (like plan 108's base-voice rebaseline modal) is a follow-up, not v1. The base-voice rebaseline flow is untouched.
+- **Per-emotion intensity / multiple variants per emotion** (e.g. "slightly angry" vs "furious"). One variant per emotion key in v1.
 - Coordinate (do not duplicate) with `side-4`/`side-7` decode-cost wake-conditions — note that variants don't inflate per-call decode, but more distinct voices mean more `.pt` loads / VRAM churn.
 
 ## Ship notes
