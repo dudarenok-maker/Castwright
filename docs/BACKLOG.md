@@ -221,6 +221,12 @@ _Full detail + acceptance:_ [#415](https://github.com/dudarenok-maker/AudioBook-
 - _Remaining (follow-up):_ a Listen-view **per-sentence** entry point — pick a single sentence on the timeline (consuming the markers slice's `rerecord` kind) and re-record/splice just it. The plumbing exists; this is purely the timeline UI affordance.
 _Full detail + acceptance:_ [#480](https://github.com/dudarenok-maker/AudioBook-Generator/issues/480).
 
+#### `fs-32` — fs-26 splice hardening (3 edge cases) ([#503](https://github.com/dudarenok-maker/AudioBook-Generator/issues/503))
+
+- _What:_ three small splice robustness follow-ups bundled — (a) re-record duration delta can false-flag the advisory QA "suspect" badge (pass the new duration on the splice path); (b) verify the A/B player renders a splice revision (empty `segments[]`) without breakage; (c) re-record on a non-English book skips generation's per-voice designed-voice manifest language re-check (mirror it or document the limitation).
+- _Benefit (technical):_ closes the remaining fs-26 edge cases so the splice path matches generation's robustness. Low severity — each bites only an edge case.
+_Full detail + acceptance:_ [#503](https://github.com/dudarenok-maker/AudioBook-Generator/issues/503).
+
 ### Voice & cast sharing
 
 Build bottom-up: `side-13` (safe-load gate) → `fs-28` (bundle format) → `fs-29` / `fs-30` → `fs-31` (externally-facing). Scoped to **synthetic / designed** voices with a consent/licensing note throughout — never framed as cloning a real person's voice.
