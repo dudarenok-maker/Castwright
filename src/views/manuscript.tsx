@@ -23,6 +23,7 @@ import {
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
 import { CharacterSearchPicker } from '../components/character-search-picker';
+import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialSentences } from '../data/sentences';
@@ -1266,6 +1267,16 @@ function SegmentRow({
                 >
                   {renderSentenceText(s.text)}
                 </span>
+                {/* fs-25 — per-quote emotion control. Shown for dialogue (the
+                    common case) and for any already-tagged sentence, rendered
+                    outside the text span so selection offsets are unaffected. */}
+                {(seg.characterId !== 'narrator' || s.emotion) && (
+                  <SentenceEmotionControl
+                    chapterId={s.chapterId}
+                    sentenceId={s.id}
+                    emotion={s.emotion}
+                  />
+                )}
                 {!isLast && ' '}
               </Fragment>
             );
