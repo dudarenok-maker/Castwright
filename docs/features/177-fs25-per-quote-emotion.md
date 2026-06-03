@@ -7,7 +7,7 @@ owner: null
 # fs-25 — Per-quote expressive / emotion synthesis
 
 > Status: draft — design approved, implementation staged in waves below.
-> Key files: `openapi.yaml` (Sentence + Character.overrideTtsVoices), `server/src/handoff/schemas.ts`, `server/src/analyzer/` (Phase-1 attribution + emotion-annotation pass), `server/src/tts/synthesise-chapter.ts` + `server/src/tts/voice-mapping.ts` (voice resolution), `server/src/routes/qwen-voice.ts` (variant design), `src/lib/voice-status.ts` (Variants badge/filter), `src/lib/play-sample-with-auto-load.ts` (variant-aware sample playback), `src/views/manuscript.tsx`, `src/views/cast.tsx`, `src/modals/profile-drawer.tsx` + `src/components/voice-preview-button.tsx` + `src/modals/{match-detail,compare-cast-modal,rebaseline-modal}.tsx` (sample-play surfaces).
+> Key files: `openapi.yaml` (Sentence + Character.overrideTtsVoices), `server/src/handoff/schemas.ts`, `server/src/analyzer/` (Phase-1 attribution + emotion-annotation pass), `server/src/tts/synthesise-chapter.ts` + `server/src/tts/voice-mapping.ts` (voice resolution), `server/src/routes/qwen-voice.ts` (variant design), `server/src/tts/hydrate-reused-voice.ts` + `cast-link-prior.ts` + `series-reuse-link.ts` + `book-state.ts` (Wave 6a reuse-carry), `src/lib/voice-status.ts` (Variants badge/filter), `src/lib/play-sample-with-auto-load.ts` (variant-aware sample playback), `src/views/manuscript.tsx`, `src/views/cast.tsx`, `src/modals/profile-drawer.tsx` + `src/components/voice-preview-button.tsx` + `src/modals/{match-detail,compare-cast-modal,rebaseline-modal}.tsx` (sample-play surfaces; rebaseline = Wave 6b series-design).
 > URL surface: `#/books/<id>/manuscript` (per-quote emotion picker), `#/books/<id>/cast` (design emotion variants).
 > OpenAPI ops: reuses `POST /api/books/{bookId}/cast/{characterId}/design-voice` (adds optional `emotion`); adds `POST /api/books/{bookId}/annotate-emotion` (Wave 4b emotion-only backfill); no new synth op — `/synthesize` + `/synthesize-batch` contracts are unchanged.
 > GitHub issue: [#479](https://github.com/dudarenok-maker/AudioBook-Generator/issues/479). Backlog id `fs-25`.
@@ -28,6 +28,19 @@ So an emotion variant = an independently designed voiceId (its own `.pt` + manif
 
 `neutral | whisper | angry | excited | sad`. `neutral` (and any untagged sentence) renders **exactly as today** on every engine. Bounded to 4 expressive values to cap variant-design cost (≤4 extra designs per character). The enum lives in one place (`openapi.yaml` → regenerated `api-types.ts`) and is mirrored in the Zod schema + the analyzer skill prompt. Widening later is additive (a new enum value + optionally a new variant); narrowing is a migration.
 
+## Reconciliation with the existing inline audio-tag system (supersede, don't conflict)
+
+**Audio is LOCAL-ONLY** — Kokoro, Coqui/XTTS, and Qwen. Gemini is the *analyzer*, not a voice engine (Gemini TTS isn't free and isn't used); the `GeminiTtsProvider` in the tree is dormant for real books. So the engines that matter for FS-25 are exactly the three local ones, and emotion's audible lever is the Qwen variant (Kokoro/XTTS = no-op).
+
+Prior per-quote work exists and must be reconciled, not duplicated. Parse-time heuristics inject inline bracketed cues into `sentence.text` — the `AUDIO_TAGS` vocabulary `emphatic | shouting | whispers | laughs | sighs | excited | hesitant` (`server/src/parsers/audio-tags.ts`, mirrored UI-side in `src/lib/audio-tags.ts`), rendered as chips in the manuscript (`src/views/manuscript.tsx:1544` via `splitAudioTagSpans`). **Every local engine strips them** via `normaliseForTts` before synthesis — so on the engines actually used they drive **zero generated audio**. They are purely a display/heuristic layer: "never fully used, just display."
+
+Because they have no audio effect on local engines, `Sentence.emotion` can **fully supersede** them as the per-quote model — no audio-regression risk:
+
+1. **Taxonomy map (overlap):** `whispers → whisper`, `shouting → angry`, `excited → excited`. The other legacy tags (`emphatic`, `laughs`, `sighs`, `hesitant`) are paralinguistic / emphasis cues, NOT emotions — they do not enter the fixed emotion enum.
+2. **Seed, don't duplicate:** derive `Sentence.emotion` from the mappable inline tags at parse-time (new imports) and in the Wave 4b backfill (existing books), so the existing heuristic signal is absorbed into the structured field instead of re-computed. Manual/analyzer emotion still wins per the precedence rule.
+3. **One per-quote control in the UI:** the manuscript shows ONE per-quote expressiveness control — the emotion chip (5a) — which **replaces the legacy emotion-equivalent chips** (whispers/shouting/excited); no double display. _(What to do with the non-emotion legacy chips — `emphatic`/`laughs`/`sighs`/`hesitant` — is the open question below.)_
+4. **Stripping unchanged.** `normaliseForTts` still strips any residual inline `[tags]` from text so nothing leaks into local synthesis. FS-25 changes the per-quote SIGNAL from "bracketed text the engine ignores" to "a structured field that drives a Qwen variant" — strictly an upgrade, nothing regresses.
+
 ## Architectural impact
 
 **New seams / extension points**
@@ -40,7 +53,7 @@ So an emotion variant = an independently designed voiceId (its own `.pt` + manif
 - **Sidecar synth contract unchanged** — `/synthesize` + `/synthesize-batch` request bodies are byte-identical; Kokoro/XTTS/Qwen-Base `synthesize(model, voice, text)` signatures untouched. (Cross-cutting plan 24/26 — engine abstraction.)
 - **One-group-per-sentence** (`buildSentenceGroups`, `synthesise-chapter.ts:452`) is preserved — emotion changes *which voice* a group resolves to, never *how* groups are built. No fold/split change.
 - **Never-cross-language** (fs-2) — variant design inherits the character's language; an emotion variant is the same language as its base.
-- **Reused-voice resolution** (`hydrate-reused-voice.ts`) — variants resolve through the same `overrideTtsVoices.qwen` path; a reused base voice with no variants simply falls back to base (no regression).
+- **Reused-voice resolution** (`hydrate-reused-voice.ts`) — variants resolve through the same `overrideTtsVoices.qwen` path AND travel with the base voice across reuse links (Wave 6a, mirroring plan 150's `voiceStyle` denormalisation); a reused voice with no designed variants falls back to base (no regression).
 
 **Migration story**
 - Old sentences without `emotion` → read as `neutral` (no migration needed; optional field).
@@ -90,6 +103,7 @@ _4a — Phase-1 inline (covers new books + any re-analysis triggered for other r
 
 _4b — Emotion-only annotation pass (default backfill for existing books; non-destructive)._
 - A new lightweight analyzer pass + skill (`audiobook-emotion-annotation`) that reads the book's already-attributed cached sentences and returns ONLY `{ sentenceId, emotion }` — it does **not** re-attribute, so `characterId`/cast/manual reassignments are untouched. New route (e.g. `POST /api/books/:bookId/annotate-emotion`, streaming progress like the analysis stream), cost surfaced up front (cf. `fs-27`). Writes emotion onto the cached sentences.
+- **Zero-cost local seed first:** before any LLM call, map existing inline `AUDIO_TAGS` → emotion (`whispers→whisper`, `shouting→angry`, `excited→excited`) so already-heuristically-tagged quotes get their structured emotion for free (see Reconciliation); the LLM pass then fills the rest. Same parse-time seed runs for new imports in the parsers.
 - **UI trigger (lands with Wave 5a, the manuscript surface where emotion chips live):** a **"Detect emotions"** action in the **manuscript view** header/toolbar (`src/views/manuscript.tsx`, `#/books/<id>/manuscript`). Click → a confirm that surfaces the cost estimate (sentence count + model) → runs the pass → inline streaming progress (reusing the analysis-stream progress pattern) → emotion chips populate when done. Scope defaults to the whole book with a per-chapter option (the view is already chapter-segmented). Re-runnable; respects manual-override precedence below (won't overwrite hand-set tags). An "Emotions detected / N untagged" hint sits beside the action so the user knows whether a backfill is worthwhile. This is the ONLY UI entry point for 4b — new books get emotion via 4a at analysis time and need no button.
 - **Precedence (both paths):** a user's hand-set per-quote emotion (manuscript-edits) ALWAYS wins over analyzer-inferred emotion — annotation/re-analysis fills only sentences with no manual override, never clobbers a manual tag.
 - Tests: `parse-and-repair` accepts/ignores the field (4a); the annotation pass returns emotion-only and leaves `characterId` untouched, and a sentence with a manual emotion override is not overwritten (4b); cost estimate surfaces before the run; (UI trigger test lands in Wave 5a).
@@ -97,7 +111,7 @@ _4b — Emotion-only annotation pass (default backfill for existing books; non-d
 **Wave 5 — UI.** (Split into 5a manuscript, 5b cast-design, 5c cast-indicator+filter so each lands with its own test.)
 
 _5a — Manuscript per-quote tagging + the "Detect emotions" trigger._
-- Manuscript view (`src/views/manuscript.tsx`): a per-sentence emotion chip/menu on a quote (shows analyzer value, editable; neutral hidden/muted). Respects the 44px touch-target + `coarse-pointer` rules. Persists the override through the existing manuscript-edits store.
+- Manuscript view (`src/views/manuscript.tsx`): a per-sentence emotion chip/menu on a quote (shows analyzer value, editable; neutral hidden/muted). Respects the 44px touch-target + `coarse-pointer` rules. Persists the override through the existing manuscript-edits store. This emotion chip **replaces** the legacy emotion-equivalent inline-tag chips (whispers/shouting/excited) currently rendered by `splitAudioTagSpans` at `manuscript.tsx:1544` — one per-quote control, no double display (see Reconciliation).
 - The **"Detect emotions"** action (the Wave 4b trigger) lives in this view's header/toolbar: cost-confirm → run the annotation pass → inline streaming progress → chips populate; whole-book default + per-chapter option; an "N untagged" hint beside it. This is where existing books get bulk emotion without a re-analysis.
 - Tests: editing a quote's emotion dispatches + persists; clicking "Detect emotions" confirms cost then streams + populates chips, and leaves manually-tagged quotes untouched.
 
@@ -133,6 +147,14 @@ _Tests (Wave 5)._
 - Vitest — editing a quote's emotion dispatches the edit + persists (5a); the variant-design controls are hidden/disabled until the base voice exists, and enabled after (5b); `resolveVoiceStatus`/`hasEmotionVariants` yields the Variants badge + the filter chip + count only when variants exist, and the badge composes with `Reused`/lifecycle without altering them (5c); a variant play control calls `playSampleWithAutoLoad` with the variant voiceId, and a not-yet-designed variant shows no play control (5d); an emotion edit on a rendered chapter raises the `ui.staleAudio` banner, a tag with no matching variant shows the missing-variant hint, variant UI is hidden for a non-Qwen character, and remove drops the variant slot (5e).
 - Playwright e2e — the per-quote picker round-trips in a real browser (5a); the cast filter chip narrows the grid to variant-bearing characters (5c); a variant audition plays from the cast/drawer (5d); the variant grid + Detect-emotions confirm render correctly at phone/tablet/desktop via `e2e/responsive/coverage.spec.ts` (5e).
 
+**Wave 6 — series propagation (variants travel across a book series).** Two facets, mirroring how base Qwen voices already propagate.
+
+_6a — Reuse-linking carries variants (data)._ When a character's Qwen voice is reused across books, its `overrideTtsVoices.qwen.variants` must travel with the base, exactly as plan 150 made `voiceStyle` travel. Extend the shared resolver `server/src/tts/hydrate-reused-voice.ts` (`ReuseHydratable`/`ResolvedReusedVoice` gain `variants`; `hydrateCharacterVoice` carries `character… ?? resolved.variants`, own-wins) and the three reuse write sites that already denormalise the voice — `cast-link-prior.ts`, `series-reuse-link.ts`, `book-state.ts` (`PUT /state`). This corrects the earlier "reused base voice has no variants → falls back to base" note: a reused voice now keeps its designed variants series-wide. A reused character with no designed variants is still fine (empty map → base).
+
+_6b — Rebaseline modal designs variants series-wide (UI)._ The plan-108 "Rebaseline the series" modal (`src/modals/rebaseline-modal.tsx`) — which designs bespoke base voices for the principal cast — gains an option to also design chosen emotion variants for those characters across the series, gated on each character's base existing (invariant 6), written as drift like the base rebaseline. Per-emotion selection (design all or some, reusing the Wave 5b controls' vocabulary); the existing audition/`useSamplePlayback` previews each (variant-aware via 5d). The base-voice rebaseline path stays intact when no variants are selected.
+
+_Tests (Wave 6)._ Server — `hydrate-reused-voice` + the three write-site tests gain a case that a reused character carries its `variants` (own-wins over source); a reuse with no variants stays base. Frontend — the rebaseline modal offers per-emotion variant design gated on the base, and emits drift for each designed variant.
+
 ## Test plan
 
 ### Automated coverage
@@ -160,7 +182,6 @@ _Tests (Wave 5)._
 - Per-quote emotion on **Kokoro/XTTS** as audible output — they have no expressive lever; the tag is a documented no-op. (A future item could map emotion → speed/pacing for Kokoro, but that is not this plan.)
 - Free-form / continuous emotion (intensity sliders). The enum is fixed; revisit only if the variant-design UX proves out.
 - Auto-designing variants on demand at generation time (would reintroduce the ~10 RTF VoiceDesign cost mid-run). Variants are designed ahead of time, explicitly.
-- **Series/rebaseline propagation of emotion variants.** Variants are per-character and designed explicitly; designing them series-wide (like plan 108's base-voice rebaseline modal) is a follow-up, not v1. The base-voice rebaseline flow is untouched.
 - **Per-emotion intensity / multiple variants per emotion** (e.g. "slightly angry" vs "furious"). One variant per emotion key in v1.
 - Coordinate (do not duplicate) with `side-4`/`side-7` decode-cost wake-conditions — note that variants don't inflate per-call decode, but more distinct voices mean more `.pt` loads / VRAM churn.
 
