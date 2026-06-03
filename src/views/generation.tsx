@@ -1137,7 +1137,20 @@ function ChapterRow({
             chapter.duration
           )}
         </span>
-        <span>{stateConfig.badge}</span>
+        <span className="flex items-center gap-1.5">
+          {/* srv-27 — advisory QA badge. Renders only when the rendered audio
+              was flagged suspect (near-silent / clipped / duration drift); the
+              chapter is still Done. The reasons sit in the tooltip. */}
+          {chapter.state === 'done' && chapter.audioQa?.status === 'suspect' && (
+            <span
+              className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800"
+              title={chapter.audioQa.reasons.join(' ')}
+            >
+              Suspect
+            </span>
+          )}
+          {stateConfig.badge}
+        </span>
         <span className={`text-ink/40 transition-transform ${expanded ? 'rotate-180' : ''}`}>
           <IconArrowDn className="w-4 h-4" />
         </span>
@@ -1148,6 +1161,12 @@ function ChapterRow({
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold text-rose-900">Synthesis failed</p>
             <p className="text-xs text-rose-800/90 mt-0.5 leading-relaxed">{chapter.errorReason}</p>
+            {/* fs-19 — concrete "what to do about it" line under the reason. */}
+            {chapter.generationRemediation && (
+              <p className="text-xs text-rose-700/80 mt-1.5 leading-relaxed">
+                <span className="font-semibold">What to do:</span> {chapter.generationRemediation}
+              </p>
+            )}
           </div>
           <button
             onClick={(e) => {

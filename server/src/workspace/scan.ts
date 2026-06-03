@@ -88,6 +88,27 @@ export interface BookStateJson {
     /** Human-readable reason for the persisted `generationState: 'failed'`.
         Mirrors the `chapter_failed` SSE broadcast's `errorReason`. */
     generationError?: string;
+    /** fs-19 — stable machine code for the failure class (drives the
+        frontend's remediation rendering). Mirrors the `chapter_failed`
+        broadcast's `errorCode`. Cleared on a successful render. */
+    generationErrorCode?: string;
+    /** fs-19 — concrete "what to do about it" copy for the failure.
+        Mirrors the `chapter_failed` broadcast's `remediation`. Cleared on
+        a successful render. */
+    generationRemediation?: string;
+    /** srv-27 — advisory post-synthesis QA verdict for this chapter's audio.
+        Stamped on a successful render; drives the "Suspect" badge in the
+        Generate + Listen views. Optional so legacy state.json files load
+        cleanly. ADVISORY only — never gates completion. */
+    audioQa?: {
+      status: 'ok' | 'suspect';
+      reasons: string[];
+      measuredLufs: number | null;
+      truePeakDb: number | null;
+      durationSec: number;
+      expectedSec: number | null;
+      checkedAt: string;
+    };
   }>;
   coverGradient: [string, string];
   /** Cached cover-image metadata. Bytes live next to state.json at
