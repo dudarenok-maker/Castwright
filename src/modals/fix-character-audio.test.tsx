@@ -11,10 +11,22 @@ import { chaptersSlice } from '../store/chapters-slice';
 import { uiSlice } from '../store/ui-slice';
 import { revisionsSlice } from '../store/revisions-slice';
 import type { SpliceArgs, SpliceTick } from '../lib/api';
+import type { Chapter } from '../lib/types';
 
 const { streamSpliceSpy } = vi.hoisted(() => ({ streamSpliceSpy: vi.fn() }));
 
 vi.mock('../lib/api', () => ({ api: { streamSplice: streamSpliceSpy } }));
+
+const CHAPTERS: Chapter[] = [
+  // Castor speaks, rendered → candidate
+  { id: 1, title: 'The Meadow', duration: '2:00', state: 'done', progress: 1, characters: { Castor: 'done', amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
+  // Castor speaks, rendered → candidate
+  { id: 2, title: 'The River', duration: '3:00', state: 'done', progress: 1, characters: { Castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
+  // Castor speaks but NOT rendered → excluded
+  { id: 3, title: 'Hidden Lake', duration: '00:00', state: 'queued', progress: 0, characters: { Castor: 'queued' }, phase: null },
+  // Rendered but Castor absent → excluded
+  { id: 4, title: 'Alone', duration: '1:00', state: 'done', progress: 1, characters: { amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
+] as Chapter[];
 
 function makeStore() {
   return configureStore({
@@ -24,19 +36,8 @@ function makeStore() {
       revisions: revisionsSlice.reducer,
     },
     preloadedState: {
-      chapters: {
-        chapters: [
-          // Castor speaks, rendered → candidate
-          { id: 1, title: 'The Meadow', slug: 'c1', duration: '2:00', state: 'done', progress: 1, characters: { Castor: 'done', amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
-          // Castor speaks, rendered → candidate
-          { id: 2, title: 'The River', slug: 'c2', duration: '3:00', state: 'done', progress: 1, characters: { Castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
-          // Castor speaks but NOT rendered → excluded
-          { id: 3, title: 'Hidden Lake', slug: 'c3', duration: '00:00', state: 'queued', progress: 0, characters: { Castor: 'queued' }, phase: null },
-          // Rendered but Castor absent → excluded
-          { id: 4, title: 'Alone', slug: 'c4', duration: '1:00', state: 'done', progress: 1, characters: { amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
-        ],
-      } as never,
-    } as never,
+      chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS },
+    },
   });
 }
 
