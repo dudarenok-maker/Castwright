@@ -1,21 +1,18 @@
-/* fs-26 — FixCharacterAudioModal drives one splice per selected RENDERED
-   chapter the character appears in, and surfaces a pending A/B revision per
-   completed chapter. api.streamSplice is mocked so no backend is needed. */
+/* fs-26 — FixCharacterAudioModal filters to the rendered chapters the character
+   appears in, and dispatches a splice/startBatch with the chosen mode + params.
+   The actual per-chapter loop lives in splice-runner-middleware (covered in its
+   own test); here we assert the modal's candidate filter + the dispatched
+   batch, so no api mock / middleware is needed. */
 
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { describe, expect, it, afterEach } from 'vitest';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { Provider } from 'react-redux';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, type Action } from '@reduxjs/toolkit';
 import { FixCharacterAudioModal } from './fix-character-audio';
 import { chaptersSlice } from '../store/chapters-slice';
 import { uiSlice } from '../store/ui-slice';
-import { revisionsSlice } from '../store/revisions-slice';
-import type { SpliceArgs, SpliceTick } from '../lib/api';
+import { spliceSlice, type SpliceBatchRequest } from '../store/splice-slice';
 import type { Chapter } from '../lib/types';
-
-const { streamSpliceSpy } = vi.hoisted(() => ({ streamSpliceSpy: vi.fn() }));
-
-vi.mock('../lib/api', () => ({ api: { streamSplice: streamSpliceSpy } }));
 
 const CHAPTERS: Chapter[] = [
   // Castor speaks, rendered → candidate
@@ -28,51 +25,47 @@ const CHAPTERS: Chapter[] = [
   { id: 4, title: 'Alone', duration: '1:00', state: 'done', progress: 1, characters: { amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
 ] as Chapter[];
 
-function makeStore() {
+function makeStore(recorded: Action[]) {
   return configureStore({
     reducer: {
       chapters: chaptersSlice.reducer,
       ui: uiSlice.reducer,
-      revisions: revisionsSlice.reducer,
+      splice: spliceSlice.reducer,
     },
     preloadedState: {
       chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS },
     },
+    middleware: (getDefault) =>
+      getDefault().concat(
+        () => (next: (a: unknown) => unknown) => (action: unknown) => {
+          recorded.push(action as Action);
+          return next(action);
+        },
+      ),
   });
 }
 
 describe('FixCharacterAudioModal', () => {
-  beforeEach(() => {
-    streamSpliceSpy.mockReset();
-    streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
-      args.onTick({ type: 'splice_start', chapterId: args.chapterId, mode: args.mode, characterId: args.characterId });
-      args.onTick({
-        type: 'splice_complete',
-        chapterId: args.chapterId,
-        characterId: args.characterId,
-        mode: args.mode,
-        durationSec: 120,
-        segmentCount: 1,
-        hasPreviousAudio: true,
-      } as SpliceTick);
-    });
-  });
   afterEach(cleanup);
 
   function renderModal() {
-    const store = makeStore();
+    const recorded: Action[] = [];
+    const store = makeStore(recorded);
     render(
       <Provider store={store}>
         <FixCharacterAudioModal characterId="Castor" characterName="Castor Allred" bookId="bk1" onClose={() => {}} />
       </Provider>,
     );
-    return store;
+    const lastStartBatch = () =>
+      [...recorded].reverse().find((a) => a.type === 'splice/startBatch') as
+        | { type: string; payload: SpliceBatchRequest }
+        | undefined;
+    return { store, lastStartBatch };
   }
 
   it('offers only rendered chapters the character appears in', () => {
     renderModal();
     // 2 candidates (ch1, ch2); ch3 unrendered + ch4 no-Castor excluded.
-    // The primary button name encodes the count.
     expect(screen.getByRole('button', { name: /Apply to 2 chapters/i })).toBeTruthy();
     expect(screen.getByText(/The Meadow/)).toBeTruthy();
     expect(screen.getByText(/The River/)).toBeTruthy();
@@ -80,26 +73,32 @@ describe('FixCharacterAudioModal', () => {
     expect(screen.queryByText(/Alone/)).toBeNull();
   });
 
-  it('runs one remix splice per selected chapter and enqueues pending revisions', async () => {
-    const store = renderModal();
+  it('dispatches a remix batch with the chosen gain for the candidate chapters', () => {
+    const { store, lastStartBatch } = renderModal();
     fireEvent.click(screen.getByRole('button', { name: /Apply to 2 chapters/i }));
-    await waitFor(() => expect(streamSpliceSpy).toHaveBeenCalledTimes(2));
-    // both calls are remix with the chosen gain
-    expect(streamSpliceSpy.mock.calls.every(([a]) => a.mode === 'remix' && a.gainDb === 3)).toBe(true);
-    // a pending revision per chapter, both flipped playable on completion
-    await waitFor(() => {
-      const pending = store.getState().revisions.pending;
-      expect(pending).toHaveLength(2);
-      expect(pending.every((r) => r.playable)).toBe(true);
+    const action = lastStartBatch();
+    expect(action).toBeTruthy();
+    expect(action!.payload).toMatchObject({
+      bookId: 'bk1',
+      characterId: 'Castor',
+      mode: 'remix',
+      gainDb: 3,
+      chapterIds: [1, 2],
     });
-    expect(screen.getByTestId('fix-audio-summary').textContent).toMatch(/2 chapters updated/);
+    expect(action!.payload.modelKey).toBeUndefined();
+    // the slice recorded a running batch → modal flips to working state
+    const batch = Object.values(store.getState().splice.batches)[0];
+    expect(batch).toMatchObject({ total: 2, status: 'running', mode: 'remix' });
+    expect(screen.getByRole('button', { name: /Working…/i })).toBeTruthy();
   });
 
-  it('switches to re-record mode and sends modelKey instead of gain', async () => {
-    renderModal();
+  it('switches to re-record mode and sends modelKey instead of gain', () => {
+    const { lastStartBatch } = renderModal();
     fireEvent.click(screen.getByText('Re-record')); // the mode toggle <p>
     fireEvent.click(screen.getByRole('button', { name: /Re-record 2 chapters/i }));
-    await waitFor(() => expect(streamSpliceSpy).toHaveBeenCalledTimes(2));
-    expect(streamSpliceSpy.mock.calls.every(([a]) => a.mode === 'rerecord' && a.gainDb === undefined && !!a.modelKey)).toBe(true);
+    const action = lastStartBatch();
+    expect(action!.payload).toMatchObject({ mode: 'rerecord', chapterIds: [1, 2] });
+    expect(action!.payload.gainDb).toBeUndefined();
+    expect(typeof action!.payload.modelKey).toBe('string');
   });
 });

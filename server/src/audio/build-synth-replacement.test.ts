@@ -4,12 +4,25 @@
    the chapter grid when the synth returns a different rate. */
 
 import { describe, it, expect } from 'vitest';
-import { buildSynthReplacements } from './build-synth-replacement.js';
+import { buildSynthReplacements, isRerecordableSegment } from './build-synth-replacement.js';
 import type { ChapterSegment } from '../tts/synthesise-chapter.js';
 
 function seg(i: number, characterId: string, sentenceIds: number[]): ChapterSegment {
   return { groupIndex: i, characterId, sentenceIds, startSec: i, endSec: i + 1 };
 }
+
+describe('isRerecordableSegment', () => {
+  it('rejects the title beat (kind:title / empty sentenceIds) so a narrator re-record cannot wipe it', () => {
+    const title: ChapterSegment = { groupIndex: -1, characterId: 'narrator', sentenceIds: [], startSec: 0, endSec: 2, kind: 'title' };
+    expect(isRerecordableSegment(title)).toBe(false);
+  });
+  it('rejects a sentence-less body segment', () => {
+    expect(isRerecordableSegment(seg(0, 'amy', []))).toBe(false);
+  });
+  it('accepts a normal sentence-backed segment', () => {
+    expect(isRerecordableSegment(seg(0, 'amy', [1, 2]))).toBe(true);
+  });
+});
 
 const segments = [
   seg(0, 'amy', [1]),
