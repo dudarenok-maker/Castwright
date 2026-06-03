@@ -1248,6 +1248,69 @@ paths:
             text/event-stream:
               schema: { $ref: '#/components/schemas/GenerationTick' }
 
+  /api/books/{bookId}/chapters/{chapterId}/splice:
+    post:
+      summary: Per-character re-record / re-mix splice (fs-26)
+      operationId: spliceChapter
+      description: |
+        Re-renders or re-mixes ONE character's segments in an already-rendered
+        chapter and splices the result back into the chapter audio, instead of
+        regenerating the whole chapter. Streams SSE `data: <json>` frames:
+        `splice_start`, `chapter_assembling`, then `splice_complete` (or
+        `chapter_failed`). Decodes the chapter audio, substitutes the target
+        segments (a `volume` gain for `remix`, fresh synthesis for `rerecord`),
+        re-runs the whole-chapter loudnorm so the splice is seamless, preserves
+        the prior take as `.previous.*` (the A/B + rollback substrate), and
+        updates `segments.json` + duration. A splice and a full regen of the
+        same chapter mutually displace each other so they never race the files.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode, characterId]
+              properties:
+                mode:
+                  type: string
+                  enum: [remix, rerecord]
+                  description: '`remix` applies a dB gain (no GPU — the fix for "too quiet"); `rerecord` re-synthesises the character''s sentences.'
+                characterId:
+                  type: string
+                  description: The character whose segments in this chapter are re-mixed or re-recorded.
+                gainDb:
+                  type: number
+                  description: 'remix only — signed dB gain applied to the character''s segments, clamped to [-24, +24].'
+                segmentIndices:
+                  type: array
+                  items: { type: integer }
+                  description: 'rerecord only — optional subset of the character''s segments to re-record; omitted = all of them.'
+                modelKey:
+                  type: string
+                  enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  description: Required for rerecord — TTS model key to synthesise with.
+      responses:
+        '200':
+          description: SSE splice progress + completion stream
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                description: 'A `data:` frame — one of splice_start / chapter_assembling / splice_complete / chapter_failed.'
+                properties:
+                  type: { type: string, enum: [splice_start, chapter_assembling, splice_complete, chapter_failed] }
+                  chapterId: { type: integer }
+                  characterId: { type: string }
+                  mode: { type: string, enum: [remix, rerecord] }
+                  durationSec: { type: number }
+                  segmentCount: { type: integer }
+                  hasPreviousAudio: { type: boolean }
+                  progress: { type: number }
+                  errorReason: { type: string }
+
   /api/books/{bookId}/chapters/{chapterId}/audio:
     get:
       summary: Get a chapter's playable audio + waveform metadata
