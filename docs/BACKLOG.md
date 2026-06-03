@@ -51,36 +51,6 @@ highest-ROI quick listener wins interleaved near the top, then medium user-value
 then the large-but-important localization item. (The dependency-major cluster that sat at
 the bottom of Should all shipped via plans 167 + 170 on 2026-06-02 — see the note below.)
 
-### `srv-27` — Post-synthesis audio QA gate ([#465](https://github.com/dudarenok-maker/AudioBook-Generator/issues/465))
-
-- _What:_ Before a chapter flips to `done`, run cheap validators on the rendered audio — duration-vs-expected ratio, leading/trailing-silence, near-silent / clipped / truncated output — and flag suspect chapters instead of silently shipping a bad render. Extends the existing ffmpeg loudness plumbing.
-- _Benefit (user):_ catches garbled / empty / truncated renders before the listener hits them.
-_Full detail + acceptance:_ [#465](https://github.com/dudarenok-maker/AudioBook-Generator/issues/465).
-
-### `fe-23` — Auto-advance / continuous playback ([#458](https://github.com/dudarenok-maker/AudioBook-Generator/issues/458))
-
-- _What:_ The mini-player's `onEnded` only calls `setPlaying(false)` — playback stops dead at every chapter boundary. Add auto-advance to the next chapter behind a default-on toggle so the book plays hands-free end to end.
-- _Benefit (user):_ quick win that fixes a broken default — the biggest everyday-listening gap.
-_Full detail + acceptance:_ [#458](https://github.com/dudarenok-maker/AudioBook-Generator/issues/458).
-
-### `srv-28` — Pre-flight disk-space guard ([#466](https://github.com/dudarenok-maker/AudioBook-Generator/issues/466))
-
-- _What:_ Before starting a generation run or an export, check free disk space against a rough estimate and warn (or block) the user if it's tight. Audiobooks are large; failing 40 chapters into a run is the worst case.
-- _Benefit (user):_ cheap; avoids deep-run failures from running out of space mid-book.
-_Full detail + acceptance:_ [#466](https://github.com/dudarenok-maker/AudioBook-Generator/issues/466).
-
-### `fs-19` — Structured failure taxonomy + plain-language remediation ([#469](https://github.com/dudarenok-maker/AudioBook-Generator/issues/469))
-
-- _What:_ Map the recurring failure modes (VRAM spill, sidecar down, analyzer rate-limit, OOM, disk-full, model-not-loaded) to a small taxonomy with human-readable messages and a "what to do next" line, instead of raw error strings in `state.json.generationError` and toasts.
-- _Benefit (user):_ self-service recovery; fewer "it just failed" dead-ends. Shares remediation copy with the in-app help panel (`fe-29`).
-_Full detail + acceptance:_ [#469](https://github.com/dudarenok-maker/AudioBook-Generator/issues/469).
-
-### `fe-24` — Skip forward/back buttons (±15s / ±30s) ([#459](https://github.com/dudarenok-maker/AudioBook-Generator/issues/459))
-
-- _What:_ Today the mini-player's prev/next jump whole chapters only. Add the standard intra-chapter ±15s/±30s seek controls + rebindable key bindings (reuse the `useKeyBinding` path that powers play/pause).
-- _Benefit (user):_ quick win; the most-used control in every audiobook app, currently absent.
-_Full detail + acceptance:_ [#459](https://github.com/dudarenok-maker/AudioBook-Generator/issues/459).
-
 ### `srv-13` — Analysis-time cross-book reuse linking — Facet B (reparse preservation) ([#398](https://github.com/dudarenok-maker/AudioBook-Generator/issues/398))
 
 - _What:_ Preserve cross-book "reused" continuity (`matchedFrom` + unified `voiceId` + `voiceState:'reused'` + aliases) **across reparse**. Today reparse **deletes `cast.json`** (`book-state.ts:722-723`), so the links Facet A establishes evaporate on the next re-analysis. Read the existing cast before deleting and carry forward per-character `matchedFrom`/`voiceId`/`voiceState`/`aliases` for surviving characters (match by id, then name/alias), mirroring the `cast-slice.ts:mergeCharacters` preservation pattern (which already preserves tuned/locked voices). Facet A is unaffected — it re-establishes links on a full `/analysis/stream`; Facet B stops a reparse from silently dropping them in between.
@@ -130,12 +100,6 @@ onboarding & first-run, security & hardening, ops & distribution, listener-app h
 Sub-groups and the items within them are ranked top = highest priority.
 
 ### Reliability & observability
-
-#### `fs-20` — Per-run resource telemetry log + trend view ([#470](https://github.com/dudarenok-maker/AudioBook-Generator/issues/470))
-
-- _What:_ Persist per-chapter generation telemetry — RTF, VRAM peak, committed host RAM, wall-time — to a rolling JSONL and chart the trend (the dev worktrees view already shows throughput; extend it to resource trends).
-- _Benefit (technical):_ perf-regression visibility for exactly the RTF / VRAM / host-RAM firefighting that has dominated recent history.
-_Full detail + acceptance:_ [#470](https://github.com/dudarenok-maker/AudioBook-Generator/issues/470).
 
 #### `ops-11` — Golden-audio regression harness ([#467](https://github.com/dudarenok-maker/AudioBook-Generator/issues/467))
 
