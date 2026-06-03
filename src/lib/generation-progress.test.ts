@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   characterLinePositionsByChapter,
   characterRowProgress,
+  characterSentenceIdsByChapter,
   characterStatsByChapter,
   countWords,
   estimateGenMinutes,
@@ -321,5 +322,112 @@ describe('characterRowProgress — the regenerate stale-Done regression', () => 
       currentLine: 50,
     });
     expect(r).toEqual({ derivedDone: 0, fraction: 0, fullyDone: false });
+  });
+});
+
+describe('fs-13 — exact per-character progress from the completed-id set', () => {
+  /* Under parallel synthesis (poolWidth > 1 + Qwen batching) groups complete
+     out of narrative order, so the chapter-wide `currentLine` COUNT can sit
+     ahead of or behind a given character's true done count. The set carries
+     the EXACT sentence ids that finished, so each character's bar reads its
+     real intersection regardless of completion order. */
+  const sentences: Sentence[] = [
+    { id: 1, chapterId: 2, characterId: 'narrator', text: 'a' },
+    { id: 2, chapterId: 2, characterId: 'Marlow', text: 'b' },
+    { id: 3, chapterId: 2, characterId: 'narrator', text: 'c' },
+    { id: 4, chapterId: 2, characterId: 'Wren', text: 'd' },
+    { id: 5, chapterId: 2, characterId: 'Wren', text: 'e' },
+  ];
+
+  it('maps each character to their sentence ids per chapter in narrative order', () => {
+    const out = characterSentenceIdsByChapter(sentences);
+    expect(out[2].narrator).toEqual([1, 3]);
+    expect(out[2].Marlow).toEqual([2]);
+    expect(out[2].Wren).toEqual([4, 5]);
+  });
+
+  it('reads an EXACT done count for a late-clustered character even when the chapter count is low', () => {
+    /* Only one group has completed so far (count = 1, currentLine = 1), but it
+       was Wren's LAST line (id 5). A currentLine/positions approximation
+       would credit Wren 0 (her positions 4,5 are both > 1); the set credits
+       exactly the one finished sentence. */
+    const ids = characterSentenceIdsByChapter(sentences)[2];
+    const completedSet = new Set([5]);
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'queued',
+      linesTotal: 2,
+      positions: [4, 5],
+      currentLine: 1,
+      sentenceIds: ids.Wren,
+      completedSet,
+    });
+    expect(r.derivedDone).toBe(1);
+    expect(r.fraction).toBeCloseTo(0.5, 5);
+    expect(r.fullyDone).toBe(false);
+  });
+
+  it('does not over-count a character whose lines have NOT finished even when the chapter count is high', () => {
+    /* count is high (3 groups done) but none of them were Marlow's line (id 2).
+       The approximation would credit Marlow 1 (position 2 ≤ currentLine 3); the
+       set correctly credits 0. */
+    const ids = characterSentenceIdsByChapter(sentences)[2];
+    const completedSet = new Set([1, 3, 5]);
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'queued',
+      linesTotal: 1,
+      positions: [2],
+      currentLine: 3,
+      sentenceIds: ids.Marlow,
+      completedSet,
+    });
+    expect(r.derivedDone).toBe(0);
+    expect(r.fullyDone).toBe(false);
+  });
+
+  it('marks a character fully done when all their sentence ids are in the set', () => {
+    const ids = characterSentenceIdsByChapter(sentences)[2];
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'queued',
+      linesTotal: 2,
+      positions: [4, 5],
+      currentLine: 5,
+      sentenceIds: ids.Wren,
+      completedSet: new Set([4, 5]),
+    });
+    expect(r.derivedDone).toBe(2);
+    expect(r.fraction).toBe(1);
+    expect(r.fullyDone).toBe(true);
+  });
+
+  it('falls back to the currentLine approximation when no completed set is present (older server)', () => {
+    /* No set / undefined → behave exactly as before: linesDoneAt(positions, currentLine). */
+    const r = characterRowProgress({
+      chapterState: 'in_progress',
+      status: 'queued',
+      linesTotal: 9,
+      positions: [10, 41, 75, 90, 101, 120, 140, 160, 175],
+      currentLine: 80,
+      sentenceIds: undefined,
+      completedSet: undefined,
+    });
+    expect(r.derivedDone).toBe(3);
+    expect(r.fraction).toBeCloseTo(3 / 9, 5);
+  });
+
+  it('still honors chapter_complete (whole chapter done) over the set', () => {
+    const ids = characterSentenceIdsByChapter(sentences)[2];
+    const r = characterRowProgress({
+      chapterState: 'done',
+      status: 'done',
+      linesTotal: 2,
+      positions: [4, 5],
+      currentLine: 0,
+      sentenceIds: ids.Wren,
+      completedSet: new Set<number>(),
+    });
+    expect(r).toEqual({ derivedDone: 2, fraction: 1, fullyDone: true });
   });
 });

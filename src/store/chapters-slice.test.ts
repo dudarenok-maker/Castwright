@@ -239,6 +239,69 @@ describe('chaptersSlice — applyGenerationTick', () => {
         eliza: 'skipped',
       });
     });
+
+    describe('fs-13 completedSentenceIds set', () => {
+      it('unions each completion tick\'s sentence ids into the chapter set, even out of narrative order', () => {
+        let state = baseState([
+          makeChapter(3, {
+            state: 'in_progress',
+            characters: { narrator: 'in_progress', halloran: 'queued', eliza: 'queued' },
+          }),
+        ]);
+        /* A late-clustered character (eliza) completes BEFORE an earlier one —
+           the set must reflect exactly what finished, not a position watermark. */
+        state = chaptersSlice.reducer(
+          state,
+          chaptersActions.applyGenerationTick(
+            tick({ type: 'progress', chapterId: 3, characterId: 'eliza', currentLine: 1, completedSentenceIds: [40, 41] }),
+          ),
+        );
+        state = chaptersSlice.reducer(
+          state,
+          chaptersActions.applyGenerationTick(
+            tick({ type: 'progress', chapterId: 3, characterId: 'narrator', currentLine: 2, completedSentenceIds: [1] }),
+          ),
+        );
+        expect([...(state.chapters[0].completedSentenceIds ?? [])].sort((a, b) => a - b)).toEqual([
+          1, 40, 41,
+        ]);
+      });
+
+      it('de-dupes a sentence id re-delivered by a heartbeat replay (idempotent union)', () => {
+        let state = baseState([makeChapter(3, { state: 'in_progress' })]);
+        const dup = tick({
+          type: 'progress',
+          chapterId: 3,
+          characterId: 'narrator',
+          currentLine: 1,
+          completedSentenceIds: [7, 8],
+        });
+        state = chaptersSlice.reducer(state, chaptersActions.applyGenerationTick(dup));
+        state = chaptersSlice.reducer(state, chaptersActions.applyGenerationTick(dup));
+        expect([...(state.chapters[0].completedSentenceIds ?? [])].sort((a, b) => a - b)).toEqual([
+          7, 8,
+        ]);
+      });
+
+      it('clears a stale set when a not-in-progress chapter receives a fresh progress tick (restart)', () => {
+        /* A chapter that was done/queued/failed and gets a new progress tick is
+           (re)starting — the prior run's completed set must not leak into it. */
+        let state = baseState([
+          makeChapter(3, {
+            state: 'done',
+            completedSentenceIds: [1, 2, 3, 4, 5],
+            characters: { narrator: 'done', halloran: 'done', eliza: 'done' },
+          }),
+        ]);
+        state = chaptersSlice.reducer(
+          state,
+          chaptersActions.applyGenerationTick(
+            tick({ type: 'progress', chapterId: 3, characterId: 'narrator', currentLine: 1, completedSentenceIds: [1] }),
+          ),
+        );
+        expect(state.chapters[0].completedSentenceIds).toEqual([1]);
+      });
+    });
   });
 
   describe('chapter_assembling', () => {

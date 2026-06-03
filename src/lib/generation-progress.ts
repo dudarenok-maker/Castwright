@@ -59,6 +59,26 @@ export function characterLinePositionsByChapter(
   return out;
 }
 
+/** Map of chapterId → characterId → that character's sentence ids in the
+   chapter, in narrative order.
+
+   fs-13 — the completed-id SET carried on the SSE tick keys on manuscript
+   sentence ids (the stable identity the server folds into a group), not line
+   positions. Intersecting a character's sentence ids with the chapter's
+   completed set yields an EXACT done count that holds under out-of-order
+   completion, where the `currentLine`-count approximation (`linesDoneAt`) can
+   read a character slightly high or low. */
+export function characterSentenceIdsByChapter(
+  sentences: Sentence[],
+): Record<number, Record<string, number[]>> {
+  const out: Record<number, Record<string, number[]>> = {};
+  for (const s of sentences) {
+    const chap = out[s.chapterId] ?? (out[s.chapterId] = {});
+    (chap[s.characterId] ??= []).push(s.id);
+  }
+  return out;
+}
+
 /** Count of positions ≤ currentLine. `positions` must be sorted ascending
    (which `characterLinePositionsByChapter` guarantees because it walks the
    chapter's sentences in narrative order). Binary search keeps this O(log N)
@@ -97,17 +117,33 @@ export function characterRowProgress(args: {
   linesTotal: number;
   positions: number[] | undefined;
   currentLine: number;
+  /* fs-13 — the EXACT path. When both are present, the character's done count
+     is the size of (their sentence ids ∩ the chapter's completed-id set),
+     which holds under out-of-order completion. When either is absent (older
+     server that doesn't emit `completedSentenceIds`, or before the first
+     completion tick) we fall back to the `linesDoneAt(positions, currentLine)`
+     approximation — identical to pre-fs-13 behaviour. */
+  sentenceIds?: number[] | undefined;
+  completedSet?: ReadonlySet<number> | undefined;
 }): { derivedDone: number; fraction: number; fullyDone: boolean } {
-  const { chapterState, status, linesTotal, positions, currentLine } = args;
+  const { chapterState, status, linesTotal, positions, currentLine, sentenceIds, completedSet } =
+    args;
   const chapterDone = chapterState === 'done';
-  const derivedDone = chapterDone
-    ? linesTotal
-    : status === 'skipped'
-      ? 0
+  const exactDone =
+    completedSet && sentenceIds
+      ? countInSet(sentenceIds, completedSet)
       : linesDoneAt(positions, currentLine);
+  const derivedDone = chapterDone ? linesTotal : status === 'skipped' ? 0 : exactDone;
   const fraction = linesTotal > 0 ? Math.min(1, derivedDone / linesTotal) : 0;
   const fullyDone = chapterDone || (linesTotal > 0 && derivedDone >= linesTotal);
   return { derivedDone, fraction, fullyDone };
+}
+
+/** Count how many of `ids` are present in `set`. fs-13 exact-intersection. */
+function countInSet(ids: number[], set: ReadonlySet<number>): number {
+  let n = 0;
+  for (const id of ids) if (set.has(id)) n += 1;
+  return n;
 }
 
 /** Target real-time factor: generation seconds per second of finished audio.
