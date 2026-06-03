@@ -1384,6 +1384,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/generation/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Per-run resource telemetry for the Admin trend panel (fs-20)
+         * @description Returns per-chapter resource telemetry — RTF + audio/wall seconds
+         *     alongside the GPU (reserved/total VRAM) and host-RAM figures captured
+         *     right after each chapter rendered — NEWEST-FIRST. Backs the Admin
+         *     console's "Resource trends" panel so the operator can watch resource
+         *     pressure climb across a long run (the slow creep that precedes a VRAM
+         *     spill / host OOM). Best-effort store (workspace JSONL, capped); a read
+         *     failure yields an empty list rather than a 500.
+         */
+        get: operations["getResourceTelemetry"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/diagnostics": {
         parameters: {
             query?: never;
@@ -2182,7 +2208,24 @@ export interface components {
              * @enum {string}
              */
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * @description srv-27 — Only on `chapter_complete` — the advisory post-synthesis
+             *     QA verdict, so the frontend can stamp a "Suspect" badge the moment
+             *     the Done pill flips without a state.json reload.
+             */
+            audioQa?: components["schemas"]["ChapterQaVerdict"];
             errorReason?: string | null;
+            /**
+             * @description Only on `chapter_failed` — fs-19 stable machine code for the failure
+             *     class. Lets the frontend render the matching remediation + persist
+             *     it without parsing `errorReason`.
+             */
+            errorCode?: components["schemas"]["FailureCode"];
+            /**
+             * @description Only on `chapter_failed` — fs-19 concrete "what to do about it" copy
+             *     for the failure, surfaced under the error reason.
+             */
+            remediation?: string;
             /**
              * @description Only on `warning` — a stable machine-readable warning code
              *     (e.g. `qwen_unavailable_kokoro_fallback`,
@@ -2798,6 +2841,36 @@ export interface components {
                 confidence?: number;
             } | null;
         };
+        /**
+         * @description fs-19 — stable machine-readable class for a synthesis (or analysis)
+         *     failure. Maps a recurring failure mode to a friendly message +
+         *     remediation server-side (server/src/routes/failure-taxonomy.ts); the
+         *     frontend switches on it for per-class styling. `unknown` is the
+         *     catch-all for an unmapped error (the raw message is surfaced verbatim).
+         * @enum {string}
+         */
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown";
+        /**
+         * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
+         *     chapter. ADVISORY only: a `suspect` status drives a badge but never
+         *     gates completion (the chapter still flips to done). Stamped at render
+         *     time and surfaced on the Chapter shape + the `chapter_complete` tick.
+         */
+        ChapterQaVerdict: {
+            /** @enum {string} */
+            status: "ok" | "suspect";
+            /** @description Human-readable reasons behind a `suspect` verdict; empty when ok. */
+            reasons: string[];
+            /** @description Integrated loudness (LUFS) checked, or null when loudnorm was disabled. */
+            measuredLufs: number | null;
+            /** @description True peak (dBTP) checked, or null when not measured. */
+            truePeakDb: number | null;
+            durationSec: number;
+            /** @description Text-derived expected length (s), or null when no estimate was available. */
+            expectedSec: number | null;
+            /** Format: date-time */
+            checkedAt: string;
+        };
         Chapter: {
             id: number;
             title: string;
@@ -2812,6 +2885,25 @@ export interface components {
                 [key: string]: "queued" | "in_progress" | "done" | "skipped" | "failed";
             };
             errorReason?: string | null;
+            /**
+             * @description fs-19 — stable machine code for the last synthesis FAILURE's class
+             *     (e.g. `vram-spill`, `disk-full`, `cuda-poisoned`). Drives the
+             *     frontend's remediation rendering. Absent on never-failed chapters;
+             *     cleared on a successful render.
+             */
+            generationErrorCode?: components["schemas"]["FailureCode"] | null;
+            /**
+             * @description fs-19 — concrete "what to do about it" copy for the last synthesis
+             *     failure. Surfaced under the error reason on the failed chapter row.
+             *     Absent on never-failed chapters; cleared on a successful render.
+             */
+            generationRemediation?: string | null;
+            /**
+             * @description srv-27 — advisory post-synthesis QA verdict for this chapter's
+             *     audio. Stamped on a successful render; drives the "Suspect" badge.
+             *     Absent on never-rendered / legacy chapters.
+             */
+            audioQa?: components["schemas"]["ChapterQaVerdict"] | null;
             /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
             excluded?: boolean;
             /**
@@ -2950,6 +3042,14 @@ export interface components {
             createdAt: string;
             /** @description ISO timestamp once status leaves in_progress. */
             completedAt?: string | null;
+            /**
+             * @description srv-28 — non-fatal disk-space advisory, present only on the POST
+             *     201 response body when the pre-flight disk guard is in `warn` mode
+             *     and free space is tight. The build still proceeds; the export modal
+             *     surfaces this next to the queued job. Absent when the guard was ok /
+             *     off, and never present on a poll (GET) response.
+             */
+            warning?: string;
         };
         BookShareLink: {
             /**
@@ -2986,6 +3086,30 @@ export interface components {
             inFlight: number;
             /** @description Configured concurrency ceiling — the GPU_CONCURRENCY env var (default 1). Bump only after measuring VRAM headroom on the target GPU. */
             max: number;
+        };
+        /**
+         * @description One per-chapter telemetry sample captured right after a chapter
+         *     rendered: throughput (RTF, audio/wall seconds) + GPU and host-RAM
+         *     figures from a best-effort sidecar /health probe (null when the probe
+         *     timed out / the sidecar was down).
+         */
+        ResourceTelemetryRecord: {
+            /** Format: date-time */
+            at: string;
+            bookId: string | null;
+            chapterId: number | string;
+            title: string | null;
+            modelKey: string | null;
+            /** @description synth wall ÷ audio (< 1 = faster than realtime). */
+            rtf: number | null;
+            audioSec: number;
+            wallSec: number;
+            vramReservedMb: number | null;
+            vramTotalMb: number | null;
+            committedHostMb: number | null;
+        };
+        ResourceTelemetryResponse: {
+            records: components["schemas"]["ResourceTelemetryRecord"][];
         };
         DiagnosticsCheck: {
             /**
@@ -5146,6 +5270,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GpuQueueState"];
+                };
+            };
+        };
+    };
+    getResourceTelemetry: {
+        parameters: {
+            query?: {
+                /** @description Cap the number of (newest-first) records returned. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Per-run resource telemetry, newest-first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResourceTelemetryResponse"];
                 };
             };
         };
