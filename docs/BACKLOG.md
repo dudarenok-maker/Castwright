@@ -57,12 +57,6 @@ the bottom of Should all shipped via plans 167 + 170 on 2026-06-02 — see the n
 - _Benefit (user):_ catches garbled / empty / truncated renders before the listener hits them.
 _Full detail + acceptance:_ [#465](https://github.com/dudarenok-maker/AudioBook-Generator/issues/465).
 
-### `srv-2` — Auto-backup scheduling for `state.json` ([#424](https://github.com/dudarenok-maker/AudioBook-Generator/issues/424))
-
-- _What:_ Add a background backup job that on configurable cadence (daily / weekly) writes a snapshot of `<workspace>/<bookId>/.audiobook/state.json` to `<workspace>/.backups/<bookId>/<YYYYMMDD-HHMMSS>.json`. Keep last N (configurable, default 14). Manual "Restore from backup" affordance in workspace settings.
-- _Benefit (user):_ disaster recovery without manual intervention. Particularly valuable on Windows where OneDrive sync conflicts can occasionally corrupt `state.json` mid-write. **Promoted to Should on 2026-06-02** as a data-safety anchor.
-_Full detail + acceptance:_ [#424](https://github.com/dudarenok-maker/AudioBook-Generator/issues/424).
-
 ### `fe-23` — Auto-advance / continuous playback ([#458](https://github.com/dudarenok-maker/AudioBook-Generator/issues/458))
 
 - _What:_ The mini-player's `onEnded` only calls `setPlaying(false)` — playback stops dead at every chapter boundary. Add auto-advance to the next chapter behind a default-on toggle so the book plays hands-free end to end.
