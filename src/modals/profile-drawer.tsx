@@ -80,6 +80,9 @@ interface Props {
   onLock: (character: Character) => void;
   onShowMatchDetail?: (id: string) => void;
   onRegenerateCharacter?: (id: string) => void;
+  /** fs-26 — open the per-character "Fix audio" modal (loudness boost /
+      re-record + splice) for this character. Omitted = button hidden. */
+  onFixAudio?: (id: string) => void;
   /** Other characters in the cast that this character could be merged INTO
       (i.e. the surviving identity). When omitted or empty, the merge
       affordance hides itself. Layout passes `cast \ this`. */
@@ -185,6 +188,7 @@ export function ProfileDrawer({
   onLock,
   onShowMatchDetail,
   onRegenerateCharacter,
+  onFixAudio,
   mergeCandidates,
   mergeCandidatesPrior,
   onMerge,
@@ -1111,6 +1115,15 @@ export function ProfileDrawer({
               <IconRefresh className="w-4 h-4" /> Regenerate {character.name.split(' ')[0]}'s lines
               across the book
             </button>
+            {onFixAudio && (
+              <button
+                onClick={() => onFixAudio(character.id)}
+                className="mt-2 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl border border-ink/10 hover:bg-ink/4 text-ink text-sm font-semibold transition-colors min-h-[44px]"
+              >
+                <IconRefresh className="w-4 h-4" /> Fix {character.name.split(' ')[0]}'s audio
+                (loudness / re-record)
+              </button>
+            )}
           </section>
 
           <section>

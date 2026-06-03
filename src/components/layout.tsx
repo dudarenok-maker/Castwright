@@ -62,6 +62,7 @@ import { RegenerateModal } from '../modals/regenerate';
 import { CharacterRegenerateModal } from '../modals/character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
 import { ProfileDrawer } from '../modals/profile-drawer';
+import { FixCharacterAudioModal } from '../modals/fix-character-audio';
 import {
   DuplicateReviewModal,
   type DuplicateReviewPair,
@@ -367,6 +368,9 @@ export function Layout() {
     aliasName: string;
     impactedChapters: { chapterId: number; candidateSentenceIds: number[] }[];
   } | null>(null);
+  /* fs-26 — per-character "Fix audio" (loudness/re-record splice) modal.
+     Holds the characterId opened from the ProfileDrawer; null = closed. */
+  const [fixAudioFor, setFixAudioFor] = useState<string | null>(null);
   const showInfo: LayoutContext['showInfo'] = (args) =>
     setResultDialog({ open: true, kind: 'info', ...args });
   const showError: LayoutContext['showError'] = (title, body, eyebrow) =>
@@ -1657,6 +1661,7 @@ export function Layout() {
               onRegenerateCharacter={(charId) =>
                 dispatch(uiActions.setRegenCharacterCtx({ characterId: charId }))
               }
+              onFixAudio={(charId) => setFixAudioFor(charId)}
             />
           );
         })()}
@@ -1685,6 +1690,16 @@ export function Layout() {
           aliasName={reattributeModal.aliasName}
           impactedChapters={reattributeModal.impactedChapters}
           onClose={() => setReattributeModal(null)}
+        />
+      )}
+
+      {/* fs-26 — per-character "Fix audio" (loudness boost / re-record splice). */}
+      {fixAudioFor && bookId && (
+        <FixCharacterAudioModal
+          characterId={fixAudioFor}
+          characterName={characters.find((c) => c.id === fixAudioFor)?.name ?? 'Character'}
+          bookId={bookId}
+          onClose={() => setFixAudioFor(null)}
         />
       )}
       <QueueModalContainer />

@@ -480,6 +480,65 @@ export async function encodePcmToAudio(
   return encoded;
 }
 
+/** Decode an encoded audio buffer (mp3 / m4a / ogg) back to raw 16-bit signed
+    LE mono PCM at `sampleRate`. The inverse of `encodePcmToAudio`, used by the
+    fs-26 splice engine to recover a rendered chapter's samples for byte-range
+    surgery.
+
+    `-ar <sampleRate>` FORCES the output onto the requested grid: the splice
+    engine maps `segments.json` timestamps to byte offsets assuming PCM at the
+    segments file's `sampleRate`, so decoding to that exact rate keeps sec↔byte
+    round-trips drift-free. MP3 is lossy and carries a little encoder
+    delay/padding — the `-write_xing` header we emit on encode lets ffmpeg's
+    decoder strip most of it, so the decode lands ~sample-aligned to the
+    original synthesis PCM.
+
+    Mirrors `encodePcmToAudio`'s subprocess handling (friendly spawn-failure
+    hint, EPIPE-safe stdin, reject on non-zero exit). We feed the whole encoded
+    file on stdin; mp3/ogg and fragmented-mp4 (our AAC output) all probe fine
+    from a pipe for decode. */
+export async function decodeAudioToPcm(input: Buffer, sampleRate: number): Promise<Buffer> {
+  const args = [
+    '-loglevel',
+    'error',
+    '-i',
+    'pipe:0',
+    '-f',
+    's16le',
+    '-acodec',
+    'pcm_s16le',
+    '-ac',
+    '1',
+    '-ar',
+    String(sampleRate),
+    'pipe:1',
+  ];
+  return new Promise<Buffer>((resolve, reject) => {
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout.on('data', (c) => stdoutChunks.push(c));
+    child.stderr.on('data', (c) => stderrChunks.push(c));
+    child.on('error', (err) => {
+      reject(
+        new Error(
+          `Failed to spawn ffmpeg: ${err.message}. ` +
+            `Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).`,
+        ),
+      );
+    });
+    child.on('close', (code) => {
+      const stderr = Buffer.concat(stderrChunks).toString('utf8');
+      if (code === 0) resolve(Buffer.concat(stdoutChunks));
+      else reject(new Error(`ffmpeg (decode) exited with code ${code}: ${stderr.trim() || '(no stderr)'}`));
+    });
+    child.stdin.on('error', (err) => {
+      if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
+    });
+    child.stdin.end(input);
+  });
+}
+
 /** Map an `EncodePcmAudioFormat` to the on-disk file extension generation
  *  emits. Centralised so generation.ts + the audio-file locator agree on
  *  the same mapping. */

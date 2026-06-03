@@ -502,6 +502,39 @@ export interface StreamArgs {
       don't carry the field. */
   queueEntryId?: string;
 }
+/** fs-26 — one SSE frame from the per-character splice endpoint. */
+export type SpliceTick =
+  | { type: 'splice_start'; chapterId: number; mode: 'remix' | 'rerecord'; characterId: string }
+  | { type: 'progress'; chapterId: number; characterId?: string; progress: number }
+  | { type: 'chapter_assembling'; chapterId: number; progress: number }
+  | {
+      type: 'splice_complete';
+      chapterId: number;
+      characterId: string;
+      mode: 'remix' | 'rerecord';
+      durationSec: number;
+      segmentCount: number;
+      hasPreviousAudio: boolean;
+    }
+  | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
+
+export interface SpliceArgs {
+  bookId: string;
+  chapterId: number;
+  /** `remix` applies a dB gain (no GPU); `rerecord` re-synthesises. */
+  mode: 'remix' | 'rerecord';
+  characterId: string;
+  /** remix only — signed dB, clamped server-side to [-24, +24]. */
+  gainDb?: number;
+  /** rerecord only — optional subset of the character's segments. */
+  segmentIndices?: number[];
+  /** rerecord only — TTS model to synthesise with. */
+  modelKey?: TtsModelKey;
+  onTick: (ev: SpliceTick) => void;
+  /** Optional cancellation (e.g. user cancels a multi-chapter batch). */
+  signal?: AbortSignal;
+}
+
 export interface AudioArgs {
   bookId: string;
   chapterId: number;
@@ -1273,6 +1306,24 @@ function mockStreamGeneration({
   };
   const handle = setInterval(tick, 1200);
   return () => clearInterval(handle);
+}
+
+/* fs-26 mock — emits the start → assembling → complete arc synchronously so
+   mock-mode (e2e / unit) drives the splice flow without a backend. */
+async function mockStreamSplice({ chapterId, mode, characterId, onTick }: SpliceArgs): Promise<void> {
+  onTick({ type: 'splice_start', chapterId, mode, characterId });
+  await wait(80);
+  onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
+  await wait(80);
+  onTick({
+    type: 'splice_complete',
+    chapterId,
+    characterId,
+    mode,
+    durationSec: 120,
+    segmentCount: 1,
+    hasPreviousAudio: true,
+  });
 }
 
 async function mockGetChapterAudio({ duration }: AudioArgs): Promise<ChapterAudio> {
@@ -3389,6 +3440,75 @@ function realStreamGeneration({
   return () => controller.abort();
 }
 
+/* fs-26 — per-character splice. One short-lived SSE POST per chapter; resolves
+   when the stream ends. Unlike generation there's no reconnect — a splice is
+   quick, so a dropped stream surfaces as a failure tick and the caller retries
+   that chapter if it wants. */
+async function realStreamSplice({
+  bookId,
+  chapterId,
+  mode,
+  characterId,
+  gainDb,
+  segmentIndices,
+  modelKey,
+  onTick,
+  signal,
+}: SpliceArgs): Promise<void> {
+  try {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/splice`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          characterId,
+          ...(gainDb !== undefined ? { gainDb } : {}),
+          ...(segmentIndices ? { segmentIndices } : {}),
+          ...(modelKey ? { modelKey } : {}),
+        }),
+        signal,
+      },
+    );
+    if (!res.ok || !res.body) {
+      const detail = await res.text().catch(() => '');
+      onTick({
+        type: 'chapter_failed',
+        chapterId,
+        errorReason: `Splice failed (${res.status}): ${detail || res.statusText}`,
+      });
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf('\n\n')) >= 0) {
+        const raw = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const dataLines = raw
+          .split('\n')
+          .filter((l) => l.startsWith('data: '))
+          .map((l) => l.slice(6));
+        if (!dataLines.length) continue;
+        try {
+          onTick(JSON.parse(dataLines.join('\n')) as SpliceTick);
+        } catch (e) {
+          console.warn('[api] malformed splice tick:', dataLines.join('\n'), e);
+        }
+      }
+    }
+  } catch (e) {
+    if ((e as { name?: string })?.name === 'AbortError') return;
+    onTick({ type: 'chapter_failed', chapterId, errorReason: (e as Error).message ?? 'Splice failed.' });
+  }
+}
+
 /* Real Pause endpoint. Posted by generation-stream-middleware on
    setPaused(true) so the server stops the in-flight run cleanly — the
    server-side abort flips synthesiseChapter's signal, the loop breaks,
@@ -4494,6 +4614,7 @@ const real = {
   getVoiceSample: realGetVoiceSample,
   getBaseVoiceSample: realGetBaseVoiceSample,
   streamGeneration: realStreamGeneration,
+  streamSplice: realStreamSplice,
   pauseGeneration: realPauseGeneration,
   pauseAnalysis: realPauseAnalysis,
   getSidecarHealth: realGetSidecarHealth,
@@ -4716,6 +4837,7 @@ const mock = {
   getVoiceSample: mockGetVoiceSample,
   getBaseVoiceSample: mockGetBaseVoiceSample,
   streamGeneration: mockStreamGeneration,
+  streamSplice: mockStreamSplice,
   pauseGeneration: mockPauseGeneration,
   pauseAnalysis: mockPauseAnalysis,
   getSidecarHealth: mockGetSidecarHealth,
