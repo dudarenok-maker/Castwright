@@ -62,6 +62,21 @@ export const castSlice = createSlice({
       const c = s.characters.find((x) => x.id === characterId);
       if (c) c.voiceStyle = voiceStyle;
     },
+    /* fs-25 — record a freshly-designed Qwen emotion variant in redux so the
+       Variants badge + "Has emotion variants" cast filter update live (the
+       design route already persisted it to cast.json). No-op for an unknown
+       character; preserves the base `name`. */
+    setCharacterEmotionVariant: (
+      s,
+      a: PayloadAction<{ characterId: string; emotion: string; voiceId: string }>,
+    ) => {
+      const { characterId, emotion, voiceId } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      const otv = (c.overrideTtsVoices ??= {});
+      const qwen = (otv.qwen ??= { name: '' });
+      qwen.variants = { ...(qwen.variants ?? {}), [emotion]: { name: voiceId } };
+    },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema
        leaves voiceState optional, but freshly-analysed characters have, by
        definition, just had a voice generated for them — default the field

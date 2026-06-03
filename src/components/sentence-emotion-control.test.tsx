@@ -5,12 +5,11 @@ import { Provider } from 'react-redux';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { SentenceEmotionControl } from './sentence-emotion-control';
 
-function makeStore(sentences: { id: number; chapterId: number; characterId: string; text: string; emotion?: string }[]) {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function makeStore(sentences: any[]) {
   return configureStore({
     reducer: { manuscript: manuscriptSlice.reducer },
-    preloadedState: {
-      manuscript: { ...manuscriptSlice.getInitialState(), sentences },
-    } as never,
+    preloadedState: { manuscript: { ...manuscriptSlice.getInitialState(), sentences } },
   });
 }
 
