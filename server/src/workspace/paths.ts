@@ -220,3 +220,12 @@ export function backupsRootDir(): string {
 export function bookBackupsDir(bookId: string): string {
   return join(backupsRootDir(), bookId);
 }
+
+/** fs-20 — workspace-level telemetry jail. Per-run resource telemetry (RTF,
+    VRAM, host RAM per chapter) is appended as JSONL to
+    `<WORKSPACE_ROOT>/.telemetry/resource-telemetry.jsonl`. Sibling to
+    `.backups` at the workspace root so it spans every book and survives a
+    single book's move/delete; the admin console's trend panel reads it back. */
+export function telemetryDir(): string {
+  return join(WORKSPACE_ROOT, '.telemetry');
+}

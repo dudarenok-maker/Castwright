@@ -18,6 +18,7 @@ import {
   type RecentChapter,
   type DiagnosticsResponse,
   type DiagnosticsStatus,
+  type ResourceTelemetryRecord,
 } from '../lib/api';
 import { formatDuration } from '../lib/time';
 
@@ -101,6 +102,7 @@ export function AdminView() {
 
       <HealthBoard />
       <GenerationThroughput stats={stats} />
+      <ResourceTrends />
       {import.meta.env.DEV && <WorktreesSection />}
     </div>
   );
@@ -334,6 +336,141 @@ function GenerationThroughput({ stats }: { stats: GenerationStatsResponse | null
         </div>
       )}
     </section>
+  );
+}
+
+/* fs-20 — per-run resource telemetry trend panel. Polls
+   GET /api/generation/telemetry (best-effort, last-good on error) and renders a
+   compact per-chapter table plus a hand-rolled inline SVG sparkline of RTF
+   across the records (no charting dep). VRAM (reserved/total) + wall-time
+   columns surface the resource pressure that climbs across a long run. */
+function ResourceTrends() {
+  const [records, setRecords] = useState<ResourceTelemetryRecord[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchOnce = () =>
+      api
+        .getResourceTelemetry(100)
+        .then((res) => {
+          if (!cancelled) {
+            setRecords(res.records);
+            setLoaded(true);
+          }
+        })
+        .catch(() => {
+          /* Best-effort — leave the last-good snapshot in place. */
+          if (!cancelled) setLoaded(true);
+        });
+    fetchOnce();
+    const t = setInterval(fetchOnce, STATS_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, []);
+
+  return (
+    <section className="mt-10">
+      <h3 className="text-lg font-medium tracking-tight text-ink mb-1">Resource trends</h3>
+      <p className="text-sm text-ink/60 mb-4">
+        Per-chapter RTF, wall-time and VRAM captured across the run — watch for a slow climb that
+        precedes a VRAM spill or host OOM. Newest first.
+      </p>
+
+      {!loaded && <p className="text-sm text-ink/50">Loading telemetry…</p>}
+
+      {loaded && records.length === 0 ? (
+        <p className="text-sm text-ink/50">No telemetry recorded yet.</p>
+      ) : records.length > 0 ? (
+        <div
+          className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden"
+          data-testid="resource-trends"
+        >
+          <div className="px-4 py-3 border-b border-ink/5">
+            <RtfSparkline records={records} />
+          </div>
+          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 px-4 py-2 text-[11px] uppercase tracking-wide text-ink/40 border-b border-ink/5">
+            <span>Chapter</span>
+            <span className="text-right">RTF</span>
+            <span className="text-right hidden sm:block">Wall</span>
+            <span className="text-right">VRAM</span>
+          </div>
+          <div className="divide-y divide-ink/5">
+            {records.map((r) => (
+              <div
+                key={`${r.bookId ?? ''}:${r.chapterId}:${r.at}`}
+                className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 items-center px-4 py-2.5 text-sm"
+                data-testid={`resource-row-${r.chapterId}`}
+              >
+                <span className="min-w-0 truncate text-ink">
+                  <span className="text-ink/40 font-mono mr-2">#{r.chapterId}</span>
+                  {r.title ?? <span className="text-ink/40">(untitled)</span>}
+                </span>
+                <span className="text-right font-mono tabular-nums text-ink/80">{fmtRtf(r.rtf)}</span>
+                <span className="text-right font-mono tabular-nums text-ink/50 hidden sm:block">
+                  {formatDuration(r.wallSec)}
+                </span>
+                <span className="text-right font-mono tabular-nums text-ink/50">
+                  {r.vramReservedMb == null
+                    ? '–'
+                    : `${(r.vramReservedMb / 1024).toFixed(1)}${
+                        r.vramTotalMb != null ? ` / ${(r.vramTotalMb / 1024).toFixed(1)}` : ''
+                      } GB`}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/* Hand-rolled inline SVG sparkline of RTF across the telemetry records. Records
+   arrive newest-first; we plot oldest→newest left→right so the trend reads
+   naturally. Null rtf points are skipped. No charting dependency. */
+function RtfSparkline({ records }: { records: ResourceTelemetryRecord[] }) {
+  const series = [...records]
+    .reverse()
+    .map((r) => r.rtf)
+    .filter((v): v is number => v != null && Number.isFinite(v));
+  if (series.length < 2) {
+    return <p className="text-xs text-ink/40">Not enough data for a trend yet.</p>;
+  }
+  const W = 240;
+  const H = 36;
+  const pad = 2;
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const span = max - min || 1;
+  const points = series
+    .map((v, i) => {
+      const x = pad + (i / (series.length - 1)) * (W - pad * 2);
+      const y = H - pad - ((v - min) / span) * (H - pad * 2);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  return (
+    <svg
+      width={W}
+      height={H}
+      viewBox={`0 0 ${W} ${H}`}
+      className="text-magenta"
+      role="img"
+      aria-label={`RTF trend across ${series.length} chapters`}
+      data-testid="resource-rtf-sparkline"
+    >
+      <polyline
+        points={points}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

@@ -20,7 +20,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { nanoid } from 'nanoid';
@@ -39,6 +39,11 @@ import { buildCodecZip } from '../export/build-codec-zip.js';
 import { writeFolderToSyncFolder, writeToSyncFolder } from '../export/sync-folder.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
+import {
+  AVG_CHAPTER_BYTES,
+  diskGuardMode,
+  evaluateDiskGuard,
+} from '../workspace/disk-guard.js';
 
 /* Mirrors the OpenAPI BookExportJob schema. Kept in sync by hand — the
    server doesn't import the generated frontend types. */
@@ -247,6 +252,34 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
     return res.status(409).json({ error: 'export_incomplete', missing });
   }
 
+  /* srv-28 — pre-flight disk-space guard. An export packs the existing chapter
+     audio into a single archive/container, so the output is roughly the sum of
+     the chapter files plus a small temp/metadata overhead. BLOCK mode 409s
+     before the job is created; WARN mode attaches a `warning` to the 201 body
+     so the export modal can surface it; OFF skips. Best-effort: a probe failure
+     never blocks the export. */
+  const diskMode = diskGuardMode();
+  let diskWarning: string | undefined;
+  if (diskMode !== 'off') {
+    try {
+      const exportsRootForProbe = bookExportsDir(located.bookDir);
+      await mkdir(exportsRootForProbe, { recursive: true });
+      const verdict = await evaluateDiskGuard(
+        exportsRootForProbe,
+        { estimatedBytes: estimateExportBytes(located.state, located.bookDir), basis: 'export' },
+        { mode: diskMode },
+      );
+      if (verdict.status === 'block') {
+        return res.status(409).json({ error: 'disk_full', message: verdict.message });
+      }
+      if (verdict.status === 'warn') {
+        diskWarning = verdict.message;
+      }
+    } catch (e) {
+      console.warn('[export] disk guard probe failed (continuing):', (e as Error).message);
+    }
+  }
+
   const exportId = `exp_${nanoid(10)}`;
   const filename = bookFilename(located.state, format);
   /* Plan 79 — flat layout under the user-visible <bookDir>/exports/.
@@ -287,7 +320,10 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
     controller.signal,
   );
 
-  return res.status(201).json(job);
+  /* srv-28 — ride the disk-low advisory back on the 201 body (warn mode). The
+     export modal surfaces `warning` next to the queued job; the build still
+     proceeds. Omitted entirely when the guard was ok / off. */
+  return res.status(201).json(diskWarning ? { ...job, warning: diskWarning } : job);
 });
 
 exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
@@ -402,6 +438,28 @@ function mimeForFormat(format: BookExportJob['format']): string {
      archive. mp3-folder isn't downloadable (the route refuses it) so
      this branch never fires for that format. */
   return 'application/zip';
+}
+
+/* srv-28 — estimate an export's output footprint. An export packs the existing
+   chapter audio into one archive/container, so the output is ~the sum of the
+   chapter files; we add a 20 % overhead buffer for the temp staging copy +
+   container metadata + zip framing. Best-effort: a chapter whose size can't be
+   read falls back to AVG_CHAPTER_BYTES so the estimate never under-counts to
+   zero. */
+function estimateExportBytes(state: BookStateJson, bookDir: string): number {
+  const root = join(bookDir, 'audio');
+  let total = 0;
+  for (const chapter of state.chapters) {
+    if (chapter.excluded) continue;
+    const audio = findChapterAudio(root, chapter.slug);
+    if (!audio) continue;
+    try {
+      total += statSync(audio.path).size;
+    } catch {
+      total += AVG_CHAPTER_BYTES;
+    }
+  }
+  return Math.round(total * 1.2);
 }
 
 function preflightMissingChapters(state: BookStateJson, bookDir: string): string[] {
