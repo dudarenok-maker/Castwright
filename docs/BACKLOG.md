@@ -263,12 +263,6 @@ _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ a step-change in narration expressiveness — a differentiating capability. (Large; cross-cuts analyzer + sidecar + UI — owes its own plan. Note: the `side-4`/`side-7` wake-conditions reference this feature inflating decode cost.)
 _Full detail + acceptance:_ [#479](https://github.com/dudarenok-maker/AudioBook-Generator/issues/479).
 
-#### `fs-13` — Exact per-character progress under parallel synthesis ([#422](https://github.com/dudarenok-maker/AudioBook-Generator/issues/422))
-
-- _What:_ Carry per-character completion in the generation SSE tick so the Generate view renders an exact per-character "X / Y done" rather than deriving an approximation from one chapter-wide `currentLine` count. Likely shape: each completed-group tick includes the completed sentence id(s) (or a per-character done tally), and the frontend tracks the SET of completed positions per character instead of `linesDoneAt(positions, currentLine)`. Keep the chapter-level `currentLine`/`progress` as the monotonic count it is today — that part is correct.
-- _Benefit (user):_ per-character progress bars become exact under parallel synthesis, not a monotonic approximation. Low urgency — the bars are already monotonic and directionally right; this only bites if a user watches a single character's bar closely during a heavily-parallel run.
-_Full detail + acceptance:_ [#422](https://github.com/dudarenok-maker/AudioBook-Generator/issues/422).
-
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
 - _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) drives today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. Per the 2026-05-21 Kokoro-Stop-pill change, the hook now fans out per engine: it returns `{ coqui, kokoro, evictionNotice, loadErrorNotice, dismissNotices }` from a single /health probe. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
