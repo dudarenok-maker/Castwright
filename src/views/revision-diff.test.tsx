@@ -206,4 +206,29 @@ describe('RevisionDiffPlayer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Reject draft/i }));
     expect(onReject).toHaveBeenCalledTimes(1);
   });
+
+  /* fs-32b (#503) — a splice revision (loudness / per-character re-record) lands
+     with an EMPTY segments array. The A/B player must render without crashing
+     (no unchecked segments[0] / .map on undefined) and simply omit the
+     per-segment diff panel. */
+  it('renders a splice revision with empty segments[] without throwing', async () => {
+    expect(() =>
+      renderPlayer(
+        makeRevision({
+          segments: [],
+          triggeredBy: 'Loudness fix (Halloran)',
+        }),
+      ),
+    ).not.toThrow();
+    /* The per-segment diff list is gated on segments.length > 0, so its panel
+       header ("N segments changed · M taking B") stays out of the DOM — but the
+       player chrome (Reject draft) is present. */
+    expect(screen.getByRole('button', { name: /Reject draft/i })).toBeInTheDocument();
+    expect(screen.queryByText(/taking B/i)).toBeNull();
+    /* Both audio fetches still fire — there's a take to audition even though no
+       segment-level diff exists. */
+    await waitFor(() => {
+      expect(api.getChapterAudio).toHaveBeenCalled();
+    });
+  });
 });
