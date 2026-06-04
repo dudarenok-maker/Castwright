@@ -66,6 +66,11 @@ export interface FinalizeChapterAudioInput {
       chapter duration; absent → uses the new duration (QA duration check
       becomes a no-op). */
   expectedSec?: number;
+  /** Invoked once, immediately AFTER the encode (2-pass loudnorm) returns and
+      BEFORE QA / snapshots / write. The generation route passes its
+      `bumpProgress` here so the per-chapter no-progress watchdog sees the long
+      encode step land. No-op for callers that don't need it. */
+  onEncoded?: () => void | Promise<void>;
 }
 
 export interface FinalizeChapterAudioResult {
@@ -107,6 +112,10 @@ export async function finalizeChapterAudioWrite(
       }
     },
   });
+
+  /* Encode (2-pass loudnorm) done — the long step. Let the caller record
+     forward progress before QA/snapshots/write (generation's watchdog bump). */
+  if (input.onEncoded) await input.onEncoded();
 
   /* srv-27 — advisory post-synthesis QA. `loudnormStats` is null when loudnorm
      is disabled (only the duration check runs then). */
