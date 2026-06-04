@@ -275,6 +275,12 @@ _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ a step-change in narration expressiveness — a differentiating capability. (Large; cross-cuts analyzer + sidecar + UI — owes its own plan. Note: the `side-4`/`side-7` wake-conditions reference this feature inflating decode cost.)
 _Full detail + acceptance:_ [#479](https://github.com/dudarenok-maker/AudioBook-Generator/issues/479).
 
+#### `fe-31` — Preview an emotion from the manuscript quote chip ([#506](https://github.com/dudarenok-maker/AudioBook-Generator/issues/506))
+
+- _What:_ A preview affordance on the fs-25 per-quote emotion chip so tagging a line `angry` lets the user hear *that speaker's* angry delivery in place — no cast-drawer trip, no full generation. Needs planning: resolve the speaker's designed variant from the cast (cross-slice), define the no-variant behaviour (preview base + "renders neutral" note / inline "Design it" / disable), and handle non-Qwen speakers. Coordinate with the deferred fs-25 `5e` missing-variant hint.
+- _Benefit (user):_ tightens the tag→hear loop right where tagging happens. _Follow-up to `fs-25`._
+_Full detail + acceptance:_ [#506](https://github.com/dudarenok-maker/AudioBook-Generator/issues/506).
+
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
 - _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) drives today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. Per the 2026-05-21 Kokoro-Stop-pill change, the hook now fans out per engine: it returns `{ coqui, kokoro, evictionNotice, loadErrorNotice, dismissNotices }` from a single /health probe. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
