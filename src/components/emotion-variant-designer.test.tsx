@@ -32,7 +32,7 @@ describe('fs-25 — EmotionVariantDesigner', () => {
       <Provider store={store}>
         <EmotionVariantDesigner
           bookId="b1"
-          characterId="sophie"
+          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
           sampleVoiceId="v1"
           modelKey="qwen3-tts-0.6b"
           baseDesigned={false}
@@ -50,7 +50,7 @@ describe('fs-25 — EmotionVariantDesigner', () => {
       <Provider store={store}>
         <EmotionVariantDesigner
           bookId="b1"
-          characterId="sophie"
+          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
           sampleVoiceId="v1"
           modelKey="qwen3-tts-0.6b"
           baseDesigned
@@ -81,7 +81,7 @@ describe('fs-25 — EmotionVariantDesigner', () => {
       <Provider store={store}>
         <EmotionVariantDesigner
           bookId="b1"
-          characterId="sophie"
+          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
           sampleVoiceId="v1"
           modelKey="qwen3-tts-0.6b"
           baseDesigned
