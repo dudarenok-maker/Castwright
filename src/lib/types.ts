@@ -39,6 +39,8 @@ export type Chapter = components['schemas']['Chapter'] & {
 export type Sentence = components['schemas']['Sentence'] & {
   confidence?: number;
 };
+/* fs-25 — per-quote delivery emotion enum (source of truth: openapi → api-types). */
+export type Emotion = components['schemas']['Emotion'];
 export type Revision = components['schemas']['Revision'];
 /* Plan 77 — EBU R128 loudness sidecar payload, surfaced on the
    ChapterAudio meta endpoint and in the book-state response's

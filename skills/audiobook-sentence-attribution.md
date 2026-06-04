@@ -92,52 +92,37 @@ speaking character, then write the result to
 
   A run of consecutive sentences should NOT all have the same confidence. If your output has every value clustered in a narrow band like 0.95–0.98, you have not actually calibrated — re-grade with the rubric above. Most manuscripts produce a clear spread between ~0.55 and ~0.98 across all sentences.
 
-## Audio delivery cues
+## Emotion delivery (fs-25)
 
-The TTS engine respects inline bracketed delivery tags placed at the start of
-spoken text. The parser may have already inserted some — your job is to
-**preserve every existing `[tag]` token verbatim** inside the relevant
-sentence's `text`, and optionally **add tags** when the narrative is explicit
-about delivery.
+Optionally set a structured per-sentence **`emotion`** field that drives
+expressive synthesis. It is one of a **fixed** vocabulary — use only these:
 
-Canonical vocabulary (use **only** these tokens — others will be ignored):
-
-- `[whispers]` — quiet, breathy speech
-- `[shouting]` — loud, raised voice
-- `[emphatic]` — stressed, pointed delivery
-- `[laughs]` — laughter within or around speech
-- `[sighs]` — exhaled, weary delivery
-- `[excited]` — energetic, urgent delivery (often signalled by `!`)
-- `[hesitant]` — uncertain, halting delivery (often signalled by `…` or `...`)
+- `whisper` — quiet, breathy, hushed speech
+- `angry` — loud/raised, intense, sharp delivery (incl. shouting)
+- `excited` — energetic, urgent delivery (often signalled by `!`)
+- `sad` — subdued, downcast, heavy delivery
+- `neutral` — ordinary delivery (the default; you may also just **omit** the field)
 
 Rules:
 
-- **Preserve parser tags.** If the source already contains `[shouting] Help!`
-  inside a quote, copy it verbatim into the sentence's `text`. Do not remove
-  or relocate it.
-- **Tags go at the start of the spoken portion only.** When you split a
-  source sentence into quote + narrative tag entries (see "Splitting"), the
-  audio tag belongs on the _spoken_ split, not the `narrator` split.
-- **Add a tag when the narrator describes the delivery.**
-  - `"You can't do that," she whispered.` → spoken split becomes
-    `"[whispers] You can't do that,"` (`whispers`).
-  - `"GET DOWN!" he shouted.` → spoken split is `"[shouting] Get down!"`
-    (also case-normalised). The narrator's `he shouted.` stays untagged.
-  - `"Honestly," he sighed, "I don't know."` → both spoken splits get
-    `[sighs]` only if the sigh applies to the line as a whole; otherwise
-    tag only the first.
-  - `"Try me," she laughed.` → spoken split is `"[laughs] Try me,"`.
-- **Tag from the current sentence, not the scene.** The cue must come from
-  the sentence itself — either an explicit narrator descriptor ("she
-  whispered", "he shouted"), the _punctuation pattern_ of the spoken
-  text (`!` for `[excited]`, leading/trailing `…` for `[hesitant]`), or
-  the character's described emotional state at that moment ("Marlow's
-  hands shook" + the quote that follows). Scene-level mood is NOT enough
-  — a character being angry across the whole chapter doesn't license
-  tagging an otherwise neutral line.
-- **One tag per spoken split is enough.** Don't stack
-  `[shouting][emphatic]` on the same line.
-- **Narrative prose (`narrator` entries) never carry audio tags.**
+- **Optional + conservative.** Omit `emotion` (or use `neutral`) unless the
+  narrative is explicit about delivery. An absent/`neutral` emotion renders
+  exactly like ordinary narration. Do NOT tag a line just because the scene is
+  tense — the cue must come from THIS sentence.
+- **Set it on the SPOKEN split only.** When you split a source sentence into
+  quote + narrative-tag entries (see "Splitting"), the emotion belongs on the
+  _spoken_ split. Narrator entries stay `neutral`/absent.
+- **Derive it from the sentence itself** — an explicit narrator descriptor
+  ("she whispered" → `whisper`, "he shouted"/"GET DOWN!" → `angry`, "she
+  laughed"/`!` → `excited`, "he said heavily" → `sad`), or the spoken text's
+  own punctuation (`!` → `excited`). Map a shout to `angry`, a laugh/exclamation
+  to `excited`. There is no separate "emphatic/laughs/sighs/hesitant" — fold
+  those into the nearest of the five values, or omit.
+- **One value per sentence.** When in doubt, omit.
+- **Never put bracketed `[tags]` in `text`.** Delivery is the `emotion` field
+  now, never inline markup. If the source text contains a `[tag]`, drop the
+  bracket and (optionally) reflect it as `emotion` — `[shouting]`→`angry`,
+  `[excited]`→`excited`, `[whispers]`→`whisper`.
 
 ## Attribution heuristics
 
@@ -167,9 +152,9 @@ whitespace) must reproduce the original sentence with no loss.
 
 Source: `"Look! I'm all better!" Marlow promised, waving his arms.`
 
-The parser pre-tagged the quote because of the exclamation marks. Two entries:
+Two entries — the exclamation makes the spoken split `excited`:
 
-- `"[excited] Look! I'm all better!"` → `Marlow`
+- `"Look! I'm all better!"` → `Marlow`, `emotion: "excited"`
 - `Marlow promised, waving his arms.` → `narrator`
 
 Source: `"Hard to starboard," he said, "before the rocks."`
@@ -210,8 +195,9 @@ problem. Fix and re-save the `.json`. Common pitfalls:
 
 - Skipping sentence ids or restarting at 1 per chapter.
 - Referring to a `characterId` that wasn't in stage 1.
-- Including markdown formatting inside `text` (use the raw text from the manuscript).
-  Inline bracketed audio tags (`[whispers]`, `[shouting]`, etc.) ARE allowed and expected — see "Audio delivery cues" above.
+- Including markdown formatting OR bracketed `[tags]` inside `text` (use the raw
+  text from the manuscript; express delivery via the `emotion` field — see
+  "Emotion delivery" above).
 
 ## Reference
 

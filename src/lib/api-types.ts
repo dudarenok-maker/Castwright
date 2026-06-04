@@ -2525,6 +2525,14 @@ export interface components {
              *       },
              *       "kokoro": {
              *         "name": "am_onyx"
+             *       },
+             *       "qwen": {
+             *         "name": "qwen-Wren",
+             *         "variants": {
+             *           "angry": {
+             *             "name": "qwen-Wren__angry"
+             *           }
+             *         }
              *       }
              *     }
              */
@@ -2532,6 +2540,20 @@ export interface components {
                 [key: string]: {
                     /** @description Engine-specific speaker handle for this engine's slot. */
                     name: string;
+                    /**
+                     * @description fs-25 — per-emotion voice variants (Qwen only). Keyed by the
+                     *     non-neutral `Emotion` values (`whisper`/`angry`/`excited`/`sad`);
+                     *     each entry is an independently designed voiceId. `name` above
+                     *     stays the neutral base. Absent → every emotion falls back to
+                     *     the base voice. Variants travel with the base across reuse
+                     *     links (plan 177 Wave 6a).
+                     */
+                    variants?: {
+                        [key: string]: {
+                            /** @description Designed variant voiceId for this emotion. */
+                            name: string;
+                        };
+                    };
                 };
             } | null;
             /**
@@ -2869,6 +2891,18 @@ export interface components {
                 [key: string]: {
                     /** @description Engine-specific speaker handle (designed voiceId for Qwen). */
                     name: string;
+                    /**
+                     * @description fs-25 — per-emotion Qwen voice variants (keyed by non-neutral
+                     *     `Emotion`); each is an independently designed voiceId. Absent →
+                     *     emotions fall back to the base `name`. Travels with the base
+                     *     across reuse links (plan 177 Wave 6a).
+                     */
+                    variants?: {
+                        [key: string]: {
+                            /** @description Designed variant voiceId for this emotion. */
+                            name: string;
+                        };
+                    };
                 };
             } | null;
             evidence?: {
@@ -2986,7 +3020,18 @@ export interface components {
             characterId: string;
             startMs?: number;
             endMs?: number;
+            emotion?: components["schemas"]["Emotion"];
         };
+        /**
+         * @description fs-25 — per-quote delivery emotion. Absent or `neutral` renders exactly
+         *     as today on every engine. The four expressive values each select a
+         *     pre-designed Qwen voice variant at synth time (`Character.overrideTtsVoices.qwen.variants`);
+         *     on Kokoro/XTTS the tag is a documented no-op. Source per quote from the
+         *     analyzer (Phase-1 inline or the emotion-annotation pass) or a hand-set
+         *     manuscript edit (manual wins). See `docs/features/177-fs25-per-quote-emotion.md`.
+         * @enum {string}
+         */
+        Emotion: "neutral" | "whisper" | "angry" | "excited" | "sad";
         /**
          * @description Response envelope shared by `mergeChapters`, `splitChapter`, and
          *     `reorderChapters`. `chapters` is the new state.json chapter list

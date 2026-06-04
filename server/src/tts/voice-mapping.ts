@@ -11,6 +11,26 @@
 
 import type { TtsEngine } from './index.js';
 
+/* fs-25 — per-quote emotion variant selection. A variant is just another
+   designed Qwen voiceId, so the only synth-time lever is picking a different
+   voice name; the sidecar contract is untouched. */
+export function pickEmotionVariantVoice(
+  engine: TtsEngine,
+  variants: Partial<Record<string, { name: string }>> | null | undefined,
+  emotion: string | undefined,
+  baseVoice: string,
+): string {
+  /* STRICT no-op for every engine except Qwen — emotion is never read on
+     Kokoro/XTTS, so a tagged chapter on those engines resolves byte-identical
+     voices to today. This is the load-bearing safety gate (plan 177 invariant 3). */
+  if (engine !== 'qwen') return baseVoice;
+  if (!emotion || emotion === 'neutral') return baseVoice;
+  const variant = variants?.[emotion]?.name;
+  /* Missing/blank variant → fall back to the base (neutral) voice; never throws,
+     so a tagged-but-undesigned emotion can't fail the chapter (invariant 5). */
+  return variant && variant.trim() ? variant : baseVoice;
+}
+
 export interface VoiceLike {
   id: string;
   character?: string;

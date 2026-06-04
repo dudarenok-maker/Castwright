@@ -235,3 +235,42 @@ describe('statusFilterKeys — cast-view filter keys', () => {
     ]);
   });
 });
+
+describe('fs-25 — hasEmotionVariants (additive Variants badge + filter)', () => {
+  const withVariants = char({
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-c1', variants: { angry: { name: 'qwen-c1__angry' } } },
+    },
+  }) as Character;
+  const noVariants = char({ overrideTtsVoices: { qwen: { name: 'qwen-c1' } } }) as Character;
+
+  it('is true only when the qwen slot has ≥1 variant, and reports the count', () => {
+    const a = resolveVoiceStatus(withVariants, undefined, QWEN);
+    expect(a.hasEmotionVariants).toBe(true);
+    expect(a.variantCount).toBe(1);
+    const b = resolveVoiceStatus(noVariants, undefined, QWEN);
+    expect(b.hasEmotionVariants).toBe(false);
+    expect(b.variantCount).toBe(0);
+  });
+
+  it('is additive — it does NOT change the lifecycle pill or the reused badge', () => {
+    const withVar = resolveVoiceStatus(
+      char({
+        voiceState: 'generated',
+        matchedFrom,
+        overrideTtsVoices: { qwen: { name: 'qwen-c1', variants: { sad: { name: 'x' } } } },
+      }) as Character,
+      undefined,
+      QWEN,
+    );
+    // lifecycle (Designed/Generated…) + reused are unchanged; variants rides alongside.
+    expect(withVar.reused).toBe(true);
+    expect(withVar.lifecycle).not.toBeNull();
+    expect(withVar.hasEmotionVariants).toBe(true);
+  });
+
+  it('adds a "Variants" filter key only when variants exist', () => {
+    expect(statusFilterKeys(withVariants, undefined, QWEN)).toContain('Variants');
+    expect(statusFilterKeys(noVariants, undefined, QWEN)).not.toContain('Variants');
+  });
+});

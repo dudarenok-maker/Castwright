@@ -32,7 +32,8 @@ import { join } from 'node:path';
 import { findBookByBookId, bookStateLanguage } from '../workspace/scan.js';
 import { sidecarLanguageName } from '../tts/language.js';
 import { castJsonPath, qwenVoiceSidecarPath, qwenVoicesDir } from '../workspace/paths.js';
-import { readJson } from '../workspace/state-io.js';
+import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
 import { isTtsModelKey, TTS_MODEL_LABELS } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
@@ -70,6 +71,29 @@ const DESIGN_TIMEOUT_MS = 180_000;
    else the local character id. */
 export function deriveQwenVoiceId(character: CastCharacter, characterId: string): string {
   return `qwen-${character.voiceId ?? characterId}`;
+}
+
+/* fs-25 — the expressive emotions a variant can be designed for (the enum minus
+   `neutral`, which IS the base voice, not a variant). */
+export const VARIANT_EMOTIONS = EMOTIONS.filter((e) => e !== 'neutral') as Exclude<
+  Emotion,
+  'neutral'
+>[];
+
+/* Emotion delivery clause appended to a character's persona when designing an
+   emotion variant, so the heavy VoiceDesign model bakes the delivery into the
+   variant's cached embedding (Qwen has no synth-time emotion lever). The base
+   persona is preserved verbatim; only the delivery is added. */
+const EMOTION_INSTRUCT: Record<Exclude<Emotion, 'neutral'>, string> = {
+  whisper: 'Delivered in a soft, hushed whisper.',
+  angry: 'Delivered angrily, with raised intensity and edge.',
+  excited: 'Delivered with bright, energetic excitement.',
+  sad: 'Delivered sadly — subdued, downcast, and heavy.',
+};
+
+/** Append the emotion delivery clause to a persona for variant design. */
+export function buildVariantInstruct(persona: string, emotion: Exclude<Emotion, 'neutral'>): string {
+  return `${persona.trim()} ${EMOTION_INSTRUCT[emotion]}`.trim();
 }
 
 /* Preview/promote (plan 161). The A/B "current vs proposed" audition must NOT
@@ -142,7 +166,26 @@ qwenVoiceRouter.post(
       sampleVoiceId?: unknown;
       modelKey?: unknown;
       preview?: unknown;
+      emotion?: unknown;
     };
+
+    /* fs-25 — optional emotion variant. When present it must be one of the
+       expressive emotions (`neutral` is the base voice, not a variant). The
+       variant is designed under `<baseVoiceId>__<emotion>`, its instruct gains
+       the delivery clause, and the cast's qwen `variants[emotion]` slot is
+       recorded on success. Absent → the original base-voice design. */
+    let emotion: Exclude<Emotion, 'neutral'> | undefined;
+    if (body.emotion !== undefined) {
+      if (
+        typeof body.emotion !== 'string' ||
+        !(VARIANT_EMOTIONS as string[]).includes(body.emotion)
+      ) {
+        return res.status(400).json({
+          error: `emotion must be one of: ${VARIANT_EMOTIONS.join(', ')} (neutral is the base voice).`,
+        });
+      }
+      emotion = body.emotion as Exclude<Emotion, 'neutral'>;
+    }
 
     const located = await findBookByBookId(bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
@@ -196,9 +239,14 @@ qwenVoiceRouter.post(
     /* Plan 161 — `preview:true` stages the design under a `-preview` sibling id
        so the live voice isn't overwritten during an A/B comparison; the drawer
        promotes it on approve. Default false keeps the original in-place design. */
-    const voiceId = body.preview === true
-      ? previewVoiceIdFor(deriveQwenVoiceId(character, characterId))
-      : deriveQwenVoiceId(character, characterId);
+    const baseVoiceId = deriveQwenVoiceId(character, characterId);
+    /* A variant is designed under a distinct, stable id so it doesn't overwrite
+       the base embedding; re-designing the same emotion overwrites the variant. */
+    const designedId = emotion ? `${baseVoiceId}__${emotion}` : baseVoiceId;
+    const voiceId = body.preview === true ? previewVoiceIdFor(designedId) : designedId;
+    /* For a variant, bake the delivery clause into the persona the heavy
+       VoiceDesign model sees. */
+    const instructForDesign = emotion ? buildVariantInstruct(persona, emotion) : persona;
     /* The audition speaks the character's own line — the longest evidence
        quote, picked exactly as voice-sample.ts's buildSampleText does, so the
        text component of the cache key matches the player's by construction. */
@@ -215,7 +263,7 @@ qwenVoiceRouter.post(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           voiceId,
-          instruct: persona,
+          instruct: instructForDesign,
           language: designLanguage,
           calibrationText,
         }),
@@ -270,6 +318,18 @@ qwenVoiceRouter.post(
         return res.status(502).json({
           error: `Designed the voice but failed to cache its preview: ${(encErr as Error).message}`,
         });
+      }
+      /* fs-25 — record a (non-preview) emotion variant onto the character's
+         qwen slot so generation can resolve it (Wave 2) and the cast UI can show
+         the Variants badge. Preserves any existing base `name`; defaults it to
+         the derived base id when the slot is fresh so base lines still resolve.
+         The base-voice design itself still persists via the drawer's Save. */
+      if (emotion && body.preview !== true) {
+        character.overrideTtsVoices = character.overrideTtsVoices ?? {};
+        const qwenSlot = character.overrideTtsVoices.qwen ?? { name: baseVoiceId };
+        qwenSlot.variants = { ...(qwenSlot.variants ?? {}), [emotion]: { name: voiceId } };
+        character.overrideTtsVoices.qwen = qwenSlot;
+        await writeJsonAtomic(castJsonPath(bookDir), cast);
       }
       console.log(
         `[qwen-voice] book=${bookId} character=${characterId} voiceId=${voiceId} ` +

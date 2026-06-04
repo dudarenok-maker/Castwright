@@ -3,6 +3,14 @@
 
 import { z } from 'zod';
 
+/* fs-25 — the fixed per-quote emotion enum. `neutral` (and absence) renders
+   exactly as today on every engine; the four expressive values each select a
+   pre-designed Qwen voice variant at synth time (no-op on Kokoro/XTTS).
+   Single source of truth for the Zod layer; mirrored in openapi.yaml →
+   api-types.ts for the frontend. Bounded to cap variant-design cost. */
+export const EMOTIONS = ['neutral', 'whisper', 'angry', 'excited', 'sad'] as const;
+export type Emotion = (typeof EMOTIONS)[number];
+
 export const toneSchema = z
   .object({
     warmth: z.number().int().min(0).max(100).optional(),
@@ -113,6 +121,9 @@ export const sentenceSchema = z
     characterId: z.string().min(1),
     text: z.string().min(1),
     confidence: z.number().min(0).max(1).optional(),
+    /* fs-25 — optional per-quote delivery emotion (4a Phase-1 inline). Absent
+       = neutral. Strictly additive: pre-fs-25 analyses validate unchanged. */
+    emotion: z.enum(EMOTIONS).optional(),
   })
   .strict();
 
