@@ -87,6 +87,50 @@ test.describe('plan 53 — playback speed picker', () => {
   });
 });
 
+test.describe('fe-25 — volume slider', () => {
+  test('changing the slider updates the audio element volume and persists across reload', async ({
+    page,
+  }) => {
+    await openSolwayBay(page);
+    await startPlaybackFromStart(page);
+    const audio = page.locator('audio');
+
+    /* Default volume is full (1) before any interaction. */
+    await expect(audio).toHaveJSProperty('volume', 1, { timeout: 3_000 });
+
+    /* Open the popover and drag the slider down. */
+    const toggle = page.getByTestId('mini-player-volume-toggle');
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+    const slider = page.getByTestId('mini-player-volume-slider');
+    await expect(slider).toBeVisible();
+    await slider.fill('0.3');
+
+    await expect(audio).toHaveJSProperty('volume', 0.3, { timeout: 3_000 });
+
+    /* The level is persisted in the settings slice (localStorage). Assert the
+       store reflects it — the redux-persist round-trip is unit-covered, so we
+       read the live slice here rather than reload (which would re-fetch the
+       fixture and is flakier on the audio element). */
+    const persisted = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __store__: { getState: () => { settings: { playerVolume: number } } };
+          }
+        ).__store__.getState().settings.playerVolume,
+    );
+    expect(persisted).toBeCloseTo(0.3);
+
+    /* Reload-survival: seed the same level through the persisted slice and
+       confirm a fresh mini-player mount adopts it on load. */
+    await page.reload();
+    await openSolwayBay(page);
+    await startPlaybackFromStart(page);
+    await expect(page.locator('audio')).toHaveJSProperty('volume', 0.3, { timeout: 5_000 });
+  });
+});
+
 test.describe('plan 53 — markers / bookmarks', () => {
   test('add marker with label, marker appears in sidebar, click seeks the player', async ({
     page,
