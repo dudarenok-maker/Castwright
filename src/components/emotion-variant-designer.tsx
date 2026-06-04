@@ -16,8 +16,12 @@ import { api } from '../lib/api';
 import { useAppDispatch } from '../store';
 import { castActions } from '../store/cast-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
+import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
+import { buildCharacterHint } from '../lib/build-character-hint';
+import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
+import { gradientForTtsVoice } from '../lib/voice-palette';
 import { IconPlay, IconSpinner } from '../lib/icons';
-import type { Emotion, TtsModelKey } from '../lib/types';
+import type { Character, Emotion, TtsModelKey, Voice } from '../lib/types';
 
 const VARIANT_EMOTIONS: { value: Exclude<Emotion, 'neutral'>; label: string }[] = [
   { value: 'whisper', label: 'Whisper' },
@@ -28,14 +32,14 @@ const VARIANT_EMOTIONS: { value: Exclude<Emotion, 'neutral'>; label: string }[] 
 
 export function EmotionVariantDesigner({
   bookId,
-  characterId,
+  character,
   sampleVoiceId,
   modelKey,
   baseDesigned,
   variants,
 }: {
   bookId: string;
-  characterId: string;
+  character: Character;
   sampleVoiceId: string;
   modelKey: TtsModelKey;
   /** True once the neutral base Qwen voice has been designed. */
@@ -43,15 +47,58 @@ export function EmotionVariantDesigner({
   /** The character's current designed variants, keyed by emotion. */
   variants: Partial<Record<string, { name: string }>> | undefined;
 }) {
+  const characterId = character.id;
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
   const [busy, setBusy] = useState<Record<string, boolean>>({});
-  /* Audition URL per emotion, captured from the design response so a
-     just-designed variant can be previewed without a full generation run.
-     (Playback for a variant designed in a PRIOR session is the deferred 5d
-     follow-up — its audition is cached server-side but not yet wired here.) */
-  const [urls, setUrls] = useState<Record<string, string>>({});
+  /* Variant voiceIds designed THIS session (merged with the `variants` prop so
+     a just-designed variant resolves before the parent's redux round-trip). */
+  const [sessionIds, setSessionIds] = useState<Record<string, string>>({});
+  const [playBusy, setPlayBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+
+  const variantVoiceId = (emotion: string): string | undefined =>
+    variants?.[emotion]?.name ?? sessionIds[emotion];
+
+  /* Audition any designed variant (this or a prior session) by replaying its
+     cached 12s sample through the shared sample machinery — the variant scope
+     `${sampleVoiceId}__${emotion}` + the variant voiceId reproduce the cache
+     key the design route wrote, so it's a hit (no re-synth) on a warm sidecar. */
+  const playVariant = async (emotion: Exclude<Emotion, 'neutral'>) => {
+    const voiceId = variantVoiceId(emotion);
+    if (!voiceId) return;
+    const scope = `${sampleVoiceId}__${emotion}`;
+    const prefix = `/audio/voices/${encodeURIComponent(scope)}-${modelKey}`;
+    if (playback.isPlaying && playback.currentUrl?.startsWith(prefix)) {
+      playback.stop();
+      return;
+    }
+    const stubTtsVoice = resolveTtsVoiceForCharacter(character, 'qwen');
+    const subject: Voice = {
+      id: scope,
+      character: character.name,
+      bookTitle: '',
+      bookId: '',
+      attributes: character.attributes ?? [],
+      gradient: gradientForTtsVoice(stubTtsVoice.name, scope),
+      usedIn: 0,
+      source: 'current',
+      ttsVoice: stubTtsVoice,
+      overrideTtsVoices: { qwen: { name: voiceId } },
+    } as Voice;
+    setPlayBusy((p) => ({ ...p, [emotion]: true }));
+    setError(null);
+    try {
+      await playSampleWithAutoLoad({
+        args: { voiceId: scope, voice: subject, modelKey, characterHint: buildCharacterHint(character) },
+        playback,
+      });
+    } catch (e) {
+      setError(`${emotion}: ${(e as Error).message}`);
+    } finally {
+      setPlayBusy((p) => ({ ...p, [emotion]: false }));
+    }
+  };
 
   if (!baseDesigned) {
     return (
@@ -71,10 +118,10 @@ export function EmotionVariantDesigner({
         emotion,
       });
       dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
-      if (previewUrl) {
-        setUrls((u) => ({ ...u, [emotion]: previewUrl }));
-        void playback.play(previewUrl);
-      }
+      setSessionIds((s) => ({ ...s, [emotion]: voiceId }));
+      /* Auto-play the fresh audition (the design route returns its cached URL),
+         so designing a variant immediately lets you hear it. */
+      if (previewUrl) void playback.play(previewUrl);
     } catch (e) {
       setError(`${emotion}: ${(e as Error).message}`);
     } finally {
@@ -82,7 +129,7 @@ export function EmotionVariantDesigner({
     }
   };
 
-  const remaining = VARIANT_EMOTIONS.filter((e) => !variants?.[e.value]);
+  const remaining = VARIANT_EMOTIONS.filter((e) => !variantVoiceId(e.value));
   const designAll = async () => {
     for (const e of remaining) await designOne(e.value);
   };
@@ -104,10 +151,10 @@ export function EmotionVariantDesigner({
       </div>
       <div className="grid grid-cols-2 gap-1.5">
         {VARIANT_EMOTIONS.map(({ value, label }) => {
-          /* Designed if the cast already carries the variant OR we just designed
-             it this session (url captured) — so the row flips to "Designed +
-             Play" immediately, before the parent's redux round-trip lands. */
-          const designed = !!variants?.[value] || !!urls[value];
+          /* Designed if the cast carries the variant OR we designed it this
+             session — so the row flips to "Designed + Play" immediately,
+             before the parent's redux round-trip lands. */
+          const designed = !!variantVoiceId(value);
           const designing = !!busy[value];
           return (
             <div
@@ -117,19 +164,20 @@ export function EmotionVariantDesigner({
               <span className="text-ink/80">{label}</span>
               {designed ? (
                 <span className="inline-flex items-center gap-2">
-                  {urls[value] && (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        playback.currentUrl === urls[value] ? playback.stop() : void playback.play(urls[value])
-                      }
-                      aria-label={`Play the ${label} variant sample`}
-                      data-testid={`variant-play-${value}`}
-                      className="inline-flex items-center justify-center w-4 h-4 text-magenta hover:text-magenta/80"
-                    >
+                  <button
+                    type="button"
+                    onClick={() => void playVariant(value)}
+                    disabled={!!playBusy[value]}
+                    aria-label={`Play the ${label} variant sample`}
+                    data-testid={`variant-play-${value}`}
+                    className="inline-flex items-center justify-center w-4 h-4 text-magenta hover:text-magenta/80 disabled:opacity-40"
+                  >
+                    {playBusy[value] ? (
+                      <IconSpinner className="w-3 h-3 animate-spin" />
+                    ) : (
                       <IconPlay className="w-3.5 h-3.5" />
-                    </button>
-                  )}
+                    )}
+                  </button>
                   <span className="text-[10px] font-semibold text-ink/55" data-testid={`variant-done-${value}`}>
                     Designed
                   </span>
