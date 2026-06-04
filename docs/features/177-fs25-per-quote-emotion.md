@@ -6,7 +6,7 @@ owner: null
 
 # fs-25 — Per-quote expressive / emotion synthesis
 
-> Status: active — core implemented (waves 1–3, 4a, 5a–5c, 6a). Deferred to follow-ups: 4b LLM emotion-backfill pass, 5d full cross-surface variant playback, parts of 5e (remove-variant server route, Voices-view badge wiring), 6b rebaseline series variant-design. See "Delivery status" below.
+> Status: active — core implemented (waves 1–3, 4a, 5a–5d, 6a). Deferred to follow-ups: 4b LLM emotion-backfill pass, parts of 5e (remove-variant server route, Voices-view badge wiring, staleness/missing-variant hints), 6b rebaseline series variant-design. See "Delivery status" below.
 > Key files: `openapi.yaml` (Sentence + Character.overrideTtsVoices), `server/src/handoff/schemas.ts`, `server/src/analyzer/` (Phase-1 attribution + emotion-annotation pass), `server/src/tts/synthesise-chapter.ts` + `server/src/tts/voice-mapping.ts` (voice resolution), `server/src/routes/qwen-voice.ts` (variant design), `server/src/tts/hydrate-reused-voice.ts` + `cast-link-prior.ts` + `series-reuse-link.ts` + `book-state.ts` (Wave 6a reuse-carry), `src/lib/voice-status.ts` (Variants badge/filter), `src/lib/play-sample-with-auto-load.ts` (variant-aware sample playback), `src/views/manuscript.tsx`, `src/views/cast.tsx`, `src/modals/profile-drawer.tsx` + `src/components/voice-preview-button.tsx` + `src/modals/{match-detail,compare-cast-modal,rebaseline-modal}.tsx` (sample-play surfaces; rebaseline = Wave 6b series-design).
 > URL surface: `#/books/<id>/manuscript` (per-quote emotion picker), `#/books/<id>/cast` (design emotion variants).
 > OpenAPI ops: reuses `POST /api/books/{bookId}/cast/{characterId}/design-voice` (adds optional `emotion`); adds `POST /api/books/{bookId}/annotate-emotion` (Wave 4b emotion-only backfill); no new synth op — `/synthesize` + `/synthesize-batch` contracts are unchanged.
@@ -213,7 +213,7 @@ Don't change the design, but must not be forgotten in implementation:
 
 **Deferred to follow-ups (filed separately):**
 - **4b** — emotion-only LLM annotation pass + `POST /annotate-emotion` + Detect-emotions trigger. (Covered for now by the migration seed, 4a, and manual tagging.)
-- **5d** — explicit per-variant play buttons across all six sample surfaces (the design route already caches a per-variant audition, so a variant's sample is reachable; the dedicated buttons are deferred).
+- **5d — DONE on the design surface:** the cast variant designer auditions any designed variant (this or a prior session) via the shared `playSampleWithAutoLoad` (variant scope cache-hit). The other sample surfaces (compare-cast / match-detail / rebaseline) are base-voice comparison tools, intentionally left on base-voice playback — variant auditioning lives in the designer.
 - **5e** — remove-variant (needs a server DELETE route), Voices-view badge render, staleness-on-edit + missing-variant pre-gen hint.
 - **6b** — rebaseline modal series-wide variant design.
 
