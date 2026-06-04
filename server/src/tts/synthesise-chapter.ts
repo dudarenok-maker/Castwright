@@ -6,8 +6,13 @@
    chapter output. This dramatically cuts the call count vs per-sentence while
    still giving us per-group timing for the future playback slice. */
 
-import type { SentenceOutput } from '../handoff/schemas.js';
-import { pickVoiceForEngine, type CharacterHint, type VoiceLike } from './voice-mapping.js';
+import type { Emotion, SentenceOutput } from '../handoff/schemas.js';
+import {
+  pickVoiceForEngine,
+  pickEmotionVariantVoice,
+  type CharacterHint,
+  type VoiceLike,
+} from './voice-mapping.js';
 import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from './index.js';
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
@@ -192,7 +197,9 @@ export interface CastCharacter {
       Persisted in cast.json so it survives reloads + analysis reparses.
       Switching engines (Coqui ↔ Kokoro) preserves cast assignments
       because each engine has its own slot. */
-  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  overrideTtsVoices?: Partial<
+    Record<TtsEngine, { name: string; variants?: Partial<Record<Emotion, { name: string }>> }>
+  > | null;
   /** @deprecated Legacy singular override. Read paths normalise this
       into `overrideTtsVoices` at cast.json load time (see
       `normaliseCastCharacter` in routes/voices.ts). Kept on the type so
@@ -214,6 +221,10 @@ export interface SentenceGroup {
   sentenceIds: number[];
   /** Concatenated sentence text. */
   text: string;
+  /** fs-25 — the quote's delivery emotion (one group = one sentence since plan
+      70d). Drives Qwen emotion-variant voice selection in `resolveGroup`;
+      absent/`neutral` → the base voice. Ignored entirely for non-Qwen engines. */
+  emotion?: Emotion;
 }
 
 export interface ChapterSegment {
@@ -467,6 +478,7 @@ export function buildSentenceGroups(sentences: SentenceOutput[]): SentenceGroup[
       characterId: s.characterId,
       sentenceIds: [s.id],
       text: s.text,
+      emotion: s.emotion,
     }));
 }
 
@@ -693,11 +705,22 @@ export async function synthesiseChapter(
       toVoiceLike(character),
       buildHintFromCast(character),
     );
+    /* fs-25 — Qwen-gated emotion variant. A tagged quote on a Qwen character
+       with a designed variant for that emotion synthesises with the variant
+       voiceId; everything else (neutral, no variant, or any non-Qwen engine)
+       resolves the base voice unchanged. Applied BEFORE the Kokoro fallback so a
+       designed variant counts as a present Qwen voice. */
+    const voiceForGroup = pickEmotionVariantVoice(
+      baseRoute.engine,
+      character.overrideTtsVoices?.qwen?.variants,
+      group.emotion,
+      baseVoice,
+    );
     /* Resolve once (used by both the batchability partition AND the synth
        call), so the fallback is decided in one place — the partition then
        sees the post-fallback Kokoro engine and routes the group as a Kokoro
        single item, not a Qwen batch item. */
-    const r = applyQwenFallback(character, baseRoute, baseVoice);
+    const r = applyQwenFallback(character, baseRoute, voiceForGroup);
     resolvedByIndex.set(group.index, r);
     return r;
   };

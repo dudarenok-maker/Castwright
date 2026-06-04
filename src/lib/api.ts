@@ -6,6 +6,7 @@
 
 import type {
   AppInfo,
+  Emotion,
   UpgradeStageResult,
   UpgradeStatePayload,
   UploadResponse,
@@ -427,6 +428,10 @@ export interface DesignQwenVoiceArgs {
       overwriting the live voice, so the A/B compare can audition it without
       committing. The drawer promotes it on approve / discards on cancel. */
   preview?: boolean;
+  /** fs-25 — design an emotion VARIANT (whisper/angry/excited/sad) under
+      `<base>__<emotion>` with an emotion-augmented instruct; the server records
+      it on `overrideTtsVoices.qwen.variants[emotion]`. Omit for the base voice. */
+  emotion?: Emotion;
 }
 
 export interface DesignQwenVoiceResponse {
@@ -621,10 +626,11 @@ async function mockSetVoiceOverrideLinked(
 async function mockDesignQwenVoice(
   _bookId: string,
   characterId: string,
-  { sampleVoiceId, modelKey, preview }: DesignQwenVoiceArgs,
+  { sampleVoiceId, modelKey, preview, emotion }: DesignQwenVoiceArgs,
 ): Promise<DesignQwenVoiceResponse> {
   await wait(120);
-  const voiceId = `qwen-${characterId}${preview ? '-preview' : ''}`;
+  const variantSuffix = emotion ? `__${emotion}` : '';
+  const voiceId = `qwen-${characterId}${variantSuffix}${preview ? '-preview' : ''}`;
   const suffix = preview ? '-preview' : '';
   const previewUrl = `/audio/voices/${sampleVoiceId}-${modelKey}${suffix}-mock.mp3`;
   return { voiceId, previewUrl };
@@ -1504,7 +1510,7 @@ async function realSetVoiceOverrideLinked(
 async function realDesignQwenVoice(
   bookId: string,
   characterId: string,
-  { persona, sampleVoiceId, modelKey, preview }: DesignQwenVoiceArgs,
+  { persona, sampleVoiceId, modelKey, preview, emotion }: DesignQwenVoiceArgs,
 ): Promise<DesignQwenVoiceResponse> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(characterId)}/design-voice`,
@@ -1516,6 +1522,7 @@ async function realDesignQwenVoice(
         sampleVoiceId,
         modelKey,
         ...(preview ? { preview: true } : {}),
+        ...(emotion ? { emotion } : {}),
       }),
     },
   );

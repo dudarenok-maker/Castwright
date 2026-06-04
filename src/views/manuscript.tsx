@@ -23,8 +23,8 @@ import {
 } from '../lib/icons';
 import { SectionLabel, ColorDot, Pill } from '../components/primitives';
 import { CharacterSearchPicker } from '../components/character-search-picker';
+import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { CHAR_COLORS } from '../lib/colors';
-import { splitAudioTagSpans } from '../lib/audio-tags';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialSentences } from '../data/sentences';
 import { useAppDispatch } from '../store';
@@ -1267,6 +1267,16 @@ function SegmentRow({
                 >
                   {renderSentenceText(s.text)}
                 </span>
+                {/* fs-25 — per-quote emotion control. Shown for dialogue (the
+                    common case) and for any already-tagged sentence, rendered
+                    outside the text span so selection offsets are unaffected. */}
+                {(seg.characterId !== 'narrator' || s.emotion) && (
+                  <SentenceEmotionControl
+                    chapterId={s.chapterId}
+                    sentenceId={s.id}
+                    emotion={s.emotion}
+                  />
+                )}
                 {!isLast && ' '}
               </Fragment>
             );
@@ -1541,36 +1551,18 @@ function SegmentInspector({
   );
 }
 
-/* ── Inline audio-tag chip rendering ──────────────────────────────────────
-   Each rendered span carries `data-text-offset` so the selection hook can
-   reconstruct sentence-relative offsets across chip + text boundaries. */
+/* ── Sentence text rendering ───────────────────────────────────────────────
+   fs-25 retired the legacy inline audio-tag chip system (`[shouting]` etc.) in
+   favour of the structured `Sentence.emotion` field — per-quote expressiveness
+   is now an emotion chip, not bracketed text. Stored `sentence.text` is kept
+   clean (seeded into `emotion` + stripped at analysis-cache write and by the
+   one-time migration), so the text renders as a single span. The span still
+   carries `data-text-offset={0}` so the selection→split hook can reconstruct
+   sentence-relative offsets. */
 
 function renderSentenceText(text: string) {
-  const spans = splitAudioTagSpans(text);
-  if (spans.length === 0) return null;
-  let offset = 0;
-  return spans.map((sp, i) => {
-    const startOffset = offset;
-    const segText = sp.kind === 'tag' ? sp.raw : sp.text;
-    offset += segText.length;
-    if (sp.kind === 'tag') {
-      return (
-        <span
-          key={i}
-          data-text-offset={startOffset}
-          className="inline-block align-baseline mx-px px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider bg-peach/15 text-magenta border border-peach/30 select-text"
-          title={`Audio cue: ${sp.tag}`}
-        >
-          {sp.raw}
-        </span>
-      );
-    }
-    return (
-      <span key={i} data-text-offset={startOffset}>
-        {sp.text}
-      </span>
-    );
-  });
+  if (!text) return null;
+  return <span data-text-offset={0}>{text}</span>;
 }
 
 /* ── Selection-based split popover ─────────────────────────────────────── */
