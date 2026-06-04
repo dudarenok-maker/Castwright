@@ -2274,3 +2274,120 @@ describe('synthesiseChapter per-call timeout (plan 148)', () => {
     expect(provider.calls.length).toBe(1);
   });
 });
+
+/* Pre-assembly per-sentence QA gate: a sentence whose rendered PCM fails the
+   signal-based checks (here: dead/near-silent) is re-recorded in place via the
+   same single-call synth path BEFORE the chapter is concatenated, and the good
+   retake is what assembles. Exhausting the retries keeps the best take and
+   stamps the segment `suspect` — it never blocks completion. Thresholds are
+   pinned per test (only the RMS/dead check matters) so the cases isolate the
+   gate from the duration/silence-run signals exercised in segment-qa.test.ts. */
+describe('synthesiseChapter pre-assembly QA gate', () => {
+  const RMS_ONLY = {
+    silenceRms: 0.01,
+    noiseFloor: 0.02,
+    maxInternalSilenceSec: 999,
+    minDurationRatio: 0,
+    maxDurationRatio: Number.POSITIVE_INFINITY,
+  };
+  const gateCast: CastCharacter[] = [{ id: 'narrator', name: 'Narrator' }];
+
+  function tonePcm(seconds = 0.5, amp = 0.3): Buffer {
+    const sr = 24000;
+    const n = Math.round(seconds * sr);
+    const buf = Buffer.alloc(n * 2);
+    for (let i = 0; i < n; i += 1) {
+      buf.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 200 * i) / sr) * amp * 32767), i * 2);
+    }
+    return buf;
+  }
+  const silencePcm = (seconds = 0.5): Buffer => Buffer.alloc(Math.round(seconds * 24000) * 2);
+
+  /** Provider that returns silence or a tone per call, decided by `pick`. */
+  function makeContentProvider(
+    pick: (text: string, nthForText: number) => 'silence' | 'tone',
+  ): TtsProvider & { calls: SynthesizeInput[] } {
+    const calls: SynthesizeInput[] = [];
+    const seen = new Map<string, number>();
+    return {
+      calls,
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        calls.push(input);
+        const nth = (seen.get(input.text) ?? 0) + 1;
+        seen.set(input.text, nth);
+        const pcm = pick(input.text, nth) === 'silence' ? silencePcm() : tonePcm();
+        return { pcm, sampleRate: 24000, mimeType: 'audio/pcm' };
+      },
+    };
+  }
+
+  it('re-records a bad segment in place and keeps the good retake', async () => {
+    // "troublesome" sentence renders silence on its first call, a tone on retry.
+    const provider = makeContentProvider((text, nth) =>
+      text.includes('troublesome') && nth === 1 ? 'silence' : 'tone',
+    );
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'The anchor sentence is perfectly fine today.'),
+        sentence(2, 'narrator', 'This troublesome line keeps dropping out.'),
+      ],
+      cast: gateCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      groupHeartbeatMs: 0,
+      maxSegmentRerecords: 2,
+      segmentQaThresholds: RMS_ONLY,
+    });
+
+    const badCalls = provider.calls.filter((c) => c.text.includes('troublesome'));
+    expect(badCalls).toHaveLength(2); // 1 initial + 1 re-record
+    const badSeg = result.segments.find((s) => s.sentenceIds.includes(2));
+    expect(badSeg?.qa?.status).toBe('ok');
+    expect(badSeg?.suspect).toBeFalsy();
+    // The kept take is the tone, so that segment's audio is not silent.
+    expect(badSeg?.qa?.rms).toBeGreaterThan(0.05);
+  });
+
+  it('keeps the best take and flags suspect after exhausting re-records', async () => {
+    const provider = makeContentProvider((text) => (text.includes('broken') ? 'silence' : 'tone'));
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'The anchor sentence is perfectly fine today.'),
+        sentence(2, 'narrator', 'This broken line never recovers at all.'),
+      ],
+      cast: gateCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      groupHeartbeatMs: 0,
+      maxSegmentRerecords: 2,
+      segmentQaThresholds: RMS_ONLY,
+    });
+
+    const badCalls = provider.calls.filter((c) => c.text.includes('broken'));
+    expect(badCalls).toHaveLength(3); // 1 initial + 2 re-records, all bad
+    const badSeg = result.segments.find((s) => s.sentenceIds.includes(2));
+    expect(badSeg?.qa?.status).toBe('suspect');
+    expect(badSeg?.suspect).toBe(true);
+    // Still assembled — the chapter completes regardless.
+    expect(result.pcm.length).toBeGreaterThan(0);
+    expect(result.segments.some((s) => s.sentenceIds.includes(1))).toBe(true);
+  });
+
+  it('is disabled by default (no re-records, no qa stamp) — back-compat', async () => {
+    const provider = makeContentProvider(() => 'silence');
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A line that renders as silence.')],
+      cast: gateCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      groupHeartbeatMs: 0,
+      // maxSegmentRerecords omitted → gate off
+    });
+    expect(provider.calls).toHaveLength(1);
+    expect(result.segments[0].qa).toBeUndefined();
+    expect(result.segments[0].suspect).toBeUndefined();
+  });
+});
