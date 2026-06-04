@@ -15,7 +15,8 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { useAppDispatch } from '../store';
 import { castActions } from '../store/cast-slice';
-import { IconSpinner } from '../lib/icons';
+import { useSamplePlayback } from '../lib/use-sample-playback';
+import { IconPlay, IconSpinner } from '../lib/icons';
 import type { Emotion, TtsModelKey } from '../lib/types';
 
 const VARIANT_EMOTIONS: { value: Exclude<Emotion, 'neutral'>; label: string }[] = [
@@ -43,7 +44,13 @@ export function EmotionVariantDesigner({
   variants: Partial<Record<string, { name: string }>> | undefined;
 }) {
   const dispatch = useAppDispatch();
+  const playback = useSamplePlayback();
   const [busy, setBusy] = useState<Record<string, boolean>>({});
+  /* Audition URL per emotion, captured from the design response so a
+     just-designed variant can be previewed without a full generation run.
+     (Playback for a variant designed in a PRIOR session is the deferred 5d
+     follow-up — its audition is cached server-side but not yet wired here.) */
+  const [urls, setUrls] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
   if (!baseDesigned) {
@@ -58,12 +65,16 @@ export function EmotionVariantDesigner({
     setBusy((b) => ({ ...b, [emotion]: true }));
     setError(null);
     try {
-      const { voiceId } = await api.designQwenVoice(bookId, characterId, {
+      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, characterId, {
         sampleVoiceId: `${sampleVoiceId}__${emotion}`,
         modelKey,
         emotion,
       });
       dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+      if (previewUrl) {
+        setUrls((u) => ({ ...u, [emotion]: previewUrl }));
+        void playback.play(previewUrl);
+      }
     } catch (e) {
       setError(`${emotion}: ${(e as Error).message}`);
     } finally {
@@ -93,7 +104,10 @@ export function EmotionVariantDesigner({
       </div>
       <div className="grid grid-cols-2 gap-1.5">
         {VARIANT_EMOTIONS.map(({ value, label }) => {
-          const designed = !!variants?.[value];
+          /* Designed if the cast already carries the variant OR we just designed
+             it this session (url captured) — so the row flips to "Designed +
+             Play" immediately, before the parent's redux round-trip lands. */
+          const designed = !!variants?.[value] || !!urls[value];
           const designing = !!busy[value];
           return (
             <div
@@ -102,8 +116,23 @@ export function EmotionVariantDesigner({
             >
               <span className="text-ink/80">{label}</span>
               {designed ? (
-                <span className="text-[10px] font-semibold text-ink/55" data-testid={`variant-done-${value}`}>
-                  Designed
+                <span className="inline-flex items-center gap-2">
+                  {urls[value] && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        playback.currentUrl === urls[value] ? playback.stop() : void playback.play(urls[value])
+                      }
+                      aria-label={`Play the ${label} variant sample`}
+                      data-testid={`variant-play-${value}`}
+                      className="inline-flex items-center justify-center w-4 h-4 text-magenta hover:text-magenta/80"
+                    >
+                      <IconPlay className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <span className="text-[10px] font-semibold text-ink/55" data-testid={`variant-done-${value}`}>
+                    Designed
+                  </span>
                 </span>
               ) : (
                 <button

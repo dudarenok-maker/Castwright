@@ -17,7 +17,10 @@ function makeStore(characters: any[]) {
 
 beforeEach(() => {
   designQwenVoice.mockReset();
-  designQwenVoice.mockResolvedValue({ voiceId: 'qwen-Wren__angry' });
+  designQwenVoice.mockResolvedValue({
+    voiceId: 'qwen-Wren__angry',
+    previewUrl: '/audio/voices/Wren__angry.mp3',
+  });
 });
 
 describe('fs-25 — EmotionVariantDesigner', () => {
@@ -67,6 +70,9 @@ describe('fs-25 — EmotionVariantDesigner', () => {
       modelKey: 'qwen3-tts-0.6b',
       emotion: 'angry',
     });
+    // a Play button for the just-designed variant's audition appears (preview
+    // without a full generation run).
+    await waitFor(() => expect(screen.getByTestId('variant-play-angry')).toBeTruthy());
   });
 
   it('shows "Designed" (not a Design button) for an already-designed variant', () => {
