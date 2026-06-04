@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { CHAR_COLORS, shade } from '../lib/colors';
-import { IconArrow, IconLink, IconPlay, IconSpinner } from '../lib/icons';
+import { IconArrow, IconLink, IconPlay, IconSparkle, IconSpinner } from '../lib/icons';
 import type { CharColor, Voice } from '../lib/types';
 
 type ButtonVariant = 'dark' | 'light' | 'ghost' | 'danger' | 'peach';
@@ -231,6 +231,22 @@ export function ReusedBadge() {
     >
       <IconLink className="w-2.5 h-2.5" />
       Reused
+    </span>
+  );
+}
+
+/* fs-25 — additive capability marker shown under a Qwen character's voice
+   label when it has ≥1 designed emotion variant. Composes with (never
+   replaces) the lifecycle pill + Reused badge. */
+export function VariantsBadge({ count }: { count: number }) {
+  return (
+    <span
+      data-testid="variants-badge"
+      title={`${count} emotion ${count === 1 ? 'variant' : 'variants'} designed`}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium text-magenta/80 bg-magenta/5"
+    >
+      <IconSparkle className="w-2.5 h-2.5" />
+      {count > 1 ? `Variants · ${count}` : 'Variants'}
     </span>
   );
 }

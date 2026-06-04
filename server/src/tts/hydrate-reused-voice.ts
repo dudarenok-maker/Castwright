@@ -21,13 +21,20 @@
 
 import type { TtsEngine } from './index.js';
 
+/* fs-25 — the per-engine override slot, carrying optional Qwen emotion
+   `variants`. Declared here so the reuse-carry path is type-honest: a reused
+   character must inherit the source's variants alongside its base voice (plan
+   177 Wave 6a), mirroring how `voiceStyle` already travels (plan 150). */
+type OverrideSlot = { name: string; variants?: Partial<Record<string, { name: string }>> };
+type OverrideMap = Partial<Record<TtsEngine, OverrideSlot>>;
+
 /** The reuse-relevant slice of a cast.json character this resolver reads. Kept
     structural (not the full CastCharacter) so callers can pass either a server
     CastCharacter or a migration's raw record. */
 export interface ReuseHydratable {
   id: string;
   ttsEngine?: TtsEngine | null;
-  overrideTtsVoices?: Partial<Record<TtsEngine, { name: string }>> | null;
+  overrideTtsVoices?: OverrideMap | null;
   /** The Qwen voice-design persona (plan 108). Like the override, it lives on
       the SOURCE book's character; reuse paths denormalise it onto the reused
       row alongside the override (srv-18) so cast.json stays self-complete. */
@@ -55,7 +62,7 @@ function hasOwnQwenVoice(c: ReuseHydratable): boolean {
     still resolves. Guards against cycles + a sane depth cap. */
 export interface ResolvedReusedVoice {
   ttsEngine?: TtsEngine | null;
-  overrideTtsVoices: Partial<Record<TtsEngine, { name: string }>>;
+  overrideTtsVoices: OverrideMap;
   voiceStyle?: string;
 }
 
@@ -118,7 +125,7 @@ export async function hydrateCharacterVoice<T extends ReuseHydratable>(
   const resolved = await resolveReusedVoiceFields(character, load);
   if (!resolved) return character;
 
-  const mergedOverrides: Partial<Record<TtsEngine, { name: string }>> = {
+  const mergedOverrides: OverrideMap = {
     ...resolved.overrideTtsVoices,
     ...(character.overrideTtsVoices ?? {}),
   };

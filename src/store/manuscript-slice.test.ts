@@ -215,6 +215,27 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
     expect(next.sentences.map((s) => s.characterId)).toEqual(['halloran', 'narrator', 'halloran']);
   });
 
+  it('fs-25 — setSentenceEmotion sets / clears a quote\'s emotion, scoped by (chapter, id)', () => {
+    const start = baseState(
+      sentences([
+        { id: 1, text: 'a', characterId: 'narrator' },
+        { id: 2, text: 'b', characterId: 'sophie' },
+      ]),
+    );
+    const tagged = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.setSentenceEmotion({ chapterId: 1, sentenceId: 2, emotion: 'angry' }),
+    );
+    expect(tagged.sentences[1].emotion).toBe('angry');
+    expect(tagged.sentences[0].emotion).toBeUndefined();
+    // setting to 'neutral' clears it back to undefined (the default render).
+    const cleared = manuscriptSlice.reducer(
+      tagged,
+      manuscriptActions.setSentenceEmotion({ chapterId: 1, sentenceId: 2, emotion: 'neutral' }),
+    );
+    expect(cleared.sentences[1].emotion).toBeUndefined();
+  });
+
   /* Regression: sentence ids restart at 1 in every chapter (the hydrate merge
      keys by `${chapterId}:${id}` for the same reason — see the
      "keeps per-chapter sentence ids distinct" test below). The reassign

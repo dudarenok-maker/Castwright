@@ -398,6 +398,51 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
   });
 });
 
+describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
+  it('designs an emotion variant under <base>__<emotion>, augments the instruct, and records it on the cast', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send({ ...designBody, emotion: 'angry' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('qwen-v_biana__angry');
+
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(sent.voiceId).toBe('qwen-v_biana__angry');
+    // base persona is preserved AND an emotion delivery clause is appended.
+    expect(sent.instruct).toContain('a poised, confident teenage girl, clear and warm');
+    expect(sent.instruct.toLowerCase()).toContain('angr');
+
+    // the variant is persisted onto the character's qwen slot.
+    const cast = readCast();
+    const biana = cast.characters.find((c) => c.id === 'biana') as Record<string, any>;
+    expect(biana.overrideTtsVoices.qwen.variants.angry).toEqual({ name: 'qwen-v_biana__angry' });
+  });
+
+  it('rejects an out-of-enum / neutral emotion with 400', async () => {
+    const bad = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send({ ...designBody, emotion: 'furious' });
+    expect(bad.status).toBe(400);
+
+    const neutral = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send({ ...designBody, emotion: 'neutral' });
+    expect(neutral.status).toBe(400);
+  });
+
+  it('a base design (no emotion) leaves variants untouched', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .send(designBody);
+    expect(res.status).toBe(200);
+    expect(res.body.voiceId).toBe('qwen-v_biana');
+    const cast = readCast();
+    const biana = cast.characters.find((c) => c.id === 'biana') as Record<string, any>;
+    expect(biana.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+  });
+});
+
 describe('GET /api/books/:bookId/cast/:characterId/designed-persona', () => {
   it('returns the sidecar instruct for a character whose voice was designed (derived voiceId)', async () => {
     writeQwenSidecar('qwen-v_biana', 'a poised, confident teenage girl, clear and warm');

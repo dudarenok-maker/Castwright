@@ -819,6 +819,14 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
     expect(groups.map((g) => g.index)).toEqual([0, 1, 2]);
   });
 
+  it('fs-25 — carries each sentence\'s emotion onto its group (undefined when absent)', () => {
+    const groups = buildSentenceGroups([
+      { id: 1, chapterId: 1, characterId: 'sophie', text: 'Stop!', emotion: 'angry' },
+      { id: 2, chapterId: 1, characterId: 'sophie', text: 'okay.' },
+    ]);
+    expect(groups.map((g) => g.emotion)).toEqual(['angry', undefined]);
+  });
+
   it('preserves order across mixed speakers', () => {
     const groups = buildSentenceGroups([
       s(1, 'narrator', 'Open.'),
