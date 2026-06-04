@@ -982,7 +982,7 @@ export function ProfileDrawer({
             {effectiveEngine === 'qwen' && bookId && (
               <EmotionVariantDesigner
                 bookId={bookId}
-                characterId={character.id}
+                character={character}
                 sampleVoiceId={sampleVoiceId}
                 modelKey={effectiveSampleModelKey}
                 baseDesigned={!!designedVoiceId}
