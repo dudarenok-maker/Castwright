@@ -14,7 +14,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAppDispatch } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
-import type { Emotion } from '../lib/types';
+import { useSamplePlayback } from '../lib/use-sample-playback';
+import {
+  playEmotionVariantSample,
+  variantVoiceIdFor,
+} from '../lib/play-emotion-variant';
+import { IconPlay, IconSpinner } from '../lib/icons';
+import type { Character, Emotion } from '../lib/types';
 
 export const EMOTION_OPTIONS: { value: Emotion; label: string }[] = [
   { value: 'neutral', label: 'Neutral' },
@@ -37,13 +43,21 @@ export function SentenceEmotionControl({
   chapterId,
   sentenceId,
   emotion,
+  character,
 }: {
   chapterId: number;
   sentenceId: number;
   emotion?: Emotion;
+  /** fe-31 — the sentence's speaking character, threaded so the chip can
+      preview the designed emotion variant. Absent → no preview affordance
+      (e.g. an unresolved characterId). */
+  character?: Character;
 }) {
   const dispatch = useAppDispatch();
+  const playback = useSamplePlayback();
   const [open, setOpen] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const ref = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -58,7 +72,30 @@ export function SentenceEmotionControl({
   const current = emotion && emotion !== 'neutral' ? emotion : undefined;
   const choose = (value: Emotion) => {
     dispatch(manuscriptActions.setSentenceEmotion({ chapterId, sentenceId, emotion: value }));
+    setNote(null);
     setOpen(false);
+  };
+
+  /* fe-31 — only Qwen renders emotion variants audibly; Kokoro/XTTS ignore the
+     tag, so the preview is disabled there with an explanatory tooltip. */
+  const isQwen = character?.ttsEngine === 'qwen';
+  const hasVariant = current && character ? !!variantVoiceIdFor(character, current) : false;
+  const firstName = character ? character.name.split(' ')[0] || character.name : '';
+
+  const preview = async () => {
+    if (!current || !character || !isQwen || previewing) return;
+    setPreviewing(true);
+    setNote(null);
+    try {
+      const { fellBackToBase } = await playEmotionVariantSample(character, current, playback);
+      if (fellBackToBase) {
+        setNote(`no ${current} variant for ${firstName} — renders neutral`);
+      }
+    } catch (e) {
+      setNote((e as Error).message);
+    } finally {
+      setPreviewing(false);
+    }
   };
 
   return (
@@ -78,6 +115,44 @@ export function SentenceEmotionControl({
       >
         {current ?? <span className="text-xs leading-none" aria-hidden>🎭</span>}
       </button>
+      {/* fe-31 — preview the designed emotion variant. Only shown for a tagged
+          (non-neutral) line that has a resolved character. Disabled for non-Qwen
+          engines (the tag is inaudible there). */}
+      {current && character && (
+        <button
+          type="button"
+          data-testid="emotion-preview"
+          disabled={!isQwen || previewing}
+          aria-label={
+            isQwen
+              ? `Preview ${current} delivery for ${firstName}`
+              : 'Emotion only audible on Qwen'
+          }
+          title={
+            isQwen
+              ? hasVariant
+                ? `Preview ${current} variant`
+                : `Preview (no ${current} variant — renders neutral)`
+              : 'Emotion only audible on Qwen'
+          }
+          onClick={() => void preview()}
+          className="mx-0.5 inline-flex items-center justify-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-4 sm:h-4 rounded-full align-middle text-ink/40 hover:text-magenta disabled:opacity-40 disabled:hover:text-ink/40"
+        >
+          {previewing ? (
+            <IconSpinner className="w-3 h-3 animate-spin" />
+          ) : (
+            <IconPlay className="w-3 h-3" />
+          )}
+        </button>
+      )}
+      {note && (
+        <span
+          data-testid="emotion-preview-note"
+          className="mx-0.5 text-[10px] text-ink/50 align-middle"
+        >
+          {note}
+        </span>
+      )}
       {open && (
         <span
           role="menu"

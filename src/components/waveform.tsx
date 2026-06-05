@@ -1,20 +1,22 @@
-import { useMemo } from 'react';
-
 interface WaveformProps {
   progress: number;
   active: boolean;
 }
 
+// Deterministic seeded bar heights, computed once at module load so every
+// Waveform mount renders the identical 48-bar profile (fe-6, #413).
+const BARS: number[] = (() => {
+  let s = 42;
+  const out: number[] = [];
+  for (let i = 0; i < 48; i++) {
+    s = (s * 9301 + 49297) % 233280;
+    out.push(0.25 + (s / 233280) * 0.75);
+  }
+  return out;
+})();
+
 export function Waveform({ progress, active }: WaveformProps) {
-  const bars = useMemo(() => {
-    let s = 42;
-    const out: number[] = [];
-    for (let i = 0; i < 48; i++) {
-      s = (s * 9301 + 49297) % 233280;
-      out.push(0.25 + (s / 233280) * 0.75);
-    }
-    return out;
-  }, []);
+  const bars = BARS;
   return (
     <div className="flex items-end gap-[2px] h-7">
       {bars.map((h, i) => {

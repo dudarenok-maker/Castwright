@@ -163,6 +163,8 @@ describe('ListenPlayerRegion — phone viewport render (plan 81 wave 3)', () => 
           onRegenerate={vi.fn()}
           onSeekMarker={vi.fn()}
           onDeleteMarker={vi.fn()}
+          onSetMarkerKind={vi.fn()}
+          onFixLine={vi.fn()}
         />
       </Provider>,
     );
@@ -200,6 +202,8 @@ describe('ListenPlayerRegion — phone viewport render (plan 81 wave 3)', () => 
           onRegenerate={vi.fn()}
           onSeekMarker={vi.fn()}
           onDeleteMarker={vi.fn()}
+          onSetMarkerKind={vi.fn()}
+          onFixLine={vi.fn()}
         />
       </Provider>,
     );

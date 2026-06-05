@@ -364,6 +364,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
         dismissNotices: vi.fn(),
       },
       priorRoster: [],
+      openFixCharacterAudio: vi.fn(),
     };
     function OutletShim() {
       return <Outlet context={ctx} />;
@@ -496,6 +497,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
         dismissNotices: vi.fn(),
       },
       priorRoster: [],
+      openFixCharacterAudio: vi.fn(),
     };
     function OutletShim() {
       return <Outlet context={ctx} />;
@@ -789,6 +791,7 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
         dismissNotices: vi.fn(),
       },
       priorRoster: [],
+      openFixCharacterAudio: vi.fn(),
     };
     function LayoutShim() {
       return <Outlet context={layoutCtx} />;

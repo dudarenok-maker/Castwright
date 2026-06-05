@@ -101,4 +101,35 @@ describe('FixCharacterAudioModal', () => {
     expect(action!.payload.gainDb).toBeUndefined();
     expect(typeof action!.payload.modelKey).toBe('string');
   });
+
+  it('pre-scopes to a single chapter + segment and dispatches segmentIndices', () => {
+    const recorded: Action[] = [];
+    const store = makeStore(recorded);
+    render(
+      <Provider store={store}>
+        <FixCharacterAudioModal
+          characterId="bronte"
+          characterName="Bronte Allred"
+          bookId="bk1"
+          preScoped={{ mode: 'rerecord', chapterId: 2, segmentIndices: [4] }}
+          onClose={() => {}}
+        />
+      </Provider>,
+    );
+    // Candidate list is pinned to the pre-scoped chapter only (ch2), not ch1.
+    expect(screen.getByText(/The River/)).toBeTruthy();
+    expect(screen.queryByText(/The Meadow/)).toBeNull();
+    // Mode is locked to re-record so the CTA reads "Re-record 1 chapter".
+    fireEvent.click(screen.getByRole('button', { name: /Re-record 1 chapter/i }));
+    const action = [...recorded]
+      .reverse()
+      .find((a) => a.type === 'splice/startBatch') as
+      | { type: string; payload: SpliceBatchRequest }
+      | undefined;
+    expect(action!.payload).toMatchObject({
+      mode: 'rerecord',
+      chapterIds: [2],
+      segmentIndices: [4],
+    });
+  });
 });
