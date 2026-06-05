@@ -217,6 +217,29 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
     expect(sophie.description).toBe('Updated richer description.');
   });
 
+  it('preserves a designed Qwen voice (overrideTtsVoices) through a voiceless cast-update (#518)', () => {
+    /* Re-analysis streams a voiceless snapshot (analyzer doesn't produce voice
+       design). mergeCharacters must NOT drop overrideTtsVoices — the designed
+       Qwen voice lives there for generated characters with no voiceId. Dropping
+       it then persisting cast.json is what stripped Maruca/Grizel/Trix. */
+    const start = baseState([
+      makeChar('maruca', {
+        voiceState: 'generated',
+        overrideTtsVoices: { qwen: { name: 'qwen-maruca' } },
+      }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.mergeCharacters([
+        { id: 'maruca', name: 'Maruca', role: 'Peer', color: 'slot-18', description: 'Re-attributed.' },
+      ]),
+    );
+    const maruca = next.characters.find((c) => c.id === 'maruca')!;
+    expect(maruca.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-maruca' } });
+    expect(maruca.voiceState).toBe('generated');
+    expect(maruca.description).toBe('Re-attributed.'); // fresh fields still flow
+  });
+
   it('appends new characters from a later snapshot at the end (preserves discovery order)', () => {
     const start = baseState([makeChar('sophie'), makeChar('keefe')]);
     const next = castSlice.reducer(
