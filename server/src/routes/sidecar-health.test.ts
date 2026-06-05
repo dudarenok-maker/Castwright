@@ -55,6 +55,45 @@ describe('GET /api/sidecar/health', () => {
     expect(res.body.device).toBe('cuda');
   });
 
+  it('forwards asr_loaded / asr_device and injects asrEnabled from SEG_ASR_ENABLED (srv-31)', async () => {
+    const prev = process.env.SEG_ASR_ENABLED;
+    process.env.SEG_ASR_ENABLED = '1';
+    try {
+      fetchMock.mockResolvedValue(
+        new Response(
+          JSON.stringify({ ok: true, engines: ['kokoro'], asr_loaded: true, asr_device: 'cuda' }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.asrEnabled).toBe(true);
+      expect(res.body.asrLoaded).toBe(true);
+      expect(res.body.asrDevice).toBe('cuda');
+    } finally {
+      if (prev === undefined) delete process.env.SEG_ASR_ENABLED;
+      else process.env.SEG_ASR_ENABLED = prev;
+    }
+  });
+
+  it('defaults asr fields when the sidecar omits them and ASR is off', async () => {
+    const prev = process.env.SEG_ASR_ENABLED;
+    delete process.env.SEG_ASR_ENABLED;
+    try {
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ ok: true, engines: ['kokoro'] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
+      const res = await request(makeApp()).get('/api/sidecar/health');
+      expect(res.body.asrEnabled).toBe(false);
+      expect(res.body.asrLoaded).toBe(false);
+      expect(res.body.asrDevice).toBeNull();
+    } finally {
+      if (prev !== undefined) process.env.SEG_ASR_ENABLED = prev;
+    }
+  });
+
   it('coerces missing load-state fields to safe defaults', async () => {
     /* Old sidecar builds (or any third-party that speaks the same wire
        protocol) won't ship the new fields. The proxy must default them

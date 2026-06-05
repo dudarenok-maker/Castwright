@@ -34,6 +34,17 @@ export interface EngineLifecycle {
   onStop: () => Promise<void>;
 }
 
+/** ASR (Whisper) is display-only in the model-watch — it loads lazily on
+    /transcribe and idle-evicts, so there is no Load/Stop affordance, just a
+    resident indicator + the device it runs on. */
+export interface AsrLifecycle {
+  /** Whether the server has ASR content-QA enabled (SEG_ASR_ENABLED). The
+      model-watch only shows an ASR pill when this is true. */
+  enabled: boolean;
+  state: ModelControlState;
+  device: string | null;
+}
+
 export interface TtsLifecycle {
   /** Coqui XTTS — button-driven, ~3 GB VRAM, auto-evicts the analyzer on Load. */
   coqui: EngineLifecycle;
@@ -43,6 +54,8 @@ export interface TtsLifecycle {
   /** Qwen — bespoke per-character engine (plan 108), button-driven. Treated
       like Kokoro for residency: does NOT auto-evict the analyzer. */
   qwen: EngineLifecycle;
+  /** Whisper ASR content-QA engine (srv-31). Display-only — no Load/Stop. */
+  asr: AsrLifecycle;
   /** Inline banner copy: "Analyzer unloaded to free VRAM for TTS." Shared
       slot — only one engine load is in flight at a time so a single notice
       surface is correct. */
@@ -156,6 +169,16 @@ export function useTtsLifecycle(): TtsLifecycle {
     return 'idle';
   })();
 
+  /* ASR is display-only: 'ready' when the Whisper model is resident, 'idle'
+     otherwise (it loads lazily on /transcribe + idle-evicts, so there's no
+     'loading' state to surface and no Load/Stop). */
+  const asrState: ModelControlState = (() => {
+    if (!sidecarHealth) return 'idle';
+    if (sidecarHealth.status === 'unreachable') return 'unreachable';
+    if (sidecarHealth.asrLoaded) return 'ready';
+    return 'idle';
+  })();
+
   const setPending = (engine: EngineId, next: ModelControlState | null) => {
     if (engine === 'kokoro') setPendingKokoro(next);
     else if (engine === 'qwen') setPendingQwen(next);
@@ -242,6 +265,11 @@ export function useTtsLifecycle(): TtsLifecycle {
       state: qwenState,
       onLoad: () => doLoad('qwen'),
       onStop: () => doStop('qwen'),
+    },
+    asr: {
+      enabled: sidecarHealth?.asrEnabled === true,
+      state: asrState,
+      device: sidecarHealth?.asrDevice ?? null,
     },
     evictionNotice,
     loadErrorNotice,
