@@ -107,12 +107,6 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (technical):_ locks the audio-output contract; aligns with the project's testing discipline.
 _Full detail + acceptance:_ [#467](https://github.com/dudarenok-maker/AudioBook-Generator/issues/467).
 
-#### `srv-29` — Converge generation.ts chapter-write tail onto `finalizeChapterAudioWrite` ([#501](https://github.com/dudarenok-maker/AudioBook-Generator/issues/501))
-
-- _What:_ fs-26 (plan 176) extracted the chapter encode/persist tail into `finalize-chapter-write.ts` (used by the splice route); `generation.ts` still inlines its equivalent. Converge generation onto the shared helper (an `onEncoded` callback covers its `bumpProgress` seam) so the two can't diverge. Behaviour-neutral; existing generation tests stay green.
-- _Benefit (technical):_ single source of truth for the chapter-write tail — a future loudnorm/preservation/QA change can't silently apply to one path and not the other.
-_Full detail + acceptance:_ [#501](https://github.com/dudarenok-maker/AudioBook-Generator/issues/501).
-
 #### `srv-30` — CPU-only analyzer device (large RAM-resident model, concurrent with GPU TTS) ([#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507))
 
 - _What:_ Run the local (Ollama) analyzer **CPU-only** (`num_gpu:0`, system RAM) per-model, so a large model (e.g. **Gemma 4 12B**, which doesn't fit the 8 GB GPU) can be used without touching the GPU. A CPU model **skips the GPU semaphore**, so CPU analysis and GPU TTS run **concurrently** instead of evicting each other. Phase 0 (small GPU model) + Phase 1 (big CPU model) run side-by-side. Server-authoritative device resolver + CPU knobs (`ANALYZER_CPU_*`); required wiring so `/api/ollama/load` matches the device and the TTS auto-evict skips CPU models. Gemma 4 12B entry gated behind env until validated (brand-new).
@@ -120,12 +114,6 @@ _Full detail + acceptance:_ [#501](https://github.com/dudarenok-maker/AudioBook-
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
 
 ### Listener experience & playback
-
-#### `fe-25` — Wire (or remove) the mini-player volume control ([#460](https://github.com/dudarenok-maker/AudioBook-Generator/issues/460))
-
-- _What:_ The `IconVolume` button in `src/components/mini-player.tsx` renders with no `onClick` — a dead placeholder. Wire it to `audioRef.current.volume` with a persisted level, or remove it.
-- _Benefit (user):_ finish an obviously-unfinished control / remove a broken affordance.
-_Full detail + acceptance:_ [#460](https://github.com/dudarenok-maker/AudioBook-Generator/issues/460).
 
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461))
 
@@ -162,12 +150,6 @@ _Full detail + acceptance:_ [#414](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Show manuscript text beside the player and highlight the current sentence as audio plays, leveraging the per-segment timing already used for the waveform; tap a sentence to seek. Widen the API to expose per-sentence start/end if not already surfaced.
 - _Benefit (user):_ immersion / accessibility / pronunciation learning — a differentiating feature. (Large; owes its own plan.)
 _Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/AudioBook-Generator/issues/464).
-
-#### `fe-6` — Waveform memoisation ([#413](https://github.com/dudarenok-maker/AudioBook-Generator/issues/413))
-
-- _What:_ In `src/components/waveform.tsx`, stabilise the 48-bar `useMemo` (memo key invariant against re-mount) and lift the animation interval to the parent so it ticks once per listen-view mount (not per waveform instance).
-- _Benefit (technical):_ avoids 480+ DOM mutations per 800 ms when many waveforms are visible simultaneously. Low real-world impact today (rare to see >3 waveforms at once).
-_Full detail + acceptance:_ [#413](https://github.com/dudarenok-maker/AudioBook-Generator/issues/413).
 
 ### Cast, voice & duplicates
 
@@ -221,18 +203,6 @@ _Full detail + acceptance:_ [#423](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ closes the centerpiece feature from plan 55 — true non-linear undo per chapter. Today the timeline modal is read-only; the user has to walk through accept/reject in the A/B player.
 _Full detail + acceptance:_ [#415](https://github.com/dudarenok-maker/AudioBook-Generator/issues/415).
 
-#### `fs-26` — Line-level re-record / splice ([#480](https://github.com/dudarenok-maker/AudioBook-Generator/issues/480))
-
-- _Mostly shipped (plan 176)._ The splice **engine** (decode → substitute target segments → re-time → re-encode + loudnorm + `.previous.*`), both **remix (gain)** and **rerecord** modes, the `POST /chapters/:id/splice` route, and a per-character "Fix audio" UI on the cast drawer all landed. The route already accepts `segmentIndices`, so the engine is line-level capable.
-- _Remaining (follow-up):_ a Listen-view **per-sentence** entry point — pick a single sentence on the timeline (consuming the markers slice's `rerecord` kind) and re-record/splice just it. The plumbing exists; this is purely the timeline UI affordance.
-_Full detail + acceptance:_ [#480](https://github.com/dudarenok-maker/AudioBook-Generator/issues/480).
-
-#### `fs-32` — fs-26 splice hardening (3 edge cases) ([#503](https://github.com/dudarenok-maker/AudioBook-Generator/issues/503))
-
-- _What:_ three small splice robustness follow-ups bundled — (a) re-record duration delta can false-flag the advisory QA "suspect" badge (pass the new duration on the splice path); (b) verify the A/B player renders a splice revision (empty `segments[]`) without breakage; (c) re-record on a non-English book skips generation's per-voice designed-voice manifest language re-check (mirror it or document the limitation).
-- _Benefit (technical):_ closes the remaining fs-26 edge cases so the splice path matches generation's robustness. Low severity — each bites only an edge case.
-_Full detail + acceptance:_ [#503](https://github.com/dudarenok-maker/AudioBook-Generator/issues/503).
-
 ### Voice & cast sharing
 
 Build bottom-up: `side-13` (safe-load gate) → `fs-28` (bundle format) → `fs-29` / `fs-30` → `fs-31` (externally-facing). Scoped to **synthetic / designed** voices with a consent/licensing note throughout — never framed as cloning a real person's voice.
@@ -275,17 +245,23 @@ _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ graceful re-entry into a long book after days away.
 _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481).
 
-#### `fs-25` — Per-quote expressive / emotion synthesis ([#479](https://github.com/dudarenok-maker/AudioBook-Generator/issues/479))
+#### `fs-33` — Emotion-only LLM annotation pass + Detect-emotions trigger (fs-25 Wave 4b) ([#510](https://github.com/dudarenok-maker/AudioBook-Generator/issues/510))
 
-- _What:_ Surface per-line emotion/delivery tags (whisper / angry / excited) that drive synthesis — the deferred Qwen "per-quote emotion." Derive (analyzer) or hand-set per quote, thread through generation into the sidecar's expressive controls; untagged lines render exactly as today.
-- _Benefit (user):_ a step-change in narration expressiveness — a differentiating capability. (Large; cross-cuts analyzer + sidecar + UI — owes its own plan. Note: the `side-4`/`side-7` wake-conditions reference this feature inflating decode cost.)
-_Full detail + acceptance:_ [#479](https://github.com/dudarenok-maker/AudioBook-Generator/issues/479).
+- _What:_ A lightweight analyzer pass (`audiobook-emotion-annotation`) + `POST /api/books/:bookId/annotate-emotion` that backfills `{ sentenceId, emotion }` onto already-attributed sentences without re-attributing, plus a "Detect emotions" trigger in the manuscript header (cost-confirm → stream → chips populate). Manual per-quote tags always win.
+- _Benefit (user):_ existing books adopt per-quote emotion in one click instead of a full (quota-costly) re-analysis. _Re-homed from `fs-25` on archive._
+_Full detail + acceptance:_ [#510](https://github.com/dudarenok-maker/AudioBook-Generator/issues/510).
 
-#### `fe-31` — Preview an emotion from the manuscript quote chip ([#506](https://github.com/dudarenok-maker/AudioBook-Generator/issues/506))
+#### `fs-34` — fs-25 5e remainder: remove-variant route + Voices-view badge + staleness/cast-row hints ([#511](https://github.com/dudarenok-maker/AudioBook-Generator/issues/511))
 
-- _What:_ A preview affordance on the fs-25 per-quote emotion chip so tagging a line `angry` lets the user hear *that speaker's* angry delivery in place — no cast-drawer trip, no full generation. Needs planning: resolve the speaker's designed variant from the cast (cross-slice), define the no-variant behaviour (preview base + "renders neutral" note / inline "Design it" / disable), and handle non-Qwen speakers. Coordinate with the deferred fs-25 `5e` missing-variant hint.
-- _Benefit (user):_ tightens the tag→hear loop right where tagging happens. _Follow-up to `fs-25`._
-_Full detail + acceptance:_ [#506](https://github.com/dudarenok-maker/AudioBook-Generator/issues/506).
+- _What:_ Four 5e UX gaps left after `fe-31` shipped the manuscript missing-variant hint: a `DELETE …/cast/:characterId/emotion-variant/:emotion` route + a cast remove affordance; verify the `VariantsBadge` + "Has emotion variants" filter render in the cross-book Voices view; mark chapters stale on emotion/variant edits via the existing `ui.staleAudio` banner; a "N tags need a variant" count on the cast row.
+- _Benefit (user):_ closes the per-quote-emotion UX loop — discardable bad designs, visible staleness, cross-book parity. _Re-homed from `fs-25` on archive._
+_Full detail + acceptance:_ [#511](https://github.com/dudarenok-maker/AudioBook-Generator/issues/511).
+
+#### `fe-32` — Rebaseline modal: series-wide emotion-variant design (fs-25 Wave 6b) ([#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512))
+
+- _What:_ Extend the plan-108 "Rebaseline the series" modal to also design chosen emotion variants for the principal cast across a series (gated on each base existing), reusing the Wave-5b per-emotion controls + variant-aware audition; the base-only path stays intact when no variants are selected.
+- _Benefit (user):_ design expressive variants for a recurring cast across a whole series in one flow. _Re-homed from `fs-25` on archive._
+_Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512).
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
