@@ -118,6 +118,38 @@ function resolveSegmentQaRerecords(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
 }
 
+/* ASR content-QA pass (srv-31). OFF by default — `SEG_ASR_ENABLED` in
+   {1,true,yes,on} switches it on (the Whisper sidecar dep stays dormant until
+   then). `SEG_ASR_MAX_RERECORDS` (default 2) bounds drift re-records;
+   `SEG_ASR_SAMPLE_EVERY` (default 1 = every sentence) strides the pass. */
+function asrEnabled(): boolean {
+  const raw = (process.env.SEG_ASR_ENABLED ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function resolveAsrRerecords(): number {
+  const raw = Number(process.env.SEG_ASR_MAX_RERECORDS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+}
+
+function resolveAsrSampleEvery(): number {
+  const raw = Number(process.env.SEG_ASR_SAMPLE_EVERY);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+}
+
+/* Proper-noun allowlist for the ASR WER check — the cast's display names (+ any
+   aliases). Whisper mangles invented names ("Wren Sparrow" → "Wren Faster"),
+   so without this every name swap would read as content drift and re-record a
+   perfectly good line. */
+function buildCastNameAllowlist(characters: readonly { name?: string; aliases?: readonly string[] }[]): string[] {
+  const names = new Set<string>();
+  for (const c of characters) {
+    if (c.name) names.add(c.name);
+    for (const a of c.aliases ?? []) if (a) names.add(a);
+  }
+  return [...names];
+}
+
 /* side-11 item 2 — soft recycle at the chapter boundary. The sidecar raises
    `recycle_pending` in /health once committed-private memory crosses the SOFT
    threshold (SIDECAR_RECYCLE_SOFT_MB, below the hard watchdog ceiling). Reading
@@ -1238,6 +1270,26 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           bumpProgress();
           if (job.lastProgressTick) broadcast(job, { type: 'progress', ...job.lastProgressTick });
         },
+        /* ASR content-QA pass (srv-31) — OFF unless SEG_ASR_ENABLED. Transcribes
+           each sentence and re-records "fluent but wrong words" drift. The cast
+           names form the proper-noun allowlist; the non-English language hint is
+           threaded so the WER is meaningful (Phase 6). Re-records feed the same
+           progress heartbeat as the signal gate above. */
+        ...(asrEnabled()
+          ? {
+              asr: {
+                maxRerecords: resolveAsrRerecords(),
+                sampleEvery: resolveAsrSampleEvery(),
+                language: nonEnglishBook ? bookLanguage : undefined,
+                nameAllowlist: buildCastNameAllowlist(cast.characters),
+                onRerecord: () => {
+                  bumpProgress();
+                  if (job.lastProgressTick)
+                    broadcast(job, { type: 'progress', ...job.lastProgressTick });
+                },
+              },
+            }
+          : {}),
           });
           break;
         } catch (synthErr) {
