@@ -48,16 +48,25 @@ import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/* The dialogue-tag verbs we look for. Same set the analyzer's per-chapter
-   prompt cites in skills/audiobook-character-detection-per-chapter.md —
-   keep these aligned. Pattern: <Name> <verb> at the start of a narrator
-   sentence, with the immediately-preceding sentence being the dialogue. */
-const DIALOGUE_VERBS = [
+/* The dialogue-tag verbs we look for. Pattern: <Name> <verb> at the start of a
+   narrator sentence, with the immediately-preceding sentence being the dialogue.
+
+   This is a LITERAL mirror of the canonical list in
+   server/src/analyzer/dialogue-verbs.ts (this `.mjs` runs under plain `node`
+   and can't import the `.ts`). scripts/tests/dialogue-verbs-drift.test.mjs
+   fails if the two ever diverge — edit both together. */
+export const DIALOGUE_VERBS = [
+  // original set (kept aligned with the historical hotfix-script list)
   'said', 'growled', 'warned', 'insisted', 'added', 'continued', 'replied',
   'asked', 'answered', 'whispered', 'shouted', 'yelled', 'snapped', 'hissed',
   'spat', 'barked', 'snarled', 'grumbled', 'muttered', 'murmured', 'sighed',
   'breathed', 'laughed', 'cried', 'interrupted', 'interjected', 'countered',
   'noted', 'teased', 'chimed', 'sang', 'complained',
+  // expansion — Prentice's own ch19 tags ("repeated", "agreed", "reminded")
+  // plus common speech verbs the original set omitted.
+  'repeated', 'agreed', 'reminded', 'demanded', 'prompted', 'protested',
+  'wondered', 'clarified', 'corrected', 'offered', 'explained', 'admitted',
+  'argued', 'observed', 'promised', 'called', 'urged', 'declared', 'exclaimed',
 ];
 
 export function parseArgs(argv) {

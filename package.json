@@ -46,6 +46,7 @@
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
     "stats": "node scripts/code-stats.mjs",
     "audit:stage2-coverage": "npx tsx scripts/audit-stage2-coverage.mts",
+    "audit:missing-speakers": "npx tsx scripts/audit-missing-speakers.mts",
     "reconcile-cast": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/reconcile-broken-cast.ps1",
     "prepare": "husky"
   },
