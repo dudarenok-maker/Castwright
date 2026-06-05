@@ -66,6 +66,19 @@ Define success criteria, then loop until verified.
 - `npm run test:sidecar` — pytest single-run for `server/tts-sidecar/tests/`.
   Uses the sidecar venv at `server/tts-sidecar/.venv\Scripts\python.exe`; emits
   a SKIP banner and exits 0 when the venv isn't bootstrapped yet (fresh clone).
+  Runs `-m "not golden"` so the opt-in golden-audio tier never loads a model here.
+- `npm run test:golden-audio` — **opt-in** golden-audio regression gate (ops-11,
+  plan 185). NOT in `test:all` / `verify` — run on demand. Two layers: **Suite B**
+  (`:assembly`, GPU-free) feeds a committed recorded-PCM fixture through the real
+  `synthesiseChapter` + ffmpeg loudnorm; **Suite A** (`:sidecar`, real Kokoro)
+  asserts each fixture line's length vs `kokoro-baseline.json` within tolerance —
+  triple-gated (venv / pytest / Kokoro weights), SKIP+exit-0 when absent. Partials:
+  `npm run test:golden-audio:assembly` (Node-side audio changes, runs anywhere) and
+  `npm run test:golden-audio:sidecar` (engine changes, box with weights). Flags via
+  the full runner: `--assembly-only`, `--sidecar-only`, `--engine=<kokoro|coqui|qwen>`,
+  and `--bless` (re-records `kokoro-baseline.json` after a fixture/model change;
+  re-capture the Suite B fixture with `server/tts-sidecar/tests/golden/capture_assembly_fixture.py`).
+  Cross-engine sanity needs `GOLDEN_COQUI=1` / `GOLDEN_QWEN_VOICE=<id>`.
 - `npm run test:e2e` — Playwright (chromium) against Vite in mock mode on port 5174.
   Requires one-time `npx playwright install chromium`. Excludes the visual baselines (run via `test:e2e:visual` separately). See `docs/features/archive/37-e2e-playwright.md`.
 - `npm run test:e2e:visual` — Playwright visual-snapshot specs at `e2e/responsive/visual.spec.ts`, chromium-only, `--workers=1` so per-snapshot Windows font-hinting drift can't race against the parallel `test:e2e` battery. Lands in pre-push `verify`.

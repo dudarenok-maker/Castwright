@@ -1,0 +1,41 @@
+{
+  "_comment": "Golden baseline for the Kokoro fixture (ops-11). Re-bless after editing fixture.json or an intentional Kokoro weights upgrade: `npm run test:golden-audio -- --bless` on a box with the weights, then commit. `metadata` records the weights SHA + kokoro-onnx version so a model bump is legible (a sample-count mismatch then explains 'you upgraded the model'). `entries` are sample-count/duration per fixture line, asserted within `tolerance`.",
+  "metadata": {
+    "kokoro_onnx_version": "0.4.9",
+    "model_sha256": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+    "blessed_at": "2026-06-05"
+  },
+  "tolerance": 0.05,
+  "entries": {
+    "narrator-plain": {
+      "voice": "af_heart",
+      "sample_rate": 24000,
+      "sample_count": 63488,
+      "duration_sec": 2.6453
+    },
+    "numbers-and-year": {
+      "voice": "af_heart",
+      "sample_rate": 24000,
+      "sample_count": 123904,
+      "duration_sec": 5.1627
+    },
+    "abbreviations": {
+      "voice": "am_michael",
+      "sample_rate": 24000,
+      "sample_count": 110592,
+      "duration_sec": 4.608
+    },
+    "quotes-and-punctuation": {
+      "voice": "bf_emma",
+      "sample_rate": 24000,
+      "sample_count": 62976,
+      "duration_sec": 2.624
+    },
+    "multi-sentence-group": {
+      "voice": "bm_george",
+      "sample_rate": 24000,
+      "sample_count": 100352,
+      "duration_sec": 4.1813
+    }
+  }
+}
