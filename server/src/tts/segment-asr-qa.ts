@@ -94,6 +94,41 @@ export function resolveAsrThresholds(override?: Partial<AsrThresholds>): AsrThre
   return { ...base, ...override };
 }
 
+/* --- Config resolvers (shared by generation.ts + the repair route) --- */
+
+/** ASR content-QA is OFF unless `SEG_ASR_ENABLED` ∈ {1,true,yes,on} — the
+    Whisper sidecar dep stays dormant until then. */
+export function asrEnabled(): boolean {
+  const raw = (process.env.SEG_ASR_ENABLED ?? '').trim().toLowerCase();
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+/** Drift re-record budget (best-of-N by WER). Default 2; 0 = detect + flag only. */
+export function resolveAsrRerecords(): number {
+  const raw = Number(process.env.SEG_ASR_MAX_RERECORDS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+}
+
+/** Transcribe 1-in-N body groups. Default 1 = every sentence. */
+export function resolveAsrSampleEvery(): number {
+  const raw = Number(process.env.SEG_ASR_SAMPLE_EVERY);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+}
+
+/** Proper-noun allowlist from the cast's display names (+ aliases) so Whisper
+    mangling invented names ("Sophie Foster" → "Sophie Faster") never reads as
+    content drift. Structural input so callers needn't import CastCharacter. */
+export function buildCastNameAllowlist(
+  characters: readonly { name?: string; aliases?: readonly string[] }[],
+): string[] {
+  const names = new Set<string>();
+  for (const c of characters) {
+    if (c.name) names.add(c.name);
+    for (const a of c.aliases ?? []) if (a) names.add(a);
+  }
+  return [...names];
+}
+
 /* --- Normalization --- */
 
 const SMART_QUOTES = /[‘’‚‛′‵]/g; // ' ' ‚ ‛ ′ ‵
