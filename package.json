@@ -45,6 +45,7 @@
     "verify:fast:scoped": "node scripts/verify-cache.mjs --steps test:hooks,test,test:server --scope-staged",
     "openapi:types": "openapi-typescript ./openapi.yaml -o ./src/lib/api-types.ts",
     "stats": "node scripts/code-stats.mjs",
+    "audit:stage2-coverage": "npx tsx scripts/audit-stage2-coverage.mts",
     "reconcile-cast": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/reconcile-broken-cast.ps1",
     "prepare": "husky"
   },
