@@ -248,6 +248,11 @@ export interface ChapterSegment {
       Kokoro. Undefined = rendered in the configured engine. Drives the
       "Fallback (Kokoro)" status in the UI. */
   renderedFallbackEngine?: TtsEngine;
+  /** The voice this segment REQUESTED, set only when the sidecar substituted a
+      safe fallback because the requested voice wasn't in its speaker manifest
+      (its `X-Voice-Substituted-From` header). Absent on a clean render. Surfaces
+      a silent voice fallback so the golden-audio gate can fail on it. */
+  voiceSubstitutedFrom?: string;
   /** Per-sentence pre-assembly QA verdict (segment-qa.ts). Set only when the
       gate ran (`maxSegmentRerecords > 0`); absent on the title beat and on
       legacy chapters synthesised before the gate landed. */
@@ -719,7 +724,7 @@ export async function synthesiseChapter(
     onTitleComplete?.({ accumulatedSec: titleEndSec });
   }
 
-  type GroupResult = { pcm: Buffer; sampleRate: number };
+  type GroupResult = { pcm: Buffer; sampleRate: number; voiceSubstitutedFrom?: string };
 
   /* Resolve a group's engine route + voice ONCE (plan 108 routing), cached by
      group index. Used by the batchability partition AND by the synth calls, so
@@ -866,7 +871,11 @@ export async function synthesiseChapter(
                 reason: info.reason,
               }),
           },
-        ).then((result) => ({ pcm: result.pcm, sampleRate: result.sampleRate })),
+        ).then((result) => ({
+          pcm: result.pcm,
+          sampleRate: result.sampleRate,
+          voiceSubstitutedFrom: result.voiceSubstitutedFrom,
+        })),
       ),
     ).catch((err) => {
       logSynthTimeoutOffender(err, [group]);
@@ -975,7 +984,7 @@ export async function synthesiseChapter(
     }
     const anchorGroup = groups[0];
     const result = await synthGroup(anchorGroup);
-    results[anchorGroup.index] = { pcm: result.pcm, sampleRate: result.sampleRate };
+    results[anchorGroup.index] = result;
     sampleRate = result.sampleRate;
     fireComplete(anchorGroup);
     bodyStartIndex = 1;
@@ -1178,6 +1187,7 @@ export async function synthesiseChapter(
       startSec,
       endSec,
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
+      voiceSubstitutedFrom: r.voiceSubstitutedFrom,
       qa,
       suspect: qa?.status === 'suspect' ? true : undefined,
     });

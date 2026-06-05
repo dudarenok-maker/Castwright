@@ -40,7 +40,11 @@ if ($LASTEXITCODE -ne 0) {
 
 Push-Location $here
 try {
-    & $venvPython -m pytest $testsDir --tb=short -q
+    # `-m "not golden"` excludes the opt-in real-model golden-audio tier (ops-11)
+    # so this fast tier stays model-free. Run the goldens via run-golden-tests.ps1
+    # (npm run test:golden-audio). The pure-logic golden helpers
+    # (tests/golden/test_golden_compare.py) carry NO marker and DO run here.
+    & $venvPython -m pytest $testsDir -m "not golden" --tb=short -q
     $code = $LASTEXITCODE
 } finally {
     Pop-Location

@@ -101,12 +101,6 @@ Sub-groups and the items within them are ranked top = highest priority.
 
 ### Reliability & observability
 
-#### `ops-11` — Golden-audio regression harness ([#467](https://github.com/dudarenok-maker/AudioBook-Generator/issues/467))
-
-- _What:_ A tiny deterministic fixture book whose synthesized output is asserted (duration and/or content hash within tolerance) as a manual or CI-opt-in gate, to catch engine/sidecar regressions unit tests miss. Venv-gated SKIP banner like `test:sidecar`.
-- _Benefit (technical):_ locks the audio-output contract; aligns with the project's testing discipline.
-_Full detail + acceptance:_ [#467](https://github.com/dudarenok-maker/AudioBook-Generator/issues/467).
-
 #### `srv-30` — CPU-only analyzer device (large RAM-resident model, concurrent with GPU TTS) ([#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507))
 
 - _What:_ Run the local (Ollama) analyzer **CPU-only** (`num_gpu:0`, system RAM) per-model, so a large model (e.g. **Gemma 4 12B**, which doesn't fit the 8 GB GPU) can be used without touching the GPU. A CPU model **skips the GPU semaphore**, so CPU analysis and GPU TTS run **concurrently** instead of evicting each other. Phase 0 (small GPU model) + Phase 1 (big CPU model) run side-by-side. Server-authoritative device resolver + CPU knobs (`ANALYZER_CPU_*`); required wiring so `/api/ollama/load` matches the device and the TTS auto-evict skips CPU models. Gemma 4 12B entry gated behind env until validated (brand-new).
