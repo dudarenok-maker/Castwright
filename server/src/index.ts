@@ -55,6 +55,7 @@ import { bookStateRouter } from './routes/book-state.js';
 import { coverRouter } from './routes/cover.js';
 import { generationRouter } from './routes/generation.js';
 import { chapterSpliceRouter } from './routes/chapter-splice.js';
+import { chapterQaRepairRouter } from './routes/chapter-qa-repair.js';
 import { generationStatsRouter } from './routes/generation-stats.js';
 import { queueRouter } from './routes/queue.js';
 import { chapterAudioRouter } from './routes/chapter-audio.js';
@@ -192,6 +193,7 @@ app.use('/api/books', seriesCastRouter); // mounts /:bookId/series-cast (full-fi
 app.use('/api', libraryCastOverrideRouter); // mounts /library-cast/override (cross-book; not under /:bookId)
 app.use('/api/books', generationRouter); // mounts /:bookId/generation (SSE)
 app.use('/api/books', chapterSpliceRouter); // fs-26 — mounts /:bookId/chapters/:chapterId/splice (SSE)
+app.use('/api/books', chapterQaRepairRouter); // mounts /:bookId/chapters/:chapterId/audio-qa-repair (SSE)
 app.use('/api/generation', generationStatsRouter); // GET /stats — live RTF throughput for the dev pill
 app.use('/api/queue', queueRouter); // plan 102 — workspace-level cross-book chapter-generation queue
 app.use('/api/books', chapterAudioRouter); // mounts /:bookId/chapters/:chapterId/audio(.mp3)
