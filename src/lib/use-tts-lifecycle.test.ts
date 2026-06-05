@@ -96,6 +96,34 @@ describe('useTtsLifecycle', () => {
     expect(result.current.coqui.state).toBe('idle');
   });
 
+  it('exposes display-only ASR state (enabled/loaded/device) from the same /health probe', async () => {
+    mocks.getSidecarHealth.mockResolvedValueOnce({
+      status: 'reachable',
+      url: '',
+      loading: false,
+      modelLoaded: false,
+      kokoroLoaded: false,
+      kokoroLoading: false,
+      qwenLoaded: false,
+      qwenLoading: false,
+      asrEnabled: true,
+      asrLoaded: true,
+      asrDevice: 'cuda',
+    });
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.asr.state).toBe('ready'));
+    expect(result.current.asr.enabled).toBe(true);
+    expect(result.current.asr.device).toBe('cuda');
+  });
+
+  it('reports ASR disabled + idle when the server omits the asr fields (SEG_ASR_ENABLED off)', async () => {
+    /* The default beforeEach /health has no asr fields → enabled false, idle. */
+    const { result } = renderHook(() => useTtsLifecycle());
+    await waitFor(() => expect(result.current.asr.enabled).toBe(false));
+    expect(result.current.asr.state).toBe('idle');
+    expect(result.current.asr.device).toBeNull();
+  });
+
   it('drives both pills from a SINGLE /health probe per tick (one-poll invariant)', async () => {
     /* The architectural rule plan 30 G1 enforced and BACKLOG #15 protects:
        per-engine fan-out must not introduce a second poll. After one mount

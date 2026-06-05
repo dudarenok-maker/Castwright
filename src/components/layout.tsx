@@ -44,6 +44,7 @@ import {
   type StatusDetail,
 } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
+import { AsrStatusBadge } from './AsrStatusBadge';
 import { TtsNoticeBanner } from './tts-notice-banner';
 import { WhatsNewBanner } from './whats-new-banner';
 import { useTtsLifecycle, type TtsLifecycle } from '../lib/use-tts-lifecycle';
@@ -1029,6 +1030,12 @@ export function Layout() {
             void ttsLifecycle.qwen.onStop();
           }}
         />
+      )}
+      {/* Whisper ASR content-QA (srv-31) — display-only, shown only when the
+          server has ASR enabled (SEG_ASR_ENABLED). No Load/Stop: it loads
+          lazily on /transcribe and idle-evicts. */}
+      {ttsLifecycle.asr.enabled && (
+        <AsrStatusBadge state={ttsLifecycle.asr.state} device={ttsLifecycle.asr.device} />
       )}
     </span>
   ) : null;

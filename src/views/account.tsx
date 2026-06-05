@@ -38,6 +38,7 @@ import {
 import { formatKeyLabel, normalizeKeyEvent } from '../lib/keybindings';
 import { OllamaInstall } from '../components/ollama-install';
 import { QwenInstall } from '../components/qwen-install';
+import { WhisperInstall } from '../components/whisper-install';
 import { CoquiInstall } from '../components/coqui-install';
 import { ModelPullStatus } from '../components/model-pull-status';
 
@@ -1311,6 +1312,17 @@ function ModelsCard() {
             offline setups.
           </p>
           <QwenInstall />
+        </div>
+
+        <div className="space-y-2">
+          <h3 className="text-sm font-medium text-ink">Whisper ASR (per-sentence content QA)</h3>
+          <p className="text-xs text-ink/55">
+            Transcribes each generated sentence and re-records "fluent but wrong words" takes the
+            signal checks can't catch (srv-31). Install it here, then enable the gate with
+            `SEG_ASR_ENABLED=1` (`ASR_DEVICE=cpu|cuda`); the CLI
+            (`node server/tts-sidecar/scripts/install-whisper.mjs`) stays available.
+          </p>
+          <WhisperInstall />
         </div>
       </div>
     </section>
