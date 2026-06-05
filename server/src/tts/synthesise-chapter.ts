@@ -17,6 +17,7 @@ import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from 
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
+import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry } from './retry.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
@@ -247,6 +248,15 @@ export interface ChapterSegment {
       Kokoro. Undefined = rendered in the configured engine. Drives the
       "Fallback (Kokoro)" status in the UI. */
   renderedFallbackEngine?: TtsEngine;
+  /** Per-sentence pre-assembly QA verdict (segment-qa.ts). Set only when the
+      gate ran (`maxSegmentRerecords > 0`); absent on the title beat and on
+      legacy chapters synthesised before the gate landed. */
+  qa?: SegmentQaVerdict;
+  /** True when this segment is still `suspect` after the gate exhausted its
+      re-records (the best-of-N take was kept and assembled anyway). Drives the
+      per-sentence suspect surface; undefined when the gate passed or did not
+      run. */
+  suspect?: boolean;
 }
 
 /** Silence padding bookending the spoken chapter-title narration. Each chapter
@@ -444,6 +454,26 @@ export interface SynthesiseChapterOpts {
       upper bound. Mainly an explicit value for tests, which drive packing
       without touching process env. */
   qwenBatchTokenBudget?: number;
+  /** Pre-assembly per-sentence QA gate (segment-qa.ts). After all body groups
+      synthesise but BEFORE the chapter is concatenated, each group's PCM is
+      checked for dead/near-silence, a long internal silence run, and duration
+      drift; a `suspect` group is re-recorded in place via `synthGroup` up to
+      this many times, keeping the best take. `0` (the default) disables the
+      gate entirely — byte-identical to pre-gate behaviour, the kill-switch.
+      generation.ts sets the production default (env `SEG_QA_MAX_RERECORDS`). */
+  maxSegmentRerecords?: number;
+  /** Explicit thresholds for the QA gate (mainly for tests). Absent → the gate
+      reads its env/default thresholds per call (see `segment-qa.ts`). */
+  segmentQaThresholds?: SegmentQaThresholds;
+  /** Fired before each gate re-record so the SSE route can surface
+      "re-recording sentence N (attempt K)" instead of a silent stall.
+      `reasons` is the failing verdict's reason list. */
+  onSegmentRerecord?: (e: {
+    group: SentenceGroup;
+    attempt: number;
+    maxRerecords: number;
+    reasons: string[];
+  }) => void;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -547,6 +577,9 @@ export async function synthesiseChapter(
     qwenBatchSize = QWEN_BATCH_SIZE,
     qwenBatchBucket = QWEN_BATCH_BUCKET,
     qwenBatchTokenBudget = QWEN_BATCH_TOKEN_BUDGET,
+    maxSegmentRerecords = 0,
+    segmentQaThresholds,
+    onSegmentRerecord,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -1068,6 +1101,56 @@ export async function synthesiseChapter(
   }
   await Promise.all(workers);
 
+  /* Pre-assembly per-sentence QA gate. Every body group's PCM is now in
+     `results[group.index]`, still UN-concatenated, so a bad sentence can be
+     re-recorded in place before assembly (the user heard dropped / silent /
+     runaway single sentences slip through the chapter-level gate, which only
+     sees whole-chapter loudness + total duration). For each suspect group we
+     re-synth via the same single-call `synthGroup`, keep the best take, and —
+     if it still fails after `maxSegmentRerecords` attempts — keep the least-bad
+     take and stamp it `suspect` (never block completion). `0` skips the gate
+     entirely (byte-identical to pre-gate). Re-records run serially here, after
+     the pool: a suspect sentence is the rare exception, and serial keeps the
+     retake deterministic. */
+  const segmentQaByIndex = new Map<number, SegmentQaVerdict>();
+  if (maxSegmentRerecords > 0) {
+    /* `ok` beats `suspect`; among two suspects, fewer reasons is less-bad. */
+    const isBetter = (a: SegmentQaVerdict, b: SegmentQaVerdict): boolean => {
+      if (a.status !== b.status) return a.status === 'ok';
+      return a.reasons.length < b.reasons.length;
+    };
+    for (const group of groups) {
+      const r = results[group.index];
+      if (!r) continue;
+      let best = r;
+      let bestVerdict = evaluateSegmentPcm(r.pcm, r.sampleRate, group.text, segmentQaThresholds);
+      for (let attempt = 1; attempt <= maxSegmentRerecords && bestVerdict.status === 'suspect'; attempt++) {
+        if (signal?.aborted) {
+          throw new DOMException('synthesiseChapter aborted', 'AbortError');
+        }
+        onSegmentRerecord?.({
+          group,
+          attempt,
+          maxRerecords: maxSegmentRerecords,
+          reasons: bestVerdict.reasons,
+        });
+        const fresh = await synthGroup(group);
+        const freshVerdict = evaluateSegmentPcm(
+          fresh.pcm,
+          fresh.sampleRate,
+          group.text,
+          segmentQaThresholds,
+        );
+        if (isBetter(freshVerdict, bestVerdict)) {
+          best = fresh;
+          bestVerdict = freshVerdict;
+        }
+      }
+      results[group.index] = best;
+      segmentQaByIndex.set(group.index, bestVerdict);
+    }
+  }
+
   /* Single index-order pass: walk `results` by group index, resample any
      mismatched rate to the anchor, append in order, and compute the final
      per-segment `startSec`/`endSec` against the now-known cumulative offset.
@@ -1087,6 +1170,7 @@ export async function synthesiseChapter(
     chunks.push(pcmForGroup);
     runningBytes += pcmForGroup.length;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
+    const qa = segmentQaByIndex.get(group.index);
     segments.push({
       groupIndex: group.index,
       characterId: group.characterId,
@@ -1094,6 +1178,8 @@ export async function synthesiseChapter(
       startSec,
       endSec,
       renderedFallbackEngine: resolveGroup(group).renderedFallbackEngine,
+      qa,
+      suspect: qa?.status === 'suspect' ? true : undefined,
     });
   }
   void completedCount;

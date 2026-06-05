@@ -113,6 +113,12 @@ _Full detail + acceptance:_ [#467](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
 
+#### `srv-31` — ASR content verification for per-sentence audio QA ([#508](https://github.com/dudarenok-maker/AudioBook-Generator/issues/508))
+
+- _What:_ Extend the signal-based per-sentence QA gate (plan 179, `segment-qa.ts`) with a speech-to-text check: transcribe a flagged sentence (small Whisper in the sidecar) and compare against the manuscript text, so a re-record is triggered for **\"fluent but wrong/garbled\"** generations that have normal length + loudness — the one defect class the cheap RMS/silence/duration signals provably can't see. Run only on already-flagged (or sampled) sentences to bound the cost.
+- _Benefit (user):_ catches garbled-content defects that pass the signal-based checks. _Trade:_ a Whisper model competes for the 8 GB GPU (Qwen/Kokoro/analyzer) — run transient/CPU/batched and measure VRAM before defaulting on.
+_Full detail + acceptance:_ [#508](https://github.com/dudarenok-maker/AudioBook-Generator/issues/508) · plan `docs/features/179-pre-assembly-segment-qa.md`.
+
 ### Listener experience & playback
 
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461))
