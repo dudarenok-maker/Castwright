@@ -22,6 +22,7 @@ import {
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
 import { AnalysisAbortedError } from './ollama.js';
+import { AnalyzerTruncatedError } from './errors.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
 
 /* Idle-chunk watchdog: if the SDK stream goes more than this long between
@@ -40,6 +41,22 @@ export function resolveStreamIdleTimeoutMs(): number {
   if (!raw) return STREAM_IDLE_TIMEOUT_MS;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : STREAM_IDLE_TIMEOUT_MS;
+}
+
+/* Explicit per-request output-token cap (#528). Gemini defaults to the model
+   maximum when unset, which on a 507-sentence stage-2 chapter silently
+   truncates the JSON mid-stream (finishReason MAX_TOKENS). We set it
+   explicitly so the cap is visible + tunable, and — paired with the
+   finishReason check in `generate()` — a hit surfaces as an
+   `AnalyzerTruncatedError` instead of a corrupt buffer. Default 8192 matches
+   the common free-tier ceiling; the stage-2 chunker keeps each call's expected
+   output well under it. Shared env name with Ollama's num_predict knob. */
+export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
+export function resolveMaxOutputTokens(): number {
+  const raw = process.env.ANALYZER_MAX_OUTPUT_TOKENS;
+  if (!raw) return DEFAULT_MAX_OUTPUT_TOKENS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_OUTPUT_TOKENS;
 }
 
 /* Inter-attempt backoffs for the retry loop in generateWithLimiter.
@@ -313,6 +330,11 @@ export class GeminiAnalyzer implements Analyzer {
            engines. */
         if (err instanceof AnalysisAbortedError) throw err;
 
+        /* Output truncation (#528): replaying the same oversized prompt just
+           truncates again, so don't burn the retry budget — re-throw and let
+           the stage-2 chunker split the chapter into smaller calls. */
+        if (err instanceof AnalyzerTruncatedError) throw err;
+
         /* Idle-stream watchdog tripped — the SDK stream never emitted a
            chunk for the watchdog window. Retry with the same backoff shape
            as a 5xx; if we exhaust attempts, the error propagates and the
@@ -452,17 +474,24 @@ export class GeminiAnalyzer implements Analyzer {
           responseMimeType: 'application/json',
           systemInstruction,
           abortSignal: combined,
+          maxOutputTokens: resolveMaxOutputTokens(),
         },
       });
       const start = Date.now();
       let lastChunkAt = start;
       let buf = '';
       let promptTokenCount: number | undefined;
+      let candidatesTokenCount: number | undefined;
+      /* Track the model's own stop reason. `STOP` = clean finish; `MAX_TOKENS`
+         (or SAFETY/RECITATION) means the response was cut off — see the
+         post-loop truncation check (#528). */
+      let finishReason: string | undefined;
       const iterator = (stream as AsyncIterable<{ text?: string }>)[Symbol.asyncIterator]();
       while (true) {
         const next = (await Promise.race([iterator.next(), abortPromise])) as IteratorResult<{
           text?: string;
-          usageMetadata?: { promptTokenCount?: number };
+          usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+          candidates?: Array<{ finishReason?: string }>;
         }>;
         if (next.done) break;
         armIdleTimer();
@@ -472,6 +501,11 @@ export class GeminiAnalyzer implements Analyzer {
         if (usage?.promptTokenCount && Number.isFinite(usage.promptTokenCount)) {
           promptTokenCount = usage.promptTokenCount;
         }
+        if (usage?.candidatesTokenCount && Number.isFinite(usage.candidatesTokenCount)) {
+          candidatesTokenCount = usage.candidatesTokenCount;
+        }
+        const chunkFinish = chunk.candidates?.[0]?.finishReason;
+        if (chunkFinish) finishReason = chunkFinish;
         if (!text) continue;
         buf += text;
         const now = Date.now();
@@ -486,6 +520,18 @@ export class GeminiAnalyzer implements Analyzer {
       if (!buf) {
         throw new Error(`Gemini ${this.model} returned an empty response.`);
       }
+      /* Truncation gate (#528): the stream completed but the model stopped
+         because it hit the output cap (or a safety/recitation block), not
+         because it finished. Returning `buf` here would hand a corrupt
+         (mid-JSON) payload to parseAndValidate, which fails, retries at the
+         same size, and ultimately surfaces as a silent reset. Throw a
+         classified error so the retry loop short-circuits and the stage-2
+         chunker can split the chapter. `FINISH_REASON_UNSPECIFIED` and a
+         missing reason are treated as clean (some SDK paths omit it on the
+         text-bearing chunks). */
+      if (finishReason && finishReason !== 'STOP' && finishReason !== 'FINISH_REASON_UNSPECIFIED') {
+        throw new AnalyzerTruncatedError('gemini', finishReason, buf.length, candidatesTokenCount);
+      }
       return { text: buf, promptTokenCount };
     } catch (err) {
       /* Classify aborts before logging so a clean pause / idle-timeout
@@ -498,6 +544,17 @@ export class GeminiAnalyzer implements Analyzer {
         throw new AnalysisAbortedError(
           `Gemini ${this.model} stream aborted (paused or client disconnected).`,
         );
+      }
+
+      /* Output truncation (#528) — already classified; log cleanly and
+         re-throw so the chunker can react. Not the generic 5xx "failed" line. */
+      if (err instanceof AnalyzerTruncatedError) {
+        console.warn(
+          `[gemini] output truncated reason=${err.reason} bytes=${err.receivedBytes}` +
+            (err.outputTokens ? ` tokens=${err.outputTokens}` : '') +
+            ` model=${this.model}`,
+        );
+        throw err;
       }
 
       /* The SDK's ApiError keeps the upstream body inside `.message` as a

@@ -69,6 +69,39 @@ function chunksOf(text: string, size: number): string[] {
   return out;
 }
 
+/* Like ndjsonStream but the terminating `done:true` line carries a
+   `done_reason` — 'length' is Ollama's "hit the context/output budget"
+   (truncated) signal. */
+function ndjsonStreamWithDoneReason(
+  chunks: string[],
+  doneReason: string,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let i = 0;
+  return new ReadableStream({
+    pull(controller) {
+      if (i < chunks.length) {
+        const line = JSON.stringify({
+          message: { role: 'assistant', content: chunks[i] },
+          done: false,
+        });
+        controller.enqueue(encoder.encode(line + '\n'));
+        i += 1;
+      } else if (i === chunks.length) {
+        const done = JSON.stringify({
+          message: { role: 'assistant', content: '' },
+          done: true,
+          done_reason: doneReason,
+        });
+        controller.enqueue(encoder.encode(done + '\n'));
+        i += 1;
+      } else {
+        controller.close();
+      }
+    },
+  });
+}
+
 function okResponse(stream: ReadableStream<Uint8Array>): Response {
   return new Response(stream, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
 }
@@ -524,10 +557,41 @@ describe('OllamaAnalyzer — forensic raw-response persistence on failure', () =
   });
 });
 
+describe('OllamaAnalyzer — output truncation (#528)', () => {
+  it('throws AnalyzerTruncatedError when the stream ends with done_reason: length', async () => {
+    /* A truncated (mid-JSON) payload whose final done line reports
+       done_reason 'length'. The gate fires before parseAndValidate so the
+       corrupt buffer never reaches the parser. */
+    fetchMock.mockResolvedValue(
+      okResponse(ndjsonStreamWithDoneReason(['{"characters":[{"id":"narr'], 'length')),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    /* Same-realm error class — see the gemini truncation test note. */
+    const { AnalyzerTruncatedError } = await import('./errors.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    await expect(
+      analyzer.runStage1Chapter('m_ollama_trunc', 1, '# prompt', {}),
+    ).rejects.toBeInstanceOf(AnalyzerTruncatedError);
+    /* Non-retryable: one round-trip only. */
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns normally when done_reason is stop', async () => {
+    const pieces = chunksOf(VALID_RESPONSE, 64);
+    fetchMock.mockResolvedValue(okResponse(ndjsonStreamWithDoneReason(pieces, 'stop')));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:4b' });
+    const result = await analyzer.runStage1Chapter('m_ollama_stopreason', 1, '# prompt', {});
+    expect(result.characters).toHaveLength(2);
+  });
+});
+
 afterAll(async () => {
   /* Tidy test inbox/outbox files. */
   for (const id of [
     'm_ollama_ok',
+    'm_ollama_trunc',
+    'm_ollama_stopreason',
     'm_ollama_down',
     'm_ollama_bare_fetchfail',
     'm_ollama_abort',

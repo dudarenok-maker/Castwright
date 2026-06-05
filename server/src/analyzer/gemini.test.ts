@@ -501,9 +501,63 @@ describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
   });
 });
 
+describe('GeminiAnalyzer — output truncation (#528)', () => {
+  it('throws AnalyzerTruncatedError when the stream ends with finishReason MAX_TOKENS, without retrying', async () => {
+    /* A truncated (mid-JSON) payload whose final chunk reports MAX_TOKENS.
+       The truncation gate fires before parseAndValidate, so the corrupt
+       buffer never reaches the parser and the call does NOT retry. */
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([
+        { text: '{"characters":[{"id":"narrator"' },
+        { text: ',"name":"Narr', candidates: [{ finishReason: 'MAX_TOKENS' }] },
+      ]),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    /* Resolve the error class through the SAME dynamic-import realm as the
+       analyzer (mirrors the DailyQuotaExhaustedError test) — a static top-level
+       import is a different module instance under the pinned slow pool, so
+       instanceof would spuriously fail. */
+    const { AnalyzerTruncatedError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+
+    await expect(analyzer.runStage1('m_trunc', '# stage 1 prompt', {})).rejects.toBeInstanceOf(
+      AnalyzerTruncatedError,
+    );
+    /* Non-retryable: replaying the same oversized prompt only truncates again. */
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets an explicit maxOutputTokens on the request', async () => {
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: STAGE1_RESPONSE }]));
+    const { GeminiAnalyzer, resolveMaxOutputTokens } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await analyzer.runStage1('m_maxtok', '# stage 1 prompt', {});
+    const cfg = generateContentStream.mock.calls[0][0].config;
+    expect(cfg.maxOutputTokens).toBe(resolveMaxOutputTokens());
+  });
+
+  it('returns normally when the stream ends with finishReason STOP', async () => {
+    const slices = chunksOf(STAGE1_RESPONSE, 200);
+    const withStop = slices.map((text, i) =>
+      i === slices.length - 1 ? { text, candidates: [{ finishReason: 'STOP' }] } : { text },
+    );
+    generateContentStream.mockResolvedValue(asyncFromArray(withStop));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    const result = await analyzer.runStage1('m_stop', '# stage 1 prompt', {});
+    expect(result.characters).toHaveLength(3);
+  });
+});
+
 afterAll(async () => {
   /* Tidy the test inbox/outbox we touched so the workspace stays clean. */
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_test-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_trunc-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_maxtok-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_stop-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_maxtok-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_stop-stage1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_skip_empty-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_empty-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_test-stage1-ch7.md'), { force: true });

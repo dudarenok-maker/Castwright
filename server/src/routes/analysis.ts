@@ -8,7 +8,7 @@ import { rm } from 'node:fs/promises';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
-import { type AnalyzerSelection } from '../analyzer/index.js';
+import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
   selectAnalyzerForPhase,
   isPerPhaseModelSelectionActive,
@@ -22,7 +22,12 @@ import {
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
-import { runStage2WithCoverageGuard } from '../analyzer/stage2-coverage.js';
+import {
+  runStage2ChapterChunked,
+  resolveStage2ChunkCharBudget,
+  type Stage2ChunkRunResult,
+} from '../analyzer/stage2-chunk.js';
+import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import {
   runStage1WithRosterGuard,
   chapterDriftExceeded,
@@ -1156,6 +1161,122 @@ ${JSON.stringify(
 
 ${chapter.body}
 `;
+}
+
+/* Stage-2 inbox for ONE SECTION of a large chapter (#528 chunking). Same roster
+   + rules as buildStage2ChapterInbox, but the body is a sub-section and an
+   optional "preceding context" block carries the prior section's tail so an
+   untagged quote keeps its speaker across the seam. The model must attribute
+   ONLY the section, not the context. The chunk runner renumbers ids across
+   sections, so per-section 1-based numbering is fine. */
+function buildStage2ChunkInbox(
+  manuscriptId: string,
+  title: string,
+  stage1: Stage1Output,
+  chapter: { id: number; title: string; body: string },
+  subBody: string,
+  precedingContext: string | null,
+): string {
+  const contextBlock = precedingContext
+    ? `## Preceding context (already attributed — do NOT include in your output)
+
+These paragraphs come immediately BEFORE the section to attribute, provided
+ONLY so you can carry a speaker across the boundary (e.g. an untagged quote
+whose speaker was named just before). Do NOT emit any sentences for this text.
+
+${precedingContext}
+
+`
+    : '';
+  return `---
+manuscriptId: ${manuscriptId}
+stage: 2
+chapterId: ${chapter.id}
+expectedOutput: ./outbox/${manuscriptId}-stage2-ch${chapter.id}.json
+schema: see skills/audiobook-sentence-attribution.md
+---
+
+# Stage 2 — Sentence attribution (Chapter ${chapter.id}, section)
+
+This is ONE SECTION of a large chapter. Run the
+**\`audiobook-sentence-attribution\`** skill on the **section to attribute**
+below. For every sentence in that section, return the speaking character (or
+'narrator' for non-dialogue prose).
+
+Schema and rules live in \`skills/audiobook-sentence-attribution.md\`.
+
+All \`chapterId\` values in the output MUST be \`${chapter.id}\`. Return ONLY a
+JSON object matching the schema above. No prose, no code fences.
+
+## Manuscript
+
+- Title: ${title}
+- Manuscript ID: ${manuscriptId}
+- Chapter: ${chapter.id} — ${chapter.title}
+
+## Characters (from stage 1)
+
+Only the \`id\` is load-bearing for stage 2 (you assign sentences by character
+id). Name and role are included for disambiguation.
+
+\`\`\`json
+${JSON.stringify(
+  stage1.characters.map((c) => ({ id: c.id, name: c.name, role: c.role })),
+  null,
+  2,
+)}
+\`\`\`
+
+${contextBlock}## Section to attribute (Chapter ${chapter.id} — ${chapter.title})
+
+${subBody}
+`;
+}
+
+/* Shared resilient stage-2 runner used by BOTH the main and subset routes
+   (#528). Wraps the chapter in the large-chapter chunker (which itself wraps
+   each call in the coverage guard), so an over-budget chapter is split into
+   sections instead of truncating, and a chunk that still truncates is
+   adaptively re-split. For a chapter within budget this is exactly one guarded
+   call against the full body (byte-identical to the prior behaviour). Returns
+   the stitched sentences + combined coverage verdict. */
+function attributeChapterStage2(opts: {
+  analyzer: Analyzer;
+  manuscriptId: string;
+  title: string;
+  stage1: Stage1Output;
+  chapter: { id: number; title: string; body: string };
+  stageCall: StageCall;
+  onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
+  onChunk?: (info: { index: number; total: number; chars: number }) => void;
+}): Promise<Stage2ChunkRunResult> {
+  const callForBody = (subBody: string, preceding: string | null) => {
+    const prompt =
+      preceding === null && subBody === opts.chapter.body
+        ? buildStage2ChapterInbox(opts.manuscriptId, opts.title, opts.stage1, opts.chapter)
+        : buildStage2ChunkInbox(
+            opts.manuscriptId,
+            opts.title,
+            opts.stage1,
+            opts.chapter,
+            subBody,
+            preceding,
+          );
+    return opts.analyzer.runStage2Chapter(
+      opts.manuscriptId,
+      opts.chapter.id,
+      prompt,
+      opts.stageCall,
+    );
+  };
+  return runStage2ChapterChunked({
+    body: opts.chapter.body,
+    charBudget: resolveStage2ChunkCharBudget(),
+    coverageRetries: resolveStage2CoverageRetries(),
+    callForBody,
+    onRetry: opts.onCoverageRetry,
+    onChunk: opts.onChunk,
+  });
 }
 
 /* ── Sticky analysis: in-flight job map + multi-subscriber broadcast ────
@@ -2922,59 +3043,62 @@ export async function runMainAnalyzerJob(
          we never call this with a roster that lags Phase 0 by less than
          `MIN_LAG_CHAPTERS`. */
       const phase1Stage1 = getPhase1Stage1Snapshot();
-      const callStage2 = () =>
-        phase1Analyzer.runStage2Chapter(
-          manuscriptId,
-          ch.id,
-          buildStage2ChapterInbox(manuscriptId, recordRef.title, phase1Stage1, ch),
-          {
-            signal: abortController.signal,
-            language: bookLanguage,
-            onWaiting: (elapsed) => tickOverall(elapsed),
-            /* Per-chunk heartbeat so the user sees evidence of model output
-               on each chapter. Stage 2's existing wall-clock heartbeat log
-               lines already cover the silence-watchdog purpose. */
-            onChunk: (info) => {
-              const now = Date.now();
-              if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
-              chapterLastHeartbeatAt = now;
-              const charsPerSec =
-                info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
-              send({
-                kind: 'heartbeat',
-                phaseId: 1,
-                receivedBytes: info.receivedBytes,
-                charsPerSec,
-                elapsedMs: info.elapsedMs,
-                sinceLastChunkMs: info.sinceLastChunkMs,
-                chapterIndex: i + 1,
-              });
-            },
-            onThrottle: (waitMs, reason) => {
-              send({
-                kind: 'throttle',
-                phaseId: 1,
-                chapterIndex: i + 1,
-                model: phase1ModelId,
-                waitMs,
-                reason,
-              });
-            },
-          },
-        );
+      const stage2Call: StageCall = {
+        signal: abortController.signal,
+        language: bookLanguage,
+        onWaiting: (elapsed) => tickOverall(elapsed),
+        /* Per-chunk heartbeat so the user sees evidence of model output
+           on each chapter. Stage 2's existing wall-clock heartbeat log
+           lines already cover the silence-watchdog purpose. */
+        onChunk: (info) => {
+          const now = Date.now();
+          if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+          chapterLastHeartbeatAt = now;
+          const charsPerSec =
+            info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
+          send({
+            kind: 'heartbeat',
+            phaseId: 1,
+            receivedBytes: info.receivedBytes,
+            charsPerSec,
+            elapsedMs: info.elapsedMs,
+            sinceLastChunkMs: info.sinceLastChunkMs,
+            chapterIndex: i + 1,
+          });
+        },
+        onThrottle: (waitMs, reason) => {
+          send({
+            kind: 'throttle',
+            phaseId: 1,
+            chapterIndex: i + 1,
+            model: phase1ModelId,
+            waitMs,
+            reason,
+          });
+        },
+      };
       /* Coverage guard (plan 181 / 2026-06-05 The Drowning Bell ch12/ch18 forensics):
          the attribution model can loop-and-truncate — re-emit a span of
          sentences and terminate early — so the chapter is BOTH duplicated and
          missing its tail, yet schema-valid (ids 1..N, no gaps). Validate the
-         output against the source prose (`ch.body`) and re-run on failure (the
-         loop is stochastic, so a fresh attempt usually clears it). Keep the
-         least-bad take and flag the chapter for retry if it never passes —
-         never silently cache a truncated chapter. */
-      const { result, coverage: coverageVerdict } = await runStage2WithCoverageGuard({
-        body: ch.body,
-        maxRetries: resolveStage2CoverageRetries(),
-        call: callStage2,
-        onRetry: (attempt, verdict) =>
+         output against the source prose (`ch.body`) and re-run on failure.
+         #528 — large chapters whose per-sentence JSON exceeds the model output
+         cap truncate mid-stream; `attributeChapterStage2` splits an over-budget
+         chapter into sections (each guarded + adaptively re-split on
+         truncation) so the call never exceeds the cap. A within-budget chapter
+         is exactly one guarded call (unchanged). */
+      const {
+        sentences: stage2Sentences,
+        coverage: coverageVerdict,
+        chunkCount: stage2ChunkCount,
+      } = await attributeChapterStage2({
+        analyzer: phase1Analyzer,
+        manuscriptId,
+        title: recordRef.title,
+        stage1: phase1Stage1,
+        chapter: ch,
+        stageCall: stage2Call,
+        onCoverageRetry: (attempt, verdict) =>
           log(
             1,
             `Chapter ${i + 1}/${totalChapters} — attribution coverage check failed (${
@@ -2982,6 +3106,12 @@ export async function runMainAnalyzerJob(
             }); re-analysing (attempt ${attempt}).`,
           ),
       });
+      if (stage2ChunkCount > 1) {
+        log(
+          1,
+          `Chapter ${i + 1}/${totalChapters} — large chapter attributed in ${stage2ChunkCount} sections to stay under the model output cap.`,
+        );
+      }
       if (!coverageVerdict.ok) {
         console.warn(
           `[analysis] chapter ${ch.id} stage2 coverage SUSPECT after retries: ${coverageVerdict.issues.join(' ')}`,
@@ -2996,9 +3126,9 @@ export async function runMainAnalyzerJob(
         failedSet.add(ch.id);
         cache.failedChapterIds = Array.from(failedSet);
       }
-      for (const s of result.sentences) s.chapterId = ch.id;
-      sentencesByChapter.set(ch.id, result.sentences);
-      cachedChapters[ch.id] = result.sentences;
+      for (const s of stage2Sentences) s.chapterId = ch.id;
+      sentencesByChapter.set(ch.id, stage2Sentences);
+      cachedChapters[ch.id] = stage2Sentences;
       cache.chapters = cachedChapters;
       /* Persist this chapter's wall-clock duration so a future resumed run
          can seed its observed-rate trackers without waiting for the first
@@ -3030,7 +3160,7 @@ export async function runMainAnalyzerJob(
       inFlight.delete(i);
       log(
         1,
-        `Chapter ${i + 1}/${totalChapters} done — ${result.sentences.length.toLocaleString()} sentences in ${humanSeconds(chDuration)}`,
+        `Chapter ${i + 1}/${totalChapters} done — ${stage2Sentences.length.toLocaleString()} sentences in ${humanSeconds(chDuration)}`,
       );
 
       /* Update observed-pace tracker. Race-safe because JS is single-threaded
@@ -3922,30 +4052,68 @@ async function runSubsetAnalyzerJob(
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
       log(1, `Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…`);
-      const result = await phase1Analyzer.runStage2Chapter(
-        manuscriptId,
-        ch.id,
-        buildStage2ChapterInbox(manuscriptId, record.title, stage1, ch),
-        {
-          signal: abortController.signal,
-          language: bookLanguage,
-          onThrottle: (waitMs, reason) => {
-            send({
-              kind: 'throttle',
-              phaseId: 1,
-              chapterIndex: ch.id,
-              model: phase1ModelId,
-              waitMs,
-              reason,
-            });
+      /* #528 — use the same resilient runner as the main route: coverage guard
+         + large-chapter chunking. The subset (Re-analyse) path previously made
+         a bare runStage2Chapter call with no guard and no chunking, so a large
+         chapter (The Drowning Bell ch19, 507 sentences) truncated mid-JSON, threw,
+         and discarded the whole job — the reported failure. */
+      const { sentences: chapterSentences, chunkCount: subsetChunkCount } =
+        await attributeChapterStage2({
+          analyzer: phase1Analyzer,
+          manuscriptId,
+          title: record.title,
+          stage1,
+          chapter: ch,
+          stageCall: {
+            signal: abortController.signal,
+            language: bookLanguage,
+            onThrottle: (waitMs, reason) => {
+              send({
+                kind: 'throttle',
+                phaseId: 1,
+                chapterIndex: ch.id,
+                model: phase1ModelId,
+                waitMs,
+                reason,
+              });
+            },
           },
-        },
-      );
-      for (const s of result.sentences) s.chapterId = ch.id;
-      cachedChapters[ch.id] = result.sentences;
+          onCoverageRetry: (attempt, verdict) =>
+            log(
+              1,
+              `Chapter ${ch.id} — attribution coverage check failed (${
+                verdict.issues[0] ?? 'coverage'
+              }); re-analysing (attempt ${attempt}).`,
+            ),
+        });
+      if (subsetChunkCount > 1) {
+        log(
+          1,
+          `Chapter ${ch.id} — large chapter attributed in ${subsetChunkCount} sections to stay under the model output cap.`,
+        );
+      }
+      for (const s of chapterSentences) s.chapterId = ch.id;
+      cachedChapters[ch.id] = chapterSentences;
       cache.chapters = cachedChapters;
       await saveAnalysisCache(manuscriptId, cache);
-      log(1, `Chapter ${ch.id} done — ${result.sentences.length.toLocaleString()} sentences.`);
+      /* Roll a partial manuscript-edits.json after each chapter completes, so a
+         LATER chapter's failure no longer discards the chapters that already
+         succeeded (#528 — pre-fix the subset route only wrote edits once at the
+         very end). Mirrors the main route's per-chapter persist. */
+      if (record.bookDir) {
+        try {
+          const running: SentenceOutput[] = [];
+          for (const order of record.chapterHints) {
+            if (order.excluded) continue;
+            const arr = cachedChapters[order.id];
+            if (arr) running.push(...arr);
+          }
+          await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), { sentences: running });
+        } catch (persistErr) {
+          console.warn('[analysis] failed to roll subset manuscript-edits.json', persistErr);
+        }
+      }
+      log(1, `Chapter ${ch.id} done — ${chapterSentences.length.toLocaleString()} sentences.`);
       send({
         kind: 'phase',
         phaseId: 1,
@@ -4149,6 +4317,21 @@ function describeError(
   err: unknown,
   modelLabel: string,
 ): { code: string; message: string; detail?: string } {
+  /* Output truncation (#528) — the chapter's per-sentence JSON exceeded the
+     model's output cap. The stage-2 chunker splits over-budget chapters
+     automatically, so reaching here means even an adaptively-split section
+     (or a single un-splittable paragraph) still truncated. Classify it
+     distinctly so the UI says "too large" rather than a generic failure. */
+  if (err instanceof AnalyzerTruncatedError) {
+    return {
+      code: 'truncated',
+      message: `${modelLabel} truncated the response (${err.reason}) — a chapter section is too large for one attribution call. Lower STAGE2_CHUNK_CHAR_BUDGET and retry.`,
+      detail: `engine=${err.engine} reason=${err.reason} bytes=${err.receivedBytes}${
+        err.outputTokens ? ` tokens=${err.outputTokens}` : ''
+      }`,
+    };
+  }
+
   /* The limiter throws DailyQuotaExhaustedError when our own RPD counter
      OR a Google daily-quota 429 trips. Route layer must classify these
      uniformly so the UI shows a single "switch model or wait until N"
