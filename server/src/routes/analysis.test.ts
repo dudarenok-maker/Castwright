@@ -14,8 +14,12 @@ import {
   attributionDriftExceeded,
   stage1ShrinkRefused,
   buildStage1ChapterInbox,
+  readPriorCastForMerge,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('sortEvidence', () => {
   it("sorts each character's evidence by quote length descending", () => {
@@ -1491,5 +1495,58 @@ describe('sticky subset retry — second in-flight slot (plan 32 D1)', () => {
     const res = await supertest(app).post('/api/manuscripts/m_no_subset/analysis/pause').send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, paused: false });
+  });
+});
+
+describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
+  function makeBookDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'audiobook-prior-cast-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    return dir;
+  }
+  const castPath = (dir: string) => join(dir, '.audiobook', 'cast.json');
+  const carryPath = (dir: string) => join(dir, '.audiobook', 'cast-reuse-carryover.json');
+
+  it('prefers cast.json when present', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(castPath(dir), JSON.stringify({ characters: [{ id: 'live', voiceId: 'live' }] }));
+      writeFileSync(
+        carryPath(dir),
+        JSON.stringify({ characters: [{ id: 'stale', voiceId: 'stale' }] }),
+      );
+      const prior = await readPriorCastForMerge(dir);
+      expect(prior.map((c) => c.id)).toEqual(['live']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the carryover when cast.json is absent (post-reparse window)', async () => {
+    const dir = makeBookDir();
+    try {
+      writeFileSync(
+        carryPath(dir),
+        JSON.stringify({
+          characters: [
+            { id: 'sophie', voiceId: 'sophie', voiceState: 'reused', matchedFrom: { bookId: 'b0' } },
+          ],
+        }),
+      );
+      const prior = await readPriorCastForMerge(dir);
+      expect(prior).toHaveLength(1);
+      expect(prior[0]).toMatchObject({ id: 'sophie', voiceId: 'sophie', voiceState: 'reused' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns [] when neither file exists', async () => {
+    const dir = makeBookDir();
+    try {
+      expect(await readPriorCastForMerge(dir)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -51,12 +51,6 @@ highest-ROI quick listener wins interleaved near the top, then medium user-value
 then the large-but-important localization item. (The dependency-major cluster that sat at
 the bottom of Should all shipped via plans 167 + 170 on 2026-06-02 — see the note below.)
 
-### `srv-13` — Analysis-time cross-book reuse linking — Facet B (reparse preservation) ([#398](https://github.com/dudarenok-maker/AudioBook-Generator/issues/398))
-
-- _What:_ Preserve cross-book "reused" continuity (`matchedFrom` + unified `voiceId` + `voiceState:'reused'` + aliases) **across reparse**. Today reparse **deletes `cast.json`** (`book-state.ts:722-723`), so the links Facet A establishes evaporate on the next re-analysis. Read the existing cast before deleting and carry forward per-character `matchedFrom`/`voiceId`/`voiceState`/`aliases` for surviving characters (match by id, then name/alias), mirroring the `cast-slice.ts:mergeCharacters` preservation pattern (which already preserves tuned/locked voices). Facet A is unaffected — it re-establishes links on a full `/analysis/stream`; Facet B stops a reparse from silently dropping them in between.
-- _Benefit (user / technical):_ series continuity survives re-analysis — no re-running a repair after every reparse. Closes the remaining durability gap left after Facet A.
-_Full detail + acceptance:_ [#398](https://github.com/dudarenok-maker/AudioBook-Generator/issues/398).
-
 ### `srv-1` — Merge journal for deterministic alias un-link ([#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397))
 
 - _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.

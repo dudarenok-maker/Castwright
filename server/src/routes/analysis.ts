@@ -50,9 +50,20 @@ import type {
   Stage1Output,
   Stage1ChapterOutput,
 } from '../handoff/schemas.js';
-import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
+import {
+  castJsonPath,
+  castReuseCarryoverJsonPath,
+  changeLogJsonPath,
+  manuscriptEditsJsonPath,
+  slug,
+  stateJsonPath,
+} from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { mergeAnalysisResultWithExistingCast } from '../store/merge-analysis-cast.js';
+import {
+  mergeAnalysisResultWithExistingCast,
+  seedReuseGuardsFromPriorCast,
+  voicedSurvivorsDropped,
+} from '../store/merge-analysis-cast.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
@@ -72,6 +83,65 @@ import {
   type DroppedQuoteEntry,
   type DroppedQuotesBatch,
 } from '../store/dropped-quotes.js';
+
+/* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
+   analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
+   it) fall back to the reuse-carryover snapshot the reparse handler wrote, so
+   continuity survives the reparse → re-analysis window. Once this run writes a
+   fresh cast.json it takes precedence and the carryover goes inert until the
+   next reparse refreshes it. */
+export async function readPriorCastForMerge(
+  bookDir: string,
+): Promise<Array<{ id: string } & Record<string, unknown>>> {
+  const fromCast = (
+    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+      castJsonPath(bookDir),
+    ).catch(() => null)
+  )?.characters;
+  if (fromCast?.length) return fromCast;
+  const fromCarryover = (
+    await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+      castReuseCarryoverJsonPath(bookDir),
+    ).catch(() => null)
+  )?.characters;
+  return fromCarryover ?? [];
+}
+
+/* srv-13 — when the merge re-adds voiced/reused characters the fresh roster
+   dropped (a transient analyzer miss), leave a change-log breadcrumb so the
+   rescue is visible. Mirrors the change-log write pattern in book-state.ts.
+   Best-effort: a log failure must never disturb the persist. */
+async function logCarriedForwardCharacters(
+  bookDir: string,
+  dropped: Array<{ id: string; name?: string }>,
+): Promise<void> {
+  if (!dropped.length) return;
+  try {
+    const logPath = changeLogJsonPath(bookDir);
+    const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
+    const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
+    const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
+    const names = dropped.map((d) => d.name || d.id).join(', ');
+    const noun = dropped.length === 1 ? 'character' : 'characters';
+    await writeJsonAtomic(logPath, {
+      events: [
+        {
+          id: nextId,
+          at: new Date().toISOString(),
+          ts: 'Just now',
+          date: 'today',
+          type: 'reparse',
+          title: 'Preserved designed voices across re-analysis',
+          note: `Re-analysis omitted ${dropped.length} voiced ${noun} (${names}); carried their designed/reused voices forward.`,
+          actor: 'system',
+        },
+        ...prior,
+      ],
+    });
+  } catch (logErr) {
+    console.warn('[analysis] carried-forward change-log write failed', logErr);
+  }
+}
 
 /* Human-readable label for a Gemini model id. Kept in lockstep with
    src/lib/models.ts MODEL_OPTIONS — the frontend sends the id, we render
@@ -1733,11 +1803,7 @@ export async function runMainAnalyzerJob(
        `fresh` (Start fresh) intentionally discards them, so capture nothing. */
     const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> =
       !requestedFresh && recordRef.bookDir
-        ? ((
-            await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
-              castJsonPath(recordRef.bookDir),
-            ).catch(() => null)
-          )?.characters ?? [])
+        ? await readPriorCastForMerge(recordRef.bookDir)
         : [];
 
     if (requestedFresh) {
@@ -1753,6 +1819,9 @@ export async function runMainAnalyzerJob(
       if (recordRef.bookDir) {
         await rm(castJsonPath(recordRef.bookDir), { force: true });
         await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
+        /* Start fresh intentionally discards reuse continuity — drop the
+           reparse carryover too so it can't resurrect links (srv-13). */
+        await rm(castReuseCarryoverJsonPath(recordRef.bookDir), { force: true });
       }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
@@ -2475,6 +2544,11 @@ export async function runMainAnalyzerJob(
            must never abort an otherwise-good analysis. */
         if (recordRef.bookId) {
           try {
+            /* Seed the guard fields (notLinkedTo, matchedFrom) from the prior
+               cast BEFORE the link pass — it scores against `characters`, so
+               without this it would re-link a pair the user separated and
+               re-stamp links already established (srv-13). */
+            seedReuseGuardsFromPriorCast(priorCastForMerge, characters);
             const linked = await linkSeriesReuseAtAnalysis(recordRef.bookId, characters);
             if (linked > 0) {
               log(0, `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`);
@@ -3214,6 +3288,10 @@ export async function runMainAnalyzerJob(
           await writeJsonAtomic(castJsonPath(record.bookDir), {
             characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, characters),
           });
+          await logCarriedForwardCharacters(
+            record.bookDir,
+            voicedSurvivorsDropped(priorCastForMerge, characters),
+          );
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
@@ -3554,11 +3632,7 @@ async function runSubsetAnalyzerJob(
   /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
      the existing cast before any interim write clobbers cast.json. */
   const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
-    ? ((
-        await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
-          castJsonPath(record.bookDir),
-        ).catch(() => null)
-      )?.characters ?? [])
+    ? await readPriorCastForMerge(record.bookDir)
     : [];
 
   /* Used inside the persist guards below in place of the old `clientGone`
@@ -3902,6 +3976,25 @@ async function runSubsetAnalyzerJob(
     }
     const enriched = attachLinesAndScenes(assignPaletteColors(folded.characters), folded.sentences);
 
+    /* Plan 126 Facet A on the chapter-retry path (srv-13) — a book completed
+       solely via this path never ran the link pass and persisted an unlinked
+       cast.json. Seed the guard fields from the prior cast first, then link.
+       Mirrors the main route's pass; failure is non-fatal. */
+    if (record.bookId) {
+      try {
+        seedReuseGuardsFromPriorCast(priorCastForMerge, enriched);
+        const linked = await linkSeriesReuseAtAnalysis(record.bookId, enriched);
+        if (linked > 0) {
+          log(
+            0,
+            `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`,
+          );
+        }
+      } catch (linkErr) {
+        console.warn('[analysis] subset series reuse-link pass failed', linkErr);
+      }
+    }
+
     /* Phase 1 character-id reconciliation — see the main route's same
        block plus the comment on reconcileSentenceCharacterIds. The
        subset path is just as exposed to orphan ids (one subset chapter
@@ -3980,6 +4073,10 @@ async function runSubsetAnalyzerJob(
           await writeJsonAtomic(castJsonPath(record.bookDir), {
             characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, enriched),
           });
+          await logCarriedForwardCharacters(
+            record.bookDir,
+            voicedSurvivorsDropped(priorCastForMerge, enriched),
+          );
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
