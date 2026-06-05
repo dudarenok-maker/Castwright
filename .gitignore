@@ -18,6 +18,7 @@ RELEASE_NOTES.md
 .vscode/
 *.swp
 .claude/
+.claude-*
 
 # Logs
 *.log
