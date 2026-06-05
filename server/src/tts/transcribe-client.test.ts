@@ -22,7 +22,7 @@ vi.mock('undici', async (importOriginal) => {
 const { acquire } = vi.hoisted(() => ({ acquire: vi.fn(async () => vi.fn()) }));
 vi.mock('../gpu/semaphore.js', () => ({ gpuSemaphore: { acquire } }));
 
-import { transcribeSegment, asrRunsOnGpu } from './transcribe-client.js';
+import { transcribeSegment, asrRunsOnGpu, normalizeWhisperLanguage } from './transcribe-client.js';
 
 const mockFetch = vi.mocked(undiciFetch);
 const URL = 'http://sidecar.test:9000';
@@ -77,8 +77,15 @@ describe('transcribeSegment', () => {
       return jsonResponse({ text: 'привет', language: 'ru' });
     }) as unknown as typeof undiciFetch);
 
-    await transcribeSegment(PCM, 24000, { sidecarUrl: URL, language: 'ru' });
-    expect(headers['x-language']).toBe('ru');
+    await transcribeSegment(PCM, 24000, { sidecarUrl: URL, language: 'ru-RU' });
+    expect(headers['x-language']).toBe('ru'); // normalised to the base subtag
+  });
+
+  it('normalizeWhisperLanguage takes the base subtag and drops non-codes', () => {
+    expect(normalizeWhisperLanguage('en-US')).toBe('en');
+    expect(normalizeWhisperLanguage('ru')).toBe('ru');
+    expect(normalizeWhisperLanguage(undefined)).toBeUndefined();
+    expect(normalizeWhisperLanguage('Russian')).toBeUndefined();
   });
 
   it('does NOT acquire a GPU token on the CPU default path', async () => {

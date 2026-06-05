@@ -71,7 +71,8 @@ export async function transcribeSegment(
     'content-type': 'audio/L16',
     'x-sample-rate': String(sampleRate),
   };
-  if (opts.language) headers['x-language'] = opts.language;
+  const lang = normalizeWhisperLanguage(opts.language);
+  if (lang) headers['x-language'] = lang;
 
   const release = asrRunsOnGpu() ? await gpuSemaphore.acquire(costForEngine('asr')) : null;
   try {
@@ -116,6 +117,15 @@ export async function transcribeSegment(
   } finally {
     release?.();
   }
+}
+
+/** Normalise a BCP-47-ish tag to the base language subtag Whisper expects
+    ("en-US" → "en", "ru" → "ru"). Anything that isn't a 2–3-letter code returns
+    undefined → let Whisper auto-detect rather than pass an unsupported value. */
+export function normalizeWhisperLanguage(lang?: string | null): string | undefined {
+  if (!lang) return undefined;
+  const base = lang.trim().toLowerCase().split(/[-_]/)[0];
+  return /^[a-z]{2,3}$/.test(base) ? base : undefined;
 }
 
 function numOrNull(v: unknown): number | null {
