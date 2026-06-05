@@ -52,6 +52,7 @@ import type {
 } from '../handoff/schemas.js';
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { mergeAnalysisResultWithExistingCast } from '../store/merge-analysis-cast.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
@@ -1726,6 +1727,19 @@ export async function runMainAnalyzerJob(
        `fresh: true` flag (parsed in the route handler and forwarded as
        opts.requestedFresh) discards the cache before any analyzer work
        begins. */
+    /* Snapshot the existing cast's designed-voice links BEFORE any interim
+       write clobbers cast.json, so the final roster preserves them across a
+       re-analysis (#518 — re-attribution must not strip designed voices).
+       `fresh` (Start fresh) intentionally discards them, so capture nothing. */
+    const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> =
+      !requestedFresh && recordRef.bookDir
+        ? ((
+            await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+              castJsonPath(recordRef.bookDir),
+            ).catch(() => null)
+          )?.characters ?? [])
+        : [];
+
     if (requestedFresh) {
       await clearAnalysisCache(manuscriptId);
       /* Match the filesystem to the cleared cache state. Without this,
@@ -2333,7 +2347,9 @@ export async function runMainAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
-              await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: interim });
+              await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
+                characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, interim),
+              });
             } catch (persistErr) {
               console.warn('[analysis] interim cast.json write failed', persistErr);
             }
@@ -2509,7 +2525,9 @@ export async function runMainAnalyzerJob(
               assignPaletteColors(previewFoldForLiveView(stage1.characters)),
               [],
             );
-            await writeJsonAtomic(castJsonPath(recordRef.bookDir), { characters: stage1Cast });
+            await writeJsonAtomic(castJsonPath(recordRef.bookDir), {
+              characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, stage1Cast),
+            });
           } catch (persistErr) {
             console.warn('[analysis] stage1 cast.json write failed', persistErr);
           }
@@ -3193,7 +3211,9 @@ export async function runMainAnalyzerJob(
             `Attribution drift exceeded threshold (${reconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
           );
         } else {
-          await writeJsonAtomic(castJsonPath(record.bookDir), { characters });
+          await writeJsonAtomic(castJsonPath(record.bookDir), {
+            characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, characters),
+          });
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
@@ -3531,6 +3551,16 @@ async function runSubsetAnalyzerJob(
     send({ kind: 'log', phaseId, message });
   };
 
+  /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
+     the existing cast before any interim write clobbers cast.json. */
+  const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
+    ? ((
+        await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+          castJsonPath(record.bookDir),
+        ).catch(() => null)
+      )?.characters ?? [])
+    : [];
+
   /* Used inside the persist guards below in place of the old `clientGone`
      flag. The detached job survives the original requester disconnecting,
      but it still respects an explicit /pause via abortController.signal —
@@ -3666,7 +3696,9 @@ async function runSubsetAnalyzerJob(
           );
           if (interim.length > 0) {
             try {
-              await writeJsonAtomic(castJsonPath(record.bookDir), { characters: interim });
+              await writeJsonAtomic(castJsonPath(record.bookDir), {
+                characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, interim),
+              });
             } catch (persistErr) {
               console.warn('[analysis-subset] interim cast.json write failed', persistErr);
             }
@@ -3945,7 +3977,9 @@ async function runSubsetAnalyzerJob(
             `Attribution drift exceeded threshold (${subsetReconciled.demotedCount}/${folded.sentences.length} ≈ ${Math.round((100 * subsetReconciled.demotedCount) / folded.sentences.length)}%) — refusing to flip cast.json / state.json. Retry analysis to re-attribute.`,
           );
         } else {
-          await writeJsonAtomic(castJsonPath(record.bookDir), { characters: enriched });
+          await writeJsonAtomic(castJsonPath(record.bookDir), {
+            characters: mergeAnalysisResultWithExistingCast(priorCastForMerge, enriched),
+          });
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {

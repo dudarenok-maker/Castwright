@@ -1341,6 +1341,21 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     );
   }
 
+  it('Re-analyse on a done chapter confirms, then calls runAnalysisForChapters([id]) for that chapter only', async () => {
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {})); // keep it pending
+    renderInclude(store);
+
+    // Chapter 1 is done → its action row carries the Re-analyse button.
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    // Confirm dialog appears; nothing fires until the user confirms.
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+
+    expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+    expect(runAnalysisForChaptersSpy).toHaveBeenCalledWith('m1', [1], expect.anything());
+  });
+
   it('on success, merges sentences into the manuscript slice, characters into cast, and clears the row excluded flag', async () => {
     const store = makeIncludeStore();
     setChapterExcludedSpy.mockResolvedValue({
