@@ -19,6 +19,7 @@ import {
   audioDir,
   bookDirByDisplay,
   castJsonPath,
+  castReuseCarryoverJsonPath,
   changeLogJsonPath,
   listenProgressJsonPath,
   manuscriptEditsJsonPath,
@@ -47,6 +48,7 @@ import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
+import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
 import { collectRenderedFallbackEngines } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
@@ -743,6 +745,34 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       updatedAt: new Date().toISOString(),
     };
     await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+
+    /* srv-13 — snapshot the cast's reuse/voice slice BEFORE deleting cast.json
+       so the next analysis can carry continuity forward. cast.json itself is
+       still deleted (clean slate for chapter-keyed chapterCast / drift), but
+       the carryover file resurrects matchedFrom / voiceId / voiceState /
+       designed voice / notLinkedTo / aliases at the next analysis's
+       priorCastForMerge fallback. Always rewrite from the CURRENT cast so a
+       pre-reparse manual unlink isn't resurrected; clear a stale carryover when
+       there's nothing to preserve. */
+    const carryoverPath = castReuseCarryoverJsonPath(bookDir);
+    const existingCast = await readJson<{
+      characters?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
+    }>(castJsonPath(bookDir));
+    const reuseRows = (existingCast?.characters ?? [])
+      .filter((c) => typeof c.id === 'string')
+      .map((c) => {
+        const row: Record<string, unknown> = { id: c.id, name: c.name };
+        if (c.aliases !== undefined) row.aliases = c.aliases;
+        for (const key of PRESERVED_VOICE_FIELDS) {
+          if (c[key] !== undefined) row[key] = c[key];
+        }
+        return row;
+      });
+    if (reuseRows.length) {
+      await writeJsonAtomic(carryoverPath, { characters: reuseRows });
+    } else if (existsSync(carryoverPath)) {
+      await rm(carryoverPath, { force: true });
+    }
 
     /* Wipe the analysis cache and any per-book state that's now stale.
        Audio dir is removed wholesale; cast.json + revisions.json are deleted

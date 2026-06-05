@@ -1,14 +1,15 @@
 ---
-status: deferred
-shipped: 2026-05-30
+status: stable
+shipped: 2026-06-05
 owner: null
 ---
 
 # Analysis-time cross-book reuse linking (durable continuity)
 
 > Status: **Facet A shipped 2026-05-30** (auto-link at analysis + the `srv-14`
-> denormalisation it builds on); **Facet B (reparse preservation) remains**
-> (backlog `srv-13`). See Ship notes.
+> denormalisation it builds on); **Facet B shipped 2026-06-05** (`srv-13` —
+> reparse preservation + the adjacent continuity holes a full-surface sweep
+> turned up). See Ship notes.
 > Key files (target): `server/src/routes/analysis.ts`, `server/src/routes/book-state.ts` (reparse), `server/src/workspace/series-cast-scan.ts`, `server/src/routes/voice-match.ts`, `server/src/routes/cast-link-prior.ts`, `src/store/cast-slice.ts`
 > URL surface: indirect — `#/books/<id>/cast` (the Reused badge + merge picker) after analysis / reparse
 > OpenAPI ops: none (no new wire fields — `matchedFrom` / `voiceId` / `voiceState` already exist)
@@ -135,15 +136,39 @@ backlog-cleanup round, integration branch `integration/2026-05-30`):
 - `cb65724` — `fix(server): denormalise reused qwen voice on auto-match write path` (`srv-14`). The cast PUT funnel (`server/src/routes/book-state.ts`) now denormalises `ttsEngine` + `overrideTtsVoices.qwen` onto any newly-reused character via the shared `resolveReusedVoiceFields`, so on-disk cast.json is self-complete without read-time hydration.
 - `33cc87a` — `feat(server): auto-link cross-book reuse at analysis (plan 126 Facet A)`. New `server/src/workspace/series-reuse-link.ts:linkSeriesReuseAtAnalysis()` runs at the Phase-0b finalise site in `analysis.ts` (right after `dropEvidencelessCast`, before the cast.json persist), matching each character against prior **strictly-earlier** same-series books with the exported `voice-match.ts:scoreOne` (`nameScore < 0.34` floor + gender/age/attribute factors), stamping `matchedFrom`/unified `voiceId`/`voiceState:'reused'`, unioning aliases, and denormalising the bespoke voice. Guards: skips `unknown-male`/`unknown-female`, never auto-links a `notLinkedTo` pair, never overwrites an existing `matchedFrom`, never demotes a tuned/locked voice; the earliest series book + standalones get zero links. Wrapped in try/catch so a link error can't abort analysis. The client-side `applyVoiceMatches` path stays as an additive fallback.
 
-**Still deferred — Facet B** (reparse preservation): the reparse handler still
-deletes `cast.json` (`book-state.ts:722-723`), so a reparse drops the links
-Facet A established. Carry `matchedFrom`/`voiceId`/`voiceState`/`aliases`
-forward across reparse, mirroring `cast-slice.ts:mergeCharacters`. Tracked as
-`srv-13` in the backlog.
+**Facet B shipped 2026-06-05** (`srv-13`, branch
+`feat/server-srv-13-reparse-reuse-preservation`, Closes #398). A full-surface
+sweep of the cast-persistence paths turned up six adjacent continuity holes;
+all fixed in one pass:
 
-**Also remaining** (surfaced this round): a SECOND Phase-0b finalise site — the
-failed-chapter retry/resume `runChapterCastSubset` path in `analysis.ts`
-(~L3508, writing cast.json ~L3712) — does NOT run the Facet-A link pass, so a
-book completed exclusively via the chapter-retry path persists an unlinked
-cast.json until the next full `/analysis/stream`. Fold into Facet B or a tiny
-standalone fix.
+- **Reparse carryover.** The reparse handler still deletes `cast.json` (clean
+  slate for chapter-keyed `chapterCast`/drift), but first snapshots the
+  reuse/voice slice (`matchedFrom`/`voiceId`/`voiceState`/designed voice/
+  `notLinkedTo`/`aliases`) to `cast-reuse-carryover.json`
+  (`paths.ts:castReuseCarryoverJsonPath`). The analysis route's
+  `readPriorCastForMerge` falls back to it when `cast.json` is absent (both the
+  main stream and the chapter-retry path); a fresh `cast.json` then takes
+  precedence (self-correcting, no resurrection); **Start fresh** deletes it.
+- **Facet-A ordering bug.** `linkSeriesReuseAtAnalysis` scored against a fresh
+  roster whose `notLinkedTo` was empty, so it could re-link a pair the user
+  separated. `seedReuseGuardsFromPriorCast` now seeds `notLinkedTo`/`matchedFrom`
+  onto the roster **before** the link pass (both sites).
+- **`notLinkedTo`** added to `PRESERVED_VOICE_FIELDS`; **`aliases` unioned**
+  (old ∪ fresh) instead of replaced in `mergeAnalysisResultWithExistingCast`.
+- **Dropped-character rescue.** A voiced/reused character the fresh roster omits
+  (transient analyzer miss) is carried forward instead of dropped, with a
+  change-log breadcrumb (`voicedSurvivorsDropped`).
+- **Chapter-retry Facet-A gap** (the SECOND Phase-0b finalise site —
+  `runChapterCastSubset`) now runs the link pass, so a book completed solely via
+  chapter-retry no longer persists an unlinked cast.json.
+- **Frontend `cast-slice.ts`.** `mergeCharacters` carries `notLinkedTo` + unions
+  `aliases`; `applyMerge` additionally carries
+  `overrideTtsVoices`/`ttsEngine`/`voiceStyle`/`notLinkedTo` + unions `aliases`
+  (the cast-merge response omits voice fields).
+
+**Deliberately out of scope:** `matchedFrom` stays in `PRESERVED_VOICE_FIELDS`
+(removing it would re-strip designed voices on re-analysis — the #518/plan-183
+fix); the stage-1 shrink-refusal threshold is untouched (dropped-char rescue
+covers the loss without risking false-positive refusals). Cross-series linking
+is `srv-7`. **Live GPU acceptance owed** (reparse→re-analyse preserves badges/
+voices/`notLinkedTo`; retry-path links; dropped-char rescue logged).
