@@ -33,6 +33,7 @@ import { api, type SeriesRosterEntry } from '../lib/api';
 import type { Character } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
+import { computeReanalyseProgress } from '../lib/reanalyse-progress';
 import { parseDuration } from '../lib/time';
 import { stageToHash } from '../lib/router';
 import {
@@ -1103,11 +1104,22 @@ export function Layout() {
       haltReason,
       kind,
       subsetChapterIds,
+      phaseElapsedMs,
     } = analysisStream;
     /* Single source of truth for work-weighted analysis progress —
        shared with the analysing view's "Overall" bar via
-       `src/lib/analysis-progress.ts`. */
-    const overall = computeOverallProgress(phaseId, phaseProgress);
+       `src/lib/analysis-progress.ts`. EXCEPT a single-chapter subset, where
+       `done/total` (and the server's coarse phaseProgress) is frozen — there we
+       use the SAME per-chapter mapper the Generate-view row uses
+       (`lib/reanalyse-progress.ts`) so the pill and the row show identical %. */
+    const isSingleSubset = kind === 'subset' && (subsetChapterIds?.length ?? 0) === 1;
+    const overall = isSingleSubset
+      ? computeReanalyseProgress({
+          phaseId: (phaseId === 1 ? 1 : 0) as 0 | 1,
+          serverProgress: phaseProgress,
+          phaseElapsedMs: phaseElapsedMs ?? 0,
+        })
+      : computeOverallProgress(phaseId, phaseProgress);
     const percent = Math.round(overall * 100);
     const stalled =
       streamState === 'running' && lastTickAt > 0 && Date.now() - lastTickAt > STALL_THRESHOLD_MS;

@@ -341,12 +341,21 @@ export function GenerationView({
         onHeartbeat: (hb) => {
           /* Live streaming tick — moves the bar within a phase (the server's
              coarse progress is frozen for a single-chapter subset) and feeds
-             the elapsed / chars-per-sec readout. */
+             the elapsed / chars-per-sec readout. The slice tick carries the
+             same elapsed so the global AnalysisPill maps identically. */
           applySubsetTick(chapterId, {
             phaseId: hb.phaseId as 0 | 1,
             phaseElapsedMs: hb.elapsedMs,
             charsPerSec: hb.charsPerSec,
           });
+          dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId: hb.phaseId,
+              phaseElapsedMs: hb.elapsedMs,
+              lastTickAt: Date.now(),
+            }),
+          );
         },
         onCastUpdate: ({ characters }) => {
           dispatch(castActions.mergeCharacters(characters));
@@ -495,12 +504,21 @@ export function GenerationView({
         onHeartbeat: (hb) => {
           /* Live streaming tick — moves the bar within a phase (the server's
              coarse progress is frozen for a single-chapter subset) and feeds
-             the elapsed / chars-per-sec readout. */
+             the elapsed / chars-per-sec readout. The slice tick carries the
+             same elapsed so the global AnalysisPill maps identically. */
           applySubsetTick(chapterId, {
             phaseId: hb.phaseId as 0 | 1,
             phaseElapsedMs: hb.elapsedMs,
             charsPerSec: hb.charsPerSec,
           });
+          dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId: hb.phaseId,
+              phaseElapsedMs: hb.elapsedMs,
+              lastTickAt: Date.now(),
+            }),
+          );
         },
         onCastUpdate: ({ characters }) => {
           dispatch(castActions.mergeCharacters(characters));
