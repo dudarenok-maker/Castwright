@@ -104,16 +104,22 @@ export const castSlice = createSlice({
       for (const inc of incoming) {
         const existing = byId.get(inc.id);
         if (existing) {
-          /* Preserve voiceId / matchedFrom / matchFactors / voiceState
-             from the local entry — those came from voice matching or
-             user edits and shouldn't get clobbered by an analyser
-             snapshot that doesn't know about them. */
+          /* Preserve voice matching / design fields from the local entry —
+             those came from voice matching or the user's voice design and must
+             NOT be clobbered by an analyser snapshot that doesn't know about
+             them. `overrideTtsVoices` holds the designed Qwen voice for
+             generated characters (no voiceId); omitting it here dropped the
+             voice in Redux and a later cast persist wrote it out of cast.json
+             (#518 — Berrin/Sela/Quill stripped on re-analysis). */
           next.push({
             ...inc,
             voiceId: existing.voiceId ?? inc.voiceId,
             matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
             matchFactors: existing.matchFactors ?? inc.matchFactors,
             voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
+            overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
+            ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
+            voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
           });
         } else {
           next.push(inc.voiceState ? inc : { ...inc, voiceState: 'generated' });
