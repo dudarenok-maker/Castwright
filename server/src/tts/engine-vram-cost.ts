@@ -18,6 +18,12 @@ export const ENGINE_VRAM_COST: Record<string, number> = {
   coqui: 3,
   gemini: 0,
   analyzer: 4,
+  /* ASR content-QA (srv-31). A tiny/base faster-whisper int8 model is only
+     ~150–400 MB, so it costs the same single token as Kokoro/Qwen — it admits
+     alongside one of them (1+1=2 ≤ 4) but serialises behind a Coqui (3) or the
+     analyzer (4). ONLY charged when ASR runs on the GPU (ASR_DEVICE=cuda); the
+     CPU-default path takes no token at all (see transcribe-client.ts). */
+  asr: 1,
 };
 
 /** VRAM token cost for an engine name (or 'analyzer'). Unknown names cost 1

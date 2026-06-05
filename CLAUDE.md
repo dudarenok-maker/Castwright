@@ -297,6 +297,16 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
 gemini?: {name} }` map. Engine switches preserve cast assignments;
     no re-cast needed when toggling Coqui ↔ Kokoro. Legacy single-field
     `overrideTtsVoice` is migrated lazily at cast.json read time.
+  - **Whisper ASR is a 4th sidecar engine (srv-31 / plan 186)** — audio→text,
+    NOT in the synth `ENGINES` map (`WhisperEngine` + `POST /transcribe`). Used
+    by the per-sentence content-QA gate to catch "fluent but wrong words"
+    generations. **CPU-first by default** (`ASR_DEVICE=cpu` → zero VRAM, never
+    competes with synth); `ASR_DEVICE=cuda` opts into the GPU with a tiny/base
+    int8 model (~150–400 MB) gated by the weighted VRAM semaphore (`asr:1`) plus
+    an idle-evict watchdog (`ASR_IDLE_TTL`, mirrors the Qwen VoiceDesign one).
+    ASR and Qwen VoiceDesign never co-reside (design = cast-review, ASR =
+    generation/repair). OFF unless `SEG_ASR_ENABLED`; needs `pip install
+    faster-whisper` in the sidecar venv.
 
 ## Commit gate
 
