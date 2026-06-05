@@ -36,6 +36,13 @@ export interface SynthesizeOutput {
   pcm: Buffer;
   sampleRate: number;
   mimeType: string;
+  /** The voice name the caller REQUESTED, set only when the sidecar couldn't
+      honour it and substituted a safe fallback (its `X-Voice-Substituted-From`
+      header). Absent on a clean render. Lets the chapter assembler stamp the
+      segment and the golden-audio gate fail on a silent voice fallback —
+      previously the substitution was only `console.warn`'d, so it was
+      unassertable. */
+  voiceSubstitutedFrom?: string;
 }
 
 /** One sentence in a batched synth request (plan 112). Mirrors the per-call

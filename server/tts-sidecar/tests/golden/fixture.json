@@ -1,0 +1,32 @@
+{
+  "_comment": "Golden-audio fixture book (ops-11). Fixed (id, voice, text) lines run through the REAL Kokoro v1 model; the synthesized length is asserted against kokoro-baseline.json within tolerance. Voices are from the English Kokoro subset (af_/am_/bf_/bm_). Lines deliberately cover text-normalization classes (numbers, quotes, abbreviations, punctuation, a multi-sentence group) so a phonemiser regression that shifts duration is caught. Keep clauses short to bound synth time. Re-bless kokoro-baseline.json (npm run test:golden-audio -- --bless) whenever you edit this file.",
+  "engine": "kokoro",
+  "model": "v1",
+  "lines": [
+    {
+      "id": "narrator-plain",
+      "voice": "af_heart",
+      "text": "The lighthouse keeper watched the grey sea roll in."
+    },
+    {
+      "id": "numbers-and-year",
+      "voice": "af_heart",
+      "text": "In 1999, all 7 of them boarded the 4:15 train to Dover."
+    },
+    {
+      "id": "abbreviations",
+      "voice": "am_michael",
+      "text": "Dr. Hollis and Mr. Vane arrived at St. Aldric's before noon."
+    },
+    {
+      "id": "quotes-and-punctuation",
+      "voice": "bf_emma",
+      "text": "\"Wait,\" she said, \"did you really mean it — all of it?\""
+    },
+    {
+      "id": "multi-sentence-group",
+      "voice": "bm_george",
+      "text": "He paused at the door. The hallway was silent. Then he stepped through."
+    }
+  ]
+}

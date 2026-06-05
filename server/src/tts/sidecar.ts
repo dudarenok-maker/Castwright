@@ -112,7 +112,12 @@ export class SidecarTtsProvider implements TtsProvider {
         );
       }
 
-      return { pcm: buf, sampleRate, mimeType };
+      return {
+        pcm: buf,
+        sampleRate,
+        mimeType,
+        ...(substitutedFrom ? { voiceSubstitutedFrom: substitutedFrom } : {}),
+      };
     } finally {
       releaseGpu();
     }
