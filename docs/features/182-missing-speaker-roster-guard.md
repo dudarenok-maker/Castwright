@@ -60,8 +60,20 @@ ch34 Woltzer, ch47 Lessom again).
 - **Prompt fix** (Layer 2a) in both copies of the stage-1 rules
   (`skills/audiobook-character-detection-per-chapter.md` + the inline block in
   `buildStage1ChapterInbox`): a `<Name> <speech-verb>` tag is binding.
-- **Audit** `scripts/audit-missing-speakers.mts` — read-only; re-parses each EPUB
-  and runs `validateRosterCoverage` per chapter against `cast.json` names+aliases.
+- **Audit** `scripts/audit-missing-speakers.mts` (`npm run audit:missing-speakers`)
+  — read-only; re-parses each EPUB and runs `validateRosterCoverage` per chapter
+  against `cast.json` names+aliases, across **every book** by default (`--book`
+  to scope, `--json` to drive a re-run list).
+- **Repair** `scripts/repair-missing-speakers.mts` (`npm run repair:missing-speakers`)
+  — the data half of the live runbook (steps 1–3), **library-wide by default**.
+  Dry-run audits + lists affected chapters per book; `--apply` backs up
+  `cast.json` then POSTs the subset re-analysis route per book and verifies the
+  before/after narrator-line drop + recovered-character line counts. It does NOT
+  touch voices/audio (steps 4–5 are the UI's job).
+  **Prerequisite:** the running server must carry BOTH this guard (#520) and the
+  preserve-voices-on-re-analysis fix (plan 183 / #521) — re-analysis on older
+  code strips designed-voice links from `cast.json`. The script's `cast.json`
+  backup is insurance, not a substitute.
 - **Reversibility:** the guard is gated by `STAGE1_ROSTER_RETRIES` (set `0` to
   disable retries) and `ROSTER_GUARD_IGNORE_NAMES`; a false auto-add gets folded
   back out by the existing minor-cast fold if it gets 0 attributed lines.
@@ -82,13 +94,17 @@ ch34 Woltzer, ch47 Lessom again).
 
 ### Automated coverage
 
-- Vitest server (`server/src/analyzer/roster-coverage.test.ts`, 18 cases) —
+- Vitest server (`server/src/analyzer/roster-coverage.test.ts`, 21 cases) —
   flags an absent tagged speaker (Lessom/ch19 regression); does NOT flag a
   rostered speaker; **matches by first name** (`"Wren said"` ↔ `"Wren
-  Foster"` — the bug the live audit caught); last-token / title match;
-  possessives + contractions ignored; pronoun openers ignored; single-hit
-  quote-adjacency bound; `ROSTER_GUARD_IGNORE_NAMES`; `runStage1WithRosterGuard`
-  retry-then-auto-add and `maxRetries=0`; `chapterDriftExceeded`.
+  Foster"` — the bug the live audit caught); last-token / title / hyphen-subtoken
+  match; possessives + contractions ignored; pronoun openers ignored; collective
+  nouns (`Councillors`/`Coaches`, de-pluralised) ignored; disguise aliases
+  (`Marlow-as-Lady-Renna`) ignored / resolved via a hyphenated roster entry;
+  single-hit quote-adjacency bound; `ROSTER_GUARD_IGNORE_NAMES`;
+  `runStage1WithRosterGuard` retry-then-auto-add and `maxRetries=0`;
+  `chapterDriftExceeded`. (Precision tuned against a live library-wide audit of
+  the full the Hollow Tide series.)
 - node:test (`scripts/tests/dialogue-verbs-drift.test.mjs`, 3 cases) — `.mjs`
   list ≡ canonical TS list; no duplicates; Lessom's tags covered.
 - The audit script's logic is `validateRosterCoverage` (covered above); the

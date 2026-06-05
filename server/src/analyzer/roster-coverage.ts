@@ -83,7 +83,27 @@ const STOPWORDS = new Set([
   'mr', 'mrs', 'ms', 'dr', 'lord', 'lady', 'sir', 'madam', 'miss', 'king',
   'queen', 'prince', 'princess', 'captain', 'professor', 'master', 'mentor',
   'council', 'father', 'mother', 'mom', 'dad', 'uncle', 'aunt',
+  // collective / role / generic nouns that read as `<Noun> <verb>` ("the
+  // Councillors agreed", "Coaches shouted") but are groups, not a character.
+  // Plurals are also matched by the de-pluralised check in isStopword(), so the
+  // singular base is enough here (councillor → councillors, coach → coaches).
+  'councillor', 'coach', 'guard', 'soldier', 'teacher', 'student', 'kid',
+  'boy', 'girl', 'man', 'woman', 'person', 'people', 'child', 'twin', 'other',
+  'everyone', 'someone', 'crowd', 'group', 'voice', 'whisper', 'telepath',
+  'empath', 'pyrokinetic', 'hydrokinetic', 'elf', 'goblin', 'ogre', 'gnome',
+  'dwarf', 'troll', 'mine',
+  // irregular plurals the -s/-es strip can't reach
+  'elves', 'dwarves', 'men', 'women', 'children',
 ]);
+
+/** A word is a stopword if it (or its de-pluralised form) is in STOPWORDS — so
+    "Councillors"/"Coaches" are caught by the "councillor"/"coach" entries. */
+function isStopword(key: string): boolean {
+  if (STOPWORDS.has(key)) return true;
+  if (key.endsWith('es') && STOPWORDS.has(key.slice(0, -2))) return true;
+  if (key.endsWith('s') && STOPWORDS.has(key.slice(0, -1))) return true;
+  return false;
+}
 
 function envNum(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -137,7 +157,10 @@ function rosterTokenSet(rosterNames: Iterable<string>): Set<string> {
     const n = stripPossessive((raw || '').trim()).toLowerCase();
     if (!n) continue;
     set.add(n);
-    for (const tok of n.split(/[\s.]+/).filter((t) => t.length >= 2)) set.add(tok);
+    // Split on whitespace, dots, AND hyphens so a compound/disguise roster name
+    // ("Marlow-as-Lady-Renna", "Mr. Casper") contributes each sub-token — a bare
+    // "Renna said" / "Casper said" tag then resolves to the rostered character.
+    for (const tok of n.split(/[\s.-]+/).filter((t) => t.length >= 2)) set.add(tok);
   }
   return set;
 }
@@ -167,10 +190,13 @@ export function validateRosterCoverage(
   for (let m = tagRe.exec(body); m; m = tagRe.exec(body)) {
     const rawName = stripPossessive(m[1]);
     const key = rawName.toLowerCase();
+    // Disguise notation ("Marlow-as-Lady-Renna") — the underlying character is
+    // already cast; the prose alias isn't a new speaker.
+    if (key.includes('-as-')) continue;
     // Contraction guard: "I've"/"You've"/"They'll" → test the root before the
     // apostrophe against the stopword set so contracted pronouns don't slip in.
     const root = key.split(/['’]/)[0];
-    if (STOPWORDS.has(key) || STOPWORDS.has(root) || ignore.has(key)) continue;
+    if (isStopword(key) || isStopword(root) || ignore.has(key)) continue;
     if (roster.has(key)) continue;
     // last-token match (tag "Casper" vs roster token "Casper") already covered
     // because rosterTokenSet stores last tokens too.

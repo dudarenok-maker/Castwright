@@ -94,6 +94,27 @@ describe('validateRosterCoverage', () => {
     expect(v.missingSpeakers.map((s) => s.name)).toContain('Bram');
   });
 
+  it('does not flag collective / group nouns ("Councillors agreed", "Coaches shouted")', () => {
+    const body = '"Now," the Councillors agreed. "Move," the Coaches shouted. "Go," Pyrokinetics yelled.';
+    const v = validateRosterCoverage(body, ['Aldous']);
+    const flagged = v.missingSpeakers.map((s) => s.name.toLowerCase());
+    expect(flagged).not.toContain('councillors');
+    expect(flagged).not.toContain('coaches');
+    expect(flagged).not.toContain('pyrokinetics');
+  });
+
+  it('does not flag disguise-alias tokens ("Marlow-as-Lady-Renna said")', () => {
+    const body = '"Hello," Marlow-as-Lady-Renna said. "Indeed," Marlow-as-Lady-Renna agreed.';
+    const v = validateRosterCoverage(body, ['Wren']);
+    expect(v.missingSpeakers).toHaveLength(0);
+  });
+
+  it('resolves a bare disguise name via a hyphenated roster entry', () => {
+    const body = '"Hello," Renna said. "Indeed," Renna agreed.';
+    const v = validateRosterCoverage(body, ['Marlow-as-Lady-Renna']);
+    expect(v.ok).toBe(true);
+  });
+
   it('honors ROSTER_GUARD_IGNORE_NAMES', () => {
     process.env.ROSTER_GUARD_IGNORE_NAMES = 'Lessom';
     const v = validateRosterCoverage(Lessom_BODY, ['Aldous']);
