@@ -16,6 +16,7 @@ import {
   type LinkableCharacter,
   type LinkSeriesReuseOptions,
 } from './series-reuse-link.js';
+import { seedReuseGuardsFromPriorCast } from '../store/merge-analysis-cast.js';
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
 
 const AUTHOR = 'A';
@@ -155,5 +156,33 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
       resolveAuthorSeries: async () => null,
     });
     expect(linked).toBe(0);
+  });
+
+  /* srv-13 — the fresh analyzer roster carries NO notLinkedTo, so without the
+     pre-seed the link pass re-links a pair the user separated on a prior run.
+     Seeding the guard fields from the prior cast first must prevent that. */
+  it('respects a prior-run notLinkedTo once the guards are seeded from prior cast', async () => {
+    // Fresh roster as the analyzer produces it: id matches a prior cast entry
+    // that carries the user's "not the same person" decision, but the fresh
+    // row itself has none.
+    const fresh: LinkableCharacter[] = [
+      { id: 'Wren-adult', name: 'Wren', gender: 'female', ageRange: 'adult' },
+    ];
+    const priorCast = [
+      {
+        id: 'Wren-adult',
+        notLinkedTo: [{ bookId: BOOK1, characterId: 'Wren' }],
+      },
+    ];
+
+    // Without seeding: the pass wrongly links (regression we're guarding).
+    const unguarded = [...fresh.map((c) => ({ ...c }))];
+    expect(await linkSeriesReuseAtAnalysis(BOOK2, unguarded, baseOptions())).toBe(1);
+
+    // With seeding: the decision is honoured, no link.
+    seedReuseGuardsFromPriorCast(priorCast, fresh);
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, fresh, baseOptions());
+    expect(linked).toBe(0);
+    expect(fresh[0].matchedFrom).toBeUndefined();
   });
 });
