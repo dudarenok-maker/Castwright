@@ -7,9 +7,9 @@ owner: null
 # 186 — ASR content verification for per-sentence audio QA (srv-31)
 
 > Status: active
-> Key files: `server/tts-sidecar/main.py` (`WhisperEngine`, `/transcribe`), `server/src/tts/transcribe-client.ts`, `server/src/tts/segment-asr-qa.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapter-qa-repair.ts`, `scripts/audit-audio-asr-drift.mts`
-> URL surface: indirect — runs inside generation + the existing `POST /api/books/{id}/chapters/{ch}/audio-qa-repair`
-> OpenAPI ops: none new (reuses `audioQaRepairChapter`)
+> Key files: `server/tts-sidecar/main.py` (`WhisperEngine`, `/transcribe`), `server/src/tts/transcribe-client.ts`, `server/src/tts/segment-asr-qa.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapter-qa-repair.ts`, `scripts/audit-audio-asr-drift.mts` · **admin install:** `server/tts-sidecar/scripts/install-whisper.mjs`, `server/src/tts/whisper-install-{detect,bootstrap}.ts`, `server/src/routes/whisper-install.ts`, `src/components/whisper-install.tsx` · **model-watch:** `src/components/AsrStatusBadge.tsx`, `src/lib/use-tts-lifecycle.ts`, `server/src/routes/sidecar-health.ts`
+> URL surface: indirect — runs inside generation + the existing `POST /api/books/{id}/chapters/{ch}/audio-qa-repair`; admin installer at Account → Models (`/api/whisper/detect|install`)
+> OpenAPI ops: none new (reuses `audioQaRepairChapter`); install routes are app-internal like `/api/qwen/*`
 
 ## Benefit / Rationale
 
@@ -31,6 +31,8 @@ said* to *what was meant* finds those — i.e. ASR.
 ## Architectural impact
 
 - **New seams:** `WhisperEngine` + `POST /transcribe` in the sidecar; `transcribe-client.ts` (server transport + conditional GPU token); `segment-asr-qa.ts` (`classifyTranscript` pure WER policy + `verifySegmentTranscript`); `SynthesiseChapterOpts.asr` pass; `ChapterSegment.asr` / `asrSuspect`; `asr:1` in `ENGINE_VRAM_COST`.
+- **Admin install (mirrors the Qwen installer):** Account → Models gets an "Install Whisper ASR" card (`whisper-install.tsx`) driving `GET /api/whisper/detect` + `POST /api/whisper/install` (+ poll/recheck). `install-whisper.mjs` pip-installs `faster-whisper` and pre-fetches the `base` model; `whisper-install-detect.ts` is the boot-time disk probe (`faster_whisper` in the venv + `model.bin` in the HF cache) → `not-installed | model-missing | ready`. No resolver-cache sync (ASR isn't auto-selected — `SEG_ASR_ENABLED` gates it). The CLI stays available.
+- **Model-watch:** `/health` already emits `asr_loaded`/`asr_device`; the server route forwards `asrLoaded`/`asrDevice` and injects `asrEnabled` (server `SEG_ASR_ENABLED`). `useTtsLifecycle` exposes a display-only `asr` lifecycle (no Load/Stop — Whisper loads lazily + idle-evicts) and `AsrStatusBadge` renders "Whisper ASR ready · cuda" / "idle" in the top-bar pill row, shown only when ASR is enabled.
 - **Invariants preserved:** OFF by default (`SEG_ASR_ENABLED` unset → byte-identical to today, like plan-179's `maxSegmentRerecords=0`). Per-character voice consistency preserved — persistent drift is flagged + shipped, **never** cross-engine-fallback. The one-poll `/health` invariant holds (asr fields fan out from the same response). CPU-default → zero VRAM, so the "every sentence" pass never contends with synth.
 - **Migration:** none. The per-sentence ASR verdict persists on each `ChapterSegment` (segments.json) — no new on-disk artifact.
 - **Reversibility:** unset `SEG_ASR_ENABLED`. The sidecar `faster-whisper` dep is dormant until then.
@@ -75,6 +77,9 @@ allowlist (cast names); short sentences not scored.
 - Vitest server (`server/src/tts/segment-asr-qa.test.ts`) — normalization, ok/drift/inconclusive, deletion-run, compression-ratio drift, untrusted→inconclusive, name allowlist, short-skip (13).
 - Vitest server (`server/src/tts/synthesise-chapter-asr.test.ts`) — drift re-records + keeps clean retake, persistent drift→asrSuspect, clean no-op, inconclusive no re-record, sampleEvery stride, absent=no-op (6).
 - Vitest server (`server/src/routes/chapter-qa-repair-asr.test.ts`) — the repair scan flags a signal-clean but wrong-words segment via ASR (1).
+- Vitest server (`server/src/routes/whisper-install.test.ts`, `server/src/tts/whisper-install-detect.test.ts`) — the installer detect/install/poll/recheck machine offline + the disk probe states (not-installed / model-missing / ready) (14).
+- Vitest server (`server/src/routes/sidecar-health.test.ts`) — `asrLoaded`/`asrDevice` forwarding + `asrEnabled` injection from `SEG_ASR_ENABLED` (2 added).
+- Vitest frontend (`src/components/whisper-install.test.tsx`, `src/components/AsrStatusBadge.test.tsx`, `src/lib/use-tts-lifecycle.test.ts`) — installer card state machine, the display-only badge render states, and the `asr` lifecycle derivation from one `/health` probe.
 
 ### Manual acceptance walkthrough
 
@@ -84,6 +89,8 @@ Requires a real sidecar with Whisper (`pip install faster-whisper`), `SEG_ASR_EN
 2. **Back-catalog audit** — `npx tsx scripts/audit-audio-asr-drift.mts` on a real book → per-chapter/per-engine drift counts, no writes.
 3. **CPU VRAM = 0** — a chapter with `ASR_DEVICE=cpu` leaves `/health` `vram_reserved_mb` unchanged vs a no-ASR run.
 4. **GPU headroom** — with Qwen resident, `ASR_DEVICE=cuda`, a chapter keeps `reserved_mb` below the 90% soft ceiling (no `recycle_pending`, no VRAM SPILL) and synth RTF doesn't collapse. *(The issue's acceptance bar — owed on the live box.)*
+5. **Admin install** — Account → Models shows "Whisper ASR is not installed" on a clean box → click Install → step text streams → flips to "Whisper ASR is installed". Re-check stays green.
+6. **Model-watch** — with `SEG_ASR_ENABLED=1`, the top-bar pill row shows "Whisper ASR idle", flipping to "Whisper ASR ready · cuda" after the first transcribe; the badge is absent when `SEG_ASR_ENABLED` is off.
 
 ## Out of scope
 
