@@ -388,9 +388,15 @@ describe('broadcastMiddleware — outbound diffing (plan 89 C2)', () => {
       (receiverMock.channel as unknown as { simulateInbound: (m: BroadcastMessage) => void }).simulateInbound(msg);
     }
 
-    expect(receiverStore.getState().analysis.activeStream).toEqual(
-      senderStore.getState().analysis.activeStream,
-    );
+    /* `phaseElapsedMs` is intentionally NOT broadcast (heartbeat-frequency,
+       tab-local cosmetic for the single-chapter subset pill ease), so the
+       receiver legitimately won't reconstruct it. Compare everything else
+       byte-for-byte. */
+    const { phaseElapsedMs: _s, ...senderRest } =
+      senderStore.getState().analysis.activeStream!;
+    const { phaseElapsedMs: _r, ...receiverRest } =
+      receiverStore.getState().analysis.activeStream!;
+    expect(receiverRest).toEqual(senderRest);
   });
 
   it('skips empty diffs (a no-op reducer tick does not touch the wire)', () => {

@@ -86,6 +86,31 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(s2.activeStream?.lastTickAt).toBe(3000); // updated
   });
 
+  it('tracks phaseElapsedMs and resets it when the phase advances (subset pill mapping)', () => {
+    const s1 = analysisSlice.reducer(
+      undefined,
+      analysisActions.setActiveStream({ ...baseSnapshot, phaseId: 0, phaseElapsedMs: 0 }),
+    );
+    /* Heartbeat within phase 0 accumulates elapsed. */
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseElapsedMs: 8000 }),
+    );
+    expect(s2.activeStream?.phaseElapsedMs).toBe(8000);
+    /* Phase advances to 1 → elapsed resets even though this tick omits it. */
+    const s3 = analysisSlice.reducer(
+      s2,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.02 }),
+    );
+    expect(s3.activeStream?.phaseElapsedMs).toBe(0);
+    /* Heartbeats within phase 1 accumulate again. */
+    const s4 = analysisSlice.reducer(
+      s3,
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, phaseElapsedMs: 3000 }),
+    );
+    expect(s4.activeStream?.phaseElapsedMs).toBe(3000);
+  });
+
   it('cross-book guard: applyAnalysisSnapshotTick for a different manuscriptId is a no-op', () => {
     /* Multi-tab safety. The pill snapshot is global per browser; another
        tab analysing a different book must not clobber this tab's
