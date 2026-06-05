@@ -69,6 +69,7 @@ const baseHandlers = () => ({
   onSendApp: vi.fn(),
   onRegenerate: vi.fn(),
   onEnterPreview: vi.fn(),
+  onFixLine: vi.fn(),
   onEditMetaField: vi.fn(),
   onCommitMeta: vi.fn(),
   onCancelMeta: vi.fn(),

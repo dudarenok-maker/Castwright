@@ -30,11 +30,13 @@ import {
   type TtsProvider,
 } from '../tts/index.js';
 import { decodeAudioToPcm } from '../tts/mp3.js';
+import { pcmDurationSec } from '../tts/pcm.js';
 import { applyGainToPcm } from '../tts/gain-pcm.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { synthesiseChapter, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
-import { isNonEnglish } from '../tts/language.js';
+import { isNonEnglish, sidecarLanguageName } from '../tts/language.js';
+import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -241,7 +243,18 @@ chapterSpliceRouter.post(
            the wrong language. */
         const bookLanguage = bookStateLanguage(state);
         const nonEnglishBook = isNonEnglish(bookLanguage);
-        if (nonEnglishBook) for (const c of cast.characters) c.ttsEngine = 'qwen';
+        if (nonEnglishBook) {
+          for (const c of cast.characters) c.ttsEngine = 'qwen';
+          /* fs-32c — mirror generation: a reused designed Qwen voice whose
+             baked manifest language ≠ this book's is cleared so the
+             forbidKokoroFallback gate blocks it (undesigned) rather than
+             re-recording the line in the wrong language. */
+          await clearMismatchedDesignedVoices(
+            cast.characters,
+            sidecarLanguageName(bookLanguage),
+            bookLanguage,
+          );
+        }
         const requiredEngines = new Set(cast.characters.map((c) => resolveCharacterEngine(c, engine)));
         const qwenInUse = requiredEngines.has('qwen');
         const qwenState = getLastKnownQwenInstallState();
@@ -298,6 +311,22 @@ chapterSpliceRouter.post(
         replacements,
       });
 
+      /* fs-32a — QA expects the POST-splice duration, not the prior whole-chapter
+         length. A legitimate re-record changes the replaced region's length, so
+         comparing the new chapter against the OLD total false-flagged "suspect".
+         Compute the expected new duration analytically: prior total minus each
+         replaced span's original length plus its new (replacement PCM) length.
+         The QA duration band then reads the chapter against its own predicted
+         length (ratio ≈ 1.0 for a normal re-record) while still catching a gross
+         truncation / runaway inside the re-recorded region. */
+      let expectedSec = segFile.durationSec;
+      for (const r of replacements) {
+        const originalSpanSec =
+          segFile.segments[r.endSegmentIndex].endSec - segFile.segments[r.startSegmentIndex].startSec;
+        const newSpanSec = pcmDurationSec(r.pcm.length, sampleRate);
+        expectedSec += newSpanSec - originalSpanSec;
+      }
+
       send({ type: 'chapter_assembling', chapterId, progress: 0.99 });
 
       const result = await finalizeChapterAudioWrite({
@@ -312,7 +341,7 @@ chapterSpliceRouter.post(
         defaultEngine,
         modelKey: finalizeModelKey,
         audioFormat: bookStateAudioFormat(state as BookStateJson),
-        expectedSec: segFile.durationSec,
+        expectedSec,
       });
 
       send({

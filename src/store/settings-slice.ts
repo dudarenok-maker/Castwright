@@ -42,6 +42,10 @@ export const SKIP_SEC_MAX = 120;
 export const SKIP_FORWARD_SEC_DEFAULT = 30;
 export const SKIP_BACK_SEC_DEFAULT = 15;
 
+/* fe-25 — mini-player output volume (0..1), device-local. Clamped on write so a
+   hand-edited localStorage blob can't push the audio element out of range. */
+export const PLAYER_VOLUME_DEFAULT = 1;
+
 export interface SettingsState {
   keybindings: Record<KeyboardActionId, string>;
   highContrast: boolean;
@@ -50,6 +54,7 @@ export interface SettingsState {
   autoAdvance: boolean;
   skipForwardSec: number;
   skipBackSec: number;
+  playerVolume: number;
 }
 
 const initialState: SettingsState = {
@@ -60,6 +65,7 @@ const initialState: SettingsState = {
   autoAdvance: true,
   skipForwardSec: SKIP_FORWARD_SEC_DEFAULT,
   skipBackSec: SKIP_BACK_SEC_DEFAULT,
+  playerVolume: PLAYER_VOLUME_DEFAULT,
 };
 
 /* Clamp a skip delta to [SKIP_SEC_MIN, SKIP_SEC_MAX], falling back to the
@@ -102,6 +108,12 @@ export const settingsSlice = createSlice({
     },
     setSkipBackSec(state, action: PayloadAction<number>) {
       state.skipBackSec = clampSkipSec(action.payload, SKIP_BACK_SEC_DEFAULT);
+    },
+    setPlayerVolume(state, action: PayloadAction<number>) {
+      const v = action.payload;
+      state.playerVolume = Number.isFinite(v)
+        ? Math.min(1, Math.max(0, v))
+        : PLAYER_VOLUME_DEFAULT;
     },
   },
 });

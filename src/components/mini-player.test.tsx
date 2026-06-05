@@ -12,7 +12,7 @@
 
 import type React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, waitFor, act } from '@testing-library/react';
+import { render, waitFor, act, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MiniPlayer } from './mini-player';
@@ -721,5 +721,59 @@ describe('MiniPlayer — fe-23 auto-advance onEnded matrix', () => {
       armEndOfChapter: true,
     });
     expect(onNext).not.toHaveBeenCalled();
+  });
+});
+
+describe('MiniPlayer — volume slider (fe-25)', () => {
+  it('persists the chosen volume to the settings slice and applies it to the audio element', async () => {
+    const store = makeStore();
+    const { container, getByTestId, queryByTestId } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio')!;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    await waitFor(() => expect(audioEl.getAttribute('src')).toMatch(/audio\.mp3$/));
+
+    /* Slider lives inside a popover the volume button toggles open. */
+    expect(queryByTestId('mini-player-volume-slider')).toBeNull();
+    fireEvent.click(getByTestId('mini-player-volume-toggle'));
+    const slider = getByTestId('mini-player-volume-slider') as HTMLInputElement;
+
+    fireEvent.change(slider, { target: { value: '0.3' } });
+
+    expect(store.getState().settings.playerVolume).toBeCloseTo(0.3);
+    await waitFor(() => expect(audioEl.volume).toBeCloseTo(0.3));
+  });
+
+  it('hydrates the audio element volume from the persisted settings level on load', async () => {
+    const store = makeStore();
+    store.dispatch(settingsSlice.actions.setPlayerVolume(0.5));
+    const { container } = render(
+      <Provider store={store}>
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />
+      </Provider>,
+    );
+    const audioEl = container.querySelector('audio')!;
+    await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+    /* The url effect re-applies the saved volume after src/load. */
+    await waitFor(() => expect(audioEl.volume).toBeCloseTo(0.5));
   });
 });

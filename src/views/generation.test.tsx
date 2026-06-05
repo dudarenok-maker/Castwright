@@ -46,6 +46,7 @@ function HostedOutlet() {
     pushToast: vi.fn(),
     ttsLifecycle,
     priorRoster: [],
+    openFixCharacterAudio: vi.fn(),
   };
   return <Outlet context={ctx} />;
 }

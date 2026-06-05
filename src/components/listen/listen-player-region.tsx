@@ -44,6 +44,10 @@ interface ListenPlayerRegionProps {
   onRegenerate: (ch: Chapter) => void;
   onSeekMarker: (marker: ListenMarker) => void;
   onDeleteMarker: (markerId: string) => void;
+  /** fs-26 — flip a marker between a plain note and a re-record marker. */
+  onSetMarkerKind: (markerId: string, kind: ListenMarker['kind']) => void;
+  /** fs-26 — open the per-line re-record fix scoped to this marker's segment. */
+  onFixLine: (marker: ListenMarker) => void;
 }
 
 export function ListenPlayerRegion({
@@ -56,6 +60,8 @@ export function ListenPlayerRegion({
   onRegenerate,
   onSeekMarker,
   onDeleteMarker,
+  onSetMarkerKind,
+  onFixLine,
 }: ListenPlayerRegionProps) {
   const findChar = (id: string) => characters.find((c) => c.id === id);
   /* Plan 69 — share-clip modal is hoisted to the region level so it can
@@ -96,6 +102,8 @@ export function ListenPlayerRegion({
         chapters={chapters}
         onSeek={onSeekMarker}
         onDelete={onDeleteMarker}
+        onSetKind={onSetMarkerKind}
+        onFixLine={onFixLine}
       />
 
       <section className="mb-8 md:mb-12">
@@ -440,8 +448,17 @@ interface MarkersPanelProps {
   chapters: Chapter[];
   onSeek: (marker: ListenMarker) => void;
   onDelete: (markerId: string) => void;
+  onSetKind: (markerId: string, kind: ListenMarker['kind']) => void;
+  onFixLine: (marker: ListenMarker) => void;
 }
-function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps) {
+function MarkersPanel({
+  bookId,
+  chapters,
+  onSeek,
+  onDelete,
+  onSetKind,
+  onFixLine,
+}: MarkersPanelProps) {
   const progress = useAppSelector(selectListenProgress(bookId));
   const markers = progress?.markers ?? [];
   if (markers.length === 0) return null;
@@ -496,6 +513,40 @@ function MarkersPanel({ bookId, chapters, onSeek, onDelete }: MarkersPanelProps)
                     {m.kind === 'rerecord' && (
                       <Pill color="library">re-record</Pill>
                     )}
+                  </button>
+                  {/* fs-26 — per-line re-record entry. Only a re-record marker
+                      can launch the fix; the kind toggle next to it promotes a
+                      plain note into one. */}
+                  {m.kind === 'rerecord' && (
+                    <button
+                      type="button"
+                      onClick={() => onFixLine(m)}
+                      data-testid={`listen-marker-fix-${m.id}`}
+                      className="shrink-0 px-3 min-h-[44px] md:min-h-0 md:py-1.5 grid place-items-center rounded-full text-xs font-semibold text-magenta hover:bg-magenta/10"
+                    >
+                      Fix this line
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onSetKind(m.id, m.kind === 'rerecord' ? 'note' : 'rerecord')
+                    }
+                    aria-pressed={m.kind === 'rerecord'}
+                    aria-label={
+                      m.kind === 'rerecord'
+                        ? 'Mark as plain note'
+                        : 'Mark for re-record'
+                    }
+                    title={
+                      m.kind === 'rerecord'
+                        ? 'Mark as plain note'
+                        : 'Mark for re-record'
+                    }
+                    data-testid={`listen-marker-kind-${m.id}`}
+                    className={`shrink-0 w-11 h-11 md:w-8 md:h-8 grid place-items-center rounded-full hover:bg-ink/4 ${m.kind === 'rerecord' ? 'text-magenta' : 'text-ink/40 hover:text-magenta'}`}
+                  >
+                    <IconRefresh className="w-4 h-4" />
                   </button>
                   <button
                     type="button"
