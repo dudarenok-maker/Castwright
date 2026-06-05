@@ -61,6 +61,11 @@ const flag = (name: string): string | null => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : null;
 };
 const apply = argv.includes('--apply');
+/* --force: re-run the given --chapters even when the roster audit is already
+   clean. Needed when a prior interrupted run added the speaker to cast.json (so
+   the name-coverage audit passes) but stage-2 never re-attributed their lines —
+   the dialogue is still on `narrator`. Requires --chapters. */
+const force = argv.includes('--force');
 const bookFilter = flag('--book')?.toLowerCase() ?? null;
 const manuscriptArg = flag('--manuscript');
 const chaptersOverride = flag('--chapters')
@@ -276,7 +281,14 @@ async function main(): Promise<void> {
     const res = await auditBook(book);
     if (!res) continue; // non-EPUB / unreadable
     if (res.findings.length === 0) {
-      if (bookFilter || manuscriptArg) console.log(`  ✅ ${book.label} — clean`);
+      if (force && chaptersOverride) {
+        console.log(
+          `  📕 ${book.label} — roster audit clean, but --force re-running chapters [${chaptersOverride.join(', ')}] for stage-2 re-attribution`,
+        );
+        affected.push({ book, findings: [], chapterIds: chaptersOverride, recovered: new Set() });
+      } else if (bookFilter || manuscriptArg) {
+        console.log(`  ✅ ${book.label} — clean`);
+      }
       continue;
     }
     const recovered = new Set<string>();
