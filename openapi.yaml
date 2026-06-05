@@ -1311,6 +1311,75 @@ paths:
                   progress: { type: number }
                   errorReason: { type: string }
 
+  /api/books/{bookId}/chapters/{chapterId}/audio-qa-repair:
+    post:
+      summary: Scan an already-rendered chapter for bad sentences and re-record them (plan 179)
+      operationId: audioQaRepairChapter
+      description: |
+        Runs the per-sentence audio-QA checks (dead/near-silent, a long internal
+        silence run, duration drift vs the manuscript text) over each segment of
+        an ALREADY-rendered chapter — the same checks the pre-assembly gate
+        applies to new generations. Streams SSE `data: <json>` frames.
+
+        `dryRun` (default `true`) returns the scan only — no GPU, no write,
+        emitting `qa_scan` then `qa_repair_complete` with the `flagged` list.
+        `dryRun: false` re-records the flagged sentences (best-of-N, re-QA'd)
+        through the fs-26 splice engine, re-runs the whole-chapter loudnorm,
+        preserves the prior take as `.previous.*`, and updates `segments.json` +
+        duration. A repair and a full regen of the same chapter mutually displace
+        each other so they never race the files.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dryRun:
+                  type: boolean
+                  default: true
+                  description: 'When true (default) only scan and report `flagged`; no GPU, no write. False re-records the flagged sentences and re-splices.'
+                modelKey:
+                  type: string
+                  enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
+                  description: 'Re-record only — TTS model key to re-synthesise with. Defaults to the chapter''s own rendered model when omitted.'
+                maxRerecords:
+                  type: integer
+                  description: 'Re-record only — max re-synthesis attempts per flagged sentence, keeping the best take. Defaults to SEG_QA_MAX_RERECORDS (2).'
+      responses:
+        '200':
+          description: SSE QA scan + (optional) repair stream
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                description: 'A `data:` frame — one of qa_scan / splice_start / progress / chapter_assembling / qa_repair_complete / chapter_failed.'
+                properties:
+                  type: { type: string, enum: [qa_scan, splice_start, progress, chapter_assembling, qa_repair_complete, chapter_failed] }
+                  chapterId: { type: integer }
+                  dryRun: { type: boolean }
+                  flaggedCount: { type: integer }
+                  flagged:
+                    type: array
+                    description: Segments that failed the per-sentence QA scan.
+                    items:
+                      type: object
+                      properties:
+                        segmentIndex: { type: integer }
+                        characterId: { type: string }
+                        sentenceIds: { type: array, items: { type: integer } }
+                        reasons: { type: array, items: { type: string } }
+                  repaired: { type: array, items: { type: integer }, description: Segment indices that passed QA after re-recording. }
+                  stillSuspect: { type: array, items: { type: integer }, description: Segment indices that stayed suspect after exhausting re-records. }
+                  durationSec: { type: number }
+                  segmentCount: { type: integer }
+                  hasPreviousAudio: { type: boolean }
+                  progress: { type: number }
+                  errorReason: { type: string }
+
   /api/books/{bookId}/chapters/{chapterId}/audio:
     get:
       summary: Get a chapter's playable audio + waveform metadata

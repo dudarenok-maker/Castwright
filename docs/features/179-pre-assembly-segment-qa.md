@@ -9,7 +9,8 @@ owner: null
 > Status: active
 > Key files: `server/src/tts/segment-qa.ts`, `server/src/tts/synthesise-chapter.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapter-qa-repair.ts`
 > URL surface: `POST /api/books/{bookId}/chapters/{chapterId}/audio-qa-repair` (SSE)
-> OpenAPI ops: none yet (SSE route, like the fs-26 splice route — deferred)
+> OpenAPI ops: `POST /api/books/{bookId}/chapters/{chapterId}/audio-qa-repair` (`audioQaRepairChapter`)
+> Issues: closes #509 (bug — bad generations ship undetected); ASR follow-up srv-31 (#508)
 
 ## Benefit / Rationale
 
@@ -98,7 +99,6 @@ chapter sails through — verified: ch17's `.lufs.json` reads a healthy `i =
   can't see. Filed as a backlog item (`srv-31`); see `docs/BACKLOG.md`.
 - Frontend "Scan & repair" affordance — v1 drives the repair route directly; a
   Listen/Generate-view button is a follow-up.
-- OpenAPI entry for the SSE repair route (deferred, like fs-26 splice).
 
 ## Ship notes
 
