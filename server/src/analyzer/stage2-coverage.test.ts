@@ -1,0 +1,182 @@
+/* Stage-2 attribution coverage guard. The per-chapter attribution model
+   (prose → per-sentence JSON) can fall into a degenerate repeat-loop: it
+   re-emits a span of sentences and terminates early, so the chapter is both
+   DUPLICATED and TRUNCATED (the 2026-06-05 The Drowning Bell ch12/ch18 forensics).
+   The cache ingest trusts the model's list with no coverage check, so it ships.
+
+   These tests pin the detector that compares the attributed sentences against
+   the EXACT input prose (`ch.body`) — same text the model saw — so it is robust
+   to the tag/quote/split-normalization noise that broke the prompt-based
+   forensic sweeps. */
+
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import {
+  validateStage2Coverage,
+  runStage2WithCoverageGuard,
+  DEFAULT_STAGE2_COVERAGE_THRESHOLDS,
+} from './stage2-coverage.js';
+
+const sent = (text: string) => ({ text });
+/** Build a body of N simple sentences and the matching faithful attribution. */
+function bodyOf(n: number): { body: string; sentences: Array<{ text: string }> } {
+  const arr = Array.from({ length: n }, (_, i) => `This is sentence number ${i + 1} of the chapter.`);
+  return { body: arr.join(' '), sentences: arr.map(sent) };
+}
+
+afterEach(() => {
+  delete process.env.STAGE2_MIN_COVERAGE;
+  delete process.env.STAGE2_MAX_COVERAGE;
+});
+
+describe('validateStage2Coverage', () => {
+  it('passes a faithful attribution (full coverage, ending present, no dup)', () => {
+    const { body, sentences } = bodyOf(12);
+    const v = validateStage2Coverage(body, sentences);
+    expect(v.ok).toBe(true);
+    expect(v.issues).toHaveLength(0);
+    expect(v.coverageRatio).toBeGreaterThan(0.9);
+    expect(v.coverageRatio).toBeLessThan(1.2);
+    expect(v.endingPresent).toBe(true);
+    expect(v.duplicatedBlock).toBeNull();
+  });
+
+  it('flags a truncated attribution (only the first third emitted)', () => {
+    const { body, sentences } = bodyOf(12);
+    const v = validateStage2Coverage(body, sentences.slice(0, 4));
+    expect(v.ok).toBe(false);
+    expect(v.endingPresent).toBe(false); // chapter ending never emitted
+    expect(v.coverageRatio).toBeLessThan(0.5);
+    expect(v.issues.some((i) => /truncat|cover|ending/i.test(i))).toBe(true);
+  });
+
+  it('flags a duplicated contiguous block (loop with full ending)', () => {
+    const { body, sentences } = bodyOf(8);
+    // emit 1..8 then re-emit 3..6 (a 4-sentence loop) — ending still present
+    const looped = [...sentences, ...sentences.slice(2, 6)];
+    const v = validateStage2Coverage(body, looped);
+    expect(v.ok).toBe(false);
+    expect(v.duplicatedBlock).not.toBeNull();
+    expect(v.duplicatedBlock!.length).toBeGreaterThanOrEqual(4);
+    expect(v.issues.some((i) => /duplicat|loop|repeat/i.test(i))).toBe(true);
+  });
+
+  it('flags the ch18 shape: loop-and-truncate (dup block + missing ending)', () => {
+    const { body, sentences } = bodyOf(12);
+    // analyze 1..6, then loop back and re-emit 3..6 — never reaches 7..12
+    const looped = [...sentences.slice(0, 6), ...sentences.slice(2, 6)];
+    const v = validateStage2Coverage(body, looped);
+    expect(v.ok).toBe(false);
+    expect(v.endingPresent).toBe(false); // back half missing
+    expect(v.duplicatedBlock).not.toBeNull(); // and a loop
+  });
+
+  it('does NOT flag normal analyzer compression (coverage ~0.7, ending present)', () => {
+    // The attribution legitimately drops/merges minor fragments — a healthy
+    // chapter can read ~70% coverage and still reach its ending (Keeper ch22).
+    const { body, sentences } = bodyOf(20);
+    // keep 14 of 20 sentences (incl. the last) → ~0.7 coverage, ending intact
+    const compressed = sentences.filter((_, i) => i < 13 || i === 19);
+    const v = validateStage2Coverage(body, compressed);
+    expect(v.coverageRatio).toBeGreaterThan(0.6);
+    expect(v.coverageRatio).toBeLessThan(0.95);
+    expect(v.endingPresent).toBe(true);
+    expect(v.ok).toBe(true);
+  });
+
+  it('does NOT false-positive a short-but-complete chapter (e.g. a preface)', () => {
+    const body = 'PREFACE. A short opening note. For the future.';
+    const sentences = [sent('PREFACE.'), sent('A short opening note.'), sent('For the future.')];
+    const v = validateStage2Coverage(body, sentences);
+    expect(v.ok).toBe(true);
+    expect(v.endingPresent).toBe(true);
+  });
+
+  it('tolerates inline [emotion] tags and minor wording in the sentence text', () => {
+    const { body } = bodyOf(6);
+    const tagged = bodyOf(6).sentences.map((s, i) =>
+      sent(i % 2 ? `[emphatic] ${s.text}` : s.text),
+    );
+    const v = validateStage2Coverage(body, tagged);
+    expect(v.ok).toBe(true);
+    expect(v.duplicatedBlock).toBeNull();
+  });
+
+  it('honours an env-override that tightens the min-coverage floor', () => {
+    const { body, sentences } = bodyOf(10);
+    const slightlyShort = sentences.slice(0, 9); // 90% coverage
+    expect(validateStage2Coverage(body, slightlyShort).coverageRatio).toBeGreaterThan(0.85);
+    // default min (0.8) passes coverage; tighten to 0.95 → flagged
+    process.env.STAGE2_MIN_COVERAGE = '0.95';
+    const strict = validateStage2Coverage(body, slightlyShort);
+    expect(strict.ok).toBe(false);
+    expect(strict.issues.some((i) => /cover/i.test(i))).toBe(true);
+  });
+
+  it('accepts an explicit thresholds argument (overrides env + defaults)', () => {
+    const { body, sentences } = bodyOf(8);
+    const looped = [...sentences, ...sentences.slice(2, 6)];
+    // raise the dup-run floor above the loop length → not flagged as dup
+    const v = validateStage2Coverage(body, looped, {
+      ...DEFAULT_STAGE2_COVERAGE_THRESHOLDS,
+      minDupRun: 99,
+      maxCoverageRatio: 5,
+    });
+    expect(v.duplicatedBlock).toBeNull();
+  });
+
+  it('handles empty input without throwing', () => {
+    expect(validateStage2Coverage('', []).ok).toBe(false);
+    expect(validateStage2Coverage('some text here', []).ok).toBe(false);
+  });
+});
+
+describe('runStage2WithCoverageGuard', () => {
+  const body = bodyOf(12).body;
+  const good = () => ({ sentences: bodyOf(12).sentences });
+  const truncated = () => ({ sentences: bodyOf(12).sentences.slice(0, 3) });
+
+  it('accepts a good first attempt without retrying', async () => {
+    const call = vi.fn(async () => good());
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 2, call });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(out.coverage.ok).toBe(true);
+    expect(out.attempts).toBe(1);
+  });
+
+  it('re-runs on a coverage failure and keeps the good retake', async () => {
+    const call = vi
+      .fn()
+      .mockImplementationOnce(async () => truncated())
+      .mockImplementationOnce(async () => good());
+    const onRetry = vi.fn();
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 2, call, onRetry });
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(out.coverage.ok).toBe(true);
+    expect(out.result.sentences.length).toBe(12); // the good take
+    expect(out.attempts).toBe(2);
+  });
+
+  it('exhausts retries and returns the best (least-bad) take, still flagged', async () => {
+    // attempt1: 3/12 (worse), attempt2: 8/12 (better but still <0.6? 0.67>0.6 ok) → use a clearer bad
+    const veryShort = () => ({ sentences: bodyOf(12).sentences.slice(0, 2) }); // 0.17
+    const lessShort = () => ({ sentences: bodyOf(12).sentences.slice(0, 6) }); // 0.5 (<0.6, still bad)
+    const call = vi
+      .fn()
+      .mockImplementationOnce(async () => veryShort())
+      .mockImplementationOnce(async () => lessShort())
+      .mockImplementationOnce(async () => veryShort());
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 2, call });
+    expect(call).toHaveBeenCalledTimes(3); // 1 + 2 retries
+    expect(out.coverage.ok).toBe(false);
+    expect(out.result.sentences.length).toBe(6); // kept the least-bad (highest coverage)
+    expect(out.attempts).toBe(3);
+  });
+
+  it('does not retry when maxRetries is 0 (guard disabled)', async () => {
+    const call = vi.fn(async () => truncated());
+    const out = await runStage2WithCoverageGuard({ body, maxRetries: 0, call });
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(out.coverage.ok).toBe(false);
+  });
+});

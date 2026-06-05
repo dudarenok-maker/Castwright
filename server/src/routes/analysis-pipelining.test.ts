@@ -51,6 +51,12 @@ beforeEach(() => {
   delete process.env.GEMINI_API_KEY;
   delete process.env.STAGE2_CONCURRENCY;
   delete process.env.ANALYSIS_CAST_CONCURRENCY;
+  /* These cases assert Phase 0/1 dispatch scheduling + call counts with stub
+     (deliberately non-covering) attribution responses, so disable the stage-2
+     coverage guard (plan 181) — otherwise every stub response fails the
+     coverage check and is re-analysed, tripling the analyzer call counts. The
+     guard itself is covered by stage2-coverage.test.ts. */
+  process.env.STAGE2_COVERAGE_RETRIES = '0';
 });
 
 afterEach(() => {
