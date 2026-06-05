@@ -21,13 +21,11 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { mkdir, rename, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
 import {
   audioDir,
   castJsonPath,
   manuscriptEditsJsonPath,
-  qwenVoiceSidecarPath,
   queueJsonPath,
   stateJsonPath,
 } from '../workspace/paths.js';
@@ -44,7 +42,6 @@ import {
 } from '../workspace/scan.js';
 import { isNonEnglish, sidecarLanguageName } from '../tts/language.js';
 import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
-import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import {
@@ -56,33 +53,20 @@ import {
   type TtsProvider,
 } from '../tts/index.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
-import { buildCharacterSnapshots } from '../audio/character-snapshots.js';
+import { finalizeChapterAudioWrite } from '../audio/finalize-chapter-write.js';
+import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import {
   getCachedUserSettings,
   getLastKnownQwenInstallState,
   getResolvedSidecarUrl,
 } from '../workspace/user-settings.js';
-import {
-  audioExtForFormat,
-  encodePcmToAudio,
-  writeChapterLufsFile,
-  writeChapterPeaksFile,
-} from '../tts/mp3.js';
-import {
-  DEFAULT_LOUDNORM_OPTIONS,
-  type LoudnormOptions,
-  type LoudnormSidecarJson,
-} from '../tts/loudnorm.js';
-import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
 import { appendTelemetry } from '../tts/resource-telemetry.js';
 import { probeSidecarHealth } from './sidecar-health.js';
 import { abortInFlightSplice } from './chapter-job-coordination.js';
-import { formatDuration } from '../audio/format-duration.js';
 import {
   synthesiseChapter,
   ChapterStallError,
   type CastCharacter,
-  type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
@@ -446,58 +430,6 @@ interface GenerationRequestBody {
   fallbackConfirmed?: unknown;
 }
 
-/* Snapshot of a character's voice-relevant attributes captured at the
-   moment a chapter is synthesised. The revisions route diffs this against
-   the live cast.json to surface drift events ("voice swapped after this
-   chapter rendered", "tone.warmth drifted 30 points", etc.). Kept narrow
-   on purpose — only fields the drift detector reads. */
-interface CharacterSnapshot {
-  tone?: { warmth?: number; pace?: number; authority?: number; emotion?: number };
-  gender?: 'male' | 'female' | 'neutral';
-  ageRange?: 'child' | 'teen' | 'adult' | 'elderly';
-  voiceId?: string;
-  voiceEngine?: string;
-  /** The voice NAME actually used at synthesis time — the resolved output of
-      `pickVoiceForEngine(charEngine, …)` (plan 108). Unlike `voiceId` (the
-      library id, which doesn't change when only a per-engine override flips),
-      this captures the real voice so the drift detector can catch an
-      override-only change. Optional: segments written before plan 108 have no
-      value → the detector treats it as "no signal" and falls back to voiceId. */
-  resolvedVoiceName?: string;
-  /** Engine this character ACTUALLY rendered in when it differs from its
-      configured engine — `'kokoro'` when a Qwen character fell back (no
-      designed voice, or Qwen unavailable). Undefined = rendered in its
-      configured engine. Drives the "Fallback (Kokoro)" cast status. */
-  renderedFallbackEngine?: string;
-  /** Attribute list captured at synthesis time. The drift detector
-      compares this against the current cast's attributes — a non-empty
-      symmetric difference fires a drift event because attributes drive
-      prebuilt-voice selection in tts-voice-mapping.ts. Sorted so the
-      snapshot is stable across runs even when the analyzer emits the
-      same set in different orders. */
-  attributes?: string[];
-}
-
-interface ChapterSegmentsFile {
-  bookId: string;
-  chapterId: number;
-  chapterTitle: string;
-  durationSec: number;
-  sampleRate: number;
-  modelKey: TtsModelKey;
-  synthesizedAt: string;
-  segments: ChapterSegment[];
-  /** Snapshot of cast character attributes at synthesis time, keyed by
-      characterId. Used by /api/books/:bookId/revisions to detect drift
-      between the current cast and what was actually rendered. Optional
-      because pre-existing segments files written before this field landed
-      have no snapshots; the revisions route treats them as "no signal". */
-  characterSnapshots?: Record<string, CharacterSnapshot>;
-  /** srv-27 — advisory post-synthesis QA verdict for this render. Optional;
-      absent on segments files written before the field landed. */
-  qa?: ChapterQaVerdict;
-}
-
 generationRouter.post('/:bookId/generation', async (req: Request, res: Response) => {
   const { bookId } = req.params;
   const body = (req.body ?? {}) as GenerationRequestBody;
@@ -581,31 +513,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const bookLanguage = bookStateLanguage(state);
   const nonEnglishBook = isNonEnglish(bookLanguage);
   if (nonEnglishBook) {
-    const expectedLang = sidecarLanguageName(bookLanguage);
-    for (const c of cast.characters) {
-      c.ttsEngine = 'qwen';
-      /* fs-2 — force re-design on cross-language reuse. A designed Qwen voice
-         bakes its language into the on-disk manifest at design time. If a voice
-         designed under a different-language book is reused here, its baked
-         language won't match — reading the new book's text through it would be
-         wrong-language audio. Clear the override so the voice reads as
-         UNDESIGNED, which the forbidKokoroFallback gate then blocks (the user
-         re-designs it in the book's language). */
-      const designedName = c.overrideTtsVoices?.qwen?.name;
-      if (designedName) {
-        const manifest = await readJson<{ language?: string }>(
-          qwenVoiceSidecarPath(designedName),
-        ).catch(() => null);
-        if (!manifest || manifest.language !== expectedLang) {
-          if (c.overrideTtsVoices?.qwen) delete c.overrideTtsVoices.qwen;
-          console.warn(
-            `[generation] ${c.name ?? c.id}: designed Qwen voice "${designedName}" ` +
-              `is not ${expectedLang} (manifest: ${manifest?.language ?? 'missing'}) — ` +
-              `treating as undesigned, re-design required for this ${bookLanguage} book.`,
-          );
-        }
-      }
-    }
+    for (const c of cast.characters) c.ttsEngine = 'qwen';
+    /* fs-2 / fs-32c — force re-design on cross-language reuse. Shared with the
+       splice re-record path: clears any designed Qwen voice whose baked
+       manifest language ≠ the book's, so the forbidKokoroFallback gate blocks
+       it as undesigned rather than reading wrong-language audio. */
+    await clearMismatchedDesignedVoices(
+      cast.characters,
+      sidecarLanguageName(bookLanguage),
+      bookLanguage,
+    );
   }
 
   /* Per-character engine routing (plan 108). Engine is no longer one global
@@ -1119,9 +1036,6 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     const QA_CHARS_PER_SEC = 14;
     const totalChars = sentences.reduce((sum, s) => sum + (s.text?.length ?? 0), 0);
     const expectedSec = totalChars > 0 ? totalChars / QA_CHARS_PER_SEC : null;
-    /* Captured by the loudnorm onLoudnessMeasured callback below (post-norm
-       i/tp in two-pass mode); fed into the QA verdict in the assembly block. */
-    let loudnormStats: LoudnormSidecarJson | null = null;
     const initialTick = {
       chapterId: chapter.id,
       characterId: null,
@@ -1361,172 +1275,38 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       });
 
       /* Per-book audio format (plan 72) — defaults to mp3 for state files
-         written before the field landed. Drives both the codec dispatch
-         in `encodePcmToAudio` (below) and the file extension that lands
-         on disk. */
+         written before the field landed. */
       const audioFormat = bookStateAudioFormat(state);
-      const audioExt = audioExtForFormat(audioFormat);
-      const audioPath = join(audioRoot, `${chapter.slug}.${audioExt}`);
-      const segPath = join(audioRoot, `${chapter.slug}.segments.json`);
-      const peaksPath = join(audioRoot, `${chapter.slug}.peaks.json`);
-      const lufsPath = join(audioRoot, `${chapter.slug}.lufs.json`);
 
-      /* EBU R128 loudness normalisation (plan 71). Default ON; opt out
-         with AUDIO_LOUDNORM_ENABLED=false. The two-pass measure-then-apply
-         flow runs inside encodePcmToAudio; the onLoudnessMeasured callback
-         writes the sidecar JSON atomically next to the MP3. */
-      const loudnorm: LoudnormOptions | undefined =
-        process.env.AUDIO_LOUDNORM_ENABLED === 'false' ? undefined : DEFAULT_LOUDNORM_OPTIONS;
-      const audioBuffer = await encodePcmToAudio(result.pcm, result.sampleRate, {
-        format: audioFormat,
-        quality: 2,
-        loudnorm,
-        onLoudnessMeasured: async (stats) => {
-          /* srv-27 — stash the measured loudness for the QA verdict below. */
-          loudnormStats = stats;
-          try {
-            await writeChapterLufsFile(stats, lufsPath);
-          } catch (err) {
-            /* Non-fatal — playback works without the sidecar; Wave 2's
-               report-card UI degrades to "no data" gracefully. Log + carry on. */
-
-            console.warn(
-              `[generation] failed to write loudness sidecar for ${chapter.slug}: ${
-                (err as Error).message
-              }`,
-            );
-          }
-        },
-      });
-
-      /* Atomic write: temp-then-rename so a crash mid-write doesn't leave a
-         half-encoded file that scan.ts would mistake for a completed
-         chapter. Per-chapter slug + pid + ts in the temp name means
-         concurrent chapter writes (sibling chapter jobs of the same book,
-         now separate dispatcher POSTs) never collide on the same temp
-         path. */
-      bumpProgress(); // encode (2-pass loudnorm) done — the long assembly step
-      /* srv-27 — ADVISORY post-synthesis QA. The chapter still completes; a
-         `suspect` verdict just drives a badge. `loudnormStats` is null when
-         loudnorm is disabled (only the duration check runs then); in two-pass
-         mode `i`/`tp` are post-normalisation values (see audio-qa.ts). */
-      const measured = loudnormStats as LoudnormSidecarJson | null;
-      const audioQa: ChapterQaVerdict = evaluateChapterQa({
+      /* srv-29 — converged encode + persist tail. finalizeChapterAudioWrite
+         owns the loudnorm encode + sidecars, the advisory QA verdict, the
+         per-character drift snapshots, the `.previous.*` preservation + atomic
+         write + peaks sibling, and the state.json duration/model/QA stamp —
+         byte-identical to what this route inlined, and shared with the fs-26
+         splice path so a re-record persists the same way. `onEncoded` fires the
+         no-progress watchdog bump right after the long encode step, exactly
+         where the inlined `bumpProgress()` used to sit. expectedSec carries the
+         same char-derived QA estimate as before (srv-27). */
+      const { audioQa } = await finalizeChapterAudioWrite({
+        bookId,
+        bookDir,
+        chapter: { id: chapter.id, slug: chapter.slug, title: chapter.title },
+        pcm: result.pcm,
+        sampleRate: result.sampleRate,
         durationSec: result.durationSec,
-        expectedSec,
-        lufs: measured ? measured.i : null,
-        truePeakDb: measured ? measured.tp : null,
+        segments: result.segments,
+        cast: cast.characters,
+        defaultEngine: engine,
+        modelKey,
+        audioFormat,
+        expectedSec: expectedSec ?? undefined,
+        onEncoded: bumpProgress,
       });
       if (audioQa.status === 'suspect') {
         console.warn(
           `[generation] chapter ${chapter.id} (${chapter.slug}) flagged SUSPECT by audio QA: ` +
             audioQa.reasons.join(' '),
         );
-      }
-      const tmpAudio = `${audioPath}.tmp-${process.pid}-${Date.now()}`;
-      await writeFile(tmpAudio, audioBuffer);
-      /* Snapshot the cast character attributes for every character that
-         actually spoke in this chapter — narrows the snapshot to the
-         characters the drift detector cares about and avoids bloating the
-         segments file with the full cast on tiny chapters. */
-      const speakingIds = new Set(result.segments.map((s) => s.characterId));
-      /* Which characters actually fell back to Kokoro this render (any segment
-         of theirs stamped renderedFallbackEngine) — surfaced on the snapshot so
-         the cast/listen UI can show "Fallback (Kokoro)". */
-      const fallbackByChar = new Map<string, string>();
-      for (const s of result.segments) {
-        if (s.renderedFallbackEngine) fallbackByChar.set(s.characterId, s.renderedFallbackEngine);
-      }
-      /* Per-character engine + the voice NAME actually rendered (plan 108),
-         keyed by characterId for the drift detector. Shared with the fs-26
-         splice path via buildCharacterSnapshots so a re-record/re-mix updates
-         the detector identically to a full regen. */
-      const characterSnapshots = buildCharacterSnapshots(
-        cast.characters,
-        speakingIds,
-        engine,
-        fallbackByChar,
-      );
-
-      const segmentsFile: ChapterSegmentsFile = {
-        bookId,
-        chapterId: chapter.id,
-        chapterTitle: chapter.title,
-        durationSec: result.durationSec,
-        sampleRate: result.sampleRate,
-        modelKey,
-        synthesizedAt: new Date().toISOString(),
-        segments: result.segments,
-        characterSnapshots,
-        qa: audioQa,
-      };
-      /* Rollback preservation: rename the live `<slug>.mp3` +
-         `.segments.json` to `.previous.*` BEFORE the new render lands.
-         First renders no-op (nothing to preserve). The revision-diff
-         player auditions the preserved pair (A) vs the new render (B);
-         accept deletes `.previous.*`, reject restores them over current.
-         Best-effort — never blocks the write. */
-      await preserveExistingAsPrevious(audioRoot, chapter.slug);
-      await writeJsonAtomic(segPath, segmentsFile);
-      await rename(tmpAudio, audioPath);
-      /* Plan 56: emit the waveform-envelope sibling alongside the MP3.
-         Failure is non-fatal — peaks are a visualization aid, not load-
-         bearing for playback — so we log + continue rather than abort the
-         render. The chapter-audio meta endpoint's missing-file fallback
-         returns `peaks: []` and the Listen view degrades gracefully. */
-      try {
-        await writeChapterPeaksFile(result.pcm, result.sampleRate, peaksPath);
-      } catch (err) {
-        console.warn(
-          `[generation] failed to write peaks for ${chapter.slug}: ${(err as Error).message}`,
-        );
-      }
-
-      /* Update state.json with the freshly-measured duration so the library
-         + future playback slice can render it without re-reading the audio.
-         Also stamp the TTS model key + render timestamp so the frontend
-         can surface engine-drift badges without reading every segments
-         file on chapter-list hydrate (see docs/features/archive/35-engine-drift-detection.md).
-
-         With sibling chapters of the same book completing in parallel
-         (separate dispatcher POSTs now), two handlers can race to
-         read-modify-write state.json. read+write are not atomic — the
-         second writer's read picks up the first writer's on-disk record
-         (the rename is atomic), so each chapter's duration / audioModelKey
-         lands eventually. The race window is narrow (sub-second between read
-         and writeJsonAtomic on local SSD) and the only contested field is
-         `chapters[i].duration` / `audioModelKey` / `audioRenderedAt` — both
-         keyed by chapter id, so siblings cannot clobber each other's data.
-         The risk is `updatedAt` carrying a slightly stale timestamp when
-         reads interleave, which the scan layer tolerates. */
-      const statePath = stateJsonPath(bookDir);
-      const prev = await readJson<BookStateJson>(statePath);
-      if (prev) {
-        const formatted = formatDuration(result.durationSec);
-        const next: BookStateJson = {
-          ...prev,
-          chapters: prev.chapters.map((c) =>
-            c.id === chapter.id
-              ? {
-                  ...c,
-                  duration: formatted,
-                  audioModelKey: modelKey,
-                  audioRenderedAt: segmentsFile.synthesizedAt,
-                  /* srv-27 — advisory QA verdict for the freshly-rendered audio
-                     so the failed/suspect badge survives a reload. */
-                  audioQa,
-                  /* A successful render clears any stale persisted failure so
-                     the chapter no longer hydrates as "Failed" after reload. */
-                  generationState: undefined,
-                  generationError: undefined,
-                  generationErrorCode: undefined,
-                  generationRemediation: undefined,
-                }
-              : c,
-          ),
-          updatedAt: new Date().toISOString(),
-        };
-        await writeJsonAtomic(statePath, stampStateSchema(next));
       }
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber
