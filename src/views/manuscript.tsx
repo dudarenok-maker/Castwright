@@ -1275,6 +1275,7 @@ function SegmentRow({
                     chapterId={s.chapterId}
                     sentenceId={s.id}
                     emotion={s.emotion}
+                    character={char}
                   />
                 )}
                 {!isLast && ' '}
