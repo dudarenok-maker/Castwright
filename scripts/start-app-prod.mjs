@@ -81,14 +81,21 @@ if (alreadyUp) {
 const outLog = openSync(resolve(logDir, 'server.log'), 'a');
 const errLog = openSync(resolve(logDir, 'server.err.log'), 'a');
 
-const isWindows = process.platform === 'win32';
-const npmCmd = isWindows ? 'npm.cmd' : 'npm';
+const serverDir = resolve(repoRoot, 'server');
 
-const child = spawn(npmCmd, ['--prefix', 'server', 'run', 'start'], {
-  cwd: repoRoot,
+/* Spawn the built server directly with the current Node binary instead of going
+   through `npm.cmd` — on Node >=20.6 spawning a `.cmd` without `shell: true`
+   throws EINVAL on Windows (the CVE-2024-27980 mitigation), which broke
+   `npm run start:prod`. Running `node dist/index.js` with cwd=server is simpler
+   and ALSO guarantees `process.loadEnvFile('.env')` resolves server/.env
+   (it's cwd-relative) — so prod gets the same WORKSPACE_DIR / analyzer / GPU
+   tuning the dev server reads. detached + unref so the server outlives this
+   launcher and the console window that double-clicked the .bat. */
+const child = spawn(process.execPath, ['dist/index.js'], {
+  cwd: serverDir,
   env: { ...process.env, NODE_ENV: 'production' },
   stdio: ['ignore', outLog, errLog],
-  detached: !isWindows,
+  detached: true,
   windowsHide: true,
 });
 
@@ -99,7 +106,7 @@ if (typeof child.pid !== 'number') {
 writeFileSync(resolve(runDir, 'server.pid'), String(child.pid), 'utf8');
 info(`[START] server pid=${child.pid} -> logs/server.log (NODE_ENV=production)`);
 
-if (!isWindows) child.unref();
+child.unref();
 
 const ready = await waitForListen(SERVER_PORT, HEALTH_TIMEOUT_MS);
 if (!ready) {
