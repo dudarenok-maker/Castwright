@@ -126,6 +126,14 @@ function chapterNoProgressMs(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 720_000;
 }
 
+/* Pre-assembly per-sentence QA gate retry budget (segment-qa.ts). How many
+   times a `suspect` sentence is re-recorded before keeping the best take.
+   Default 2; `0` disables the gate (byte-identical to pre-gate). */
+function resolveSegmentQaRerecords(): number {
+  const raw = Number(process.env.SEG_QA_MAX_RERECORDS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+}
+
 /* side-11 item 2 — soft recycle at the chapter boundary. The sidecar raises
    `recycle_pending` in /health once committed-private memory crosses the SOFT
    threshold (SIDECAR_RECYCLE_SOFT_MB, below the hard watchdog ceiling). Reading
@@ -1301,6 +1309,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           bumpProgress();
           recordBatchThroughput({ genMs, audioMs });
         },
+        /* Pre-assembly per-sentence QA gate (segment-qa.ts): re-record a
+           sentence whose rendered PCM is dead/silent, has a long internal
+           silence run, or drifts far from its text-predicted length, BEFORE
+           the chapter is concatenated. Tunable via SEG_QA_MAX_RERECORDS
+           (default 2; 0 disables). The thresholds default from segment-qa.ts'
+           own env (SEG_QA_*), so we don't pass `segmentQaThresholds` here. */
+        maxSegmentRerecords: resolveSegmentQaRerecords(),
+        onSegmentRerecord: () => {
+          /* Keep both the server no-progress watchdog and the client stall
+             timer fed while a suspect sentence re-records (serial, after the
+             pool), and re-broadcast the last tick so the SSE isn't silent. No
+             new SSE shape — the re-record surfaces as continued progress. */
+          bumpProgress();
+          if (job.lastProgressTick) broadcast(job, { type: 'progress', ...job.lastProgressTick });
+        },
           });
           break;
         } catch (synthErr) {
@@ -1411,12 +1434,29 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          loudnorm is disabled (only the duration check runs then); in two-pass
          mode `i`/`tp` are post-normalisation values (see audio-qa.ts). */
       const measured = loudnormStats as LoudnormSidecarJson | null;
-      const audioQa: ChapterQaVerdict = evaluateChapterQa({
+      const chapterQa: ChapterQaVerdict = evaluateChapterQa({
         durationSec: result.durationSec,
         expectedSec,
         lufs: measured ? measured.i : null,
         truePeakDb: measured ? measured.tp : null,
       });
+      /* Roll the pre-assembly per-sentence gate (segment-qa.ts) into the
+         chapter-level verdict so the existing "Suspect" badge lights up when a
+         sentence was kept despite still failing QA after its re-records. The
+         whole-chapter signals above can't see a single bad sentence in a long
+         chapter — this is the surface for it. */
+      const suspectSegments = result.segments.filter((s) => s.suspect);
+      const audioQa: ChapterQaVerdict =
+        suspectSegments.length > 0
+          ? {
+              ...chapterQa,
+              status: 'suspect',
+              reasons: [
+                ...chapterQa.reasons,
+                `${suspectSegments.length} sentence(s) still flagged after re-recording (e.g. ${suspectSegments[0].qa?.reasons[0] ?? 'audio QA'}).`,
+              ],
+            }
+          : chapterQa;
       if (audioQa.status === 'suspect') {
         console.warn(
           `[generation] chapter ${chapter.id} (${chapter.slug}) flagged SUSPECT by audio QA: ` +

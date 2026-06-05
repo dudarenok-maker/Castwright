@@ -942,6 +942,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/{chapterId}/audio-qa-repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Scan an already-rendered chapter for bad sentences and re-record them (plan 179)
+         * @description Runs the per-sentence audio-QA checks (dead/near-silent, a long internal
+         *     silence run, duration drift vs the manuscript text) over each segment of
+         *     an ALREADY-rendered chapter — the same checks the pre-assembly gate
+         *     applies to new generations. Streams SSE `data: <json>` frames.
+         *
+         *     `dryRun` (default `true`) returns the scan only — no GPU, no write,
+         *     emitting `qa_scan` then `qa_repair_complete` with the `flagged` list.
+         *     `dryRun: false` re-records the flagged sentences (best-of-N, re-QA'd)
+         *     through the fs-26 splice engine, re-runs the whole-chapter loudnorm,
+         *     preserves the prior take as `.previous.*`, and updates `segments.json` +
+         *     duration. A repair and a full regen of the same chapter mutually displace
+         *     each other so they never race the files.
+         */
+        post: operations["audioQaRepairChapter"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/chapters/{chapterId}/audio": {
         parameters: {
             query?: never;
@@ -4774,6 +4805,68 @@ export interface operations {
                         characterId?: string;
                         /** @enum {string} */
                         mode?: "remix" | "rerecord";
+                        durationSec?: number;
+                        segmentCount?: number;
+                        hasPreviousAudio?: boolean;
+                        progress?: number;
+                        errorReason?: string;
+                    };
+                };
+            };
+        };
+    };
+    audioQaRepairChapter: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /**
+                     * @description When true (default) only scan and report `flagged`; no GPU, no write. False re-records the flagged sentences and re-splices.
+                     * @default true
+                     */
+                    dryRun?: boolean;
+                    /**
+                     * @description Re-record only — TTS model key to re-synthesise with. Defaults to the chapter's own rendered model when omitted.
+                     * @enum {string}
+                     */
+                    modelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+                    /** @description Re-record only — max re-synthesis attempts per flagged sentence, keeping the best take. Defaults to SEG_QA_MAX_RERECORDS (2). */
+                    maxRerecords?: number;
+                };
+            };
+        };
+        responses: {
+            /** @description SSE QA scan + (optional) repair stream */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": {
+                        /** @enum {string} */
+                        type?: "qa_scan" | "splice_start" | "progress" | "chapter_assembling" | "qa_repair_complete" | "chapter_failed";
+                        chapterId?: number;
+                        dryRun?: boolean;
+                        flaggedCount?: number;
+                        /** @description Segments that failed the per-sentence QA scan. */
+                        flagged?: {
+                            segmentIndex?: number;
+                            characterId?: string;
+                            sentenceIds?: number[];
+                            reasons?: string[];
+                        }[];
+                        /** @description Segment indices that passed QA after re-recording. */
+                        repaired?: number[];
+                        /** @description Segment indices that stayed suspect after exhausting re-records. */
+                        stillSuspect?: number[];
                         durationSec?: number;
                         segmentCount?: number;
                         hasPreviousAudio?: boolean;
