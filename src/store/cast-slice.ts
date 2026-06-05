@@ -3,6 +3,28 @@
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Character, AnalyseResponse, VoiceMatchResponse } from '../lib/types';
 
+/* Union two alias lists (case-insensitive dedup, original casing, first-seen
+   order). Mirrors the server's union (merge-analysis-cast.ts) so a manually-
+   added or reuse-unioned alias isn't dropped when an analyser snapshot or a
+   cast-merge response carries a sparser set (srv-13). */
+function unionAliases(a?: string[], b?: string[]): string[] | undefined {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const list of [a, b]) {
+    if (!Array.isArray(list)) continue;
+    for (const raw of list) {
+      if (typeof raw !== 'string') continue;
+      const trimmed = raw.trim();
+      if (!trimmed) continue;
+      const key = trimmed.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(trimmed);
+    }
+  }
+  return out.length ? out : undefined;
+}
+
 export interface CastState {
   characters: Character[];
   /** fe-16 — characterId → engine the character actually rendered in when it
@@ -120,6 +142,10 @@ export const castSlice = createSlice({
             overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
             ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
             voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
+            /* The user's "not the same person" decision and any manually-added
+               aliases must survive a live Phase-0a roster snapshot (srv-13). */
+            notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+            aliases: unionAliases(existing.aliases, inc.aliases),
           });
         } else {
           next.push(inc.voiceState ? inc : { ...inc, voiceState: 'generated' });
@@ -143,9 +169,10 @@ export const castSlice = createSlice({
     applyMerge: (s, a: PayloadAction<{ characters: Character[] }>) => {
       const { characters } = a.payload;
       if (!characters) return;
-      /* Preserve voiceId / matchedFrom / matchFactors / voiceState on each
-         surviving character — those are local-only or library-derived and
-         the server's character list doesn't carry them. */
+      /* Preserve voice-design + reuse fields on each surviving character —
+         those are local-only or library-derived and the server's character
+         list doesn't carry them (srv-13: the merge response previously dropped
+         the designed voice, persona, not-linked decisions and aliases). */
       const byId = new Map(s.characters.map((c) => [c.id, c]));
       s.characters = characters.map((inc) => {
         const existing = byId.get(inc.id);
@@ -156,6 +183,11 @@ export const castSlice = createSlice({
           matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
           matchFactors: existing.matchFactors ?? inc.matchFactors,
           voiceState: existing.voiceState ?? inc.voiceState,
+          overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
+          ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
+          voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
+          notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+          aliases: unionAliases(existing.aliases, inc.aliases),
         };
       });
     },
