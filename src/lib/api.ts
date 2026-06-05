@@ -1340,12 +1340,20 @@ async function mockGetChapterAudio({ duration }: AudioArgs): Promise<ChapterAudi
     const base = 0.35 + 0.45 * Math.sin((i / peakCount) * Math.PI);
     return Math.max(0.05, Math.min(1, base + (Math.random() - 0.5) * 0.35));
   });
+  /* Deterministic per-character segment layout so the Listen-view per-line
+     re-record resolver (fs-26) has something to bite on in mock mode: split
+     the chapter into three contiguous spans (narrator / halloran / narrator). */
+  const third = totalSec / 3;
   return {
     url: stubAudioB,
     durationSec: totalSec,
     peaks,
     sampleRate: 44100,
-    segments: [],
+    segments: [
+      { start: 0, end: third, characterId: 'narrator', sentenceId: 1 },
+      { start: third, end: third * 2, characterId: 'halloran', sentenceId: 2 },
+      { start: third * 2, end: totalSec, characterId: 'narrator', sentenceId: 3 },
+    ],
   };
 }
 

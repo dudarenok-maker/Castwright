@@ -23,6 +23,7 @@ import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/bo
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
+import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
 import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { Layout, type LayoutContext } from '../components/layout';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
@@ -666,6 +667,7 @@ function ReadyViewSwitch({
    selectors instead of bloating the parent. */
 function ListenRoute({ bookId }: { bookId: string }) {
   const dispatch = useAppDispatch();
+  const { openFixCharacterAudio, pushToast } = useOutletContext<LayoutContext>();
   const chapters = useAppSelector((s) => s.chapters.chapters);
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
@@ -692,6 +694,32 @@ function ListenRoute({ bookId }: { bookId: string }) {
       onSendApp={(app) => dispatch(uiActions.setHandoffApp(app))}
       onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
       onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}
+      onFixLine={async (marker) => {
+        /* fs-26 — resolve the re-record marker's playhead to the chapter audio
+           segment it sits in, then open the Fix-audio modal pre-scoped to that
+           single character + segment. */
+        const chapter = chapters.find((c) => c.id === marker.chapterId);
+        const audio = await api
+          .getChapterAudio({ bookId, chapterId: marker.chapterId, duration: chapter?.duration })
+          .catch(() => null);
+        const resolved = audio ? resolveSegmentForSec(marker.sec, audio.segments) : null;
+        if (!resolved) {
+          pushToast({
+            kind: 'warn',
+            message: 'No line found at this marker — try a marker on a spoken line.',
+            dedupeKey: `fix-line-${marker.id}`,
+          });
+          return;
+        }
+        openFixCharacterAudio({
+          characterId: resolved.characterId,
+          preScoped: {
+            mode: 'rerecord',
+            chapterId: marker.chapterId,
+            segmentIndices: [resolved.segmentIndex],
+          },
+        });
+      }}
       bookMeta={bookMeta}
       bookCoverGradient={coverGradient}
       bookCoverImageUrl={coverImageUrl}

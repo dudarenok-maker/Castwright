@@ -22,6 +22,10 @@ export interface SpliceBatchRequest {
   /** rerecord only. */
   modelKey?: TtsModelKey;
   chapterIds: number[];
+  /** rerecord only — scope the splice to a subset of the character's segments
+      (fs-26 per-line re-record from the Listen view). Applied to every chapter
+      in the batch; omit for a whole-character re-record. */
+  segmentIndices?: number[];
 }
 
 export interface SpliceBatch {

@@ -247,6 +247,7 @@ describe('a11y — listen view', () => {
           onSendApp={vi.fn()}
           onRegenerate={vi.fn()}
           onEnterPreview={vi.fn()}
+          onFixLine={vi.fn()}
           bookMeta={meta}
           bookCoverGradient={['#2C7A4B', '#0F3A23']}
           bookCoverImageUrl={null}

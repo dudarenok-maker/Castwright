@@ -21,12 +21,23 @@ interface Props {
   characterName: string;
   bookId: string;
   onClose: () => void;
+  /** fs-26 — optional pre-scoped open (e.g. a per-line re-record launched from
+      the Listen-view marker). Locks the mode, pins the batch to a single
+      chapter, and scopes the splice to the given segment indices. When absent
+      the modal behaves exactly as before (whole-character picker). */
+  preScoped?: { mode: 'remix' | 'rerecord'; chapterId: number; segmentIndices: number[] };
 }
 
 const GAIN_MIN = -12;
 const GAIN_MAX = 12;
 
-export function FixCharacterAudioModal({ characterId, characterName, bookId, onClose }: Props) {
+export function FixCharacterAudioModal({
+  characterId,
+  characterName,
+  bookId,
+  onClose,
+  preScoped,
+}: Props) {
   const dispatch = useAppDispatch();
   const chapters = useAppSelector((s) => s.chapters.chapters);
   const modelKey = useAppSelector((s) => s.ui.ttsModelKey);
@@ -44,12 +55,14 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
         (c) =>
           !!characterId &&
           c.characters?.[characterId] !== undefined &&
-          (c.audioModelKey != null || c.state === 'done'),
+          (c.audioModelKey != null || c.state === 'done') &&
+          // A pre-scoped per-line fix targets exactly one chapter.
+          (!preScoped || c.id === preScoped.chapterId),
       ),
-    [chapters, characterId],
+    [chapters, characterId, preScoped],
   );
 
-  const [mode, setMode] = useState<'remix' | 'rerecord'>('remix');
+  const [mode, setMode] = useState<'remix' | 'rerecord'>(preScoped?.mode ?? 'remix');
   const [gainDb, setGainDb] = useState(3);
   const [selected, setSelected] = useState<Set<number>>(() => new Set(candidates.map((c) => c.id)));
 
@@ -69,7 +82,8 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
 
   const run = () => {
     if (!selectedIds.length || running) return;
-    const id = `splice-${bookId}-${characterId}-${selectedIds.join('.')}-${selectedIds.length}`;
+    const segSuffix = preScoped ? `-seg${preScoped.segmentIndices.join('.')}` : '';
+    const id = `splice-${bookId}-${characterId}-${selectedIds.join('.')}-${selectedIds.length}${segSuffix}`;
     setBatchId(id);
     dispatch(
       spliceActions.startBatch({
@@ -78,7 +92,9 @@ export function FixCharacterAudioModal({ characterId, characterName, bookId, onC
         characterId,
         characterName,
         mode,
-        ...(mode === 'remix' ? { gainDb } : { modelKey }),
+        ...(mode === 'remix'
+          ? { gainDb }
+          : { modelKey, ...(preScoped ? { segmentIndices: preScoped.segmentIndices } : {}) }),
         chapterIds: selectedIds,
       }),
     );

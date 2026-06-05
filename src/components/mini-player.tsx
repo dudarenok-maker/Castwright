@@ -16,6 +16,7 @@ import { parseDuration, formatTime } from '../lib/time';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import type { Chapter, ChapterAudio } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
+import { settingsActions } from '../store/settings-slice';
 import {
   getPlaybackRate,
   listenProgressActions,
@@ -116,6 +117,12 @@ export function MiniPlayer({
      el.playbackRate without re-running on every rate change. */
   const playbackRateRef = useRef(playbackRate);
   playbackRateRef.current = playbackRate;
+  /* fe-25 — device-local output volume (0..1), persisted in the settings slice.
+     A ref mirrors it so the audio.url effect can re-apply it on every src/load
+     cycle (el.volume snaps back to 1.0 on a fresh load, same as playbackRate). */
+  const playerVolume = useAppSelector((s) => s.settings?.playerVolume ?? 1);
+  const playerVolumeRef = useRef(playerVolume);
+  playerVolumeRef.current = playerVolume;
   /* (Marker list itself is read in the Listen view sidebar via the
      same selector — the mini-player only owns the add-marker entry
      point.) */
@@ -126,6 +133,7 @@ export function MiniPlayer({
   /* Hover-driven popovers for the two RHS toolbar buttons. */
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
   const [sleepMenuOpen, setSleepMenuOpen] = useState(false);
+  const [volumeMenuOpen, setVolumeMenuOpen] = useState(false);
   /* Marker-add inline form — opens under the player when the user
      drops a marker so they can type a label without leaving listen. */
   const [markerDraft, setMarkerDraft] = useState<{ chapterId: number; sec: number } | null>(null);
@@ -224,6 +232,7 @@ export function MiniPlayer({
       el.load();
       el.currentTime = 0;
       el.playbackRate = playbackRateRef.current;
+      el.volume = playerVolumeRef.current;
       if (playing)
         void el.play().catch(() => {
           /* user-gesture errors surface via <audio onerror> */
@@ -243,6 +252,14 @@ export function MiniPlayer({
     if (!el) return;
     el.playbackRate = playbackRate;
   }, [playbackRate]);
+
+  /* fe-25 — reflect the volume selection onto the live element. Separate effect
+     (like playbackRate) so dragging the slider mid-playback doesn't re-load. */
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    el.volume = playerVolume;
+  }, [playerVolume]);
 
   /* Plan 53 — rehydrate the local playbackRate from the slice when
      the persisted record lands (Layout's per-book hydrate effect
@@ -718,9 +735,52 @@ export function MiniPlayer({
                 End of ch
               </span>
             )}
-            <button className="p-2 rounded-full hover:bg-canvas/10 hidden md:grid place-items-center">
-              <IconVolume className="w-4 h-4" />
-            </button>
+            {/* fe-25 — output volume. The button toggles a slider popover;
+                the icon dims at low/zero level so muting reads at a glance. */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setVolumeMenuOpen((v) => !v);
+                  setSpeedMenuOpen(false);
+                  setSleepMenuOpen(false);
+                }}
+                aria-label="Volume"
+                data-testid="mini-player-volume-toggle"
+                aria-expanded={volumeMenuOpen}
+                aria-haspopup="menu"
+                title={`Volume ${Math.round(playerVolume * 100)}%`}
+                className={`p-2 rounded-full hover:bg-canvas/10 hidden md:grid place-items-center min-h-[44px] sm:min-h-0 ${
+                  playerVolume === 0 ? 'text-canvas/40' : 'text-canvas/80'
+                }`}
+              >
+                <IconVolume className="w-4 h-4" />
+              </button>
+              {volumeMenuOpen && (
+                <div
+                  role="menu"
+                  data-testid="mini-player-volume-menu"
+                  className="absolute bottom-full right-0 mb-2 px-3 py-2 rounded-xl bg-ink-soft border border-canvas/10 shadow-float z-10 flex items-center gap-2"
+                >
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={playerVolume}
+                    onChange={(e) =>
+                      dispatch(settingsActions.setPlayerVolume(Number(e.target.value)))
+                    }
+                    aria-label="Volume level"
+                    data-testid="mini-player-volume-slider"
+                    className="w-28 accent-magenta"
+                  />
+                  <span className="text-[11px] tabular-nums text-canvas/70 w-9 text-right">
+                    {Math.round(playerVolume * 100)}%
+                  </span>
+                </div>
+              )}
+            </div>
             <button onClick={onClose} className="p-2 rounded-full hover:bg-canvas/10">
               <IconClose className="w-4 h-4" />
             </button>
@@ -804,6 +864,8 @@ export function MiniPlayer({
                  driven by the same src; without this the user's 1.5×
                  selection silently undoes after the resume seek. */
               target.playbackRate = playbackRateRef.current;
+              /* fe-25 — el.volume also resets on load; re-apply the saved level. */
+              target.volume = playerVolumeRef.current;
             }
           }}
           onEnded={() => {

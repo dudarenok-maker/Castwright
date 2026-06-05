@@ -11,7 +11,7 @@
    mislead the user. */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { ListenPlayerRegion } from './listen-player-region';
@@ -61,6 +61,8 @@ function renderRegion(chapters: Chapter[]) {
         onRegenerate={vi.fn()}
         onSeekMarker={vi.fn()}
         onDeleteMarker={vi.fn()}
+        onSetMarkerKind={vi.fn()}
+        onFixLine={vi.fn()}
       />
     </Provider>,
   );
@@ -184,6 +186,8 @@ describe('ListenPlayerRegion — live row sync + pill-hidden-while-playing (plan
           onRegenerate={vi.fn()}
           onSeekMarker={vi.fn()}
           onDeleteMarker={vi.fn()}
+          onSetMarkerKind={vi.fn()}
+          onFixLine={vi.fn()}
         />
       </Provider>,
     );
@@ -286,6 +290,8 @@ describe('ListenPlayerRegion — ungenerated-chapter affordances', () => {
           onRegenerate={onRegenerate}
           onSeekMarker={vi.fn()}
           onDeleteMarker={vi.fn()}
+          onSetMarkerKind={vi.fn()}
+          onFixLine={vi.fn()}
         />
       </Provider>,
     );
@@ -299,5 +305,64 @@ describe('ListenPlayerRegion — ungenerated-chapter affordances', () => {
     expect(screen.getByLabelText('Play chapter 1')).not.toBeDisabled();
     expect(screen.getByTestId('chapter-row-1-share-clip')).not.toBeDisabled();
     expect(within(row).getByText('10:00')).toBeInTheDocument();
+  });
+});
+
+describe('ListenPlayerRegion — markers panel re-record entry (fs-26)', () => {
+  function renderWithMarker(kind: 'note' | 'rerecord') {
+    const store = makeStore();
+    store.dispatch(
+      listenProgressActions.addMarker({
+        bookId: 'test-book',
+        marker: {
+          id: 'm1',
+          chapterId: 1,
+          sec: 42,
+          label: 'A line',
+          kind,
+          createdAt: '2026-06-05T00:00:00.000Z',
+        },
+      }),
+    );
+    const onSetMarkerKind = vi.fn();
+    const onFixLine = vi.fn();
+    render(
+      <Provider store={store}>
+        <ListenPlayerRegion
+          bookId="test-book"
+          chapters={[makeChapter(1)]}
+          listenable={[makeChapter(1)]}
+          characters={[]}
+          currentTrack={null}
+          onPlayChapter={vi.fn()}
+          onRegenerate={vi.fn()}
+          onSeekMarker={vi.fn()}
+          onDeleteMarker={vi.fn()}
+          onSetMarkerKind={onSetMarkerKind}
+          onFixLine={onFixLine}
+        />
+      </Provider>,
+    );
+    return { onSetMarkerKind, onFixLine };
+  }
+
+  it('shows no "Fix this line" action for a plain note marker', () => {
+    renderWithMarker('note');
+    expect(screen.queryByTestId('listen-marker-fix-m1')).toBeNull();
+  });
+
+  it('toggling the kind control promotes a note to a re-record marker', () => {
+    const { onSetMarkerKind } = renderWithMarker('note');
+    fireEvent.click(screen.getByTestId('listen-marker-kind-m1'));
+    expect(onSetMarkerKind).toHaveBeenCalledWith('m1', 'rerecord');
+  });
+
+  it('a re-record marker exposes "Fix this line" and fires onFixLine with the marker', () => {
+    const { onFixLine } = renderWithMarker('rerecord');
+    const fixBtn = screen.getByTestId('listen-marker-fix-m1');
+    expect(fixBtn).toBeInTheDocument();
+    fireEvent.click(fixBtn);
+    expect(onFixLine).toHaveBeenCalledTimes(1);
+    expect(onFixLine.mock.calls[0][0]).toMatchObject({ id: 'm1', chapterId: 1, sec: 42 });
   });
 });
