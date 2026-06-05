@@ -8,7 +8,7 @@ import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { listenProgressActions } from '../store/listen-progress-slice';
+import { listenProgressActions, type ListenMarker } from '../store/listen-progress-slice';
 import { api } from '../lib/api';
 import { exportsActions } from '../store/exports-slice';
 import { retryExport } from '../store/exports-middleware';
@@ -31,6 +31,10 @@ interface Props {
   onSendApp: (app: ListenerApp) => void;
   onRegenerate: (ch: Chapter) => void;
   onEnterPreview: () => void;
+  /** fs-26 — open the per-line re-record fix for a re-record marker. Resolves
+      the marker's playhead → chapter segment → character upstream (ListenRoute
+      has the LayoutContext to mount the Fix-audio modal). */
+  onFixLine: (marker: ListenMarker) => void;
   /* Book-meta wiring (Listen header + metadata editor). When `bookMeta` is
      null the view has not yet hydrated for this book — render a minimal
      skeleton rather than the design fixture. */
@@ -59,6 +63,7 @@ export function ListenView({
   onSendApp,
   onRegenerate,
   onEnterPreview,
+  onFixLine,
   bookMeta,
   bookCoverGradient,
   bookCoverImageUrl,
@@ -235,6 +240,10 @@ export function ListenView({
         onDeleteMarker={(markerId) => {
           dispatch(listenProgressActions.deleteMarker({ bookId, markerId }));
         }}
+        onSetMarkerKind={(markerId, kind) => {
+          dispatch(listenProgressActions.editMarker({ bookId, markerId, patch: { kind } }));
+        }}
+        onFixLine={onFixLine}
       />
 
       <ListenDownloadSection

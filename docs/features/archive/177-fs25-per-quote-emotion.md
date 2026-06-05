@@ -1,12 +1,12 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-06-04
 owner: null
 ---
 
 # fs-25 — Per-quote expressive / emotion synthesis
 
-> Status: active — core implemented (waves 1–3, 4a, 5a–5d, 6a). Deferred to follow-ups: 4b LLM emotion-backfill pass, parts of 5e (remove-variant server route, Voices-view badge wiring, staleness/missing-variant hints), 6b rebaseline series variant-design. See "Delivery status" below.
+> Status: stable — core shipped via PR #505 (merge `87ddfdf`, 2026-06-04): waves 1–3, 4a, 5a–5d, 6a. Deferred sub-waves re-homed as their own backlog items on 2026-06-05: **4b** LLM emotion-backfill pass → `fs-33` (#510); **5e** remainder (remove-variant route, Voices-view badge, staleness-on-edit, cast-row missing-variant count) → `fs-34` (#511) — the manuscript missing-variant inline hint half of 5e shipped via `fe-31` (#506); **6b** rebaseline series variant-design → `fe-32` (#512). Live-GPU acceptance still owed. See "Ship notes" + "Delivery status" below.
 > Key files: `openapi.yaml` (Sentence + Character.overrideTtsVoices), `server/src/handoff/schemas.ts`, `server/src/analyzer/` (Phase-1 attribution + emotion-annotation pass), `server/src/tts/synthesise-chapter.ts` + `server/src/tts/voice-mapping.ts` (voice resolution), `server/src/routes/qwen-voice.ts` (variant design), `server/src/tts/hydrate-reused-voice.ts` + `cast-link-prior.ts` + `series-reuse-link.ts` + `book-state.ts` (Wave 6a reuse-carry), `src/lib/voice-status.ts` (Variants badge/filter), `src/lib/play-sample-with-auto-load.ts` (variant-aware sample playback), `src/views/manuscript.tsx`, `src/views/cast.tsx`, `src/modals/profile-drawer.tsx` + `src/components/voice-preview-button.tsx` + `src/modals/{match-detail,compare-cast-modal,rebaseline-modal}.tsx` (sample-play surfaces; rebaseline = Wave 6b series-design).
 > URL surface: `#/books/<id>/manuscript` (per-quote emotion picker), `#/books/<id>/cast` (design emotion variants).
 > OpenAPI ops: reuses `POST /api/books/{bookId}/cast/{characterId}/design-voice` (adds optional `emotion`); adds `POST /api/books/{bookId}/annotate-emotion` (Wave 4b emotion-only backfill); no new synth op — `/synthesize` + `/synthesize-batch` contracts are unchanged.
@@ -221,4 +221,8 @@ Don't change the design, but must not be forgotten in implementation:
 
 ## Ship notes
 
-(Filled when status → `stable`: shipped date, commit SHA, behaviour delta vs spec, then `git mv` to `docs/features/archive/`.)
+- **Shipped:** 2026-06-04 via PR [#505](https://github.com/dudarenok-maker/AudioBook-Generator/pull/505), merge commit `87ddfdf`. Archived to `docs/features/archive/` on 2026-06-05.
+- **Delivered (core):** waves 1–3, 4a, 5a–5d, 6a — the per-quote emotion data model (`Sentence.emotion`, `Character.overrideTtsVoices.qwen.variants`), Qwen-gated variant voice resolution (strict no-op on Kokoro/XTTS), emotion-augmented `design-voice`, Phase-1 analyzer emotion output, the manuscript per-quote chip, the cast `EmotionVariantDesigner` (+ audition), the additive `VariantsBadge` + filter, and series-reuse variant carry. Legacy inline audio-tag system retired (seed-and-strip migration; `denormaliseAllCaps` preserved).
+- **Behaviour delta vs spec:** none of substance. 5d landed as "audition on the design surface" (the cast variant designer) rather than wiring variant playback into every sample surface — the compare-cast / match-detail / rebaseline surfaces are base-voice comparison tools and were intentionally left on base playback.
+- **Deferred sub-waves re-homed (2026-06-05):** 4b → `fs-33` (#510); 5e remainder (remove-variant DELETE route + Voices-view badge render + staleness-on-edit + cast-row missing-variant count) → `fs-34` (#511); 6b → `fe-32` (#512). The manuscript missing-variant inline hint (part of 5e) shipped via `fe-31` (#506) in the same round as this archive.
+- **Owed:** live-GPU acceptance (CI has no sidecar venv) — design a variant, tag a quote, confirm audible-on-Qwen and byte-identical-on-Kokoro (acceptance walkthrough steps 3a / 5 / 6 above).

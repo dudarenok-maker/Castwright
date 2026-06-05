@@ -72,7 +72,12 @@ async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<voi
       chapterId,
       mode: req.mode,
       characterId: req.characterId,
-      ...(req.mode === 'remix' ? { gainDb: req.gainDb } : { modelKey: req.modelKey }),
+      ...(req.mode === 'remix'
+        ? { gainDb: req.gainDb }
+        : {
+            modelKey: req.modelKey,
+            ...(req.segmentIndices ? { segmentIndices: req.segmentIndices } : {}),
+          }),
       signal: controller.signal,
       onTick: (ev: SpliceTick) => {
         if (ev.type === 'splice_complete') {
