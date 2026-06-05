@@ -18,6 +18,12 @@ import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
+import {
+  verifySegmentTranscript,
+  type AsrClassification,
+  type AsrThresholds,
+} from './segment-asr-qa.js';
+import type { TranscribeResult } from './transcribe-client.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry } from './retry.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
@@ -262,6 +268,16 @@ export interface ChapterSegment {
       per-sentence suspect surface; undefined when the gate passed or did not
       run. */
   suspect?: boolean;
+  /** ASR content-QA verdict (srv-31) — transcript vs manuscript word-error-rate.
+      Set only when the ASR pass ran (`opts.asr` provided); absent on the title
+      beat and on chapters synthesised without ASR. Carries the transcript + WER
+      breakdown + intrinsic signals for the per-chapter QA report. */
+  asr?: AsrClassification;
+  /** True when this segment is still `drift` after the ASR pass exhausted its
+      re-records (best-of-N by WER kept and assembled anyway) — the
+      "fluent but wrong words" surface. Undefined when ASR passed, was
+      inconclusive, or did not run. */
+  asrSuspect?: boolean;
 }
 
 /** Silence padding bookending the spoken chapter-title narration. Each chapter
@@ -479,6 +495,44 @@ export interface SynthesiseChapterOpts {
     maxRerecords: number;
     reasons: string[];
   }) => void;
+  /** ASR content-QA pass (srv-31). Absent → no ASR (byte-identical to today).
+      When provided, after the signal-QA loop each sampled body group's audio is
+      transcribed and word-error-rated against its sentence text; a `drift`
+      verdict is re-recorded up to `maxRerecords`, best-of-N by WER. The pass is
+      inline here, but the multi-worker queue overlaps chapter N's (CPU) ASR with
+      chapter N+1's (GPU) synth, so it doesn't serialise the run. */
+  asr?: AsrPassOptions;
+}
+
+/** Options for the per-sentence ASR content-QA pass (srv-31). */
+export interface AsrPassOptions {
+  /** Max re-records of a `drift` segment (best-of-N by WER). `0` = detect + flag
+      only (no re-record). generation.ts resolves this from SEG_ASR_MAX_RERECORDS. */
+  maxRerecords?: number;
+  /** Transcribe 1-in-N body groups (stride). `1` (default) = every sentence. */
+  sampleEvery?: number;
+  /** Whisper language hint — non-English books MUST set this or the WER is noise. */
+  language?: string | null;
+  /** Per-book proper-noun allowlist (cast names) so invented names don't drift. */
+  nameAllowlist?: Iterable<string>;
+  /** Explicit WER thresholds (mainly tests); absent → env/defaults per call. */
+  thresholds?: Partial<AsrThresholds>;
+  /** Inject a transcribe fn (tests); absent → the real sidecar client. */
+  transcribeFn?: (
+    pcm: Buffer,
+    sampleRate: number,
+    o: { language?: string | null; signal?: AbortSignal; sidecarUrl?: string },
+  ) => Promise<TranscribeResult>;
+  /** Sidecar URL override (tests). */
+  sidecarUrl?: string;
+  /** Fired before each ASR re-record so the SSE route can surface it. */
+  onRerecord?: (e: {
+    group: SentenceGroup;
+    attempt: number;
+    maxRerecords: number;
+    wer: number;
+    reasons: string[];
+  }) => void;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -585,6 +639,7 @@ export async function synthesiseChapter(
     maxSegmentRerecords = 0,
     segmentQaThresholds,
     onSegmentRerecord,
+    asr,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -1160,6 +1215,63 @@ export async function synthesiseChapter(
     }
   }
 
+  /* ASR content-QA pass (srv-31). Runs AFTER the signal-QA loop on the now-final
+     per-group PCM, catching the one defect class the signal checks can't see: a
+     fluent, right-length, right-loudness sentence that says the WRONG words.
+     Each sampled body group is transcribed and word-error-rated against its
+     text; a `drift` verdict is re-recorded (best-of-N by WER), an `inconclusive`
+     one (untrusted transcript) is left alone. A segment still `drift` after the
+     retries is kept and flagged `asrSuspect` — flag + surface, never block
+     (the decided persistent-drift policy). Inline here, but the multi-worker
+     queue overlaps this chapter's CPU ASR with the next chapter's GPU synth. */
+  const segmentAsrByIndex = new Map<number, AsrClassification>();
+  if (asr) {
+    const sampleEvery = Math.max(1, Math.floor(asr.sampleEvery ?? 1));
+    const maxAsrRerecords = Math.max(0, Math.floor(asr.maxRerecords ?? 0));
+    /* ok < inconclusive < drift; among equal verdicts, lower WER wins. */
+    const rank = (c: AsrClassification): number =>
+      c.verdict === 'ok' ? 0 : c.verdict === 'inconclusive' ? 1 : 2;
+    const asrBetter = (a: AsrClassification, b: AsrClassification): boolean =>
+      rank(a) !== rank(b) ? rank(a) < rank(b) : a.wer < b.wer;
+    const verify = (pcm: Buffer, rate: number, text: string): Promise<AsrClassification> =>
+      verifySegmentTranscript(pcm, rate, text, {
+        language: asr.language,
+        nameAllowlist: asr.nameAllowlist,
+        thresholds: asr.thresholds,
+        transcribeFn: asr.transcribeFn,
+        sidecarUrl: asr.sidecarUrl,
+        signal,
+      });
+    let sampleCounter = 0;
+    for (const group of groups) {
+      const r = results[group.index];
+      if (!r) continue;
+      /* Stride sampling — default every sentence (sampleEvery=1). */
+      if (sampleEvery > 1 && sampleCounter++ % sampleEvery !== 0) continue;
+      if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+      let best = r;
+      let bestClass = await verify(r.pcm, r.sampleRate, group.text);
+      for (let attempt = 1; attempt <= maxAsrRerecords && bestClass.verdict === 'drift'; attempt++) {
+        if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+        asr.onRerecord?.({
+          group,
+          attempt,
+          maxRerecords: maxAsrRerecords,
+          wer: bestClass.wer,
+          reasons: bestClass.reasons,
+        });
+        const fresh = await synthGroup(group);
+        const freshClass = await verify(fresh.pcm, fresh.sampleRate, group.text);
+        if (asrBetter(freshClass, bestClass)) {
+          best = fresh;
+          bestClass = freshClass;
+        }
+      }
+      results[group.index] = best;
+      segmentAsrByIndex.set(group.index, bestClass);
+    }
+  }
+
   /* Single index-order pass: walk `results` by group index, resample any
      mismatched rate to the anchor, append in order, and compute the final
      per-segment `startSec`/`endSec` against the now-known cumulative offset.
@@ -1180,6 +1292,7 @@ export async function synthesiseChapter(
     runningBytes += pcmForGroup.length;
     const endSec = pcmDurationSec(runningBytes, sampleRate);
     const qa = segmentQaByIndex.get(group.index);
+    const asrClass = segmentAsrByIndex.get(group.index);
     segments.push({
       groupIndex: group.index,
       characterId: group.characterId,
@@ -1190,6 +1303,8 @@ export async function synthesiseChapter(
       voiceSubstitutedFrom: r.voiceSubstitutedFrom,
       qa,
       suspect: qa?.status === 'suspect' ? true : undefined,
+      asr: asrClass,
+      asrSuspect: asrClass?.verdict === 'drift' ? true : undefined,
     });
   }
   void completedCount;

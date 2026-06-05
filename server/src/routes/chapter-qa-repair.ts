@@ -36,6 +36,12 @@ import { decodeAudioToPcm } from '../tts/mp3.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { synthesiseChapter, type CastCharacter, type ChapterSegment } from '../tts/synthesise-chapter.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict } from '../tts/segment-qa.js';
+import {
+  verifySegmentTranscript,
+  asrEnabled,
+  buildCastNameAllowlist,
+  type AsrClassification,
+} from '../tts/segment-asr-qa.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { isNonEnglish } from '../tts/language.js';
 import { getLastKnownQwenInstallState } from '../workspace/user-settings.js';
@@ -127,6 +133,28 @@ chapterQaRepairRouter.post(
       const segText = (seg: ChapterSegment): string =>
         seg.sentenceIds.map((id) => idToText.get(id) ?? '').join(' ').trim();
 
+      /* ASR content-QA setup (srv-31) — OFF unless SEG_ASR_ENABLED. The scan
+         adds a transcript word-error-rate check on top of the signal scan so a
+         "fluent but wrong words" segment (which the signal checks can't see) is
+         also flagged for re-record. Cast names form the proper-noun allowlist;
+         a non-English book passes its language hint. */
+      const asrOn = asrEnabled();
+      const repairLanguage = bookStateLanguage(state);
+      const asrLanguage = isNonEnglish(repairLanguage) ? repairLanguage : undefined;
+      let asrAllowlist: string[] = [];
+      if (asrOn) {
+        const castNames = await readJson<{ characters?: { name?: string; aliases?: string[] }[] }>(
+          castJsonPath(bookDir),
+        ).catch(() => null);
+        asrAllowlist = buildCastNameAllowlist(castNames?.characters ?? []);
+      }
+      const verifyAsr = (pcm: Buffer, text: string): Promise<AsrClassification> =>
+        verifySegmentTranscript(pcm, sampleRate, text, {
+          language: asrLanguage,
+          nameAllowlist: asrAllowlist,
+          signal: controller.signal,
+        });
+
       /* Scan every sentence-backed segment (skip the title beat). */
       const flagged: Array<{
         segmentIndex: number;
@@ -134,11 +162,14 @@ chapterQaRepairRouter.post(
         sentenceIds: number[];
         reasons: string[];
       }> = [];
-      segFile.segments.forEach((seg, i) => {
-        if (!isRerecordableSegment(seg)) return;
+      for (let i = 0; i < segFile.segments.length; i += 1) {
+        const seg = segFile.segments[i];
+        if (!isRerecordableSegment(seg)) continue;
         const start = secToByteOffset(seg.startSec, sampleRate, decodedPcm.length);
         const end = secToByteOffset(seg.endSec, sampleRate, decodedPcm.length);
-        const verdict = evaluateSegmentPcm(decodedPcm.subarray(start, end), sampleRate, segText(seg));
+        const pcmSeg = decodedPcm.subarray(start, end);
+        const text = segText(seg);
+        const verdict = evaluateSegmentPcm(pcmSeg, sampleRate, text);
         if (verdict.status === 'suspect') {
           flagged.push({
             segmentIndex: i,
@@ -146,8 +177,21 @@ chapterQaRepairRouter.post(
             sentenceIds: seg.sentenceIds.slice(),
             reasons: verdict.reasons,
           });
+          continue; // already flagged by the cheap signal scan — skip ASR
         }
-      });
+        /* Signal-clean → check content (the fluent-but-wrong case). */
+        if (asrOn && text) {
+          const a = await verifyAsr(pcmSeg, text);
+          if (a.verdict === 'drift') {
+            flagged.push({
+              segmentIndex: i,
+              characterId: seg.characterId,
+              sentenceIds: seg.sentenceIds.slice(),
+              reasons: a.reasons,
+            });
+          }
+        }
+      }
 
       send({ type: 'qa_scan', chapterId, flaggedCount: flagged.length, flagged });
 
@@ -241,6 +285,12 @@ chapterQaRepairRouter.post(
           const text = segText(seg);
           let best: { pcm: Buffer; sampleRate: number } | null = null;
           let bestVerdict: SegmentQaVerdict | null = null;
+          let bestAsr: AsrClassification | null = null;
+          /* A take is acceptable when the signal gate passes AND (ASR off or the
+             content isn't drift). Among non-acceptable takes, prefer the
+             signal-better one (isBetter). */
+          const isAcceptable = (v: SegmentQaVerdict | null, a: AsrClassification | null): boolean =>
+            v != null && v.status === 'ok' && (!asrOn || a == null || a.verdict !== 'drift');
           for (let attempt = 1; attempt <= maxRerecords; attempt++) {
             if (controller.signal.aborted) break;
             send({ type: 'progress', chapterId, segmentIndex: segIndex, attempt, progress: 0.5 });
@@ -259,14 +309,21 @@ chapterQaRepairRouter.post(
               narratorCharacterId: 'narrator',
             });
             const v = evaluateSegmentPcm(r.pcm, r.sampleRate, text);
-            if (!best || !bestVerdict || isBetter(v, bestVerdict)) {
+            const a = asrOn && text ? await verifyAsr(r.pcm, text) : null;
+            const better =
+              !best ||
+              bestVerdict == null ||
+              (isAcceptable(v, a) && !isAcceptable(bestVerdict, bestAsr)) ||
+              (isAcceptable(v, a) === isAcceptable(bestVerdict, bestAsr) && isBetter(v, bestVerdict));
+            if (better) {
               best = { pcm: r.pcm, sampleRate: r.sampleRate };
               bestVerdict = v;
+              bestAsr = a;
             }
-            if (bestVerdict.status === 'ok') break;
+            if (isAcceptable(bestVerdict, bestAsr)) break;
           }
           if (!best) throw new Error('Re-record produced no audio.');
-          if (bestVerdict?.status === 'suspect') stillSuspect.push(segIndex);
+          if (bestVerdict?.status === 'suspect' || bestAsr?.verdict === 'drift') stillSuspect.push(segIndex);
           else repaired.push(segIndex);
           return best;
         },

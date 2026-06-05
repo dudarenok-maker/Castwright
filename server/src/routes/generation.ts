@@ -72,6 +72,12 @@ import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.j
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import { ensureSidecarEngineReady, SIDECAR_ENGINES } from '../tts/ensure-sidecar-loaded.js';
+import {
+  asrEnabled,
+  resolveAsrRerecords,
+  resolveAsrSampleEvery,
+  buildCastNameAllowlist,
+} from '../tts/segment-asr-qa.js';
 import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 import type { FailureCode } from './failure-taxonomy.js';
@@ -117,6 +123,10 @@ function resolveSegmentQaRerecords(): number {
   const raw = Number(process.env.SEG_QA_MAX_RERECORDS);
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
 }
+
+/* ASR content-QA pass (srv-31) — resolvers shared with the repair route live in
+   segment-asr-qa.ts (asrEnabled / resolveAsrRerecords / resolveAsrSampleEvery /
+   buildCastNameAllowlist). OFF by default via SEG_ASR_ENABLED. */
 
 /* side-11 item 2 — soft recycle at the chapter boundary. The sidecar raises
    `recycle_pending` in /health once committed-private memory crosses the SOFT
@@ -1238,6 +1248,26 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           bumpProgress();
           if (job.lastProgressTick) broadcast(job, { type: 'progress', ...job.lastProgressTick });
         },
+        /* ASR content-QA pass (srv-31) — OFF unless SEG_ASR_ENABLED. Transcribes
+           each sentence and re-records "fluent but wrong words" drift. The cast
+           names form the proper-noun allowlist; the non-English language hint is
+           threaded so the WER is meaningful (Phase 6). Re-records feed the same
+           progress heartbeat as the signal gate above. */
+        ...(asrEnabled()
+          ? {
+              asr: {
+                maxRerecords: resolveAsrRerecords(),
+                sampleEvery: resolveAsrSampleEvery(),
+                language: nonEnglishBook ? bookLanguage : undefined,
+                nameAllowlist: buildCastNameAllowlist(cast.characters),
+                onRerecord: () => {
+                  bumpProgress();
+                  if (job.lastProgressTick)
+                    broadcast(job, { type: 'progress', ...job.lastProgressTick });
+                },
+              },
+            }
+          : {}),
           });
           break;
         } catch (synthErr) {
