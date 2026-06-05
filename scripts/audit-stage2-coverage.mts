@@ -21,7 +21,7 @@
    Only EPUB-sourced books are audited (the coverage check needs the parsed
    source prose); txt/pdf books are listed as skipped. */
 
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEpub } from '../server/src/parsers/epub.js';
