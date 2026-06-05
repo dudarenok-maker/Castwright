@@ -1,0 +1,372 @@
+/* ASR content-QA policy (srv-31) — the trustworthy half of the gate.
+   Companion to the signal-based `segment-qa.ts`: that one catches dead /
+   silent / wrong-length audio with cheap math; THIS one catches a generation
+   that is fluent, right length, right loudness, but says the WRONG WORDS — by
+   transcribing it (Whisper, in the sidecar) and word-error-rating the
+   transcript against the manuscript sentence.
+
+   The make-or-break for srv-31 is TRUSTWORTHINESS: a gate that false-flags a
+   perfectly good "Wren Sparrow" line (Whisper mangles invented names) gets
+   switched off, and then garbled chapters ship again. So the verdict logic:
+
+     - normalises both strings hard (case / punctuation / contractions / digits)
+       so cosmetic differences never count,
+     - decomposes the edit distance into substitution / deletion / insertion
+       with asymmetric thresholds (a long DELETION run = truncation/drop drift =
+       serious; a single substitution = benign),
+     - co-evaluates Whisper's INTRINSIC signals: a high compression_ratio is the
+       loop/repeat tell (→ drift even at low WER); a very low avg_logprob / high
+       no_speech_prob means the TRANSCRIPT itself is untrustworthy (→
+       `inconclusive`, NOT a re-record — re-recording on an untrusted transcript
+       is how false-positive loops start),
+     - tolerates proper nouns via a per-book name allowlist (the cast roster).
+
+   `classifyTranscript` is PURE (text + signals in, verdict out) so the policy is
+   unit-testable without a sidecar; `verifySegmentTranscript` adds the one
+   transcribe call. Env-override pattern mirrors `segment-qa.ts`. */
+
+import { transcribeSegment, type TranscribeResult } from './transcribe-client.js';
+
+export type AsrVerdict = 'ok' | 'drift' | 'inconclusive';
+
+export interface AsrSignals {
+  avgLogprob: number | null;
+  noSpeechProb: number | null;
+  compressionRatio: number | null;
+}
+
+export interface AsrClassification {
+  verdict: AsrVerdict;
+  /** Word-error-rate after normalization + proper-noun tolerance, in [0, ~1+]. */
+  wer: number;
+  /** Counted (non-tolerated) substitutions / deletions / insertions. */
+  sub: number;
+  del: number;
+  ins: number;
+  /** Longest contiguous run of deletions — the truncation/drop signal. */
+  longestDeletionRun: number;
+  transcript: string;
+  reasons: string[];
+}
+
+export interface AsrThresholds {
+  /** wer above this is drift. */
+  maxWer: number;
+  /** A contiguous deletion run longer than this is drift (truncation/drop). */
+  maxDeletionRun: number;
+  /** Sentences shorter than this (trimmed chars) are not scored (one wrong word
+      swamps a short sentence's WER) → inconclusive. */
+  minChars: number;
+  /** compression_ratio above this → drift (Whisper's loop/repeat hallucination
+      tell), regardless of WER. */
+  maxCompressionRatio: number;
+  /** avg_logprob below this → transcript untrustworthy → inconclusive. */
+  minAvgLogprob: number;
+  /** no_speech_prob above this → transcript untrustworthy → inconclusive. */
+  maxNoSpeechProb: number;
+}
+
+export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
+  maxWer: 0.4,
+  maxDeletionRun: 4,
+  minChars: 12,
+  maxCompressionRatio: 2.4,
+  minAvgLogprob: -1.0,
+  maxNoSpeechProb: 0.6,
+};
+
+function envNum(key: string, fallback: number): number {
+  const raw = process.env[key];
+  if (raw == null || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function resolveAsrThresholds(override?: Partial<AsrThresholds>): AsrThresholds {
+  const base: AsrThresholds = {
+    maxWer: envNum('SEG_ASR_MAX_WER', DEFAULT_ASR_THRESHOLDS.maxWer),
+    maxDeletionRun: envNum('SEG_ASR_MAX_DELETION_RUN', DEFAULT_ASR_THRESHOLDS.maxDeletionRun),
+    minChars: envNum('SEG_ASR_MIN_CHARS', DEFAULT_ASR_THRESHOLDS.minChars),
+    maxCompressionRatio: envNum('SEG_ASR_MAX_COMPRESSION', DEFAULT_ASR_THRESHOLDS.maxCompressionRatio),
+    minAvgLogprob: envNum('SEG_ASR_MIN_AVG_LOGPROB', DEFAULT_ASR_THRESHOLDS.minAvgLogprob),
+    maxNoSpeechProb: envNum('SEG_ASR_MAX_NO_SPEECH', DEFAULT_ASR_THRESHOLDS.maxNoSpeechProb),
+  };
+  return { ...base, ...override };
+}
+
+/* --- Normalization --- */
+
+const SMART_QUOTES = /[‘’‚‛′‵]/g; // ' ' ‚ ‛ ′ ‵
+const SMART_DQUOTES = /[“”„‟″]/g; // " " „ ‟ ″
+const DASHES = /[‐-―−]/g; // hyphen variants + minus
+
+/* Curated contraction expansions — both Whisper and the manuscript may pick
+   either form; expanding to a canonical form makes them comparable. */
+const CONTRACTIONS: Record<string, string> = {
+  "don't": 'do not', "doesn't": 'does not', "didn't": 'did not',
+  "can't": 'cannot', "won't": 'will not', "wouldn't": 'would not',
+  "shouldn't": 'should not', "couldn't": 'could not', "isn't": 'is not',
+  "aren't": 'are not', "wasn't": 'was not', "weren't": 'were not',
+  "hasn't": 'has not', "haven't": 'have not', "hadn't": 'had not',
+  "i'm": 'i am', "i've": 'i have', "i'll": 'i will', "i'd": 'i would',
+  "you're": 'you are', "you've": 'you have', "you'll": 'you will', "you'd": 'you would',
+  "he's": 'he is', "she's": 'she is', "it's": 'it is', "that's": 'that is',
+  "there's": 'there is', "here's": 'here is', "what's": 'what is', "let's": 'let us',
+  "we're": 'we are', "we've": 'we have', "we'll": 'we will', "we'd": 'we would',
+  "they're": 'they are', "they've": 'they have', "they'll": 'they will', "they'd": 'they would',
+};
+
+const ONES = [
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+  'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+  'seventeen', 'eighteen', 'nineteen',
+];
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+
+/* Spell an integer 0..99 to match Whisper's word output ("3" → "three"). Larger
+   numbers are left as the digit string (Whisper usually emits digits for them
+   anyway, and year/decimal reading is too variable to canonicalise cheaply). */
+function spellInteger(n: number): string | null {
+  if (n < 20) return ONES[n];
+  if (n < 100) {
+    const t = TENS[Math.floor(n / 10)];
+    const o = n % 10;
+    return o === 0 ? t : `${t} ${ONES[o]}`;
+  }
+  return null;
+}
+
+/** Normalise to a token array: lowercase, NFKC, smart-punctuation→ascii,
+    contraction expansion, integer 0..99 → words, strip residual punctuation. */
+export function normalizeForWer(text: string): string[] {
+  let s = (text ?? '').normalize('NFKC').toLowerCase();
+  s = s.replace(SMART_QUOTES, "'").replace(SMART_DQUOTES, '"').replace(DASHES, '-');
+  // Expand contractions before stripping apostrophes.
+  for (const [from, to] of Object.entries(CONTRACTIONS)) {
+    s = s.replace(new RegExp(`\\b${from.replace(/'/g, "['’]")}\\b`, 'g'), to);
+  }
+  // Drop possessive 's and any remaining apostrophes inside words.
+  s = s.replace(/'s\b/g, '').replace(/'/g, '');
+  // Replace every non-alphanumeric with a space, then tokenise.
+  s = s.replace(/[^a-z0-9]+/g, ' ');
+  const tokens = s.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  for (const tok of tokens) {
+    if (/^\d+$/.test(tok)) {
+      const spelled = spellInteger(Number(tok));
+      if (spelled) {
+        out.push(...spelled.split(' '));
+        continue;
+      }
+    }
+    out.push(tok);
+  }
+  return out;
+}
+
+/* --- Word-level alignment (Levenshtein with backtrace) --- */
+
+type Op = { type: 'match' | 'sub' | 'del' | 'ins'; expected?: string };
+
+/** Align expected → actual token arrays, returning the edit ops in expected
+    order. `del` = an expected token missing from the transcript; `ins` = an
+    extra transcript token; `sub` = a swapped token. */
+function alignTokens(expected: string[], actual: string[]): Op[] {
+  const m = expected.length;
+  const n = actual.length;
+  // dp[i][j] = edit distance of expected[0..i) vs actual[0..j).
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 0; i <= m; i += 1) dp[i][0] = i;
+  for (let j = 0; j <= n; j += 1) dp[0][j] = j;
+  for (let i = 1; i <= m; i += 1) {
+    for (let j = 1; j <= n; j += 1) {
+      if (expected[i - 1] === actual[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        dp[i][j] = 1 + Math.min(dp[i - 1][j - 1], dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+  // Backtrace.
+  const ops: Op[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && expected[i - 1] === actual[j - 1] && dp[i][j] === dp[i - 1][j - 1]) {
+      ops.push({ type: 'match', expected: expected[i - 1] });
+      i -= 1;
+      j -= 1;
+    } else if (i > 0 && j > 0 && dp[i][j] === dp[i - 1][j - 1] + 1) {
+      ops.push({ type: 'sub', expected: expected[i - 1] });
+      i -= 1;
+      j -= 1;
+    } else if (i > 0 && dp[i][j] === dp[i - 1][j] + 1) {
+      ops.push({ type: 'del', expected: expected[i - 1] });
+      i -= 1;
+    } else {
+      ops.push({ type: 'ins' });
+      j -= 1;
+    }
+  }
+  ops.reverse();
+  return ops;
+}
+
+export interface ClassifyOptions {
+  thresholds?: Partial<AsrThresholds>;
+  /** Per-book proper-noun allowlist (cast names). Tokens here don't count as
+      drift when substituted/deleted — Whisper mangles invented names. */
+  nameAllowlist?: Iterable<string>;
+}
+
+/** Pure verdict from a transcript + signals. No I/O — inject the transcript. */
+export function classifyTranscript(
+  expectedText: string,
+  transcript: string,
+  signals: AsrSignals,
+  opts: ClassifyOptions = {},
+): AsrClassification {
+  const t = resolveAsrThresholds(opts.thresholds);
+  const reasons: string[] = [];
+  const base = (verdict: AsrVerdict, extra: Partial<AsrClassification> = {}): AsrClassification => ({
+    verdict,
+    wer: 0,
+    sub: 0,
+    del: 0,
+    ins: 0,
+    longestDeletionRun: 0,
+    transcript,
+    reasons,
+    ...extra,
+  });
+
+  // Too short to score reliably — don't act on it.
+  if ((expectedText ?? '').trim().length < t.minChars) {
+    reasons.push(`Not scored — sentence under the ${t.minChars}-char ASR floor.`);
+    return base('inconclusive');
+  }
+
+  // Loop/repeat hallucination is positive drift evidence even at low WER.
+  if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
+    reasons.push(
+      `Loop/repeat — compression ratio ${signals.compressionRatio.toFixed(2)} exceeds the ${
+        t.maxCompressionRatio
+      } cap (likely repeated/garbled synthesis).`,
+    );
+    // Still compute WER below for observability, but the verdict is drift.
+  } else {
+    // Untrustworthy transcript → inconclusive (do NOT re-record on a guess).
+    if (signals.avgLogprob != null && signals.avgLogprob < t.minAvgLogprob) {
+      reasons.push(
+        `Transcript untrustworthy — avg logprob ${signals.avgLogprob.toFixed(
+          2,
+        )} below ${t.minAvgLogprob}; not scoring.`,
+      );
+      return base('inconclusive');
+    }
+    if (signals.noSpeechProb != null && signals.noSpeechProb > t.maxNoSpeechProb) {
+      reasons.push(
+        `Transcript untrustworthy — no-speech prob ${signals.noSpeechProb.toFixed(
+          2,
+        )} above ${t.maxNoSpeechProb}; not scoring.`,
+      );
+      return base('inconclusive');
+    }
+  }
+
+  const expectedTokens = normalizeForWer(expectedText);
+  const actualTokens = normalizeForWer(transcript);
+  if (expectedTokens.length === 0) {
+    reasons.push('Not scored — expected text normalised to empty.');
+    return base('inconclusive');
+  }
+
+  const allow = new Set<string>();
+  if (opts.nameAllowlist) {
+    for (const name of opts.nameAllowlist) {
+      for (const tok of normalizeForWer(name)) allow.add(tok);
+    }
+  }
+
+  const ops = alignTokens(expectedTokens, actualTokens);
+  let sub = 0;
+  let del = 0;
+  let ins = 0;
+  let curDelRun = 0;
+  let longestDeletionRun = 0;
+  for (const op of ops) {
+    const tolerated = op.expected != null && allow.has(op.expected);
+    if (op.type === 'sub') {
+      if (!tolerated) sub += 1;
+      curDelRun = 0;
+    } else if (op.type === 'del') {
+      if (!tolerated) {
+        del += 1;
+        curDelRun += 1;
+        if (curDelRun > longestDeletionRun) longestDeletionRun = curDelRun;
+      } else {
+        curDelRun = 0;
+      }
+    } else if (op.type === 'ins') {
+      ins += 1;
+      curDelRun = 0;
+    } else {
+      curDelRun = 0;
+    }
+  }
+
+  const wer = (sub + del + ins) / expectedTokens.length;
+  const metrics = { wer, sub, del, ins, longestDeletionRun };
+
+  // Compression-ratio drift was flagged above.
+  if (signals.compressionRatio != null && signals.compressionRatio > t.maxCompressionRatio) {
+    return base('drift', metrics);
+  }
+  if (longestDeletionRun > t.maxDeletionRun) {
+    reasons.push(
+      `Truncation/drop — ${longestDeletionRun} consecutive words missing (> ${t.maxDeletionRun}).`,
+    );
+    return base('drift', metrics);
+  }
+  if (wer > t.maxWer) {
+    reasons.push(
+      `Content drift — word-error-rate ${wer.toFixed(2)} exceeds ${t.maxWer} ` +
+        `(${sub} sub, ${del} del, ${ins} ins vs ${expectedTokens.length} words).`,
+    );
+    return base('drift', metrics);
+  }
+  return base('ok', metrics);
+}
+
+export interface VerifyOptions extends ClassifyOptions {
+  language?: string | null;
+  signal?: AbortSignal;
+  sidecarUrl?: string;
+  /** Inject a transcribe fn (tests); defaults to the real sidecar client. */
+  transcribeFn?: (
+    pcm: Buffer,
+    sampleRate: number,
+    o: { language?: string | null; signal?: AbortSignal; sidecarUrl?: string },
+  ) => Promise<TranscribeResult>;
+}
+
+/** Transcribe one sentence's PCM and classify it. The single impure entry. */
+export async function verifySegmentTranscript(
+  pcm: Buffer,
+  sampleRate: number,
+  expectedText: string,
+  opts: VerifyOptions = {},
+): Promise<AsrClassification> {
+  const transcribe = opts.transcribeFn ?? transcribeSegment;
+  const r = await transcribe(pcm, sampleRate, {
+    language: opts.language,
+    signal: opts.signal,
+    sidecarUrl: opts.sidecarUrl,
+  });
+  return classifyTranscript(
+    expectedText,
+    r.text,
+    { avgLogprob: r.avgLogprob, noSpeechProb: r.noSpeechProb, compressionRatio: r.compressionRatio },
+    { thresholds: opts.thresholds, nameAllowlist: opts.nameAllowlist },
+  );
+}
