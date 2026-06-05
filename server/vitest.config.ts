@@ -57,7 +57,16 @@ export default defineConfig({
        122) so suites never touch the real ~/.audiobook-generator file. */
     setupFiles: ['src/test-setup.ts'],
     include: ['src/**/*.{test,spec}.ts'],
-    exclude: ['node_modules/**', 'dist/**', 'src/test-setup.ts', ...SLOW_FILES_TO_EXCLUDE],
+    /* `*.golden.test.ts` is the opt-in GPU-free assembly golden (ops-11,
+       Suite B) — run only via `npm run test:golden-audio` through
+       vitest.config.golden.ts, never in the default `test:server` tier. */
+    exclude: [
+      'node_modules/**',
+      'dist/**',
+      'src/test-setup.ts',
+      'src/**/*.golden.test.ts',
+      ...SLOW_FILES_TO_EXCLUDE,
+    ],
     testTimeout: 15_000,
     hookTimeout: 30_000,
     pool: 'forks',

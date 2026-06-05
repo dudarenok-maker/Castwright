@@ -7,3 +7,14 @@ fail on CI machines without a configured venv."""
 import os
 
 os.environ.setdefault("PRELOAD_COQUI", "0")
+
+
+def pytest_configure(config):
+    """Register the `golden` marker so `-m golden` / `-m "not golden"` selection
+    (the opt-in real-model golden-audio tier, ops-11) doesn't emit an
+    unknown-marker warning. The fast `test:sidecar` tier runs `-m "not golden"`;
+    `run-golden-tests.ps1` runs `-m golden`."""
+    config.addinivalue_line(
+        "markers",
+        "golden: real-model golden-audio regression (opt-in; needs Kokoro weights)",
+    )

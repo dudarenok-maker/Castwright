@@ -11,6 +11,7 @@
     "pretest": "node ../scripts/preflight-ffmpeg.cjs",
     "test": "vitest run",
     "test:slow": "vitest run --config vitest.config.slow.ts",
+    "test:golden": "vitest run --config vitest.config.golden.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
