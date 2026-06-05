@@ -223,5 +223,31 @@ describe('SidecarTtsProvider error classification', () => {
     expect(result.pcm.equals(pcm)).toBe(true);
     expect(result.sampleRate).toBe(22050);
     expect(result.mimeType).toMatch(/audio\/L16/);
+    /* No substitution header → field omitted, so a silent fallback is
+       distinguishable from a clean render downstream (golden-audio gate). */
+    expect(result.voiceSubstitutedFrom).toBeUndefined();
+  });
+
+  it('surfaces x-voice-substituted-from on the result when the sidecar falls back', async () => {
+    /* The sidecar substitutes a safe voice when the requested one isn't in its
+       speaker manifest and signals it via this header. Surfacing it (not just
+       logging) lets the chapter assembler stamp the segment + the golden-audio
+       harness fail on a silent fallback. */
+    const pcm = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+    stubFetch(
+      async () =>
+        new Response(pcm, {
+          status: 200,
+          headers: {
+            'content-type': 'audio/L16;codec=pcm;rate=24000',
+            'x-sample-rate': '24000',
+            'x-voice-substituted-from': 'Nonexistent Voice',
+          },
+        }),
+    );
+
+    const result = await makeProvider().synthesize(SYNTH_INPUT);
+
+    expect(result.voiceSubstitutedFrom).toBe('Nonexistent Voice');
   });
 });
