@@ -3622,6 +3622,14 @@ export interface SidecarHealth {
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
   qwenInstallState?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
+  /* ASR (Whisper) model-watch state (srv-31). Display-only — Whisper loads
+     lazily on /transcribe and idle-evicts, so there is no Load/Stop pill, just a
+     resident indicator. `asrEnabled` is the server's SEG_ASR_ENABLED (gates
+     whether the ASR pill shows at all); `asrDevice` is 'cpu' | 'cuda'. Absent on
+     an older server → false / null. */
+  asrEnabled?: boolean;
+  asrLoaded?: boolean;
+  asrDevice?: string | null;
   device?: string | null;
 }
 
