@@ -12,6 +12,7 @@ import {
   setLastKnownQwenInstallState,
   type QwenInstallState,
 } from '../workspace/user-settings.js';
+import { asrEnabled } from '../tts/segment-asr-qa.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -53,6 +54,12 @@ interface SidecarHealthBody {
   qwen_package_installed?: boolean;
   qwen_weights_present?: boolean;
   qwen_install_state?: 'not-installed' | 'weights-missing' | 'ready' | 'loaded';
+  /* ASR content-QA Whisper engine (srv-31). Display-only in the model-watch
+     pill — no per-engine Load/Stop (ASR loads lazily on /transcribe and
+     idle-evicts). `asr_device` is 'cpu' | 'cuda' (where Whisper runs). Absent on
+     an older sidecar → false / null below. */
+  asr_loaded?: boolean;
+  asr_device?: string | null;
   device?: string | null;
   /* side-11 item 2 — SOFT recycle signal. `recycle_pending` flips true once the
      sidecar's committed-private memory crosses SIDECAR_RECYCLE_SOFT_MB (below the
@@ -121,6 +128,13 @@ export interface SidecarHealthResult {
   qwenPackageInstalled?: boolean;
   qwenWeightsPresent?: boolean;
   qwenInstallState?: QwenInstallState;
+  /* ASR (Whisper) model-watch state (srv-31). `asrEnabled` is the SERVER's
+     SEG_ASR_ENABLED (not from the sidecar body) — drives whether the model-watch
+     shows an ASR pill at all. `asrLoaded` = the Whisper model is resident in the
+     sidecar; `asrDevice` = 'cpu' | 'cuda'. */
+  asrEnabled?: boolean;
+  asrLoaded?: boolean;
+  asrDevice?: string | null;
   device?: string | null;
   recyclePending?: boolean;
   committedMb?: number | null;
@@ -174,6 +188,9 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       qwenPackageInstalled: qwenLoaded || body.qwen_package_installed === true,
       qwenWeightsPresent: qwenLoaded || body.qwen_weights_present === true,
       qwenInstallState: qwenInstallState,
+      asrEnabled: asrEnabled(),
+      asrLoaded: body.asr_loaded === true,
+      asrDevice: typeof body.asr_device === 'string' ? body.asr_device : null,
       device: typeof body.device === 'string' ? body.device : null,
       /* side-11 item 2 — forward the soft-recycle signal (default false / null
          for an older sidecar that omits them). */
