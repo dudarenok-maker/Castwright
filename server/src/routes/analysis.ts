@@ -24,6 +24,11 @@ import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { runStage2WithCoverageGuard } from '../analyzer/stage2-coverage.js';
 import {
+  runStage1WithRosterGuard,
+  chapterDriftExceeded,
+  type MissingSpeaker,
+} from '../analyzer/roster-coverage.js';
+import {
   readUserSettings,
   getCachedUserSettings,
   type UserSettings,
@@ -39,7 +44,12 @@ import {
   writeAnalysisState,
   type AnalysisStateFile,
 } from '../store/analysis-state.js';
-import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
+import type {
+  CharacterOutput,
+  SentenceOutput,
+  Stage1Output,
+  Stage1ChapterOutput,
+} from '../handoff/schemas.js';
 import { castJsonPath, manuscriptEditsJsonPath, slug, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { mergeAnalysisResultWithExistingCast } from '../store/merge-analysis-cast.js';
@@ -330,6 +340,68 @@ export async function persistDroppedQuotesBatch(
    - New id → append the entry as-is.
    Mutates `roster` in place; returns nothing. Order of insertion of new
    characters reflects the order chapters were processed in. */
+/* Build a schema-conformant cast entry for a speaker the roster-coverage guard
+   recovered (stage-1 dropped them despite the prose tagging them). A dialogue
+   tag IS a verbatim utterance, so detectionSource is the normal `'dialogue'` —
+   characterSchema's enum is closed and strict, so the recovery is recorded in
+   `description` (and a WARN log at the call site) rather than a bespoke source. */
+function makeRecoveredCharacter(miss: MissingSpeaker): CharacterOutput {
+  return {
+    id: miss.id,
+    name: miss.name,
+    role: 'Speaker',
+    color: miss.id,
+    attributes: [],
+    evidence: [],
+    lines: 0,
+    scenes: 0,
+    detectionSource: 'dialogue',
+    description: `Auto-recovered by the roster-coverage guard — stage-1 detection missed this tagged speaker (${miss.tagCount} dialogue tag${miss.tagCount === 1 ? '' : 's'}, e.g. ${miss.sampleTag}).`,
+  };
+}
+
+/* Wrap a stage-1 detection call with the roster-coverage guard: validate the
+   chapter's detected roster against its prose dialogue tags, retry detection on
+   a miss (STAGE1_ROSTER_RETRIES, default 1), then auto-add any still-missing
+   tagged speaker. `runningRoster` supplies the names/aliases of characters
+   already on the book's roster so a returning speaker isn't re-flagged. Shared
+   by the main Phase-0a loop and the subset-retry route. */
+async function runStage1Guarded(opts: {
+  body: string;
+  runningRoster: CharacterOutput[];
+  call: () => Promise<Stage1ChapterOutput>;
+  log: (phaseId: number, message: string) => void;
+  chapterId: number;
+}): Promise<Stage1ChapterOutput> {
+  const retriesRaw = Number(process.env.STAGE1_ROSTER_RETRIES);
+  const maxRetries = Number.isFinite(retriesRaw) ? Math.max(0, Math.trunc(retriesRaw)) : 1;
+  const namesOf = (chars: Array<{ name: string; aliases?: string[] }>): string[] =>
+    chars.flatMap((c) => [c.name, ...(c.aliases ?? [])]);
+  const runningNames = namesOf(opts.runningRoster);
+  const { result } = await runStage1WithRosterGuard<CharacterOutput, Stage1ChapterOutput>({
+    body: opts.body,
+    rosterNamesFor: (r) => [...runningNames, ...namesOf(r.characters)],
+    call: opts.call,
+    makeCharacter: makeRecoveredCharacter,
+    maxRetries,
+    onRetry: (attempt, verdict) =>
+      opts.log(
+        0,
+        `Chapter ${opts.chapterId}: stage-1 missed tagged speaker(s) ${verdict.missingSpeakers
+          .map((s) => s.name)
+          .join(', ')} — retrying detection (attempt ${attempt}).`,
+      ),
+    onAutoAdd: (added) =>
+      opts.log(
+        0,
+        `⚠ Chapter ${opts.chapterId}: roster-coverage guard auto-added ${added.length} missing speaker${
+          added.length === 1 ? '' : 's'
+        } (${added.map((s) => `${s.name}×${s.tagCount}`).join(', ')}) — stage-1 dropped them despite dialogue tags.`,
+      ),
+  });
+  return result;
+}
+
 export function mergeRosterChapter(
   roster: Map<string, CharacterOutput>,
   fromChapter: CharacterOutput[],
@@ -678,6 +750,36 @@ export function attributionDriftExceeded(
   return demotedCount / totalSentences > thresholdRatio;
 }
 
+/* Secondary net for the roster-coverage bug: WARN for any single chapter whose
+   demotion rate is high on its own. The book-wide `attributionDriftExceeded`
+   dilutes one damaged chapter below its 5% threshold (the ~30 Stellarlune ch19
+   demotions vanished against a whole-book denominator), so it never surfaced.
+   WARN-only — informs the user / log, never aborts (a narration-heavy chapter
+   can legitimately demote a lot). `demotedByChapter` is accumulated in the
+   reconcile `onDemote` callback. */
+function warnPerChapterDrift(
+  allSentences: SentenceOutput[],
+  demotedByChapter: Map<number, number>,
+  log: (phaseId: number, message: string) => void,
+): void {
+  if (demotedByChapter.size === 0) return;
+  const totalByChapter = new Map<number, number>();
+  for (const s of allSentences) {
+    totalByChapter.set(s.chapterId, (totalByChapter.get(s.chapterId) ?? 0) + 1);
+  }
+  for (const [chapterId, demoted] of demotedByChapter) {
+    const total = totalByChapter.get(chapterId) ?? 0;
+    if (chapterDriftExceeded(demoted, total)) {
+      log(
+        1,
+        `⚠ Chapter ${chapterId}: ${demoted}/${total} sentences demoted to narrator (${Math.round(
+          (demoted / total) * 100,
+        )}%) — a tagged speaker may be uncast here. Run scripts/audit-missing-speakers.mts to check.`,
+      );
+    }
+  }
+}
+
 /* Stage 1 shrink guard. When a stage1 write would replace a non-trivial
    existing roster (default `minPrevForGate=3` characters) with a much
    smaller one (default `thresholdRatio=0.5` — i.e. >50% drop), refuse
@@ -892,6 +994,13 @@ true:
    the *author* is the character, with their \`id\` set to their name,
    and the document's prose becomes their evidence. \`narrator\` is
    reserved for omniscient third-person prose with no in-fiction author.
+
+**An explicit \`<Name> <speech-verb>\` dialogue tag is binding** — \`"…,"
+Prentice repeated.\`, \`"Fine," Grizel agreed.\`, \`"Where?" Sophie asked.\`
+The tagged Name MUST appear in the output, every time, no matter how few
+lines they have or whether they are mostly *addressed* by others. A single
+tagged line is decisive; omitting a minor-but-tagged speaker dumps their
+quoted lines on the narrator — the exact failure to avoid.
 
 Pets, animals, magical creatures, and any entity whose only "lines" are
 non-verbal sounds (purring, growling, hissing, roaring) do NOT belong on
@@ -2069,7 +2178,13 @@ export async function runMainAnalyzerJob(
         );
         let result;
         try {
-          result = await analyzer.runStage1Chapter(
+          result = await runStage1Guarded({
+            body: ch.body,
+            runningRoster: Array.from(rebuildRoster().values()),
+            chapterId: ch.id,
+            log,
+            call: () =>
+              analyzer.runStage1Chapter(
             manuscriptId,
             ch.id,
             buildStage1ChapterInbox(
@@ -2134,7 +2249,8 @@ export async function runMainAnalyzerJob(
                 });
               },
             },
-          );
+              ),
+          });
         } catch (chErr) {
           /* Client disconnect propagates up — let the route's outer catch
              land us back at res.end() without a "failed" SSE event. */
@@ -3025,14 +3141,17 @@ export async function runMainAnalyzerJob(
        demotion rate exceeds the threshold on a non-trivial sample so the
        confirm screen never advances against a corrupted run. */
     const phase1ValidIds = new Set(characters.map((c) => c.id));
+    const demotedByChapter = new Map<number, number>();
     const reconciled = reconcileSentenceCharacterIds(folded.sentences, phase1ValidIds, {
       onDemote: ({ sentence, originalId }) => {
+        demotedByChapter.set(sentence.chapterId, (demotedByChapter.get(sentence.chapterId) ?? 0) + 1);
         log(
           1,
           `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`,
         );
       },
     });
+    warnPerChapterDrift(folded.sentences, demotedByChapter, log);
     if (reconciled.demotedCount > 0) {
       const summary = Array.from(reconciled.demotedByOriginalId.entries())
         .map(([id, count]) => `${id}=${count}`)
@@ -3524,31 +3643,38 @@ async function runSubsetAnalyzerJob(
          cache.failedChapterIds so the analysing view's Retry row
          disappears on reload. */
       try {
-        const result = await analyzer.runStage1Chapter(
-          manuscriptId,
-          ch.id,
-          buildStage1ChapterInbox(
-            manuscriptId,
-            record.title,
-            ch,
-            Array.from(rebuildRoster().values()),
-            subsetSeriesPrior,
-          ),
-          {
-            signal: abortController.signal,
-            language: bookLanguage,
-            onThrottle: (waitMs, reason) => {
-              send({
-                kind: 'throttle',
-                phaseId: 0,
-                chapterIndex: ch.id,
-                model: subsetModelId,
-                waitMs,
-                reason,
-              });
-            },
-          },
-        );
+        const result = await runStage1Guarded({
+          body: ch.body,
+          runningRoster: Array.from(rebuildRoster().values()),
+          chapterId: ch.id,
+          log,
+          call: () =>
+            analyzer.runStage1Chapter(
+              manuscriptId,
+              ch.id,
+              buildStage1ChapterInbox(
+                manuscriptId,
+                record.title,
+                ch,
+                Array.from(rebuildRoster().values()),
+                subsetSeriesPrior,
+              ),
+              {
+                signal: abortController.signal,
+                language: bookLanguage,
+                onThrottle: (waitMs, reason) => {
+                  send({
+                    kind: 'throttle',
+                    phaseId: 0,
+                    chapterIndex: ch.id,
+                    model: subsetModelId,
+                    waitMs,
+                    reason,
+                  });
+                },
+              },
+            ),
+        });
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
         const wasFailed = clearFailedChapterId(cache, ch.id);
@@ -3783,14 +3909,20 @@ async function runSubsetAnalyzerJob(
        shrunk between attribution and persist), so the same guard
        applies here. */
     const subsetValidIds = new Set(enriched.map((c) => c.id));
+    const subsetDemotedByChapter = new Map<number, number>();
     const subsetReconciled = reconcileSentenceCharacterIds(folded.sentences, subsetValidIds, {
       onDemote: ({ sentence, originalId }) => {
+        subsetDemotedByChapter.set(
+          sentence.chapterId,
+          (subsetDemotedByChapter.get(sentence.chapterId) ?? 0) + 1,
+        );
         log(
           1,
           `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`,
         );
       },
     });
+    warnPerChapterDrift(folded.sentences, subsetDemotedByChapter, log);
     if (subsetReconciled.demotedCount > 0) {
       const summary = Array.from(subsetReconciled.demotedByOriginalId.entries())
         .map(([id, count]) => `${id}=${count}`)
