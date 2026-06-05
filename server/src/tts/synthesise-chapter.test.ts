@@ -2390,4 +2390,46 @@ describe('synthesiseChapter pre-assembly QA gate', () => {
     expect(result.segments[0].qa).toBeUndefined();
     expect(result.segments[0].suspect).toBeUndefined();
   });
+
+  it('stamps voiceSubstitutedFrom on the segment when the provider reports a fallback', async () => {
+    /* A silent voice fallback (sidecar X-Voice-Substituted-From) must reach the
+       segment so the golden-audio gate can fail on it — previously it was only
+       logged. */
+    const provider: TtsProvider & { calls: SynthesizeInput[] } = {
+      calls: [],
+      async synthesize(input: SynthesizeInput): Promise<SynthesizeOutput> {
+        provider.calls.push(input);
+        return {
+          pcm: tonePcm(),
+          sampleRate: 24000,
+          mimeType: 'audio/pcm',
+          voiceSubstitutedFrom: 'Requested Voice',
+        };
+      },
+    };
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A line whose voice the sidecar could not honour.')],
+      cast: gateCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      groupHeartbeatMs: 0,
+    });
+    const body = result.segments.find((s) => s.sentenceIds.includes(1));
+    expect(body?.voiceSubstitutedFrom).toBe('Requested Voice');
+  });
+
+  it('leaves voiceSubstitutedFrom undefined on a clean render', async () => {
+    const provider = makeContentProvider(() => 'tone');
+    const result = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'A perfectly ordinary line.')],
+      cast: gateCast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      groupHeartbeatMs: 0,
+    });
+    const body = result.segments.find((s) => s.sentenceIds.includes(1));
+    expect(body?.voiceSubstitutedFrom).toBeUndefined();
+  });
 });

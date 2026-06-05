@@ -1,0 +1,23 @@
+{
+  "sampleRate": 24000,
+  "segments": [
+    {
+      "characterId": "narrator",
+      "text": "The harbor was quiet that morning.",
+      "voiceName": "af_heart",
+      "byteLength": 83968
+    },
+    {
+      "characterId": "alice",
+      "text": "Did you hear that sound just now?",
+      "voiceName": "bf_emma",
+      "byteLength": 87040
+    },
+    {
+      "characterId": "ben",
+      "text": "It was only the wind off the water.",
+      "voiceName": "am_michael",
+      "byteLength": 103424
+    }
+  ]
+}
