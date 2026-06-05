@@ -779,3 +779,67 @@ describe('castSlice — applyNotLinked / removeNotLinked (cross-book variant, pl
   });
 });
 
+
+describe('castSlice — mergeCharacters (srv-13 preservation)', () => {
+  it('preserves voice fields, notLinkedTo and unions aliases on a surviving character', () => {
+    const start = baseState([
+      makeChar('Marlow', {
+        voiceState: 'reused',
+        voiceId: 'Marlow',
+        matchedFrom: { bookId: 'b0', characterId: 'Marlow', confidence: 0.9 },
+        overrideTtsVoices: { qwen: { name: 'qwen-Marlow' } },
+        ttsEngine: 'qwen',
+        voiceStyle: 'witty',
+        notLinkedTo: [{ bookId: 'b1', characterId: 'Marlow-young' }],
+        aliases: ['Marlow', 'Sir Singe'],
+      }),
+    ]);
+    // Analyzer snapshot: same id, fresh attribution, NO voice/link fields,
+    // a sparser alias set.
+    const next = castSlice.reducer(
+      start,
+      castActions.mergeCharacters([
+        makeChar('Marlow', { aliases: ['Marlow', 'Mr. Halden'] }),
+      ]),
+    );
+    const Marlow = next.characters[0];
+    expect(Marlow.voiceId).toBe('Marlow');
+    expect(Marlow.voiceState).toBe('reused');
+    expect(Marlow.matchedFrom).toEqual({ bookId: 'b0', characterId: 'Marlow', confidence: 0.9 });
+    expect(Marlow.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Marlow' } });
+    expect(Marlow.ttsEngine).toBe('qwen');
+    expect(Marlow.voiceStyle).toBe('witty');
+    expect(Marlow.notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'Marlow-young' }]);
+    expect(Marlow.aliases).toEqual(['Marlow', 'Sir Singe', 'Mr. Halden']);
+  });
+});
+
+describe('castSlice — applyMerge (srv-13 preservation)', () => {
+  it('preserves designed voice, persona, notLinkedTo and unions aliases (server omits them)', () => {
+    const start = baseState([
+      makeChar('Wren', {
+        voiceState: 'reused',
+        voiceId: 'Wren',
+        matchedFrom: { bookId: 'b0', characterId: 'Wren', confidence: 0.92 },
+        overrideTtsVoices: { qwen: { name: 'qwen-Wren' } },
+        ttsEngine: 'qwen',
+        voiceStyle: 'earnest',
+        notLinkedTo: [{ bookId: 'b1', characterId: 'Wren-teen' }],
+        aliases: ['Wren Sparrow'],
+      }),
+    ]);
+    // Server merge response: authoritative roster but no voice fields, sparse aliases.
+    const next = castSlice.reducer(
+      start,
+      castActions.applyMerge({ characters: [makeChar('Wren', { aliases: ['Soph'] })] }),
+    );
+    const Wren = next.characters[0];
+    expect(Wren.voiceId).toBe('Wren');
+    expect(Wren.voiceState).toBe('reused');
+    expect(Wren.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Wren' } });
+    expect(Wren.ttsEngine).toBe('qwen');
+    expect(Wren.voiceStyle).toBe('earnest');
+    expect(Wren.notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'Wren-teen' }]);
+    expect(Wren.aliases).toEqual(['Wren Sparrow', 'Soph']);
+  });
+});

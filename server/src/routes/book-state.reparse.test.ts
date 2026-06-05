@@ -88,7 +88,13 @@ beforeEach(() => {
       updatedAt: new Date().toISOString(),
     }),
   );
-  for (const f of ['manuscript-edits.json', 'change-log.json', 'cast.json', 'revisions.json']) {
+  for (const f of [
+    'manuscript-edits.json',
+    'change-log.json',
+    'cast.json',
+    'cast-reuse-carryover.json',
+    'revisions.json',
+  ]) {
     const p = join(bookDir, '.audiobook', f);
     if (existsSync(p)) rmSync(p, { force: true });
   }
@@ -149,6 +155,94 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
 
     const logPath = join(bookDir, '.audiobook', 'change-log.json');
     expect(existsSync(logPath)).toBe(false);
+  });
+});
+
+describe('reparse handler — reuse/voice carryover (srv-13)', () => {
+  const carryoverPath = () => join(bookDir, '.audiobook', 'cast-reuse-carryover.json');
+  const castPath = () => join(bookDir, '.audiobook', 'cast.json');
+
+  it('snapshots the reuse/voice slice before deleting cast.json', async () => {
+    writeFileSync(
+      castPath(),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'Wren',
+            name: 'Wren',
+            aliases: ['Wren Sparrow'],
+            voiceId: 'Wren',
+            voiceState: 'reused',
+            matchedFrom: { bookId: 'b0', characterId: 'Wren', confidence: 0.91 },
+            overrideTtsVoices: { qwen: { name: 'qwen-Wren' } },
+            ttsEngine: 'qwen',
+            voiceStyle: 'warm, earnest',
+            notLinkedTo: [{ bookId: 'b1', characterId: 'Wren-teen' }],
+            // analyzer-owned fields that must NOT be snapshotted:
+            lines: 99,
+            evidence: ['something'],
+          },
+        ],
+      }),
+    );
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    // cast.json deleted (clean slate), carryover written.
+    expect(existsSync(castPath())).toBe(false);
+    expect(existsSync(carryoverPath())).toBe(true);
+    const carry = JSON.parse(readFileSync(carryoverPath(), 'utf8'));
+    expect(carry.characters).toHaveLength(1);
+    const c = carry.characters[0];
+    expect(c).toMatchObject({
+      id: 'Wren',
+      name: 'Wren',
+      aliases: ['Wren Sparrow'],
+      voiceId: 'Wren',
+      voiceState: 'reused',
+      matchedFrom: { bookId: 'b0', characterId: 'Wren', confidence: 0.91 },
+      overrideTtsVoices: { qwen: { name: 'qwen-Wren' } },
+      ttsEngine: 'qwen',
+      voiceStyle: 'warm, earnest',
+      notLinkedTo: [{ bookId: 'b1', characterId: 'Wren-teen' }],
+    });
+    // analyzer-owned data is NOT carried.
+    expect(c.lines).toBeUndefined();
+    expect(c.evidence).toBeUndefined();
+  });
+
+  it('refreshes the carryover from the CURRENT cast (no resurrection of a removed link)', async () => {
+    // Stale carryover from a prior reparse still has the link…
+    writeFileSync(
+      carryoverPath(),
+      JSON.stringify({ characters: [{ id: 'Wren', voiceState: 'reused', voiceId: 'Wren' }] }),
+    );
+    // …but the user has since unlinked Wren in the live cast.
+    writeFileSync(
+      castPath(),
+      JSON.stringify({ characters: [{ id: 'Wren', name: 'Wren', voiceState: 'generated' }] }),
+    );
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    const carry = JSON.parse(readFileSync(carryoverPath(), 'utf8'));
+    expect(carry.characters[0].voiceState).toBe('generated');
+    expect(carry.characters[0].voiceId).toBeUndefined();
+  });
+
+  it('clears a stale carryover when there is no cast to snapshot', async () => {
+    writeFileSync(
+      carryoverPath(),
+      JSON.stringify({ characters: [{ id: 'old', voiceState: 'reused' }] }),
+    );
+    // no cast.json on disk
+
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+
+    expect(existsSync(carryoverPath())).toBe(false);
   });
 
   it('preserves the excluded flag across reparse (id match — typical case)', async () => {
