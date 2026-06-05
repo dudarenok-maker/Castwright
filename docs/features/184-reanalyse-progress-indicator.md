@@ -44,6 +44,13 @@ ch16 re-analyse).
   include branch) now pass `onHeartbeat` and route `onPhase` through the tick. The
   row renders the mapped bar + a `· 0:08 · 512 chars/s` readout; the existing
   throttle ("waiting on rate limit") indicator is unchanged.
+- **Global AnalysisPill consistency** — `analysis-slice.ts`'s
+  `AnalysisStreamSnapshot` gains `phaseElapsedMs` (reset to 0 when `phaseId`
+  advances, fed by the subset `onHeartbeat` dispatch); `layout.tsx` builds the
+  pill `percent` from the **same** `computeReanalyseProgress` for a single-chapter
+  subset (`kind === 'subset' && subsetChapterIds.length === 1`), falling back to
+  `computeOverallProgress` for main / multi-chapter runs. So the Generate-view row
+  and the top-bar pill show identical % during a single-chapter re-analysis.
 - **No schema / API change** — `runAnalysisForChapters` already supported
   `onHeartbeat` (`src/lib/api.ts`); only the caller is new.
 - **Reversibility:** delete the module + revert the handler wiring; the row falls
@@ -53,9 +60,11 @@ ch16 re-analyse).
 
 1. The mapped `progress` stays within `[0,1]` and never decreases across a run
    (`reanalyse-progress.test.ts`).
-2. The global sticky AnalysisPill still receives the server's raw `phaseProgress`
-   via `applyAnalysisSnapshotTick` — this plan changes only the per-chapter row.
-   (Mapping the pill too is a follow-up.)
+2. The row and the global pill use the SAME `computeReanalyseProgress` for a
+   single-chapter subset, so their displayed % match. Main / multi-chapter runs
+   are unchanged (still `computeOverallProgress`).
+3. `applyAnalysisSnapshotTick` resets `phaseElapsedMs` to 0 on a phase advance
+   (`analysis-slice.test.ts`), so the pill's ease restarts per phase.
 
 ## Test plan
 
@@ -78,8 +87,8 @@ ch16 re-analyse).
 
 ## Out of scope
 
-- Mapping the whole-book bar / sticky AnalysisPill (follow-up; they aggregate
-  multiple chapters so `done/total` is already meaningful there).
+- The whole-book / multi-chapter bar + pill keep `computeOverallProgress`
+  (`done/total` is already meaningful when there's more than one chapter).
 - A true byte-accurate stage-2 estimate from the chapter's sentence count
   (time-ease is honest and dependency-free; byte estimate is a possible refinement).
 

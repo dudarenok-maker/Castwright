@@ -388,8 +388,16 @@ export function createBroadcastMiddleware(opts?: {
           lastAnalysisSent.snapshot as unknown as Record<string, unknown>,
           snapshot as unknown as Record<string, unknown>,
         ) as Partial<AnalysisStreamSnapshot> | null;
-        if (!diff) {
-          /* No-op tick — slice state didn't change. Skip the wire. */
+        /* `phaseElapsedMs` is a heartbeat-frequency, purely-cosmetic field that
+           drives the single-chapter subset pill's local time-ease. Keep it OFF
+           the cross-tab wire — broadcasting it would flood the channel every ~2s
+           and churn the diff; a mirror tab maps from its own clock instead. */
+        if (diff && 'phaseElapsedMs' in diff) {
+          delete (diff as Record<string, unknown>).phaseElapsedMs;
+        }
+        if (!diff || Object.keys(diff).length === 0) {
+          /* No-op tick — slice state didn't change (or only phaseElapsedMs did,
+             which we don't broadcast). Skip the wire. */
           return result;
         }
 
