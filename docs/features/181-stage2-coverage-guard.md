@@ -97,6 +97,11 @@ per-sentence audio quality, not source fidelity).
   the app is on the new code).
 - Auditing non-EPUB (txt/pdf) books and the Unlocked guide book (re-parse id
   drift makes title-gated alignment unreliable — reported as skipped).
+- **Missing-speaker / roster coverage** — a speaker the prose tags but Phase-0a
+  dropped from the roster (so stage-2 demotes their lines to narrator). That is a
+  distinct failure mode handled by plan
+  [182](182-missing-speaker-roster-guard.md) (`roster-coverage.ts`), not this
+  sentence-coverage guard.
 
 ## Ship notes
 
