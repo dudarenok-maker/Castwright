@@ -48,6 +48,17 @@ onnxruntime-gpu>=1.20.0,<2.0.0
 # a version both accept (verified empirically when the model is downloaded).
 # qwen-tts
 
+# faster-whisper — ASR (speech-to-text) for the per-sentence content-QA gate
+# (srv-31): transcribe a synthesised sentence and word-error-rate it against the
+# manuscript text to catch "fluent but wrong words" generations the signal-based
+# segment QA can't see. CTranslate2 backend — small wheel, int8, CPU-fast and
+# GPU-optional. CPU-first by default (ASR_DEVICE=cpu → zero VRAM); ASR_DEVICE=cuda
+# opts into the GPU with a tiny/base int8 model (~150–400 MB). The model weights
+# (~145 MB for `base`) are fetched by faster-whisper on first load from its own
+# cache, not on a plain `pip install -r`. Off by default at the server (SEG_ASR_
+# ENABLED=0), so this dep is dormant until the gate is switched on.
+faster-whisper>=1.0,<2.0
+
 # psutil — process RSS / committed-private bytes for the host-memory watchdog +
 # /debug/memory readout (the 2026-05-30 host-RAM leak guard). Already arrives
 # transitively via accelerate, but the watchdog now depends on it directly, so

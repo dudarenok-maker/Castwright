@@ -1559,6 +1559,149 @@ class QwenEngine(Engine):
         )
 
 
+class WhisperEngine:
+    """ASR (speech-to-text) for the per-sentence content-QA gate (srv-31).
+
+    Transcribes one synthesised sentence's PCM so the SERVER can word-error-rate
+    the transcript against the manuscript text and catch a "fluent but wrong
+    words" generation — the one defect class the signal-based segment QA
+    (`segment-qa.ts`: dead-RMS / silence-run / duration-drift) provably can't
+    see. This engine only TRANSCRIBES; the WER policy lives in TypeScript
+    (`segment-asr-qa.ts`) where the expected text + thresholds already are.
+
+    Deliberately NOT in the synth `ENGINES` map: it consumes audio and emits
+    text, so it doesn't share the `Engine.synthesize` contract.
+
+    VRAM story (8 GB box): CPU-first by default (`ASR_DEVICE=cpu`) so the
+    "every sentence" pass costs ZERO VRAM and never competes with synth on the
+    GPU. `ASR_DEVICE=cuda` opts into the GPU — a `tiny`/`base` int8 model is
+    only ~150–400 MB, fits the ~1–2 GB generation headroom, and is gated by the
+    server's weighted VRAM semaphore (`engine-vram-cost.ts`, cost `asr`) plus
+    the idle-evict watchdog below. Decode is deterministic + hallucination-
+    resistant (greedy, temperature 0, no cross-sentence carryover, VAD filter)
+    so a QA verdict is idempotent run-to-run and Whisper doesn't invent words on
+    near-silence.
+    """
+
+    name = "whisper"
+    # faster-whisper expects 16 kHz mono float32; synth PCM is 24 kHz int16.
+    TARGET_SAMPLE_RATE = 16000
+
+    def __init__(self) -> None:
+        self._model: Any = None
+        self._loading: bool = False
+        # Serialises concurrent cold loads (mirrors the synth engines' pattern).
+        self._load_lock: asyncio.Lock = asyncio.Lock()
+        # CTranslate2 inference isn't guaranteed reentrant; serialise forwards
+        # the same way QwenEngine guards its Base model with `_synth_lock`.
+        self._infer_lock = threading.Lock()
+        # Monotonic timestamp of the last transcribe — drives the idle watchdog.
+        self._last_used: float = 0.0
+        self._device = (os.environ.get("ASR_DEVICE", "cpu").strip().lower() or "cpu")
+        self._model_name = (os.environ.get("ASR_MODEL", "base").strip() or "base")
+
+    def _compute_type(self) -> str:
+        """int8 on CPU (fast, tiny); int8_float16 on GPU (small VRAM, fast).
+        Override via ASR_COMPUTE_TYPE for a roomier card."""
+        default = "int8_float16" if self._device == "cuda" else "int8"
+        return (os.environ.get("ASR_COMPUTE_TYPE", default).strip() or default)
+
+    def _ensure_loaded(self) -> None:
+        if self._model is not None:
+            return
+        try:
+            from faster_whisper import WhisperModel  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                f"Failed to import faster-whisper ({e}). Install with: "
+                "`.\\.venv\\Scripts\\python.exe -m pip install faster-whisper` "
+                "in server/tts-sidecar."
+            ) from e
+        log.info(
+            "Loading Whisper ASR model=%s device=%s compute=%s ...",
+            self._model_name, self._device, self._compute_type(),
+        )
+        self._model = WhisperModel(
+            self._model_name, device=self._device, compute_type=self._compute_type()
+        )
+        log.info("Whisper ASR loaded (model=%s device=%s).", self._model_name, self._device)
+
+    @staticmethod
+    def _pcm_to_float32_16k(pcm: bytes, sample_rate: int) -> Any:
+        """int16 LE mono PCM → float32 [-1, 1] resampled to 16 kHz. Linear
+        interpolation is plenty for ASR and avoids a scipy dependency."""
+        import numpy as np  # type: ignore
+
+        samples = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        if sample_rate != WhisperEngine.TARGET_SAMPLE_RATE and samples.size > 0:
+            duration = samples.size / float(sample_rate)
+            target_n = int(round(duration * WhisperEngine.TARGET_SAMPLE_RATE))
+            if target_n > 0:
+                src = np.linspace(0.0, samples.size - 1, target_n)
+                samples = np.interp(src, np.arange(samples.size), samples).astype(np.float32)
+        return samples
+
+    def transcribe(
+        self, pcm: bytes, sample_rate: int, language: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Transcribe one sentence's PCM. Returns the text plus Whisper's
+        intrinsic signals — `avg_logprob` (lower = less confident),
+        `no_speech_prob` (higher = more likely silence), `compression_ratio`
+        (higher = repetition/loop hallucination) — aggregated worst-case across
+        segments so the server can tell "audio is wrong" from "transcript is
+        untrustworthy" without re-deriving them."""
+        self._ensure_loaded()
+        assert self._model is not None
+        audio = self._pcm_to_float32_16k(pcm, sample_rate)
+        with self._infer_lock:
+            self._last_used = time.monotonic()
+            segments, info = self._model.transcribe(
+                audio,
+                language=language,
+                beam_size=1,                     # greedy
+                temperature=0.0,                 # deterministic → idempotent verdicts
+                condition_on_previous_text=False,  # no cross-sentence carryover hallucination
+                vad_filter=True,                 # drop non-speech so silence isn't "transcribed"
+            )
+            segs = list(segments)
+        text = " ".join((s.text or "").strip() for s in segs).strip()
+        logprobs = [s.avg_logprob for s in segs if s.avg_logprob is not None]
+        no_speech = [s.no_speech_prob for s in segs if s.no_speech_prob is not None]
+        compression = [s.compression_ratio for s in segs if s.compression_ratio is not None]
+        return {
+            "text": text,
+            "language": getattr(info, "language", language),
+            # Worst-case aggregation: the weakest segment governs the verdict.
+            "avg_logprob": (min(logprobs) if logprobs else None),
+            "no_speech_prob": (max(no_speech) if no_speech else None),
+            "compression_ratio": (max(compression) if compression else None),
+        }
+
+    def unload(self) -> bool:
+        """Drop the model + reclaim. Idempotent. Returns True iff a model was
+        actually freed (so the watchdog can log only real frees)."""
+        if self._model is None:
+            return False
+        self._model = None
+        _reclaim_host_and_vram()
+        log.info("Whisper ASR model unloaded.")
+        return True
+
+    def maybe_free_idle(self, ttl_seconds: float) -> bool:
+        """Free the model once it has idled past the TTL — mirrors
+        `QwenEngine.maybe_free_idle_design`. Matters mainly on the cuda path
+        (reclaims VRAM); on cpu it just frees host RAM. No-op while in use."""
+        if self._model is None:
+            return False
+        if self._last_used and (time.monotonic() - self._last_used) < ttl_seconds:
+            return False
+        return self.unload()
+
+
+# ASR is a standalone singleton (not a synth `Engine`) — audio in, text out.
+ASR = WhisperEngine()
+
+
 ENGINES: dict[str, Engine] = {
     "coqui": CoquiEngine(),
     "kokoro": KokoroEngine(),
@@ -1624,6 +1767,61 @@ async def _stop_design_idle_watchdog() -> None:
         except asyncio.CancelledError:
             pass
         _design_idle_task = None
+
+
+# Default seconds of ASR inactivity before the watchdog frees the Whisper model
+# (srv-31). Mirrors the Qwen VoiceDesign idle-evict. Mainly reclaims VRAM on the
+# ASR_DEVICE=cuda path; on cpu it just frees host RAM. Override via ASR_IDLE_TTL.
+_ASR_IDLE_TTL_DEFAULT = 120.0
+_asr_idle_task: "Optional[asyncio.Task[None]]" = None
+
+
+def _asr_idle_ttl() -> float:
+    """Resolve ASR_IDLE_TTL (seconds) with a safe default + 5 s floor — a tiny
+    TTL would thrash (free immediately, reload next sentence), defeating the
+    warm-across-a-chapter reuse the per-sentence pass relies on."""
+    try:
+        ttl = float(os.environ.get("ASR_IDLE_TTL", _ASR_IDLE_TTL_DEFAULT))
+    except (TypeError, ValueError):
+        return _ASR_IDLE_TTL_DEFAULT
+    return ttl if ttl >= 5.0 else _ASR_IDLE_TTL_DEFAULT
+
+
+async def _asr_idle_watchdog() -> None:
+    """Free the Whisper ASR model once it idles past the TTL — reclaims VRAM
+    (cuda path) / host RAM (cpu) between chapters without churning it mid-pass.
+    The free runs on a worker thread so the event loop and /health stay live."""
+    ttl = _asr_idle_ttl()
+    interval = min(30.0, max(5.0, ttl / 4))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            freed = await asyncio.to_thread(ASR.maybe_free_idle, ttl)
+            if freed:
+                log.info("Whisper ASR freed after >%.0fs idle (watchdog).", ttl)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # a watchdog must never die on a transient error
+            log.warning("ASR idle watchdog tick failed (%s).", e)
+
+
+@app.on_event("startup")
+async def _start_asr_idle_watchdog() -> None:
+    global _asr_idle_task
+    _asr_idle_task = asyncio.create_task(_asr_idle_watchdog())
+    log.info("Whisper ASR idle watchdog started (ttl=%.0fs).", _asr_idle_ttl())
+
+
+@app.on_event("shutdown")
+async def _stop_asr_idle_watchdog() -> None:
+    global _asr_idle_task
+    if _asr_idle_task is not None:
+        _asr_idle_task.cancel()
+        try:
+            await _asr_idle_task
+        except asyncio.CancelledError:
+            pass
+        _asr_idle_task = None
 
 
 # --- Host-memory watchdog: soft reclaim + hard process-recycle ---
@@ -2274,6 +2472,11 @@ def health() -> dict[str, Any]:
         "qwen_package_installed": qwen_package_installed,
         "qwen_weights_present": qwen_weights_present,
         "qwen_install_state": qwen_install_state,
+        # ASR (srv-31) load state — its own pair, same pattern as the synth
+        # engines, so the one-poll invariant holds. `asr_device` lets an
+        # operator confirm whether transcription is on the GPU or CPU.
+        "asr_loaded": ASR._model is not None,
+        "asr_device": ASR._device,
         "device": device,
         "poisoned": poisoned,
         "poison_reason": poison_reason,
@@ -2328,6 +2531,7 @@ def debug_memory() -> dict[str, Any]:
     kokoro = ENGINES.get("kokoro")
     if isinstance(kokoro, KokoroEngine):
         engines["kokoro"] = {"model_loaded": kokoro._kokoro is not None}
+    engines["whisper"] = {"model_loaded": ASR._model is not None, "device": ASR._device}
     out["engines"] = engines
     cuda: dict[str, Any] = {}
     try:
@@ -2752,6 +2956,61 @@ async def synthesize(req: Request) -> Response:
         media_type=f"audio/L16;codec=pcm;rate={result.sample_rate}",
         headers=headers,
     )
+
+
+@app.post("/transcribe")
+async def transcribe(req: Request) -> Response:
+    """ASR content-QA (srv-31). Transcribe one synthesised sentence's PCM so the
+    server can word-error-rate the transcript against the manuscript text and
+    catch a "fluent but wrong words" generation.
+
+    Body: raw int16 LE mono PCM (the same bytes /synthesize emits). Headers:
+    `X-Sample-Rate` (required) and optional `X-Language` (Whisper language hint;
+    non-English books pass their language or the WER is meaningless). Returns
+    JSON `{ text, language, avg_logprob, no_speech_prob, compression_ratio }`.
+
+    Offloaded to a worker thread like /synthesize so /health stays sub-50 ms
+    while a transcribe runs. Honours the same poison + recycle-drain fences."""
+    if _process_poisoned:
+        return JSONResponse(
+            {
+                "detail": (
+                    "TTS sidecar is in a poisoned CUDA state and must be restarted."
+                    + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
+                ),
+                "poisoned": True,
+            },
+            status_code=503,
+        )
+    if _restart_pending:
+        return JSONResponse(
+            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            status_code=503,
+        )
+
+    pcm = await req.body()
+    if not pcm:
+        raise HTTPException(status_code=400, detail="empty PCM body")
+    try:
+        sample_rate = int(req.headers.get("X-Sample-Rate", "0"))
+    except (TypeError, ValueError):
+        sample_rate = 0
+    if sample_rate <= 0:
+        raise HTTPException(status_code=400, detail="X-Sample-Rate header (>0) is required.")
+    language = req.headers.get("X-Language") or None
+
+    try:
+        result = await asyncio.to_thread(ASR.transcribe, pcm, sample_rate, language)
+    except Exception as e:
+        err_str = str(e)
+        log.exception("transcribe failed (sample_rate=%d bytes=%d)", sample_rate, len(pcm))
+        # Same CUDA-poison fence as /synthesize — a device-side assert here
+        # corrupts the shared context just the same.
+        if _CUDA_POISON_RE.search(err_str):
+            _mark_cuda_poisoned(err_str)
+            return JSONResponse({"detail": err_str, "poisoned": True}, status_code=503)
+        return JSONResponse({"detail": err_str}, status_code=500)
+    return JSONResponse(result)
 
 
 @app.post("/synthesize-batch")
