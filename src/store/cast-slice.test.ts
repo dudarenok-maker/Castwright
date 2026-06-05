@@ -217,6 +217,29 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
     expect(Wren.description).toBe('Updated richer description.');
   });
 
+  it('preserves a designed Qwen voice (overrideTtsVoices) through a voiceless cast-update (#518)', () => {
+    /* Re-analysis streams a voiceless snapshot (analyzer doesn't produce voice
+       design). mergeCharacters must NOT drop overrideTtsVoices — the designed
+       Qwen voice lives there for generated characters with no voiceId. Dropping
+       it then persisting cast.json is what stripped Berrin/Sela/Quill. */
+    const start = baseState([
+      makeChar('Berrin', {
+        voiceState: 'generated',
+        overrideTtsVoices: { qwen: { name: 'qwen-Berrin' } },
+      }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.mergeCharacters([
+        { id: 'Berrin', name: 'Berrin', role: 'Peer', color: 'slot-18', description: 'Re-attributed.' },
+      ]),
+    );
+    const Berrin = next.characters.find((c) => c.id === 'Berrin')!;
+    expect(Berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Berrin' } });
+    expect(Berrin.voiceState).toBe('generated');
+    expect(Berrin.description).toBe('Re-attributed.'); // fresh fields still flow
+  });
+
   it('appends new characters from a later snapshot at the end (preserves discovery order)', () => {
     const start = baseState([makeChar('Wren'), makeChar('Marlow')]);
     const next = castSlice.reducer(
