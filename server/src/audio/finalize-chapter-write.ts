@@ -120,12 +120,33 @@ export async function finalizeChapterAudioWrite(
   /* srv-27 — advisory post-synthesis QA. `loudnormStats` is null when loudnorm
      is disabled (only the duration check runs then). */
   const measured = loudnormStats as LoudnormSidecarJson | null;
-  const audioQa: ChapterQaVerdict = evaluateChapterQa({
+  const baseQa: ChapterQaVerdict = evaluateChapterQa({
     durationSec,
     expectedSec: input.expectedSec ?? durationSec,
     lufs: measured ? measured.i : null,
     truePeakDb: measured ? measured.tp : null,
   });
+  /* Roll the pre-assembly per-sentence gate (segment-qa.ts, plan 179) into the
+     chapter-level verdict so the existing "Suspect" badge lights up when a
+     sentence was kept despite still failing QA after its re-records — the
+     whole-chapter signals above can't see a single bad sentence in a long
+     chapter. Shared here (rather than inline in generation) so the splice path
+     gets the same roll-up; splice segments never carry `suspect`, so it's a
+     no-op there. */
+  const suspectSegments = segments.filter((s) => s.suspect);
+  const audioQa: ChapterQaVerdict =
+    suspectSegments.length > 0
+      ? {
+          ...baseQa,
+          status: 'suspect',
+          reasons: [
+            ...baseQa.reasons,
+            `${suspectSegments.length} sentence(s) still flagged after re-recording (e.g. ${
+              suspectSegments[0].qa?.reasons[0] ?? 'audio QA'
+            }).`,
+          ],
+        }
+      : baseQa;
 
   const speakingIds = new Set(segments.map((s) => s.characterId));
   const fallbackByChar = new Map<string, string>();

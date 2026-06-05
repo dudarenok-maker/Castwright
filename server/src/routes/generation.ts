@@ -110,6 +110,14 @@ function chapterNoProgressMs(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 720_000;
 }
 
+/* Pre-assembly per-sentence QA gate retry budget (segment-qa.ts). How many
+   times a `suspect` sentence is re-recorded before keeping the best take.
+   Default 2; `0` disables the gate (byte-identical to pre-gate). */
+function resolveSegmentQaRerecords(): number {
+  const raw = Number(process.env.SEG_QA_MAX_RERECORDS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+}
+
 /* side-11 item 2 — soft recycle at the chapter boundary. The sidecar raises
    `recycle_pending` in /health once committed-private memory crosses the SOFT
    threshold (SIDECAR_RECYCLE_SOFT_MB, below the hard watchdog ceiling). Reading
@@ -1214,6 +1222,21 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         onBatchComplete: ({ genMs, audioMs }) => {
           bumpProgress();
           recordBatchThroughput({ genMs, audioMs });
+        },
+        /* Pre-assembly per-sentence QA gate (segment-qa.ts): re-record a
+           sentence whose rendered PCM is dead/silent, has a long internal
+           silence run, or drifts far from its text-predicted length, BEFORE
+           the chapter is concatenated. Tunable via SEG_QA_MAX_RERECORDS
+           (default 2; 0 disables). The thresholds default from segment-qa.ts'
+           own env (SEG_QA_*), so we don't pass `segmentQaThresholds` here. */
+        maxSegmentRerecords: resolveSegmentQaRerecords(),
+        onSegmentRerecord: () => {
+          /* Keep both the server no-progress watchdog and the client stall
+             timer fed while a suspect sentence re-records (serial, after the
+             pool), and re-broadcast the last tick so the SSE isn't silent. No
+             new SSE shape — the re-record surfaces as continued progress. */
+          bumpProgress();
+          if (job.lastProgressTick) broadcast(job, { type: 'progress', ...job.lastProgressTick });
         },
           });
           break;
