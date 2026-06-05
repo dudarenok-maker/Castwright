@@ -72,6 +72,12 @@ import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.j
 import { buildChapterTitleNarration } from '../tts/chapter-title-narration.js';
 import { recordBatchThroughput, recordChapterThroughput } from '../tts/generation-stats.js';
 import { ensureSidecarEngineReady, SIDECAR_ENGINES } from '../tts/ensure-sidecar-loaded.js';
+import {
+  asrEnabled,
+  resolveAsrRerecords,
+  resolveAsrSampleEvery,
+  buildCastNameAllowlist,
+} from '../tts/segment-asr-qa.js';
 import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 import type { FailureCode } from './failure-taxonomy.js';
@@ -118,37 +124,9 @@ function resolveSegmentQaRerecords(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
 }
 
-/* ASR content-QA pass (srv-31). OFF by default — `SEG_ASR_ENABLED` in
-   {1,true,yes,on} switches it on (the Whisper sidecar dep stays dormant until
-   then). `SEG_ASR_MAX_RERECORDS` (default 2) bounds drift re-records;
-   `SEG_ASR_SAMPLE_EVERY` (default 1 = every sentence) strides the pass. */
-function asrEnabled(): boolean {
-  const raw = (process.env.SEG_ASR_ENABLED ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
-}
-
-function resolveAsrRerecords(): number {
-  const raw = Number(process.env.SEG_ASR_MAX_RERECORDS);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
-}
-
-function resolveAsrSampleEvery(): number {
-  const raw = Number(process.env.SEG_ASR_SAMPLE_EVERY);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
-}
-
-/* Proper-noun allowlist for the ASR WER check — the cast's display names (+ any
-   aliases). Whisper mangles invented names ("Wren Sparrow" → "Wren Faster"),
-   so without this every name swap would read as content drift and re-record a
-   perfectly good line. */
-function buildCastNameAllowlist(characters: readonly { name?: string; aliases?: readonly string[] }[]): string[] {
-  const names = new Set<string>();
-  for (const c of characters) {
-    if (c.name) names.add(c.name);
-    for (const a of c.aliases ?? []) if (a) names.add(a);
-  }
-  return [...names];
-}
+/* ASR content-QA pass (srv-31) — resolvers shared with the repair route live in
+   segment-asr-qa.ts (asrEnabled / resolveAsrRerecords / resolveAsrSampleEvery /
+   buildCastNameAllowlist). OFF by default via SEG_ASR_ENABLED. */
 
 /* side-11 item 2 — soft recycle at the chapter boundary. The sidecar raises
    `recycle_pending` in /health once committed-private memory crosses the SOFT
