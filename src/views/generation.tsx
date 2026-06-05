@@ -12,6 +12,7 @@ import {
   IconHistory,
   IconClock,
   IconPencil,
+  IconSparkle,
 } from '../lib/icons';
 import { SectionLabel, MixedHeading, Pill, ColorDot } from '../components/primitives';
 import { Stat } from '../components/stat-tiles';
@@ -378,6 +379,100 @@ export function GenerationView({
     });
   }
 
+  /* Re-analyse ONE already-included chapter in place (#518 / per-chapter
+     reanalyse) — re-runs character detection + attribution for it via the same
+     subset route the un-exclude flow uses, so the user never has to navigate to
+     the analysing URL (which re-runs the WHOLE book). Designed voices are
+     preserved server-side. Streaming + progress mirror `handleToggleExcluded`'s
+     include branch, minus the exclude flip + rollback (the chapter stays
+     included throughout). */
+  async function handleReanalyse(chapterId: number): Promise<void> {
+    if (!manuscriptId) return;
+    if (subsetByChapter[chapterId] && subsetByChapter[chapterId].error == null) return;
+    const controller = new AbortController();
+    setSubsetByChapter((prev) => ({
+      ...prev,
+      [chapterId]: {
+        chapterId,
+        phaseId: 0,
+        phaseLabel: ANALYSIS_PHASES[0].label,
+        progress: 0,
+        throttle: null,
+        error: null,
+        controller,
+      },
+    }));
+    const engine = MODEL_OPTIONS.find((m) => m.id === selectedAnalyzerModelId)?.engine;
+    dispatch(
+      analysisActions.setActiveStream({
+        bookId,
+        manuscriptId,
+        bookTitle: title ?? undefined,
+        engine,
+        phaseId: 0,
+        phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'subset',
+        subsetChapterIds: [chapterId],
+      }),
+    );
+    try {
+      const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
+        signal: controller.signal,
+        onPhase: ({ phaseId, progress }) => {
+          patchSubset(chapterId, {
+            phaseId: phaseId as 0 | 1,
+            phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? ANALYSIS_PHASES[0].label,
+            progress,
+          });
+          dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId,
+              phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
+              phaseProgress: progress,
+              lastTickAt: Date.now(),
+            }),
+          );
+        },
+        onCastUpdate: ({ characters }) => {
+          dispatch(castActions.mergeCharacters(characters));
+        },
+        onThrottle: ({ model: throttleModel, waitMs, reason }) => {
+          patchSubset(chapterId, {
+            throttle: { until: Date.now() + waitMs, model: throttleModel, reason },
+          });
+        },
+        onChapterFailed: ({ chapterId: failedId, message }) => {
+          if (failedId === chapterId) patchSubset(chapterId, { error: message });
+        },
+      });
+      dispatch(castActions.mergeCharacters(res.characters ?? []));
+      dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
+      dispatch(manuscriptActions.hydrateFromAnalysis(res));
+      setSubsetByChapter((prev) => {
+        const { [chapterId]: _, ...rest } = prev;
+        return rest;
+      });
+      dispatch(analysisActions.clearActiveStream());
+    } catch (e) {
+      const isAbort =
+        (e as Error)?.name === 'AbortError' || (e instanceof AnalysisError && e.code === 'aborted');
+      dispatch(analysisActions.clearActiveStream());
+      if (isAbort) {
+        setSubsetByChapter((prev) => {
+          const { [chapterId]: _, ...rest } = prev;
+          return rest;
+        });
+        return;
+      }
+      patchSubset(chapterId, { error: (e as Error).message || 'Re-analysis failed.' });
+    }
+  }
+
   /* Escape hatch for a chapter stuck showing "Queued" with no active run —
      e.g. one that failed before the durable failure-status landed, so the
      queue entry was long since cleared and nothing remembers it. A queued row
@@ -446,6 +541,8 @@ export function GenerationView({
     [driftedChapters],
   );
   const [bulkRegenOpen, setBulkRegenOpen] = useState(false);
+  /* Chapter pending a re-analyse confirmation (per-chapter reanalyse, #518). */
+  const [reanalyseChapter, setReanalyseChapter] = useState<Chapter | null>(null);
   /* Used by the header action: Resume/Pause is meaningless once every chapter
      has finished synthesising, so the button flips to Regenerate. Failed
      chapters keep the Pause/Resume affordance because the user might still
@@ -770,6 +867,33 @@ export function GenerationView({
         onClose={() => setBulkRegenOpen(false)}
       />
 
+      <ConfirmDialog
+        open={reanalyseChapter !== null}
+        eyebrow="Re-analyse"
+        icon={<IconRefresh className="w-4 h-4" />}
+        title={`Re-analyse "${reanalyseChapter?.title ?? ''}"?`}
+        body={
+          <div className="space-y-3">
+            <p>
+              Re-runs character detection and dialogue attribution for this chapter only — useful
+              if its analysis came out wrong (duplicated or missing lines).
+            </p>
+            <p className="text-ink/60">
+              Your designed character voices are preserved. Regenerate this chapter afterwards to
+              hear the updated attribution.
+            </p>
+          </div>
+        }
+        confirmLabel="Re-analyse chapter"
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          const ch = reanalyseChapter;
+          setReanalyseChapter(null);
+          if (ch) void handleReanalyse(ch.id);
+        }}
+        onClose={() => setReanalyseChapter(null)}
+      />
+
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-4 sm:p-6 mb-6 sm:mb-8">
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm font-semibold text-ink">Overall progress</p>
@@ -818,6 +942,7 @@ export function GenerationView({
               charPositions={characterPositions[ch.id]}
               charSentenceIds={characterSentenceIds[ch.id]}
               onRegenerate={onRegenerate}
+              onReanalyse={(ch) => setReanalyseChapter(ch)}
               onGenerateChapter={handleGenerateChapter}
               onRegenerateCharacterInChapter={onRegenerateCharacterInChapter}
               onPreview={onPreview}
@@ -928,6 +1053,8 @@ interface ChapterRowProps {
       `chapter.completedSentenceIds` for an EXACT per-character done count. */
   charSentenceIds: Record<string, number[]> | undefined;
   onRegenerate: (ch: Chapter) => void;
+  /** Re-analyse this one chapter (character detection + attribution) in place. */
+  onReanalyse: (ch: Chapter) => void;
   /** Escape hatch for a stuck/never-rendered `queued` row: enqueues this one
       chapter directly (no reason prompt) so the dispatcher picks it up. */
   onGenerateChapter: (ch: Chapter) => void;
@@ -967,6 +1094,7 @@ function ChapterRow({
   charPositions,
   charSentenceIds,
   onRegenerate,
+  onReanalyse,
   onGenerateChapter,
   onRegenerateCharacterInChapter,
   onPreview,
@@ -1252,6 +1380,18 @@ function ChapterRow({
           >
             <IconRefresh className="w-3.5 h-3.5" />{' '}
             {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onReanalyse(chapter);
+            }}
+            disabled={subsetProgress != null}
+            data-testid={`chapter-row-${chapter.id}-reanalyse`}
+            title="Re-run character detection + attribution for this chapter (designed voices preserved)."
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
+          >
+            <IconSparkle className="w-3.5 h-3.5" /> Re-analyse
           </button>
           <button
             onClick={(e) => {
