@@ -78,6 +78,19 @@ one **verbatim utterance** that is theirs — either:
 Registry File`, the surrounding bio block, etc.). The author of
    such text is a character whose `id` is their name, NOT `narrator`.
 
+**Binding rule — an explicit dialogue tag always counts.** If the chapter
+contains a `<Name> <speech-verb>` attribution beat next to a quote — `"…,"
+Prentice repeated.`, `"Fine," Grizel agreed.`, `"Where?" Sophie asked.` —
+that Name **MUST** appear on the roster, every time, no exceptions. The tag
+itself is the verbatim evidence; do not weigh whether the character seems
+"important" or count how many lines they have. A character tagged once and a
+character tagged ten times are equally required. A character who is mostly
+*addressed* by others but speaks even one tagged line still counts — being
+spoken to is irrelevant, speaking once is decisive. When in doubt, scan the
+chapter for `<name> <speech-verb>`: a single hit is mandatory grounds for
+inclusion. Omitting a minor-but-tagged speaker — letting their quoted lines
+fall through to the narrator — is the exact failure this rule prevents.
+
 Do **NOT** include:
 
 - Pets, animals, or non-speaking creatures (a cat that purrs, a dog that
