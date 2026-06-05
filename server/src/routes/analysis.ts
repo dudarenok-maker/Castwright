@@ -22,6 +22,7 @@ import {
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import { runStage2WithCoverageGuard } from '../analyzer/stage2-coverage.js';
 import {
   readUserSettings,
   getCachedUserSettings,
@@ -550,6 +551,16 @@ function readStage2Concurrency(): number {
   const raw = Number(process.env.STAGE2_CONCURRENCY);
   if (!Number.isFinite(raw) || raw < 1) return 2;
   return Math.min(6, Math.floor(raw));
+}
+
+/* Stage-2 coverage guard retry budget. The attribution model occasionally
+   loop-and-truncates (re-emits a span and stops early); a fresh attempt usually
+   clears it, so a bad response is re-run up to this many times before the
+   least-bad take is kept and the chapter is flagged for retry. `0` disables the
+   guard (byte-identical to pre-guard). Default 2. */
+function resolveStage2CoverageRetries(): number {
+  const raw = Number(process.env.STAGE2_COVERAGE_RETRIES);
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
 }
 
 function clampEst(ms: number): number {
@@ -2703,45 +2714,80 @@ export async function runMainAnalyzerJob(
          we never call this with a roster that lags Phase 0 by less than
          `MIN_LAG_CHAPTERS`. */
       const phase1Stage1 = getPhase1Stage1Snapshot();
-      const result = await phase1Analyzer.runStage2Chapter(
-        manuscriptId,
-        ch.id,
-        buildStage2ChapterInbox(manuscriptId, recordRef.title, phase1Stage1, ch),
-        {
-          signal: abortController.signal,
-          language: bookLanguage,
-          onWaiting: (elapsed) => tickOverall(elapsed),
-          /* Per-chunk heartbeat so the user sees evidence of model output
-             on each chapter. Stage 2's existing wall-clock heartbeat log
-             lines already cover the silence-watchdog purpose. */
-          onChunk: (info) => {
-            const now = Date.now();
-            if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
-            chapterLastHeartbeatAt = now;
-            const charsPerSec =
-              info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
-            send({
-              kind: 'heartbeat',
-              phaseId: 1,
-              receivedBytes: info.receivedBytes,
-              charsPerSec,
-              elapsedMs: info.elapsedMs,
-              sinceLastChunkMs: info.sinceLastChunkMs,
-              chapterIndex: i + 1,
-            });
+      const callStage2 = () =>
+        phase1Analyzer.runStage2Chapter(
+          manuscriptId,
+          ch.id,
+          buildStage2ChapterInbox(manuscriptId, recordRef.title, phase1Stage1, ch),
+          {
+            signal: abortController.signal,
+            language: bookLanguage,
+            onWaiting: (elapsed) => tickOverall(elapsed),
+            /* Per-chunk heartbeat so the user sees evidence of model output
+               on each chapter. Stage 2's existing wall-clock heartbeat log
+               lines already cover the silence-watchdog purpose. */
+            onChunk: (info) => {
+              const now = Date.now();
+              if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+              chapterLastHeartbeatAt = now;
+              const charsPerSec =
+                info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
+              send({
+                kind: 'heartbeat',
+                phaseId: 1,
+                receivedBytes: info.receivedBytes,
+                charsPerSec,
+                elapsedMs: info.elapsedMs,
+                sinceLastChunkMs: info.sinceLastChunkMs,
+                chapterIndex: i + 1,
+              });
+            },
+            onThrottle: (waitMs, reason) => {
+              send({
+                kind: 'throttle',
+                phaseId: 1,
+                chapterIndex: i + 1,
+                model: phase1ModelId,
+                waitMs,
+                reason,
+              });
+            },
           },
-          onThrottle: (waitMs, reason) => {
-            send({
-              kind: 'throttle',
-              phaseId: 1,
-              chapterIndex: i + 1,
-              model: phase1ModelId,
-              waitMs,
-              reason,
-            });
-          },
-        },
-      );
+        );
+      /* Coverage guard (plan 181 / 2026-06-05 The Drowning Bell ch12/ch18 forensics):
+         the attribution model can loop-and-truncate — re-emit a span of
+         sentences and terminate early — so the chapter is BOTH duplicated and
+         missing its tail, yet schema-valid (ids 1..N, no gaps). Validate the
+         output against the source prose (`ch.body`) and re-run on failure (the
+         loop is stochastic, so a fresh attempt usually clears it). Keep the
+         least-bad take and flag the chapter for retry if it never passes —
+         never silently cache a truncated chapter. */
+      const { result, coverage: coverageVerdict } = await runStage2WithCoverageGuard({
+        body: ch.body,
+        maxRetries: resolveStage2CoverageRetries(),
+        call: callStage2,
+        onRetry: (attempt, verdict) =>
+          log(
+            1,
+            `Chapter ${i + 1}/${totalChapters} — attribution coverage check failed (${
+              verdict.issues[0] ?? 'coverage'
+            }); re-analysing (attempt ${attempt}).`,
+          ),
+      });
+      if (!coverageVerdict.ok) {
+        console.warn(
+          `[analysis] chapter ${ch.id} stage2 coverage SUSPECT after retries: ${coverageVerdict.issues.join(' ')}`,
+        );
+        log(
+          1,
+          `Chapter ${i + 1}/${totalChapters} — ⚠ attribution may be incomplete (${
+            coverageVerdict.issues[0] ?? 'low coverage'
+          }); kept the best take and flagged the chapter for retry.`,
+        );
+        const failedSet = new Set(cache.failedChapterIds ?? []);
+        failedSet.add(ch.id);
+        cache.failedChapterIds = Array.from(failedSet);
+      }
       for (const s of result.sentences) s.chapterId = ch.id;
       sentencesByChapter.set(ch.id, result.sentences);
       cachedChapters[ch.id] = result.sentences;
