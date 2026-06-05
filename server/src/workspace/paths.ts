@@ -130,6 +130,15 @@ export function castJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'cast.json');
 }
 
+/* srv-13 — a reparse deletes cast.json before the next analysis can carry its
+   reuse/voice links forward. The reparse handler snapshots the reuse-relevant
+   slice of cast.json here first; the analysis route reads it as a fallback for
+   `priorCastForMerge` when cast.json is absent, then a fresh cast.json (which
+   takes precedence) makes it inert until the next reparse refreshes it. */
+export function castReuseCarryoverJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'cast-reuse-carryover.json');
+}
+
 export function manuscriptEditsJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'manuscript-edits.json');
 }
