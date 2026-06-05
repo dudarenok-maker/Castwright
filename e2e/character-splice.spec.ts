@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
-import { goToConfirm, waitForRouteReady } from './helpers';
+import { goToConfirm, waitForRouteReady, waitForListenViewReady } from './helpers';
 
 /**
  * fs-26 — per-character "Fix audio" (loudness / re-record splice).
@@ -103,5 +103,67 @@ test.describe('Fix audio — full run', () => {
       () => (window as unknown as StoreWin).__store__?.getState().revisions.pending.length ?? 0,
     );
     expect(pendingCount).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * fs-26 follow-up (#480) — per-line re-record entry from the Listen view.
+ *
+ * Promote a Listen-view marker to a re-record marker, hit "Fix this line", and
+ * assert the Fix-audio modal opens pre-scoped to a single chapter in re-record
+ * mode. The marker's playhead → chapter-audio segment → character resolution
+ * runs through the mock `api.getChapterAudio` (which now returns a deterministic
+ * narrator/halloran segment layout).
+ */
+test.describe('Listen view → per-line re-record', () => {
+  test('a re-record marker opens the Fix-audio modal pre-scoped to one chapter', async ({
+    page,
+  }) => {
+    test.setTimeout(45_000);
+    await page.goto('/#/books/sb/listen');
+    await waitForListenViewReady(page, /Solway Bay/i);
+
+    /* Mark every chapter rendered so whichever character the marker resolves to
+       has a candidate chapter in the modal. Seed a re-record marker on CH1. */
+    await page.evaluate(() => {
+      const s = (window as unknown as StoreWin).__store__;
+      if (!s) throw new Error('window.__store__ not exposed (e2e gate regressed)');
+      const chapters = s.getState().chapters.chapters;
+      s.dispatch({
+        type: 'chapters/setChapters',
+        payload: chapters.map((c) => ({
+          ...c,
+          state: 'done',
+          progress: 1,
+          audioModelKey: 'kokoro-v1',
+        })),
+      });
+      s.dispatch({
+        type: 'listenProgress/addMarker',
+        payload: {
+          bookId: 'sb',
+          marker: {
+            id: 'e2e-rr',
+            chapterId: 1,
+            sec: 42,
+            label: 'Wrong tone here',
+            kind: 'rerecord',
+            createdAt: new Date().toISOString(),
+          },
+        },
+      });
+    });
+
+    const fixLine = page.getByTestId('listen-marker-fix-e2e-rr');
+    await expect(fixLine).toBeVisible({ timeout: 10_000 });
+    await fixLine.click();
+
+    /* Modal opens in re-record mode (pre-scoped locks the mode). The loudness
+       slider only renders in remix mode, so its absence proves the modal
+       defaulted to re-record — the normal (non-pre-scoped) modal opens in
+       remix. The CTA reads "Re-record …" rather than "Apply to …". */
+    await expect(page.getByText(/Re-synthesise the lines/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByLabel(/Loudness boost in decibels/i)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Re-record \d+ chapter/i })).toBeVisible();
   });
 });

@@ -114,6 +114,13 @@ export interface LayoutContext {
     dedupeKey?: string;
   }) => void;
   ttsLifecycle: TtsLifecycle;
+  /* fs-26 — open the per-character "Fix audio" modal, optionally pre-scoped to
+     a single chapter + segment(s) (the Listen-view per-line re-record entry).
+     Routes under the Outlet call this rather than mounting their own copy. */
+  openFixCharacterAudio: (args: {
+    characterId: string;
+    preScoped?: { mode: 'remix' | 'rerecord'; chapterId: number; segmentIndices: number[] };
+  }) => void;
   /* Prior-series roster for the currently-open book. Lazily fetched
      once per book — empty array until the fetch lands or if the book
      is a standalone / has no prior series-mates. Consumers (today:
@@ -371,12 +378,27 @@ export function Layout() {
   /* fs-26 — per-character "Fix audio" (loudness/re-record splice) modal.
      Holds the characterId opened from the ProfileDrawer; null = closed. */
   const [fixAudioFor, setFixAudioFor] = useState<string | null>(null);
+  /* fs-26 — when opened from the Listen-view marker ("Fix this line") the modal
+     is pre-scoped to one chapter + segment(s); null = the whole-character
+     ProfileDrawer path. Cleared in lockstep with fixAudioFor on close. */
+  const [fixAudioPreScoped, setFixAudioPreScoped] = useState<{
+    mode: 'remix' | 'rerecord';
+    chapterId: number;
+    segmentIndices: number[];
+  } | null>(null);
   const showInfo: LayoutContext['showInfo'] = (args) =>
     setResultDialog({ open: true, kind: 'info', ...args });
   const showError: LayoutContext['showError'] = (title, body, eyebrow) =>
     setResultDialog({ open: true, kind: 'error', title, body, eyebrow });
   const pushToast: LayoutContext['pushToast'] = (args) =>
     dispatch(notificationsActions.pushToast(args));
+  const openFixCharacterAudio: LayoutContext['openFixCharacterAudio'] = ({
+    characterId,
+    preScoped,
+  }) => {
+    setFixAudioPreScoped(preScoped ?? null);
+    setFixAudioFor(characterId);
+  };
 
   /* Redux → URL sync. Skip the first effect run so a deep-link mount
      (e.g. user opens #/books/abc/cast?chapter=5) doesn't race the route
@@ -890,7 +912,14 @@ export function Layout() {
      text-scale) to <html>, same single-mount shape as useTheme. */
   useAccessibilitySettings();
   const priorRoster = bookId ? (priorRosterByBook.get(bookId) ?? []) : [];
-  const ctx: LayoutContext = { showInfo, showError, pushToast, ttsLifecycle, priorRoster };
+  const ctx: LayoutContext = {
+    showInfo,
+    showError,
+    pushToast,
+    ttsLifecycle,
+    priorRoster,
+    openFixCharacterAudio,
+  };
 
   /* Reverse local-analyzer guard for the regenerate modals (D2 in
      plan 32). The modals' onConfirm callbacks all dispatch a
@@ -1699,7 +1728,11 @@ export function Layout() {
           characterId={fixAudioFor}
           characterName={characters.find((c) => c.id === fixAudioFor)?.name ?? 'Character'}
           bookId={bookId}
-          onClose={() => setFixAudioFor(null)}
+          preScoped={fixAudioPreScoped ?? undefined}
+          onClose={() => {
+            setFixAudioFor(null);
+            setFixAudioPreScoped(null);
+          }}
         />
       )}
       <QueueModalContainer />

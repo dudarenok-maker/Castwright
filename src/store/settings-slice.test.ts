@@ -12,6 +12,7 @@ import {
   SKIP_BACK_SEC_DEFAULT,
   SKIP_SEC_MIN,
   SKIP_SEC_MAX,
+  PLAYER_VOLUME_DEFAULT,
 } from './settings-slice';
 
 const reducer = settingsSlice.reducer;
@@ -82,6 +83,26 @@ describe('setSkipForwardSec / setSkipBackSec clamp (fe-24)', () => {
     );
     expect(reducer(initial, settingsActions.setSkipBackSec(NaN)).skipBackSec).toBe(
       SKIP_BACK_SEC_DEFAULT,
+    );
+  });
+});
+
+describe('setPlayerVolume clamp (fe-25)', () => {
+  it('defaults to full volume', () => {
+    expect(initial.playerVolume).toBe(PLAYER_VOLUME_DEFAULT);
+    expect(initial.playerVolume).toBe(1);
+  });
+  it('accepts in-range values', () => {
+    expect(reducer(initial, settingsActions.setPlayerVolume(0.4)).playerVolume).toBeCloseTo(0.4);
+    expect(reducer(initial, settingsActions.setPlayerVolume(0)).playerVolume).toBe(0);
+  });
+  it('clamps below 0 and above 1', () => {
+    expect(reducer(initial, settingsActions.setPlayerVolume(-0.5)).playerVolume).toBe(0);
+    expect(reducer(initial, settingsActions.setPlayerVolume(2)).playerVolume).toBe(1);
+  });
+  it('falls back to the default on a non-finite value', () => {
+    expect(reducer(initial, settingsActions.setPlayerVolume(NaN)).playerVolume).toBe(
+      PLAYER_VOLUME_DEFAULT,
     );
   });
 });
