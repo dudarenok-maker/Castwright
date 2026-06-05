@@ -1387,7 +1387,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(ch3?.characters).toMatchObject({ narrator: 'queued', sophie: 'queued' });
   });
 
-  it('renders inline phase + percentage while subset analysis is streaming', async () => {
+  it('moves the subset bar off the floor on a heartbeat + shows live elapsed/throughput', async () => {
     const store = makeIncludeStore();
     setChapterExcludedSpy.mockResolvedValue({
       id: 3,
@@ -1395,10 +1395,21 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       slug: '03-chapter-3',
       excluded: false,
     });
-    /* Capture the opts to invoke onPhase synchronously after the click,
-       and return a never-resolving promise so the row stays in the
+    /* Capture the opts to invoke onPhase/onHeartbeat synchronously after the
+       click, and return a never-resolving promise so the row stays in the
        running variant for assertion. */
-    let capturedOpts: { onPhase?: (e: { phaseId: number; progress: number }) => void } | undefined;
+    let capturedOpts:
+      | {
+          onPhase?: (e: { phaseId: number; progress: number }) => void;
+          onHeartbeat?: (e: {
+            phaseId: number;
+            receivedBytes: number;
+            charsPerSec: number;
+            elapsedMs: number;
+            sinceLastChunkMs: number;
+          }) => void;
+        }
+      | undefined;
     runAnalysisForChaptersSpy.mockImplementation((_id, _ids, opts) => {
       capturedOpts = opts;
       return new Promise(() => {});
@@ -1406,15 +1417,29 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
     renderInclude(store);
     fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
-    /* Let the awaited setChapterExcluded resolve so the analysis-call
-       happens and capturedOpts is set. */
     await screen.findByRole('button', { name: /Cancel/i });
 
-    capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.37 });
+    /* For a single-chapter subset the server's coarse progress is ~2% the whole
+       phase — the old bug. The row maps it and floors at 2% until a heartbeat. */
+    capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.02 });
     expect(
       await screen.findByText(/Re-analyzing — Detecting characters \(Phase 0a\)/i),
     ).toBeInTheDocument();
-    expect(screen.getByText('37%')).toBeInTheDocument();
+    expect(screen.getByText('2%')).toBeInTheDocument();
+
+    /* A streaming heartbeat moves the bar within the detect band and surfaces
+       the live elapsed + throughput readout (8s @ 6s tau → ~30%). */
+    capturedOpts?.onHeartbeat?.({
+      phaseId: 0,
+      receivedBytes: 2048,
+      charsPerSec: 512,
+      elapsedMs: 8000,
+      sinceLastChunkMs: 500,
+    });
+    expect(await screen.findByText('30%')).toBeInTheDocument();
+    expect(screen.getByText(/0:08/)).toBeInTheDocument();
+    expect(screen.getByText(/512 chars\/s/)).toBeInTheDocument();
+    expect(screen.queryByText('2%')).not.toBeInTheDocument();
   });
 
   it('Cancel aborts the underlying signal and reverts the row to the idle Include CTA', async () => {

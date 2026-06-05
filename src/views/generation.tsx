@@ -66,6 +66,7 @@ import {
   sentencesPerChapter,
 } from '../lib/generation-progress';
 import { relativeTime, withRecomputedDisplay } from '../lib/change-log';
+import { computeReanalyseProgress, formatElapsed } from '../lib/reanalyse-progress';
 import { LOG_TYPES } from '../data/log-types';
 import type {
   Chapter,
@@ -92,7 +93,15 @@ interface SubsetProgress {
   chapterId: number;
   phaseId: 0 | 1;
   phaseLabel: string;
+  /** Display fraction shown on the bar — mapped (see lib/reanalyse-progress.ts),
+      NOT the server's coarse value, so a single-chapter run actually moves. */
   progress: number;
+  /** Server's coarse phase progress (0..1), kept to detect phase completion. */
+  serverProgress: number;
+  /** Heartbeat's per-call elapsed ms — drives the intra-phase ease + live readout. */
+  phaseElapsedMs: number;
+  /** Heartbeat throughput, for the live "N chars/s" readout. */
+  charsPerSec: number;
   throttle: { until: number; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after'; model: string } | null;
   error: string | null;
   controller: AbortController;
@@ -200,6 +209,43 @@ export function GenerationView({
     });
   };
 
+  /* Apply a phase or heartbeat tick to a subset row, recomputing the mapped
+     display `progress` from the merged raw state (lib/reanalyse-progress.ts).
+     `phaseElapsedMs` resets when the phase advances so each phase's ease starts
+     from 0; `progress` is clamped non-decreasing so it never visibly rewinds. */
+  const applySubsetTick = (
+    chapterId: number,
+    raw: {
+      phaseId?: 0 | 1;
+      serverProgress?: number;
+      phaseElapsedMs?: number;
+      charsPerSec?: number;
+    },
+  ) => {
+    setSubsetByChapter((prev) => {
+      const existing = prev[chapterId];
+      if (!existing) return prev;
+      const phaseChanged = raw.phaseId != null && raw.phaseId !== existing.phaseId;
+      const phaseId = raw.phaseId ?? existing.phaseId;
+      const phaseElapsedMs =
+        raw.phaseElapsedMs != null ? raw.phaseElapsedMs : phaseChanged ? 0 : existing.phaseElapsedMs;
+      const serverProgress = raw.serverProgress ?? existing.serverProgress;
+      const mapped = computeReanalyseProgress({ phaseId, serverProgress, phaseElapsedMs });
+      return {
+        ...prev,
+        [chapterId]: {
+          ...existing,
+          phaseId,
+          phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? existing.phaseLabel,
+          serverProgress,
+          phaseElapsedMs,
+          charsPerSec: raw.charsPerSec ?? existing.charsPerSec,
+          progress: Math.max(existing.progress, mapped),
+        },
+      };
+    });
+  };
+
   async function handleToggleExcluded(chapterId: number, excluded: boolean): Promise<void> {
     /* Exclude direction — flip the flag and walk away. No analysis is
        needed; the server cleans up audio + segments and the slice resets
@@ -239,6 +285,9 @@ export function GenerationView({
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0].label,
         progress: 0,
+        serverProgress: 0,
+        phaseElapsedMs: 0,
+        charsPerSec: 0,
         throttle: null,
         error: null,
         controller,
@@ -276,11 +325,7 @@ export function GenerationView({
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
         onPhase: ({ phaseId, progress }) => {
-          patchSubset(chapterId, {
-            phaseId: phaseId as 0 | 1,
-            phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? ANALYSIS_PHASES[0].label,
-            progress,
-          });
+          applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           /* Snapshot tick — middleware uses this to attach a sticky
              subscriber against the subset route's in-flight map. */
           dispatch(
@@ -289,6 +334,25 @@ export function GenerationView({
               phaseId,
               phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
               phaseProgress: progress,
+              lastTickAt: Date.now(),
+            }),
+          );
+        },
+        onHeartbeat: (hb) => {
+          /* Live streaming tick — moves the bar within a phase (the server's
+             coarse progress is frozen for a single-chapter subset) and feeds
+             the elapsed / chars-per-sec readout. The slice tick carries the
+             same elapsed so the global AnalysisPill maps identically. */
+          applySubsetTick(chapterId, {
+            phaseId: hb.phaseId as 0 | 1,
+            phaseElapsedMs: hb.elapsedMs,
+            charsPerSec: hb.charsPerSec,
+          });
+          dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId: hb.phaseId,
+              phaseElapsedMs: hb.elapsedMs,
               lastTickAt: Date.now(),
             }),
           );
@@ -397,6 +461,9 @@ export function GenerationView({
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0].label,
         progress: 0,
+        serverProgress: 0,
+        phaseElapsedMs: 0,
+        charsPerSec: 0,
         throttle: null,
         error: null,
         controller,
@@ -423,17 +490,32 @@ export function GenerationView({
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
         onPhase: ({ phaseId, progress }) => {
-          patchSubset(chapterId, {
-            phaseId: phaseId as 0 | 1,
-            phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? ANALYSIS_PHASES[0].label,
-            progress,
-          });
+          applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           dispatch(
             analysisActions.applyAnalysisSnapshotTick({
               manuscriptId,
               phaseId,
               phaseLabel: ANALYSIS_PHASES[phaseId]?.label ?? 'Analysing',
               phaseProgress: progress,
+              lastTickAt: Date.now(),
+            }),
+          );
+        },
+        onHeartbeat: (hb) => {
+          /* Live streaming tick — moves the bar within a phase (the server's
+             coarse progress is frozen for a single-chapter subset) and feeds
+             the elapsed / chars-per-sec readout. The slice tick carries the
+             same elapsed so the global AnalysisPill maps identically. */
+          applySubsetTick(chapterId, {
+            phaseId: hb.phaseId as 0 | 1,
+            phaseElapsedMs: hb.elapsedMs,
+            charsPerSec: hb.charsPerSec,
+          });
+          dispatch(
+            analysisActions.applyAnalysisSnapshotTick({
+              manuscriptId,
+              phaseId: hb.phaseId,
+              phaseElapsedMs: hb.elapsedMs,
               lastTickAt: Date.now(),
             }),
           );
@@ -1644,6 +1726,13 @@ function ExcludedChapterRow({
           {running ? (
             <span className="block text-[11px] text-ink/55 mt-0.5">
               Re-analyzing — {running.phaseLabel} (Phase {running.phaseId === 0 ? '0a' : '1'})
+              {running.phaseElapsedMs > 0 && (
+                <span className="text-ink/40 tabular-nums">
+                  {' · '}
+                  {formatElapsed(running.phaseElapsedMs)}
+                  {running.charsPerSec > 0 && ` · ${running.charsPerSec.toLocaleString()} chars/s`}
+                </span>
+              )}
             </span>
           ) : errored ? (
             <span className="block text-[11px] text-rose-700 mt-0.5">

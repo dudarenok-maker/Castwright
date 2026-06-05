@@ -38,6 +38,11 @@ export interface AnalysisStreamSnapshot {
   phaseLabel: string;
   /** 0..1 fraction within the active phase. */
   phaseProgress: number;
+  /** Heartbeat's per-call elapsed ms for the active phase (reset when the
+      phase advances). Drives the single-chapter subset pill's mapped progress
+      (lib/reanalyse-progress.ts), where the server's coarse phaseProgress is
+      frozen. Undefined on main runs / pre-existing cold-boot snapshots. */
+  phaseElapsedMs?: number;
   /** Server's projected total-remaining wall-clock ms across the rest
       of the run, refined as each chapter completes. null until the
       first eta event lands. */
@@ -110,6 +115,7 @@ export const analysisSlice = createSlice({
         phaseId?: number;
         phaseLabel?: string;
         phaseProgress?: number;
+        phaseElapsedMs?: number;
         remainingMs?: number;
         lastTickAt?: number;
       }>,
@@ -117,11 +123,18 @@ export const analysisSlice = createSlice({
       const snap = state.activeStream;
       if (!snap) return;
       if (snap.manuscriptId !== action.payload.manuscriptId) return;
+      const phaseChanged =
+        typeof action.payload.phaseId === 'number' && action.payload.phaseId !== snap.phaseId;
       if (typeof action.payload.phaseId === 'number') snap.phaseId = action.payload.phaseId;
       if (typeof action.payload.phaseLabel === 'string')
         snap.phaseLabel = action.payload.phaseLabel;
       if (typeof action.payload.phaseProgress === 'number')
         snap.phaseProgress = action.payload.phaseProgress;
+      /* Reset per-phase elapsed when the phase advances so the new phase's ease
+         starts from 0; otherwise adopt the supplied heartbeat value. */
+      if (phaseChanged) snap.phaseElapsedMs = action.payload.phaseElapsedMs ?? 0;
+      else if (typeof action.payload.phaseElapsedMs === 'number')
+        snap.phaseElapsedMs = action.payload.phaseElapsedMs;
       if (typeof action.payload.remainingMs === 'number')
         snap.remainingMs = action.payload.remainingMs;
       if (typeof action.payload.lastTickAt === 'number')
