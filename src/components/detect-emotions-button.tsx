@@ -118,7 +118,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         <span
           role="dialog"
           aria-label="Detect emotions"
-          className="absolute z-30 right-0 top-full mt-2 w-72 rounded-xl border border-ink/10 bg-canvas shadow-lg p-3 text-left"
+          className="absolute z-50 left-0 top-full mt-2 w-72 rounded-xl border border-ink/10 bg-canvas shadow-lg p-3 text-left"
         >
           <p className="text-xs text-ink/70 leading-snug">
             Run an LLM pass over the whole book to detect per-quote delivery emotions. This uses
