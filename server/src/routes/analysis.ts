@@ -1892,8 +1892,14 @@ export async function runMainAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* `lastStep` mirrors the most recent phase milestone to the server log (so a
+     stall's last log line names where it wedged) and feeds the fatal-error log
+     below (so a failure names its phase, not just a stack). */
+  let lastStep = 'init';
   const log = (phaseId: number, message: string) => {
     send({ kind: 'log', phaseId, message });
+    lastStep = `phase=${phaseId} ${message}`;
+    console.log(`[analysis] mns=${manuscriptId} ${lastStep}`);
   };
 
   const startedAt = Date.now();
@@ -3492,6 +3498,8 @@ export async function runMainAnalyzerJob(
        reads the same on both sides. */
     const parsedLog = tryParseApiError((e as Error)?.message ?? String(e));
     console.error('[analysis] failed', {
+      manuscriptId,
+      lastStep,
       model: activeModelId,
       name: (e as Error)?.name,
       status: (e as { status?: number })?.status,
@@ -3755,8 +3763,16 @@ async function runSubsetAnalyzerJob(
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
   };
+  /* `lastStep` is a breadcrumb of the most recent phase milestone — mirrored to
+     the server log (so a stall's last server-log line names where it wedged)
+     and folded into the fatal-error log below (so a failure names the phase it
+     died in, not a bare stack). The 2026-06-06 ch12 incident surfaced only as
+     "sentences.map is not a function" with no phase/chapter context. */
+  let lastStep = 'init';
   const log = (phaseId: number, message: string) => {
     send({ kind: 'log', phaseId, message });
+    lastStep = `phase=${phaseId} ${message}`;
+    console.log(`[analysis-subset] mns=${manuscriptId} ${lastStep}`);
   };
 
   /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
@@ -4301,7 +4317,13 @@ async function runSubsetAnalyzerJob(
       return;
     }
     const { code, message, detail } = describeError(e, analyzerLabel);
-    console.error('[analysis-subset] failed', { manuscriptId, code, message });
+    console.error('[analysis-subset] failed', {
+      manuscriptId,
+      code,
+      message,
+      lastStep,
+      stack: (e as Error)?.stack,
+    });
     endJob(job, { kind: 'error', code, message, detail });
   }
 }
