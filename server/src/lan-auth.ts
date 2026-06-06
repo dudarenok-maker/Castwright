@@ -12,6 +12,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
+import { isValidDeviceToken } from './workspace/device-tokens.js';
 
 /* The configured shared secret, or undefined when unset/empty. */
 export function getLanAuthToken(): string | undefined {
@@ -56,10 +57,13 @@ export function isLanTokenEnforced(): boolean {
 export function requireLanToken(req: Request, res: Response, next: NextFunction): void {
   if (!isLanTokenEnforced()) return next();
   if (isLoopbackRequest(req)) return next();
-  const expected = getLanAuthToken();
   const provided = extractToken(req);
-  if (expected !== undefined && provided !== undefined && safeEqual(provided, expected)) {
-    return next();
+  if (provided !== undefined) {
+    /* Legacy shared secret (srv-20) … */
+    const expected = getLanAuthToken();
+    if (expected !== undefined && safeEqual(provided, expected)) return next();
+    /* … or an individually-revocable per-device token (srv-33). */
+    if (isValidDeviceToken(provided)) return next();
   }
   res.status(401).json({ error: 'Missing or invalid LAN access token.' });
 }

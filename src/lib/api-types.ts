@@ -1573,6 +1573,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List paired companion devices (srv-33)
+         * @description Per-device access tokens for the Android companion (srv-33), layered on
+         *     srv-20's shared secret. Behind the LAN guard (only an authed or loopback
+         *     caller). Returns device records WITHOUT any token material.
+         */
+        get: operations["listDevices"];
+        put?: never;
+        /**
+         * Mint a new per-device token (returned once) (srv-33)
+         * @description Generates a fresh, individually-revocable device token. The raw token is
+         *     returned ONCE in this response (only its SHA-256 is persisted) — the
+         *     caller must surface it to the user immediately.
+         */
+        post: operations["createDevice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/devices/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke a paired device (srv-33) */
+        delete: operations["revokeDevice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/state": {
         parameters: {
             query?: never;
@@ -3322,6 +3367,22 @@ export interface components {
             token?: string;
             /** @description srv-20 — the LAN CA's SHA-256 (X.509 fingerprint256), present only when the mkcert root CA is resolvable. A pairing client fetches /cert/root.crt, computes the same fingerprint, and pins only if it matches. */
             caFingerprint?: string;
+        };
+        /** @description srv-33 — a paired companion device. Never carries token material (only the SHA-256 is persisted server-side). */
+        Device: {
+            /** @description Stable device id (used to revoke). */
+            id: string;
+            /** @description Human label, e.g. the phone name. */
+            label: string;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Optional; last time this device's token was accepted.
+             */
+            lastSeenAt?: string;
+            /** @description True once revoked — the guard then rejects its token. */
+            revoked: boolean;
         };
         GpuQueueState: {
             /** @description Number of acquires waiting in the FIFO queue behind the in-flight ops. The frontend pill renders 'GPU busy · N waiting ·' when this is > 0. */
@@ -5740,6 +5801,89 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ExportLanInfo"];
                 };
+            };
+        };
+    };
+    listDevices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Paired devices */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        devices: components["schemas"]["Device"][];
+                    };
+                };
+            };
+        };
+    };
+    createDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Human label, e.g. the phone name. */
+                    label?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description The created device plus its one-time raw token */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Device"] & {
+                        /** @description Raw access token — shown once; only its hash is stored. */
+                        token: string;
+                    };
+                };
+            };
+        };
+    };
+    revokeDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        ok?: boolean;
+                    };
+                };
+            };
+            /** @description Unknown device */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
