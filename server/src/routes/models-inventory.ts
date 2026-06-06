@@ -39,6 +39,7 @@ import {
   dirSizeBytes,
   totalSizeBytes,
 } from '../tts/model-paths.js';
+import { kokoroIntegrity } from '../tts/model-integrity.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -127,6 +128,7 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
     isFallbackEngine: true,
     removable: kokoroSize.fileCount > 0,
     updatable: true,
+    integrity: kokoroSize.fileCount > 0 ? kokoroIntegrity(repoRoot) : undefined,
   });
 
   /* ── Qwen Base (TTS, bespoke per-character voices) ─────────────────── */
