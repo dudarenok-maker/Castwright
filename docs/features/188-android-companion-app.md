@@ -23,8 +23,8 @@ per CLAUDE.md; this doc is what they hang off.
 > `app-4` (offline store — drift/SQLite), `app-5` (native player —
 > just_audio/audio_service), `app-6` (two-way resume sync), `app-7` (library browse),
 > `app-13` (settings), `app-8` (auto-sync on reconnect), `app-14` (home shelf + multi-book
-> switching) — the full MVP app block — and now **`app-11` (signed release APK + alpha
-> channel)**. Remaining: the ranked follow-ups **`app-9`** (Android Auto/CarPlay) and
+> switching) — the full MVP app block — `app-11` (signed release APK + alpha channel), and
+> now **`app-9` (in-car: Android Auto + CarPlay media browser)**. The last item is
 > **`app-10`** (LAN streaming). See **Build progress & dev
 > setup** immediately below.
 
@@ -50,18 +50,18 @@ per CLAUDE.md; this doc is what they hang off.
 | `app-13` | #579 (merge `e54c2af`, closed #549) | settings: pure `AppSettings` (sleep timer, default speed, skip-silence, skip-button behaviour, unmetered-Wi-Fi-only, storage cap + auto-delete-finished + keep-recent-books, auto-sync/auto-download — drives app-5/app-4/app-8) with json round-trip + tolerant `fromJson`; `SettingsStore` (FileStore JSON, defaults on corrupt); testable `SleepTimer` (injectable scheduler); presentational `SettingsScreen`. 14 paired Dart tests. **Live device acceptance owed.** |
 | `app-8` | #580 (merge `b064b0d`, closed #548) | auto-sync on reconnect: pure `shouldAutoSync` gate (never on mobile/offline, only unmetered Wi-Fi unless opted in, only when the paired server is reachable — token never leaves the home LAN) + `AutoSyncService` (pre-gates before probing so it never probes off-LAN; runs delta sync + resume flush when allowed) + pure `networkTypeFromConnectivity` + real `connectivity_plus` resolver (pinned 6.x — 7.x iOS uses an iOS-26 `NWPath` API that fails the CI iOS compile). 17 paired Dart tests. **Live device acceptance owed.** |
 | `app-14` | #582 (merge `e5b5da9`, closed #550) | home shelf + multi-book switching: pure `home_shelf` (`buildContinueListening` = in-progress books most-recently-played first; `buildRecentlyUpdated` newest-first capped) + presentational `HomeScreen` (Continue-listening rail + recently-updated rail; tap → `onOpenBook`, host wires to the player's `switchBook` for seamless per-book resume). 6 paired Dart tests. **Live device acceptance owed.** **MVP app block (app-1..8,13,14) complete.** |
-| `app-11` | _this PR_ (closed #554) | distribution: Gradle release signing via git-ignored `android/key.properties` (real upload keystore) with a **debug-signed fallback** so `flutter build apk --release` always produces an installable sideload APK; `key.properties.example` + `.gitignore` for the secrets; CI publishes a `companion-release-apk` artifact per build. Build-config (no Dart tests); release APK verified locally (65.6 MB). |
+| `app-11` | #586 (merge `0563f05`, closed #554) | distribution: Gradle release signing via git-ignored `android/key.properties` (real upload keystore) with a **debug-signed fallback** so `flutter build apk --release` always produces an installable sideload APK; `key.properties.example` + `.gitignore` for the secrets; CI publishes a `companion-release-apk` artifact per build. Build-config (no Dart tests); release APK verified locally (65.6 MB). |
+| `app-9` | _this PR_ (closed #552) | in-car (Android Auto + CarPlay): pure `media_browse_tree` (root→books→chapters `MediaNode` + `bookMediaId`/`chapterMediaId` codec + `childrenOf`) wired into `CompanionAudioHandler.getChildren`/`playFromMediaId` (audio_service `MediaBrowser`); Android Auto descriptor (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests. **Live device/head-unit acceptance owed.** |
 
-### Next up — `app-9` / `app-10` (follow-ups)
+### Next up — `app-10` (LAN streaming, last item)
 
-The **MVP app block + signed APK are built**. Remaining are the ranked follow-ups:
-**`app-9`** (Android Auto/CarPlay) and **`app-10`** (LAN streaming). See the item specs below.
+The **MVP app block + signed APK + in-car browse are built**. The last item is **`app-10`**
+(stream-over-LAN instant play). See the item spec below.
 
 ### Remaining app track
 
-`app-11` (signed APK) → follow-ups `app-9`/`app-10`
-(integration) → `app-11` (signed APK). Follow-ups: `srv-33`, `app-9` (Android Auto/CarPlay),
-`app-10`, `app-12` (iOS).
+`app-10` (LAN streaming) — last item. Then `srv-33` (server multi-device tokens) and
+`app-12` (iOS) remain parked follow-ups outside this build run.
 
 ### Dev setup (this box — full toolchain installed + validated)
 
@@ -782,8 +782,13 @@ top for the running status):
   **To ship a properly-signed alpha:** `keytool -genkey -v -keystore upload-keystore.jks
   -keyalg RSA -keysize 2048 -validity 10000 -alias upload`, drop `android/key.properties`
   (see the example), then `flutter build apk --release`; sideload `app-release.apk`.
+- `app-9` — in-car (closed #552): pure `media_browse_tree` (root→books→chapters `MediaNode` +
+  mediaId codec + `childrenOf`) wired into `CompanionAudioHandler.getChildren`/`playFromMediaId`
+  (audio_service `MediaBrowser`, Android Auto + CarPlay) + Android Auto descriptor
+  (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests; clean + APK builds.
+  **Live device/head-unit acceptance owed.**
 
 All MVP server prerequisites are merged. Toolchain installed + the app validated on a
 `Pixel_10_Pro` emulator. Per the user's directive, the app track is being built through
 `app-10` with **all live-device acceptance batched at the end** for the whole feature set.
-Next up: `app-9` / `app-10` (follow-ups).
+Next up: `app-10` (LAN streaming) — the last item.
