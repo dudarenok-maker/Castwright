@@ -92,6 +92,12 @@ const PERSIST_RULES: Record<
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences }),
   },
+  /* fs-33 — the bulk emotion backfill persists like a manual tag so detected
+     emotions survive reload and reach synth via manuscript-edits.json. */
+  'manuscript/applyDetectedEmotions': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences }),
+  },
   'manuscript/splitSentence': {
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences }),
