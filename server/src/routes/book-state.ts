@@ -1082,6 +1082,11 @@ interface ListenProgressFile {
 const PLAYBACK_RATE_MIN = 0.25;
 const PLAYBACK_RATE_MAX = 4.0;
 
+/* srv-34 (plan 188) — a small tolerance for a client-supplied
+   `listenedAt`. A device clock a little ahead is fine; one absurdly in
+   the future is rejected so it can't poison last-write-wins ordering. */
+const LISTENED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
+
 /* Plan 53 — server-side validator for an individual marker payload.
    Returns null when valid, or a short reason string for the 400. */
 function validateMarker(raw: unknown): string | null {
@@ -1126,6 +1131,7 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
           currentSec: unknown;
           playbackRate: unknown;
           markers: unknown;
+          listenedAt: unknown;
         }>
       | undefined;
     if (!body || typeof body.chapterId !== 'number' || !Number.isFinite(body.chapterId)) {
@@ -1165,10 +1171,40 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
       }
       markers = body.markers as ListenMarker[];
     }
+    /* srv-34 (plan 188) — optional client `listenedAt`. When present it
+       stamps `updatedAt` (the wall-clock time the user actually listened,
+       which may be earlier than this request when a phone flushes offline
+       progress on reconnect) instead of receive-time. Validated as a real
+       date and rejected if absurdly future (clock-skew guard). */
+    let effectiveUpdatedAt = new Date().toISOString();
+    let listenedAtMs: number | null = null;
+    if (body.listenedAt !== undefined) {
+      if (typeof body.listenedAt !== 'string' || Number.isNaN(Date.parse(body.listenedAt))) {
+        return res.status(400).json({ error: 'listenedAt must be an ISO date-time string.' });
+      }
+      listenedAtMs = Date.parse(body.listenedAt);
+      if (listenedAtMs > Date.now() + LISTENED_AT_FUTURE_SKEW_MS) {
+        return res.status(400).json({ error: 'listenedAt is too far in the future.' });
+      }
+      effectiveUpdatedAt = new Date(listenedAtMs).toISOString();
+    }
+    /* srv-34 — guarded compare-and-set. ONLY when the caller supplies a
+       `listenedAt` (the companion's offline-correct ordering signal) do we
+       refuse to overwrite a strictly-newer stored record, returning that
+       record so the client reconciles. Legacy callers that omit
+       `listenedAt` keep last-write-wins-by-receive-time. */
+    if (listenedAtMs !== null) {
+      const existing = await readJson<ListenProgressFile>(
+        listenProgressJsonPath(located.bookDir),
+      );
+      if (existing && Date.parse(existing.updatedAt) >= listenedAtMs) {
+        return res.json(existing);
+      }
+    }
     const record: ListenProgressFile = {
       chapterId: body.chapterId,
       currentSec: body.currentSec,
-      updatedAt: new Date().toISOString(),
+      updatedAt: effectiveUpdatedAt,
       ...(playbackRate !== undefined ? { playbackRate } : {}),
       ...(markers !== undefined ? { markers } : {}),
     };
