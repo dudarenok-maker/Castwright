@@ -33,6 +33,7 @@
    the fold rules can be tuned without invalidating in-flight progress. */
 
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
+import { taggedSpeakerIds } from './recover-tagged-lines.js';
 
 export interface FoldOptions {
   /** A character whose attributed line count is strictly below this
@@ -203,6 +204,13 @@ export function foldMinorCast(
     }
   }
 
+  /* Speakers the prose explicitly tags (`"…," Behnam noted.`). A 0-line such
+     speaker is a stage-2 attribution failure, NOT a non-speaker — keep them
+     instead of dropping (#537), so a roster-recovered character that couldn't
+     get its quote flipped still persists in the cast. nameOnly mode skips the
+     zero-line drop entirely, so the scan isn't needed there. */
+  const proseTagged = nameOnly ? new Set<string>() : taggedSpeakerIds(sentences, characters);
+
   /* Decide who folds, who drops, and where. Narrator is exempt from both.
      A character with zero attributed sentences in this run is dropped
      entirely — they never speak, so the narrator covers any narration
@@ -234,9 +242,14 @@ export function foldMinorCast(
     const isDescriptor = isDescriptorName(c.name);
     const lines = lineCount.get(c.id) ?? 0;
     const isProtected =
-      c.detectionSource === 'narrator-mention' &&
-      matchesProtectedRole(c.role, protectedRoles) &&
-      !isDescriptor;
+      (c.detectionSource === 'narrator-mention' &&
+        matchesProtectedRole(c.role, protectedRoles) &&
+        !isDescriptor) ||
+      /* A speaker the prose explicitly tags (`"…," Behnam noted.`) is a real
+         named speaker — keep their own slot even at a low/zero line count
+         (stage-2 may have stranded their quote on narrator, #537). Descriptors
+         ("The Jogger") still fold. */
+      (proseTagged.has(c.id) && !isDescriptor);
     if (!nameOnly && lines === 0 && !isDescriptor && !isProtected) {
       droppedIds.add(c.id);
       droppedNames.push(c.name);
