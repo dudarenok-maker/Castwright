@@ -48,7 +48,20 @@ class Chapters extends Table {
   Set<Column<Object>> get primaryKey => {uuid};
 }
 
-@DriftDatabase(tables: [Books, Chapters])
+/// Per-book playback resume point (`app-5`): the current chapter + position the
+/// player restores when a book is (re)opened. Kept local; `app-6` syncs it with
+/// the server listen-progress.
+class Playback extends Table {
+  TextColumn get bookId => text()();
+  TextColumn get chapterUuid => text()();
+  IntColumn get positionMs => integer().withDefault(const Constant(0))();
+  TextColumn get updatedAt => text().withDefault(const Constant(''))();
+
+  @override
+  Set<Column<Object>> get primaryKey => {bookId};
+}
+
+@DriftDatabase(tables: [Books, Chapters, Playback])
 class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase(super.e);
 
@@ -57,5 +70,13 @@ class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase.open() : this(driftDatabase(name: 'library'));
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) => m.createAll(),
+        onUpgrade: (m, from, to) async {
+          if (from < 2) await m.createTable(playback);
+        },
+      );
 }
