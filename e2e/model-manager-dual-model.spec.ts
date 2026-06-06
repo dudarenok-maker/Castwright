@@ -72,28 +72,32 @@ test.describe('Account — dual-model TTS flag', () => {
   });
 });
 
-test.describe('Account — Qwen install card', () => {
-  test('renders the in-app Qwen3-TTS installer card', async ({ page }) => {
+test.describe('Model Manager — Qwen install (per-row)', () => {
+  test('opens the in-app Qwen3-TTS installer from its inventory row', async ({ page }) => {
     await page.goto('/#/models');
     await waitForRouteReady(page);
 
-    /* The display-only snippet was replaced by the one-click QwenInstall
-       component. The /api/qwen/detect probe is stubbed not-installed (see
-       stubAccountModelProbes), so the "Install Qwen3-TTS" card renders. */
+    /* fs-23 follow-up: the installer is no longer a passive bottom card — it
+       expands from the Qwen Base inventory row's Install/Update toggle. The
+       /api/qwen/detect probe is stubbed not-installed (stubAccountModelProbes),
+       so the "Install Qwen3-TTS" card renders once expanded. */
+    const row = page.getByTestId('model-row-qwen-base');
+    await row.getByTestId('model-install-toggle-qwen-base').click();
     await expect(page.getByTestId('qwen-install-not-detected')).toBeVisible();
     await expect(page.getByRole('button', { name: /Install Qwen3-TTS/i })).toBeVisible();
   });
 });
 
-test.describe('Account — Coqui install card', () => {
-  test('renders the in-app Coqui XTTS v2 installer card', async ({ page }) => {
+test.describe('Model Manager — Coqui install (per-row)', () => {
+  test('opens the in-app Coqui XTTS v2 installer from its inventory row', async ({ page }) => {
     await page.goto('/#/models');
     await waitForRouteReady(page);
 
-    /* The display-only install snippet was replaced by the one-click
-       CoquiInstall component. The /api/coqui/detect probe is stubbed
-       weights-missing (see stubAccountModelProbes), so the "Install Coqui
-       XTTS v2" card renders with its value/difference copy. */
+    /* fs-23 follow-up: expand the Coqui row's Install toggle. The
+       /api/coqui/detect probe is stubbed weights-missing
+       (stubAccountModelProbes), so the "Install Coqui XTTS v2" card renders. */
+    const row = page.getByTestId('model-row-coqui');
+    await row.getByTestId('model-install-toggle-coqui').click();
     await expect(page.getByTestId('coqui-install-not-detected')).toBeVisible();
     await expect(page.getByRole('button', { name: /Install Coqui XTTS v2/i })).toBeVisible();
   });
