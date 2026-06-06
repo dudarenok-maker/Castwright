@@ -444,6 +444,9 @@ describe('scanLibrary backfills audioModelKey from segments.json', () => {
       /* Stamp duration too so the new duration-backfill leg doesn't
          trigger a rewrite — same "everything already migrated" shape. */
       ch.duration = '01:00';
+      /* srv-35 — stamp a uuid so the lazy uuid backfill has nothing to
+         migrate either; keeps the "everything already migrated" shape. */
+      ch.uuid = `u-${ch.id}`;
     }
     await fs.writeFile(statePath, JSON.stringify(before));
     const beforeContent = await fs.readFile(statePath, 'utf-8');
