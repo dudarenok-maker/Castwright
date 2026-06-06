@@ -8,6 +8,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   validateRosterCoverage,
+  validateAttributionCoverage,
   runStage1WithRosterGuard,
   chapterDriftExceeded,
   toKebabId,
@@ -216,5 +217,61 @@ describe('toKebabId', () => {
   it('kebab-cases names like the analyzer convention', () => {
     expect(toKebabId('Mr. Casper')).toBe('mr-Casper');
     expect(toKebabId('Lessom')).toBe('Lessom');
+  });
+});
+
+describe('validateAttributionCoverage (#529 half-state)', () => {
+  const roster = [
+    { id: 'Lessom', name: 'Lessom' },
+    { id: 'Aldous', name: 'Aldous' },
+  ];
+
+  it('flags a rostered, prose-tagged speaker with 0 attributed lines (Lessom/ch19 half-state)', () => {
+    /* Lessom is in the roster but every line landed on narrator (interrupted
+       re-analysis). Aldous is tagged once but has a line, so he's fine. */
+    const sentences = [
+      { characterId: 'narrator' },
+      { characterId: 'narrator' },
+      { characterId: 'Aldous' },
+      { characterId: 'narrator' },
+    ];
+    const v = validateAttributionCoverage(Lessom_BODY, roster, sentences);
+    expect(v.ok).toBe(false);
+    expect(v.halfStateSpeakers.map((s) => s.id)).toContain('Lessom');
+    expect(v.halfStateSpeakers.map((s) => s.id)).not.toContain('Aldous');
+    const Lessom = v.halfStateSpeakers.find((s) => s.id === 'Lessom')!;
+    expect(Lessom.attributedLines).toBe(0);
+    expect(Lessom.narratorLines).toBe(3);
+    expect(Lessom.tagCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does NOT flag rostered speakers who already have attributed lines', () => {
+    /* Both tagged speakers (Lessom + Aldous) carry a line, so neither is a
+       half-state — even though most of the chapter is narration. */
+    const sentences = [
+      { characterId: 'Lessom' },
+      { characterId: 'Aldous' },
+      { characterId: 'narrator' },
+    ];
+    const v = validateAttributionCoverage(Lessom_BODY, roster, sentences);
+    expect(v.ok).toBe(true);
+    expect(v.halfStateSpeakers).toHaveLength(0);
+  });
+
+  it('never flags the narrator or an unknown-* bucket (minor speakers fold in as aliases)', () => {
+    const body = '"Indeed," Castor said. "Quite," Castor agreed firmly.';
+    const bucketRoster = [{ id: 'unknown-male', name: 'Unknown Male', aliases: ['Castor'] }];
+    // Bucket has 0 lines in this chapter, yet must NOT flag (it's a bucket).
+    const v = validateAttributionCoverage(body, bucketRoster, [{ characterId: 'narrator' }]);
+    expect(v.ok).toBe(true);
+  });
+
+  it('respects the single-hit quote-adjacency bound (no false positive)', () => {
+    const body =
+      'Far from any dialogue, Lessom agreed with the assessment completely and utterly.';
+    const v = validateAttributionCoverage(body, [{ id: 'Lessom', name: 'Lessom' }], [
+      { characterId: 'narrator' },
+    ]);
+    expect(v.ok).toBe(true); // one tag, no nearby quote → below the flag threshold
   });
 });

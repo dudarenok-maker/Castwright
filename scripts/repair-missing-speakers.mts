@@ -8,9 +8,13 @@
    to one.
 
    What it does, per book with findings:
-     1. AUDIT (read-only) — re-parses the EPUB and runs `validateRosterCoverage`
-        per chapter to find tagged speakers missing from cast.json. Prints the
-        affected chapterIds + a "before" snapshot (per-chapter narrator counts).
+     1. AUDIT (read-only) — re-parses the EPUB and runs TWO checks per chapter:
+        `validateRosterCoverage` (tagged speaker missing from cast.json) AND
+        `validateAttributionCoverage` (#529 — a speaker who IS in cast.json but
+        has 0 attributed lines in a chapter that tags them, i.e. the
+        interrupted-re-analysis half-state). Both flag the chapter for re-run, so
+        the half-state is now detected automatically (no `--force` needed). Prints
+        the affected chapterIds + a "before" snapshot (per-chapter narrator counts).
      2. RE-RUN (only with --apply) — backs up cast.json, then POSTs those
         chapterIds to the running server's subset re-analysis route
         (`POST /api/manuscripts/:id/analysis/chapters`), which re-runs stage-1
@@ -48,7 +52,10 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEpub } from '../server/src/parsers/epub.js';
-import { validateRosterCoverage } from '../server/src/analyzer/roster-coverage.js';
+import {
+  validateRosterCoverage,
+  validateAttributionCoverage,
+} from '../server/src/analyzer/roster-coverage.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
@@ -61,10 +68,11 @@ const flag = (name: string): string | null => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : null;
 };
 const apply = argv.includes('--apply');
-/* --force: re-run the given --chapters even when the roster audit is already
-   clean. Needed when a prior interrupted run added the speaker to cast.json (so
-   the name-coverage audit passes) but stage-2 never re-attributed their lines —
-   the dialogue is still on `narrator`. Requires --chapters. */
+/* --force: re-run the given --chapters even when BOTH audits are already clean.
+   The half-state (rostered speaker, 0 attributed lines) is now detected by
+   `validateAttributionCoverage`, so --force is no longer required for it — keep
+   this only as a manual escape hatch for chapters neither check flags. Requires
+   --chapters. */
 const force = argv.includes('--force');
 const bookFilter = flag('--book')?.toLowerCase() ?? null;
 const manuscriptArg = flag('--manuscript');
@@ -165,7 +173,28 @@ function resolveBooks(): Book[] {
 interface Finding {
   chapterId: number;
   title: string;
+  /** Speakers prose-tagged but ABSENT from the roster (validateRosterCoverage). */
   speakers: { name: string; id: string; tagCount: number }[];
+  /** Speakers IN the roster but with 0 attributed lines in this chapter — the
+      interrupted-re-analysis half-state (#529, validateAttributionCoverage). */
+  halfState: { name: string; id: string; tagCount: number; narratorLines: number }[];
+}
+
+/** Group manuscript-edits.json sentences by chapter for the attribution check. */
+function sentencesByChapter(edits: EditsJson | null): Map<number, { characterId: string }[]> {
+  const m = new Map<number, { characterId: string }[]>();
+  for (const s of edits?.sentences ?? []) {
+    const arr = m.get(s.chapterId) ?? [];
+    arr.push({ characterId: s.characterId });
+    m.set(s.chapterId, arr);
+  }
+  return m;
+}
+
+function rosterObjectsOf(cast: CastJson | null): Array<{ id: string; name: string; aliases?: string[] }> {
+  return (cast?.characters ?? [])
+    .filter((c) => c.id && c.name)
+    .map((c) => ({ id: c.id!, name: c.name!, aliases: c.aliases }));
 }
 
 async function auditBook(book: Book): Promise<{ findings: Finding[]; cast: CastJson | null } | null> {
@@ -180,15 +209,27 @@ async function auditBook(book: Book): Promise<{ findings: Finding[]; cast: CastJ
   }
   const excluded = new Set((book.state.chapters ?? []).filter((c) => c.excluded).map((c) => c.id));
   const rosterNames = rosterNamesOf(cast);
+  const roster = rosterObjectsOf(cast);
+  const edits = readJson<EditsJson>(join(book.bookDir, '.audiobook', 'manuscript-edits.json'));
+  const byChapter = sentencesByChapter(edits);
   const findings: Finding[] = [];
   for (const ch of parsed.chapters) {
     if (excluded.has(ch.id)) continue;
+    // (a) tagged speaker absent from the roster.
     const v = validateRosterCoverage(ch.body, rosterNames);
-    if (!v.ok)
+    // (b) rostered speaker prose-tagged but with 0 attributed lines (half-state).
+    const av = validateAttributionCoverage(ch.body, roster, byChapter.get(ch.id) ?? []);
+    if (!v.ok || !av.ok)
       findings.push({
         chapterId: ch.id,
         title: ch.title,
         speakers: v.missingSpeakers.map((s) => ({ name: s.name, id: s.id, tagCount: s.tagCount })),
+        halfState: av.halfStateSpeakers.map((s) => ({
+          name: s.name,
+          id: s.id,
+          tagCount: s.tagCount,
+          narratorLines: s.narratorLines,
+        })),
       });
   }
   return { findings, cast };
@@ -294,8 +335,18 @@ async function main(): Promise<void> {
     const recovered = new Set<string>();
     console.log(`  📕 ${book.label}`);
     for (const f of res.findings) {
-      console.log(`       ch ${f.chapterId} "${f.title}": ${f.speakers.map((s) => `${s.name}×${s.tagCount}`).join(', ')}`);
+      const parts: string[] = [];
+      if (f.speakers.length)
+        parts.push(`uncast: ${f.speakers.map((s) => `${s.name}×${s.tagCount}`).join(', ')}`);
+      if (f.halfState.length)
+        parts.push(
+          `0-line half-state: ${f.halfState
+            .map((s) => `${s.name}×${s.tagCount} (narrator ${s.narratorLines})`)
+            .join(', ')}`,
+        );
+      console.log(`       ch ${f.chapterId} "${f.title}": ${parts.join('; ')}`);
       for (const s of f.speakers) recovered.add(s.id);
+      for (const s of f.halfState) recovered.add(s.id);
     }
     const chapterIds = chaptersOverride ?? [...new Set(res.findings.map((f) => f.chapterId))].sort((a, b) => a - b);
     affected.push({ book, findings: res.findings, chapterIds, recovered });
@@ -345,7 +396,13 @@ async function main(): Promise<void> {
     if ((after?.findings.length ?? 0) === 0) console.log('  ✅ re-audit clean.');
     else {
       console.log('  ⚠ re-audit still flags:');
-      for (const f of after!.findings) console.log(`    ch ${f.chapterId}: ${f.speakers.map((s) => `${s.name}×${s.tagCount}`).join(', ')}`);
+      for (const f of after!.findings) {
+        const parts = [
+          ...f.speakers.map((s) => `${s.name}×${s.tagCount} (uncast)`),
+          ...f.halfState.map((s) => `${s.name}×${s.tagCount} (0 lines)`),
+        ];
+        console.log(`    ch ${f.chapterId}: ${parts.join(', ')}`);
+      }
     }
   }
 

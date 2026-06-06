@@ -1,14 +1,20 @@
 #!/usr/bin/env -S npx tsx
-/* Audit every analyzed book for MISSING SPEAKERS — characters the prose tags
-   with a dialogue beat (`"…," Lessom repeated.`) but who never made it into
-   the cast, so stage-2 attribution dumped their lines on the narrator (the
-   2026-06-05 The Drowning Bell ch19 "Lessom" bug). Read-only: it reports, it never
-   writes.
+/* Audit every analyzed book for MISSING SPEAKERS in two ways. Read-only: it
+   reports, it never writes.
+
+   (a) UNCAST — characters the prose tags with a dialogue beat
+       (`"…," Lessom repeated.`) but who never made it into cast.json, so
+       stage-2 dumped their lines on the narrator (the 2026-06-05 The Drowning Bell
+       ch19 "Lessom" bug). `validateRosterCoverage` vs cast.json names+aliases.
+   (b) HALF-STATE (#529) — a speaker who IS in cast.json but has 0 attributed
+       lines in a chapter that tags them (an interrupted re-analysis: stage-1
+       added the name, stage-2 never re-attributed). `validateAttributionCoverage`
+       reads manuscript-edits.json and counts each rostered speaker's lines.
 
    For each book it RE-PARSES the source EPUB (the same `parseEpub` the analyzer
-   used) and runs `validateRosterCoverage` on each chapter's prose against the
-   book's actual cast (cast.json names + aliases — folded minor speakers live on
-   as aliases of the unknown-male/female buckets, so they correctly DON'T flag).
+   used). Folded minor speakers live on as aliases of the unknown-male/female
+   buckets (whose ids carry lines), so they correctly DON'T flag under either
+   check. A book is "clean" only when BOTH checks pass on every chapter.
 
    Usage (from repo root):
      npx tsx scripts/audit-missing-speakers.mts
@@ -33,7 +39,9 @@ import { fileURLToPath } from 'node:url';
 import { parseEpub } from '../server/src/parsers/epub.js';
 import {
   validateRosterCoverage,
+  validateAttributionCoverage,
   type MissingSpeaker,
+  type HalfStateSpeaker,
 } from '../server/src/analyzer/roster-coverage.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -79,14 +87,20 @@ interface StateJson {
   chapters?: Array<{ id: number; title?: string; excluded?: boolean }>;
 }
 interface CastJson {
-  characters?: Array<{ name?: string; aliases?: string[] }>;
+  characters?: Array<{ id?: string; name?: string; aliases?: string[] }>;
+}
+interface EditsJson {
+  sentences?: Array<{ chapterId: number; characterId: string }>;
 }
 
 interface Finding {
   book: string;
   chapterId: number;
   title: string;
+  /** Tagged speakers ABSENT from the roster. */
   missingSpeakers: MissingSpeaker[];
+  /** Rostered speakers with 0 attributed lines here — the #529 half-state. */
+  halfStateSpeakers: HalfStateSpeaker[];
 }
 
 function log(...args: unknown[]): void {
@@ -136,9 +150,24 @@ async function main(): Promise<void> {
       continue;
     }
     const rosterNames: string[] = [];
+    const roster: Array<{ id: string; name: string; aliases?: string[] }> = [];
     for (const c of cast.characters ?? []) {
       if (c.name) rosterNames.push(c.name);
       for (const a of c.aliases ?? []) rosterNames.push(a);
+      if (c.id && c.name) roster.push({ id: c.id, name: c.name, aliases: c.aliases });
+    }
+
+    /* manuscript-edits.json holds the per-sentence attribution. The half-state
+       check (#529) needs it to count a rostered speaker's lines per chapter. */
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const edits = existsSync(editsPath)
+      ? (JSON.parse(readFileSync(editsPath, 'utf8')) as EditsJson)
+      : null;
+    const sentencesByChapter = new Map<number, { characterId: string }[]>();
+    for (const s of edits?.sentences ?? []) {
+      const arr = sentencesByChapter.get(s.chapterId) ?? [];
+      arr.push({ characterId: s.characterId });
+      sentencesByChapter.set(s.chapterId, arr);
     }
 
     let parsed;
@@ -156,13 +185,21 @@ async function main(): Promise<void> {
     const bookFindings: Finding[] = [];
     for (const ch of parsed.chapters) {
       if (excludedIds.has(ch.id)) continue;
+      // (a) tagged speaker absent from the roster.
       const verdict = validateRosterCoverage(ch.body, rosterNames);
-      if (!verdict.ok) {
+      // (b) rostered speaker prose-tagged but with 0 attributed lines (half-state).
+      const attribution = validateAttributionCoverage(
+        ch.body,
+        roster,
+        sentencesByChapter.get(ch.id) ?? [],
+      );
+      if (!verdict.ok || !attribution.ok) {
         const rec: Finding = {
           book: label,
           chapterId: ch.id,
           title: ch.title,
           missingSpeakers: verdict.missingSpeakers,
+          halfStateSpeakers: attribution.halfStateSpeakers,
         };
         bookFindings.push(rec);
         findings.push(rec);
@@ -172,14 +209,20 @@ async function main(): Promise<void> {
     if (bookFindings.length) {
       log(`📕 ${label}  (${parsed.chapters.length} source ch)`);
       for (const f of bookFindings) {
-        const who = f.missingSpeakers
-          .map((s) => `${s.name}×${s.tagCount}`)
-          .join(', ');
-        log(`     ❌ ch ${f.chapterId} "${f.title}": ${who}`);
+        const parts: string[] = [];
+        if (f.missingSpeakers.length)
+          parts.push(`uncast: ${f.missingSpeakers.map((s) => `${s.name}×${s.tagCount}`).join(', ')}`);
+        if (f.halfStateSpeakers.length)
+          parts.push(
+            `0-line half-state: ${f.halfStateSpeakers
+              .map((s) => `${s.name}×${s.tagCount} (narrator ${s.narratorLines})`)
+              .join(', ')}`,
+          );
+        log(`     ❌ ch ${f.chapterId} "${f.title}": ${parts.join('; ')}`);
       }
       log();
     } else {
-      log(`✅ ${label} — every tagged speaker is in the cast`);
+      log(`✅ ${label} — every tagged speaker is in the cast and has attributed lines`);
     }
   }
 
@@ -189,7 +232,9 @@ async function main(): Promise<void> {
   }
 
   log('─'.repeat(60));
-  log(`Books audited: ${booksAudited}. Chapters with missing speakers: ${findings.length}.`);
+  log(
+    `Books audited: ${booksAudited}. Chapters flagged (uncast or 0-line half-state): ${findings.length}.`,
+  );
   if (findings.length) {
     const chapterIdsByBook = new Map<string, Set<number>>();
     for (const f of findings) {
