@@ -3,6 +3,9 @@
 /// audio.
 abstract class AudioEngine {
   Future<void> setFilePath(String path);
+
+  /// Stream a remote chapter URL with auth headers — `app-10` LAN instant play.
+  Future<void> setStreamUrl(String url, {Map<String, String>? headers});
   Future<void> play();
   Future<void> pause();
   Future<void> seek(Duration position);

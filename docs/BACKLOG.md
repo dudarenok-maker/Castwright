@@ -419,7 +419,7 @@ hash matches — no OS cert install, no manual hex compare).
 
 11. `srv-33` ([#551](https://github.com/dudarenok-maker/AudioBook-Generator/issues/551)) — Device pairing + multi-device token management (on top of `srv-20`). _Benefit:_ revocable per-device access.
 12. ✅ **SHIPPED** `app-9` ([#552](https://github.com/dudarenok-maker/AudioBook-Generator/issues/552)) — In-car (**Android Auto + CarPlay**): pure `media_browse_tree` (root→books→chapters + mediaId codec) wired into `CompanionAudioHandler` MediaBrowser callbacks + Android Auto descriptor. 6 paired Dart tests; head-unit acceptance owed (batched). _Benefit:_ first-class in-car beyond the Bluetooth path.
-13. `app-10` ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553)) — Stream-over-LAN instant play. _Benefit:_ zero-wait preview before a download.
+13. ✅ **SHIPPED** `app-10` ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553)) — Stream-over-LAN instant play: pure `resolvePlaybackSource` (offline-first; stream only when on-LAN + opted in) + `AppSettings.streamOverLan` + `AudioEngine.setStreamUrl`. 4 paired Dart tests; live device acceptance owed (batched). _Benefit:_ zero-wait preview before a download.
 14. ✅ **SHIPPED** `app-11` ([#554](https://github.com/dudarenok-maker/AudioBook-Generator/issues/554)) — Distribution: Gradle release signing via git-ignored `key.properties` (real upload keystore) with a debug-signed fallback so `flutter build apk --release` always sideloads; `key.properties.example` + CI `companion-release-apk` artifact. Release APK verified (65.6 MB). _Benefit:_ testers can install it.
 
 ---

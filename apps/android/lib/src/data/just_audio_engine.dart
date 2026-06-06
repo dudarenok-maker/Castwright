@@ -19,6 +19,13 @@ class JustAudioEngine implements AudioEngine {
   }
 
   @override
+  Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {
+    await _player.setAudioSource(
+      AudioSource.uri(Uri.parse(url), headers: headers),
+    );
+  }
+
+  @override
   Future<void> play() => _player.play();
 
   @override
