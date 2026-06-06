@@ -23,6 +23,7 @@ import {
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
   runStage2ChapterChunked,
   resolveStage2ChunkCharBudget,
@@ -3320,7 +3321,15 @@ export async function runMainAnalyzerJob(
        account view (`minorCastMinLines`); see
        server/src/analyzer/fold-minor-cast.ts for the trigger contract. */
     const userSettings = await readUserSettings();
-    const folded = foldMinorCast(stage1.characters, allSentences, {
+    /* Recover dialogue lines stage-2 left on the narrator (a prose-tagged
+       speaker who is in the roster but got 0 attributed lines) BEFORE the fold
+       counts lines, so the fold doesn't drop them as 0-line. */
+    const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters);
+    if (recovered.flipped > 0) {
+      const summary = [...recovered.byId.entries()].map(([id, n]) => `${id}=${n}`).join(', ');
+      log(1, `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`);
+    }
+    const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
     });
     if (folded.summary.foldedCount > 0) {
@@ -4164,9 +4173,17 @@ async function runSubsetAnalyzerJob(
       if (arr) allSentences.push(...arr);
     }
 
+    /* Recover narrator-stranded tagged-speaker lines before the fold (see the
+       main route's same block) so a re-analysed chapter's tagged speakers get
+       their lines + aren't dropped as 0-line. */
+    const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters);
+    if (recovered.flipped > 0) {
+      const summary = [...recovered.byId.entries()].map(([id, n]) => `${id}=${n}`).join(', ');
+      log(1, `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`);
+    }
     /* Re-fold the cast against the merged sentence set so the bucket
        attributions stay coherent with the new chapters' attributions. */
-    const folded = foldMinorCast(stage1.characters, allSentences);
+    const folded = foldMinorCast(stage1.characters, recovered.sentences);
     if (folded.summary.droppedSilent > 0) {
       const sample = folded.dropped.slice(0, 4).join(', ');
       const more = folded.dropped.length > 4 ? `, +${folded.dropped.length - 4} more` : '';
