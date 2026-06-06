@@ -101,7 +101,7 @@ clipRouter.get(
 
     let child;
     try {
-      child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     } catch (err) {
       return res.status(500).json({
         message: `Failed to spawn ffmpeg: ${(err as Error).message}. ` +
