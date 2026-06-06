@@ -119,12 +119,14 @@ for (const [chId, sentences] of [...bupByChapter].sort((a, b) => a[0] - b[0])) {
   const insertAt = liveEdits.sentences.findIndex((s) => s.chapterId > chId);
   const idx = insertAt === -1 ? liveEdits.sentences.length : insertAt;
   liveEdits.sentences.splice(idx, 0, ...sentences);
-  // (b) rebuild cache.chapters[chId] as the sentence-index map (key = id-1)
+  // (b) rebuild cache.chapters[chId] as an ARRAY of sentence objects, ascending
+  //     by id — the analyzer cache shape is Record<number, SentenceOutput[]>
+  //     (server/src/store/analysis-cache.ts: chapters[n].map(...)), NOT an
+  //     index-keyed object. Writing an object here makes the cache load throw
+  //     "sentences.map is not a function".
   cache.chapters ??= {};
   if (!cache.chapters[String(chId)]) {
-    const map = {};
-    for (const s of sentences) map[String(s.id - 1)] = s;
-    cache.chapters[String(chId)] = map;
+    cache.chapters[String(chId)] = [...sentences].sort((a, b) => a.id - b.id);
   }
   restoredChapters.push(`${chId} (${sentences.length} sentences)`);
 }
