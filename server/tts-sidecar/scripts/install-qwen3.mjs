@@ -27,12 +27,33 @@
 // the HF cache already has the snapshot.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, mkdtempSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SIDECAR_DIR = resolve(__dirname, '..');
+
+/* ops-7 (#430) — pinned SHA256 for the FA2 wheel (the sharpest supply-chain
+   risk: a single-maintainer community wheel that runs with the user's
+   privileges on install). Returns the lowercased hex digest, or null when
+   unpinned (verification then can't run — we warn and proceed). */
+export function flashAttnWheelPin() {
+  try {
+    const manifest = JSON.parse(readFileSync(join(__dirname, 'model-hashes.json'), 'utf8'));
+    const raw = manifest?.flashAttentionWheel?.sha256;
+    return typeof raw === 'string' && raw.length > 0 ? raw.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** SHA256 a file as a lowercased hex string. */
+export function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
 
 const args = process.argv.slice(2);
 const SKIP_DESIGN = args.includes('--skip-design');
@@ -121,7 +142,40 @@ function installFlashAttn(python, env) {
   }
   step('FlashAttention-2: installing pinned prebuilt wheel (opt-in)...');
   step(`  ${plan.url}`);
-  if (run(python, ['-m', 'pip', 'install', plan.url], env) !== 0) {
+  const pin = flashAttnWheelPin();
+  let installTarget = plan.url;
+  if (pin) {
+    /* ops-7 — download the wheel WITHOUT installing, verify its SHA256, then
+       install the verified local file. Refuse + delete on a mismatch so a
+       tampered/corrupted wheel never executes its setup with the user's
+       privileges. */
+    const dlDir = mkdtempSync(join(tmpdir(), 'fa2-wheel-'));
+    if (run(python, ['-m', 'pip', 'download', '--no-deps', '-d', dlDir, plan.url], env) !== 0) {
+      step('FlashAttention-2: WARN wheel download failed — continuing on SDPA.');
+      return;
+    }
+    const wheel = readdirSync(dlDir).find((f) => f.endsWith('.whl'));
+    if (!wheel) {
+      step('FlashAttention-2: WARN no .whl downloaded — continuing on SDPA.');
+      return;
+    }
+    const wheelPath = join(dlDir, wheel);
+    const actual = sha256File(wheelPath);
+    if (actual !== pin) {
+      step('FlashAttention-2: FAIL integrity check — refusing to install.');
+      step(`  expected SHA256 ${pin}`);
+      step(`  got      SHA256 ${actual}`);
+      step('  The wheel does not match the pinned hash. Continuing on SDPA;');
+      step('  re-bless model-hashes.json if the upstream wheel legitimately changed.');
+      return;
+    }
+    step('FlashAttention-2: wheel SHA256 verified.');
+    installTarget = wheelPath;
+  } else {
+    step('FlashAttention-2: WARN wheel is UNPINNED in model-hashes.json — installing');
+    step('  without hash verification. Bless the wheel to enable the integrity gate.');
+  }
+  if (run(python, ['-m', 'pip', 'install', installTarget], env) !== 0) {
     step('FlashAttention-2: WARN install failed — continuing on SDPA. Retry the');
     step('  wheel URL above, or just leave QWEN_ATTN_IMPL=sdpa (the default).');
     return;

@@ -47,14 +47,39 @@ if (-not (Test-Path -LiteralPath $TargetDir)) {
     New-Item -ItemType Directory -Path $TargetDir -Force | Out-Null
 }
 
+# ops-7 (#430) -- pinned-hash integrity. The manifest sits next to this script.
+$ManifestPath = Join-Path $ScriptDir 'model-hashes.json'
+
+function Get-PinnedHash([string]$FileName) {
+    if (-not (Test-Path -LiteralPath $ManifestPath)) { return $null }
+    try {
+        $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+        $entry = $manifest.kokoro.$FileName
+        if ($entry -and $entry.sha256) { return ([string]$entry.sha256).ToLower() }
+    }
+    catch { }
+    return $null
+}
+
+# True if the file matches its pinned SHA256 (or is unpinned -- accept).
+function Test-HashOk([string]$Dest) {
+    $expected = Get-PinnedHash (Split-Path -Leaf $Dest)
+    if (-not $expected) { return $true }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Dest).Hash.ToLower()
+    return ($actual -eq $expected)
+}
+
 function Get-File([string]$Url, [string]$Dest) {
     if (Test-Path -LiteralPath $Dest) {
         $size = (Get-Item -LiteralPath $Dest).Length
         if ($size -gt 0) {
-            Write-Step "Skipping $(Split-Path -Leaf $Dest) -- already present ($([math]::Round($size/1MB,1)) MB)."
-            return
+            if (Test-HashOk $Dest) {
+                Write-Step "Skipping $(Split-Path -Leaf $Dest) -- already present and verified ($([math]::Round($size/1MB,1)) MB)."
+                return
+            }
+            Write-Step "Cached $(Split-Path -Leaf $Dest) failed its integrity check -- re-downloading."
         }
-        # Zero-byte file from a previous failed run -- delete and retry.
+        # Zero-byte (failed run) OR a hash mismatch -- delete and retry.
         Remove-Item -LiteralPath $Dest -Force
     }
     Write-Step "Downloading $(Split-Path -Leaf $Dest) from $Url"
@@ -77,7 +102,15 @@ function Get-File([string]$Url, [string]$Dest) {
         Remove-Item -LiteralPath $Dest -Force
         throw "Downloaded $Dest is only $size bytes -- looks like an error page, not the real weights."
     }
-    Write-Step "Downloaded $(Split-Path -Leaf $Dest) ($([math]::Round($size/1MB,1)) MB)"
+    # ops-7 -- refuse + delete on a SHA256 mismatch so a corrupted/tampered
+    # download never reaches the sidecar.
+    if (-not (Test-HashOk $Dest)) {
+        $expected = Get-PinnedHash (Split-Path -Leaf $Dest)
+        $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Dest).Hash.ToLower()
+        Remove-Item -LiteralPath $Dest -Force
+        throw "Integrity check FAILED for $(Split-Path -Leaf $Dest). Expected SHA256 $expected but got $actual. Deleted the file -- re-run to retry, or re-bless model-hashes.json if the upstream asset legitimately changed."
+    }
+    Write-Step "Downloaded and verified $(Split-Path -Leaf $Dest) ($([math]::Round($size/1MB,1)) MB)"
 }
 
 Get-File -Url $ModelUrl  -Dest (Join-Path $TargetDir 'kokoro-v1.0.onnx')

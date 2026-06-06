@@ -698,4 +698,8 @@ export type Stage =
      dashboard, plan 86). Health board + generation throughput are visible to
      everyone; the git-worktree list inside the view stays gated behind
      `import.meta.env.DEV` (and its `/api/worktrees` server route 404s in prod). */
-  | { kind: 'admin' };
+  | { kind: 'admin' }
+  /* fs-23 — In-app Model Manager. Top-level view (like account/admin), reached
+     from the Admin view. Consolidates all model install/inventory/residency
+     controls that used to live in the Account view. */
+  | { kind: 'model-manager' };
