@@ -24,6 +24,7 @@ import {
   type Stage2ChapterOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import { AnalyzerTruncatedError } from './errors.js';
 import {
   buildSystemInstruction,
   parseAndValidate,
@@ -145,6 +146,19 @@ export const ANALYZER_NUM_CTX = 16384;
    key the same way num_ctx is — mismatching values between /load and
    the first /api/chat call triggers a silent reload mid-stream). */
 export const ANALYZER_NUM_GPU = 999;
+
+/* Optional explicit output-token cap (`num_predict`). Unset → -1 (Ollama's
+   "predict until the context window fills"), which on a huge stage-2 chapter
+   silently truncates the JSON once input + output brush num_ctx. The
+   `done_reason: 'length'` check in chat() turns any such truncation into a
+   loud AnalyzerTruncatedError (#528); this knob lets an operator cap output
+   sooner. Shares the env name with Gemini's maxOutputTokens knob's sibling. */
+export function resolveNumPredict(): number {
+  const raw = process.env.ANALYZER_NUM_PREDICT;
+  if (!raw) return -1;
+  const n = Number(raw);
+  return Number.isFinite(n) && n !== 0 ? Math.floor(n) : -1;
+}
 
 export class OllamaAnalyzer implements Analyzer {
   private readonly url: string;
@@ -377,6 +391,10 @@ export class OllamaAnalyzer implements Analyzer {
            full rationale (was: Ollama silently offloading ~8% of
            llama3.1:8b layers to CPU under 16K-context pressure). */
         num_gpu: ANALYZER_NUM_GPU,
+        /* Output-token cap — see resolveNumPredict above. -1 by default
+           (predict until context fills); truncation is caught loudly via
+           done_reason below regardless. */
+        num_predict: resolveNumPredict(),
       },
     };
 
@@ -435,6 +453,10 @@ export class OllamaAnalyzer implements Analyzer {
       let buf = ''; // assembled assistant content
       let lineBuf = ''; // partial NDJSON line carried across reads
       let firstByteSeen = false;
+      /* Ollama reports WHY it stopped on the final `done:true` line:
+         'stop' (clean), 'length' (hit num_ctx/num_predict — truncated),
+         'load'. Captured here, asserted after the stream drains (#528). */
+      let doneReason: string | undefined;
       const start = Date.now();
       let lastChunkAt = start;
 
@@ -473,7 +495,12 @@ export class OllamaAnalyzer implements Analyzer {
             lineBuf = lineBuf.slice(nl + 1);
             if (!line) continue;
 
-            let parsed: { message?: { content?: string }; done?: boolean; error?: string };
+            let parsed: {
+              message?: { content?: string };
+              done?: boolean;
+              done_reason?: string;
+              error?: string;
+            };
             try {
               parsed = JSON.parse(line);
             } catch {
@@ -487,6 +514,7 @@ export class OllamaAnalyzer implements Analyzer {
             if (parsed.error) {
               throw new Error(`Ollama ${this.url} stream error: ${parsed.error}`);
             }
+            if (parsed.done && parsed.done_reason) doneReason = parsed.done_reason;
 
             const piece = parsed.message?.content;
             if (piece) {
@@ -512,6 +540,18 @@ export class OllamaAnalyzer implements Analyzer {
 
       if (!buf) {
         throw new Error(`Ollama ${this.model} returned an empty response.`);
+      }
+      /* Truncation gate (#528): the stream completed but Ollama stopped
+         because it hit the context/output budget (`done_reason: 'length'`),
+         not because the model finished. The buffered JSON is cut off
+         mid-object; returning it hands a corrupt payload to parseAndValidate.
+         Throw a classified error so the stage-2 chunker can split the
+         chapter rather than retrying the same oversized prompt. */
+      if (doneReason === 'length') {
+        console.warn(
+          `[ollama] output truncated done_reason=length bytes=${buf.length} model=${this.model}`,
+        );
+        throw new AnalyzerTruncatedError('ollama', 'length', buf.length);
       }
       return buf;
     } finally {
