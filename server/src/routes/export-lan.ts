@@ -24,8 +24,11 @@
    / mic / camera APIs become available on phone Safari/Chrome). */
 
 import { networkInterfaces } from 'node:os';
+import { readFileSync } from 'node:fs';
+import { X509Certificate } from 'node:crypto';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { resolveRootCaPath } from './cert-root.js';
 
 export const exportLanRouter = Router();
 
@@ -33,6 +36,15 @@ export interface ExportLanInfo {
   urls: string[];
   port: number;
   protocol: 'http' | 'https';
+  /* srv-20 — the shared-secret LAN token, present only when LAN_AUTH_TOKEN is
+     configured. The companion pairing QR carries it so a device can
+     authenticate to the (otherwise guarded) /api surface. */
+  token?: string;
+  /* srv-20 — the LAN CA's SHA-256 (X.509 fingerprint256), present only when the
+     mkcert root CA is resolvable. A pairing client fetches /cert/root.crt,
+     computes the same fingerprint, and pins ONLY if it matches (no manual
+     hex compare, no OS cert install). */
+  caFingerprint?: string;
 }
 
 export function isLanHttpsEnabled(): boolean {
@@ -54,11 +66,37 @@ export function enumerateLanUrls(port: number, protocol: 'http' | 'https' = 'htt
   return { urls, port, protocol };
 }
 
+/* srv-20 — the configured shared-secret token (or undefined). Read directly
+   from env (not via lan-auth) to avoid a circular import (lan-auth already
+   imports isLanHttpsEnabled from here). */
+function lanAuthToken(): string | undefined {
+  const t = process.env.LAN_AUTH_TOKEN;
+  return typeof t === 'string' && t.length > 0 ? t : undefined;
+}
+
+/* srv-20 — the LAN CA's SHA-256 fingerprint (standard X.509 fingerprint256).
+   Best-effort: undefined when the mkcert CA can't be located / read / parsed. */
+export function lanCaFingerprint(): string | undefined {
+  try {
+    const ca = resolveRootCaPath();
+    if (!ca) return undefined;
+    return new X509Certificate(readFileSync(ca.path)).fingerprint256;
+  } catch {
+    return undefined;
+  }
+}
+
 exportLanRouter.get('/lan', (_req: Request, res: Response) => {
   const httpsMode = isLanHttpsEnabled();
   const port = httpsMode
     ? Number(process.env.LAN_HTTPS_PORT ?? 8443)
     : Number(process.env.PORT ?? 8080);
   const protocol: 'http' | 'https' = httpsMode ? 'https' : 'http';
-  res.json(enumerateLanUrls(port, protocol));
+  const token = lanAuthToken();
+  const caFingerprint = lanCaFingerprint();
+  res.json({
+    ...enumerateLanUrls(port, protocol),
+    ...(token !== undefined ? { token } : {}),
+    ...(caFingerprint !== undefined ? { caFingerprint } : {}),
+  });
 });
