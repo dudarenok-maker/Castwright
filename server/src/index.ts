@@ -65,6 +65,7 @@ import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
 import { exportRouter } from './routes/export.js';
 import { exportLanRouter, enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
 import { certRootRouter } from './routes/cert-root.js';
+import { devicesRouter } from './routes/devices.js';
 import { requireLanToken } from './lan-auth.js';
 import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
@@ -179,6 +180,7 @@ import { upgradeRouter } from './routes/upgrade.js';
 app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
 import { infoRouter } from './routes/info.js';
 app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new state
+app.use('/api', devicesRouter); // srv-33 — companion per-device tokens: GET/POST /devices, DELETE /devices/:id
 app.use('/api/library', libraryRouter);
 app.use('/api/library', syncManifestRouter); // srv-32 — GET /api/library/sync-manifest
 app.use('/api', importRouter); // mounts /import and /books
