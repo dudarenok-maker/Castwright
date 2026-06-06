@@ -7,7 +7,7 @@
 
    The moved form sections land in step A7 (alongside the Account surgery). */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import {
   ModelControlPill,
@@ -16,6 +16,7 @@ import {
 } from '../components/ModelControlPill';
 import { api, type ModelInventoryItem, type ModelInventoryResponse } from '../lib/api';
 import { formatBytes } from '../lib/bytes';
+import { ModelSettingsForm } from '../components/model-settings-form';
 
 const INVENTORY_POLL_MS = 30_000;
 
@@ -42,6 +43,7 @@ export function ModelManagerView() {
 
       <div className="space-y-6">
         <ModelInventory />
+        <ModelSettingsForm />
       </div>
     </div>
   );
