@@ -534,6 +534,49 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
     );
     expect(next.characters).toEqual(start.characters);
   });
+
+  it('applies the merged profile the server carried over (quotes/attributes/etc.)', () => {
+    /* The carry-over fix: the link-prior response now echoes the prior
+       character's representative quotes + descriptors so the open drawer
+       reflects them without a reload. */
+    const start = baseState([makeChar('dame-Linnet_from', { voiceState: 'reused' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'dame-Linnet_from',
+        matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'Linnet', bookTitle: 'Saltgrave', confidence: 1 },
+        voiceId: 'dame-Linnet',
+        profile: {
+          evidence: [{ quote: 'The Council has spoken.', note: 'imperious' }],
+          attributes: ['imperious', 'vain'],
+          description: 'A vain Councillor.',
+          gender: 'female',
+          ageRange: 'adult',
+        },
+      }),
+    );
+    const Linnet = next.characters.find((c) => c.id === 'dame-Linnet_from')!;
+    expect(Linnet.evidence).toHaveLength(1);
+    expect(Linnet.attributes).toEqual(['imperious', 'vain']);
+    expect(Linnet.description).toBe('A vain Councillor.');
+    expect(Linnet.gender).toBe('female');
+    expect(Linnet.ageRange).toBe('adult');
+  });
+
+  it('leaves the profile untouched when the response carries none', () => {
+    const start = baseState([
+      makeChar('Hartwell-alvin-Vale', { voiceState: 'generated', attributes: ['original'] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'Hartwell-alvin-Vale',
+        matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'Hart', bookTitle: 'Keeper #1', confidence: 1 },
+        voiceId: 'v_Hart',
+      }),
+    );
+    expect(next.characters[0].attributes).toEqual(['original']);
+  });
 });
 
 describe('castSlice — applyUnlinkAlias (POST /cast/unlink-alias response)', () => {

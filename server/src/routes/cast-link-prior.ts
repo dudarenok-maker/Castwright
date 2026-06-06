@@ -32,6 +32,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { normaliseForMatch } from './analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 import type { TtsEngine } from '../tts/index.js';
 
@@ -158,8 +159,44 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
   const targetQwen = target.overrideTtsVoices?.qwen?.name;
   const shouldDenormaliseVoice = !sourceHasQwen && !!targetQwen;
 
-  if (voiceIdChanged || shouldDenormaliseVoice) {
-    const mergedSource: PersistedCharacter = { ...source, voiceId: canonicalVoiceId };
+  /* Carry the prior character's PROFILE content onto the source at link time.
+     A manual continuity link declares "these are the same person", so the
+     reused row should inherit the canonical character's representative quotes
+     and descriptors — not just its voice. Without this a roster-carried row
+     (e.g. an Unlocked "Dame Linnet" with zero of its own detected lines) stays
+     blank after linking, which reads as "the link did nothing". Merge rules
+     mirror the in-book merge (cast-merge.ts): union the list fields (evidence,
+     attributes) source-first so the current book's own quotes lead, and
+     fill-if-missing the scalar fields (description, tone, gender, ageRange) so
+     a richer local profile is never clobbered. */
+  const mergedEvidence = mergeEvidence(source.evidence, target.evidence);
+  const mergedAttributes = unionStrings(source.attributes, target.attributes);
+  const mergedDescription =
+    source.description && source.description.trim() ? source.description : target.description;
+  const mergedTone =
+    source.tone || target.tone ? { ...target.tone, ...source.tone } : undefined;
+  const mergedGender = source.gender ?? target.gender;
+  const mergedAgeRange = source.ageRange ?? target.ageRange;
+
+  const profileChanged =
+    !evidenceEqual(source.evidence, mergedEvidence) ||
+    !arraysShallowEqual(source.attributes ?? [], mergedAttributes ?? []) ||
+    source.description !== mergedDescription ||
+    source.gender !== mergedGender ||
+    source.ageRange !== mergedAgeRange ||
+    JSON.stringify(source.tone ?? null) !== JSON.stringify(mergedTone ?? null);
+
+  if (voiceIdChanged || shouldDenormaliseVoice || profileChanged) {
+    const mergedSource: PersistedCharacter = {
+      ...source,
+      voiceId: canonicalVoiceId,
+      evidence: mergedEvidence,
+      attributes: mergedAttributes,
+      description: mergedDescription,
+      tone: mergedTone,
+      gender: mergedGender,
+      ageRange: mergedAgeRange,
+    };
     if (shouldDenormaliseVoice) {
       mergedSource.ttsEngine = source.ttsEngine ?? target.ttsEngine ?? 'qwen';
       mergedSource.overrideTtsVoices = {
@@ -179,7 +216,8 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
   console.log(
     `[cast-link-prior] ${sourceBookId}/${sourceCharacterId} → ${targetBookId}/${targetCharacterId}` +
       (aliasesChanged ? ' (alias added)' : ' (no-op: alias already present)') +
-      (voiceIdChanged ? ` (voiceId → ${canonicalVoiceId})` : ''),
+      (voiceIdChanged ? ` (voiceId → ${canonicalVoiceId})` : '') +
+      (profileChanged ? ' (merged profile)' : ''),
   );
 
   return res.json({
@@ -190,6 +228,18 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
       confidence: 1,
     },
     voiceId: canonicalVoiceId,
+    /* Echo the merged profile so the frontend updates the open drawer +
+       redux without a reload. Only present when something changed. */
+    profile: profileChanged
+      ? {
+          evidence: mergedEvidence,
+          attributes: mergedAttributes,
+          description: mergedDescription,
+          tone: mergedTone,
+          gender: mergedGender,
+          ageRange: mergedAgeRange,
+        }
+      : undefined,
   });
 });
 
@@ -226,4 +276,54 @@ function arraysShallowEqual(a: readonly string[], b: readonly string[]): boolean
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+/* Union two evidence (representative-quote) lists, source-first, dedup on
+   normalised quote text so smart/straight-quote variants don't double up.
+   Mirrors cast-merge.ts::mergeEvidence — inlined to keep this route file
+   self-contained (same rationale as appendAliases above). */
+function mergeEvidence(
+  a: CharacterOutput['evidence'] | undefined,
+  b: CharacterOutput['evidence'] | undefined,
+): CharacterOutput['evidence'] {
+  if (!a?.length && !b?.length) return undefined;
+  const seen = new Set<string>();
+  const out: NonNullable<CharacterOutput['evidence']> = [];
+  for (const e of [...(a ?? []), ...(b ?? [])]) {
+    const norm = normaliseForMatch(e.quote);
+    if (!norm || seen.has(norm)) continue;
+    seen.add(norm);
+    out.push({ ...e });
+  }
+  return out.length ? out : undefined;
+}
+
+/* True when two evidence lists carry the same set of normalised quotes
+   (order-insensitive) — used to detect a no-op profile merge. */
+function evidenceEqual(
+  a: CharacterOutput['evidence'] | undefined,
+  b: CharacterOutput['evidence'] | undefined,
+): boolean {
+  const keys = (e: CharacterOutput['evidence'] | undefined) =>
+    new Set((e ?? []).map((x) => normaliseForMatch(x.quote)).filter(Boolean));
+  const ka = keys(a);
+  const kb = keys(b);
+  if (ka.size !== kb.size) return false;
+  for (const k of ka) if (!kb.has(k)) return false;
+  return true;
+}
+
+/* Union two string lists, source-first, lower-case dedup, preserving
+   first-seen casing. Mirrors cast-merge.ts::unionStrings. */
+function unionStrings(a: string[] | undefined, b: string[] | undefined): string[] | undefined {
+  if (!a?.length && !b?.length) return undefined;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of [...(a ?? []), ...(b ?? [])]) {
+    const key = s.trim().toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out.length ? out : undefined;
 }
