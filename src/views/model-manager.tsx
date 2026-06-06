@@ -53,6 +53,7 @@ function ModelInventory() {
   const [inv, setInv] = useState<ModelInventoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirmItem, setConfirmItem] = useState<ModelInventoryItem | null>(null);
 
   const refetch = useCallback(async () => {
     try {
@@ -118,10 +119,108 @@ function ModelInventory() {
                 setBusyId(null);
               }
             }}
+            onRemove={() => setConfirmItem(item)}
           />
         ))}
       </ul>
+
+      {confirmItem && (
+        <ConfirmRemoveModal
+          item={confirmItem}
+          onClose={() => setConfirmItem(null)}
+          onRemoved={async () => {
+            setConfirmItem(null);
+            await refetch();
+          }}
+        />
+      )}
     </section>
+  );
+}
+
+function ConfirmRemoveModal({
+  item,
+  onClose,
+  onRemoved,
+}: {
+  item: ModelInventoryItem;
+  onClose: () => void;
+  onRemoved: () => Promise<void> | void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  /* The server enforces these guards with a 409; mirror them here so the user
+     sees WHY before clicking, and disable Confirm rather than inviting a failed
+     request. */
+  const blockedReason = item.loaded
+    ? 'It is loaded in GPU memory — unload it first.'
+    : item.isFallbackEngine
+      ? 'It is the universal fallback engine — removing it breaks audio fallback for every book.'
+      : item.isDefaultEngine
+        ? 'It is your current default engine — change the default first.'
+        : null;
+
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    const result = await api.removeModel(item.id);
+    setBusy(false);
+    if (result.ok) {
+      await onRemoved();
+    } else {
+      setError([result.error, result.remediation].filter(Boolean).join(' '));
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+      role="dialog"
+      aria-modal="true"
+      data-testid="model-remove-confirm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-ink/10 bg-white p-6 shadow-card"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="text-base font-semibold text-ink">Remove {item.label}?</h3>
+        <p className="mt-2 text-sm text-ink/70">
+          This deletes the model weights from disk
+          {item.sizeBytes != null ? ` (frees ~${formatBytes(item.sizeBytes)})` : ''}. You can
+          reinstall it later.
+        </p>
+        {blockedReason && (
+          <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {blockedReason}
+          </p>
+        )}
+        {error && (
+          <p className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink/70 hover:bg-ink/5"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={busy || blockedReason !== null}
+            data-testid="model-remove-confirm-button"
+            className="min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-rose-600 text-white text-sm font-medium hover:bg-rose-700 disabled:opacity-50 disabled:hover:bg-rose-600"
+          >
+            {busy ? 'Removing…' : 'Remove'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -152,11 +251,13 @@ function ModelRow({
   sidecarReachable,
   busy,
   onAction,
+  onRemove,
 }: {
   item: ModelInventoryItem;
   sidecarReachable: boolean;
   busy: boolean;
   onAction: (action: () => Promise<unknown>) => Promise<void>;
+  onRemove: () => void;
 }) {
   const engine = TTS_ENGINE_BY_ID[item.id];
   const isAnalyzerDefault = item.kind === 'analyzer' && item.isDefaultEngine;
@@ -221,7 +322,7 @@ function ModelRow({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
+      <div className="flex items-center gap-2 shrink-0 flex-wrap">
         <ResidencyBadge item={item} />
         {hasControl && (
           <ModelControlPill
@@ -231,6 +332,16 @@ function ModelRow({
             onLoad={doLoad}
             onStop={doStop}
           />
+        )}
+        {item.present && item.removable && (
+          <button
+            type="button"
+            onClick={onRemove}
+            data-testid={`model-remove-${item.id}`}
+            className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-rose-200 bg-white text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+          >
+            Remove
+          </button>
         )}
       </div>
     </li>
