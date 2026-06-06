@@ -398,6 +398,92 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(after?.voiceId).toBe('biana');
   });
 
+  it('merges the target profile (quotes, attributes, description, tone, gender, age) onto an empty source', async () => {
+    /* The carry-over fix: a roster-linked row with NO profile of its own
+       (Unlocked's "Dame Alina") must inherit the canonical character's
+       representative quotes + descriptors at link time, not just its voice. */
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'dex',
+        name: 'Dex',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_dex',
+        aliases: ['Dexter'],
+        evidence: [{ quote: 'Technopath stuff!', note: 'gadget talk' }],
+        attributes: ['inventive', 'loyal'],
+        description: 'A boy-genius technopath.',
+        tone: { default: 'earnest' },
+        gender: 'male',
+        ageRange: 'teen',
+      },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'dexter-alvin-diznee',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'dex',
+    });
+    expect(res.status).toBe(200);
+    /* Response echoes the merged profile so the open drawer updates without
+       a reload. */
+    expect(res.body.profile).toBeDefined();
+    expect(res.body.profile.evidence).toHaveLength(1);
+    expect(res.body.profile.attributes).toEqual(['inventive', 'loyal']);
+    expect(res.body.profile.description).toBe('A boy-genius technopath.');
+    /* Source on disk inherited the profile. */
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'dexter-alvin-diznee',
+    ) as Record<string, unknown> | undefined;
+    expect((after?.evidence as unknown[])?.length).toBe(1);
+    expect(after?.attributes).toEqual(['inventive', 'loyal']);
+    expect(after?.description).toBe('A boy-genius technopath.');
+    expect(after?.tone).toEqual({ default: 'earnest' });
+    expect(after?.gender).toBe('male');
+    expect(after?.ageRange).toBe('teen');
+  });
+
+  it("unions quotes/attributes source-first and never clobbers the source's own description", async () => {
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
+      {
+        id: 'dexter-alvin-diznee',
+        name: 'Dexter Alvin Diznee',
+        role: 'character',
+        color: 'unset',
+        aliases: ['Dizz'],
+        evidence: [{ quote: 'Source line.', note: 'own' }],
+        attributes: ['witty'],
+        description: "The source's own description.",
+      },
+    ]);
+    writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
+      { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
+      {
+        id: 'dex',
+        name: 'Dex',
+        role: 'character',
+        color: 'unset',
+        voiceId: 'v_dex',
+        evidence: [{ quote: 'Target line.', note: 'canon' }],
+        attributes: ['witty', 'brave'],
+        description: 'A different, longer canonical description.',
+      },
+    ]);
+    const res = await callLink(newBookId, {
+      sourceCharacterId: 'dexter-alvin-diznee',
+      targetBookId: keeperBookId,
+      targetCharacterId: 'dex',
+    });
+    expect(res.status).toBe(200);
+    const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
+      (c) => c.id === 'dexter-alvin-diznee',
+    ) as Record<string, unknown> | undefined;
+    const quotes = (after?.evidence as Array<{ quote: string }>).map((e) => e.quote);
+    expect(quotes).toEqual(['Source line.', 'Target line.']); // source-first union
+    expect(after?.attributes).toEqual(['witty', 'brave']); // dedup, source-first
+    expect(after?.description).toBe("The source's own description."); // never clobbered
+  });
+
   it('drops target.name from the alias pool (no self-alias)', async () => {
     /* Edge case: source.aliases already contains the target's name.
        After the merge, target.aliases should NOT list its own name. */
