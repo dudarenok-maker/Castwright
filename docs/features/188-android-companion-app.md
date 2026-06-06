@@ -96,6 +96,13 @@ differentiator vs. the existing listener-app handoffs (`fe-3`/`fs-7`/`fs-8`).
    `.github/workflows/cross-os.yml` for an unsigned iOS build (`flutter build ios
    --no-codesign`) of the Flutter app from `app-1` on, so divergence is caught long
    before iOS is a shipping target.
+5. **Codec compatibility (OGG is Android-only).** iOS `AVPlayer` does **not** play `.ogg`
+   (Vorbis/Opus); the server can render `.ogg`, `.m4a`, or `.mp3` (`chapter-audio.ts`). So
+   for an iOS deployment the server must use **MP3 or M4A/AAC** (both play on Android *and*
+   iOS); **`.ogg` is Android-only**. The app reads each chapter's format from the `srv-32`
+   `urlSuffix` and, on iOS, surfaces a clear "format not supported on iOS" state for an
+   `.ogg` chapter rather than failing silently. (v1 is Android, where all three play — this
+   is a forward constraint for `app-12`, captured per the 5th review.)
 
 ### Secondary review (2026-06-06) — incorporated
 
@@ -240,9 +247,12 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   changed book's **per-book detail** and download only changed/new chapters **via the
   manifest's per-chapter `urlSuffix`** (`audio.mp3` | `.m4a` | `.ogg` — **never hardcode
   `.mp3`**), keyed by the stable `uuid` (`srv-35`), with **resumable range downloads +
-  retry/backoff + integrity check** (size/stamp). **Atomic swap:** write each download to
-  `<file>.tmp`, verify, atomic-rename over the live file — **defer if the player has it
-  open** (apply on next stop). **Foreground service:** while a sync is actively downloading,
+  retry/backoff + integrity check** (size/stamp). **Resume, don't restart (5th review):** on
+  a dropped connection, check the existing `<file>.tmp`, then send `Range:
+  bytes=<localTmpSize>-` and append — the server's `sendFile` serves `206` natively, so a
+  10–50 MB chapter never restarts at byte 0. **Atomic swap:** once complete, verify the
+  `<file>.tmp`, atomic-rename over the live file — **defer if the player has it open** (apply
+  on next stop). **Foreground service:** while a sync is actively downloading,
   run it as an **Android foreground service** (persistent progress notification, e.g.
   "Downloading Book A — ch 3/12") so the OS doesn't kill a multi-book download after a few
   minutes (iOS: background `URLSession` via the download plugin). **Deletion:** evict any
@@ -260,8 +270,9 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   keep metadata + progress pointer) and (b) **least-recently-listened book eviction** when
   the storage cap is hit (keep the N most-recently-played books). Evicted audio re-syncs
   on demand. **Store each chapter's actual audio extension** (`mp3`/`m4a`/`ogg`) so
-  `just_audio` initialises the right codec. **Cache a small cover thumbnail** (`?width=` —
-  see D11) for list/grid rendering; fetch the full-res cover only for the now-playing screen.
+  `just_audio` initialises the right codec. **Cache a small cover thumbnail** (~250×250,
+  <50 KB JPEG; `?width=` — see D11) for list/grid rendering **and the lock-screen media
+  session** (`app-5`); fetch the full-res cover only for the now-playing screen.
 - **Benefit (user):** listen anywhere; the cache never silently fills the phone; lists stay
   smooth. **Depends on:** `app-3`.
 
@@ -280,7 +291,10 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
     stays debounced/on-reconnect (`app-6`);
   - **media-key safety** — default the Bluetooth/notification skip buttons (and
     steering-wheel/headset keys) to **seek ±30 s / ±15 s**, NOT next/prev *chapter*, so an
-    accidental press doesn't skip a whole chapter (toggle to chapter-skip in `app-13`).
+    accidental press doesn't skip a whole chapter (toggle to chapter-skip in `app-13`);
+  - **lock-screen artwork uses the thumbnail (5th review)** — the `MediaItem` /
+    `NowPlayingInfo` artwork points at the **local ~250×250 thumbnail** (`app-4`), never the
+    2 MB+ full-res cover, so the background media service can't OOM-crash.
 - **Benefit (user):** table-stakes listening UX that survives backgrounding and car
   controls. **Depends on:** `app-4`.
 
@@ -320,9 +334,12 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 #### `app-8` — Auto-sync on reconnect
 
 - **What:** detect home-network reachability; background auto-pull deltas + flush the
-  resume queue (Wi-Fi-only / charging constraints via the cross-platform background-task
-  plugin). **Network gating (4th-review point 5):** only attempt sync when the **paired
-  server is actually reachable** — a reachability probe with backoff, optionally pinned to
+  resume queue (charging constraints via the cross-platform background-task plugin).
+  **Unmetered Wi-Fi only (5th review):** restrict sync to connections the OS reports as
+  **unmetered** — a "Wi-Fi" link can be a metered phone hotspot, and syncing 50 MB chapters
+  on it would burn the user's mobile data (check the connection's metered flag, not just
+  "is Wi-Fi"). **Network gating (4th review):** only attempt sync when the **paired server
+  is actually reachable** — a reachability probe with backoff, optionally pinned to
   configured Wi-Fi SSID(s) (`app-13`) — so the app never spams connection attempts to the
   LAN IP, drains battery, or **leaks the token on public/foreign Wi-Fi**. *(SSID pinning
   needs Android location permission; pure reachability-gating avoids it — the plan picks
@@ -335,11 +352,11 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 
 - **What:** sleep timer (table-stakes for bedtime listening), default speed,
   skip-silence, **skip-button behaviour toggle** (seek ±30/±15 s vs chapter-skip — drives
-  `app-5`'s media keys), Wi-Fi-only downloads, **storage cap + the two auto-eviction
-  policies** (auto-delete finished chapters; least-recently-listened book eviction — drive
-  `app-4`), **auto-sync network gating** (paired-network-only / configured home SSID(s) —
-  drives `app-8`), auto-download policy for in-progress books, and a "copy diagnostic logs"
-  affordance (self-service observability).
+  `app-5`'s media keys), **unmetered-Wi-Fi-only** downloads (excludes metered hotspots),
+  **storage cap + the two auto-eviction policies** (auto-delete finished chapters;
+  least-recently-listened book eviction — drive `app-4`), **auto-sync network gating**
+  (paired-network-only / configured home SSID(s) — drives `app-8`), auto-download policy for
+  in-progress books, and a "copy diagnostic logs" affordance (self-service observability).
 - **Benefit (user):** the settings a real listening app is expected to have.
   **Depends on:** `app-5`, `app-4`.
 - **Nice-to-have (follow-up, not v1):** "shake-to-extend" sleep timer — in the last ~30 s,
