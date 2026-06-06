@@ -112,7 +112,12 @@ function main() {
   }
 
   const cwd = plan.mode === 'release' ? plan.releaseDir : installRoot;
-  const child = spawn(process.execPath, [plan.startScript], { cwd, env: childEnv, stdio: 'inherit' });
+  const child = spawn(process.execPath, [plan.startScript], {
+    cwd,
+    env: childEnv,
+    stdio: 'inherit',
+    windowsHide: true,
+  });
   child.on('exit', (code) => process.exit(code ?? 0));
   child.on('error', (err) => {
     process.stderr.write(`[launch] failed to start ${plan.startScript}: ${err.message}\n`);

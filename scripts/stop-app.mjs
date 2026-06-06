@@ -22,7 +22,10 @@ function info(msg) {
 function killTree(pid) {
   try {
     if (isWindows) {
-      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
     } else {
       // Negative pid = process group on POSIX. start-app-prod.mjs runs the
       // child detached so it gets its own group.
