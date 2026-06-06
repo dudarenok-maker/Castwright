@@ -812,6 +812,123 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
   });
 });
 
+describe('book-state router — backfills missing cast.lines from attribution', () => {
+  /* Regression: a roster-added / cross-book-linked cast row (cast-add-from-
+     roster.ts mints `<id>_from_<book>` without a `lines` field, and nothing
+     rewrites it after analysis attributes sentences to it) rendered a blank
+     line count in the cast view even though the manuscript attributes lines to
+     it (the Unlocked "Councilor Linnet" case). The GET handler now derives the
+     count from manuscript-edits.json and fills it in when the row lacks one,
+     without clobbering counts the analyzer already stamped. */
+  const LINES_TITLE = 'Lines Backfill Test';
+  const LINES_MANUSCRIPT_ID = 'm_lines_backfill_test';
+  let linesBookId: string;
+  let linesBookDir: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    linesBookId = makeBookId(AUTHOR, SERIES, LINES_TITLE);
+    linesBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, LINES_TITLE);
+    mkdirSync(join(linesBookDir, '.audiobook'), { recursive: true });
+
+    writeFileSync(join(linesBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(linesBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: linesBookId,
+        manuscriptId: LINES_MANUSCRIPT_ID,
+        title: LINES_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 63, title: 'Chapter 63', slug: '63-chapter' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+
+    /* Cast: a linked row with NO `lines` field (the roster-add shape), a
+       linked row with no attributed lines, and a normal row whose analyzer-
+       stamped `lines` must survive untouched. */
+    writeFileSync(
+      join(linesBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator' },
+          { id: 'Wren', name: 'Wren', lines: 99 },
+          { id: 'Linnet_from_shannon-', name: 'Councilor Linnet' },
+          { id: 'ghost_from_shannon-', name: 'Ghost Link' },
+        ],
+      }),
+    );
+
+    writeFileSync(
+      join(linesBookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [
+          { id: 1, chapterId: 63, characterId: 'narrator', text: 'She spun toward the sound.' },
+          { id: 2, chapterId: 63, characterId: 'Linnet_from_shannon-', text: 'Of course she told us.' },
+          { id: 3, chapterId: 63, characterId: 'Linnet_from_shannon-', text: 'Oh, really?' },
+          { id: 4, chapterId: 63, characterId: 'Linnet_from_shannon-', text: 'Then why?' },
+          { id: 5, chapterId: 63, characterId: 'Wren', text: 'I never said that.' },
+        ],
+      }),
+    );
+  });
+
+  afterAll(async () => {
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache(LINES_MANUSCRIPT_ID);
+  });
+
+  it('fills cast.lines for a linked row that lacks one, from manuscript-edits attribution', async () => {
+    const res = await request(app).get(`/api/books/${linesBookId}/state`);
+    expect(res.status).toBe(200);
+    const chars = res.body.cast.characters as Array<{ id: string; lines?: number }>;
+    const byId = Object.fromEntries(chars.map((c) => [c.id, c.lines]));
+    /* The linked row had 3 sentences attributed in chapter 63 → count is
+       now surfaced instead of blank. */
+    expect(byId['Linnet_from_shannon-']).toBe(3);
+    /* A linked row with zero attributed lines becomes a truthful 0, not
+       undefined/blank. */
+    expect(byId['ghost_from_shannon-']).toBe(0);
+  });
+
+  it('overrides a stale stored lines count with the current attribution (derive-always)', async () => {
+    const res = await request(app).get(`/api/books/${linesBookId}/state`);
+    expect(res.status).toBe(200);
+    const chars = res.body.cast.characters as Array<{ id: string; lines?: number }>;
+    const Wren = chars.find((c) => c.id === 'Wren');
+    /* Wren's stored count (99) is replaced by her CURRENT attribution count
+       (1 sentence in manuscript-edits) — the cast view always reflects the
+       live attribution, not a value that may have drifted since analysis. */
+    expect(Wren?.lines).toBe(1);
+  });
+
+  it('preserves stored counts when no attribution source is loaded (analysis in flight)', async () => {
+    /* No manuscript-edits AND no analysis cache → nothing to derive from.
+       Deriving-always must NOT wipe every row to 0 in this state; the stored
+       counts are the only signal the cast view has. */
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache(LINES_MANUSCRIPT_ID);
+    rmSync(join(linesBookDir, '.audiobook', 'manuscript-edits.json'), { force: true });
+
+    const res = await request(app).get(`/api/books/${linesBookId}/state`);
+    expect(res.status).toBe(200);
+    const chars = res.body.cast.characters as Array<{ id: string; lines?: number }>;
+    const Wren = chars.find((c) => c.id === 'Wren');
+    /* Stored count survives; the linked row that never had one stays
+       absent rather than being forced to a misleading 0. */
+    expect(Wren?.lines).toBe(99);
+    const Linnet = chars.find((c) => c.id === 'Linnet_from_shannon-');
+    expect(Linnet?.lines).toBeUndefined();
+  });
+});
+
 describe('book-state router — state slice series-membership + on-disk rename', () => {
   /* Each case in this block creates its own book on disk so the test
      observing the post-rename layout doesn't tread on the shared bookId
