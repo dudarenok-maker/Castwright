@@ -278,6 +278,33 @@ export const manuscriptSlice = createSlice({
       else sent.emotion = a.payload.emotion as typeof sent.emotion;
     },
 
+    /* fs-33 — bulk-apply the emotion-only backfill pass for one chapter.
+       Fill-ONLY-empty: a detected emotion is written only where the sentence
+       currently has no (non-neutral) emotion, so a hand-set tag ALWAYS wins and
+       a re-run just fills the remaining neutrals. A `neutral` annotation is a
+       no-op (the pass omits these, but guard anyway). Persisted to
+       manuscript-edits.json via the persistence middleware, the same path synth
+       reads — so detected emotion reaches generation exactly like a manual tag. */
+    applyDetectedEmotions: (
+      s,
+      a: PayloadAction<{
+        chapterId: number;
+        annotations: Array<{ sentenceId: number; emotion: string }>;
+      }>,
+    ) => {
+      const byId = new Map<number, string>();
+      for (const ann of a.payload.annotations) {
+        if (ann.emotion && ann.emotion !== 'neutral') byId.set(ann.sentenceId, ann.emotion);
+      }
+      if (byId.size === 0) return;
+      for (const sent of s.sentences) {
+        if (sent.chapterId !== a.payload.chapterId) continue;
+        if (sent.emotion) continue; // manual / prior-detected wins — fill only empty
+        const detected = byId.get(sent.id);
+        if (detected) sent.emotion = detected as Sentence['emotion'];
+      }
+    },
+
     /* User edit: reassign a batch of sentences at once. Used by the
        boundary-drag handle and the segment inspector. Scoped to one
        chapter — the caller batches ids from a single chapter's segments. */

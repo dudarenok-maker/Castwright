@@ -99,6 +99,22 @@ export const castSlice = createSlice({
       const qwen = (otv.qwen ??= { name: '' });
       qwen.variants = { ...(qwen.variants ?? {}), [emotion]: { name: voiceId } };
     },
+    /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
+       badge + count update live (the DELETE route already removed it from
+       cast.json + disk — this is local-only, no persist rule, mirroring
+       setCharacterEmotionVariant). Clears the empty `variants` map so the badge
+       disappears. No-op for an unknown character / absent variant. */
+    removeCharacterEmotionVariant: (
+      s,
+      a: PayloadAction<{ characterId: string; emotion: string }>,
+    ) => {
+      const { characterId, emotion } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      const variants = c?.overrideTtsVoices?.qwen?.variants;
+      if (!variants || !(emotion in variants)) return;
+      delete variants[emotion as keyof typeof variants];
+      if (Object.keys(variants).length === 0) delete c!.overrideTtsVoices!.qwen!.variants;
+    },
     /* From POST /api/manuscripts/:id/analysis response. The analyser schema
        leaves voiceState optional, but freshly-analysed characters have, by
        definition, just had a voice generated for them — default the field
