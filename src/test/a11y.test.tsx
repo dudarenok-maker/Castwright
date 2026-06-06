@@ -33,12 +33,14 @@ import type { EditableBookMeta } from '../store/book-meta-slice';
 
 /* The Upload view fires api.importManuscript on user action only,
    but the workspace-path row mounts on render and calls
-   getWorkspaceInfo. Never-resolving promises keep the render shape
-   stable for axe to scan. */
+   getWorkspaceInfo. The Listen view's chapter rows fetch real waveform
+   peaks via getChapterAudio for every `done` chapter on mount.
+   Never-resolving promises keep the render shape stable for axe to scan. */
 vi.mock('../lib/api', () => ({
   api: {
     getWorkspaceInfo: () => new Promise(() => {}),
     importManuscript: () => new Promise(() => {}),
+    getChapterAudio: () => new Promise(() => {}),
   },
 }));
 
