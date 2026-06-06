@@ -139,9 +139,28 @@ export const stage2Schema = z
    whole-manuscript shape (none today). */
 export const stage2ChapterSchema = stage2Schema;
 
+/* fs-33 — the emotion-only backfill pass. The analyzer reads a chapter's
+   already-attributed sentences and returns ONLY {sentenceId, emotion} for the
+   sentences it assigns a delivery emotion. Strict: no `characterId`/`text` —
+   the pass must NOT re-attribute. `.min(1)` is deliberately omitted: a chapter
+   the model leaves entirely neutral returns `{ annotations: [] }`. */
+export const emotionAnnotationSchema = z
+  .object({
+    annotations: z.array(
+      z
+        .object({
+          sentenceId: z.number().int().positive(),
+          emotion: z.enum(EMOTIONS),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+
 export type Stage1Output = z.infer<typeof stage1Schema>;
 export type Stage1ChapterOutput = z.infer<typeof stage1ChapterSchema>;
 export type Stage2Output = z.infer<typeof stage2Schema>;
 export type Stage2ChapterOutput = z.infer<typeof stage2ChapterSchema>;
 export type CharacterOutput = z.infer<typeof characterSchema>;
 export type SentenceOutput = z.infer<typeof sentenceSchema>;
+export type EmotionAnnotationOutput = z.infer<typeof emotionAnnotationSchema>;

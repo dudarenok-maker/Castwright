@@ -1,6 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
-import { stage1Schema, stage2Schema, characterSchema, sentenceSchema, EMOTIONS } from './schemas.js';
+import {
+  stage1Schema,
+  stage2Schema,
+  characterSchema,
+  sentenceSchema,
+  emotionAnnotationSchema,
+  EMOTIONS,
+} from './schemas.js';
 
 /* The Ollama analyzer (server/src/analyzer/ollama.ts) feeds these per-stage
    schemas through `z.toJSONSchema(schema, { target: 'draft-07', reused: 'inline' })`
@@ -80,5 +87,48 @@ describe('fs-25 — sentence emotion (Phase-1 inline, 4a)', () => {
       'excited',
       'sad',
     ]);
+  });
+});
+
+describe('fs-33 — emotion-only annotation schema', () => {
+  it('accepts an annotations array of {sentenceId, emotion}', () => {
+    const parsed = emotionAnnotationSchema.parse({
+      annotations: [
+        { sentenceId: 3, emotion: 'angry' },
+        { sentenceId: 7, emotion: 'whisper' },
+      ],
+    });
+    expect(parsed.annotations).toHaveLength(2);
+    expect(parsed.annotations[0]).toEqual({ sentenceId: 3, emotion: 'angry' });
+  });
+
+  it('accepts an empty annotations array (a chapter the model left all-neutral)', () => {
+    expect(emotionAnnotationSchema.parse({ annotations: [] }).annotations).toEqual([]);
+  });
+
+  it('rejects a re-attribution attempt — characterId is not allowed (strict)', () => {
+    expect(
+      emotionAnnotationSchema.safeParse({
+        annotations: [{ sentenceId: 1, emotion: 'sad', characterId: 'Wren' }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects an out-of-enum emotion', () => {
+    expect(
+      emotionAnnotationSchema.safeParse({ annotations: [{ sentenceId: 1, emotion: 'furious' }] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects a non-positive / non-integer sentenceId', () => {
+    expect(
+      emotionAnnotationSchema.safeParse({ annotations: [{ sentenceId: 0, emotion: 'sad' }] })
+        .success,
+    ).toBe(false);
+    expect(
+      emotionAnnotationSchema.safeParse({ annotations: [{ sentenceId: 1.5, emotion: 'sad' }] })
+        .success,
+    ).toBe(false);
   });
 });

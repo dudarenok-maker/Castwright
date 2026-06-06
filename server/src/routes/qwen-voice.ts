@@ -489,3 +489,58 @@ qwenVoiceRouter.post(
     return res.status(200).json({ ok: true });
   },
 );
+
+/* DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion
+
+   fs-34 (fs-25 Wave 5e) — drop a designed emotion variant. Removes the
+   `overrideTtsVoices.qwen.variants[emotion]` slot from cast.json and deletes the
+   variant's `.pt` + `.json` on disk, so a bad design is discardable without
+   touching the base voice. The base `qwen.name` and every other variant are
+   preserved; an empty `variants` map is cleaned up so the Variants badge clears.
+   Idempotent: removing an absent variant still returns 200. */
+qwenVoiceRouter.delete(
+  '/:bookId/cast/:characterId/emotion-variant/:emotion',
+  async (req: Request, res: Response) => {
+    const { bookId, characterId, emotion } = req.params;
+
+    if (!(VARIANT_EMOTIONS as readonly string[]).includes(emotion)) {
+      return res.status(400).json({
+        error: `emotion must be one of: ${VARIANT_EMOTIONS.join(', ')}`,
+      });
+    }
+
+    const located = await findBookByBookId(bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const cast = await readJson<CastFile>(castJsonPath(located.bookDir));
+    const character = cast?.characters?.find((c) => c.id === characterId);
+    if (!character || !cast) {
+      return res.status(404).json({ error: `Character "${characterId}" not found.` });
+    }
+
+    /* Drop the slot from cast.json (preserving base + sibling variants). */
+    const qwenSlot = character.overrideTtsVoices?.qwen;
+    if (qwenSlot?.variants && emotion in qwenSlot.variants) {
+      delete qwenSlot.variants[emotion as Exclude<Emotion, 'neutral'>];
+      if (Object.keys(qwenSlot.variants).length === 0) delete qwenSlot.variants;
+      await writeJsonAtomic(castJsonPath(located.bookDir), cast);
+    }
+
+    /* Delete the designed embedding + its persona sidecar (best-effort). */
+    const designedId = `${deriveQwenVoiceId(character, characterId)}__${emotion}`;
+    await rm(qwenVoicePtPath(designedId), { force: true }).catch(() => {});
+    await rm(qwenVoiceSidecarPath(designedId), { force: true }).catch(() => {});
+
+    /* Evict from the sidecar's in-memory prompt cache (best-effort). */
+    try {
+      await fetch(`${getResolvedSidecarUrl()}/qwen/evict-voice`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voiceId: designedId }),
+      });
+    } catch {
+      /* sidecar unreachable — non-fatal */
+    }
+
+    return res.status(200).json({ ok: true, removed: emotion });
+  },
+);
