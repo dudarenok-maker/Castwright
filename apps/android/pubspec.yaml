@@ -41,6 +41,9 @@ dependencies:
   # app-2 — persist the paired-server connection (url/token/fingerprint).
   flutter_secure_storage: ^9.2.4
 
+  # app-2 — scan the server pairing QR.
+  mobile_scanner: ^5.2.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
