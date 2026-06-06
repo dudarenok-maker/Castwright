@@ -61,6 +61,12 @@
             </intent-filter>
         </receiver>
 
+        <!-- app-9: Android Auto media app descriptor (CarPlay is configured in
+             the iOS target). Lets the head unit browse the audio_service tree. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
