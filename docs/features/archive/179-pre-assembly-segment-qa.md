@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -102,4 +102,6 @@ chapter sails through — verified: ch17's `.lufs.json` reads a healthy `i =
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+Shipped 2026-06-06 (merge 174c796, PR #513, closes #509). Live acceptance
+confirmed: the pre-assembly QA gate ran during The Drowning Bell regenerations — SSE
+showed re-records and the new `segments.json` carried fewer `suspect` flags.

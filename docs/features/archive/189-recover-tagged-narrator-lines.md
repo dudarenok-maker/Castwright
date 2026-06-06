@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -92,4 +92,7 @@ a re-analysis fully recover such speakers *with* their lines.
 
 ## Ship notes
 
-(Filled when status flips to `stable`.) Closes #537. Builds on plan 187 (#528/#529). Refs #519.
+Shipped 2026-06-06 (merge 1accb11, PR #557). Closes #537. Builds on plan 187
+(#528/#529). Refs #519. Live acceptance confirmed: The Drowning Bell ch16 (Behnam) ends
+with non-zero lines and survives a subsequent re-analysis of another chapter;
+voice designed + chapter regenerated.

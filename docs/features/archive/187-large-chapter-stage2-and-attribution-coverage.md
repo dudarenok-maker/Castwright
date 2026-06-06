@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -131,8 +131,8 @@ manual escape hatch).
 
 ## Ship notes
 
-_Pending merge._ Live acceptance owed (user's Gemini key + The Drowning Bell): re-analyse
-ch19 via the subset route and confirm stage-2 completes (chunked), edits land, and
-ch19's tagged speakers carry lines; spot-check the Ollama engine for parity. Then
-`npm run audit:missing-speakers -- --book The Drowning Bell` flags any half-state and the
-repair fixes it without `--force`.
+Shipped 2026-06-06 (merge 56d0418, PR #532, closes #528 + #529). Live acceptance
+confirmed: The Drowning Bell ch19 re-analysed via the subset route — stage-2 completed
+(chunked), edits landed in `manuscript-edits.json`, and ch19's tagged speakers
+carry lines; `npm run audit:missing-speakers -- --book The Drowning Bell` is clean (no
+half-state).

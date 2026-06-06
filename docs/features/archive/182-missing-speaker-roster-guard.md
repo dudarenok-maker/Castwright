@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -130,4 +130,7 @@ ch34 Woltzer, ch47 Lessom again).
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped 2026-06-06 (merge 9bc81e1, PR #520, closes #519). Live acceptance
+confirmed: The Drowning Bell ch16/19/33/34/47 re-analysed; roster-guard recovered
+`Lessom`/`behnam`/`cadence`/`woltzer` with non-zero lines and
+`npm run audit:missing-speakers -- --book The Drowning Bell` is clean.

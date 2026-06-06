@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -105,4 +105,6 @@ per-sentence audio quality, not source fidelity).
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+Shipped 2026-06-06 (merge 1e93419, PR #516, closes #515). Live acceptance
+confirmed: The Drowning Bell ch12 + ch18 re-analysed and regenerated;
+`npm run audit:stage2-coverage` came back clean; the data-fix issue #517 is closed.
