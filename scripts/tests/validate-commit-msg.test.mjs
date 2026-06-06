@@ -9,6 +9,7 @@ const accepted = [
   'feat(frontend): add voice library compare entry',
   'fix(server): retry batch on 429',
   'refactor(sidecar): split synth pipeline',
+  'feat(app): scaffold the Flutter companion app',
   'perf(server): cache analyzer prompts',
   'test(e2e): cover sticky generation across navigation',
   'docs(docs): add plan 38',
