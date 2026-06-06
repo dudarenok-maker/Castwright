@@ -1,5 +1,7 @@
 package com.audiobookgenerator.audiobook_companion
 
-import io.flutter.embedding.android.FlutterActivity
+import com.ryanheise.audioservice.AudioServiceActivity
 
-class MainActivity : FlutterActivity()
+// app-5: extend AudioServiceActivity so audio_service's media session (lock
+// screen, Bluetooth controls, notification) attaches to the Flutter engine.
+class MainActivity : AudioServiceActivity()
