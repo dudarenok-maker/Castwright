@@ -60,6 +60,7 @@ function run(python, pyArgs, env) {
     cwd: SIDECAR_DIR,
     stdio: 'inherit',
     env: { ...process.env, ...env },
+    windowsHide: true,
   });
   if (res.error) throw new Error(`spawn failed: ${res.error.message}`);
   return res.status ?? 1;

@@ -172,7 +172,7 @@ describe('InstallBootstrap.start — state machine', () => {
     expect(finalJob?.status).toBe('installed');
     expect(finalJob?.error).toBeNull();
     expect(detect).toHaveBeenCalledTimes(2);
-    expect(spawnFn).toHaveBeenCalledWith('bash', expect.any(Array));
+    expect(spawnFn).toHaveBeenCalledWith('bash', expect.any(Array), { windowsHide: true });
   });
 
   it('windows path stays in "installing" with manualInstallerPath set after download', async () => {
