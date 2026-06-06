@@ -77,7 +77,7 @@ export async function applyId3v24Tags(
   args.push('-f', 'mp3', destPath);
 
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
     const stderrChunks: Buffer[] = [];
     child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
     child.on('error', (err) =>

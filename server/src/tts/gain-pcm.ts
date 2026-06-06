@@ -44,7 +44,7 @@ export async function applyGainToPcm(
   ];
 
   return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     child.stdout.on('data', (c) => stdoutChunks.push(c));
