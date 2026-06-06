@@ -2075,6 +2075,72 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ExportLanInfo' }
 
+  /api/devices:
+    get:
+      summary: List paired companion devices (srv-33)
+      operationId: listDevices
+      description: |
+        Per-device access tokens for the Android companion (srv-33), layered on
+        srv-20's shared secret. Behind the LAN guard (only an authed or loopback
+        caller). Returns device records WITHOUT any token material.
+      responses:
+        '200':
+          description: Paired devices
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [devices]
+                properties:
+                  devices:
+                    type: array
+                    items: { $ref: '#/components/schemas/Device' }
+    post:
+      summary: Mint a new per-device token (returned once) (srv-33)
+      operationId: createDevice
+      description: |
+        Generates a fresh, individually-revocable device token. The raw token is
+        returned ONCE in this response (only its SHA-256 is persisted) — the
+        caller must surface it to the user immediately.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, description: 'Human label, e.g. the phone name.' }
+      responses:
+        '201':
+          description: The created device plus its one-time raw token
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Device'
+                  - type: object
+                    required: [token]
+                    properties:
+                      token:
+                        type: string
+                        description: 'Raw access token — shown once; only its hash is stored.'
+
+  /api/devices/{id}:
+    delete:
+      summary: Revoke a paired device (srv-33)
+      operationId: revokeDevice
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { ok: { type: boolean } }
+        '404': { description: Unknown device }
+
   /api/books/{bookId}/state:
     get:
       summary: Book-open hydrate composite (state + cast + manuscript meta + revisions + …)
@@ -4432,6 +4498,17 @@ components:
         caFingerprint:
           type: string
           description: "srv-20 — the LAN CA's SHA-256 (X.509 fingerprint256), present only when the mkcert root CA is resolvable. A pairing client fetches /cert/root.crt, computes the same fingerprint, and pins only if it matches."
+
+    Device:
+      type: object
+      required: [id, label, createdAt, revoked]
+      description: "srv-33 — a paired companion device. Never carries token material (only the SHA-256 is persisted server-side)."
+      properties:
+        id: { type: string, description: "Stable device id (used to revoke)." }
+        label: { type: string, description: "Human label, e.g. the phone name." }
+        createdAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time, description: "Optional; last time this device's token was accepted." }
+        revoked: { type: boolean, description: "True once revoked — the guard then rejects its token." }
 
     GpuQueueState:
       type: object

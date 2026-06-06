@@ -17,14 +17,13 @@ the full backlog decomposition (`srv-32` + `app-1..14`), the v1 definition-of-do
 the wave-sequenced delivery roadmap. Each backlog item lands under its own branch + plan
 per CLAUDE.md; this doc is what they hang off.
 
-> **Build status (2026-06-07):** **the entire `app-*` build track is code-complete** — all
-> MVP server prereqs (`srv-34`/`srv-20`/`srv-35`/`srv-32`) + the full MVP app block
-> (`app-1`…`app-8`, `app-13`, `app-14`) + `app-11` (signed APK) + the follow-ups `app-9`
-> (in-car) and **`app-10` (LAN streaming)** are all built, tested, and merged. **The only
-> thing left is the batched live-device acceptance pass** (per the user's directive) — and
-> the parked follow-ups `srv-33` (server multi-device tokens) + `app-12` (iOS release). See
-> **Build progress & dev
-> setup** immediately below.
+> **Build status (2026-06-07):** **the entire `app-*` build track + `srv-33` are
+> code-complete** — all MVP server prereqs (`srv-34`/`srv-20`/`srv-35`/`srv-32`) + the full
+> MVP app block (`app-1`…`app-8`, `app-13`, `app-14`) + `app-11` (signed APK) + the follow-ups
+> `app-9` (in-car), `app-10` (LAN streaming), and **`srv-33` (per-device tokens + revoke)** are
+> all built, tested, and merged. **The only thing left is the batched live-device acceptance
+> pass** (per the user's directive) — and the parked `app-12` (iOS release). See **Build
+> progress & dev setup** immediately below.
 
 ---
 
@@ -50,16 +49,18 @@ per CLAUDE.md; this doc is what they hang off.
 | `app-14` | #582 (merge `e5b5da9`, closed #550) | home shelf + multi-book switching: pure `home_shelf` (`buildContinueListening` = in-progress books most-recently-played first; `buildRecentlyUpdated` newest-first capped) + presentational `HomeScreen` (Continue-listening rail + recently-updated rail; tap → `onOpenBook`, host wires to the player's `switchBook` for seamless per-book resume). 6 paired Dart tests. **Live device acceptance owed.** **MVP app block (app-1..8,13,14) complete.** |
 | `app-11` | #586 (merge `0563f05`, closed #554) | distribution: Gradle release signing via git-ignored `android/key.properties` (real upload keystore) with a **debug-signed fallback** so `flutter build apk --release` always produces an installable sideload APK; `key.properties.example` + `.gitignore` for the secrets; CI publishes a `companion-release-apk` artifact per build. Build-config (no Dart tests); release APK verified locally (65.6 MB). |
 | `app-9` | #588 (merge `e05753d`, closed #552) | in-car (Android Auto + CarPlay): pure `media_browse_tree` (root→books→chapters `MediaNode` + `bookMediaId`/`chapterMediaId` codec + `childrenOf`) wired into `CompanionAudioHandler.getChildren`/`playFromMediaId` (audio_service `MediaBrowser`); Android Auto descriptor (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests. **Live device/head-unit acceptance owed.** |
-| `app-10` | _this PR_ (closed #553) | stream-over-LAN instant play: pure `resolvePlaybackSource` (downloaded → local file; else streaming-on + on-LAN → LAN stream; else needs-download — offline-first) + `AppSettings.streamOverLan` toggle (default off) + `AudioEngine.setStreamUrl` (just_audio `AudioSource.uri` with auth headers) + a settings switch. 4 paired Dart tests. **Live device acceptance owed.** |
+| `app-10` | #589 (merge `c51f71e`, closed #553) | stream-over-LAN instant play: pure `resolvePlaybackSource` (downloaded → local file; else streaming-on + on-LAN → LAN stream; else needs-download — offline-first) + `AppSettings.streamOverLan` toggle (default off) + `AudioEngine.setStreamUrl` (just_audio `AudioSource.uri` with auth headers) + a settings switch. 4 paired Dart tests. **Live device acceptance owed.** |
+| `srv-33` | _this PR_ (closed #551) | per-device tokens + revoke, layered on srv-20 (server): `workspace/device-tokens.ts` (pure `findValidDevice`/`hashToken`/`redactDevice` + cache-backed mint/list/revoke, sha-256-only at rest) + `routes/devices.ts` (`GET`/`POST`/`DELETE /api/devices` behind the LAN guard) + `lan-auth.ts` now accepts the shared secret **OR** a non-revoked device token (still sync). Backward-compatible. 18 server tests; openapi `/api/devices` + `Device` schema. **App-side adoption (mint+use a per-device token at pairing) is an optional small follow-up — the shipped app keeps working on the shared token.** |
 
 ### Build track complete
 
-**Every `app-*` item through `app-10` is built, tested, and merged.** The only remaining
-work is the **batched live-device/head-unit acceptance pass** (per the user's directive — run
-the whole feature set on the Pixel 10 Pro / a physical device + a head unit against the real
-GPU server). Parked follow-ups outside this run: **`srv-33`** (server multi-device tokens) and
-**`app-12`** (iOS release — the codebase is iOS-ready: app-pinned TLS, dual-platform plugins,
-the unsigned-iOS CI compile is green on every PR).
+**Every `app-*` item through `app-10`, plus the `srv-33` server follow-up, is built, tested,
+and merged.** The only remaining work is the **batched live-device/head-unit acceptance pass**
+(per the user's directive — run the whole feature set on the Pixel 10 Pro / a physical device +
+a head unit against the real GPU server). Parked: **`app-12`** (iOS release — the codebase is
+iOS-ready: app-pinned TLS, dual-platform plugins, the unsigned-iOS CI compile is green on every
+PR). _srv-33 ships the server capability; wiring the companion to mint + use a per-device token
+at pairing (so revoke targets one phone) is a tiny optional follow-up._
 
 ### Dev setup (this box — full toolchain installed + validated)
 
