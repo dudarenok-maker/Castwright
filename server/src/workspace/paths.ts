@@ -218,6 +218,14 @@ export function queueJsonPath(): string {
   return join(WORKSPACE_ROOT, '.queue.json');
 }
 
+/** srv-33 — workspace-level per-device access tokens (companion multi-device
+    pairing + revoke, layered on srv-20's shared secret). One file holds every
+    paired device's record `{ id, label, tokenHash, createdAt, lastSeenAt?,
+    revoked? }`; sibling to voices.json at the workspace root. */
+export function deviceTokensJsonPath(): string {
+  return join(WORKSPACE_ROOT, 'device-tokens.json');
+}
+
 /** srv-2 — workspace-level backup jail. Per-book state.json snapshots live at
     `<WORKSPACE_ROOT>/.backups/<bookId>/<YYYYMMDD-HHMMSS>.json` — OUTSIDE the
     book folder so a book move/delete doesn't take its history with it, and so
