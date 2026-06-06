@@ -19,6 +19,7 @@ import {
   playEmotionVariantSample,
   variantVoiceIdFor,
 } from '../lib/play-emotion-variant';
+import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { IconPlay, IconSpinner } from '../lib/icons';
 import type { Character, Emotion } from '../lib/types';
 
@@ -55,6 +56,7 @@ export function SentenceEmotionControl({
 }) {
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
+  const markStale = useMarkCharacterStaleIfRendered();
   const [open, setOpen] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -72,6 +74,17 @@ export function SentenceEmotionControl({
   const current = emotion && emotion !== 'neutral' ? emotion : undefined;
   const choose = (value: Emotion) => {
     dispatch(manuscriptActions.setSentenceEmotion({ chapterId, sentenceId, emotion: value }));
+    /* fs-34 — an emotion edit only changes the audio when it actually selects a
+       different voice: a Qwen character WITH a designed variant for this emotion.
+       Otherwise synth is byte-identical (plan-177 invariant), so don't raise a
+       false-positive stale banner. */
+    if (
+      value !== 'neutral' &&
+      character?.ttsEngine === 'qwen' &&
+      variantVoiceIdFor(character, value)
+    ) {
+      markStale({ id: character.id, name: character.name });
+    }
     setNote(null);
     setOpen(false);
   };

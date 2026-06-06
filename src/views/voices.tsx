@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { SectionLabel, MixedHeading, VoiceSwatch, Pill } from '../components/primitives';
+import { SectionLabel, MixedHeading, VoiceSwatch, Pill, VariantsBadge } from '../components/primitives';
 import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
 import { IconPlay, IconSparkle } from '../lib/icons';
@@ -226,6 +226,20 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   );
   const families = useMemo(() => buildFamilies(presetLibrary, tab), [presetLibrary, tab]);
   const qwenGroups = useMemo(() => buildQwenStatusGroups(qwenLibrary, tab), [qwenLibrary, tab]);
+  /* fs-34 — per-voice designed-variant count for the cross-book Voices badge.
+     Resolve each Qwen voice to its character (redux for the open book, the
+     global cast cache for others) and count its qwen.variants. */
+  const variantCountByVoiceId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const v of qwenLibrary) {
+      const source =
+        v.bookId === currentBookId ? characters : (globalCastCache.get(v.bookId) ?? null);
+      const ch = source ? findCharacterForVoice(v, source) : null;
+      const n = ch ? Object.keys(ch.overrideTtsVoices?.qwen?.variants ?? {}).length : 0;
+      if (n > 0) map.set(v.id, n);
+    }
+    return map;
+  }, [qwenLibrary, currentBookId, characters, globalCastCache]);
   const books = [...new Set(library.map((v) => v.bookId))];
 
   /* Compare derivations. Memoised so a transient render doesn't recompute
@@ -1089,6 +1103,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               onOpenCharacter={onOpenCharacter}
               selectedVoiceIds={selectedVoiceIds}
               onToggleSelect={toggleSelect}
+              variantCountByVoiceId={variantCountByVoiceId}
               representativeBookIdBySeries={representativeBookIdBySeries}
               onRebaselineSeries={(bookId) =>
                 dispatch(uiActions.openRebaselineModal({ bookId }))
@@ -1651,6 +1666,9 @@ interface QwenSectionProps {
   onOpenCharacter?: (voice: Voice) => void;
   selectedVoiceIds: string[];
   onToggleSelect: (v: Voice) => void;
+  /* fs-34 — designed emotion-variant count per Qwen voiceId (0/absent → no
+     badge). Resolved in the parent where the cross-book cast cache lives. */
+  variantCountByVoiceId: Map<string, number>;
   /* Per-series Rebaseline (plan 108 follow-up) — reused verbatim from
      VoiceFamilySection. Rebaseline *creates* designed Qwen voices, so it
      sits naturally on the Qwen sections' series-group headers. */
@@ -1671,6 +1689,7 @@ function QwenStatusSection({
   onOpenCharacter,
   selectedVoiceIds,
   onToggleSelect,
+  variantCountByVoiceId,
   representativeBookIdBySeries,
   onRebaselineSeries,
 }: QwenSectionProps) {
@@ -1735,13 +1754,18 @@ function QwenStatusSection({
                           onToggleSelect={onToggleSelect}
                           badge={
                             group.status === 'designed' ? (
-                              v.generated ? (
-                                <Pill color="success">Generated</Pill>
-                              ) : v.sampled ? (
-                                <Pill color="peach">Sampled</Pill>
-                              ) : (
-                                <Pill color="library">Designed</Pill>
-                              )
+                              <span className="inline-flex items-center gap-1.5">
+                                {v.generated ? (
+                                  <Pill color="success">Generated</Pill>
+                                ) : v.sampled ? (
+                                  <Pill color="peach">Sampled</Pill>
+                                ) : (
+                                  <Pill color="library">Designed</Pill>
+                                )}
+                                {(variantCountByVoiceId.get(v.id) ?? 0) > 0 && (
+                                  <VariantsBadge count={variantCountByVoiceId.get(v.id)!} />
+                                )}
+                              </span>
                             ) : undefined
                           }
                         />
