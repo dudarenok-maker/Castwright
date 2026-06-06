@@ -38,6 +38,9 @@ dependencies:
   # srv-20 pairing (app-2) — SHA-256 of the server CA for cert-fingerprint pinning.
   crypto: ^3.0.6
 
+  # app-2 — persist the paired-server connection (url/token/fingerprint).
+  flutter_secure_storage: ^9.2.4
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
