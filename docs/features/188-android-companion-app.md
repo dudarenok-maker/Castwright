@@ -166,6 +166,16 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   **overwrites** a newer 2:30 pm position made on the web client. The fix makes
   last-write-wins reflect *when the user actually listened*, not when the network
   delivered the write.
+- **Guarded write (compare-and-set, from 3rd-review point 4):** the PUT must **read the
+  stored record first and commit only if the incoming `listenedAt` is strictly newer**
+  than the stored one; on a stale write, return `200` with the stored (newer) record so
+  the client reconciles. Without this, the server still blind-overwrites
+  (`book-state.ts:1168-1175` writes unconditionally) and a slow mobile push clobbers a
+  newer web write. This is the targeted fix for concurrent web+companion writers — it does
+  **NOT** wake the broader `srv-10`/`fe-11` multi-writer items (those cover `state.json`;
+  listen-progress only here). *Open nuance for the plan: a wholesale reject can drop a
+  marker added on the losing side — consider union-merging `markers` while LWW-ing the
+  position.*
 - **Benefit (user/technical):** correct cross-device resume; unblocks `app-6`'s two-way
   sync. **Depends on:** nothing (consumed by `app-6`).
 
@@ -300,6 +310,24 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   multi-device refinement.
 - **Benefit (user/security):** revocable per-device access. **Depends on:** `srv-20`.
 
+#### `srv-35` — Stable per-chapter identifier (reorder/rename-proof) — *recommended before GA, not MVP-blocking*
+
+- **What:** add an immutable per-chapter `uuid` at import, preserved through restructure
+  (merge/split/reorder, `restructure.ts`) and rename (`78-chapter-rename`), and key
+  listen-progress + the sync manifest by it. **Verified gap (3rd review, point 5):**
+  chapter `id` is *positional* — re-issued 1..N on reorder (`restructure.ts:1185-1189`) —
+  and `slug` embeds both id and title (`chapterSlug(id, title)`), so **neither survives a
+  restructure**; today's web listen-progress already assumes a stable `id` with no
+  fallback (`book-state.ts:1064-1075`). The reviewer's "store `chapterSlug` as fallback"
+  therefore **doesn't hold** (slug is no more stable than id) — a real stable key is needed.
+- **Scope note:** benefits the **existing web player too**, not just the companion. **v1
+  keys by `id` (web parity)** — the blast radius is bounded (restructure-after-listen is
+  rare; the manifest's fingerprint set makes a mis-keyed *audio* file self-heal by
+  re-download, so only a *bookmark* can mis-resume), so this is a strongly-recommended
+  follow-up, not an MVP gate. `srv-32`/`app-3`/`app-6` adopt the stable key once it lands.
+- **Benefit (user/technical):** bookmarks + per-chapter sync survive chapter restructure on
+  both web and the companion. **Depends on:** nothing (cross-cutting server change).
+
 #### `app-9` — In-car support (Android Auto **and** CarPlay)
 
 - **What:** a media-browser service so the library browses + plays on the car head unit,
@@ -331,12 +359,70 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 
 ### Relationships to existing items (reconcile, don't absorb)
 
-- **`srv-20`** — promoted to a hard MVP dependency; annotated in BACKLOG.
+*(Expanded by the 2026-06-06 cross-item coherence review — collisions with non-companion
+backlog items.)*
+
+- **`srv-20`** — hard MVP dependency, with two coherence constraints: (a) its LAN/pairing
+  payload carries the `token` **and** the CA `caFingerprint` so `app-2` auto-verifies; (b)
+  the token middleware must **explicitly exempt `/cert/root.crt`** (top-level `/cert`,
+  `index.ts:207` — already outside `/api/*`, but keep the exemption explicit): it's public
+  CA material the app fetches over the *untrusted bootstrap channel before* it can pin, so
+  it must not require the secret token. *(3rd review, point 2.)*
+- **`fe-1`** (in-app LAN HTTPS banner / QR) — shares the LAN-URL + cert plumbing, but the
+  companion needs its **own *structured* pairing QR** carrying `{ url, token,
+  caFingerprint }`. Do **not** unify it with `fe-1`'s / the export-modal's *browser-open*
+  QR — a phone browser scanning a JSON blob breaks; they share source data, not QR format.
+  The pairing-QR surface reuses `fe-1`'s machinery, emits the structured payload. *(Point 1
+  — adopted with this adjustment.)*
+- **`ops-2`** (Docker deployment) — when built, two companion constraints: (a) **mount a
+  persistent volume for the mkcert CA** (the `mkcert -CAROOT` dir) so `caFingerprint`
+  survives container rebuilds (else every update forces a re-pair); (b) honour a
+  **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads
+  `os.networkInterfaces()`, which inside a container yields bridge IPs like `172.18.0.x`)
+  so the QR carries the host's real LAN IP. Annotated on the `ops-2` row. *(Point 3.)*
+- **`srv-10` / `fe-11`** (multi-writer conflict — parked Won't) — the companion adds a
+  *second concurrent writer* to listen-progress. `srv-34`'s guarded compare-and-set handles
+  that **specific** route; it does **not** wake the broader `state.json` multi-writer items,
+  which stay parked. *(Point 4.)*
+- **`srv-35`** (stable chapter identifier — new follow-up above) — chapter `id`/`slug` are
+  both restructure-unstable; v1 keys by `id` (web parity), `srv-35` is the durable fix for
+  web + companion. *(Point 5 — adopted as a tracked item; the reviewer's slug-fallback was
+  rejected because slug embeds the id + title.)*
 - **`fs-15`** (cross-book resume) — `srv-32` manifest + the `app-14` "Continue listening"
   shelf overlap; cross-link both ways, keep distinct.
 - **`fe-3` / `fs-7` / `fs-8`** (Apple Books / Plex / PocketBook handoffs) — the companion
   is the user's *own* replacement for the sideload pain, but does **not** obsolete them
   (they still serve users who prefer third-party apps).
+
+---
+
+## External dependencies & required cross-area changes
+
+The full set of work **outside the `app-*` items** that must be in place for the companion
+to work — found via the 2026-06-06 coherence reviews. Nothing here is new *companion*
+code; it's the surrounding changes the app depends on. **Deal with these before/with the
+build, not after.** "Blocks" = the MVP can't ship without it.
+
+| # | Dependency | Area / scope | Blocks v1? | What must change |
+|---|---|---|---|---|
+| D1 | **`srv-20` shared-secret token** lands | server (security) | **YES** — `app-2` | Today `/api/*` is unauthenticated over LAN. srv-20 is the auth primitive the app sends its token to. Also: **carry `token` + `caFingerprint` in the pairing payload**, **exempt `/cert/root.crt`** from the guard, and **don't break the web app's LAN access** (the phone-browser web UI also needs the token). |
+| D2 | **CA fingerprint exposed** for pairing | server (security) | **YES** — `app-2` | Compute the SHA-256 of the mkcert root CA (already served by `cert-root.ts`) and surface it in the pairing payload (extend `/api/export/lan` or a small `/api/pair`). Part of `srv-20`. |
+| D3 | **`openapi.yaml` documents `srv-32` + `srv-34`** and `api-types` regenerated | openapi | **YES** — `app-2` | The Dart client is generated from `openapi.yaml`; the new sync-manifest op + the `listenedAt` field must be in the spec. `srv-32` also **bumps the `/api/info` `schemas` map** so the app can compat-gate. |
+| D4 | **Audio-stamp correctness** on every re-record path | server (generation) | **YES** — `srv-32` | `srv-32`'s fingerprint trusts `audioRenderedAt`(+size) changing on *every* audio mutation. **Audit + fix** per-character splice (`fs-26`), segment-QA re-record (plan 179), loudness renorm — any path that rewrites audio without bumping the stamp makes the companion silently stale. (This is the `srv-32` test obligation, but the fix may reach into those modules.) |
+| D5 | **Pairing-QR surface** (structured payload) | frontend | **YES** — `app-2` | A "Pair a device" QR rendering `{ url, token, caFingerprint }`, reusing `fe-1`'s LAN-URL/cert plumbing. Distinct from the browser-open QR. Lands with `srv-20` / `fe-1`. |
+| D6 | **Server runs in LAN HTTPS mode** with the mkcert CA installed | operational (no code) | **YES** | The app reaches the server only over `npm run start:lan` / `LAN_HTTPS=1` (all-interfaces bind via `srv-19`, shipped) + `npm run install:cert-mobile`. A loopback-only server is unreachable. Surface this in the pairing flow + docs. |
+| D7 | **Path-filtered CI learns the `apps/android/` (`app`) scope** | ops / ci | **YES** — `app-1` | `verify.yml` (plan 103) must run the Flutter lane for `app`-scope PRs and skip frontend/server legs (and vice-versa). New CI plumbing; the iOS compile uses the existing macOS runner (`cross-os.yml`). The `app` commit scope itself is **already registered**. |
+| D8 | **`srv-35` stable chapter identifier** | server (cross-cutting) | No — *recommended before GA* | Chapter `id`/`slug` are restructure-unstable (verified). v1 keys by `id` (web parity); `srv-35` is the durable fix and also repairs the **existing web player**. Touches `restructure.ts`/`scan.ts`/`state.json`. |
+| D9 | **`ops-2` Docker constraints** | ops | No — only if Dockerised | Persistent mkcert-CA volume (else `caFingerprint` rotates → re-pair) + `LAN_HOST` override (container bridge IPs). |
+| D10 | **`app-11` signed APK / distribution** | ops | No — MVP installs the `app-1` debug APK | Proper signed channel for alpha testers; Play Store later. |
+
+**Concurrency note:** the companion is a *second* concurrent writer to `listen-progress`;
+`srv-34`'s guarded compare-and-set covers exactly that route — it does **not** reopen the
+parked `state.json` multi-writer items (`srv-10` / `fe-11`).
+
+**Net new server/contract items this creates (beyond the app):** `srv-32`, `srv-34`
+(MVP); `srv-35` (recommended); plus the `srv-20` extensions (D1/D2) and the openapi (D3),
+generation-stamp (D4), frontend-QR (D5) and CI (D7) work folded into existing items.
 
 ---
 
@@ -385,6 +471,15 @@ plan per CLAUDE.md; the waves are the scheduling layer over them.
 
 **Peak parallelism is 3 agents (Wave 5); most waves are 1.** Total ≈ 7 build sessions,
 several of which (waves 2–4) are one continuing agent down the spine.
+
+**Cross-area dependencies map onto the waves** (see *External dependencies*). The Wave 1
+server track is broader than just the three `srv-*` items: it also lands **D1/D2**
+(`srv-20` token + CA-fingerprint-in-QR + `/cert/root.crt` exemption), **D3** (openapi
+ops + `/api/info` schemas bump), **D4** (audio-stamp audit across splice/QA/loudnorm), and
+**D5** (the frontend pairing-QR surface, reusing `fe-1`'s plumbing). The Wave 1 app track
+also lands **D7** (teach `verify.yml`'s path filter the `apps/android/` `app` scope).
+**D6** (server in LAN HTTPS mode + mkcert CA) is an operational precondition for the Wave 2
+live-pair gate. `srv-35` (**D8**) is a recommended-before-GA follow-up, not on the MVP path.
 
 **One-time prerequisites (gate before the Wave 1 app track):** install the Flutter SDK +
 Android SDK/emulator on the dev box; a physical Android phone for real-device acceptance
@@ -449,10 +544,18 @@ the two parallel waves (1 and 5) land as **one integration PR per wave**.
    fetching `/cert/root.crt`, asserting its SHA-256 == the QR-scanned `caFingerprint`, and
    pinning it in the app's `SecurityContext` — never an OS cert install, never a manual
    hex compare (keeps iOS parity + closes the MitM gap).
-4. **Last-write-wins by client listen-time.** Two-way resume conflict resolution orders by
-   the client `listenedAt` (server sanity-bounded, `srv-34`), NOT by network-receive time
-   — so an offline listen pushed late can't overwrite a newer position made elsewhere.
-5. **Never-cross-language / never-wrong-voice** server invariants (plan 162, plan 108)
+4. **Last-write-wins by client listen-time, server-guarded.** Two-way resume conflict
+   resolution orders by the client `listenedAt` (server sanity-bounded, `srv-34`), NOT by
+   network-receive time; the server **commits only if the incoming `listenedAt` is strictly
+   newer** than the stored one (compare-and-set) so a stale push can't clobber a newer
+   position. Scope: listen-progress only — does not touch `state.json` (`srv-10`/`fe-11`).
+5. **Bootstrap cert fetch is unauthenticated.** `srv-20`'s token guard must never cover
+   `/cert/root.crt` — it's public CA material the app fetches over the untrusted channel
+   before it can pin + present the token.
+6. **Chapter keying for v1 is `id` (web parity).** Chapter `id`/`slug` are restructure-
+   unstable (verified); the companion keys sync + bookmarks by `id` like the web player
+   until `srv-35` adds a stable identifier, then both adopt it.
+7. **Never-cross-language / never-wrong-voice** server invariants (plan 162, plan 108)
    are unaffected — the app only *plays* server-rendered audio, it does not synthesize.
 
 ## Test plan
