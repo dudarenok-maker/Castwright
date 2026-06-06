@@ -283,12 +283,6 @@ _Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ support deflection; the answers live where the user already is.
 _Full detail + acceptance:_ [#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473).
 
-#### `fs-23` — In-app model manager ([#476](https://github.com/dudarenok-maker/AudioBook-Generator/issues/476))
-
-- _What:_ One place to see installed models (Kokoro, Qwen base + design, Coqui XTTS, analyzer) with sizes + disk used, and install / remove / update each. Gives the scattered in-app installers (Qwen, Coqui `fe-22`) a single home; pairs with `ops-7` (SHA pinning) for integrity.
-- _Benefit (user):_ demystifies the multi-engine zoo; a clear home for the install flows.
-_Full detail + acceptance:_ [#476](https://github.com/dudarenok-maker/AudioBook-Generator/issues/476).
-
 #### `fs-21` — First-run setup wizard ([#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474))
 
 - _What:_ A guided fresh-install flow: detect GPU, check/install the required models (Kokoro, Qwen, analyzer), pick defaults (engine, analysis model, theme), then run a one-sentence smoke synth to prove the whole stack end to end before the user uploads anything.
@@ -319,12 +313,6 @@ Source for the whole sub-group: the [2026-05-31 security review](security/2026-0
 - _Companion dependency:_ the **Android companion app** (plan 188, `app-2`) depends on this token as its v1 auth primitive, and needs the QR/pairing payload to also carry the CA **SHA-256 fingerprint** so the app auto-verifies the pinned cert (no manual hex compare). Two acceptance constraints from the companion: **exempt `/cert/root.crt`** from the token check (public CA material the app fetches over the untrusted channel *before* it can present the token), and don't break the web app's existing LAN access. A kickoff-time reason to prioritise it. The multi-device / revocable evolution is `srv-33`.
 _Full detail + acceptance:_ [#425](https://github.com/dudarenok-maker/AudioBook-Generator/issues/425).
 
-#### `srv-21` — Validate `sidecarUrl` (scheme + private-host allowlist) before fetch ([#426](https://github.com/dudarenok-maker/AudioBook-Generator/issues/426))
-
-- _What:_ tighten the zod validator (or a dedicated `assertSafeSidecarUrl`) to require `http`/`https` and a loopback/private-range host before any outbound fetch; reject otherwise with a clear 400 on the settings PUT.
-- _Benefit (technical):_ closes the SSRF primitive; makes the sidecar-URL contract explicit instead of "any string we'll fetch".
-_Full detail + acceptance:_ [#426](https://github.com/dudarenok-maker/AudioBook-Generator/issues/426).
-
 #### `side-12` — Load Qwen voice `.pt` prompts with `weights_only=True` (or a safe format) ([#428](https://github.com/dudarenok-maker/AudioBook-Generator/issues/428))
 
 - _What:_ switch the voice-prompt load to `weights_only=True`; if the saved payload isn't a pure tensor/state-dict, migrate the design-time save (`design_voice`) to a safe container (safetensors, or JSON sidecar + tensors) so the load no longer needs arbitrary unpickling. One-time read-compat shim for already-cached `.pt` files (re-derive or one-shot re-save). Prerequisite groundwork for `side-13`.
@@ -339,11 +327,6 @@ _Full detail + acceptance:_ [#427](https://github.com/dudarenok-maker/AudioBook-
 
 ### Ops, CI & distribution
 
-#### `ops-7` — Pin SHA256 for model + wheel downloads ([#430](https://github.com/dudarenok-maker/AudioBook-Generator/issues/430))
-
-- _What:_ pin a known-good SHA256 for each downloaded artifact and verify after download (refuse + delete on mismatch): the kokoro `.onnx`/`.bin` release assets, and the FlashAttention wheel URL. For the pip installs, evaluate `pip install --require-hashes` against a pinned requirements set for the opt-in Qwen/FA2 deps (or at minimum pin exact versions). Surface a clear failure message pointing at the expected hash.
-- _Benefit (user / technical):_ closes the supply-chain gap on the binaries that run with the user's privileges on install — the sharpest of these is the single-maintainer community FA2 wheel. Cheap relative to the RCE blast radius.
-_Full detail + acceptance:_ [#430](https://github.com/dudarenok-maker/AudioBook-Generator/issues/430).
 
 #### `ops-9` — Enable server-side branch protection on `main` (when Pro/public) ([#429](https://github.com/dudarenok-maker/AudioBook-Generator/issues/429))
 
