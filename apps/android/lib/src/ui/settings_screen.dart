@@ -69,6 +69,13 @@ class SettingsScreen extends StatelessWidget {
             onChanged: (v) =>
                 onChanged(settings.copyWith(autoSyncOnReconnect: v)),
           ),
+          SwitchListTile(
+            key: const Key('stream-over-lan'),
+            title: const Text('Stream over LAN'),
+            subtitle: const Text('Play an undownloaded chapter instantly at home'),
+            value: settings.streamOverLan,
+            onChanged: (v) => onChanged(settings.copyWith(streamOverLan: v)),
+          ),
           const _SectionHeader('Storage'),
           SwitchListTile(
             key: const Key('auto-delete-finished'),
