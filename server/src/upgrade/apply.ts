@@ -150,7 +150,7 @@ export function extractRelease(zipPath: string, releaseDir: string, topDir: stri
 
 function run(cmd: string, args: string[], cwd: string): Promise<void> {
   return new Promise((res, rej) => {
-    const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: isWin() });
+    const child = spawn(cmd, args, { cwd, stdio: 'inherit', shell: isWin(), windowsHide: true });
     child.on('error', rej);
     child.on('exit', (code) => (code === 0 ? res() : rej(new Error(`${cmd} ${args.join(' ')} exited ${code}`))));
   });
@@ -211,6 +211,7 @@ export function createApplySteps(opts: { venvDir: string; log?: (m: string) => v
         },
         detached: true,
         stdio: 'ignore',
+        windowsHide: true,
       });
       child.unref();
     },

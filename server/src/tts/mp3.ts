@@ -93,6 +93,7 @@ export function hasLibFdkAac(): boolean {
     const result = spawnSync('ffmpeg', ['-hide_banner', '-codecs'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
     });
     if (result.status !== 0) {
       cachedHasLibFdkAac = false;
@@ -369,7 +370,7 @@ export async function encodePcmToAudio(
   let encodeResult: { encoded: Buffer; stderr: string };
   try {
     encodeResult = await new Promise<{ encoded: Buffer; stderr: string }>((resolve, reject) => {
-      const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
@@ -514,7 +515,7 @@ export async function decodeAudioToPcm(input: Buffer, sampleRate: number): Promi
     'pipe:1',
   ];
   return new Promise<Buffer>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     child.stdout.on('data', (c) => stdoutChunks.push(c));

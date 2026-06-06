@@ -18,7 +18,7 @@ export interface FfmpegProbe {
    PATH (ENOENT), so the strict `=== 0` correctly reports absence. */
 function present(bin: string): boolean {
   try {
-    return spawnSync(bin, ['-version'], { stdio: 'ignore' }).status === 0;
+    return spawnSync(bin, ['-version'], { stdio: 'ignore', windowsHide: true }).status === 0;
   } catch {
     return false;
   }
