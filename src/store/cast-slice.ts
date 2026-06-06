@@ -321,15 +321,37 @@ export const castSlice = createSlice({
         characterId: string;
         matchedFrom: NonNullable<Character['matchedFrom']>;
         voiceId?: string;
+        /* Profile content the server merged from the prior character onto
+           this one (representative quotes + descriptors). Applied here so the
+           open drawer + cast row reflect the inherited quotes/attributes
+           immediately; the persist-middleware rule for applyManualMatch then
+           round-trips them to cast.json. Present only when the link changed
+           something. */
+        profile?: {
+          evidence?: Character['evidence'];
+          attributes?: string[];
+          description?: string;
+          tone?: Character['tone'];
+          gender?: Character['gender'];
+          ageRange?: Character['ageRange'];
+        };
       }>,
     ) => {
-      const { characterId, matchedFrom, voiceId } = a.payload;
+      const { characterId, matchedFrom, voiceId, profile } = a.payload;
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
       c.matchedFrom = matchedFrom;
       if (c.voiceState !== 'locked' && c.voiceState !== 'tuned') {
         c.voiceId = voiceId ?? c.voiceId;
         c.voiceState = 'reused';
+      }
+      if (profile) {
+        if (profile.evidence !== undefined) c.evidence = profile.evidence;
+        if (profile.attributes !== undefined) c.attributes = profile.attributes;
+        if (profile.description !== undefined) c.description = profile.description;
+        if (profile.tone !== undefined) c.tone = profile.tone;
+        if (profile.gender !== undefined) c.gender = profile.gender;
+        if (profile.ageRange !== undefined) c.ageRange = profile.ageRange;
       }
     },
     /* From POST /api/books/:bookId/cast/:characterId/not-linked-to (plan 101).

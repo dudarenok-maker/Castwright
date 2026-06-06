@@ -34,6 +34,7 @@ import type { Character } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
+import { filterLinkablePriorCandidates } from '../lib/prior-link-candidates';
 import { parseDuration } from '../lib/time';
 import { stageToHash } from '../lib/router';
 import {
@@ -1501,23 +1502,17 @@ export function Layout() {
       )}
       {profileCharacter &&
         (() => {
-          /* Build the manual-link picker's prior-roster list. Strip any
-           entries that have already been auto-matched (any local cast
-           member's matchedFrom points at them) — re-linking would just
-           be a no-op alias re-write. Bucket on (bookId, characterId)
-           since two different prior books could each have a character
-           named "Sophie" with the same id. */
+          /* Build the manual-link picker's prior-roster list. Drop any
+           candidate the cast has already pinned to a canonical identity —
+           either an exact matchedFrom hit OR a shared canonical voiceId, so
+           ALL of a recurring character's prior-book copies collapse out of
+           the picker once any one of them is linked (otherwise the same
+           person lingers under every other volume's name). See
+           filterLinkablePriorCandidates for the full rule. */
           const priorRoster = bookId ? (priorRosterByBook.get(bookId) ?? []) : [];
-          const alreadyLinked = new Set<string>();
-          for (const c of characters) {
-            const mf = c.matchedFrom;
-            if (mf?.bookId && mf?.characterId) {
-              alreadyLinked.add(`${mf.bookId}::${mf.characterId}`);
-            }
-          }
-          const mergeCandidatesPrior = priorRoster
-            .filter((p) => !alreadyLinked.has(`${p.bookId}::${p.id}`))
-            .map((p) => ({ id: p.id, name: p.name, bookId: p.bookId, bookTitle: p.bookTitle }));
+          const mergeCandidatesPrior = filterLinkablePriorCandidates(characters, priorRoster).map(
+            (p) => ({ id: p.id, name: p.name, bookId: p.bookId, bookTitle: p.bookTitle }),
+          );
           return (
             <ProfileDrawer
               character={profileCharacter}
@@ -1553,6 +1548,7 @@ export function Layout() {
                           characterId: sourceId,
                           matchedFrom: res.matchedFrom,
                           voiceId: res.voiceId,
+                          profile: res.profile,
                         }),
                       );
                       /* Close so the user lands back on the confirm card and can see
