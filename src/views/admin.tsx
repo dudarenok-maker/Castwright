@@ -129,7 +129,7 @@ function ModelManagerLink() {
         type="button"
         onClick={() => dispatch(uiActions.openModelManager())}
         data-testid="admin-open-model-manager"
-        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-white text-sm font-medium hover:bg-ink/90"
+        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
       >
         Open Model Manager →
       </button>

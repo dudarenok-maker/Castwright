@@ -30,7 +30,7 @@ interface DetectResp {
 
 const POLL_INTERVAL_MS = 1_500;
 
-export function WhisperInstall() {
+export function WhisperInstall({ onInstalled }: { onInstalled?: () => void } = {}) {
   const [detect, setDetect] = useState<DetectResp | null>(null);
   const [job, setJob] = useState<WhisperInstallJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +61,10 @@ export function WhisperInstall() {
         if (!res.ok) throw new Error(`poll failed: HTTP ${res.status}`);
         const body = (await res.json()) as WhisperInstallJob;
         setJob(body);
-        if (body.status === 'installed') void doDetect();
+        if (body.status === 'installed') {
+          void doDetect();
+          onInstalled?.();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -69,7 +72,7 @@ export function WhisperInstall() {
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [job, doDetect]);
+  }, [job, doDetect, onInstalled]);
 
   const startInstall = async () => {
     setError(null);
