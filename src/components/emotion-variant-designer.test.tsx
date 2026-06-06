@@ -6,7 +6,13 @@ import { castSlice } from '../store/cast-slice';
 import { EmotionVariantDesigner } from './emotion-variant-designer';
 
 const designQwenVoice = vi.fn();
-vi.mock('../lib/api', () => ({ api: { designQwenVoice: (...a: unknown[]) => designQwenVoice(...a) } }));
+const removeQwenVariant = vi.fn();
+vi.mock('../lib/api', () => ({
+  api: {
+    designQwenVoice: (...a: unknown[]) => designQwenVoice(...a),
+    removeQwenVariant: (...a: unknown[]) => removeQwenVariant(...a),
+  },
+}));
 
 function makeStore(characters: any[]) {
   return configureStore({
@@ -21,6 +27,8 @@ beforeEach(() => {
     voiceId: 'qwen-sophie__angry',
     previewUrl: '/audio/voices/sophie__angry.mp3',
   });
+  removeQwenVariant.mockReset();
+  removeQwenVariant.mockResolvedValue(undefined);
 });
 
 describe('fs-25 — EmotionVariantDesigner', () => {
@@ -91,5 +99,33 @@ describe('fs-25 — EmotionVariantDesigner', () => {
     );
     expect(screen.getByTestId('variant-done-whisper')).toBeTruthy();
     expect(screen.queryByLabelText('Design the Whisper variant')).toBeNull();
+  });
+
+  it('fs-34 — removing a designed variant calls the API and drops it from redux', async () => {
+    const store = makeStore([
+      {
+        ...baseChar,
+        overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: { whisper: { name: 'qwen-sophie__whisper' } } } },
+      },
+    ]);
+    render(
+      <Provider store={store}>
+        <EmotionVariantDesigner
+          bookId="b1"
+          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
+          sampleVoiceId="v1"
+          modelKey="qwen3-tts-0.6b"
+          baseDesigned
+          variants={{ whisper: { name: 'qwen-sophie__whisper' } }}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByLabelText('Remove the Whisper variant'));
+    expect(removeQwenVariant).toHaveBeenCalledWith('b1', 'sophie', 'whisper');
+    await waitFor(() => {
+      const qwen = (store.getState().cast.characters[0] as unknown as typeof baseChar)
+        .overrideTtsVoices.qwen as { variants?: unknown };
+      expect(qwen.variants).toBeUndefined();
+    });
   });
 });
