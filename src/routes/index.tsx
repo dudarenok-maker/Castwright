@@ -66,6 +66,9 @@ const RestructureView = lazy(() =>
 const AdminView = lazy(() =>
   import('../views/admin').then((m) => ({ default: m.AdminView })),
 );
+const ModelManagerView = lazy(() =>
+  import('../views/model-manager').then((m) => ({ default: m.ModelManagerView })),
+);
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
@@ -317,6 +320,12 @@ function AccountRoute() {
 function AdminRoute() {
   useHydrateStage({ kind: 'admin' }, []);
   return <AdminView />;
+}
+
+/* fs-23 — In-app Model Manager, reached from the Admin view. */
+function ModelManagerRoute() {
+  useHydrateStage({ kind: 'model-manager' }, []);
+  return <ModelManagerView />;
 }
 
 export function ChangelogRoute() {
@@ -909,6 +918,7 @@ export const router = createHashRouter([
       { path: 'admin', element: <AdminRoute /> },
       /* Inbound alias for old dev bookmarks; stageToHash canonicalises to #/admin. */
       { path: 'worktrees', element: <AdminRoute /> },
+      { path: 'models', element: <ModelManagerRoute /> },
       { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },
       { path: 'books/:bookId/confirm', element: <ConfirmRoute /> },
       { path: 'books/:bookId/:view', element: <ReadyRoute /> },
