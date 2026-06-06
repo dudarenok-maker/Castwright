@@ -83,6 +83,7 @@ function writeState(opts: {
     id: number;
     title: string;
     slug: string;
+    uuid?: string;
     excluded?: boolean;
     audioRenderedAt?: string;
   }>;
@@ -178,9 +179,11 @@ describe('GET /:bookId/state — title-only refresh on legacy books', () => {
 
   it('does NOT re-parse when version is already current — state.json mtime unchanged', async () => {
     writeState({
+      /* uuids present so srv-35's lazy backfill has nothing to migrate —
+         this test isolates the title-refresh no-rewrite invariant. */
       chapters: [
-        { id: 1, title: 'Preserved Title', slug: '01-preserved' },
-        { id: 2, title: 'Another Preserved', slug: '02-another' },
+        { id: 1, title: 'Preserved Title', slug: '01-preserved', uuid: 'u-1' },
+        { id: 2, title: 'Another Preserved', slug: '02-another', uuid: 'u-2' },
       ],
       parserVersion: CHAPTER_TITLE_PARSER_VERSION,
     });

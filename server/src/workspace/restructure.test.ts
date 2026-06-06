@@ -15,6 +15,8 @@ import {
   applyMerge,
   applySplit,
   applyReorder,
+  applyRename,
+  applyExclude,
   computeBodySplitIndex,
   type RestructureSentence,
 } from './restructure.js';
@@ -29,6 +31,7 @@ function makeState(
     excluded?: boolean;
     audioModelKey?: string;
     audioRenderedAt?: string;
+    uuid?: string;
   }>,
 ): BookStateJson {
   return {
@@ -49,6 +52,7 @@ function makeState(
       ...(c.excluded ? { excluded: true } : {}),
       ...(c.audioModelKey ? { audioModelKey: c.audioModelKey } : {}),
       ...(c.audioRenderedAt ? { audioRenderedAt: c.audioRenderedAt } : {}),
+      ...(c.uuid ? { uuid: c.uuid } : {}),
     })),
     coverGradient: ['#000', '#fff'],
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -488,5 +492,97 @@ describe('applyReorder', () => {
     // Only chapter that had audio gets a rename op
     expect(result.audioOps).toHaveLength(1);
     expect(result.audioOps[0]).toMatchObject({ from: '02-b', to: '01-b' });
+  });
+});
+
+/* srv-35 (plan 190) — the immutable per-chapter uuid is identity, not
+   position, so a restructure must carry it by the chapter it belongs to,
+   never re-issue it like the positional id. */
+describe('uuid preservation across restructure (srv-35)', () => {
+  it('reorder carries each chapter uuid with the chapter, not the position', () => {
+    const state = makeState([
+      { id: 1, title: 'A', uuid: 'u-a' },
+      { id: 2, title: 'B', uuid: 'u-b' },
+      { id: 3, title: 'C', uuid: 'u-c' },
+    ]);
+    const hints = makeHints([
+      { id: 1, title: 'A', body: 'a' },
+      { id: 2, title: 'B', body: 'b' },
+      { id: 3, title: 'C', body: 'c' },
+    ]);
+
+    // Rotate: old 3,1,2 → new ids 1,2,3
+    const result = applyReorder(state, hints, [], { order: [3, 1, 2] });
+
+    const byNewId = new Map(result.state.chapters.map((c) => [c.id, c.uuid]));
+    expect(byNewId.get(1)).toBe('u-c'); // old C is now id 1
+    expect(byNewId.get(2)).toBe('u-a'); // old A is now id 2
+    expect(byNewId.get(3)).toBe('u-b'); // old B is now id 3
+  });
+
+  it('merge keeps the survivor (first member) uuid and preserves the tail uuid', () => {
+    const state = makeState([
+      { id: 1, title: 'A', uuid: 'u-a' },
+      { id: 2, title: 'B', uuid: 'u-b' },
+      { id: 3, title: 'C', uuid: 'u-c' },
+      { id: 4, title: 'D', uuid: 'u-d' },
+    ]);
+    const hints = makeHints([
+      { id: 1, title: 'A', body: 'A body' },
+      { id: 2, title: 'B', body: 'B body' },
+      { id: 3, title: 'C', body: 'C body' },
+      { id: 4, title: 'D', body: 'D body' },
+    ]);
+
+    // Merge old 2+3 → new id 2 ; old 4 becomes new id 3
+    const result = applyMerge(state, hints, [], { chapterIds: [2, 3] });
+
+    const byNewId = new Map(result.state.chapters.map((c) => [c.id, c.uuid]));
+    expect(byNewId.get(1)).toBe('u-a'); // untouched
+    expect(byNewId.get(2)).toBe('u-b'); // merged B+C keeps B's (survivor) uuid
+    expect(byNewId.get(3)).toBe('u-d'); // tail D renumbered, uuid preserved
+  });
+
+  it('split keeps the original uuid on the first half and mints a fresh one for the second', () => {
+    const state = makeState([{ id: 1, title: 'A', uuid: 'u-a' }]);
+    const hints = makeHints([{ id: 1, title: 'A', body: 'A1\n\nA2' }]);
+    const sentences = [s(1, 1, 'narr', 'A1'), s(2, 1, 'narr', 'A2')];
+
+    // Split chapter 1 after sentence 1 → two chapters
+    const result = applySplit(state, hints, sentences, {
+      chapterId: 1,
+      afterSentenceId: 1,
+    });
+
+    expect(result.state.chapters).toHaveLength(2);
+    expect(result.state.chapters[0].uuid).toBe('u-a'); // first half keeps it
+    expect(result.state.chapters[1].uuid).toBeDefined();
+    expect(result.state.chapters[1].uuid).not.toBe('u-a'); // second half is new
+  });
+
+  it('rename preserves the uuid', () => {
+    const state = makeState([{ id: 1, title: 'A', uuid: 'u-a' }]);
+    const hints = makeHints([{ id: 1, title: 'A', body: 'a' }]);
+
+    const result = applyRename(state, hints, [], { chapterId: 1, title: 'New Title' });
+
+    expect(result.state.chapters[0].uuid).toBe('u-a');
+  });
+
+  it('exclude preserves the uuid', () => {
+    const state = makeState([
+      { id: 1, title: 'A', uuid: 'u-a' },
+      { id: 2, title: 'B', uuid: 'u-b' },
+    ]);
+    const hints = makeHints([
+      { id: 1, title: 'A', body: 'a' },
+      { id: 2, title: 'B', body: 'b' },
+    ]);
+
+    const result = applyExclude(state, hints, [], { chapterIds: [2], excluded: true });
+
+    expect(result.state.chapters[0].uuid).toBe('u-a');
+    expect(result.state.chapters[1].uuid).toBe('u-b');
+    expect(result.state.chapters[1].excluded).toBe(true);
   });
 });

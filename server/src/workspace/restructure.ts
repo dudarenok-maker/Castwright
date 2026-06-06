@@ -13,6 +13,7 @@
    plus a sentence remap the route returns to the frontend so it can
    update its manuscript-slice without re-fetching the whole list. */
 
+import { randomUUID } from 'node:crypto';
 import { slug } from './paths.js';
 import type { BookStateJson } from './scan.js';
 import type { ChapterHint } from '../store/manuscripts.js';
@@ -269,6 +270,13 @@ function buildNewStateChapters(
       id: newId,
       title: hint.title,
       slug: newSlug,
+      /* srv-35 — uuid is identity, carried from the primary old chapter
+         (reorder: the moved chapter; merge: the first/survivor member).
+         A new chapter with no old inheritor — the SECOND half of a split,
+         which has no primaryOldByNewId entry — mints a fresh uuid. This is
+         independent of `contentChanged`: re-recording audio doesn't change
+         which chapter this is. */
+      uuid: oldChapter?.uuid ?? randomUUID(),
     };
     if (hint.excluded) base.excluded = true;
     if (oldChapter?.duration) base.duration = oldChapter.duration;
