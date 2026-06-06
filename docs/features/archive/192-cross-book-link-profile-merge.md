@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -105,4 +105,7 @@ it feel broken.
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+Shipped 2026-06-06 (merge 9cd7f57, PR #574). Live acceptance confirmed:
+Unlocked → Cast → "Dame Alina" shows inherited representative quotes/attributes
+that persist across reload; `scripts/repair-linked-character-attributes.mjs --apply`
+run to top up thin multi-book rows.

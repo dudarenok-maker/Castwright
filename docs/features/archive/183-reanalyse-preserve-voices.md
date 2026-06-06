@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -104,4 +104,7 @@ analysing URL, which is exactly what caused the damage.
 
 ## Ship notes
 
-(Filled when status flips to `stable`.)
+Shipped 2026-06-06 (merge ce93ab8, PR #521, closes #518). Live acceptance
+confirmed: re-analysing an already-voiced book keeps every designed/reused voice
+(cast view, not "No voice designed yet"), and the Generate-view per-chapter
+Re-analyse button re-attributes with inline progress.
