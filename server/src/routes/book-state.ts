@@ -34,6 +34,7 @@ import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { ensureChapterUuids, reconcileChapterUuids } from '../workspace/chapter-uuid.js';
 import {
   putManuscript,
   getManuscript,
@@ -189,6 +190,12 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
 
     const { bookDir } = located;
     const state = await refreshChapterTitles(located.state, bookDir);
+    /* srv-35 — lazy-migrate chapter uuids on the canonical book read (the
+       web player's source of truth), persisting once so the Listen view's
+       resume can resolve by uuid. Idempotent. */
+    if (ensureChapterUuids(state)) {
+      await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+    }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[] }>(manuscriptEditsJsonPath(bookDir));
     const revs = await readJson<{
@@ -565,7 +572,13 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         const next: BookStateJson = {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
-          chapters: patch.chapters ?? state.chapters,
+          /* srv-35 — the frontend round-trips state.chapters but doesn't
+             track the server-only `uuid`, so a wholesale replace would
+             strip it. reconcileChapterUuids carries each uuid across by id
+             (and mints for a genuinely-new chapter). */
+          chapters: patch.chapters
+            ? reconcileChapterUuids(patch.chapters, state.chapters)
+            : state.chapters,
           title: pickString(patch.title, state.title),
           author: pickString(patch.author, state.author),
           series: pickString(patch.series, state.series),
@@ -1063,6 +1076,13 @@ interface ListenMarker {
 
 interface ListenProgressFile {
   chapterId: number;
+  /* srv-35 (plan 190) — the stable uuid of the resume chapter, derived on
+     PUT from the current chapterId. GET resolves it back to the CURRENT
+     chapterId so a resume position survives a chapter restructure (the
+     positional id shifts, the uuid doesn't). Absent on legacy records and
+     on a PUT whose chapterId doesn't map to a chapter — GET then falls
+     back to the stored chapterId. */
+  chapterUuid?: string;
   currentSec: number;
   updatedAt: string;
   /* Plan 53 — per-book playback rate
@@ -1114,6 +1134,17 @@ bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Respon
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const progress = await readJson<ListenProgressFile>(listenProgressJsonPath(located.bookDir));
+    /* srv-35 — resolve the stored chapterUuid to the chapter's CURRENT id,
+       so a resume position made before a restructure lands on the right
+       chapter. Falls back to the stored chapterId when the record predates
+       uuids or the chapter has since been deleted. */
+    if (progress?.chapterUuid) {
+      const current = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+      const match = current?.chapters.find((c) => c.uuid === progress.chapterUuid);
+      if (match && match.id !== progress.chapterId) {
+        return res.json({ ...progress, chapterId: match.id });
+      }
+    }
     res.json(progress);
   } catch (e) {
     console.error('[book-state] GET listen-progress failed', e);
@@ -1201,8 +1232,15 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
         return res.json(existing);
       }
     }
+    /* srv-35 — stamp the resume chapter's stable uuid (resolved from the
+       current chapterId) so GET can re-derive the chapterId after a
+       restructure. Absent when the chapterId doesn't map to a chapter (or
+       a legacy book without uuids) — GET then keeps the stored chapterId. */
+    const stateForUuid = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+    const chapterUuid = stateForUuid?.chapters.find((c) => c.id === body.chapterId)?.uuid;
     const record: ListenProgressFile = {
       chapterId: body.chapterId,
+      ...(chapterUuid ? { chapterUuid } : {}),
       currentSec: body.currentSec,
       updatedAt: effectiveUpdatedAt,
       ...(playbackRate !== undefined ? { playbackRate } : {}),
