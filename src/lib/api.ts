@@ -1344,13 +1344,22 @@ async function mockStreamSplice({ chapterId, mode, characterId, onTick }: Splice
   });
 }
 
-async function mockGetChapterAudio({ duration }: AudioArgs): Promise<ChapterAudio> {
+async function mockGetChapterAudio({ chapterId, duration }: AudioArgs): Promise<ChapterAudio> {
   await wait(120);
   const totalSec = parseDuration(duration || '10:00');
   const peakCount = 240;
+  /* Deterministic per-chapter envelope: seed a tiny LCG from chapterId so each
+     chapter has a stable-but-distinct waveform. (Was Math.random() — fine when
+     peaks went unrendered, but the Listen-view rows now draw them, so the
+     listen.png / listen-dark.png visual snapshots need a deterministic shape.) */
+  let seed = ((Number(chapterId) || 1) * 1009) % 233280;
+  const rand = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
   const peaks = Array.from({ length: peakCount }, (_, i) => {
     const base = 0.35 + 0.45 * Math.sin((i / peakCount) * Math.PI);
-    return Math.max(0.05, Math.min(1, base + (Math.random() - 0.5) * 0.35));
+    return Math.max(0.05, Math.min(1, base + (rand() - 0.5) * 0.35));
   });
   /* Deterministic per-character segment layout so the Listen-view per-line
      re-record resolver (fs-26) has something to bite on in mock mode: split

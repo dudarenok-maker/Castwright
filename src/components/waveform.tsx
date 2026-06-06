@@ -1,22 +1,52 @@
 interface WaveformProps {
   progress: number;
   active: boolean;
+  /** Real per-chapter loudness envelope (server's 240-bin RMS peaks, plan 56).
+      When present and non-empty the bars are derived from it; otherwise the
+      seeded `BARS` fallback below keeps the decorative shape for loading /
+      not-yet-generated rows. */
+  peaks?: number[];
 }
 
+const BAR_COUNT = 48;
+
 // Deterministic seeded bar heights, computed once at module load so every
-// Waveform mount renders the identical 48-bar profile (fe-6, #413).
+// Waveform mount renders the identical 48-bar profile when no real peaks are
+// available (fe-6, #413).
 const BARS: number[] = (() => {
   let s = 42;
   const out: number[] = [];
-  for (let i = 0; i < 48; i++) {
+  for (let i = 0; i < BAR_COUNT; i++) {
     s = (s * 9301 + 49297) % 233280;
     out.push(0.25 + (s / 233280) * 0.75);
   }
   return out;
 })();
 
-export function Waveform({ progress, active }: WaveformProps) {
-  const bars = BARS;
+/* Reduce the server's variable-length RMS envelope (240 bins in practice) to
+   `count` bar heights in [floor, 1]. Chunked mean, then re-normalised so the
+   loudest bar fills the track, with a small floor so quiet/silent bins still
+   render a visible sliver — matching the seeded bars' visual weight. Returns
+   null for an empty/undefined input so the caller can fall back to BARS. */
+export function peaksToBars(peaks: number[] | undefined, count = BAR_COUNT): number[] | null {
+  if (!peaks || peaks.length === 0) return null;
+  const floor = 0.12;
+  const means: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const lo = Math.floor((i * peaks.length) / count);
+    const hi = Math.max(lo + 1, Math.floor(((i + 1) * peaks.length) / count));
+    let sum = 0;
+    for (let j = lo; j < hi; j++) sum += peaks[j];
+    means.push(sum / (hi - lo));
+  }
+  const max = Math.max(...means);
+  // All-silent envelope → uniform floor (avoids divide-by-zero / NaN).
+  if (max <= 0) return means.map(() => floor);
+  return means.map((m) => floor + (1 - floor) * (m / max));
+}
+
+export function Waveform({ progress, active, peaks }: WaveformProps) {
+  const bars = peaksToBars(peaks) ?? BARS;
   return (
     <div className="flex items-end gap-[2px] h-7">
       {bars.map((h, i) => {
