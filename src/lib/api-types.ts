@@ -600,13 +600,19 @@ export interface paths {
         get: operations["getListenProgress"];
         /**
          * Stamp the per-book resume bookmark
-         * @description Persist `{ chapterId, currentSec }` for this book; the server
-         *     stamps `updatedAt = new Date().toISOString()`. Writes via
-         *     `writeJsonAtomic` to `listen-progress.json` (no backup
-         *     rotation — the file is cheap to re-derive on loss, unlike
-         *     `state.json`). Called debounced from the mini-player's
-         *     `onTimeUpdate` (once per 5 s) plus one final flush on chapter
-         *     switch / close. Plan [47](docs/features/archive/47-listen-progress.md).
+         * @description Persist `{ chapterId, currentSec }` for this book. The server
+         *     stamps `updatedAt = new Date().toISOString()` unless the caller
+         *     supplies `listenedAt` (srv-34 / plan 188), in which case that
+         *     client wall-clock time is used instead and a **guarded
+         *     compare-and-set** applies: the write is committed only if
+         *     `listenedAt` is strictly newer than the stored record, otherwise
+         *     the existing (newer) record is returned unchanged so the client
+         *     reconciles. Writes via `writeJsonAtomic` to
+         *     `listen-progress.json` (no backup rotation — the file is cheap to
+         *     re-derive on loss, unlike `state.json`). Called debounced from the
+         *     mini-player's `onTimeUpdate` (once per 5 s) plus one final flush on
+         *     chapter switch / close. Plan
+         *     [47](docs/features/archive/47-listen-progress.md).
          */
         put: operations["putListenProgress"];
         post?: never;
@@ -4393,11 +4399,23 @@ export interface operations {
                      *     from "re-record" flags.
                      */
                     markers?: components["schemas"]["ListenMarker"][];
+                    /**
+                     * Format: date-time
+                     * @description srv-34 (plan 188) — optional client wall-clock time the
+                     *     user actually listened. When present it stamps
+                     *     `updatedAt` instead of receive-time and gates a guarded
+                     *     compare-and-set (the write is rejected if not strictly
+                     *     newer than the stored record). Lets an offline client
+                     *     (the Android companion) flush in-car progress on
+                     *     reconnect without clobbering a newer position made
+                     *     elsewhere. Rejected (400) if non-date or absurdly future.
+                     */
+                    listenedAt?: string;
                 };
             };
         };
         responses: {
-            /** @description The just-saved record, including the server-stamped updatedAt */
+            /** @description The saved record (or, on a guard-rejected stale write, the existing newer record), with updatedAt = the client listenedAt when supplied */
             200: {
                 headers: {
                     [name: string]: unknown;
