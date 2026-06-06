@@ -110,10 +110,39 @@ describe('GET /api/diagnostics', () => {
   });
 
   it('treats a CPU-only sidecar as ok (no GPU is not a failure)', async () => {
-    probeSidecarHealth.mockResolvedValue({ status: 'reachable', url: '', proxy: 'sidecar', device: null });
+    /* CPU-only = device null AND no VRAM figures (torch.cuda.is_available() is
+       false, so the sidecar reports no vramTotalMb). */
+    probeSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      url: '',
+      proxy: 'sidecar',
+      device: null,
+      vramTotalMb: null,
+    });
     const res = await request(makeApp()).get('/api/diagnostics');
     expect(byId(res.body.checks, 'gpu').status).toBe('ok');
     expect(byId(res.body.checks, 'gpu').detail).toMatch(/CPU/i);
+  });
+
+  it('reports cuda for a Qwen-on-GPU sidecar even when device is null (Coqui idle)', async () => {
+    /* Regression: the GPU row used to key off the Coqui-only `device` field, so a
+       Qwen run (Coqui not loaded → device null) showed "CPU — no GPU detected"
+       despite VRAM figures proving CUDA is present. */
+    probeSidecarHealth.mockResolvedValue({
+      status: 'reachable',
+      url: '',
+      proxy: 'sidecar',
+      device: null,
+      vramReservedMb: 3072,
+      vramTotalMb: 8192,
+      qwenLoaded: true,
+    });
+    const res = await request(makeApp()).get('/api/diagnostics');
+    const gpu = byId(res.body.checks, 'gpu');
+    expect(gpu.status).toBe('ok');
+    expect(gpu.detail).toMatch(/cuda/);
+    expect(gpu.detail).toMatch(/8\.0 GB/);
+    expect(gpu.detail).not.toMatch(/CPU/i);
   });
 
   it('skips the Ollama analyzer check when the engine is Gemini', async () => {

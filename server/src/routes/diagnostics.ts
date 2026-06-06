@@ -91,7 +91,15 @@ diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
         };
       }
       const device = sidecar.device ?? null;
-      if (device !== 'cuda') {
+      const reserved = sidecar.vramReservedMb;
+      const total = sidecar.vramTotalMb;
+      /* CUDA presence is engine-independent: the sidecar reports vramTotalMb iff
+         torch.cuda.is_available() (see _cuda_vram_mb). Don't key off the `device`
+         field alone — it only reflects the Coqui engine and only when Coqui is
+         loaded, so a Qwen-only run (Coqui idle) reports device=null while the GPU
+         is plainly in use. */
+      const cudaPresent = device === 'cuda' || total != null;
+      if (!cudaPresent) {
         return {
           id: 'gpu',
           label: 'GPU / VRAM',
@@ -99,8 +107,6 @@ diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
           detail: device ? `device: ${device}` : 'CPU — no GPU detected',
         };
       }
-      const reserved = sidecar.vramReservedMb;
-      const total = sidecar.vramTotalMb;
       const queue = readGpuQueueState();
       const ratio = reserved != null && total != null && total > 0 ? reserved / total : null;
       const status: CheckStatus = ratio != null && ratio > 0.85 ? 'warn' : 'ok';
