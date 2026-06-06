@@ -1,0 +1,17 @@
+# app-11: release signing template. Copy to `android/key.properties` (git-ignored)
+# and fill in your upload keystore. When this file is ABSENT the release build
+# falls back to debug signing, so `flutter build apk --release` still produces an
+# installable sideload APK for alpha testing.
+#
+# Generate an upload keystore once:
+#   keytool -genkey -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 \
+#     -validity 10000 -alias upload
+# Then point storeFile at it (path relative to android/app, or absolute).
+#
+# In CI, write this file from repository secrets before `flutter build apk --release`
+# and base64-decode the keystore — never commit either.
+
+storePassword=changeit
+keyPassword=changeit
+keyAlias=upload
+storeFile=upload-keystore.jks
