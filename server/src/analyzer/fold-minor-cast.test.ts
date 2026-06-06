@@ -342,6 +342,29 @@ describe('foldMinorCast', () => {
     expect(result.characters.find((c) => c.id === 'unknown-female')).toBeUndefined();
   });
 
+  it('keeps a 0-line character whose name the prose explicitly tags (#537 — stage-2 stranded their line on narrator)', () => {
+    /* A `"…," Behnam noted.` tag means Behnam genuinely speaks; if stage-2 left
+       his quote on the narrator he has 0 attributed lines, but he must NOT be
+       dropped — the fold treats a prose-tagged 0-line speaker as a stage-2
+       failure, not a non-speaker. */
+    const chars = [
+      makeChar('narrator'),
+      makeChar('Wren', { name: 'Wren', gender: 'female' }),
+      makeChar('behnam', { name: 'Behnam Aria', gender: 'male' }), // 0 lines, but tagged
+    ];
+    const sentences: SentenceOutput[] = [
+      { id: 1, chapterId: 1, characterId: 'Wren', text: '“Hi there,”' },
+      { id: 2, chapterId: 1, characterId: 'Wren', text: 'Wren said brightly.' },
+      { id: 3, chapterId: 1, characterId: 'Wren', text: '“Anyone home?”' },
+      { id: 4, chapterId: 1, characterId: 'narrator', text: '“That would be easier to believe,”' },
+      { id: 5, chapterId: 1, characterId: 'narrator', text: 'Behnam noted.' },
+    ];
+    const result = foldMinorCast(chars, sentences, { minLines: 3 });
+    expect(result.characters.map((c) => c.id)).toContain('behnam');
+    expect(result.dropped).not.toContain('Behnam Aria');
+    expect(result.summary.droppedSilent).toBe(0);
+  });
+
   it('keeps an "Unknown <descriptor>" entry with 0 lines as a fold (analyzer-flagged minor speaker, not a non-speaker)', () => {
     /* "Unknown Jogger" with 0 attributed lines still folds rather than
        drops — the "Unknown" naming convention is a signal from the
