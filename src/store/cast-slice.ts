@@ -106,11 +106,36 @@ export const castSlice = createSlice({
        instead of nothing. */
     hydrateFromAnalysis: (s, a: PayloadAction<AnalyseResponse>) => {
       const { characters } = a.payload;
-      if (characters?.length) {
-        s.characters = characters.map((c) =>
-          c.voiceState ? c : { ...c, voiceState: 'generated' },
-        );
-      }
+      if (!characters?.length) return;
+      /* Overlay the existing slice's voice-design fields onto the freshly-analysed
+         roster, matched by id — the SAME preservation mergeCharacters already does
+         for live Phase-0a snapshots (#518). The analysis-complete payload that lands
+         on /confirm carries voice continuity only for characters matched against
+         OTHER books in the series (the series-reuse pass); a character DESIGNED IN
+         THIS BOOK (overrideTtsVoices.qwen, no voiceId/matchedFrom) finds no match and
+         arrives voiceless. A flat replace dropped it in Redux, so /confirm rendered
+         "No voice designed yet" for Berrin/Sela/Quill even though cast.json on disk
+         still held the voice. Existing-wins ONLY when the existing entry has the
+         field, so a fresh reuse link stamped this run still flows through. */
+      const byId = new Map(s.characters.map((c) => [c.id, c]));
+      s.characters = characters.map((inc) => {
+        const existing = byId.get(inc.id);
+        if (!existing) return inc.voiceState ? inc : { ...inc, voiceState: 'generated' };
+        return {
+          ...inc,
+          voiceId: existing.voiceId ?? inc.voiceId,
+          matchedFrom: existing.matchedFrom ?? inc.matchedFrom,
+          /* matchFactors is voice-match-only — the analyzer payload never carries
+             it, so there is no incoming value to fall back to; just keep ours. */
+          matchFactors: existing.matchFactors,
+          voiceState: existing.voiceState ?? inc.voiceState ?? 'generated',
+          overrideTtsVoices: existing.overrideTtsVoices ?? inc.overrideTtsVoices,
+          ttsEngine: existing.ttsEngine ?? inc.ttsEngine,
+          voiceStyle: existing.voiceStyle ?? inc.voiceStyle,
+          notLinkedTo: existing.notLinkedTo ?? inc.notLinkedTo,
+          aliases: unionAliases(existing.aliases, inc.aliases),
+        };
+      });
     },
     /* Live cast-update events from Phase 0a (per-chapter cast detection).
        Each event carries the running roster snapshot — upsert by id so
@@ -225,9 +250,7 @@ export const castSlice = createSlice({
       const key = aliasName.trim().toLowerCase();
       const source = s.characters.find((c) => c.id === sourceCharacterId);
       if (source) {
-        source.aliases = (source.aliases ?? []).filter(
-          (n) => n.trim().toLowerCase() !== key,
-        );
+        source.aliases = (source.aliases ?? []).filter((n) => n.trim().toLowerCase() !== key);
       }
       /* Append the new standalone character. Idempotent on id (double-
          dispatch under network retry leaves the existing entry in place,
@@ -244,10 +267,7 @@ export const castSlice = createSlice({
        to a character's aliases array. Idempotent (case-insensitive
        dedup), rejects self-aliases silently (server returns 400 in that
        case — surfaced as an error toast at the dispatch site). */
-    applyAddAlias: (
-      s,
-      a: PayloadAction<{ characterId: string; aliasName: string }>,
-    ) => {
+    applyAddAlias: (s, a: PayloadAction<{ characterId: string; aliasName: string }>) => {
       const { characterId, aliasName } = a.payload;
       const trimmed = aliasName.trim();
       if (!trimmed) return;
@@ -268,10 +288,7 @@ export const castSlice = createSlice({
        the aliases list so it doesn't double up. Dedup is case-insensitive,
        trim-tolerant; display casing is preserved. Persisted to cast.json via
        the 'cast/renameCharacter' rule in persistence-middleware.ts. */
-    renameCharacter: (
-      s,
-      a: PayloadAction<{ characterId: string; name: string }>,
-    ) => {
+    renameCharacter: (s, a: PayloadAction<{ characterId: string; name: string }>) => {
       const { characterId, name } = a.payload;
       const trimmed = name.trim();
       if (!trimmed) return;
@@ -336,11 +353,7 @@ export const castSlice = createSlice({
       const c = s.characters.find((x) => x.id === characterId);
       if (!c) return;
       const existing = c.notLinkedTo ?? [];
-      if (
-        existing.some(
-          (p) => p.bookId === otherBookId && p.characterId === otherCharacterId,
-        )
-      ) {
+      if (existing.some((p) => p.bookId === otherBookId && p.characterId === otherCharacterId)) {
         return;
       }
       c.notLinkedTo = [...existing, { bookId: otherBookId, characterId: otherCharacterId }];
