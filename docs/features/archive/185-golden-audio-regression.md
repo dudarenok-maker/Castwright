@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -134,6 +134,8 @@ pure-logic unit tests ride in the normal tiers.
 
 ## Ship notes
 
-(Filled when status → stable. Owed: live re-bless of `kokoro-baseline.json` +
-`golden-chapter.{pcm,json}` is already done on the maintainer's GPU box at author
-time; cross-engine sanity (Coqui/Qwen) acceptance under their env flags remains.)
+Shipped 2026-06-06 (merge bbdef4d, PR #527, closes #467). Live acceptance
+confirmed: automated tiers green and the Kokoro baseline (`kokoro-baseline.json` +
+`golden-chapter.{pcm,json}`) blessed on the maintainer's GPU box. Optional
+follow-up (sanity-only, not gating): cross-engine Coqui/Qwen acceptance via
+`npm run test:golden-audio:sidecar` under `GOLDEN_COQUI=1` / `GOLDEN_QWEN_VOICE=<id>`.
