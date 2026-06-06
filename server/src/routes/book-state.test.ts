@@ -11,7 +11,7 @@
    module imports so paths.ts picks up WORKSPACE_DIR, supertest against
    the real router. */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import {
   rmSync,
   mkdirSync,
@@ -1405,5 +1405,94 @@ describe('book-state router — listen-progress slice (plan 47)', () => {
       });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/createdAt/);
+  });
+
+  /* srv-34 (plan 188) — optional client `listenedAt` (offline-correct
+     ordering) + guarded compare-and-set so a late offline push can't
+     clobber a newer position made elsewhere. Each test starts clean. */
+  describe('srv-34 — client listenedAt + guarded compare-and-set', () => {
+    const lpFile = () => join(lpBookDir, '.audiobook', 'listen-progress.json');
+    const T1 = '2026-01-01T10:00:00.000Z';
+    const T2 = '2026-01-01T11:00:00.000Z';
+    const T3 = '2026-01-01T12:00:00.000Z';
+
+    beforeEach(() => {
+      rmSync(lpFile(), { force: true });
+    });
+
+    it('accepts a client listenedAt and stamps it as updatedAt', async () => {
+      const put = await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 1, currentSec: 50, listenedAt: T2 });
+      expect(put.status).toBe(200);
+      expect(put.body.updatedAt).toBe(T2);
+    });
+
+    it('400s on a non-date listenedAt', async () => {
+      const res = await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 1, currentSec: 5, listenedAt: 'not-a-date' });
+      expect(res.status).toBe(400);
+    });
+
+    it('400s on a listenedAt far in the future (clock-skew guard)', async () => {
+      const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      const res = await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 1, currentSec: 5, listenedAt: future });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects a stale listenedAt: keeps + returns the newer stored record', async () => {
+      await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 1, currentSec: 100, listenedAt: T2 });
+      const stale = await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 2, currentSec: 5, listenedAt: T1 });
+      expect(stale.status).toBe(200);
+      expect(stale.body.chapterId).toBe(1);
+      expect(stale.body.currentSec).toBe(100);
+      expect(stale.body.updatedAt).toBe(T2);
+
+      const get = await request(app).get(`/api/books/${lpBookId}/listen-progress`);
+      expect(get.body.chapterId).toBe(1);
+      expect(get.body.updatedAt).toBe(T2);
+    });
+
+    it('accepts a newer listenedAt and overwrites', async () => {
+      await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 1, currentSec: 100, listenedAt: T2 });
+      const newer = await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 2, currentSec: 5, listenedAt: T3 });
+      expect(newer.status).toBe(200);
+      expect(newer.body.chapterId).toBe(2);
+      expect(newer.body.updatedAt).toBe(T3);
+    });
+
+    it('without listenedAt keeps legacy behaviour: server-stamps + always writes', async () => {
+      await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 1, currentSec: 100, listenedAt: T2 });
+      const before = Date.now();
+      const legacy = await request(app)
+        .put(`/api/books/${lpBookId}/listen-progress`)
+        .set('Content-Type', 'application/json')
+        .send({ chapterId: 2, currentSec: 5 });
+      expect(legacy.status).toBe(200);
+      expect(legacy.body.chapterId).toBe(2);
+      expect(legacy.body.currentSec).toBe(5);
+      expect(Date.parse(legacy.body.updatedAt)).toBeGreaterThanOrEqual(before);
+    });
   });
 });
