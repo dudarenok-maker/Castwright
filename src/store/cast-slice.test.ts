@@ -162,6 +162,85 @@ describe('castSlice — hydrateFromAnalysis', () => {
     const next = castSlice.reducer(start, castActions.hydrateFromAnalysis(baseAnalysis([])));
     expect(next.characters).toEqual(start.characters);
   });
+
+  it('preserves a designed-in-this-book Qwen voice when the analysis payload returns it voiceless (confirm-screen strip)', () => {
+    /* The /confirm payload (AnalysingView onComplete → hydrateFromAnalysis) carries
+       voice continuity only for characters matched against OTHER books in the series.
+       A character DESIGNED IN THIS BOOK (overrideTtsVoices.qwen, no matchedFrom) finds
+       no series match and arrives voiceless, so a flat replace stripped it on the
+       confirm screen — rendering "No voice designed yet" for Maruca/Grizel/Trix even
+       though cast.json on disk still held the voice. Mirror the mergeCharacters #518
+       overlay: preserve voice-design fields by id from the existing slice. */
+    const start = baseState([
+      makeChar('maruca', {
+        voiceState: 'generated',
+        overrideTtsVoices: { qwen: { name: 'qwen-maruca' } },
+        ttsEngine: 'qwen',
+        voiceStyle: 'a bright, eager teenage girl, quick and clear.',
+      }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.hydrateFromAnalysis(
+        baseAnalysis([
+          {
+            id: 'maruca',
+            name: 'Maruca',
+            role: 'Peer',
+            color: 'slot-18',
+            description: 'Re-attributed.',
+          } as Character,
+        ]),
+      ),
+    );
+    const maruca = next.characters.find((c) => c.id === 'maruca')!;
+    expect(maruca.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-maruca' } });
+    expect(maruca.ttsEngine).toBe('qwen');
+    expect(maruca.voiceStyle).toBe('a bright, eager teenage girl, quick and clear.');
+    expect(maruca.voiceState).toBe('generated');
+    /* Fresh analyzer-owned fields still flow through. */
+    expect(maruca.description).toBe('Re-attributed.');
+  });
+
+  it('preserves a reused/linked voice but lets a fresh series-reuse link flow through', () => {
+    /* Existing reused link must survive a voiceless re-analysis; a NEWLY stamped
+       matchedFrom on a previously-voiceless character (the analyzer's series-reuse
+       pass) must still flow through (existing-wins only when existing has it). */
+    const start = baseState([
+      makeChar('lord-cassius', {
+        voiceState: 'reused',
+        voiceId: 'qwen-lord-cassius',
+        matchedFrom: { bookTitle: 'Everblaze', confidence: 0.9 },
+      }),
+      makeChar('newcomer', { voiceState: 'generated' }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.hydrateFromAnalysis(
+        baseAnalysis([
+          {
+            id: 'lord-cassius',
+            name: 'Lord Cassius',
+            role: 'Antagonist',
+            color: 'slot-2',
+          } as Character,
+          {
+            id: 'newcomer',
+            name: 'Newcomer',
+            role: 'Peer',
+            color: 'slot-9',
+            matchedFrom: { bookTitle: 'Exile', confidence: 0.88 },
+          } as Character,
+        ]),
+      ),
+    );
+    const cassius = next.characters.find((c) => c.id === 'lord-cassius')!;
+    expect(cassius.voiceId).toBe('qwen-lord-cassius');
+    expect(cassius.voiceState).toBe('reused');
+    expect(cassius.matchedFrom).toEqual({ bookTitle: 'Everblaze', confidence: 0.9 });
+    const newcomer = next.characters.find((c) => c.id === 'newcomer')!;
+    expect(newcomer.matchedFrom).toEqual({ bookTitle: 'Exile', confidence: 0.88 });
+  });
 });
 
 describe('castSlice — initial state (mock-leak regression)', () => {
@@ -231,7 +310,13 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
     const next = castSlice.reducer(
       start,
       castActions.mergeCharacters([
-        { id: 'maruca', name: 'Maruca', role: 'Peer', color: 'slot-18', description: 'Re-attributed.' },
+        {
+          id: 'maruca',
+          name: 'Maruca',
+          role: 'Peer',
+          color: 'slot-18',
+          description: 'Re-attributed.',
+        },
       ]),
     );
     const maruca = next.characters.find((c) => c.id === 'maruca')!;
@@ -489,9 +574,7 @@ describe('castSlice — applyUnlinkAlias (POST /cast/unlink-alias response)', ()
   });
 
   it('is case-insensitive and trim-tolerant when matching the alias to strip', () => {
-    const start = baseState([
-      makeChar('neverseen-figure', { aliases: ['  Sandor  ', 'Jurek'] }),
-    ]);
+    const start = baseState([makeChar('neverseen-figure', { aliases: ['  Sandor  ', 'Jurek'] })]);
     const next = castSlice.reducer(
       start,
       castActions.applyUnlinkAlias({
@@ -510,10 +593,7 @@ describe('castSlice — applyUnlinkAlias (POST /cast/unlink-alias response)', ()
 
   it('is idempotent when the new character already exists (network retry safety)', () => {
     const existing = makeChar('sandor', { voiceState: 'tuned', voiceId: 'v_sandor' });
-    const start = baseState([
-      makeChar('neverseen-figure', { aliases: ['Sandor'] }),
-      existing,
-    ]);
+    const start = baseState([makeChar('neverseen-figure', { aliases: ['Sandor'] }), existing]);
     const next = castSlice.reducer(
       start,
       castActions.applyUnlinkAlias({
@@ -536,9 +616,7 @@ describe('castSlice — applyUnlinkAlias (POST /cast/unlink-alias response)', ()
 
 describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
   it('appends a new alias to the target character', () => {
-    const start = baseState([
-      makeChar('sophie', { aliases: ['Foster'], name: 'Sophie Foster' }),
-    ]);
+    const start = baseState([makeChar('sophie', { aliases: ['Foster'], name: 'Sophie Foster' })]);
     const next = castSlice.reducer(
       start,
       castActions.applyAddAlias({ characterId: 'sophie', aliasName: 'Sofi' }),
@@ -547,9 +625,7 @@ describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
   });
 
   it('dedupes case-insensitively and trim-tolerantly', () => {
-    const start = baseState([
-      makeChar('sophie', { aliases: ['Foster'], name: 'Sophie Foster' }),
-    ]);
+    const start = baseState([makeChar('sophie', { aliases: ['Foster'], name: 'Sophie Foster' })]);
     const next = castSlice.reducer(
       start,
       castActions.applyAddAlias({ characterId: 'sophie', aliasName: '  foster  ' }),
@@ -558,7 +634,7 @@ describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
     expect(next.characters[0].aliases).toEqual(['Foster']);
   });
 
-  it('refuses to add the character\'s own name as an alias', () => {
+  it("refuses to add the character's own name as an alias", () => {
     const start = baseState([makeChar('sophie', { name: 'Sophie Foster' })]);
     const next = castSlice.reducer(
       start,
@@ -568,9 +644,7 @@ describe('castSlice — applyAddAlias (POST /cast/add-alias response)', () => {
   });
 
   it('no-ops for an unknown characterId or empty alias', () => {
-    const start = baseState([
-      makeChar('sophie', { aliases: ['Foster'], name: 'Sophie Foster' }),
-    ]);
+    const start = baseState([makeChar('sophie', { aliases: ['Foster'], name: 'Sophie Foster' })]);
     const r1 = castSlice.reducer(
       start,
       castActions.applyAddAlias({ characterId: 'ghost', aliasName: 'Foo' }),
@@ -696,10 +770,7 @@ describe('castSlice — renameCharacter (rename + promote alias)', () => {
 describe('castSlice — setRenderedFallback (fe-16)', () => {
   it('overwrites the fallback map from the book-state hydrate', () => {
     const start = { characters: [makeChar('sweeney')], renderedFallbackByCharacter: {} };
-    const next = castSlice.reducer(
-      start,
-      castActions.setRenderedFallback({ sweeney: 'kokoro' }),
-    );
+    const next = castSlice.reducer(start, castActions.setRenderedFallback({ sweeney: 'kokoro' }));
     expect(next.renderedFallbackByCharacter).toEqual({ sweeney: 'kokoro' });
   });
 
@@ -779,7 +850,6 @@ describe('castSlice — applyNotLinked / removeNotLinked (cross-book variant, pl
   });
 });
 
-
 describe('castSlice — mergeCharacters (srv-13 preservation)', () => {
   it('preserves voice fields, notLinkedTo and unions aliases on a surviving character', () => {
     const start = baseState([
@@ -798,9 +868,7 @@ describe('castSlice — mergeCharacters (srv-13 preservation)', () => {
     // a sparser alias set.
     const next = castSlice.reducer(
       start,
-      castActions.mergeCharacters([
-        makeChar('keefe', { aliases: ['Keefe', 'Mr. Sencen'] }),
-      ]),
+      castActions.mergeCharacters([makeChar('keefe', { aliases: ['Keefe', 'Mr. Sencen'] })]),
     );
     const keefe = next.characters[0];
     expect(keefe.voiceId).toBe('keefe');
