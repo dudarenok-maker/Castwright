@@ -21,7 +21,9 @@ test.describe('Model Manager — inventory', () => {
     await expect(page.getByTestId('model-row-kokoro')).toBeVisible();
     await expect(page.getByTestId('model-row-qwen-base')).toBeVisible();
     /* Kokoro is the resident fallback in the mock inventory. */
-    await expect(page.getByTestId('model-row-kokoro').getByText('Loaded')).toBeVisible();
+    await expect(
+      page.getByTestId('model-row-kokoro').getByText('Loaded', { exact: true }),
+    ).toBeVisible();
   });
 
   test('removing an idle non-default model flips its row to Not installed', async ({ page }) => {
@@ -37,9 +39,12 @@ test.describe('Model Manager — inventory', () => {
     await expect(modal).toBeVisible();
     await modal.getByTestId('model-remove-confirm-button').click();
 
-    await expect(page.getByTestId('model-row-qwen-design').getByText('Not installed')).toBeVisible({
-      timeout: 5_000,
-    });
+    /* Match the residency BADGE exactly — the row's detail line also reads
+       "not installed · <path>" once present:false, so a loose substring match
+       is a strict-mode violation (two nodes). */
+    await expect(
+      page.getByTestId('model-row-qwen-design').getByText('Not installed', { exact: true }),
+    ).toBeVisible({ timeout: 5_000 });
   });
 
   test('blocks removing the loaded fallback engine', async ({ page }) => {
