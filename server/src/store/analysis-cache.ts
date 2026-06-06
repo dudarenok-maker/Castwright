@@ -18,7 +18,32 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
    text, so the retired tag system leaves no residue in new caches. Idempotent:
    already-clean sentences pass through unchanged, and an existing `emotion`
    (manual or analyzer-set) is never overridden. */
+/* Validate the on-disk cache shape before anything iterates it. Each chapter
+   entry must be an array of sentences (`Record<number, SentenceOutput[]>`).
+   A malformed entry — e.g. an index-keyed object `{ "0": {...} }` written by a
+   buggy external repair — otherwise throws a context-free
+   "sentences.map is not a function" deep in seedEmotionsFromTags, which the UI
+   surfaces as an inscrutable "Re-analysis failed". Failing here names the
+   manuscript + chapter so the corruption is actionable (re-run that chapter or
+   restore the cache). Asserts the type so callers narrow to the array shape. */
+export function assertCacheChaptersShape(
+  chapters: Record<number, unknown>,
+  manuscriptId?: string,
+): asserts chapters is Record<number, SentenceOutput[]> {
+  for (const [chapterId, sentences] of Object.entries(chapters)) {
+    if (!Array.isArray(sentences)) {
+      const got = sentences === null ? 'null' : typeof sentences;
+      throw new Error(
+        `Analysis cache${manuscriptId ? ` for ${manuscriptId}` : ''} chapter ${chapterId} is ` +
+          `malformed: expected an array of sentences, got ${got}. The cache file is corrupt — ` +
+          `re-run analysis for this chapter or restore the cache from a backup.`,
+      );
+    }
+  }
+}
+
 function seedEmotionsFromTags(chapters: Record<number, SentenceOutput[]>): Record<number, SentenceOutput[]> {
+  assertCacheChaptersShape(chapters);
   const out: Record<number, SentenceOutput[]> = {};
   for (const [chapterId, sentences] of Object.entries(chapters)) {
     out[Number(chapterId)] = sentences.map((s) => {
@@ -67,6 +92,10 @@ function cachePath(manuscriptId: string): string {
 export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisCache> {
   const cache = await readJson<AnalysisCache>(cachePath(manuscriptId));
   if (!cache) return { chapters: {} };
+  /* Fail loud + contextful on a corrupt cache (a chapter entry that isn't an
+     array) before any phase does work, instead of a context-free TypeError on
+     the next save. */
+  assertCacheChaptersShape(cache.chapters ?? {}, manuscriptId);
   /* JSON parse turns the chapter-id keys into strings, but the route uses
      numeric ids. Coerce shape so callers can use cache.chapters[chapterId]
      directly. */
