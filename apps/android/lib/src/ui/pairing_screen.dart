@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/pairing_service.dart';
 import '../data/pairing_store.dart';
 import '../domain/paired_server.dart';
+import 'qr_scan_screen.dart';
 
 /// Manual pairing form (app-2). Enter the server URL + token + CA fingerprint
 /// from the desktop pairing screen; on success the verified connection is
@@ -58,6 +59,22 @@ class _PairingScreenState extends State<PairingScreen> {
     }
   }
 
+  /// Open the camera scanner; on a valid pairing QR, fill the form fields so
+  /// the user can review before pairing.
+  Future<void> _scan() async {
+    final server = await Navigator.of(context).push<PairedServer>(
+      MaterialPageRoute(builder: (_) => const QrScanScreen()),
+    );
+    if (server != null && mounted) {
+      setState(() {
+        _url.text = server.url;
+        _token.text = server.token;
+        _fingerprint.text = server.caFingerprint;
+        _error = null;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -67,8 +84,15 @@ class _PairingScreenState extends State<PairingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text('Enter the server details shown on the desktop pairing '
-                'screen. (QR scanning comes next.)'),
+            const Text('Scan the pairing QR shown on the desktop, or enter the '
+                'details manually.'),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('scan-qr'),
+              onPressed: _busy ? null : _scan,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Scan QR'),
+            ),
             const SizedBox(height: 12),
             TextField(
               key: const Key('field-url'),
