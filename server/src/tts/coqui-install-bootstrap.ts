@@ -40,7 +40,7 @@ export interface CoquiInstallJob {
 export type CoquiSpawnFn = (
   cmd: string,
   args: readonly string[],
-  opts?: { cwd?: string },
+  opts?: { cwd?: string; windowsHide?: boolean },
 ) => ChildProcess;
 
 export interface CoquiInstallOptions {
@@ -159,7 +159,10 @@ export class CoquiInstallBootstrap {
       try {
         /* Piped stdio (NOT inherit) so we can read the script's
            `[install-coqui]` step lines and surface the latest to the UI. */
-        proc = this.spawnFn('node', [script, ...this.installArgs], { cwd: this.repoRoot });
+        proc = this.spawnFn('node', [script, ...this.installArgs], {
+          cwd: this.repoRoot,
+          windowsHide: true,
+        });
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));
         return;

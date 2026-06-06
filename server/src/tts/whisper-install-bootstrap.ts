@@ -34,7 +34,7 @@ export interface WhisperInstallJob {
 export type WhisperSpawnFn = (
   cmd: string,
   args: readonly string[],
-  opts?: { cwd?: string },
+  opts?: { cwd?: string; windowsHide?: boolean },
 ) => ChildProcess;
 
 export interface WhisperInstallOptions {
@@ -142,7 +142,10 @@ export class WhisperInstallBootstrap {
     return new Promise((resolve, reject) => {
       let proc: ChildProcess;
       try {
-        proc = this.spawnFn('node', [script, ...this.installArgs], { cwd: this.repoRoot });
+        proc = this.spawnFn('node', [script, ...this.installArgs], {
+          cwd: this.repoRoot,
+          windowsHide: true,
+        });
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));
         return;
