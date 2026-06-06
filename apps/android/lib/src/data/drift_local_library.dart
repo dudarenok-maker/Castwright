@@ -245,7 +245,11 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore {
           ..where((p) => p.bookId.equals(bookId)))
         .getSingleOrNull();
     if (row == null) return null;
-    return PlaybackPoint(chapterUuid: row.chapterUuid, positionMs: row.positionMs);
+    return PlaybackPoint(
+      chapterUuid: row.chapterUuid,
+      positionMs: row.positionMs,
+      listenedAt: row.updatedAt,
+    );
   }
 
   /// One-time migration: if the `app-3` JSON snapshot exists under [_rootPath],
