@@ -8,8 +8,8 @@ label and stay **off** this list (they're out-of-band — filed as the user hits
 them). See [CONTRIBUTING.md "Issues"](../CONTRIBUTING.md#issues).
 
 **Item IDs are permanent.** Each item carries a `<prefix>-<n>` ID — `fe` (frontend),
-`srv` (server), `side` (TTS sidecar), `ops` (CI / build / dev-tooling), or `fs`
-(full-stack). IDs are assigned once and **never reused or renumbered**; gaps are
+`srv` (server), `side` (TTS sidecar), `ops` (CI / build / dev-tooling), `fs`
+(full-stack), or `app` (Android companion app). IDs are assigned once and **never reused or renumbered**; gaps are
 expected. Cite an item by its ID from code or docs and the reference won't rot.
 The issue title leads with the same ID; the issue `#NN` is the GitHub-native
 auto-close hook (`Closes #NN` on the delivering PR).
@@ -299,6 +299,7 @@ _Full detail + acceptance:_ [#474](https://github.com/dudarenok-maker/AudioBook-
 
 - _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected). **Demoted from Should on 2026-06-02** — niche dev/LAN surfacing.
+- _Companion coherence (plan 188):_ shares the LAN-URL + cert plumbing, but the companion (`app-2`) needs its own **structured pairing QR** carrying `{ url, token, caFingerprint }` — do NOT make `fe-1`'s browser-open QR a JSON blob (a phone browser can't scan it). The pairing-QR surface reuses this machinery; whoever builds it (with `srv-20`) is the home for the companion QR.
 _Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401).
 
 #### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant ([#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402))
@@ -315,6 +316,7 @@ Source for the whole sub-group: the [2026-05-31 security review](security/2026-0
 
 - _What:_ a single shared-secret token (env-configured, surfaced in the LAN URL / QR alongside the existing cert flow) checked by a small Express middleware on `/api/*` and the `/workspace` mount when LAN mode is on. Loopback requests bypass the check (so `npm start` is unaffected). Reuse the existing LAN-URL/QR plumbing (`GET /api/export/lan`, `npm run install:cert-mobile`) to carry the token.
 - _Benefit (user):_ the mobile flow stops being "open to everyone on the network" without re-introducing friction — the token rides the URL the user already scans.
+- _Companion dependency:_ the **Android companion app** (plan 188, `app-2`) depends on this token as its v1 auth primitive, and needs the QR/pairing payload to also carry the CA **SHA-256 fingerprint** so the app auto-verifies the pinned cert (no manual hex compare). Two acceptance constraints from the companion: **exempt `/cert/root.crt`** from the token check (public CA material the app fetches over the untrusted channel *before* it can present the token), and don't break the web app's existing LAN access. A kickoff-time reason to prioritise it. The multi-device / revocable evolution is `srv-33`.
 _Full detail + acceptance:_ [#425](https://github.com/dudarenok-maker/AudioBook-Generator/issues/425).
 
 #### `srv-21` — Validate `sidecarUrl` (scheme + private-host allowlist) before fetch ([#426](https://github.com/dudarenok-maker/AudioBook-Generator/issues/426))
@@ -365,6 +367,7 @@ _Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-
 
 - _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/audiobook-generator:vX.Y.Z` on tag push.
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
+- _Companion coherence (plan 188):_ if the companion is used against a Dockerised server, (a) **mount a persistent volume for the mkcert CA** (`mkcert -CAROOT` dir) so the pinned `caFingerprint` survives container rebuilds (else every update forces a re-pair), and (b) honour a **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads `os.networkInterfaces()` → container bridge IPs like `172.18.0.x`) so the pairing QR carries the host's real LAN IP.
 _Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
 
 ### Listener-app handoffs
@@ -386,6 +389,52 @@ _Full detail + acceptance:_ [#435](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
 _Full detail + acceptance:_ [#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436).
+
+### Android companion app (Flutter)
+
+A net-new, multi-week initiative: a native Android-first listening companion that
+**delta-syncs a constantly-regenerated library** (per-chapter `…/audio.mp3` pulls, not
+whole-book M4B re-exports) with **two-way resume sync**, offline playback, and
+Bluetooth/lock-screen controls — the differentiator vs. the export→sideload→third-party
+flow above (`fe-3`/`fs-7`/`fs-8`, which it complements, not obsoletes). Full spec, v1
+definition-of-done, and the 7-wave delivery roadmap live in **[plan
+188](features/188-android-companion-app.md)** — the canonical detail home for this
+group. Flutter (`just_audio`/`audio_service`) so iOS is an incremental follow-up; the
+load-bearing iOS-readiness move is **app-managed, auto-verified TLS trust** (the QR
+carries the CA fingerprint; the app pins the fetched `/cert/root.crt` after asserting its
+hash matches — no OS cert install, no manual hex compare).
+
+> _GitHub issues for these `app-*` / `srv-32` / `srv-34` / `srv-35` / `srv-33` items are
+> filed after the user's review of plan 188; until then each row links the plan. IDs +
+> positions are final. (Two 2026-06-06 reviews — secondary + cross-item coherence — are
+> folded into the plan; see its "Secondary review" + "Relationships" sections.)_
+
+**Server prereqs:**
+
+- `srv-32` — **Per-chapter sync-manifest endpoint** (`GET /api/library/sync-manifest`, `?since` delta + the full **active-ID set** for stateless client-side deletion; fingerprint must bump on every audio-mutating path). _Benefit:_ the one change that makes delta sync possible; reshapes existing scan data. Also feeds `fs-15`. → [plan 188](features/188-android-companion-app.md#srv-32--per-chapter-sync-manifest-endpoint-delta-friendly)
+- `srv-34` — **Listen-progress PUT accepts client `listenedAt`** + **guarded compare-and-set** (commit only if strictly newer; return the stored record on a stale write). _Benefit:_ offline-correct conflict ordering AND safe concurrent web+companion writers (the targeted listen-progress fix; does not wake `srv-10`/`fe-11`); unblocks `app-6`. → [plan 188](features/188-android-companion-app.md#srv-34--listen-progress-put-accepts-a-client-listenedat-offline-correct-ordering)
+
+**MVP block (v1)** — ranked:
+
+1. `app-1` — Flutter scaffold (`apps/android/`) + test harness + CI lane (incl. unsigned iOS compile) + debug APK. _Benefit:_ the foundation everything builds on.
+2. `app-2` — Pairing + **auto-verified app-managed TLS trust** (QR fingerprint match; bad-cert-bypass bootstrap then pin) + generated API client + secure token. _Benefit:_ one-time, MitM-safe pairing that works on Android *and* iOS. _Depends:_ `srv-20` (token + CA fingerprint in QR).
+3. `app-3` — Delta sync engine (pull only changed/new chapters; resumable + integrity; **atomic `.tmp`→rename** swap, defer if playing; evict via active-ID diff). _Benefit:_ the killer feature — no full-book resync; an in-progress chapter never corrupts mid-listen.
+4. `app-4` — Offline library store (per-chapter audio + storage accounting + auto-eviction). _Benefit:_ listen anywhere; cache never silently fills the phone.
+5. `app-5` — Native player (background, lock-screen, Bluetooth, **per-book state**; media keys default to **seek ±30/±15 s** not chapter-skip; **autosave ~5–10 s** survives an OS kill). _Benefit:_ table-stakes UX that survives backgrounding + car controls.
+6. `app-6` — Two-way resume sync (**last-write-wins by client `listenedAt`**, not network-receive time). _Benefit:_ in-car position flows back without clobbering a newer position set elsewhere. _Depends:_ `srv-34`.
+7. `app-7` — Hierarchical browse + management (**by author → series → book**, state pills, download/remove). _Benefit:_ find any book fast in a big multi-series library.
+8. `app-14` — Home shelf + multi-book switching ("Continue listening", seamless book swap). _Benefit:_ the listen-to-several-books day-to-day surface.
+9. `app-8` — Auto-sync on reconnect (background delta-pull + resume flush). _Benefit:_ fixes + new chapters appear with no manual action.
+10. `app-13` — Playback & download settings incl. **sleep timer**, skip-button toggle (seek vs chapter), Wi-Fi-only, and **storage-cap auto-eviction** (auto-delete finished chapters; LRU book eviction). _Benefit:_ the settings a real listening app needs.
+
+**Follow-ups (post-MVP)** — ranked:
+
+- **`srv-35`** — **Stable per-chapter identifier** (immutable `uuid` preserved through restructure/rename), keying listen-progress + the sync manifest. _Recommended before GA, not MVP-blocking; benefits the web player too._ Verified gap: chapter `id` is positional and `slug` embeds id+title, so neither survives reorder/rename (the reviewer's slug-fallback doesn't hold); v1 keys by `id` (web parity). → [plan 188](features/188-android-companion-app.md)
+
+11. `srv-33` — Device pairing + multi-device token management (on top of `srv-20`). _Benefit:_ revocable per-device access.
+12. `app-9` — In-car (**Android Auto + CarPlay**) head-unit UI. _Benefit:_ first-class in-car beyond the Bluetooth path.
+13. `app-10` — Stream-over-LAN instant play. _Benefit:_ zero-wait preview before a download.
+14. `app-11` — Distribution: signed release APK + alpha channel. _Benefit:_ testers can install it. _Depends:_ `app-1`.
 
 ---
 
@@ -414,6 +463,8 @@ Specific items someone might reasonably re-propose. Each carries a _Why parked_ 
 - `srv-6` — Engine-drift factor polish + `resolvedVoiceName` backfill ([#446](https://github.com/dudarenok-maker/AudioBook-Generator/issues/446)). _Why parked:_ the user is regenerating the whole catalogue with Qwen, so every book will get a fresh post-plan-108 `resolvedVoiceName` snapshot at render time — there are no stranded legacy chapters left for the backfill to rescue. _Wake when:_ a corpus of pre-plan-108 chapters that will _not_ be regenerated needs drift detection after all (e.g. an imported back-catalogue from another deployer). Until then the regen sweep makes the backfill moot.
 
 - `srv-5` — Tune per-engine VRAM cost map against real hardware ([#447](https://github.com/dudarenok-maker/AudioBook-Generator/issues/447)). _Why parked:_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost … _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. …
+
+- `app-12` — iOS build + release of the companion app ([plan 188](features/188-android-companion-app.md)). _Why parked:_ "Android **initially**" — v1 ships Android only; the codebase stays iOS-ready by construction (app-managed TLS trust, dual-platform Flutter plugins, an unsigned iOS CI compile from `app-1`), so this is incremental, not a rewrite. _Wake when:_ the Android v1 MVP is stable on real devices AND there's listener demand for iOS.
 
 ---
 
