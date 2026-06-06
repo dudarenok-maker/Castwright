@@ -33,7 +33,7 @@ interface DetectResp {
 
 const POLL_INTERVAL_MS = 1_500;
 
-export function CoquiInstall() {
+export function CoquiInstall({ onInstalled }: { onInstalled?: () => void } = {}) {
   const [detect, setDetect] = useState<DetectResp | null>(null);
   const [job, setJob] = useState<CoquiInstallJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -64,7 +64,10 @@ export function CoquiInstall() {
         if (!res.ok) throw new Error(`poll failed: HTTP ${res.status}`);
         const body = (await res.json()) as CoquiInstallJob;
         setJob(body);
-        if (body.status === 'installed') void doDetect();
+        if (body.status === 'installed') {
+          void doDetect();
+          onInstalled?.();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -72,7 +75,7 @@ export function CoquiInstall() {
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [job, doDetect]);
+  }, [job, doDetect, onInstalled]);
 
   const startInstall = async () => {
     setError(null);

@@ -31,7 +31,7 @@ interface DetectResp {
 
 const POLL_INTERVAL_MS = 1_500;
 
-export function QwenInstall() {
+export function QwenInstall({ onInstalled }: { onInstalled?: () => void } = {}) {
   const [detect, setDetect] = useState<DetectResp | null>(null);
   const [job, setJob] = useState<QwenInstallJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +62,10 @@ export function QwenInstall() {
         if (!res.ok) throw new Error(`poll failed: HTTP ${res.status}`);
         const body = (await res.json()) as QwenInstallJob;
         setJob(body);
-        if (body.status === 'installed') void doDetect();
+        if (body.status === 'installed') {
+          void doDetect();
+          onInstalled?.();
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -70,7 +73,7 @@ export function QwenInstall() {
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [job, doDetect]);
+  }, [job, doDetect, onInstalled]);
 
   const startInstall = async () => {
     setError(null);

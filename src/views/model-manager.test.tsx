@@ -357,14 +357,37 @@ describe('ModelManagerView — analyzer split', () => {
   });
 });
 
-describe('ModelManagerView — installers', () => {
-  it('renders the in-app installer cards for Coqui / Qwen / Whisper', async () => {
+describe('ModelManagerView — per-row install (fs-23 follow-up)', () => {
+  it('shows an Install toggle on a not-installed row and reveals the installer inline', async () => {
+    renderManager();
+    const coqui = await screen.findByTestId('model-row-coqui');
+    const toggle = within(coqui).getByTestId('model-install-toggle-coqui');
+    expect(toggle).toHaveTextContent(/Install/);
+    expect(within(coqui).queryByTestId('model-installer-coqui')).toBeNull();
+    fireEvent.click(toggle);
+    expect(within(coqui).getByTestId('model-installer-coqui')).toBeInTheDocument();
+  });
+
+  it('labels the toggle Update on an installed row', async () => {
+    renderManager();
+    const qwen = await screen.findByTestId('model-row-qwen-base');
+    expect(within(qwen).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Update/);
+  });
+
+  it('offers no install toggle for a release-bundled model (kokoro)', async () => {
+    renderManager();
+    const kokoro = await screen.findByTestId('model-row-kokoro');
+    expect(within(kokoro).queryByTestId('model-install-toggle-kokoro')).toBeNull();
+  });
+
+  it('reduces the bottom card to the Ollama analyzer only — no TTS/ASR installer headings', async () => {
     renderManager();
     const card = await screen.findByTestId('account-models-card');
-    expect(within(card).getByRole('heading', { name: /Coqui XTTS v2/i, level: 3 })).toBeInTheDocument();
     expect(
-      within(card).getByRole('heading', { name: /Qwen3-TTS \(bespoke/i, level: 3 }),
+      within(card).getByRole('heading', { name: /Local analyzer \(Ollama\)/i, level: 3 }),
     ).toBeInTheDocument();
-    expect(within(card).getByRole('heading', { name: /Whisper ASR/i, level: 3 })).toBeInTheDocument();
+    expect(within(card).queryByRole('heading', { name: /Coqui XTTS v2/i, level: 3 })).toBeNull();
+    expect(within(card).queryByRole('heading', { name: /Qwen3-TTS \(bespoke/i, level: 3 })).toBeNull();
+    expect(within(card).queryByRole('heading', { name: /Whisper ASR/i, level: 3 })).toBeNull();
   });
 });

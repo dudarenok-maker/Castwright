@@ -13,6 +13,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { coquiModelDir } from './coqui-install-detect.js';
 
 /* Same repo ids the sidecar engines resolve (main.py), env-overridable in
    lockstep so a relocated model is sized/removed where it actually lives. */
@@ -60,10 +61,13 @@ export function kokoroWeightDir(repoRoot: string): string {
   return join(sidecarDir(repoRoot), 'voices', 'kokoro');
 }
 
-/** The XTTS v2 model directory under TTS_HOME (install-coqui.ps1 layout). */
-export function coquiWeightDir(repoRoot: string): string {
-  const home = process.env.TTS_HOME || join(sidecarDir(repoRoot), 'voices', 'coqui');
-  return join(home, 'tts', 'tts_models--multilingual--multi-dataset--xtts_v2');
+/** The XTTS v2 model directory. Delegates to the authoritative resolver in
+    coqui-install-detect.ts (the TTS lib's user-data dir — what the runtime and
+    /api/coqui/detect actually use), NOT the old voices/coqui guess: the sidecar
+    runtime never sets TTS_HOME, so the guess diverged from reality and made the
+    inventory disagree with the installer card. */
+export function coquiWeightDir(): string {
+  return coquiModelDir();
 }
 
 /** Qwen Base / VoiceDesign HF snapshot repo dirs. */
