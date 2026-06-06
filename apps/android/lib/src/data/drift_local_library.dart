@@ -6,6 +6,7 @@ import '../domain/storage_policy.dart';
 import 'file_store.dart';
 import 'library_database.dart';
 import 'local_library.dart';
+import 'playback_store.dart';
 
 /// Display-oriented book row for list/grid UIs (`app-7`).
 class BookSummary {
@@ -34,7 +35,7 @@ class BookSummary {
 ///
 /// Per-chapter audio lives at `<root>/books/<bookId>/<uuid>/<urlSuffix>` — the
 /// same scheme as the `app-3` [FileLocalLibrary] it supersedes.
-class DriftLocalLibrary implements LocalLibrary {
+class DriftLocalLibrary implements LocalLibrary, PlaybackStore {
   DriftLocalLibrary(this._db, this._fs, {required String root}) : _rootPath = root;
 
   final LibraryDatabase _db;
@@ -223,6 +224,28 @@ class DriftLocalLibrary implements LocalLibrary {
     await _ensureBook(bookId);
     await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))
         .write(BooksCompanion(coverThumbPath: Value(path)));
+  }
+
+  // --- PlaybackStore (app-5) ----------------------------------------------
+
+  @override
+  Future<void> savePlayback(
+      String bookId, String chapterUuid, int positionMs, String isoNow) async {
+    await _db.into(_db.playback).insertOnConflictUpdate(PlaybackCompanion.insert(
+          bookId: bookId,
+          chapterUuid: chapterUuid,
+          positionMs: Value(positionMs),
+          updatedAt: Value(isoNow),
+        ));
+  }
+
+  @override
+  Future<PlaybackPoint?> loadPlayback(String bookId) async {
+    final row = await (_db.select(_db.playback)
+          ..where((p) => p.bookId.equals(bookId)))
+        .getSingleOrNull();
+    if (row == null) return null;
+    return PlaybackPoint(chapterUuid: row.chapterUuid, positionMs: row.positionMs);
   }
 
   /// One-time migration: if the `app-3` JSON snapshot exists under [_rootPath],

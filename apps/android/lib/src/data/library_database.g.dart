@@ -1052,16 +1052,342 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
   }
 }
 
+class $PlaybackTable extends Playback
+    with TableInfo<$PlaybackTable, PlaybackData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $PlaybackTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _bookIdMeta = const VerificationMeta('bookId');
+  @override
+  late final GeneratedColumn<String> bookId = GeneratedColumn<String>(
+    'book_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _chapterUuidMeta = const VerificationMeta(
+    'chapterUuid',
+  );
+  @override
+  late final GeneratedColumn<String> chapterUuid = GeneratedColumn<String>(
+    'chapter_uuid',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _positionMsMeta = const VerificationMeta(
+    'positionMs',
+  );
+  @override
+  late final GeneratedColumn<int> positionMs = GeneratedColumn<int>(
+    'position_ms',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<String> updatedAt = GeneratedColumn<String>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    bookId,
+    chapterUuid,
+    positionMs,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'playback';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<PlaybackData> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('book_id')) {
+      context.handle(
+        _bookIdMeta,
+        bookId.isAcceptableOrUnknown(data['book_id']!, _bookIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_bookIdMeta);
+    }
+    if (data.containsKey('chapter_uuid')) {
+      context.handle(
+        _chapterUuidMeta,
+        chapterUuid.isAcceptableOrUnknown(
+          data['chapter_uuid']!,
+          _chapterUuidMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_chapterUuidMeta);
+    }
+    if (data.containsKey('position_ms')) {
+      context.handle(
+        _positionMsMeta,
+        positionMs.isAcceptableOrUnknown(data['position_ms']!, _positionMsMeta),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {bookId};
+  @override
+  PlaybackData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return PlaybackData(
+      bookId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}book_id'],
+      )!,
+      chapterUuid: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}chapter_uuid'],
+      )!,
+      positionMs: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}position_ms'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $PlaybackTable createAlias(String alias) {
+    return $PlaybackTable(attachedDatabase, alias);
+  }
+}
+
+class PlaybackData extends DataClass implements Insertable<PlaybackData> {
+  final String bookId;
+  final String chapterUuid;
+  final int positionMs;
+  final String updatedAt;
+  const PlaybackData({
+    required this.bookId,
+    required this.chapterUuid,
+    required this.positionMs,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['book_id'] = Variable<String>(bookId);
+    map['chapter_uuid'] = Variable<String>(chapterUuid);
+    map['position_ms'] = Variable<int>(positionMs);
+    map['updated_at'] = Variable<String>(updatedAt);
+    return map;
+  }
+
+  PlaybackCompanion toCompanion(bool nullToAbsent) {
+    return PlaybackCompanion(
+      bookId: Value(bookId),
+      chapterUuid: Value(chapterUuid),
+      positionMs: Value(positionMs),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory PlaybackData.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return PlaybackData(
+      bookId: serializer.fromJson<String>(json['bookId']),
+      chapterUuid: serializer.fromJson<String>(json['chapterUuid']),
+      positionMs: serializer.fromJson<int>(json['positionMs']),
+      updatedAt: serializer.fromJson<String>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'bookId': serializer.toJson<String>(bookId),
+      'chapterUuid': serializer.toJson<String>(chapterUuid),
+      'positionMs': serializer.toJson<int>(positionMs),
+      'updatedAt': serializer.toJson<String>(updatedAt),
+    };
+  }
+
+  PlaybackData copyWith({
+    String? bookId,
+    String? chapterUuid,
+    int? positionMs,
+    String? updatedAt,
+  }) => PlaybackData(
+    bookId: bookId ?? this.bookId,
+    chapterUuid: chapterUuid ?? this.chapterUuid,
+    positionMs: positionMs ?? this.positionMs,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  PlaybackData copyWithCompanion(PlaybackCompanion data) {
+    return PlaybackData(
+      bookId: data.bookId.present ? data.bookId.value : this.bookId,
+      chapterUuid: data.chapterUuid.present
+          ? data.chapterUuid.value
+          : this.chapterUuid,
+      positionMs: data.positionMs.present
+          ? data.positionMs.value
+          : this.positionMs,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PlaybackData(')
+          ..write('bookId: $bookId, ')
+          ..write('chapterUuid: $chapterUuid, ')
+          ..write('positionMs: $positionMs, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(bookId, chapterUuid, positionMs, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is PlaybackData &&
+          other.bookId == this.bookId &&
+          other.chapterUuid == this.chapterUuid &&
+          other.positionMs == this.positionMs &&
+          other.updatedAt == this.updatedAt);
+}
+
+class PlaybackCompanion extends UpdateCompanion<PlaybackData> {
+  final Value<String> bookId;
+  final Value<String> chapterUuid;
+  final Value<int> positionMs;
+  final Value<String> updatedAt;
+  final Value<int> rowid;
+  const PlaybackCompanion({
+    this.bookId = const Value.absent(),
+    this.chapterUuid = const Value.absent(),
+    this.positionMs = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  PlaybackCompanion.insert({
+    required String bookId,
+    required String chapterUuid,
+    this.positionMs = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : bookId = Value(bookId),
+       chapterUuid = Value(chapterUuid);
+  static Insertable<PlaybackData> custom({
+    Expression<String>? bookId,
+    Expression<String>? chapterUuid,
+    Expression<int>? positionMs,
+    Expression<String>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (bookId != null) 'book_id': bookId,
+      if (chapterUuid != null) 'chapter_uuid': chapterUuid,
+      if (positionMs != null) 'position_ms': positionMs,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  PlaybackCompanion copyWith({
+    Value<String>? bookId,
+    Value<String>? chapterUuid,
+    Value<int>? positionMs,
+    Value<String>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return PlaybackCompanion(
+      bookId: bookId ?? this.bookId,
+      chapterUuid: chapterUuid ?? this.chapterUuid,
+      positionMs: positionMs ?? this.positionMs,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (bookId.present) {
+      map['book_id'] = Variable<String>(bookId.value);
+    }
+    if (chapterUuid.present) {
+      map['chapter_uuid'] = Variable<String>(chapterUuid.value);
+    }
+    if (positionMs.present) {
+      map['position_ms'] = Variable<int>(positionMs.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<String>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('PlaybackCompanion(')
+          ..write('bookId: $bookId, ')
+          ..write('chapterUuid: $chapterUuid, ')
+          ..write('positionMs: $positionMs, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$LibraryDatabase extends GeneratedDatabase {
   _$LibraryDatabase(QueryExecutor e) : super(e);
   $LibraryDatabaseManager get managers => $LibraryDatabaseManager(this);
   late final $BooksTable books = $BooksTable(this);
   late final $ChaptersTable chapters = $ChaptersTable(this);
+  late final $PlaybackTable playback = $PlaybackTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
   @override
-  List<DatabaseSchemaEntity> get allSchemaEntities => [books, chapters];
+  List<DatabaseSchemaEntity> get allSchemaEntities => [
+    books,
+    chapters,
+    playback,
+  ];
 }
 
 typedef $$BooksTableCreateCompanionBuilder =
@@ -1574,6 +1900,191 @@ typedef $$ChaptersTableProcessedTableManager =
       Chapter,
       PrefetchHooks Function()
     >;
+typedef $$PlaybackTableCreateCompanionBuilder =
+    PlaybackCompanion Function({
+      required String bookId,
+      required String chapterUuid,
+      Value<int> positionMs,
+      Value<String> updatedAt,
+      Value<int> rowid,
+    });
+typedef $$PlaybackTableUpdateCompanionBuilder =
+    PlaybackCompanion Function({
+      Value<String> bookId,
+      Value<String> chapterUuid,
+      Value<int> positionMs,
+      Value<String> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$PlaybackTableFilterComposer
+    extends Composer<_$LibraryDatabase, $PlaybackTable> {
+  $$PlaybackTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get bookId => $composableBuilder(
+    column: $table.bookId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get chapterUuid => $composableBuilder(
+    column: $table.chapterUuid,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get positionMs => $composableBuilder(
+    column: $table.positionMs,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$PlaybackTableOrderingComposer
+    extends Composer<_$LibraryDatabase, $PlaybackTable> {
+  $$PlaybackTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get bookId => $composableBuilder(
+    column: $table.bookId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get chapterUuid => $composableBuilder(
+    column: $table.chapterUuid,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get positionMs => $composableBuilder(
+    column: $table.positionMs,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$PlaybackTableAnnotationComposer
+    extends Composer<_$LibraryDatabase, $PlaybackTable> {
+  $$PlaybackTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get bookId =>
+      $composableBuilder(column: $table.bookId, builder: (column) => column);
+
+  GeneratedColumn<String> get chapterUuid => $composableBuilder(
+    column: $table.chapterUuid,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get positionMs => $composableBuilder(
+    column: $table.positionMs,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$PlaybackTableTableManager
+    extends
+        RootTableManager<
+          _$LibraryDatabase,
+          $PlaybackTable,
+          PlaybackData,
+          $$PlaybackTableFilterComposer,
+          $$PlaybackTableOrderingComposer,
+          $$PlaybackTableAnnotationComposer,
+          $$PlaybackTableCreateCompanionBuilder,
+          $$PlaybackTableUpdateCompanionBuilder,
+          (
+            PlaybackData,
+            BaseReferences<_$LibraryDatabase, $PlaybackTable, PlaybackData>,
+          ),
+          PlaybackData,
+          PrefetchHooks Function()
+        > {
+  $$PlaybackTableTableManager(_$LibraryDatabase db, $PlaybackTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$PlaybackTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$PlaybackTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$PlaybackTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> bookId = const Value.absent(),
+                Value<String> chapterUuid = const Value.absent(),
+                Value<int> positionMs = const Value.absent(),
+                Value<String> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => PlaybackCompanion(
+                bookId: bookId,
+                chapterUuid: chapterUuid,
+                positionMs: positionMs,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String bookId,
+                required String chapterUuid,
+                Value<int> positionMs = const Value.absent(),
+                Value<String> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => PlaybackCompanion.insert(
+                bookId: bookId,
+                chapterUuid: chapterUuid,
+                positionMs: positionMs,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$PlaybackTableProcessedTableManager =
+    ProcessedTableManager<
+      _$LibraryDatabase,
+      $PlaybackTable,
+      PlaybackData,
+      $$PlaybackTableFilterComposer,
+      $$PlaybackTableOrderingComposer,
+      $$PlaybackTableAnnotationComposer,
+      $$PlaybackTableCreateCompanionBuilder,
+      $$PlaybackTableUpdateCompanionBuilder,
+      (
+        PlaybackData,
+        BaseReferences<_$LibraryDatabase, $PlaybackTable, PlaybackData>,
+      ),
+      PlaybackData,
+      PrefetchHooks Function()
+    >;
 
 class $LibraryDatabaseManager {
   final _$LibraryDatabase _db;
@@ -1582,4 +2093,6 @@ class $LibraryDatabaseManager {
       $$BooksTableTableManager(_db, _db.books);
   $$ChaptersTableTableManager get chapters =>
       $$ChaptersTableTableManager(_db, _db.chapters);
+  $$PlaybackTableTableManager get playback =>
+      $$PlaybackTableTableManager(_db, _db.playback);
 }
