@@ -17,15 +17,13 @@ the full backlog decomposition (`srv-32` + `app-1..14`), the v1 definition-of-do
 the wave-sequenced delivery roadmap. Each backlog item lands under its own branch + plan
 per CLAUDE.md; this doc is what they hang off.
 
-> **Build status (2026-06-06):** **all MVP server prerequisites are shipped** —
-> `srv-34`, `srv-20`, `srv-35`, `srv-32` — plus the app foundation `app-1` (scaffold + CI),
-> `app-2` (pairing + TLS pinning + API client), `app-3` (delta sync engine),
-> `app-4` (offline store — drift/SQLite), `app-5` (native player —
-> just_audio/audio_service), `app-6` (two-way resume sync), `app-7` (library browse),
-> `app-13` (settings), `app-8` (auto-sync on reconnect), `app-14` (home shelf + multi-book
-> switching) — the full MVP app block — `app-11` (signed release APK + alpha channel), and
-> now **`app-9` (in-car: Android Auto + CarPlay media browser)**. The last item is
-> **`app-10`** (LAN streaming). See **Build progress & dev
+> **Build status (2026-06-07):** **the entire `app-*` build track is code-complete** — all
+> MVP server prereqs (`srv-34`/`srv-20`/`srv-35`/`srv-32`) + the full MVP app block
+> (`app-1`…`app-8`, `app-13`, `app-14`) + `app-11` (signed APK) + the follow-ups `app-9`
+> (in-car) and **`app-10` (LAN streaming)** are all built, tested, and merged. **The only
+> thing left is the batched live-device acceptance pass** (per the user's directive) — and
+> the parked follow-ups `srv-33` (server multi-device tokens) + `app-12` (iOS release). See
+> **Build progress & dev
 > setup** immediately below.
 
 ---
@@ -51,17 +49,17 @@ per CLAUDE.md; this doc is what they hang off.
 | `app-8` | #580 (merge `b064b0d`, closed #548) | auto-sync on reconnect: pure `shouldAutoSync` gate (never on mobile/offline, only unmetered Wi-Fi unless opted in, only when the paired server is reachable — token never leaves the home LAN) + `AutoSyncService` (pre-gates before probing so it never probes off-LAN; runs delta sync + resume flush when allowed) + pure `networkTypeFromConnectivity` + real `connectivity_plus` resolver (pinned 6.x — 7.x iOS uses an iOS-26 `NWPath` API that fails the CI iOS compile). 17 paired Dart tests. **Live device acceptance owed.** |
 | `app-14` | #582 (merge `e5b5da9`, closed #550) | home shelf + multi-book switching: pure `home_shelf` (`buildContinueListening` = in-progress books most-recently-played first; `buildRecentlyUpdated` newest-first capped) + presentational `HomeScreen` (Continue-listening rail + recently-updated rail; tap → `onOpenBook`, host wires to the player's `switchBook` for seamless per-book resume). 6 paired Dart tests. **Live device acceptance owed.** **MVP app block (app-1..8,13,14) complete.** |
 | `app-11` | #586 (merge `0563f05`, closed #554) | distribution: Gradle release signing via git-ignored `android/key.properties` (real upload keystore) with a **debug-signed fallback** so `flutter build apk --release` always produces an installable sideload APK; `key.properties.example` + `.gitignore` for the secrets; CI publishes a `companion-release-apk` artifact per build. Build-config (no Dart tests); release APK verified locally (65.6 MB). |
-| `app-9` | _this PR_ (closed #552) | in-car (Android Auto + CarPlay): pure `media_browse_tree` (root→books→chapters `MediaNode` + `bookMediaId`/`chapterMediaId` codec + `childrenOf`) wired into `CompanionAudioHandler.getChildren`/`playFromMediaId` (audio_service `MediaBrowser`); Android Auto descriptor (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests. **Live device/head-unit acceptance owed.** |
+| `app-9` | #588 (merge `e05753d`, closed #552) | in-car (Android Auto + CarPlay): pure `media_browse_tree` (root→books→chapters `MediaNode` + `bookMediaId`/`chapterMediaId` codec + `childrenOf`) wired into `CompanionAudioHandler.getChildren`/`playFromMediaId` (audio_service `MediaBrowser`); Android Auto descriptor (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests. **Live device/head-unit acceptance owed.** |
+| `app-10` | _this PR_ (closed #553) | stream-over-LAN instant play: pure `resolvePlaybackSource` (downloaded → local file; else streaming-on + on-LAN → LAN stream; else needs-download — offline-first) + `AppSettings.streamOverLan` toggle (default off) + `AudioEngine.setStreamUrl` (just_audio `AudioSource.uri` with auth headers) + a settings switch. 4 paired Dart tests. **Live device acceptance owed.** |
 
-### Next up — `app-10` (LAN streaming, last item)
+### Build track complete
 
-The **MVP app block + signed APK + in-car browse are built**. The last item is **`app-10`**
-(stream-over-LAN instant play). See the item spec below.
-
-### Remaining app track
-
-`app-10` (LAN streaming) — last item. Then `srv-33` (server multi-device tokens) and
-`app-12` (iOS) remain parked follow-ups outside this build run.
+**Every `app-*` item through `app-10` is built, tested, and merged.** The only remaining
+work is the **batched live-device/head-unit acceptance pass** (per the user's directive — run
+the whole feature set on the Pixel 10 Pro / a physical device + a head unit against the real
+GPU server). Parked follow-ups outside this run: **`srv-33`** (server multi-device tokens) and
+**`app-12`** (iOS release — the codebase is iOS-ready: app-pinned TLS, dual-platform plugins,
+the unsigned-iOS CI compile is green on every PR).
 
 ### Dev setup (this box — full toolchain installed + validated)
 
@@ -787,8 +785,14 @@ top for the running status):
   (audio_service `MediaBrowser`, Android Auto + CarPlay) + Android Auto descriptor
   (`automotive_app_desc.xml` + manifest meta-data). 6 paired Dart tests; clean + APK builds.
   **Live device/head-unit acceptance owed.**
+- `app-10` — stream-over-LAN instant play (closed #553): pure `resolvePlaybackSource`
+  (offline-first: downloaded → local; else streaming-on + on-LAN → stream; else download) +
+  `AppSettings.streamOverLan` toggle (default off) + `AudioEngine.setStreamUrl` (just_audio
+  `AudioSource.uri` + auth headers) + a settings switch. 4 paired Dart tests; clean + APK
+  builds. **Live device acceptance owed.**
 
-All MVP server prerequisites are merged. Toolchain installed + the app validated on a
-`Pixel_10_Pro` emulator. Per the user's directive, the app track is being built through
-`app-10` with **all live-device acceptance batched at the end** for the whole feature set.
-Next up: `app-10` (LAN streaming) — the last item.
+**The `app-*` build track (through `app-10`) is code-complete** — all items built, tested
+(167 Dart tests), and merged; `flutter analyze` clean and the debug + release APKs build, with
+CI (android + unsigned-iOS + verify) green on every PR. The remaining work is the **batched
+live-device/head-unit acceptance pass** on the user's real GPU server. Parked follow-ups:
+`srv-33`, `app-12` (iOS release).
