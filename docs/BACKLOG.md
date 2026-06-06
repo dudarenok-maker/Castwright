@@ -420,7 +420,7 @@ hash matches — no OS cert install, no manual hex compare).
 11. `srv-33` ([#551](https://github.com/dudarenok-maker/AudioBook-Generator/issues/551)) — Device pairing + multi-device token management (on top of `srv-20`). _Benefit:_ revocable per-device access.
 12. `app-9` ([#552](https://github.com/dudarenok-maker/AudioBook-Generator/issues/552)) — In-car (**Android Auto + CarPlay**) head-unit UI. _Benefit:_ first-class in-car beyond the Bluetooth path.
 13. `app-10` ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553)) — Stream-over-LAN instant play. _Benefit:_ zero-wait preview before a download.
-14. `app-11` ([#554](https://github.com/dudarenok-maker/AudioBook-Generator/issues/554)) — Distribution: signed release APK + alpha channel. _Benefit:_ testers can install it. _Depends:_ `app-1`.
+14. ✅ **SHIPPED** `app-11` ([#554](https://github.com/dudarenok-maker/AudioBook-Generator/issues/554)) — Distribution: Gradle release signing via git-ignored `key.properties` (real upload keystore) with a debug-signed fallback so `flutter build apk --release` always sideloads; `key.properties.example` + CI `companion-release-apk` artifact. Release APK verified (65.6 MB). _Benefit:_ testers can install it.
 
 ---
 
