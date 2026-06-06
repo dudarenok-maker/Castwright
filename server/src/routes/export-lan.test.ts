@@ -118,3 +118,41 @@ describe('GET /api/export/lan — CORS-from-LAN-origin acceptance', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('GET /api/export/lan — srv-20 pairing payload (token + caFingerprint)', () => {
+  const origToken = process.env.LAN_AUTH_TOKEN;
+  afterEach(() => {
+    if (origToken === undefined) delete process.env.LAN_AUTH_TOKEN;
+    else process.env.LAN_AUTH_TOKEN = origToken;
+  });
+
+  it('omits token when LAN_AUTH_TOKEN is unset', async () => {
+    delete process.env.LAN_AUTH_TOKEN;
+    const res = await request(makeApp()).get('/api/export/lan');
+    expect(res.status).toBe(200);
+    expect(res.body.token).toBeUndefined();
+  });
+
+  it('surfaces the token when LAN_AUTH_TOKEN is set', async () => {
+    process.env.LAN_AUTH_TOKEN = 'pair-secret-123';
+    const res = await request(makeApp()).get('/api/export/lan');
+    expect(res.status).toBe(200);
+    expect(res.body.token).toBe('pair-secret-123');
+  });
+
+  it('omits token for an empty LAN_AUTH_TOKEN', async () => {
+    process.env.LAN_AUTH_TOKEN = '';
+    const res = await request(makeApp()).get('/api/export/lan');
+    expect(res.status).toBe(200);
+    expect(res.body.token).toBeUndefined();
+  });
+
+  it('caFingerprint, when present, is a non-empty fingerprint string (best-effort)', async () => {
+    const res = await request(makeApp()).get('/api/export/lan');
+    expect(res.status).toBe(200);
+    if (res.body.caFingerprint !== undefined) {
+      expect(typeof res.body.caFingerprint).toBe('string');
+      expect(res.body.caFingerprint.length).toBeGreaterThan(0);
+    }
+  });
+});
