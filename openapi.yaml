@@ -351,6 +351,52 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/LibraryResponse' }
 
+  /api/library/sync-manifest:
+    get:
+      summary: Two-level delta-sync manifest for the companion app (srv-32)
+      operationId: getSyncManifest
+      description: |
+        The Android companion's delta-sync contract (srv-32, plan 191). One
+        route, two modes:
+
+        - **No `bookId`** → the INDEX: one lightweight row per book (book id +
+          audio-aware `updatedAt` + cover ref + active-chapter count) plus the
+          full `activeBookIds` set. `?since=<iso>` trims the `books` list to
+          books changed after the cutoff but NEVER the `activeBookIds` set —
+          that full set drives stateless client-side eviction (a filesystem
+          scan has no tombstones for deleted books).
+        - **`?bookId=<id>`** → the per-book DETAIL: that book's chapters keyed
+          by the stable `uuid` (srv-35), each with a `fingerprint`
+          (`audioRenderedAt` + file size — moves on every audio mutation), the
+          actual `urlSuffix`/`audioUrl` (`.mp3`/`.m4a`/`.ogg`), and
+          `durationSec`/`lufs` hints, plus the full `activeChapterUuids` set.
+
+        The response is gzip-compressed when the client sends
+        `Accept-Encoding: gzip`. Compatibility is gated off the
+        `schemas.syncManifest` version in `GET /api/info`.
+      parameters:
+        - name: bookId
+          in: query
+          required: false
+          schema: { type: string }
+          description: When present, returns that book's per-chapter detail instead of the index.
+        - name: since
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Index only — omit books whose `updatedAt` is at or before this ISO timestamp.
+      responses:
+        '200':
+          description: The sync-manifest index, or a per-book detail when `bookId` is supplied.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SyncManifestIndex'
+                  - $ref: '#/components/schemas/SyncManifestBookDetail'
+        '404':
+          description: The requested `bookId` does not exist.
+
   /api/import:
     post:
       summary: Parse a manuscript and stage it for confirmation
@@ -2515,6 +2561,94 @@ components:
         edition:
           type: string
           description: 'Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy.'
+
+    SyncManifestIndex:
+      type: object
+      required: [schemaVersion, books, activeBookIds]
+      description: |
+        srv-32 (plan 191) — the index level of the companion sync manifest.
+        `books` is trimmed by `?since`; `activeBookIds` is ALWAYS the full
+        current set so the client can evict local books that no longer exist.
+      properties:
+        schemaVersion:
+          type: integer
+          description: Mirrors `schemas.syncManifest` from `GET /api/info` for compat-gating.
+        books:
+          type: array
+          items: { $ref: '#/components/schemas/SyncManifestIndexBook' }
+        activeBookIds:
+          type: array
+          items: { type: string }
+          description: Full current set of book ids (never trimmed by `?since`).
+
+    SyncManifestIndexBook:
+      type: object
+      required: [bookId, updatedAt, title, author, series, seriesPosition, chapterCount]
+      properties:
+        bookId: { type: string }
+        updatedAt:
+          type: string
+          format: date-time
+          description: Max of the book's `state.updatedAt` and every chapter's `audioRenderedAt`.
+        title: { type: string }
+        author: { type: string }
+        series: { type: string }
+        seriesPosition: { type: integer, nullable: true }
+        chapterCount:
+          type: integer
+          description: Active (non-excluded) chapter count.
+        coverUrl:
+          type: string
+          description: Server-relative cover URL when a cover image is on disk; absent otherwise.
+
+    SyncManifestBookDetail:
+      type: object
+      required: [schemaVersion, bookId, updatedAt, chapters, activeChapterUuids]
+      description: |
+        srv-32 (plan 191) — the per-book detail level. `chapters` lists the
+        book's active (non-excluded) chapters keyed by the stable srv-35
+        `uuid`; `activeChapterUuids` is the full set the client evicts against.
+      properties:
+        schemaVersion: { type: integer }
+        bookId: { type: string }
+        updatedAt: { type: string, format: date-time }
+        chapters:
+          type: array
+          items: { $ref: '#/components/schemas/SyncManifestChapter' }
+        activeChapterUuids:
+          type: array
+          items: { type: string }
+
+    SyncManifestChapter:
+      type: object
+      required: [uuid, id, title]
+      properties:
+        uuid:
+          type: string
+          description: Stable per-chapter identifier (srv-35) — the client keys local audio by this.
+        id:
+          type: integer
+          description: Current positional id; the client builds `audioUrl` from it.
+        title: { type: string }
+        fingerprint:
+          type: string
+          description: |
+            `audioRenderedAt` + file size. Changes on every audio-mutating path
+            (regen / splice / QA re-record / loudnorm). Absent when the chapter
+            has no rendered audio.
+        urlSuffix:
+          type: string
+          enum: [audio.mp3, audio.m4a, audio.ogg]
+          description: Actual rendered format suffix — the client never hardcodes `.mp3`.
+        audioUrl:
+          type: string
+          description: Server-relative URL to the chapter audio (absent when not yet rendered).
+        durationSec:
+          type: number
+          description: Chapter audio duration in seconds when known (from the QA verdict).
+        lufs:
+          type: number
+          description: Integrated loudness when measured.
 
     ListenProgress:
       type: object
