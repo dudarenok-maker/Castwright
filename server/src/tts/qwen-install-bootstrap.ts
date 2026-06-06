@@ -43,7 +43,7 @@ export interface QwenInstallJob {
 export type QwenSpawnFn = (
   cmd: string,
   args: readonly string[],
-  opts?: { cwd?: string },
+  opts?: { cwd?: string; windowsHide?: boolean },
 ) => ChildProcess;
 
 export interface QwenInstallOptions {
@@ -165,7 +165,10 @@ export class QwenInstallBootstrap {
         /* Piped stdio (NOT inherit) so we can read the script's
            `[install-qwen3]` step lines and surface the latest to the UI. The
            script writes via process.stdout.write, so piping captures it. */
-        proc = this.spawnFn('node', [script, ...this.installArgs], { cwd: this.repoRoot });
+        proc = this.spawnFn('node', [script, ...this.installArgs], {
+          cwd: this.repoRoot,
+          windowsHide: true,
+        });
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));
         return;
