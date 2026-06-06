@@ -3203,6 +3203,10 @@ export interface components {
              */
             protocol: "http" | "https";
             urls: string[];
+            /** @description srv-20 — the shared-secret LAN token, present only when LAN_AUTH_TOKEN is configured. The companion pairing QR carries it so a device can authenticate to the otherwise-guarded /api surface. */
+            token?: string;
+            /** @description srv-20 — the LAN CA's SHA-256 (X.509 fingerprint256), present only when the mkcert root CA is resolvable. A pairing client fetches /cert/root.crt, computes the same fingerprint, and pins only if it matches. */
+            caFingerprint?: string;
         };
         GpuQueueState: {
             /** @description Number of acquires waiting in the FIFO queue behind the in-flight ops. The frontend pill renders 'GPU busy · N waiting ·' when this is > 0. */
