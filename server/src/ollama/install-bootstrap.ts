@@ -77,7 +77,7 @@ export type HttpFn = (url: string) => Promise<HttpResponse>;
 export type SpawnFn = (
   cmd: string,
   args: readonly string[],
-  opts?: { env?: NodeJS.ProcessEnv },
+  opts?: { env?: NodeJS.ProcessEnv; windowsHide?: boolean },
 ) => ChildProcess;
 
 export interface InstallBootstrapOptions {
@@ -122,7 +122,7 @@ async function defaultDetectOllama(spawnFn: SpawnFn): Promise<string | null> {
   return new Promise((resolve) => {
     let proc: ChildProcess;
     try {
-      proc = spawnFn('ollama', ['-v']);
+      proc = spawnFn('ollama', ['-v'], { windowsHide: true });
     } catch {
       resolve(null);
       return;
@@ -367,7 +367,7 @@ export class InstallBootstrap {
 
   private spawnAndWait(cmd: string, args: readonly string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const proc = this.spawnFn(cmd, args);
+      const proc = this.spawnFn(cmd, args, { windowsHide: true });
       proc.on('error', reject);
       proc.on('close', (code) => {
         if (code === 0) resolve();

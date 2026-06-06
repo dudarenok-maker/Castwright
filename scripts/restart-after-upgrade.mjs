@@ -68,6 +68,7 @@ async function main() {
     env: process.env,
     detached: true,
     stdio: 'ignore',
+    windowsHide: true,
   });
   child.unref();
   process.exit(0);

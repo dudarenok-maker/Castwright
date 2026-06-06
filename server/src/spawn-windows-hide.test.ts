@@ -3,20 +3,25 @@
  * Symptom this locks down: on Windows, a prod app launched without an
  * attached console (the fs-1 versioned-dir launcher runs detached) gives
  * every spawned console program — ffmpeg.exe, ffprobe.exe, git.exe, the
- * Python sidecar — its OWN new console window, which flashes open and
+ * Python sidecar, pip — its OWN new console window, which flashes open and
  * vanishes. During audio generation/export the server spawns ffmpeg per
  * sentence and per chapter, so the windows flash "constantly". In dev
  * (`npm start` from a terminal) the children inherit the existing console,
  * so the bug is invisible there — which is exactly how it slipped in.
  *
  * The fix is `windowsHide: true` on EVERY child_process call. Rather than
- * unit-test each call site, this scans the whole server source tree and
- * asserts the invariant globally: any new spawn that forgets the flag
- * fails here, before it can ever ship a flashing window to a user.
+ * unit-test each call site, this scans the source globally and asserts the
+ * invariant: any new spawn that forgets the flag fails here, before it can
+ * ever ship a flashing window to a user.
  *
- * Scope: production server source only (`server/src/**`, excluding tests).
- * Launcher scripts under `scripts/*.mjs` already carry the flag and are
- * out of this suite's reach. */
+ * Three scans (round 2 widened the net after launchers + injectable-spawnFn
+ * installers slipped through the server/src-only round-1 scan):
+ *   1. direct child_process calls in `server/src/**`,
+ *   2. indirect `spawnFn(...)` calls in `server/src/**` (the install
+ *      bootstraps spawn through a function pointer the bare scan can't see),
+ *   3. the prod launcher + start/stop + model-installer scripts that live
+ *      OUTSIDE server/src (a hidden parent does not stop a grandchild pip /
+ *      python from popping its own console). */
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -33,6 +38,28 @@ const SPAWN_NAMES = ['spawnSync', 'spawn', 'execFileSync', 'execFile', 'execSync
    match `someRegex.exec(...)`, `child.spawn(...)`, or a local `respawn(...)`
    helper — only top-level `spawn(`, `spawnSync(`, `execFile(`, etc. */
 const CALL_RE = new RegExp(String.raw`(?<![.\w])(${SPAWN_NAMES.join('|')})\s*\(`, 'g');
+
+/* Indirect spawners. The install bootstraps (whisper/coqui/qwen/ollama) launch
+   their child through an injectable `spawnFn` function pointer, so the
+   bare-call scan above can't see them — exactly the round-1 blind spot. Match
+   any `spawnFn(` (bare OR member, e.g. `this.spawnFn(`) and demand the flag. */
+const INDIRECT_RE = /\bspawnFn\s*\(/g;
+
+/* Prod-reachable spawn sites OUTSIDE server/src that the tree scan can't reach:
+   the versioned-dir launcher (launch.mjs), the prod start/stop scripts, the
+   upgrade restarter, and the model installer scripts — which spawn python/pip,
+   and a hidden parent does NOT stop a grandchild from popping its own console
+   on Windows, so each grandchild needs the flag too. */
+const REPO_ROOT = join(SRC_ROOT, '..', '..');
+const EXTERNAL_FILES = [
+  'launch.mjs',
+  'scripts/start-app-prod.mjs',
+  'scripts/restart-after-upgrade.mjs',
+  'scripts/stop-app.mjs',
+  'server/tts-sidecar/scripts/install-whisper.mjs',
+  'server/tts-sidecar/scripts/install-qwen3.mjs',
+  'server/tts-sidecar/scripts/install-coqui.mjs',
+].map((rel) => join(REPO_ROOT, rel));
 
 function listSourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -119,38 +146,65 @@ function extractCallArgs(src: string, openParenIdx: number): string {
   return src.slice(openParenIdx); // unbalanced — treat the rest as the call
 }
 
+/* Scan one file for spawn calls matching `re` whose call args omit
+   `windowsHide: true`. Returns repo-relative `path:line — name(...)` offenders. */
+function scanFile(file: string, re: RegExp): string[] {
+  const offenders: string[] = [];
+  const src = blankCommentsAndStrings(readFileSync(file, 'utf8'));
+  for (const match of src.matchAll(re)) {
+    const name = match[0].replace(/\s*\($/, '').trim();
+    const openParenIdx = match.index + match[0].length - 1;
+    const callText = extractCallArgs(src, openParenIdx);
+    if (!/windowsHide\s*:\s*true/.test(callText)) {
+      const rel = file.slice(REPO_ROOT.length + 1).replace(/\\/g, '/');
+      const line = src.slice(0, match.index).split('\n').length;
+      offenders.push(`${rel}:${line} — ${name}(...) missing windowsHide: true`);
+    }
+  }
+  return offenders;
+}
+
 describe('windowsHide invariant (no flashing console windows in prod)', () => {
-  const files = listSourceFiles(SRC_ROOT).filter((f) =>
+  const serverFiles = listSourceFiles(SRC_ROOT).filter((f) =>
     readFileSync(f, 'utf8').includes('child_process'),
   );
 
   it('finds at least the known ffmpeg/sidecar spawners (scan is wired up)', () => {
     /* Guard against the scan silently matching nothing (e.g. a refactor that
        moves all spawns) and giving a false green. */
-    expect(files.length).toBeGreaterThanOrEqual(5);
+    expect(serverFiles.length).toBeGreaterThanOrEqual(5);
   });
 
-  it('every child_process spawn passes windowsHide: true', () => {
-    const offenders: string[] = [];
-
-    for (const file of files) {
-      const src = blankCommentsAndStrings(readFileSync(file, 'utf8'));
-      for (const match of src.matchAll(CALL_RE)) {
-        const name = match[1];
-        const openParenIdx = match.index + match[0].length - 1;
-        const callText = extractCallArgs(src, openParenIdx);
-        if (!/windowsHide\s*:\s*true/.test(callText)) {
-          const rel = file.slice(SRC_ROOT.length + 1).replace(/\\/g, '/');
-          const upToMatch = src.slice(0, match.index);
-          const line = upToMatch.split('\n').length;
-          offenders.push(`${rel}:${line} — ${name}(...) missing windowsHide: true`);
-        }
-      }
-    }
-
+  it('every direct child_process spawn in server/src passes windowsHide: true', () => {
+    const offenders = serverFiles.flatMap((f) => scanFile(f, CALL_RE));
     expect(
       offenders,
       `child_process calls missing windowsHide (would flash a console window in prod):\n${offenders.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('every indirect spawnFn(...) call in server/src passes windowsHide: true', () => {
+    /* Only files whose `spawnFn` defaults to a RAW child_process spawn — the
+       reliable static tell is that they import `realSpawn`. A `spawnFn` that
+       delegates to an already-hiding wrapper (e.g. sidecar-supervisor → the
+       windowsHide'd `spawnSidecar`) is exempt: the flag lives in the wrapper,
+       and forcing it onto the high-level call would be meaningless. */
+    const indirectFiles = listSourceFiles(SRC_ROOT).filter((f) => {
+      const src = readFileSync(f, 'utf8');
+      return src.includes('spawnFn') && src.includes('realSpawn');
+    });
+    const offenders = indirectFiles.flatMap((f) => scanFile(f, INDIRECT_RE));
+    expect(
+      offenders,
+      `spawnFn() calls missing windowsHide (installer bootstraps would flash):\n${offenders.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('prod launcher + start/stop + installer scripts pass windowsHide: true', () => {
+    const offenders = EXTERNAL_FILES.flatMap((f) => scanFile(f, CALL_RE));
+    expect(
+      offenders,
+      `spawns outside server/src missing windowsHide (launcher/installer flash):\n${offenders.join('\n')}`,
     ).toEqual([]);
   });
 });
