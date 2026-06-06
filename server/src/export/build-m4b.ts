@@ -211,7 +211,7 @@ function probeDurationSec(mp3Path: string): Promise<number> {
       'default=nw=1:nk=1',
       mp3Path,
     ];
-    const child = spawn('ffprobe', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('ffprobe', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     child.stdout.on('data', (c) => stdoutChunks.push(c));
@@ -307,7 +307,7 @@ function runFfmpegMux(opts: RunFfmpegMuxOptions): Promise<void> {
       'mp4',
       outPath,
     ];
-    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     const stderrChunks: Buffer[] = [];
 
     /* Bridge AbortSignal → child process. ffmpeg responds to SIGTERM on
