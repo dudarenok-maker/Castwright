@@ -1,0 +1,187 @@
+import 'dart:convert';
+
+import 'package:drift/native.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:audiobook_companion/src/data/drift_local_library.dart';
+import 'package:audiobook_companion/src/data/file_store.dart';
+import 'package:audiobook_companion/src/data/library_database.dart';
+import 'package:audiobook_companion/src/domain/storage_policy.dart';
+
+DriftLocalLibrary makeLib(FileStore fs) =>
+    DriftLocalLibrary(LibraryDatabase(NativeDatabase.memory()), fs, root: '/data');
+
+void main() {
+  group('DriftLocalLibrary (LocalLibrary port)', () {
+    test('records chapters + book updatedAt and reads them back', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      // The downloaded file exists on disk before recording.
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1, 2, 3]);
+      await lib.setBookUpdatedAt('b1', '2026-06-06T10:00:00Z');
+      await lib.recordChapter('b1', 'u1', 'fp1', 'audio.mp3');
+
+      expect(await lib.syncedBookUpdatedAt(), {'b1': '2026-06-06T10:00:00Z'});
+      expect(await lib.chapterFingerprints('b1'), {'u1': 'fp1'});
+      await lib.close();
+    });
+
+    test('recordChapter stats the on-disk file for byte accounting', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', List.filled(500, 7));
+      await lib.recordChapter('b1', 'u1', 'fp1', 'audio.mp3');
+
+      final usages = await lib.bookUsages();
+      expect(usages.single.chapters.single.bytes, 500);
+      await lib.close();
+    });
+
+    test('audioPath matches the app-3 path scheme', () async {
+      final lib = makeLib(InMemoryFileStore());
+      expect(lib.audioPath('b1', 'u1', 'audio.m4a'), '/data/books/b1/u1/audio.m4a');
+      await lib.close();
+    });
+
+    test('evictChapter deletes the file and forgets the chapter', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1]);
+      await lib.recordChapter('b1', 'u1', 'fp1', 'audio.mp3');
+
+      await lib.evictChapter('b1', 'u1');
+      expect(await lib.chapterFingerprints('b1'), isEmpty);
+      expect(await fs.exists('/data/books/b1/u1/audio.mp3'), isFalse);
+      await lib.close();
+    });
+
+    test('evictBook deletes all files and forgets the book + chapters', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await lib.setBookUpdatedAt('b1', 't');
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1]);
+      await lib.recordChapter('b1', 'u1', 'fp1', 'audio.mp3');
+
+      await lib.evictBook('b1');
+      expect(await lib.syncedBookUpdatedAt(), isEmpty);
+      expect(await lib.chapterFingerprints('b1'), isEmpty);
+      expect(await fs.exists('/data/books/b1/u1/audio.mp3'), isFalse);
+      await lib.close();
+    });
+  });
+
+  group('DriftLocalLibrary (app-4 store)', () {
+    test('markPlayed and setChapterFinished surface in bookUsages', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1, 2]);
+      await lib.recordChapter('b1', 'u1', 'fp1', 'audio.mp3');
+      await lib.markPlayed('b1', '2026-06-06T12:00:00Z');
+      await lib.setChapterFinished('u1', true);
+
+      final usage = (await lib.bookUsages()).single;
+      expect(usage.lastPlayedAt, '2026-06-06T12:00:00Z');
+      expect(usage.chapters.single.finished, isTrue);
+      await lib.close();
+    });
+
+    test('applyEviction drops a chapter file (keeps row) and evicts a book', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1, 2, 3]);
+      await fs.writeBytes('/data/books/b2/u9/audio.mp3', [9]);
+      await lib.recordChapter('b1', 'u1', 'fp1', 'audio.mp3');
+      await lib.setBookUpdatedAt('b1', 't');
+      await lib.recordChapter('b2', 'u9', 'fp9', 'audio.mp3');
+      await lib.setBookUpdatedAt('b2', 't');
+
+      await lib.applyEviction(const EvictionPlan(
+        chapterFilesToDrop: [ChapterRef('b1', 'u1')],
+        booksToEvict: ['b2'],
+      ));
+
+      // b1/u1 file gone but the row stays (fingerprint cleared, bytes 0).
+      expect(await fs.exists('/data/books/b1/u1/audio.mp3'), isFalse);
+      expect(await lib.chapterFingerprints('b1'), {'u1': ''});
+      final b1 = (await lib.bookUsages()).firstWhere((b) => b.bookId == 'b1');
+      expect(b1.chapters.single.bytes, 0);
+      // b2 fully gone.
+      expect(await fs.exists('/data/books/b2/u9/audio.mp3'), isFalse);
+      expect((await lib.syncedBookUpdatedAt()).containsKey('b2'), isFalse);
+      await lib.close();
+    });
+
+    test('listBooks returns display metadata set via upsertBookMeta', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.upsertBookMeta(
+        bookId: 'b1',
+        title: 'Title',
+        author: 'Author',
+        series: 'Saga',
+        seriesPosition: 3,
+      );
+      final books = await lib.listBooks();
+      expect(books.single.bookId, 'b1');
+      expect(books.single.title, 'Title');
+      expect(books.single.author, 'Author');
+      expect(books.single.series, 'Saga');
+      expect(books.single.seriesPosition, 3);
+      await lib.close();
+    });
+
+    test('cover thumbnail path round-trips', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.setBookUpdatedAt('b1', 't');
+      await lib.setCoverThumbPath('b1', '/data/thumbs/b1.jpg');
+      expect(await lib.coverThumbPath('b1'), '/data/thumbs/b1.jpg');
+      await lib.close();
+    });
+
+    test('totalBytes sums all chapter bytes', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', List.filled(100, 1));
+      await fs.writeBytes('/data/books/b2/u2/audio.mp3', List.filled(250, 1));
+      await lib.recordChapter('b1', 'u1', 'fp', 'audio.mp3');
+      await lib.recordChapter('b2', 'u2', 'fp', 'audio.mp3');
+      expect(await lib.totalBytes(), 350);
+      await lib.close();
+    });
+  });
+
+  group('DriftLocalLibrary legacy JSON import', () {
+    test('imports an app-3 sync-state.json then deletes it', () async {
+      final fs = InMemoryFileStore();
+      // Seed the app-3 JSON snapshot shape.
+      final legacy = {
+        'books': {
+          'b1': {
+            'updatedAt': '2026-06-06T10:00:00Z',
+            'chapters': {
+              'u1': {'fingerprint': 'fp1', 'urlSuffix': 'audio.mp3'},
+            },
+          },
+        },
+      };
+      await fs.writeBytes('/data/sync-state.json', utf8.encode(jsonEncode(legacy)));
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1, 2, 3, 4]);
+
+      final lib = makeLib(fs);
+      await lib.importLegacyJsonIfPresent();
+
+      expect(await lib.syncedBookUpdatedAt(), {'b1': '2026-06-06T10:00:00Z'});
+      expect(await lib.chapterFingerprints('b1'), {'u1': 'fp1'});
+      // bytes picked up from the on-disk file.
+      expect((await lib.bookUsages()).single.chapters.single.bytes, 4);
+      // The legacy file is removed so the import runs once.
+      expect(await fs.exists('/data/sync-state.json'), isFalse);
+      await lib.close();
+    });
+
+    test('is a no-op when there is no legacy file', () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.importLegacyJsonIfPresent(); // must not throw
+      expect(await lib.syncedBookUpdatedAt(), isEmpty);
+      await lib.close();
+    });
+  });
+}
