@@ -35,6 +35,7 @@ void main() {
         skipButtonBehavior: SkipButtonBehavior.chapter,
         storageCapBytes: 1234,
         autoDeleteFinished: true,
+        streamOverLan: true,
       );
       final back = AppSettings.fromJson(s.toJson());
       expect(back.sleepTimerMinutes, 30);
@@ -42,6 +43,7 @@ void main() {
       expect(back.skipButtonBehavior, SkipButtonBehavior.chapter);
       expect(back.storageCapBytes, 1234);
       expect(back.autoDeleteFinished, isTrue);
+      expect(back.streamOverLan, isTrue);
     });
 
     test('fromJson tolerates missing keys (falls back to defaults)', () {

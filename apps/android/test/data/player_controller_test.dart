@@ -25,6 +25,13 @@ class FakeAudioEngine implements AudioEngine {
   }
 
   @override
+  Future<void> setStreamUrl(String url, {Map<String, String>? headers}) async {
+    loadedPath = url;
+    _position = Duration.zero;
+    calls.add('stream:$url');
+  }
+
+  @override
   Future<void> play() async => calls.add('play');
   @override
   Future<void> pause() async => calls.add('pause');

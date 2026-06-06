@@ -19,6 +19,7 @@ class AppSettings {
     this.keepRecentBooks = 3,
     this.autoSyncOnReconnect = true,
     this.autoDownloadInProgress = true,
+    this.streamOverLan = false,
   });
 
   /// 0 = off.
@@ -43,6 +44,10 @@ class AppSettings {
   final bool autoSyncOnReconnect;
   final bool autoDownloadInProgress;
 
+  /// Allow streaming a not-yet-downloaded chapter over the home LAN for instant
+  /// play (drives `app-10`). Off by default — the app is offline-first.
+  final bool streamOverLan;
+
   static const AppSettings defaults = AppSettings();
 
   AppSettings copyWith({
@@ -58,6 +63,7 @@ class AppSettings {
     int? keepRecentBooks,
     bool? autoSyncOnReconnect,
     bool? autoDownloadInProgress,
+    bool? streamOverLan,
   }) {
     return AppSettings(
       sleepTimerMinutes: sleepTimerMinutes ?? this.sleepTimerMinutes,
@@ -73,6 +79,7 @@ class AppSettings {
       autoSyncOnReconnect: autoSyncOnReconnect ?? this.autoSyncOnReconnect,
       autoDownloadInProgress:
           autoDownloadInProgress ?? this.autoDownloadInProgress,
+      streamOverLan: streamOverLan ?? this.streamOverLan,
     );
   }
 
@@ -89,6 +96,7 @@ class AppSettings {
         'keepRecentBooks': keepRecentBooks,
         'autoSyncOnReconnect': autoSyncOnReconnect,
         'autoDownloadInProgress': autoDownloadInProgress,
+        'streamOverLan': streamOverLan,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -114,6 +122,7 @@ class AppSettings {
           json['autoSyncOnReconnect'] as bool? ?? d.autoSyncOnReconnect,
       autoDownloadInProgress:
           json['autoDownloadInProgress'] as bool? ?? d.autoDownloadInProgress,
+      streamOverLan: json['streamOverLan'] as bool? ?? d.streamOverLan,
     );
   }
 
