@@ -41,10 +41,18 @@ function ttsDataDir(): string {
   return join(base, 'tts');
 }
 
+/** The XTTS v2 model directory under the resolved TTS user-data dir. Single
+    source of truth shared with the Model Manager inventory (model-paths.ts) so
+    the inventory row and the /api/coqui/detect card can't disagree on where the
+    weights live. */
+export function coquiModelDir(): string {
+  return join(ttsDataDir(), XTTS_DIR_NAME);
+}
+
 /** True if the XTTS v2 model blob (`model.pth`) is present — a half-finished
     download (config.json only) reads as missing, mirroring Qwen's caution. */
 export function coquiWeightsPresent(): boolean {
-  return existsSync(join(ttsDataDir(), XTTS_DIR_NAME, 'model.pth'));
+  return existsSync(join(coquiModelDir(), 'model.pth'));
 }
 
 /** True if the `TTS` package (pip `coqui-tts`) is present in the sidecar venv's

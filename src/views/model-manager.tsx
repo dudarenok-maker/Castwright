@@ -7,7 +7,7 @@
 
    The moved form sections land in step A7 (alongside the Account surgery). */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ComponentType } from 'react';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import {
   ModelControlPill,
@@ -17,6 +17,9 @@ import {
 import { api, type ModelInventoryItem, type ModelInventoryResponse } from '../lib/api';
 import { formatBytes } from '../lib/bytes';
 import { ModelSettingsForm } from '../components/model-settings-form';
+import { CoquiInstall } from '../components/coqui-install';
+import { QwenInstall } from '../components/qwen-install';
+import { WhisperInstall } from '../components/whisper-install';
 
 const INVENTORY_POLL_MS = 30_000;
 
@@ -25,6 +28,16 @@ const TTS_ENGINE_BY_ID: Partial<Record<string, 'coqui' | 'kokoro' | 'qwen'>> = {
   kokoro: 'kokoro',
   'qwen-base': 'qwen',
   coqui: 'coqui',
+};
+
+/* Inventory ids with an in-app installer, rendered inline under the row (fs-23
+   follow-up — install lives with the model, not in a separate bottom section).
+   kokoro ships in the release bundle, qwen-design is fetched at design time, and
+   ollama models live in the analyzer section below — none get a row installer. */
+const INSTALLER_BY_ID: Partial<Record<string, ComponentType<{ onInstalled?: () => void }>>> = {
+  coqui: CoquiInstall,
+  'qwen-base': QwenInstall,
+  whisper: WhisperInstall,
 };
 
 export function ModelManagerView() {
@@ -119,6 +132,7 @@ function ModelInventory() {
                 setBusyId(null);
               }
             }}
+            onChanged={refetch}
             onRemove={() => setConfirmItem(item)}
           />
         ))}
@@ -251,14 +265,18 @@ function ModelRow({
   sidecarReachable,
   busy,
   onAction,
+  onChanged,
   onRemove,
 }: {
   item: ModelInventoryItem;
   sidecarReachable: boolean;
   busy: boolean;
   onAction: (action: () => Promise<unknown>) => Promise<void>;
+  onChanged: () => void;
   onRemove: () => void;
 }) {
+  const [installerOpen, setInstallerOpen] = useState(false);
+  const Installer = INSTALLER_BY_ID[item.id];
   const engine = TTS_ENGINE_BY_ID[item.id];
   const isAnalyzerDefault = item.kind === 'analyzer' && item.isDefaultEngine;
   /* A Load/Unload pill is meaningful only for the sidecar TTS engines and the
@@ -285,8 +303,9 @@ function ModelRow({
       data-testid={`model-row-${item.id}`}
       data-present={item.present}
       data-loaded={item.loaded}
-      className="rounded-xl border border-ink/10 bg-ink/2 p-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+      className="rounded-xl border border-ink/10 bg-ink/2 p-3 flex flex-col gap-3"
     >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-semibold text-ink">{item.label}</span>
@@ -339,6 +358,17 @@ function ModelRow({
             onStop={doStop}
           />
         )}
+        {Installer && (
+          <button
+            type="button"
+            onClick={() => setInstallerOpen((o) => !o)}
+            data-testid={`model-install-toggle-${item.id}`}
+            aria-expanded={installerOpen}
+            className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-semibold text-ink/70 hover:bg-ink/5"
+          >
+            {item.present ? 'Update' : 'Install'} {installerOpen ? '▴' : '▾'}
+          </button>
+        )}
         {item.present && item.removable && (
           <button
             type="button"
@@ -350,6 +380,16 @@ function ModelRow({
           </button>
         )}
       </div>
+      </div>
+
+      {Installer && installerOpen && (
+        <div
+          data-testid={`model-installer-${item.id}`}
+          className="border-t border-ink/10 pt-3"
+        >
+          <Installer onInstalled={onChanged} />
+        </div>
+      )}
     </li>
   );
 }

@@ -29,6 +29,7 @@ import {
 } from '../workspace/user-settings.js';
 import { engineForModelKey, type TtsEngine } from '../tts/index.js';
 import { detectQwenInstallStateOnDisk } from '../tts/qwen-install-detect.js';
+import { coquiWeightsPresent } from '../tts/coqui-install-detect.js';
 import {
   kokoroWeightPaths,
   kokoroWeightDir,
@@ -172,9 +173,12 @@ export function buildModelInventory(deps: InventoryDeps): ModelInventoryResponse
   });
 
   /* ── Coqui XTTS v2 (alternate TTS) ─────────────────────────────────── */
-  const coquiPath = coquiWeightDir(repoRoot);
+  const coquiPath = coquiWeightDir();
   const coquiSize = dirSizeBytes(coquiPath);
-  const coquiPresent = coquiSize.bytes > 0;
+  /* Authoritative present check — the same model.pth probe /api/coqui/detect
+     uses, so the inventory row and the installer card never disagree. A
+     half-finished download (config.json only) reads as not-present. */
+  const coquiPresent = coquiWeightsPresent();
   items.push({
     id: 'coqui',
     kind: 'tts',
@@ -321,7 +325,7 @@ function removalPaths(id: string, repoRoot: string): string[] {
     case 'qwen-design':
       return [qwenDesignRepoDir()];
     case 'coqui':
-      return [coquiWeightDir(repoRoot)];
+      return [coquiWeightDir()];
     case 'whisper':
       return [whisperRepoDir()];
     default:
