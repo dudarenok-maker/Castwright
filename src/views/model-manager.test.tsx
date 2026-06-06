@@ -17,6 +17,7 @@ import type { UserSettings } from '../lib/types';
 vi.mock('../lib/api', () => ({
   api: {
     getModelInventory: vi.fn(),
+    removeModel: vi.fn(),
     loadSidecar: vi.fn(),
     unloadSidecar: vi.fn(),
     loadAnalyzer: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('../lib/api', () => ({
 const mockInventory = vi.mocked(api.getModelInventory);
 const mockLoad = vi.mocked(api.loadSidecar);
 const mockUnload = vi.mocked(api.unloadSidecar);
+const mockRemove = vi.mocked(api.removeModel);
 
 const SETTINGS_FIXTURE: UserSettings = {
   displayName: 'Mike',
@@ -127,6 +129,7 @@ beforeEach(() => {
   mockInventory.mockResolvedValue(INVENTORY);
   mockLoad.mockResolvedValue({ status: 'ready' });
   mockUnload.mockResolvedValue({ status: 'idle' });
+  mockRemove.mockResolvedValue({ ok: true, id: 'qwen-base', removed: true, freedBytes: 1_000 });
   /* The moved installers + ModelsCard fetch on mount; keep them quiet. */
   vi.stubGlobal(
     'fetch',
@@ -181,6 +184,33 @@ describe('ModelManagerView — inventory', () => {
     renderManager();
     const coqui = await screen.findByTestId('model-row-coqui');
     expect(within(coqui).queryByRole('button', { name: /load model/i })).toBeNull();
+  });
+});
+
+describe('ModelManagerView — remove', () => {
+  it('removes an idle, non-default, non-fallback model via the confirm modal', async () => {
+    renderManager();
+    const qwen = await screen.findByTestId('model-row-qwen-base');
+    within(qwen).getByTestId('model-remove-qwen-base').click();
+    const modal = await screen.findByTestId('model-remove-confirm');
+    within(modal).getByTestId('model-remove-confirm-button').click();
+    await waitFor(() => expect(mockRemove).toHaveBeenCalledWith('qwen-base'));
+  });
+
+  it('warns and disables Confirm for the loaded fallback engine', async () => {
+    renderManager();
+    const kokoro = await screen.findByTestId('model-row-kokoro');
+    within(kokoro).getByTestId('model-remove-kokoro').click();
+    const modal = await screen.findByTestId('model-remove-confirm');
+    expect(within(modal).getByText(/loaded in GPU memory/i)).toBeInTheDocument();
+    expect(within(modal).getByTestId('model-remove-confirm-button')).toBeDisabled();
+    expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  it('offers no Remove button for a not-installed model', async () => {
+    renderManager();
+    const coqui = await screen.findByTestId('model-row-coqui');
+    expect(within(coqui).queryByTestId('model-remove-coqui')).toBeNull();
   });
 });
 

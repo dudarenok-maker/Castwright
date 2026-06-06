@@ -15,6 +15,8 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rmSync } from 'node:fs';
+import { execFile } from 'node:child_process';
 import {
   probeSidecarHealth,
   type SidecarHealthResult,
@@ -265,6 +267,135 @@ async function probeOllamaModels(): Promise<OllamaSnapshot> {
     return { reachable: false, models: [], resident: [] };
   }
 }
+
+/* ── Remove (Phase B) ──────────────────────────────────────────────────── */
+
+export interface RemovalGuard {
+  ok: boolean;
+  code?: 'model-loaded' | 'model-is-default' | 'model-is-fallback';
+  error?: string;
+  remediation?: string;
+}
+
+/** Pure guard — decide whether `item` may be removed. Order matters: a loaded
+    model is the most actionable (unload first); the fallback guard is the
+    loudest (removing Kokoro breaks fallback for every book). */
+export function evaluateRemoval(item: ModelInventoryItem): RemovalGuard {
+  if (item.loaded) {
+    return {
+      ok: false,
+      code: 'model-loaded',
+      error: `${item.label} is currently loaded in GPU memory.`,
+      remediation: 'Unload it first, then remove.',
+    };
+  }
+  if (item.isFallbackEngine) {
+    return {
+      ok: false,
+      code: 'model-is-fallback',
+      error: `${item.label} is the universal fallback engine — removing it breaks audio fallback for every book.`,
+      remediation: 'Keep the fallback engine installed.',
+    };
+  }
+  if (item.isDefaultEngine) {
+    return {
+      ok: false,
+      code: 'model-is-default',
+      error: `${item.label} is your current default engine.`,
+      remediation: 'Change the default in the Model Manager first, then remove.',
+    };
+  }
+  return { ok: true };
+}
+
+/** Resolve the on-disk path(s) a model id occupies. Ollama models have no local
+    path (managed by the daemon). */
+function removalPaths(id: string, repoRoot: string): string[] {
+  switch (id) {
+    case 'kokoro':
+      return [kokoroWeightDir(repoRoot)];
+    case 'qwen-base':
+      return [qwenBaseRepoDir()];
+    case 'qwen-design':
+      return [qwenDesignRepoDir()];
+    case 'coqui':
+      return [coquiWeightDir(repoRoot)];
+    case 'whisper':
+      return [whisperRepoDir()];
+    default:
+      return [];
+  }
+}
+
+/** Delete a model's weights. For Ollama, exec `ollama rm <tag>`. Returns the
+    freed byte count (computed before deletion). Throws on a locked file (the
+    route maps EBUSY/EPERM to a 409) or an ollama failure. */
+export async function performRemoval(
+  id: string,
+  repoRoot: string,
+): Promise<{ removed: boolean; freedBytes: number }> {
+  if (id.startsWith('ollama:')) {
+    const tag = id.slice('ollama:'.length);
+    await new Promise<void>((resolveP, rejectP) => {
+      execFile('ollama', ['rm', tag], { timeout: 10_000, windowsHide: true }, (err) =>
+        err ? rejectP(err) : resolveP(),
+      );
+    });
+    return { removed: true, freedBytes: 0 };
+  }
+  const paths = removalPaths(id, repoRoot);
+  let freedBytes = 0;
+  for (const p of paths) {
+    freedBytes += totalSizeBytes([p]).bytes;
+    rmSync(p, { recursive: true, force: true });
+  }
+  return { removed: true, freedBytes };
+}
+
+modelsInventoryRouter.post('/:id/remove', async (req: Request, res: Response) => {
+  const id = req.params.id;
+  const [sidecar, ollama] = await Promise.all([
+    probeSidecarHealth().catch(
+      (): SidecarHealthResult => ({ status: 'unreachable', url: '', proxy: 'sidecar' }),
+    ),
+    probeOllamaModels(),
+  ]);
+  const inventory = buildModelInventory({
+    repoRoot: REPO_ROOT,
+    ts: new Date().toISOString(),
+    sidecar,
+    ollama,
+    resolvedTtsEngine: engineForModelKey(getResolvedTtsModelKey()),
+    analysisEngine: getResolvedAnalysisEngine(),
+    resolvedOllamaModel: getResolvedOllamaModel(),
+  });
+  const item = inventory.items.find((i) => i.id === id);
+  if (!item) {
+    return res.status(404).json({ error: `Unknown model '${id}'.` });
+  }
+  if (!item.present) {
+    /* Idempotent: nothing to delete. */
+    return res.json({ id, removed: false, freedBytes: 0, item });
+  }
+  const guard = evaluateRemoval(item);
+  if (!guard.ok) {
+    return res.status(409).json({ code: guard.code, error: guard.error, remediation: guard.remediation });
+  }
+  try {
+    const { removed, freedBytes } = await performRemoval(id, REPO_ROOT);
+    return res.json({ id, removed, freedBytes });
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'EBUSY' || err.code === 'EPERM' || err.code === 'ENOTEMPTY') {
+      return res.status(409).json({
+        code: 'files-locked',
+        error: `Couldn't delete ${item.label} — files are in use.`,
+        remediation: 'Stop the sidecar (or Unload the model) and retry.',
+      });
+    }
+    return res.status(500).json({ error: err.message || 'Removal failed.' });
+  }
+});
 
 modelsInventoryRouter.get('/inventory', async (_req: Request, res: Response) => {
   const [sidecar, ollama] = await Promise.all([
