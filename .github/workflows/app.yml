@@ -1,0 +1,47 @@
+name: app
+
+# Flutter companion app (apps/android/) CI lane — analyze + test + debug APK on
+# every change, plus the unsigned iOS compile that keeps the codebase iOS-ready
+# (plan 188, app-1 / D7). Path-filtered so non-app changes never trigger it, and
+# the heavy frontend/server/e2e `verify` battery is irrelevant to app-only PRs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/app.yml'
+  pull_request:
+    paths:
+      - 'apps/android/**'
+      - '.github/workflows/app.yml'
+
+defaults:
+  run:
+    working-directory: apps/android
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --debug
+
+  ios-compile:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter build ios --no-codesign
