@@ -3589,6 +3589,39 @@ async function mockPauseAnalysis(_: { manuscriptId: string }): Promise<void> {
   return Promise.resolve();
 }
 
+/* fs-23 — In-app Model Manager. Mirrors server/src/routes/models-inventory.ts
+   (these /api/models routes are local-ops only, not in the OpenAPI contract, so
+   the shape is hand-mirrored rather than generated). */
+export type ModelInventoryId =
+  | 'kokoro'
+  | 'qwen-base'
+  | 'qwen-design'
+  | 'coqui'
+  | 'whisper'
+  | `ollama:${string}`;
+
+export interface ModelInventoryItem {
+  id: ModelInventoryId;
+  kind: 'tts' | 'analyzer' | 'asr';
+  label: string;
+  present: boolean;
+  sizeBytes: number | null;
+  diskPath: string | null;
+  loaded: boolean;
+  installState?: string;
+  isDefaultEngine: boolean;
+  isFallbackEngine: boolean;
+  removable: boolean;
+  updatable: boolean;
+  integrity?: 'verified' | 'unpinned' | 'mismatch';
+}
+
+export interface ModelInventoryResponse {
+  ts: string;
+  sidecarReachable: boolean;
+  items: ModelInventoryItem[];
+}
+
 export interface SidecarHealth {
   status: 'reachable' | 'unreachable';
   url: string;
@@ -3772,6 +3805,14 @@ async function realGetSidecarHealth(): Promise<SidecarHealth> {
      parse from the Node route as having come from the sidecar layer, so
      the UI's distinguisher logic stays clean. */
   return { ...body, proxy: body.proxy ?? 'sidecar' };
+}
+
+/* fs-23 — Model Manager inventory. The Node route does the FS sizing + probe
+   folding; the frontend just GETs and renders. */
+async function realGetModelInventory(): Promise<ModelInventoryResponse> {
+  const res = await fetch('/api/models/inventory');
+  if (!res.ok) throw new Error(`Model inventory failed: HTTP ${res.status}`);
+  return (await res.json()) as ModelInventoryResponse;
 }
 
 /* ── User settings ─────────────────────────────────────────────────────
@@ -4368,6 +4409,99 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   };
 }
 
+/* fs-23 — static mock inventory so the Model Manager renders + e2e runs offline
+   under VITE_USE_MOCKS=true. Kokoro present + loaded (the resident fallback),
+   Qwen base present, Coqui/Whisper absent, one resident Ollama analyzer model. */
+async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
+  await wait(80);
+  return {
+    ts: new Date().toISOString(),
+    sidecarReachable: true,
+    items: [
+      {
+        id: 'kokoro',
+        kind: 'tts',
+        label: 'Kokoro v1',
+        present: true,
+        sizeBytes: 346_030_080,
+        diskPath: 'server/tts-sidecar/voices/kokoro',
+        loaded: MOCK_SIDECAR_KOKORO_LOADED,
+        isDefaultEngine: !MOCK_SIDECAR_QWEN_LOADED,
+        isFallbackEngine: true,
+        removable: true,
+        updatable: true,
+        integrity: 'verified',
+      },
+      {
+        id: 'qwen-base',
+        kind: 'tts',
+        label: 'Qwen3-TTS Base (0.6B)',
+        present: true,
+        sizeBytes: 1_283_457_024,
+        diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-0.6B-Base',
+        loaded: MOCK_SIDECAR_QWEN_LOADED,
+        installState: MOCK_SIDECAR_QWEN_LOADED ? 'loaded' : 'ready',
+        isDefaultEngine: MOCK_SIDECAR_QWEN_LOADED,
+        isFallbackEngine: false,
+        removable: true,
+        updatable: true,
+      },
+      {
+        id: 'qwen-design',
+        kind: 'tts',
+        label: 'Qwen3-TTS VoiceDesign (1.7B)',
+        present: true,
+        sizeBytes: 3_623_878_656,
+        diskPath: '~/.cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+        loaded: false,
+        isDefaultEngine: false,
+        isFallbackEngine: false,
+        removable: true,
+        updatable: true,
+      },
+      {
+        id: 'coqui',
+        kind: 'tts',
+        label: 'Coqui XTTS v2',
+        present: false,
+        sizeBytes: null,
+        diskPath: 'server/tts-sidecar/voices/coqui/tts/tts_models--multilingual--multi-dataset--xtts_v2',
+        loaded: false,
+        isDefaultEngine: false,
+        isFallbackEngine: false,
+        removable: false,
+        updatable: true,
+      },
+      {
+        id: 'whisper',
+        kind: 'asr',
+        label: 'Whisper ASR (faster-whisper)',
+        present: false,
+        sizeBytes: null,
+        diskPath: '~/.cache/huggingface/hub/models--Systran--faster-whisper-base',
+        loaded: false,
+        isDefaultEngine: false,
+        isFallbackEngine: false,
+        removable: false,
+        updatable: true,
+      },
+      {
+        id: 'ollama:qwen3.5:4b',
+        kind: 'analyzer',
+        label: 'qwen3.5:4b',
+        present: true,
+        sizeBytes: 2_600_000_000,
+        diskPath: null,
+        loaded: true,
+        isDefaultEngine: true,
+        isFallbackEngine: false,
+        removable: true,
+        updatable: true,
+      },
+    ],
+  };
+}
+
 /* In-memory model state for the mock path — flipped by mockLoadSidecar /
    mockUnloadSidecar so the in-app Load/Stop pill round-trips visibly under
    VITE_USE_MOCKS=true. Per-engine flags so the Kokoro pill can be exercised
@@ -4653,6 +4787,7 @@ const real = {
   pauseGeneration: realPauseGeneration,
   pauseAnalysis: realPauseAnalysis,
   getSidecarHealth: realGetSidecarHealth,
+  getModelInventory: realGetModelInventory,
   getGpuQueueState: realGetGpuQueueState,
   getDiagnostics: realGetDiagnostics,
   getOllamaHealth: realGetOllamaHealth,
@@ -4876,6 +5011,7 @@ const mock = {
   pauseGeneration: mockPauseGeneration,
   pauseAnalysis: mockPauseAnalysis,
   getSidecarHealth: mockGetSidecarHealth,
+  getModelInventory: mockGetModelInventory,
   getGpuQueueState: mockGetGpuQueueState,
   getDiagnostics: mockGetDiagnostics,
   getOllamaHealth: mockGetOllamaHealth,
