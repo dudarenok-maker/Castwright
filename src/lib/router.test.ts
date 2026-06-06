@@ -26,6 +26,10 @@ describe('stageToHash', () => {
     expect(stageToHash({ kind: 'changelog' })).toBe('#/log');
   });
 
+  it('model-manager → #/models (fs-23)', () => {
+    expect(stageToHash({ kind: 'model-manager' })).toBe('#/models');
+  });
+
   it('analysing with bookId → #/books/:id/analysing', () => {
     expect(stageToHash({ kind: 'analysing', bookId: 'ns', manuscriptId: null })).toBe(
       '#/books/ns/analysing',

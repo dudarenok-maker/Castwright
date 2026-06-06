@@ -21,6 +21,8 @@ import {
   type ResourceTelemetryRecord,
 } from '../lib/api';
 import { formatDuration } from '../lib/time';
+import { useAppDispatch } from '../store';
+import { uiActions } from '../store/ui-slice';
 
 /* Diagnostics poll cadence. The probes spawn processes + do disk I/O, and
    health isn't fast-moving, so 30 s (matching the sidecar/ollama health polls)
@@ -100,11 +102,38 @@ export function AdminView() {
         no logs required.
       </p>
 
+      <ModelManagerLink />
       <HealthBoard />
       <GenerationThroughput stats={stats} />
       <ResourceTrends />
       {import.meta.env.DEV && <WorktreesSection />}
     </div>
+  );
+}
+
+/* fs-23 — entry point to the In-app Model Manager. The manager consolidates
+   every model install / inventory / residency control that used to be
+   scattered across the Account view; Admin is its only launch surface. */
+function ModelManagerLink() {
+  const dispatch = useAppDispatch();
+  return (
+    <section className="mb-6 rounded-2xl border border-ink/10 bg-white p-5 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h3 className="text-base font-semibold text-ink">Model Manager</h3>
+        <p className="mt-1 text-xs text-ink/55 max-w-prose">
+          Install, remove, and update the local TTS / analyzer / ASR models, see disk usage, and load
+          or unload each into the GPU — all in one place.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => dispatch(uiActions.openModelManager())}
+        data-testid="admin-open-model-manager"
+        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-white text-sm font-medium hover:bg-ink/90"
+      >
+        Open Model Manager →
+      </button>
+    </section>
   );
 }
 
