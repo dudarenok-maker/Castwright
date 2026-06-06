@@ -411,25 +411,24 @@ hash matches — no OS cert install, no manual hex compare).
 
 **Server prereqs:**
 
-- `srv-32` — **Per-chapter sync-manifest endpoint** (`GET /api/library/sync-manifest`, `?since` delta + the full **active-ID set** for stateless client-side deletion; fingerprint must bump on every audio-mutating path). _Benefit:_ the one change that makes delta sync possible; reshapes existing scan data. Also feeds `fs-15`. → [plan 188](features/188-android-companion-app.md#srv-32--per-chapter-sync-manifest-endpoint-delta-friendly)
+- `srv-32` — **Per-chapter sync-manifest endpoint** — **two-level** (book index + per-book detail), gzip'd; carries each chapter's stable `uuid`, fingerprint, **actual audio `urlSuffix`** (mp3/m4a/ogg), and active-ID sets; `?since` delta; fingerprint must bump on every audio-mutating path. _Benefit:_ delta sync that scales to big libraries + is multi-format-safe; reshapes existing scan data. Feeds `fs-15`. → [plan 188](features/188-android-companion-app.md#srv-32--per-chapter-sync-manifest-endpoint-delta-friendly)
 - `srv-34` — **Listen-progress PUT accepts client `listenedAt`** + **guarded compare-and-set** (commit only if strictly newer; return the stored record on a stale write). _Benefit:_ offline-correct conflict ordering AND safe concurrent web+companion writers (the targeted listen-progress fix; does not wake `srv-10`/`fe-11`); unblocks `app-6`. → [plan 188](features/188-android-companion-app.md#srv-34--listen-progress-put-accepts-a-client-listenedat-offline-correct-ordering)
+- `srv-35` — **Stable per-chapter identifier** (immutable `uuid` preserved through restructure/rename + lazy migration), keying the sync manifest + listen-progress. **MVP (user directive 2026-06-06).** Verified gap: chapter `id` is positional and `slug` embeds id+title, so neither survives reorder/rename (the reviewer's slug-fallback doesn't hold). Also repairs the **existing web player**. Lands first in the server track (srv-32 keys by its `uuid`). → [plan 188](features/188-android-companion-app.md)
 
 **MVP block (v1)** — ranked:
 
 1. `app-1` — Flutter scaffold (`apps/android/`) + test harness + CI lane (incl. unsigned iOS compile) + debug APK. _Benefit:_ the foundation everything builds on.
 2. `app-2` — Pairing + **auto-verified app-managed TLS trust** (QR fingerprint match; bad-cert-bypass bootstrap then pin) + generated API client + secure token. _Benefit:_ one-time, MitM-safe pairing that works on Android *and* iOS. _Depends:_ `srv-20` (token + CA fingerprint in QR).
-3. `app-3` — Delta sync engine (pull only changed/new chapters; resumable + integrity; **atomic `.tmp`→rename** swap, defer if playing; evict via active-ID diff). _Benefit:_ the killer feature — no full-book resync; an in-progress chapter never corrupts mid-listen.
-4. `app-4` — Offline library store (per-chapter audio + storage accounting + auto-eviction). _Benefit:_ listen anywhere; cache never silently fills the phone.
+3. `app-3` — Delta sync engine (per-book pull via the manifest's per-chapter `urlSuffix` — **never hardcode `.mp3`**; resumable + integrity; **atomic `.tmp`→rename** swap, defer if playing; **Android foreground service** so big downloads survive backgrounding; evict via active-ID diff). _Benefit:_ no full-book resync; downloads finish in the background. _Depends:_ `srv-35`.
+4. `app-4` — Offline library store (per-chapter audio + **actual codec extension** + cover **thumbnails** + storage accounting + auto-eviction). _Benefit:_ listen anywhere; cache never fills the phone; lists stay smooth.
 5. `app-5` — Native player (background, lock-screen, Bluetooth, **per-book state**; media keys default to **seek ±30/±15 s** not chapter-skip; **autosave ~5–10 s** survives an OS kill). _Benefit:_ table-stakes UX that survives backgrounding + car controls.
 6. `app-6` — Two-way resume sync (**last-write-wins by client `listenedAt`**, not network-receive time). _Benefit:_ in-car position flows back without clobbering a newer position set elsewhere. _Depends:_ `srv-34`.
 7. `app-7` — Hierarchical browse + management (**by author → series → book**, state pills, download/remove). _Benefit:_ find any book fast in a big multi-series library.
 8. `app-14` — Home shelf + multi-book switching ("Continue listening", seamless book swap). _Benefit:_ the listen-to-several-books day-to-day surface.
-9. `app-8` — Auto-sync on reconnect (background delta-pull + resume flush). _Benefit:_ fixes + new chapters appear with no manual action.
-10. `app-13` — Playback & download settings incl. **sleep timer**, skip-button toggle (seek vs chapter), Wi-Fi-only, and **storage-cap auto-eviction** (auto-delete finished chapters; LRU book eviction). _Benefit:_ the settings a real listening app needs.
+9. `app-8` — Auto-sync on reconnect (background delta-pull + resume flush; **network-gated** — only when the paired server is reachable / on a configured home Wi-Fi, so the token never leaks on public Wi-Fi). _Benefit:_ fixes + new chapters appear with no manual action, safely off-network.
+10. `app-13` — Playback & download settings incl. **sleep timer**, skip-button toggle (seek vs chapter), Wi-Fi-only, **auto-sync network gating** (home SSID), and **storage-cap auto-eviction** (auto-delete finished chapters; LRU book eviction). _Benefit:_ the settings a real listening app needs. _(Shake-to-extend sleep timer = follow-up nice-to-have.)_
 
 **Follow-ups (post-MVP)** — ranked:
-
-- **`srv-35`** — **Stable per-chapter identifier** (immutable `uuid` preserved through restructure/rename), keying listen-progress + the sync manifest. _Recommended before GA, not MVP-blocking; benefits the web player too._ Verified gap: chapter `id` is positional and `slug` embeds id+title, so neither survives reorder/rename (the reviewer's slug-fallback doesn't hold); v1 keys by `id` (web parity). → [plan 188](features/188-android-companion-app.md)
 
 11. `srv-33` — Device pairing + multi-device token management (on top of `srv-20`). _Benefit:_ revocable per-device access.
 12. `app-9` — In-car (**Android Auto + CarPlay**) head-unit UI. _Benefit:_ first-class in-car beyond the Bluetooth path.

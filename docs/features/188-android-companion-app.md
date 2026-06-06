@@ -134,19 +134,25 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 
 #### `srv-32` — Per-chapter sync-manifest endpoint (delta-friendly)
 
-- **What:** `GET /api/library/sync-manifest` returning, per book + chapter, a
-  **fingerprint** (`audioRenderedAt` + file size; content hash optional) plus
-  `durationSec`/`lufs`/format, book metadata + `coverImageUrl`, and per-book
-  `listen-progress.updatedAt`. Supports **`?since=<iso>`** for deltas. **Deletion stays
-  server-stateless:** every response also carries the **full set of currently-active
-  book/chapter IDs**, so the client evicts anything in its local store absent from that
-  set — a filesystem-scan server can't emit tombstones for already-deleted folders (it
-  has no memory of them), and this keeps the "no new on-disk state" property. Reuses
-  `server/src/workspace/scan.ts` data.
-- **Acceptance highlight:** the fingerprint MUST change on **every** audio-mutating path
-  — full regen, per-character splice (`fs-26`), QA re-record (plan 179), loudness renorm
-  — or the companion silently misses updates. Ships a test asserting each path bumps it.
-  A `?since` response still includes the full active-ID set (IDs only — cheap).
+- **What:** a **two-level, gzip/brotli-compressed** manifest (so a 200-book / 4,000-chapter
+  library never ships as one giant JSON — 4th-review point 2): a lightweight **index**
+  (`GET /api/library/sync-manifest` — book IDs + per-book version/`updatedAt` + cover ref +
+  the active **book**-ID set; `?since=<iso>` trims it) and a **per-book detail**
+  (`GET /api/library/sync-manifest?bookId=<id>` — that book's chapters with, per chapter:
+  the **stable `uuid`** (`srv-35`), a **fingerprint** (`audioRenderedAt` + file size; hash
+  optional), `durationSec`/`lufs`/`listen-progress.updatedAt`, and the **exact audio
+  `urlSuffix`** — `audio.mp3` | `audio.m4a` | `audio.ogg`, since a chapter can render in any
+  of the three (`chapter-audio.ts:310-312`) — plus the active **chapter**-ID set). The
+  client diffs the index, then pulls only changed books' detail (isolates failures, drives
+  "Syncing Book A…" UI). **Deletion stays server-stateless:** the active book/chapter ID
+  sets let the client evict what's gone (a filesystem scan can't emit tombstones for deleted
+  folders). Reuses `server/src/workspace/scan.ts`.
+- **Acceptance highlights:** (1) the fingerprint MUST change on **every** audio-mutating
+  path — full regen, per-character splice (`fs-26`), QA re-record (plan 179), loudness
+  renorm — or the companion silently misses updates (test asserts each path bumps it);
+  (2) the per-chapter `urlSuffix` reflects the **actual rendered format** so the client
+  never hardcodes `.mp3`; (3) chapters are keyed by the `srv-35` `uuid`, not the positional
+  `id`.
 - **Benefit (architectural/user):** the one change that makes delta sync possible; also
   feeds `fs-15`. **Depends on:** nothing.
 
@@ -179,6 +185,27 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 - **Benefit (user/technical):** correct cross-device resume; unblocks `app-6`'s two-way
   sync. **Depends on:** nothing (consumed by `app-6`).
 
+#### `srv-35` — Stable per-chapter identifier (reorder/rename-proof) — **MVP prereq**
+
+- **What:** add an immutable per-chapter `uuid` at import, preserved through restructure
+  (merge/split/reorder, `restructure.ts`) and rename (`78-chapter-rename`), and key
+  listen-progress + the sync manifest (`srv-32`) by it. **Verified gap (3rd review,
+  point 5):** chapter `id` is *positional* — re-issued 1..N on reorder
+  (`restructure.ts:1185-1189`) — and `slug` embeds both id and title
+  (`chapterSlug(id, title)`), so **neither survives a restructure**; today's web
+  listen-progress already assumes a stable `id` with no fallback
+  (`book-state.ts:1064-1075`). (The reviewer's "store `chapterSlug` as fallback" doesn't
+  hold — slug is no more stable than id.)
+- **MVP, done up front (user directive 2026-06-06):** not deferred — so the companion keys
+  sync + bookmarks by a stable id from day one and a server-side reorder/rename can never
+  desync an offline phone. **Also repairs the existing web player's latent bug.**
+  `srv-32`/`app-3`/`app-6` key by the `uuid`. Lazy-migrate existing chapters (inject a
+  `uuid` on the next `state.json` write); split keeps the original `uuid` on the first
+  half + mints a new one for the second; merge keeps the survivor's.
+- **Benefit (user/technical):** bookmarks + per-chapter sync survive chapter restructure on
+  both web and the companion. **Depends on:** nothing (cross-cutting server change; touches
+  `restructure.ts`/`scan.ts`/`state.json`).
+
 ### `app-*` — MVP block (first usable, installable Android deployment)
 
 #### `app-1` — Flutter app scaffold in `apps/android/`
@@ -209,27 +236,34 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 
 #### `app-3` — Delta sync engine
 
-- **What:** fetch the `srv-32` manifest (`?since`), diff vs the local store, pull only
-  changed/new chapters via `…/audio.mp3` with **resumable range downloads + retry/backoff
-  + integrity check** (size/stamp). **Atomic swap:** write each download to `<chapter>.tmp`,
-  verify, then atomic-rename over the live file — and **defer the swap if the player has
-  that file open** (apply on next stop). **Deletion:** evict any local book/chapter absent
-  from the manifest's active-ID set (no server tombstones). Re-pull a single regenerated
-  chapter, never the whole book.
+- **What:** fetch the `srv-32` **index** (`?since`), diff vs the local store, then pull each
+  changed book's **per-book detail** and download only changed/new chapters **via the
+  manifest's per-chapter `urlSuffix`** (`audio.mp3` | `.m4a` | `.ogg` — **never hardcode
+  `.mp3`**), keyed by the stable `uuid` (`srv-35`), with **resumable range downloads +
+  retry/backoff + integrity check** (size/stamp). **Atomic swap:** write each download to
+  `<file>.tmp`, verify, atomic-rename over the live file — **defer if the player has it
+  open** (apply on next stop). **Foreground service:** while a sync is actively downloading,
+  run it as an **Android foreground service** (persistent progress notification, e.g.
+  "Downloading Book A — ch 3/12") so the OS doesn't kill a multi-book download after a few
+  minutes (iOS: background `URLSession` via the download plugin). **Deletion:** evict any
+  local book/chapter absent from the active-ID sets. Re-pull a single regenerated chapter,
+  never the whole book.
 - **Benefit (user):** the killer feature — no full-book resync when one chapter is
-  fixed/improved; an in-progress chapter never corrupts mid-listen. **Depends on:**
-  `app-2`, `srv-32`.
+  fixed/improved; an in-progress chapter never corrupts mid-listen; large downloads finish
+  in the background. **Depends on:** `app-2`, `srv-32`, **`srv-35`**.
 
 #### `app-4` — Offline library store
 
 - **What:** local per-chapter audio + metadata + cover persistence, storage accounting,
   delete/evict a book, **disk-full handling**, and **auto-eviction policies** driven by
-  `app-13` settings — (a) **auto-delete finished chapters** (drop the `.mp3` once listened,
+  `app-13` settings — (a) **auto-delete finished chapters** (drop the file once listened,
   keep metadata + progress pointer) and (b) **least-recently-listened book eviction** when
   the storage cap is hit (keep the N most-recently-played books). Evicted audio re-syncs
-  on demand.
-- **Benefit (user):** listen anywhere; the cache never silently fills the phone.
-  **Depends on:** `app-3`.
+  on demand. **Store each chapter's actual audio extension** (`mp3`/`m4a`/`ogg`) so
+  `just_audio` initialises the right codec. **Cache a small cover thumbnail** (`?width=` —
+  see D11) for list/grid rendering; fetch the full-res cover only for the now-playing screen.
+- **Benefit (user):** listen anywhere; the cache never silently fills the phone; lists stay
+  smooth. **Depends on:** `app-3`.
 
 #### `app-5` — Native audio player
 
@@ -269,7 +303,8 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   search/filter by title/author and pinned books surfaced. Maps directly to the
   `GET /api/library` / `srv-32` tree — **no new server work**. Each book shows its state
   pill (not-downloaded / downloading / downloaded / **update-available**) with
-  download/remove, sync status + errors, and storage usage.
+  download/remove, sync status + errors, and storage usage. Renders **thumbnail** covers
+  (not full-res) so large libraries don't jank.
 - **Benefit (user):** find any book fast in a large, multi-series library.
   **Depends on:** `app-3`, `app-5`.
 
@@ -286,9 +321,15 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 
 - **What:** detect home-network reachability; background auto-pull deltas + flush the
   resume queue (Wi-Fi-only / charging constraints via the cross-platform background-task
-  plugin).
+  plugin). **Network gating (4th-review point 5):** only attempt sync when the **paired
+  server is actually reachable** — a reachability probe with backoff, optionally pinned to
+  configured Wi-Fi SSID(s) (`app-13`) — so the app never spams connection attempts to the
+  LAN IP, drains battery, or **leaks the token on public/foreign Wi-Fi**. *(SSID pinning
+  needs Android location permission; pure reachability-gating avoids it — the plan picks
+  one.)* Active downloads run under `app-3`'s foreground service.
 - **Benefit (user):** the "sync as you reconnect" ask — fixes + new chapters appear with
-  no manual action. **Depends on:** `app-3`, `app-6`.
+  no manual action, safely and without battery drain off-network. **Depends on:** `app-3`,
+  `app-6`.
 
 #### `app-13` — Playback & download settings (incl. sleep timer)
 
@@ -296,10 +337,14 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   skip-silence, **skip-button behaviour toggle** (seek ±30/±15 s vs chapter-skip — drives
   `app-5`'s media keys), Wi-Fi-only downloads, **storage cap + the two auto-eviction
   policies** (auto-delete finished chapters; least-recently-listened book eviction — drive
-  `app-4`), auto-download policy for in-progress books, and a "copy diagnostic logs"
+  `app-4`), **auto-sync network gating** (paired-network-only / configured home SSID(s) —
+  drives `app-8`), auto-download policy for in-progress books, and a "copy diagnostic logs"
   affordance (self-service observability).
 - **Benefit (user):** the settings a real listening app is expected to have.
   **Depends on:** `app-5`, `app-4`.
+- **Nice-to-have (follow-up, not v1):** "shake-to-extend" sleep timer — in the last ~30 s,
+  duck the volume + soft chime; an accelerometer shake adds another interval without
+  unlocking the phone. Premium ergonomic; YAGNI for the MVP, captured so it isn't lost.
 
 ### `app-*` — Follow-ups (post-MVP, ranked)
 
@@ -309,24 +354,6 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   *Reconcile, don't absorb:* MVP ships against `srv-20`'s single token; `srv-33` is the
   multi-device refinement.
 - **Benefit (user/security):** revocable per-device access. **Depends on:** `srv-20`.
-
-#### `srv-35` — Stable per-chapter identifier (reorder/rename-proof) — *recommended before GA, not MVP-blocking*
-
-- **What:** add an immutable per-chapter `uuid` at import, preserved through restructure
-  (merge/split/reorder, `restructure.ts`) and rename (`78-chapter-rename`), and key
-  listen-progress + the sync manifest by it. **Verified gap (3rd review, point 5):**
-  chapter `id` is *positional* — re-issued 1..N on reorder (`restructure.ts:1185-1189`) —
-  and `slug` embeds both id and title (`chapterSlug(id, title)`), so **neither survives a
-  restructure**; today's web listen-progress already assumes a stable `id` with no
-  fallback (`book-state.ts:1064-1075`). The reviewer's "store `chapterSlug` as fallback"
-  therefore **doesn't hold** (slug is no more stable than id) — a real stable key is needed.
-- **Scope note:** benefits the **existing web player too**, not just the companion. **v1
-  keys by `id` (web parity)** — the blast radius is bounded (restructure-after-listen is
-  rare; the manifest's fingerprint set makes a mis-keyed *audio* file self-heal by
-  re-download, so only a *bookmark* can mis-resume), so this is a strongly-recommended
-  follow-up, not an MVP gate. `srv-32`/`app-3`/`app-6` adopt the stable key once it lands.
-- **Benefit (user/technical):** bookmarks + per-chapter sync survive chapter restructure on
-  both web and the companion. **Depends on:** nothing (cross-cutting server change).
 
 #### `app-9` — In-car support (Android Auto **and** CarPlay)
 
@@ -384,10 +411,11 @@ backlog items.)*
   *second concurrent writer* to listen-progress. `srv-34`'s guarded compare-and-set handles
   that **specific** route; it does **not** wake the broader `state.json` multi-writer items,
   which stay parked. *(Point 4.)*
-- **`srv-35`** (stable chapter identifier — new follow-up above) — chapter `id`/`slug` are
-  both restructure-unstable; v1 keys by `id` (web parity), `srv-35` is the durable fix for
-  web + companion. *(Point 5 — adopted as a tracked item; the reviewer's slug-fallback was
-  rejected because slug embeds the id + title.)*
+- **`srv-35`** (stable chapter identifier — **now an MVP server prereq**, above) — chapter
+  `id`/`slug` are both restructure-unstable; the companion keys sync + bookmarks by the new
+  `uuid` from day one, and it repairs the existing web player too. *(Point 5 — the
+  reviewer's slug-fallback was rejected because slug embeds the id + title; user directive
+  2026-06-06 promoted it to MVP, not deferred.)*
 - **`fs-15`** (cross-book resume) — `srv-32` manifest + the `app-14` "Continue listening"
   shelf overlap; cross-link both ways, keep distinct.
 - **`fe-3` / `fs-7` / `fs-8`** (Apple Books / Plex / PocketBook handoffs) — the companion
@@ -412,25 +440,27 @@ build, not after.** "Blocks" = the MVP can't ship without it.
 | D5 | **Pairing-QR surface** (structured payload) | frontend | **YES** — `app-2` | A "Pair a device" QR rendering `{ url, token, caFingerprint }`, reusing `fe-1`'s LAN-URL/cert plumbing. Distinct from the browser-open QR. Lands with `srv-20` / `fe-1`. |
 | D6 | **Server runs in LAN HTTPS mode** with the mkcert CA installed | operational (no code) | **YES** | The app reaches the server only over `npm run start:lan` / `LAN_HTTPS=1` (all-interfaces bind via `srv-19`, shipped) + `npm run install:cert-mobile`. A loopback-only server is unreachable. Surface this in the pairing flow + docs. |
 | D7 | **Path-filtered CI learns the `apps/android/` (`app`) scope** | ops / ci | **YES** — `app-1` | `verify.yml` (plan 103) must run the Flutter lane for `app`-scope PRs and skip frontend/server legs (and vice-versa). New CI plumbing; the iOS compile uses the existing macOS runner (`cross-os.yml`). The `app` commit scope itself is **already registered**. |
-| D8 | **`srv-35` stable chapter identifier** | server (cross-cutting) | No — *recommended before GA* | Chapter `id`/`slug` are restructure-unstable (verified). v1 keys by `id` (web parity); `srv-35` is the durable fix and also repairs the **existing web player**. Touches `restructure.ts`/`scan.ts`/`state.json`. |
+| D8 | **`srv-35` stable chapter identifier** | server (cross-cutting) | **YES** — MVP (user directive 2026-06-06) | Chapter `id`/`slug` are restructure-unstable (verified). Add an immutable per-chapter `uuid` preserved through restructure/rename + lazy migration; `srv-32`/`app-3`/`app-6` key by it. Also repairs the **existing web player**. Touches `restructure.ts`/`scan.ts`/`state.json`. |
 | D9 | **`ops-2` Docker constraints** | ops | No — only if Dockerised | Persistent mkcert-CA volume (else `caFingerprint` rotates → re-pair) + `LAN_HOST` override (container bridge IPs). |
 | D10 | **`app-11` signed APK / distribution** | ops | No — MVP installs the `app-1` debug APK | Proper signed channel for alpha testers; Play Store later. |
+| D11 | **Cover thumbnails** (`GET /api/books/{id}/cover?width=`) | server (perf) | No — *strongly recommended* | `cover.ts` serves full-res JPEG (no resize). Add a `?width=` resize (needs an image lib, e.g. sharp) so lists/grids fetch small thumbnails, full-res only for now-playing. Interim: the app can client-downscale (Flutter `cacheWidth`), but that still downloads the full bytes (4th-review point 3). |
 
 **Concurrency note:** the companion is a *second* concurrent writer to `listen-progress`;
 `srv-34`'s guarded compare-and-set covers exactly that route — it does **not** reopen the
 parked `state.json` multi-writer items (`srv-10` / `fe-11`).
 
-**Net new server/contract items this creates (beyond the app):** `srv-32`, `srv-34`
-(MVP); `srv-35` (recommended); plus the `srv-20` extensions (D1/D2) and the openapi (D3),
-generation-stamp (D4), frontend-QR (D5) and CI (D7) work folded into existing items.
+**Net new server/contract items this creates (beyond the app):** `srv-32`, `srv-34`,
+`srv-35` (**all MVP**); the cover-thumbnail `?width=` (D11, recommended); plus the `srv-20`
+extensions (D1/D2), openapi (D3), generation-stamp (D4), frontend-QR (D5) and CI (D7) work
+folded into existing items.
 
 ---
 
 ## v1 scope (definition of done)
 
-v1 = the `srv-32` + `srv-34` server prereqs (+ landing `srv-20`) and the 10-item MVP app
-block (`app-1..8, 13, 14`). **v1 is "done" when this single end-to-end scenario passes on
-a real Android device against the user's real GPU server:**
+v1 = the `srv-32` + `srv-34` + `srv-35` server prereqs (+ landing `srv-20`) and the 10-item
+MVP app block (`app-1..8, 13, 14`). **v1 is "done" when this single end-to-end scenario
+passes on a real Android device against the user's real GPU server:**
 
 > Pair the phone to the server (scan QR — token + CA fingerprint **auto-verified**, no OS
 > cert install) → browse the library by author/series/book → download 2 books → play
@@ -461,7 +491,7 @@ plan per CLAUDE.md; the waves are the scheduling layer over them.
 | Wave | Items (size) | Agents | Isolation | Gate (must pass before next wave) |
 |---|---|---|---|---|
 | **0 · Backlog landing** | this doc + BACKLOG rows + register `app` scope/prefix + INDEX; then file 16 issues + issue-map (S) | 1 | shared tree (docs only) | `feat(app):` passes commit-msg hook; rows render; doc linked; (after review) issues filed |
-| **1 · Foundations** ∥ | **srv-20**→**srv-32**→**srv-34** (M) ‖ **app-1** scaffold (L) | **2** | 1 worktree each (server vs `apps/android/`) | server: `npm run test:server` green + new manifest / auth (token+fingerprint in QR) / listen-progress-`listenedAt` tests. app: `flutter analyze` + widget tests green, **debug APK builds**, **unsigned iOS compile** (`--no-codesign`) **on the macOS cross-os runner** |
+| **1 · Foundations** ∥ | **srv-20**→**srv-35**→**srv-32**→**srv-34** (M–L) ‖ **app-1** scaffold (L) | **2** | 1 worktree each (server vs `apps/android/`) | server: `npm run test:server` green + new manifest / auth (token+fingerprint in QR, `/cert/root.crt` exempt) / listen-progress-`listenedAt`-guard / **chapter-`uuid` survives restructure** tests. app: `flutter analyze` + widget tests green, **debug APK builds**, **unsigned iOS compile** (`--no-codesign`) **on the macOS cross-os runner** |
 | **2 · Network spine** | **app-2** pairing + TLS-pin + gen API client + secure token + error model (L) | 1 | serial | live pair against `npm run start:lan`; QR token + CA fingerprint **auto-verified** (mismatch refuses to pair); CA pinned in `SecurityContext` (no OS install); integration test hits `/api/info` + `/api/library` |
 | **3 · Data spine** | **app-3** delta sync → **app-4** offline store (L, L) | 1 | serial (same track) | sync a real book; regenerate 1 chapter server-side → re-sync pulls **only** that file (atomic `.tmp`→rename); delete a book server-side → client evicts via active-ID diff; storage-cap eviction; resumable download + integrity check |
 | **4 · Player** | **app-5** native player + media controls + per-book state (L) | 1 | serial | background + lock-screen + Bluetooth (skip = seek ±30/±15 s default); sleep-timer; **autosave survives an OS kill**; **switch book preserves each position** |
@@ -479,7 +509,10 @@ ops + `/api/info` schemas bump), **D4** (audio-stamp audit across splice/QA/loud
 **D5** (the frontend pairing-QR surface, reusing `fe-1`'s plumbing). The Wave 1 app track
 also lands **D7** (teach `verify.yml`'s path filter the `apps/android/` `app` scope).
 **D6** (server in LAN HTTPS mode + mkcert CA) is an operational precondition for the Wave 2
-live-pair gate. `srv-35` (**D8**) is a recommended-before-GA follow-up, not on the MVP path.
+live-pair gate. **`srv-35` (D8) is now an MVP prereq** (user directive) — it lands first in
+the Wave 1 server track (before `srv-32`, which keys by its `uuid`). The cover-thumbnail
+`?width=` (**D11**) is recommended (the app can interim client-downscale) — fold it into the
+server track when convenient.
 
 **One-time prerequisites (gate before the Wave 1 app track):** install the Flutter SDK +
 Android SDK/emulator on the dev box; a physical Android phone for real-device acceptance
@@ -552,9 +585,10 @@ the two parallel waves (1 and 5) land as **one integration PR per wave**.
 5. **Bootstrap cert fetch is unauthenticated.** `srv-20`'s token guard must never cover
    `/cert/root.crt` — it's public CA material the app fetches over the untrusted channel
    before it can pin + present the token.
-6. **Chapter keying for v1 is `id` (web parity).** Chapter `id`/`slug` are restructure-
-   unstable (verified); the companion keys sync + bookmarks by `id` like the web player
-   until `srv-35` adds a stable identifier, then both adopt it.
+6. **Chapter keying is the stable `uuid` (`srv-35`).** Chapter `id`/`slug` are restructure-
+   unstable (verified), so the manifest, downloads, and bookmarks key by the immutable
+   per-chapter `uuid` that `srv-35` adds (an MVP prereq) — never the positional `id`. The
+   existing web player adopts it in the same change.
 7. **Never-cross-language / never-wrong-voice** server invariants (plan 162, plan 108)
    are unaffected — the app only *plays* server-rendered audio, it does not synthesize.
 
