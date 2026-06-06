@@ -7,11 +7,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
-import { MODEL_OPTION_GROUPS } from '../lib/models';
-import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type {
   BackupSnapshot,
-  TtsModelKey,
   UserSettings,
   UserSettingsPatch,
 } from '../lib/types';
@@ -21,11 +18,7 @@ import { UpgradeCard } from '../components/upgrade-card';
 import { selectLibraryBooks, libraryActions } from '../store/library-slice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-import {
-  fetchAccountSettings,
-  saveAccountSettings,
-  saveGeminiApiKey,
-} from '../store/account-slice';
+import { fetchAccountSettings, saveAccountSettings } from '../store/account-slice';
 import {
   settingsActions,
   type KeyboardActionId,
@@ -36,23 +29,7 @@ import {
   SKIP_SEC_MAX,
 } from '../store/settings-slice';
 import { formatKeyLabel, normalizeKeyEvent } from '../lib/keybindings';
-import { OllamaInstall } from '../components/ollama-install';
-import { QwenInstall } from '../components/qwen-install';
-import { WhisperInstall } from '../components/whisper-install';
-import { CoquiInstall } from '../components/coqui-install';
-import { ModelPullStatus } from '../components/model-pull-status';
-import {
-  analyzerModelLabel,
-  FormCard,
-  FieldRow,
-  ReadOnlyRow,
-  GeminiKeyField,
-} from '../components/account-forms';
-
-/* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS.
-   Centralised here so the Models card can render rows without re-fetching
-   the allowlist from the backend (it's static per release). */
-const PULLABLE_MODELS = ['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b', 'llama3.2:3b', 'gemma3:4b'] as const;
+import { FormCard, FieldRow, ReadOnlyRow } from '../components/account-forms';
 
 export function AccountView() {
   const dispatch = useAppDispatch();
@@ -63,51 +40,15 @@ export function AccountView() {
      workspaceDirOverride field is tracked separately so an "edited but not
      saved" diff can render the restart-required badge. */
   const [displayName, setDisplayName] = useState(account.displayName);
-  const [defaultAnalysisModel, setDefaultAnalysisModel] = useState(account.defaultAnalysisModel);
-  const [defaultTtsEngine, setDefaultTtsEngine] = useState<TtsEngineId>(account.defaultTtsEngine);
-  /* The picker shows the EFFECTIVE default (resolvedTtsModelKey, which is Qwen
-     on a box with Qwen installed), not the stored key — so the user sees what
-     books will actually use, and re-selecting a different engine is a real
-     change that pins it. Falls back to the stored key for an older server. */
-  const effectiveTtsModelKey = account.resolvedTtsModelKey ?? account.defaultTtsModelKey;
-  const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(effectiveTtsModelKey);
-  const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
-  const [analysisEngine, setAnalysisEngine] = useState<'local' | 'gemini'>(account.analysisEngine);
-  const [ollamaUrl, setOllamaUrl] = useState(account.ollamaUrl);
   const [workspaceDirOverride, setWorkspaceDirOverride] = useState<string>(
     account.workspaceDirOverride ?? '',
   );
   const [minorCastMinLines, setMinorCastMinLines] = useState<number>(account.minorCastMinLines);
-  /* Plan 88 phase-2 — Account-tab Analyzer card. `null` means "fall
-     through to env / hardcoded default"; the picker renders that as a
-     "(use server default)" option at the top of each model select. */
-  const [analyzerPhase0Model, setAnalyzerPhase0Model] = useState<string | null>(
-    account.analyzerPhase0Model ?? null,
-  );
-  const [analyzerPhase1Model, setAnalyzerPhase1Model] = useState<string | null>(
-    account.analyzerPhase1Model ?? null,
-  );
-  const [analyzerPhase1MinLagChapters, setAnalyzerPhase1MinLagChapters] = useState<number | null>(
-    account.analyzerPhase1MinLagChapters ?? null,
-  );
   const [coverPickerDefaultTab, setCoverPickerDefaultTab] = useState<
     NonNullable<UserSettings['coverPickerDefaultTab']>
   >(account.coverPickerDefaultTab ?? 'search');
   const [defaultThemePreference, setDefaultThemePreference] = useState<ThemePreference>(
     account.defaultThemePreference ?? 'system',
-  );
-  const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(
-    account.autoStartSidecar ?? true,
-  );
-  const [dualModelEnabled, setDualModelEnabled] = useState<boolean>(
-    account.dualModelEnabled ?? false,
-  );
-  const [eagerLoadKokoro, setEagerLoadKokoro] = useState<boolean>(
-    account.eagerLoadKokoro ?? true,
-  );
-  const [eagerLoadQwen, setEagerLoadQwen] = useState<boolean>(account.eagerLoadQwen ?? true);
-  const [generationWorkers, setGenerationWorkers] = useState<number>(
-    account.generationWorkers ?? 2,
   );
   /* srv-2 — per-book state.json auto-backup preferences. */
   const [backupEnabled, setBackupEnabled] = useState<boolean>(account.backupEnabled ?? true);
@@ -120,63 +61,24 @@ export function AccountView() {
 
   useEffect(() => {
     setDisplayName(account.displayName);
-    setDefaultAnalysisModel(account.defaultAnalysisModel);
-    setDefaultTtsEngine(account.defaultTtsEngine);
-    setDefaultTtsModelKey(account.resolvedTtsModelKey ?? account.defaultTtsModelKey);
-    setSidecarUrl(account.sidecarUrl);
-    setAnalysisEngine(account.analysisEngine);
-    setOllamaUrl(account.ollamaUrl);
     setWorkspaceDirOverride(account.workspaceDirOverride ?? '');
     setMinorCastMinLines(account.minorCastMinLines);
-    setAnalyzerPhase0Model(account.analyzerPhase0Model ?? null);
-    setAnalyzerPhase1Model(account.analyzerPhase1Model ?? null);
-    setAnalyzerPhase1MinLagChapters(account.analyzerPhase1MinLagChapters ?? null);
     setCoverPickerDefaultTab(account.coverPickerDefaultTab ?? 'search');
     setDefaultThemePreference(account.defaultThemePreference ?? 'system');
-    setAutoStartSidecar(account.autoStartSidecar ?? true);
-    setDualModelEnabled(account.dualModelEnabled ?? false);
-    setEagerLoadKokoro(account.eagerLoadKokoro ?? true);
-    setEagerLoadQwen(account.eagerLoadQwen ?? true);
-    setGenerationWorkers(account.generationWorkers ?? 2);
     setBackupEnabled(account.backupEnabled ?? true);
     setBackupCadence(account.backupCadence ?? 'daily');
     setBackupRetention(account.backupRetention ?? 14);
   }, [
     account.hydrated,
     account.displayName,
-    account.defaultAnalysisModel,
-    account.defaultTtsEngine,
-    account.defaultTtsModelKey,
-    account.resolvedTtsModelKey,
-    account.sidecarUrl,
-    account.analysisEngine,
-    account.ollamaUrl,
     account.workspaceDirOverride,
     account.minorCastMinLines,
-    account.analyzerPhase0Model,
-    account.analyzerPhase1Model,
-    account.analyzerPhase1MinLagChapters,
     account.coverPickerDefaultTab,
     account.defaultThemePreference,
-    account.autoStartSidecar,
-    account.dualModelEnabled,
-    account.eagerLoadKokoro,
-    account.eagerLoadQwen,
-    account.generationWorkers,
     account.backupEnabled,
     account.backupCadence,
     account.backupRetention,
   ]);
-
-  /* When the engine switches, the selected modelKey may not belong to the
-     new engine's group. Default to the new group's first model so the
-     dropdown never shows a mismatched value. */
-  const engineGroup = TTS_ENGINES.find((g) => g.id === defaultTtsEngine) ?? TTS_ENGINES[0];
-  useEffect(() => {
-    if (!engineGroup.models.some((m) => m.id === defaultTtsModelKey)) {
-      setDefaultTtsModelKey(engineGroup.models[0].id);
-    }
-  }, [defaultTtsEngine, engineGroup, defaultTtsModelKey]);
 
   /* Persisted override vs draft. The "Restart required" badge fires the
      instant the user changes the override away from the persisted value —
@@ -185,67 +87,19 @@ export function AccountView() {
   const persistedOverride = account.workspaceDirOverride ?? '';
   const workspaceDirty = workspaceDirOverride !== persistedOverride;
 
-  const persistedAutoStart = account.autoStartSidecar ?? true;
-  const autoStartDirty = autoStartSidecar !== persistedAutoStart;
-
-  /* Like autoStartDirty, this gates a "Restart required" badge: the
-     PRELOAD_KOKORO env only changes when the sidecar is re-spawned, so a
-     toggle here doesn't take effect until the next restart. */
-  const persistedEagerLoadKokoro = account.eagerLoadKokoro ?? true;
-  const eagerLoadKokoroDirty = eagerLoadKokoro !== persistedEagerLoadKokoro;
-
-  /* Same restart-required gate for Qwen's preload (PRELOAD_QWEN). */
-  const persistedEagerLoadQwen = account.eagerLoadQwen ?? true;
-  const eagerLoadQwenDirty = eagerLoadQwen !== persistedEagerLoadQwen;
-
-  /* The eager-load toggle governs the DEFAULT engine only — the other engine
-     is the on-demand fallback (forced lazy in spawn-sidecar.ts). Track the
-     form's selected model key so switching the engine picker in-session flips
-     the toggle to match what the next sidecar restart will actually preload. */
-  const eagerEngineIsQwen = defaultTtsModelKey === 'qwen3-tts-0.6b';
-
   const dirty = useMemo(() => {
     return (
       displayName !== account.displayName ||
-      defaultAnalysisModel !== account.defaultAnalysisModel ||
-      defaultTtsEngine !== account.defaultTtsEngine ||
-      defaultTtsModelKey !== effectiveTtsModelKey ||
-      sidecarUrl !== account.sidecarUrl ||
-      analysisEngine !== account.analysisEngine ||
-      ollamaUrl !== account.ollamaUrl ||
       minorCastMinLines !== account.minorCastMinLines ||
-      analyzerPhase0Model !== (account.analyzerPhase0Model ?? null) ||
-      analyzerPhase1Model !== (account.analyzerPhase1Model ?? null) ||
-      analyzerPhase1MinLagChapters !== (account.analyzerPhase1MinLagChapters ?? null) ||
       coverPickerDefaultTab !== (account.coverPickerDefaultTab ?? 'search') ||
       defaultThemePreference !== (account.defaultThemePreference ?? 'system') ||
-      dualModelEnabled !== (account.dualModelEnabled ?? false) ||
-      generationWorkers !== (account.generationWorkers ?? 2) ||
-      autoStartDirty ||
-      eagerLoadKokoroDirty ||
-      eagerLoadQwenDirty ||
       workspaceDirty
     );
   }, [
     displayName,
-    defaultAnalysisModel,
-    defaultTtsEngine,
-    defaultTtsModelKey,
-    effectiveTtsModelKey,
-    sidecarUrl,
-    analysisEngine,
-    ollamaUrl,
     minorCastMinLines,
-    analyzerPhase0Model,
-    analyzerPhase1Model,
-    analyzerPhase1MinLagChapters,
     coverPickerDefaultTab,
     defaultThemePreference,
-    dualModelEnabled,
-    generationWorkers,
-    autoStartDirty,
-    eagerLoadKokoroDirty,
-    eagerLoadQwenDirty,
     workspaceDirty,
     account,
   ]);
@@ -253,32 +107,10 @@ export function AccountView() {
   const onSave = async () => {
     const patch: UserSettingsPatch = {
       displayName,
-      defaultAnalysisModel,
-      defaultTtsEngine,
-      defaultTtsModelKey,
-      /* Pin the user's choice (so the server stops preferring Qwen) only when
-         they picked something OTHER than the resolved default — saving an
-         unrelated field while the picker sits on the resolved default must not
-         silently disable Qwen-when-installed. Preserve a prior explicit pin. */
-      defaultTtsModelKeyExplicit:
-        defaultTtsModelKey !== effectiveTtsModelKey
-          ? true
-          : account.defaultTtsModelKeyExplicit,
-      sidecarUrl,
-      analysisEngine,
-      ollamaUrl,
       workspaceDirOverride: workspaceDirOverride.trim() === '' ? null : workspaceDirOverride.trim(),
       minorCastMinLines,
-      analyzerPhase0Model,
-      analyzerPhase1Model,
-      analyzerPhase1MinLagChapters,
       coverPickerDefaultTab,
       defaultThemePreference,
-      autoStartSidecar,
-      dualModelEnabled,
-      eagerLoadKokoro,
-      eagerLoadQwen,
-      generationWorkers,
       backupEnabled,
       backupCadence,
       backupRetention,
@@ -375,173 +207,6 @@ export function AccountView() {
         </FormCard>
 
         <FormCard
-          title="Defaults for new books"
-          hint="Used the first time you open a book that hasn't been touched yet. Per-book choices override these and persist."
-        >
-          <FieldRow label="Analysis model">
-            <select
-              value={defaultAnalysisModel}
-              onChange={(e) => setDefaultAnalysisModel(e.target.value)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              {MODEL_OPTION_GROUPS.map((g) => (
-                <optgroup key={g.engine} label={g.label}>
-                  {g.models.map((m) => (
-                    <option key={m.id} value={m.id} title={m.hint}>
-                      {m.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </FieldRow>
-          <FieldRow label="TTS engine">
-            <select
-              value={defaultTtsEngine}
-              onChange={(e) => setDefaultTtsEngine(e.target.value as TtsEngineId)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              {TTS_ENGINES.map((g) => (
-                <option key={g.id} value={g.id} title={g.hint}>
-                  {g.label}
-                </option>
-              ))}
-            </select>
-          </FieldRow>
-          <FieldRow label="TTS model">
-            <select
-              value={defaultTtsModelKey}
-              onChange={(e) => setDefaultTtsModelKey(e.target.value as TtsModelKey)}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              {engineGroup.models.map((m) => (
-                <option key={m.id} value={m.id} title={m.hint}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </FieldRow>
-        </FormCard>
-
-        <FormCard
-          title="Two-model analyzer split (advanced)"
-          hint="Optional. By default both analysis passes run on your default analysis model. Pick a model for EACH phase to split the work: Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (1,500/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. Leave both blank for the single-model default. Server env vars (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still override for ops triage."
-        >
-          {(() => {
-            const on = !!(analyzerPhase0Model || analyzerPhase1Model);
-            return (
-              <p
-                data-testid="analyzer-split-status"
-                className="rounded-xl border border-ink/10 bg-ink/2 px-3 py-2 text-xs text-ink/70"
-              >
-                {on ? (
-                  <>
-                    <span className="font-semibold text-emerald-700">Currently ON</span> — Phase 0:{' '}
-                    <span className="font-medium text-ink">
-                      {analyzerModelLabel(analyzerPhase0Model)}
-                    </span>{' '}
-                    · Phase 1:{' '}
-                    <span className="font-medium text-ink">
-                      {analyzerModelLabel(analyzerPhase1Model)}
-                    </span>{' '}
-                    · lag {analyzerPhase1MinLagChapters ?? 10} chapter
-                    {(analyzerPhase1MinLagChapters ?? 10) === 1 ? '' : 's'}.
-                  </>
-                ) : (
-                  <>
-                    <span className="font-semibold">Currently OFF</span> — both phases run on the
-                    default analysis model (
-                    <span className="font-medium text-ink">
-                      {analyzerModelLabel(defaultAnalysisModel)}
-                    </span>
-                    ).
-                  </>
-                )}
-              </p>
-            );
-          })()}
-          <FieldRow
-            label="Phase 0 model (cast detection)"
-            sublabel='Drives the cast-roster pass. Gemma 4 31B is the recommended default — high free-tier headroom (1,500/day) and strong at character identification.'
-          >
-            <select
-              value={analyzerPhase0Model ?? ''}
-              onChange={(e) =>
-                setAnalyzerPhase0Model(e.target.value === '' ? null : e.target.value)
-              }
-              data-testid="account-analyzer-phase0-model"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              <option value="">(use server default)</option>
-              {MODEL_OPTION_GROUPS.map((g) => (
-                <optgroup key={g.engine} label={g.label}>
-                  {g.models.map((m) => (
-                    <option key={m.id} value={m.id} title={m.hint}>
-                      {m.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </FieldRow>
-          <FieldRow
-            label="Phase 1 model (attribution)"
-            sublabel='Drives the per-sentence speaker-attribution pass. Gemini 3.1 Flash Lite is the recommended default — fast, comfortably parses a novel in the 500/day free-tier bucket.'
-          >
-            <select
-              value={analyzerPhase1Model ?? ''}
-              onChange={(e) =>
-                setAnalyzerPhase1Model(e.target.value === '' ? null : e.target.value)
-              }
-              data-testid="account-analyzer-phase1-model"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              <option value="">(use server default)</option>
-              {MODEL_OPTION_GROUPS.map((g) => (
-                <optgroup key={g.engine} label={g.label}>
-                  {g.models.map((m) => (
-                    <option key={m.id} value={m.id} title={m.hint}>
-                      {m.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </FieldRow>
-          <FieldRow
-            label="Phase 1 minimum chapter lag"
-            sublabel="0 releases the lag; 10 anchors attribution to the roster-author model's interpretive baseline (recommended). Leave blank to use the server default."
-          >
-            <input
-              type="number"
-              min={0}
-              max={50}
-              step={1}
-              value={
-                analyzerPhase1MinLagChapters === null || analyzerPhase1MinLagChapters === undefined
-                  ? ''
-                  : analyzerPhase1MinLagChapters
-              }
-              onChange={(e) => {
-                const raw = e.target.value;
-                if (raw === '') {
-                  setAnalyzerPhase1MinLagChapters(null);
-                  return;
-                }
-                const parsed = parseInt(raw, 10);
-                if (Number.isFinite(parsed)) {
-                  /* Clamp to schema [0, 50] so Save can't 400 on a fat-finger. */
-                  setAnalyzerPhase1MinLagChapters(Math.max(0, Math.min(50, parsed)));
-                }
-              }}
-              placeholder="(use server default)"
-              data-testid="account-analyzer-phase1-min-lag"
-              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-          </FieldRow>
-        </FormCard>
-
-        <FormCard
           title="Cast analysis"
           hint="How the analyzer decides which characters earn a dedicated voice profile vs. get folded into the generic Unknown male / Unknown female buckets."
         >
@@ -630,127 +295,6 @@ export function AccountView() {
         </FormCard>
 
         <FormCard
-          title="TTS sidecar"
-          hint="The Python sidecar process that runs Qwen3-TTS / Kokoro / Coqui XTTS locally. The Node server can launch it for you automatically."
-        >
-          <FieldRow
-            label="Auto-start with server"
-            sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python TTS sidecar as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart."
-          >
-            <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={autoStartSidecar}
-                onChange={(e) => setAutoStartSidecar(e.target.checked)}
-                data-testid="account-auto-start-sidecar"
-                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-              />
-              <span className="text-sm text-ink">
-                {autoStartSidecar
-                  ? 'Enabled — the server will spawn the sidecar at boot.'
-                  : 'Disabled — you manage the sidecar process yourself.'}
-              </span>
-            </label>
-            {autoStartDirty && (
-              <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                Restart the server to apply this change.
-              </p>
-            )}
-          </FieldRow>
-          <FieldRow
-            label="Keep both TTS engines loaded (dual-model mode)"
-            sublabel="Loads two TTS engines into GPU memory at once so a book can mix engines (e.g. Kokoro + Qwen) without swap latency. Only enable if your GPU has headroom (~8 GB); the analyzer auto-evicts during generation. Off by default — when off, a mixed-engine book still generates but pays an engine-swap cost."
-          >
-            <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={dualModelEnabled}
-                onChange={(e) => setDualModelEnabled(e.target.checked)}
-                data-testid="account-dual-model-enabled"
-                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-              />
-              <span className="text-sm text-ink">
-                {dualModelEnabled
-                  ? 'Enabled — both engines may stay resident; mixed-engine books skip the swap.'
-                  : 'Disabled — one engine at a time; mixed-engine books pay a swap cost.'}
-              </span>
-            </label>
-          </FieldRow>
-          {eagerEngineIsQwen ? (
-            <FieldRow
-              label="Eager-load Qwen at startup"
-              sublabel="On by default while Qwen is your default engine — the sidecar preloads Qwen's synth model at boot so the first chapter doesn't wait on a cold load. Turn off to warm it lazily on first synth and keep that VRAM free until generation starts. Kokoro stays the on-demand fallback either way. Takes effect on the next sidecar restart."
-            >
-              <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={eagerLoadQwen}
-                  onChange={(e) => setEagerLoadQwen(e.target.checked)}
-                  data-testid="account-eager-load-qwen"
-                  className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-                />
-                <span className="text-sm text-ink">
-                  {eagerLoadQwen
-                    ? 'Enabled — the sidecar preloads Qwen at startup.'
-                    : 'Disabled — Qwen warms on demand on first synth.'}
-                </span>
-              </label>
-              {eagerLoadQwenDirty && (
-                <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                  Restart the sidecar to apply this change.
-                </p>
-              )}
-            </FieldRow>
-          ) : (
-            <FieldRow
-              label="Eager-load Kokoro at startup"
-              sublabel="On by default. Turn off if Qwen is your main engine — Kokoro then loads only when a Kokoro voice (e.g. the narrator) is synthesized, freeing ~1 GB VRAM. Takes effect on the next sidecar restart."
-            >
-              <label className="inline-flex items-center gap-3 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={eagerLoadKokoro}
-                  onChange={(e) => setEagerLoadKokoro(e.target.checked)}
-                  data-testid="account-eager-load-kokoro"
-                  className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
-                />
-                <span className="text-sm text-ink">
-                  {eagerLoadKokoro
-                    ? 'Enabled — the sidecar preloads Kokoro at startup.'
-                    : 'Disabled — Kokoro warms on demand on first synth.'}
-                </span>
-              </label>
-              {eagerLoadKokoroDirty && (
-                <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                  Restart the sidecar to apply this change.
-                </p>
-              )}
-            </FieldRow>
-          )}
-          <FieldRow
-            label="Generation workers"
-            sublabel="How many chapters the generation queue synthesizes at once (1–4, default 2). Chapters are pulled from the queue across books. This is queue concurrency only — the GPU stays the limit on simultaneous synthesis, so raising this never risks running out of VRAM. Takes effect on the next generation run."
-          >
-            <input
-              type="number"
-              min={1}
-              max={4}
-              step={1}
-              value={generationWorkers}
-              onChange={(e) => {
-                const parsed = parseInt(e.target.value, 10);
-                if (Number.isFinite(parsed)) {
-                  /* Clamp to schema [1, 4] so Save can't 400 on a fat-finger. */
-                  setGenerationWorkers(Math.max(1, Math.min(4, parsed)));
-                }
-              }}
-              data-testid="account-generation-workers"
-              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-          </FieldRow>
-        </FormCard>
-
-        <FormCard
           title="Backups"
           hint="Automatic snapshots of each book's state.json (cast, chapters, metadata) so an accidental edit or corrupt write can be rolled back. Snapshots live alongside the book in its workspace folder."
         >
@@ -812,50 +356,9 @@ export function AccountView() {
         </FormCard>
 
         <FormCard
-          title="Server configuration"
-          hint="Non-secret overrides for what's in server/.env. Sidecar URL and Ollama settings take effect on the next request; workspace directory needs a server restart."
+          title="Workspace"
+          hint="Where this machine keeps your library on disk. Changing it needs a server restart."
         >
-          <FieldRow
-            label="Sidecar URL"
-            sublabel="Local TTS sidecar endpoint. Default: http://localhost:9000"
-          >
-            <input
-              type="text"
-              value={sidecarUrl}
-              onChange={(e) => setSidecarUrl(e.target.value)}
-              placeholder="http://localhost:9000"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-          </FieldRow>
-          <FieldRow
-            label="Analyzer engine"
-            sublabel={
-              'Default — Gemini API sends every chapter straight to Google using the GEMINI_API_KEY in server/.env. Local routes analysis through the Ollama daemon on this machine instead (with Gemini as automatic fallback only when the daemon is unreachable, assuming GEMINI_API_KEY is configured). Pick Local only if you want analysis to run on-device.'
-            }
-          >
-            <select
-              value={analysisEngine}
-              onChange={(e) => setAnalysisEngine(e.target.value as 'local' | 'gemini')}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              <option value="gemini">Gemini API (default — direct)</option>
-              <option value="local">Local Ollama (on-device, with Gemini fallback)</option>
-            </select>
-          </FieldRow>
-          <FieldRow
-            label="Ollama URL"
-            sublabel={
-              'Local Ollama daemon endpoint. Default: http://localhost:11434. The Ollama model tag is whatever you pick above under "Analysis model" — pull it once with `ollama pull <tag>` before first run.'
-            }
-          >
-            <input
-              type="text"
-              value={ollamaUrl}
-              onChange={(e) => setOllamaUrl(e.target.value)}
-              placeholder="http://localhost:11434"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-          </FieldRow>
           <FieldRow
             label="Workspace directory override"
             sublabel="Absolute or relative-to-server/ path. Leave empty to use WORKSPACE_DIR from server/.env."
@@ -878,13 +381,27 @@ export function AccountView() {
             value={account.workspaceRoot || '(unknown)'}
             sublabel={`Source: ${account.workspaceSource}`}
           />
-          <GeminiKeyField
-            status={account.apiKeyStatus}
-            onSave={(key) => dispatch(saveGeminiApiKey(key))}
-          />
         </FormCard>
 
-        <ModelsCard />
+        {/* fs-23 — model setup (engines, installers, sidecar, analyzer split,
+            server config) now lives in the Model Manager, reached from Admin. */}
+        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Models &amp; engines</h2>
+            <p className="mt-1 text-xs text-ink/55 max-w-prose">
+              Installing models, picking the default TTS / analyzer engine, the sidecar / Ollama
+              URLs, and the Gemini key now live in the Model Manager.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => dispatch(uiActions.openModelManager())}
+            data-testid="account-model-manager-pointer"
+            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-white text-sm font-medium hover:bg-ink/90"
+          >
+            Open Model Manager →
+          </button>
+        </section>
 
         <AdvancedCard />
 
@@ -1049,111 +566,6 @@ function BackupRestoreSection() {
       {status && <p className="mt-2 text-xs text-magenta font-semibold">{status}</p>}
       {error && <p className="mt-2 text-xs text-rose-700">{error}</p>}
     </div>
-  );
-}
-
-/* Plan 61 — Models card. Hosts the in-app Install Ollama affordance +
-   per-model Pull controls. The card sits below the server-config card
-   so the user lands on it after seeing their analyzer-engine + Ollama
-   URL choices.
-
-   On mount, GETs /api/ollama/health directly (bypassing the mock
-   layer) so the ModelPullStatus row list reflects current on-disk
-   state. The "Refresh available models" button inside ModelPullStatus
-   re-probes via POST /refresh without going through this card.
-
-   Direct-fetch is deliberate: in mock mode the api.getOllamaHealth
-   mock returns the model as already pulled, which would make the
-   Pull buttons permanently disabled. The Models card needs the real
-   health envelope from the server (or whatever the e2e route-mock
-   provides). */
-function ModelsCard() {
-  const [health, setHealth] = useState<import('../components/model-pull-status').OllamaHealthEnvelope | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const res = await fetch('/api/ollama/health');
-        if (!res.ok) return;
-        const body = await res.json();
-        if (!cancelled) setHealth(body);
-      } catch {
-        /* Best-effort probe — leave health null and let ModelPullStatus
-           render the "daemon unreachable" banner. */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return (
-    <section
-      data-testid="account-models-card"
-      className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card"
-    >
-      <h2 className="text-base font-semibold text-ink">Models</h2>
-      <p className="mt-1 text-xs text-ink/55">
-        Install Ollama, pull analyzer model weights, and pre-fetch Coqui XTTS — all without
-        dropping to a terminal. Kokoro v1 ships pre-installed via the release bundle, so
-        nothing on this page applies to it.
-      </p>
-
-      <div className="mt-4 space-y-6">
-        <div>
-          <h3 className="text-sm font-medium text-ink">Local analyzer (Ollama)</h3>
-          <p className="mt-1 mb-3 text-xs text-ink/55">
-            Required when "Analyzer engine" above is set to Local.
-          </p>
-          <OllamaInstall />
-        </div>
-
-        <div>
-          <h3 className="text-sm font-medium text-ink">Analyzer models</h3>
-          <p className="mt-1 mb-3 text-xs text-ink/55">
-            Pulled tags appear in the Analysis-model dropdown above. The configured default is
-            highlighted.
-          </p>
-          <ModelPullStatus health={health} pullableModels={PULLABLE_MODELS} />
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-ink">Coqui XTTS v2 (alternate cloning engine)</h3>
-          <p className="text-xs text-ink/55">
-            The alternate engine — zero-shot voice cloning from a reference clip, plus ~30 baked
-            multilingual voices. Optional: Kokoro and Qwen cover the defaults. Install it here to
-            pre-fetch the model; the CLI (
-            <code className="font-mono">install-coqui.ps1</code> / <code className="font-mono">.sh</code>)
-            stays available for scripted / offline setups, and the sidecar still auto-downloads on
-            first synth if you skip this.
-          </p>
-          <CoquiInstall />
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-ink">Qwen3-TTS (bespoke per-character voices)</h3>
-          <p className="text-xs text-ink/55">
-            Qwen3-TTS designs a unique voice per character — the headline TTS engine. Install it
-            here to make it the default for new books; the CLI
-            (`node server/tts-sidecar/scripts/install-qwen3.mjs`) stays available for scripted /
-            offline setups.
-          </p>
-          <QwenInstall />
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-ink">Whisper ASR (per-sentence content QA)</h3>
-          <p className="text-xs text-ink/55">
-            Transcribes each generated sentence and re-records "fluent but wrong words" takes the
-            signal checks can't catch (srv-31). Install it here, then enable the gate with
-            `SEG_ASR_ENABLED=1` (`ASR_DEVICE=cpu|cuda`); the CLI
-            (`node server/tts-sidecar/scripts/install-whisper.mjs`) stays available.
-          </p>
-          <WhisperInstall />
-        </div>
-      </div>
-    </section>
   );
 }
 
