@@ -301,13 +301,19 @@ function ModelRow({
             </span>
           )}
           {item.integrity === 'verified' && (
-            <span className="text-[10px] font-semibold text-emerald-700" title="Checksum verified">
+            <span
+              className="text-[10px] font-semibold text-emerald-700"
+              title="On-disk size matches the pinned release (full SHA256 is verified at install time)"
+            >
               ✓ verified
             </span>
           )}
           {item.integrity === 'mismatch' && (
-            <span className="text-[10px] font-semibold text-rose-700" title="Checksum mismatch">
-              ⚠ checksum mismatch
+            <span
+              className="text-[10px] font-semibold text-rose-700"
+              title="On-disk size differs from the pinned release — reinstall to restore integrity"
+            >
+              ⚠ size mismatch
             </span>
           )}
         </div>
