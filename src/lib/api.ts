@@ -3622,6 +3622,10 @@ export interface ModelInventoryResponse {
   items: ModelInventoryItem[];
 }
 
+export type ModelRemovalResult =
+  | { ok: true; id: string; removed: boolean; freedBytes: number }
+  | { ok: false; code?: string; error?: string; remediation?: string };
+
 export interface SidecarHealth {
   status: 'reachable' | 'unreachable';
   url: string;
@@ -3813,6 +3817,28 @@ async function realGetModelInventory(): Promise<ModelInventoryResponse> {
   const res = await fetch('/api/models/inventory');
   if (!res.ok) throw new Error(`Model inventory failed: HTTP ${res.status}`);
   return (await res.json()) as ModelInventoryResponse;
+}
+
+/* fs-23 — remove a model's weights. Resolves to a discriminated result so the
+   UI can surface the server's guard (loaded / default / fallback / locked)
+   without a throw/catch dance. */
+async function realRemoveModel(id: string): Promise<ModelRemovalResult> {
+  const res = await fetch(`/api/models/${encodeURIComponent(id)}/remove`, { method: 'POST' });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok) {
+    return {
+      ok: false,
+      code: body.code as string | undefined,
+      error: (body.error as string | undefined) ?? `HTTP ${res.status}`,
+      remediation: body.remediation as string | undefined,
+    };
+  }
+  return {
+    ok: true,
+    id: String(body.id ?? id),
+    removed: Boolean(body.removed),
+    freedBytes: Number(body.freedBytes ?? 0),
+  };
 }
 
 /* ── User settings ─────────────────────────────────────────────────────
@@ -4409,15 +4435,21 @@ async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   };
 }
 
+/* In-memory removed-model state for the mock path — flipped by mockRemoveModel
+   so a Remove in the Model Manager round-trips visibly under VITE_USE_MOCKS. */
+const MOCK_REMOVED_MODEL_IDS = new Set<string>();
+
 /* fs-23 — static mock inventory so the Model Manager renders + e2e runs offline
    under VITE_USE_MOCKS=true. Kokoro present + loaded (the resident fallback),
-   Qwen base present, Coqui/Whisper absent, one resident Ollama analyzer model. */
+   Qwen base present, Coqui/Whisper absent, one resident Ollama analyzer model.
+   Models removed via mockRemoveModel render as not-installed. */
 async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
   await wait(80);
-  return {
-    ts: new Date().toISOString(),
-    sidecarReachable: true,
-    items: [
+  const applyRemoved = (item: ModelInventoryItem): ModelInventoryItem =>
+    MOCK_REMOVED_MODEL_IDS.has(item.id)
+      ? { ...item, present: false, loaded: false, sizeBytes: null, removable: false }
+      : item;
+  const items: ModelInventoryItem[] = [
       {
         id: 'kokoro',
         kind: 'tts',
@@ -4498,8 +4530,27 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
         removable: true,
         updatable: true,
       },
-    ],
+  ];
+  return {
+    ts: new Date().toISOString(),
+    sidecarReachable: true,
+    items: items.map(applyRemoved),
   };
+}
+
+/* fs-23 — mock removal. Honours the same guards the server enforces (loaded /
+   default / fallback) so the confirm-modal warnings are exercisable offline,
+   then marks the model removed so the next inventory poll shows it gone. */
+async function mockRemoveModel(id: string): Promise<ModelRemovalResult> {
+  await wait(60);
+  if (id === 'kokoro') {
+    return { ok: false, code: 'model-is-fallback', error: 'Kokoro is the fallback engine.' };
+  }
+  if (id === 'ollama:qwen3.5:4b') {
+    return { ok: false, code: 'model-loaded', error: 'qwen3.5:4b is loaded.' };
+  }
+  MOCK_REMOVED_MODEL_IDS.add(id);
+  return { ok: true, id, removed: true, freedBytes: 1_283_457_024 };
 }
 
 /* In-memory model state for the mock path — flipped by mockLoadSidecar /
@@ -4788,6 +4839,7 @@ const real = {
   pauseAnalysis: realPauseAnalysis,
   getSidecarHealth: realGetSidecarHealth,
   getModelInventory: realGetModelInventory,
+  removeModel: realRemoveModel,
   getGpuQueueState: realGetGpuQueueState,
   getDiagnostics: realGetDiagnostics,
   getOllamaHealth: realGetOllamaHealth,
@@ -5012,6 +5064,7 @@ const mock = {
   pauseAnalysis: mockPauseAnalysis,
   getSidecarHealth: mockGetSidecarHealth,
   getModelInventory: mockGetModelInventory,
+  removeModel: mockRemoveModel,
   getGpuQueueState: mockGetGpuQueueState,
   getDiagnostics: mockGetDiagnostics,
   getOllamaHealth: mockGetOllamaHealth,

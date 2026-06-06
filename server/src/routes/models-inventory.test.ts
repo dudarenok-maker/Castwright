@@ -10,8 +10,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildModelInventory,
+  evaluateRemoval,
+  performRemoval,
   modelsInventoryRouter,
   type InventoryDeps,
+  type ModelInventoryItem,
 } from './models-inventory.js';
 import { dirSizeBytes, totalSizeBytes } from '../tts/model-paths.js';
 import type { SidecarHealthResult } from './sidecar-health.js';
@@ -173,6 +176,73 @@ describe('buildModelInventory', () => {
     const inv = buildModelInventory(baseDeps({ resolvedTtsEngine: 'qwen' }));
     expect(inv.items.find((i) => i.id === 'kokoro')!.isDefaultEngine).toBe(false);
     expect(inv.items.find((i) => i.id === 'qwen-base')!.isDefaultEngine).toBe(true);
+  });
+});
+
+function item(over: Partial<ModelInventoryItem>): ModelInventoryItem {
+  return {
+    id: 'coqui',
+    kind: 'tts',
+    label: 'Coqui XTTS v2',
+    present: true,
+    sizeBytes: 1000,
+    diskPath: '/x',
+    loaded: false,
+    isDefaultEngine: false,
+    isFallbackEngine: false,
+    removable: true,
+    updatable: true,
+    ...over,
+  };
+}
+
+describe('evaluateRemoval', () => {
+  it('allows a present, idle, non-default, non-fallback model', () => {
+    expect(evaluateRemoval(item({})).ok).toBe(true);
+  });
+  it('blocks a loaded model (unload first)', () => {
+    expect(evaluateRemoval(item({ loaded: true }))).toMatchObject({ ok: false, code: 'model-loaded' });
+  });
+  it('blocks the fallback engine the loudest (even if also default)', () => {
+    expect(
+      evaluateRemoval(item({ isFallbackEngine: true, isDefaultEngine: true })),
+    ).toMatchObject({ ok: false, code: 'model-is-fallback' });
+  });
+  it('blocks the current default engine', () => {
+    expect(evaluateRemoval(item({ isDefaultEngine: true }))).toMatchObject({
+      ok: false,
+      code: 'model-is-default',
+    });
+  });
+});
+
+describe('performRemoval', () => {
+  it('deletes the Kokoro weight dir and reports freed bytes', async () => {
+    writeFile(join(repoRoot, 'server', 'tts-sidecar', 'voices', 'kokoro', 'kokoro-v1.0.onnx'), 1000);
+    writeFile(join(repoRoot, 'server', 'tts-sidecar', 'voices', 'kokoro', 'voices-v1.0.bin'), 200);
+    const res = await performRemoval('kokoro', repoRoot);
+    expect(res.removed).toBe(true);
+    expect(res.freedBytes).toBe(1200);
+    expect(dirSizeBytes(join(repoRoot, 'server', 'tts-sidecar', 'voices', 'kokoro')).bytes).toBe(0);
+  });
+
+  it('is a no-op (0 bytes) when the path is already gone', async () => {
+    const res = await performRemoval('coqui', repoRoot);
+    expect(res).toEqual({ removed: true, freedBytes: 0 });
+  });
+});
+
+describe('POST /api/models/:id/remove', () => {
+  it('404s an unknown model id', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new Error('offline'))),
+    );
+    const app = express();
+    app.use(express.json());
+    app.use('/api/models', modelsInventoryRouter);
+    const res = await request(app).post('/api/models/not-a-model/remove');
+    expect(res.status).toBe(404);
   });
 });
 
