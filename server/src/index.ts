@@ -50,6 +50,7 @@ import { seriesCastRouter } from './routes/series-cast.js';
 import { voiceSampleRouter } from './routes/voice-sample.js';
 import { voicesRouter } from './routes/voices.js';
 import { libraryRouter } from './routes/library.js';
+import { syncManifestRouter } from './routes/library-sync-manifest.js';
 import { importRouter } from './routes/import.js';
 import { bookStateRouter } from './routes/book-state.js';
 import { coverRouter } from './routes/cover.js';
@@ -178,6 +179,7 @@ app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/
 import { infoRouter } from './routes/info.js';
 app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new state
 app.use('/api/library', libraryRouter);
+app.use('/api/library', syncManifestRouter); // srv-32 — GET /api/library/sync-manifest
 app.use('/api', importRouter); // mounts /import and /books
 app.use('/api/manuscripts', manuscriptsRouter);
 app.use('/api/manuscripts', analysisRouter); // analysisRouter mounts /:id/analysis
