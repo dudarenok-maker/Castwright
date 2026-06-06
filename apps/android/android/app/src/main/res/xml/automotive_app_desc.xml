@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- app-9: declares the companion as an Android Auto media app so the head unit
+     surfaces the audio_service MediaBrowser tree. -->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>
