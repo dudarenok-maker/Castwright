@@ -556,3 +556,97 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
     expect(readFileSync(join(qwenDir(), 'qwen-v_biana.pt'), 'utf8')).toBe('LIVE');
   });
 });
+
+describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (fs-34)', () => {
+  const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
+
+  /* Seed biana with TWO designed variants (angry + sad) on cast.json + disk,
+     alongside the base voice — so a delete can be shown to drop exactly one. */
+  function seedVariants() {
+    mkdirSync(qwenDir(), { recursive: true });
+    for (const id of ['qwen-v_biana', 'qwen-v_biana__angry', 'qwen-v_biana__sad']) {
+      writeFileSync(join(qwenDir(), `${id}.pt`), 'EMBEDDING');
+      writeFileSync(join(qwenDir(), `${id}.json`), JSON.stringify({ voiceId: id }));
+    }
+    const withVariants = characters.map((c) =>
+      c.id === 'biana'
+        ? {
+            ...c,
+            overrideTtsVoices: {
+              qwen: {
+                name: 'qwen-v_biana',
+                variants: {
+                  angry: { name: 'qwen-v_biana__angry' },
+                  sad: { name: 'qwen-v_biana__sad' },
+                },
+              },
+            },
+          }
+        : c,
+    );
+    writeFileSync(
+      join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: withVariants }),
+    );
+  }
+
+  it('drops the variant from cast.json + deletes its .pt/.json, leaving base + siblings intact', async () => {
+    seedVariants();
+    const res = await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/angry`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, removed: 'angry' });
+
+    const biana = readCast().characters.find((c) => c.id === 'biana')!;
+    const qwen = biana.overrideTtsVoices as { qwen: { name: string; variants?: Record<string, unknown> } };
+    expect(qwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_biana__sad' } });
+    expect(qwen.qwen.name).toBe('qwen-v_biana'); // base untouched
+
+    expect(existsSync(join(qwenDir(), 'qwen-v_biana__angry.pt'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_biana__angry.json'))).toBe(false);
+    // Sibling + base files survive.
+    expect(existsSync(join(qwenDir(), 'qwen-v_biana__sad.pt'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_biana.pt'))).toBe(true);
+  });
+
+  it('clears the whole variants map (and badge) when the last variant is removed', async () => {
+    mkdirSync(qwenDir(), { recursive: true });
+    writeFileSync(join(qwenDir(), 'qwen-v_biana__angry.pt'), 'E');
+    const onlyAngry = characters.map((c) =>
+      c.id === 'biana'
+        ? { ...c, overrideTtsVoices: { qwen: { name: 'qwen-v_biana', variants: { angry: { name: 'qwen-v_biana__angry' } } } } }
+        : c,
+    );
+    writeFileSync(
+      join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK, '.audiobook', 'cast.json'),
+      JSON.stringify({ characters: onlyAngry }),
+    );
+
+    const res = await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/angry`);
+    expect(res.status).toBe(200);
+    const qwen = readCast().characters.find((c) => c.id === 'biana')!.overrideTtsVoices as {
+      qwen: { name: string; variants?: unknown };
+    };
+    expect(qwen.qwen.variants).toBeUndefined();
+    expect(qwen.qwen.name).toBe('qwen-v_biana');
+  });
+
+  it('400s on an emotion outside the variant enum (incl. neutral)', async () => {
+    seedVariants();
+    expect((await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/furious`)).status).toBe(400);
+    expect((await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/neutral`)).status).toBe(400);
+  });
+
+  it('404s for an unknown book or character', async () => {
+    seedVariants();
+    expect((await request(app).delete(`/api/books/nope/cast/biana/emotion-variant/angry`)).status).toBe(404);
+    expect((await request(app).delete(`/api/books/${bookId}/cast/ghost/emotion-variant/angry`)).status).toBe(404);
+  });
+
+  it('is idempotent — removing an absent variant still returns 200', async () => {
+    // biana has no variants in the default cast (beforeEach wrote it).
+    const res = await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/excited`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, removed: 'excited' });
+  });
+});
