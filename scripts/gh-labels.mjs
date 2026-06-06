@@ -26,6 +26,7 @@ export const LABELS = [
   { name: 'area:fe', color: '0e8a16', description: 'Frontend (src/)' },
   { name: 'area:srv', color: '0e8a16', description: 'Server (server/src/)' },
   { name: 'area:side', color: '0e8a16', description: 'TTS sidecar (server/tts-sidecar/)' },
+  { name: 'area:app', color: '0e8a16', description: 'Android companion app (apps/android/)' },
   { name: 'area:ops', color: '0e8a16', description: 'CI / build / dev-tooling / distribution' },
   { name: 'area:fs', color: '0e8a16', description: 'Full-stack (frontend + server)' },
 
