@@ -12,3 +12,8 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# app-11: release signing secrets — never commit
+key.properties
+*.jks
+*.keystore
