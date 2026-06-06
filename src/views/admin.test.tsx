@@ -137,6 +137,16 @@ describe('AdminView — model manager link (fs-23)', () => {
     link.click();
     expect(store.getState().ui.stage.kind).toBe('model-manager');
   });
+
+  it('uses the theme-safe ink/canvas token so it stays readable in dark mode', async () => {
+    /* Regression: the button shipped with `bg-ink text-white`, which paints
+       white-on-near-white once --ink inverts in dark mode. The codebase idiom
+       (PrimaryButton `dark`) is `bg-ink text-canvas`. */
+    renderAdmin();
+    const link = await screen.findByTestId('admin-open-model-manager');
+    expect(link.className).toContain('text-canvas');
+    expect(link.className).not.toContain('text-white');
+  });
 });
 
 describe('AdminView — dev-only worktrees gating', () => {
