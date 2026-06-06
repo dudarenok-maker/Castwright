@@ -131,6 +131,14 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('model-manager (global) view', async ({ page }) => {
+    await page.goto('/#/models');
+    /* Inventory hydrates from the mocked GET /api/models/inventory. */
+    await expect(page.getByTestId('model-inventory')).toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
   test('queue modal (plan 102)', async ({ page }) => {
     /* Intercept /api/queue so the layout's mount-effect loadQueue
        resolves and the modal can render — mock-mode otherwise has no

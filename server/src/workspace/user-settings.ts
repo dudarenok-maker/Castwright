@@ -16,6 +16,7 @@ import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from './state-io.js';
+import { isPrivateHostUrl } from './sidecar-url.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -383,8 +384,25 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
 export function getResolvedSidecarUrl(): string {
   const c = cached;
   const raw = c?.sidecarUrl ?? process.env.LOCAL_TTS_URL ?? DEFAULT_USER_SETTINGS.sidecarUrl;
+  /* srv-21 — the sidecar is always local; refuse to fetch from a non-private
+     host. A misconfigured/hostile sidecarUrl (set via the UI/API) would
+     otherwise turn every server→sidecar fetch into an SSRF. Fall back to the
+     factory default rather than throwing so a bad value can't wedge the server.
+     The frontend blocks saving such a value too (src/lib/sidecar-url.ts). */
+  if (!isPrivateHostUrl(raw)) {
+    if (raw !== lastWarnedSidecarUrl) {
+      lastWarnedSidecarUrl = raw;
+      console.warn(
+        `[srv-21] Ignoring non-local sidecar URL ${JSON.stringify(raw)} — ` +
+          `falling back to ${DEFAULT_USER_SETTINGS.sidecarUrl}. The sidecar must run on a ` +
+          `loopback/private host.`,
+      );
+    }
+    return DEFAULT_USER_SETTINGS.sidecarUrl.replace(/\/+$/, '');
+  }
   return raw.replace(/\/+$/, '');
 }
+let lastWarnedSidecarUrl: string | null = null;
 
 /** Same fallback chain as getResolvedSidecarUrl, but for the local Ollama
     daemon: cached user-settings → OLLAMA_URL env → DEFAULT_USER_SETTINGS. */

@@ -52,7 +52,7 @@ async function readAccountSlice(page: import('@playwright/test').Page) {
 
 test.describe('plan 88 phase-2 — Account Analyzer card', () => {
   test('renders all three knobs with the "(use server default)" sentinel', async ({ page }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
@@ -83,7 +83,7 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
   });
 
   test('changing the three knobs + Save round-trips through the slice', async ({ page }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
@@ -124,7 +124,7 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
   test('values survive an away-and-back hash navigation in the same JS context', async ({
     page,
   }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
     await expect(phase0).toBeVisible();
@@ -150,7 +150,7 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
     await waitForRouteReady(page);
     /* Let the library view settle (its own fetch hops fire on mount). */
     await page.waitForLoadState('networkidle').catch(() => {});
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     const phase0AfterNav = page.getByTestId('account-analyzer-phase0-model');
@@ -161,7 +161,7 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
   test('switching a picker back to "(use server default)" lands null in the slice', async ({
     page,
   }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     const phase0 = page.getByTestId('account-analyzer-phase0-model');
@@ -204,7 +204,7 @@ test.describe('plan 88 phase-2 — Account Analyzer card', () => {
   });
 
   test('min-lag input clamps an out-of-range entry to [0, 50]', async ({ page }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     const minLag = page.getByTestId('account-analyzer-phase1-min-lag');
