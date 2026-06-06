@@ -66,6 +66,7 @@ merge tooling. Two parallel branches should have near-disjoint file sets:
 | `frontend` | `src/`                                                |
 | `server`   | `server/src/`                                         |
 | `sidecar`  | `server/tts-sidecar/`                                 |
+| `app`      | `apps/android/` (Flutter companion app)               |
 | `scripts`  | `scripts/`                                            |
 | `e2e`      | `e2e/`                                                |
 | `mocks`    | `src/mocks/`                                          |
@@ -206,7 +207,7 @@ feat(server)!: drop legacy field
 
 ### Allowed scopes
 
-`frontend` · `server` · `sidecar` · `scripts` · `e2e` · `mocks` · `openapi` ·
+`frontend` · `server` · `sidecar` · `app` · `scripts` · `e2e` · `mocks` · `openapi` ·
 `docs` · `deps` · `ci`
 
 Mapped to file sets in the [table above](#scope-discipline--merge-magic).
