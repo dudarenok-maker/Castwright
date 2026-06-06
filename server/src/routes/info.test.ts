@@ -41,6 +41,7 @@ describe('GET /api/info', () => {
       revisions: 1,
       listenProgress: 1,
       voices: 1,
+      syncManifest: 1, // srv-32 — companion compat-gates off this
     });
     expect(res.body.showWhatsNew).toBe(false);
   });

@@ -229,6 +229,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/library/sync-manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Two-level delta-sync manifest for the companion app (srv-32)
+         * @description The Android companion's delta-sync contract (srv-32, plan 191). One
+         *     route, two modes:
+         *
+         *     - **No `bookId`** → the INDEX: one lightweight row per book (book id +
+         *       audio-aware `updatedAt` + cover ref + active-chapter count) plus the
+         *       full `activeBookIds` set. `?since=<iso>` trims the `books` list to
+         *       books changed after the cutoff but NEVER the `activeBookIds` set —
+         *       that full set drives stateless client-side eviction (a filesystem
+         *       scan has no tombstones for deleted books).
+         *     - **`?bookId=<id>`** → the per-book DETAIL: that book's chapters keyed
+         *       by the stable `uuid` (srv-35), each with a `fingerprint`
+         *       (`audioRenderedAt` + file size — moves on every audio mutation), the
+         *       actual `urlSuffix`/`audioUrl` (`.mp3`/`.m4a`/`.ogg`), and
+         *       `durationSec`/`lufs` hints, plus the full `activeChapterUuids` set.
+         *
+         *     The response is gzip-compressed when the client sends
+         *     `Accept-Encoding: gzip`. Compatibility is gated off the
+         *     `schemas.syncManifest` version in `GET /api/info`.
+         */
+        get: operations["getSyncManifest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/import": {
         parameters: {
             query?: never;
@@ -1914,6 +1951,71 @@ export interface components {
             coverUrl: string;
             /** @description Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy. */
             edition?: string;
+        };
+        /**
+         * @description srv-32 (plan 191) — the index level of the companion sync manifest.
+         *     `books` is trimmed by `?since`; `activeBookIds` is ALWAYS the full
+         *     current set so the client can evict local books that no longer exist.
+         */
+        SyncManifestIndex: {
+            /** @description Mirrors `schemas.syncManifest` from `GET /api/info` for compat-gating. */
+            schemaVersion: number;
+            books: components["schemas"]["SyncManifestIndexBook"][];
+            /** @description Full current set of book ids (never trimmed by `?since`). */
+            activeBookIds: string[];
+        };
+        SyncManifestIndexBook: {
+            bookId: string;
+            /**
+             * Format: date-time
+             * @description Max of the book's `state.updatedAt` and every chapter's `audioRenderedAt`.
+             */
+            updatedAt: string;
+            title: string;
+            author: string;
+            series: string;
+            seriesPosition: number | null;
+            /** @description Active (non-excluded) chapter count. */
+            chapterCount: number;
+            /** @description Server-relative cover URL when a cover image is on disk; absent otherwise. */
+            coverUrl?: string;
+        };
+        /**
+         * @description srv-32 (plan 191) — the per-book detail level. `chapters` lists the
+         *     book's active (non-excluded) chapters keyed by the stable srv-35
+         *     `uuid`; `activeChapterUuids` is the full set the client evicts against.
+         */
+        SyncManifestBookDetail: {
+            schemaVersion: number;
+            bookId: string;
+            /** Format: date-time */
+            updatedAt: string;
+            chapters: components["schemas"]["SyncManifestChapter"][];
+            activeChapterUuids: string[];
+        };
+        SyncManifestChapter: {
+            /** @description Stable per-chapter identifier (srv-35) — the client keys local audio by this. */
+            uuid: string;
+            /** @description Current positional id; the client builds `audioUrl` from it. */
+            id: number;
+            title: string;
+            /**
+             * @description `audioRenderedAt` + file size. Changes on every audio-mutating path
+             *     (regen / splice / QA re-record / loudnorm). Absent when the chapter
+             *     has no rendered audio.
+             */
+            fingerprint?: string;
+            /**
+             * @description Actual rendered format suffix — the client never hardcodes `.mp3`.
+             * @enum {string}
+             */
+            urlSuffix?: "audio.mp3" | "audio.m4a" | "audio.ogg";
+            /** @description Server-relative URL to the chapter audio (absent when not yet rendered). */
+            audioUrl?: string;
+            /** @description Chapter audio duration in seconds when known (from the QA verdict). */
+            durationSec?: number;
+            /** @description Integrated loudness when measured. */
+            lufs?: number;
         };
         /**
          * @description Per-book resume bookmark. The mini-player writes one of these
@@ -3695,6 +3797,38 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LibraryResponse"];
                 };
+            };
+        };
+    };
+    getSyncManifest: {
+        parameters: {
+            query?: {
+                /** @description When present, returns that book's per-chapter detail instead of the index. */
+                bookId?: string;
+                /** @description Index only — omit books whose `updatedAt` is at or before this ISO timestamp. */
+                since?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sync-manifest index, or a per-book detail when `bookId` is supplied. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncManifestIndex"] | components["schemas"]["SyncManifestBookDetail"];
+                };
+            };
+            /** @description The requested `bookId` does not exist. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
