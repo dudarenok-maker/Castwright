@@ -17,11 +17,11 @@ the full backlog decomposition (`srv-32` + `app-1..14`), the v1 definition-of-do
 the wave-sequenced delivery roadmap. Each backlog item lands under its own branch + plan
 per CLAUDE.md; this doc is what they hang off.
 
-> **Build status (2026-06-06):** the MVP **foundation is shipped** — `srv-34`, `srv-20`
-> (complete), `app-1` (scaffold + CI), `app-2` (pairing + TLS pinning + API client). The
-> two server prereqs `srv-35` + `srv-32` are **in progress on a parallel agent**; the rest
-> of the app track (`app-3`…`app-14`) is gated on them. See **Build progress & dev setup**
-> immediately below.
+> **Build status (2026-06-06):** **all MVP server prerequisites are now shipped** —
+> `srv-34`, `srv-20`, `srv-35`, `srv-32` — plus the app foundation `app-1` (scaffold + CI)
+> and `app-2` (pairing + TLS pinning + API client). With `srv-32` + `srv-35` merged,
+> **`app-3` (delta sync) is unblocked** and is the next item; the rest of the app track
+> (`app-4`…`app-14`) follows it. See **Build progress & dev setup** immediately below.
 
 ---
 
@@ -33,15 +33,18 @@ per CLAUDE.md; this doc is what they hang off.
 |---|---|---|
 | `srv-34` | #558 (closed #539) | listen-progress `listenedAt` + guarded compare-and-set |
 | `srv-20` | #561 (middleware) + #564 (D2 payload), closed #425 | opt-in LAN token guard (`lan-auth.ts`); `/api/export/lan` now carries `token` + `caFingerprint` |
+| `srv-35` | #569 (merge `61df595`), closed #540 | stable per-chapter `uuid` (lazy backfill + persist), restructure/rename-proof, anti-strip PUT guard, listen-progress resolves resume by `uuid`; also repairs the web player. Plan [190](190-srv-35-stable-chapter-uuid.md) |
+| `srv-32` | #570 (merge `439e27a`), closed #538 | two-level gzip'd `GET /api/library/sync-manifest` (index + `?bookId=` detail), `?since` delta + full active-ID sets for stateless deletion, per-chapter fingerprint + actual `urlSuffix`/`audioUrl`, keyed by the `srv-35` `uuid`; bumps `/api/info` `schemas.syncManifest`. Plan [191](191-srv-32-sync-manifest.md) |
 | `app-1` | #562 (closed #541) | Flutter scaffold at `apps/android/` (pkg `audiobook_companion`), domain seam, CI lane `.github/workflows/app.yml` |
 | `app-2` | #565 + #566 + #567 (closed #542) | full pairing: QR/manual → fetch CA → verify SHA-256 → pin in `SecurityContext` → token probe; `SecurePairingStore`; `ApiClient` (authenticated, CA-pinned) |
 
-### In progress (parallel agent)
+### Next up — `app-3` (delta sync), now unblocked
 
-- **`srv-35` (#540)** stable per-chapter `uuid` + **`srv-32` (#538)** sync-manifest endpoint.
-  **`app-3` (delta sync) is gated on both** — it consumes the manifest and keys by the `uuid`.
+All four MVP server prerequisites (`srv-34` / `srv-20` / `srv-35` / `srv-32`) are merged, so
+`app-3` — which consumes the `srv-32` manifest and keys local audio by the `srv-35` `uuid` —
+is the next item to build.
 
-### Remaining (after `srv-32`/`srv-35` land)
+### Remaining app track
 
 `app-3` (delta sync) → `app-4` (offline store) → `app-5` (player) → `app-6`/`app-7`/`app-13`
 (parallel leaves) → `app-8`/`app-14` (integration) → `app-11` (signed APK). Follow-ups:
@@ -195,6 +198,8 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
 
 #### `srv-32` — Per-chapter sync-manifest endpoint (delta-friendly)
 
+> ✅ **Shipped 2026-06-06** — PR #570 (merge `439e27a`), closed #538. Plan [191](191-srv-32-sync-manifest.md).
+
 - **What:** a **two-level, gzip/brotli-compressed** manifest (so a 200-book / 4,000-chapter
   library never ships as one giant JSON — 4th-review point 2): a lightweight **index**
   (`GET /api/library/sync-manifest` — book IDs + per-book version/`updatedAt` + cover ref +
@@ -247,6 +252,8 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   sync. **Depends on:** nothing (consumed by `app-6`).
 
 #### `srv-35` — Stable per-chapter identifier (reorder/rename-proof) — **MVP prereq**
+
+> ✅ **Shipped 2026-06-06** — PR #569 (merge `61df595`), closed #540. Plan [190](190-srv-35-stable-chapter-uuid.md).
 
 - **What:** add an immutable per-chapter `uuid` at import, preserved through restructure
   (merge/split/reorder, `restructure.ts`) and rename (`78-chapter-rename`), and key
