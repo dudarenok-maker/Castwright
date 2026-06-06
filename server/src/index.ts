@@ -64,6 +64,7 @@ import { chaptersRestructureRouter } from './routes/chapters-restructure.js';
 import { exportRouter } from './routes/export.js';
 import { exportLanRouter, enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
 import { certRootRouter } from './routes/cert-root.js';
+import { requireLanToken } from './lan-auth.js';
 import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
 import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';
@@ -159,6 +160,11 @@ void fsckAllBooks()
     }
   })
   .catch((err) => console.warn('[fsck] sweep skipped:', err));
+
+/* srv-20 — optional shared-secret token guard for the LAN exposure surface.
+   Scoped to /api + /workspace; /cert/root.crt + /audio stay open. OFF unless
+   LAN HTTPS mode is on AND LAN_AUTH_TOKEN is set; loopback always bypasses. */
+app.use(['/api', '/workspace'], requireLanToken);
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {
