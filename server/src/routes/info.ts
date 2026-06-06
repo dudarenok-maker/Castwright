@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { getAppVersion } from '../app-version.js';
 import { CURRENT_STATE_SCHEMA } from '../workspace/state-migrate.js';
 import { SCHEMA_SEAMS } from '../workspace/schema-migrate.js';
+import { SYNC_MANIFEST_SCHEMA } from '../workspace/sync-manifest.js';
 import { readUserSettings, writeUpgradeMeta, getResolvedSidecarUrl } from '../workspace/user-settings.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +34,8 @@ function schemaMap(): Record<string, number> {
     const key = seam.label.replace(/\.json$/, '').replace(/-([a-z])/g, (_m, c) => c.toUpperCase());
     out[key] = seam.current;
   }
+  // srv-32 — the companion compat-gates the sync-manifest contract off this.
+  out.syncManifest = SYNC_MANIFEST_SCHEMA;
   return out;
 }
 

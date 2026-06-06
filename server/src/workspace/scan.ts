@@ -687,6 +687,32 @@ async function findBookBy(predicate: (state: BookStateJson) => boolean): Promise
   return null;
 }
 
+/** Walk every book and return its directory + parsed state.json. A thin
+ *  all-books variant of `findBookBy` (which stops at the first match) used
+ *  by the srv-32 sync-manifest INDEX, which needs each book's ISO
+ *  `updatedAt` + chapter `audioRenderedAt` (the `LibraryBook` wire shape
+ *  only carries a relative `lastWorkedOn`). Deliberately lean: a state.json
+ *  read per book with backup recovery, NO per-chapter segments I/O — modern
+ *  renders already stamp `audioRenderedAt` into state.json
+ *  (finalize-chapter-write.ts), so the manifest signal is current without
+ *  re-opening every segments file. Corrupt/unreadable books are skipped. */
+export async function collectBooks(): Promise<Array<{ bookDir: string; state: BookStateJson }>> {
+  ensureWorkspace();
+  const out: Array<{ bookDir: string; state: BookStateJson }> = [];
+  for (const authorName of listDirs(BOOKS_ROOT)) {
+    for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
+      for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
+        const dir = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        const raw = await readStateJsonWithRecovery(
+          join(dir, '.audiobook', 'state.json'),
+        ).catch(() => null);
+        if (raw) out.push({ bookDir: dir, state: raw });
+      }
+    }
+  }
+  return out;
+}
+
 /** Lazy-migrate `audioModelKey` and `audioRenderedAt` onto every chapter
     in `state.chapters` by reading the corresponding `audio/<slug>.segments.json`
     file. Used by both the library-scan path (where the segments read is
