@@ -156,6 +156,10 @@ export const uiSlice = createSlice({
     openAdmin: (s) => {
       s.stage = { kind: 'admin' };
     },
+    /* fs-23 — In-app Model Manager, reached from the Admin view. */
+    openModelManager: (s) => {
+      s.stage = { kind: 'model-manager' };
+    },
     startNewBook: (s) => {
       s.stage = { kind: 'upload' };
     },
