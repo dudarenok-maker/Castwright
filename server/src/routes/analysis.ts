@@ -8,6 +8,7 @@ import { rm } from 'node:fs/promises';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
+import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
   selectAnalyzerForPhase,
@@ -3775,6 +3776,18 @@ async function runSubsetAnalyzerJob(
     console.log(`[analysis-subset] mns=${manuscriptId} ${lastStep}`);
   };
 
+  /* Throttled LLM heartbeat. The subset (per-chapter Re-analyse) path
+     previously wired only onThrottle on its analyzer calls — NO onWaiting /
+     onChunk — so during a 60-90s Gemini phase it emitted nothing, the global
+     pill's `activeStream.lastTickAt` aged past the 8s cloud stall threshold,
+     and a working re-analyse falsely read as "Stalled" (the main job emits
+     these; the subset job didn't). onWaiting (500ms wall-clock from gemini.ts)
+     keeps the pill fresh even between Gemini chunks; onChunk carries real
+     model-output progress. Both funnel through the shared throttled emitter
+     (analysis-heartbeat.ts), and the analysis-stream middleware bumps
+     lastTickAt off each. */
+  const emitHeartbeat = makeThrottledHeartbeat(send, HEARTBEAT_EVENT_THROTTLE_MS);
+
   /* Preserve designed-voice links across a subset re-analysis (#518) — snapshot
      the existing cast before any interim write clobbers cast.json. */
   const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
@@ -3882,6 +3895,8 @@ async function runSubsetAnalyzerJob(
               {
                 signal: abortController.signal,
                 language: bookLanguage,
+                onWaiting: () => emitHeartbeat(0, ch.id),
+                onChunk: (info) => emitHeartbeat(0, ch.id, info),
                 onThrottle: (waitMs, reason) => {
                   send({
                     kind: 'throttle',
@@ -4083,6 +4098,8 @@ async function runSubsetAnalyzerJob(
           stageCall: {
             signal: abortController.signal,
             language: bookLanguage,
+            onWaiting: () => emitHeartbeat(1, ch.id),
+            onChunk: (info) => emitHeartbeat(1, ch.id, info),
             onThrottle: (waitMs, reason) => {
               send({
                 kind: 'throttle',
