@@ -18,6 +18,7 @@ import {
 } from './paths.js';
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
+import { ensureChapterUuids } from './chapter-uuid.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { formatDuration } from '../audio/format-duration.js';
 import { normaliseBookLanguage } from '../tts/language.js';
@@ -51,6 +52,15 @@ export interface BookStateJson {
     id: number;
     title: string;
     slug: string;
+    /** srv-35 (plan 190) — immutable per-chapter identifier, stable across
+        restructure (merge/split/reorder) and rename, unlike the positional
+        `id` and the `id`-embedding `slug`. Minted lazily by
+        `ensureChapterUuids` (server/src/workspace/chapter-uuid.ts) at the
+        read seams that already persist (scan, book-state GET, restructure),
+        so legacy books gain a uuid on first touch — no schema bump (plan 27
+        add policy). The sync manifest (srv-32) and resume bookmarks key by
+        this. Optional so legacy state.json files load cleanly. */
+    uuid?: string;
     duration?: string;
     excluded?: boolean;
     /** TTS model key that produced this chapter's audio file. Stamped on
@@ -443,6 +453,18 @@ async function scanBook(
      book-state route is hit before a library scan has run. */
   let totalSec = 0;
   if (state) {
+    /* srv-35 — lazy-migrate: mint a stable uuid for any chapter lacking
+       one and persist once. Idempotent; subsequent scans are no-ops. Runs
+       before the segments backfill so a freshly-uuid'd book is on disk
+       even if the segments pass finds nothing to write. */
+    if (ensureChapterUuids(state)) {
+      try {
+        await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+      } catch {
+        /* best-effort — the next scan retries; in-memory state already
+           carries the uuids for this caller. */
+      }
+    }
     const result = await backfillAudioModelKeysFromSegments(bookDir, state);
     state = result.state;
     totalSec = result.totalSec;

@@ -1496,3 +1496,138 @@ describe('book-state router — listen-progress slice (plan 47)', () => {
     });
   });
 });
+
+describe('book-state router — srv-35 stable chapter uuid (plan 190)', () => {
+  const S_AUTHOR = 'Srv35 Author';
+  const S_SERIES = 'Standalones';
+  const S_TITLE = 'Srv35 Book';
+  let sBookId: string;
+  let sBookDir: string;
+
+  const stateFile = () => join(sBookDir, '.audiobook', 'state.json');
+  const lpFile = () => join(sBookDir, '.audiobook', 'listen-progress.json');
+  const readStateDisk = (): {
+    chapters: Array<{ id: number; title: string; slug: string; uuid?: string }>;
+  } => JSON.parse(readFileSync(stateFile(), 'utf8'));
+
+  function seedState(
+    chapters: Array<{ id: number; title: string; slug: string; uuid?: string }>,
+  ): void {
+    writeFileSync(
+      stateFile(),
+      JSON.stringify({
+        bookId: sBookId,
+        manuscriptId: 'm_srv35',
+        title: S_TITLE,
+        author: S_AUTHOR,
+        series: S_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters,
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    sBookId = makeBookId(S_AUTHOR, S_SERIES, S_TITLE);
+    sBookDir = join(workspaceRoot, 'books', S_AUTHOR, S_SERIES, S_TITLE);
+    mkdirSync(join(sBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(sBookDir, 'manuscript.txt'), 'placeholder');
+  });
+
+  beforeEach(() => {
+    seedState([
+      { id: 1, title: 'Chapter 1', slug: '01-chapter-1', uuid: 'uuid-aaa' },
+      { id: 2, title: 'Chapter 2', slug: '02-chapter-2', uuid: 'uuid-bbb' },
+    ]);
+    rmSync(lpFile(), { force: true });
+  });
+
+  it('PUT slice=state with chapters lacking uuid does NOT strip existing uuids', async () => {
+    const res = await request(app)
+      .put(`/api/books/${sBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'state',
+        patch: {
+          chapters: [
+            { id: 1, title: 'Renamed One', slug: '01-chapter-1' },
+            { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          ],
+        },
+      });
+    expect(res.status).toBe(204);
+
+    const disk = readStateDisk();
+    expect(disk.chapters[0].uuid).toBe('uuid-aaa'); // preserved by id
+    expect(disk.chapters[1].uuid).toBe('uuid-bbb');
+    expect(disk.chapters[0].title).toBe('Renamed One'); // edit still applied
+  });
+
+  it('PUT slice=state mints a uuid for a genuinely-new chapter', async () => {
+    await request(app)
+      .put(`/api/books/${sBookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'state',
+        patch: {
+          chapters: [
+            { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+            { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+            { id: 3, title: 'New Chapter', slug: '03-new-chapter' },
+          ],
+        },
+      });
+    const disk = readStateDisk();
+    expect(disk.chapters[0].uuid).toBe('uuid-aaa');
+    expect(disk.chapters[2].uuid).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
+  it('listen-progress PUT derives chapterUuid from the current chapterId', async () => {
+    const put = await request(app)
+      .put(`/api/books/${sBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 10 });
+    expect(put.status).toBe(200);
+    expect(put.body.chapterUuid).toBe('uuid-aaa');
+    const onDisk = JSON.parse(readFileSync(lpFile(), 'utf8'));
+    expect(onDisk.chapterUuid).toBe('uuid-aaa');
+  });
+
+  it('listen-progress GET resolves chapterUuid to the CURRENT chapterId after a restructure', async () => {
+    // Listened to chapter 1 (uuid-aaa).
+    await request(app)
+      .put(`/api/books/${sBookId}/listen-progress`)
+      .set('Content-Type', 'application/json')
+      .send({ chapterId: 1, currentSec: 10 });
+
+    // A restructure reorders the book: the chapter with uuid-aaa is now id 2.
+    seedState([
+      { id: 1, title: 'Chapter 2', slug: '01-chapter-2', uuid: 'uuid-bbb' },
+      { id: 2, title: 'Chapter 1', slug: '02-chapter-1', uuid: 'uuid-aaa' },
+    ]);
+
+    const get = await request(app).get(`/api/books/${sBookId}/listen-progress`);
+    expect(get.status).toBe(200);
+    expect(get.body.chapterId).toBe(2); // resolved from uuid-aaa → now id 2
+    expect(get.body.chapterUuid).toBe('uuid-aaa');
+    expect(get.body.currentSec).toBe(10);
+  });
+
+  it('listen-progress GET falls back to the stored chapterId for a legacy record (no chapterUuid)', async () => {
+    writeFileSync(
+      lpFile(),
+      JSON.stringify({ chapterId: 1, currentSec: 7, updatedAt: '2026-01-01T00:00:00.000Z' }),
+    );
+    const get = await request(app).get(`/api/books/${sBookId}/listen-progress`);
+    expect(get.status).toBe(200);
+    expect(get.body.chapterId).toBe(1);
+    expect(get.body.chapterUuid).toBeUndefined();
+  });
+});
