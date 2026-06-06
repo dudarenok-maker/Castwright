@@ -233,18 +233,6 @@ _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ graceful re-entry into a long book after days away.
 _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481).
 
-#### `fs-33` — Emotion-only LLM annotation pass + Detect-emotions trigger (fs-25 Wave 4b) ([#510](https://github.com/dudarenok-maker/AudioBook-Generator/issues/510))
-
-- _What:_ A lightweight analyzer pass (`audiobook-emotion-annotation`) + `POST /api/books/:bookId/annotate-emotion` that backfills `{ sentenceId, emotion }` onto already-attributed sentences without re-attributing, plus a "Detect emotions" trigger in the manuscript header (cost-confirm → stream → chips populate). Manual per-quote tags always win.
-- _Benefit (user):_ existing books adopt per-quote emotion in one click instead of a full (quota-costly) re-analysis. _Re-homed from `fs-25` on archive._
-_Full detail + acceptance:_ [#510](https://github.com/dudarenok-maker/AudioBook-Generator/issues/510).
-
-#### `fs-34` — fs-25 5e remainder: remove-variant route + Voices-view badge + staleness/cast-row hints ([#511](https://github.com/dudarenok-maker/AudioBook-Generator/issues/511))
-
-- _What:_ Four 5e UX gaps left after `fe-31` shipped the manuscript missing-variant hint: a `DELETE …/cast/:characterId/emotion-variant/:emotion` route + a cast remove affordance; verify the `VariantsBadge` + "Has emotion variants" filter render in the cross-book Voices view; mark chapters stale on emotion/variant edits via the existing `ui.staleAudio` banner; a "N tags need a variant" count on the cast row.
-- _Benefit (user):_ closes the per-quote-emotion UX loop — discardable bad designs, visible staleness, cross-book parity. _Re-homed from `fs-25` on archive._
-_Full detail + acceptance:_ [#511](https://github.com/dudarenok-maker/AudioBook-Generator/issues/511).
-
 #### `fe-32` — Rebaseline modal: series-wide emotion-variant design (fs-25 Wave 6b) ([#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512))
 
 - _What:_ Extend the plan-108 "Rebaseline the series" modal to also design chosen emotion variants for the principal cast across a series (gated on each base existing), reusing the Wave-5b per-emotion controls + variant-aware audition; the base-only path stays intact when no variants are selected.
