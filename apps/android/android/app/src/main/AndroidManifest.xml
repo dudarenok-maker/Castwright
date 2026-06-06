@@ -2,6 +2,11 @@
     <!-- app-2: network calls to the paired server + QR pairing-code scanning. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- app-3: foreground service so a multi-book download isn't killed by the
+         OS. (FOREGROUND_SERVICE/WAKE_LOCK/POST_NOTIFICATIONS are merged in by
+         flutter_foreground_task; the data-sync type needs its own permission on
+         API 34+.) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <application
         android:label="audiobook_companion"
         android:name="${applicationName}"
@@ -28,6 +33,13 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- app-3: flutter_foreground_task download service. Warning: do not
+             change the service name (the plugin starts it by class). -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -17,11 +17,11 @@ the full backlog decomposition (`srv-32` + `app-1..14`), the v1 definition-of-do
 the wave-sequenced delivery roadmap. Each backlog item lands under its own branch + plan
 per CLAUDE.md; this doc is what they hang off.
 
-> **Build status (2026-06-06):** **all MVP server prerequisites are now shipped** —
-> `srv-34`, `srv-20`, `srv-35`, `srv-32` — plus the app foundation `app-1` (scaffold + CI)
-> and `app-2` (pairing + TLS pinning + API client). With `srv-32` + `srv-35` merged,
-> **`app-3` (delta sync) is unblocked** and is the next item; the rest of the app track
-> (`app-4`…`app-14`) follows it. See **Build progress & dev setup** immediately below.
+> **Build status (2026-06-06):** **all MVP server prerequisites are shipped** —
+> `srv-34`, `srv-20`, `srv-35`, `srv-32` — plus the app foundation `app-1` (scaffold + CI),
+> `app-2` (pairing + TLS pinning + API client), and now **`app-3` (delta sync engine)**.
+> The next item is **`app-4` (offline store)**; the rest of the app track (`app-5`…`app-14`)
+> follows it. See **Build progress & dev setup** immediately below.
 
 ---
 
@@ -37,16 +37,17 @@ per CLAUDE.md; this doc is what they hang off.
 | `srv-32` | #570 (merge `439e27a`), closed #538 | two-level gzip'd `GET /api/library/sync-manifest` (index + `?bookId=` detail), `?since` delta + full active-ID sets for stateless deletion, per-chapter fingerprint + actual `urlSuffix`/`audioUrl`, keyed by the `srv-35` `uuid`; bumps `/api/info` `schemas.syncManifest`. Plan [191](191-srv-32-sync-manifest.md) |
 | `app-1` | #562 (closed #541) | Flutter scaffold at `apps/android/` (pkg `audiobook_companion`), domain seam, CI lane `.github/workflows/app.yml` |
 | `app-2` | #565 + #566 + #567 (closed #542) | full pairing: QR/manual → fetch CA → verify SHA-256 → pin in `SecurityContext` → token probe; `SecurePairingStore`; `ApiClient` (authenticated, CA-pinned) |
+| `app-3` | _this PR_ (closed #543) | delta sync engine: pure `sync_manifest`/`sync_plan` domain (uuid+fingerprint keyed), `ApiClient.syncManifest{Index,BookDetail}`, range-resume + size-integrity + atomic `.tmp`→rename `ChapterDownloader` over an injectable `FileStore`, `LocalLibrary` JSON store, `SyncEngine` (per-book failure isolation, deferred swap via `isInUse`, progress stream, active-ID eviction), thin `flutter_foreground_task` keep-alive shim. 41 paired Dart tests. **Live device acceptance owed** (no sync-trigger UI until `app-7`/`app-14`). |
 
-### Next up — `app-3` (delta sync), now unblocked
+### Next up — `app-4` (offline store)
 
-All four MVP server prerequisites (`srv-34` / `srv-20` / `srv-35` / `srv-32`) are merged, so
-`app-3` — which consumes the `srv-32` manifest and keys local audio by the `srv-35` `uuid` —
-is the next item to build.
+`app-3` shipped the sync engine against a `LocalLibrary` **port** with a minimal JSON-snapshot
+adapter. `app-4` grows the real persistent store behind that same interface (storage
+accounting, cover thumbnails, the auto-eviction policies) — see the item spec below.
 
 ### Remaining app track
 
-`app-3` (delta sync) → `app-4` (offline store) → `app-5` (player) → `app-6`/`app-7`/`app-13`
+`app-4` (offline store) → `app-5` (player) → `app-6`/`app-7`/`app-13`
 (parallel leaves) → `app-8`/`app-14` (integration) → `app-11` (signed APK). Follow-ups:
 `srv-33`, `app-9` (Android Auto/CarPlay), `app-10`, `app-12` (iOS).
 
@@ -712,8 +713,18 @@ top for the running status):
 
 - `srv-34` — PR #558 (closed #539).
 - `srv-20` — PR #561 (middleware) + #564 (D2 pairing payload) (closed #425).
+- `srv-35` — PR #569 (closed #540). Plan [190](190-srv-35-stable-chapter-uuid.md).
+- `srv-32` — PR #570 (closed #538). Plan [191](191-srv-32-sync-manifest.md).
 - `app-1` — PR #562 (closed #541).
 - `app-2` — PR #565 + #566 + #567 (closed #542).
+- `app-3` — delta sync engine (closed #543): `sync_manifest`/`sync_plan` pure domain,
+  `ChapterDownloader` (range-resume + size-integrity + atomic swap over an injectable
+  `FileStore`), `LocalLibrary` JSON store, `SyncEngine` (per-book isolation, deferred swap,
+  progress stream, active-ID eviction), `ApiClient.syncManifest*`, and a thin
+  `flutter_foreground_task` keep-alive shim. 41 paired Dart tests; `flutter analyze` clean +
+  debug APK builds. **Live device acceptance owed** — there is no sync-trigger UI yet
+  (`app-7`/`app-14`), so the engine is exercised by unit tests only until then.
 
-Toolchain installed + the app validated on a `Pixel_10_Pro` emulator. `srv-35`/`srv-32`
-are in progress on a parallel agent; `app-3`+ are gated on them.
+All MVP server prerequisites are now merged. Toolchain installed + the app validated on a
+`Pixel_10_Pro` emulator. Next up: `app-4` (offline store), which grows the real persistent
+store behind `app-3`'s `LocalLibrary` port.

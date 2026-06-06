@@ -1,7 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../domain/sync_manifest.dart';
+import 'chapter_downloader.dart' show RangeFetch, RangeResponse;
 import 'pairing_service.dart' show Connection;
+import 'sync_engine.dart' show ManifestApi;
 
 /// Result of a raw HTTP send (status + body) — the injection seam that lets the
 /// API client be unit-tested without real TLS.
@@ -54,6 +57,56 @@ class ApiClient {
   /// GET /api/info — the server version / capabilities handshake (used to
   /// gate features + confirm the server is new enough for the sync manifest).
   Future<Map<String, dynamic>> info() => getJson('/api/info');
+
+  /// GET /api/library/sync-manifest — the srv-32 INDEX (one row per book + the
+  /// full active-book set). `?since=` (an ISO timestamp) trims the `books` list,
+  /// never the active set.
+  Future<SyncManifestIndex> syncManifestIndex({String? since}) async {
+    final q = since == null ? '' : '?since=${Uri.encodeQueryComponent(since)}';
+    return SyncManifestIndex.fromJson(await getJson('/api/library/sync-manifest$q'));
+  }
+
+  /// GET `/api/library/sync-manifest?bookId=` — the srv-32 per-book DETAIL
+  /// (uuid-keyed chapters + the full active-chapter set).
+  Future<SyncManifestBookDetail> syncManifestBookDetail(String bookId) async {
+    return SyncManifestBookDetail.fromJson(await getJson(
+        '/api/library/sync-manifest?bookId=${Uri.encodeQueryComponent(bookId)}'));
+  }
+
+  /// Adapter so this client satisfies the sync engine's [ManifestApi] port.
+  ManifestApi get manifestApi => _ApiManifestApi(this);
+
+  /// A range-capable, CA-pinned, authenticated byte fetcher for chapter audio
+  /// downloads — the engine's [RangeFetch] seam. Streams the response body so
+  /// large chapters never buffer fully in memory; the `Range` header (set by the
+  /// downloader on a resume) is forwarded verbatim.
+  RangeFetch pinnedRangeFetch() {
+    final ctx = SecurityContext(withTrustedRoots: false)
+      ..setTrustedCertificatesBytes(utf8.encode(connection.caPem));
+    final client = HttpClient(context: ctx);
+    final token = connection.server.token;
+    return (Uri url, Map<String, String> headers) async {
+      final req = await client.getUrl(url);
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      headers.forEach(req.headers.set);
+      final res = await req.close();
+      return RangeResponse(statusCode: res.statusCode, body: res);
+    };
+  }
+}
+
+/// Wraps [ApiClient] as the engine-facing [ManifestApi].
+class _ApiManifestApi implements ManifestApi {
+  _ApiManifestApi(this._client);
+  final ApiClient _client;
+
+  @override
+  Future<SyncManifestIndex> index({String? since}) =>
+      _client.syncManifestIndex(since: since);
+
+  @override
+  Future<SyncManifestBookDetail> bookDetail(String bookId) =>
+      _client.syncManifestBookDetail(bookId);
 }
 
 /// Real transport: a `dart:io` HttpClient that trusts ONLY the pinned CA and
