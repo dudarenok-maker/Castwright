@@ -20,9 +20,10 @@ per CLAUDE.md; this doc is what they hang off.
 > **Build status (2026-06-06):** **all MVP server prerequisites are shipped** —
 > `srv-34`, `srv-20`, `srv-35`, `srv-32` — plus the app foundation `app-1` (scaffold + CI),
 > `app-2` (pairing + TLS pinning + API client), `app-3` (delta sync engine),
-> `app-4` (offline store — drift/SQLite), and now **`app-5` (native player —
-> just_audio/audio_service)**. The next item is **`app-6` (two-way resume sync)**; the
-> rest of the app track follows it. See **Build progress & dev setup** immediately below.
+> `app-4` (offline store — drift/SQLite), `app-5` (native player —
+> just_audio/audio_service), and now **`app-6` (two-way resume sync)**. The next item is
+> **`app-7` (library browse)**; the rest of the app track follows it. See **Build progress
+> & dev setup** immediately below.
 
 ---
 
@@ -40,18 +41,17 @@ per CLAUDE.md; this doc is what they hang off.
 | `app-2` | #565 + #566 + #567 (closed #542) | full pairing: QR/manual → fetch CA → verify SHA-256 → pin in `SecurityContext` → token probe; `SecurePairingStore`; `ApiClient` (authenticated, CA-pinned) |
 | `app-3` | #572 (merge `d6fe920`, closed #543) | delta sync engine: pure `sync_manifest`/`sync_plan` domain (uuid+fingerprint keyed), `ApiClient.syncManifest{Index,BookDetail}`, range-resume + size-integrity + atomic `.tmp`→rename `ChapterDownloader` over an injectable `FileStore`, `LocalLibrary` JSON store, `SyncEngine` (per-book failure isolation, deferred swap via `isInUse`, progress stream, active-ID eviction), thin `flutter_foreground_task` keep-alive shim. 41 paired Dart tests. **Live device acceptance owed** (no sync-trigger UI until `app-7`/`app-14`). |
 | `app-4` | #573 (merge `9d4c2a3`, closed #544) | offline store: **drift/SQLite** `LibraryDatabase` (Books+Chapters), `DriftLocalLibrary` implementing the `app-3` `LocalLibrary` port + accounting (`bookUsages`/`totalBytes`), `markPlayed`/`setChapterFinished`, `applyEviction`, cover-thumb paths, display meta, and a **one-time `sync-state.json`→drift import**. Pure `storage_policy` (auto-delete-finished + LRU book eviction). `ThumbnailCache` (ensure-if-missing) + pure `package:image` JPEG downscale (~250 px; client-side, D11 server `?width=` deferred). 25 paired Dart tests. **Live device acceptance owed.** |
-| `app-5` | _this PR_ (closed #545) | native player: testable `PlayerController` brain over an injectable `AudioEngine` port — per-book resume/switch (saves position on switch, restores each book's own point), ~10 s **autosave throttle** (survives OS kill), **media-key→seek default** (`skip_behavior` ±30/±15 s, chapter-mode toggle), `isInUse` for app-3 deferred swap; drift **Playback** table (schema v2 + migration); real `JustAudioEngine` (just_audio) + `CompanionAudioHandler` (audio_service: lock-screen/Bluetooth/notification) + `MainActivity`→`AudioServiceActivity` + manifest service. 14 paired Dart tests. **Live device acceptance owed.** |
+| `app-5` | #575 (merge `056ea33`, closed #545) | native player: testable `PlayerController` brain over an injectable `AudioEngine` port — per-book resume/switch (saves position on switch, restores each book's own point), ~10 s **autosave throttle** (survives OS kill), **media-key→seek default** (`skip_behavior` ±30/±15 s, chapter-mode toggle), `isInUse` for app-3 deferred swap; drift **Playback** table (schema v2 + migration); real `JustAudioEngine` (just_audio) + `CompanionAudioHandler` (audio_service: lock-screen/Bluetooth/notification) + `MainActivity`→`AudioServiceActivity` + manifest service. 14 paired Dart tests. **Live device acceptance owed.** |
+| `app-6` | _this PR_ (closed #546) | two-way resume sync: pure `reconcileResume` (LWW by client `listenedAt`, not network-receive time) + `ResumeSyncService` (push local / pull remote / noop over an injectable `ListenProgressApi` + `PlaybackStore` + a `chapterIdResolver`; the local Playback row IS the offline queue); `ApiClient.get/putListenProgress` (real CA-pinned, `listenedAt` per `srv-34`); `PlaybackPoint` gains `listenedAt`. 12 paired Dart tests. **Live device acceptance owed.** |
 
-### Next up — `app-6` (two-way resume sync)
+### Next up — `app-7` (library browse)
 
-`app-5` shipped the player + per-book local resume store. `app-6` makes resume two-way:
-pull server listen-progress on sync, queue local positions offline, push back on reconnect
-with the client `listenedAt` (`srv-34`) so last-write-wins by listen time — see the item
-spec below.
+`app-6` made resume two-way. The next leaves are **`app-7`** (author→series→book browse UI),
+**`app-13`** (settings), then **`app-8`/`app-14`** integration. See the item specs below.
 
 ### Remaining app track
 
-`app-6`/`app-7`/`app-13` (parallel leaves) → `app-8`/`app-14`
+`app-7`/`app-13` (leaves) → `app-8`/`app-14`
 (integration) → `app-11` (signed APK). Follow-ups: `srv-33`, `app-9` (Android Auto/CarPlay),
 `app-10`, `app-12` (iOS).
 
@@ -742,8 +742,13 @@ top for the running status):
   migration); real `JustAudioEngine` (just_audio) + `CompanionAudioHandler` (audio_service
   lock-screen/Bluetooth/notification) + `MainActivity`→`AudioServiceActivity` + manifest service.
   14 paired Dart tests; clean + APK builds. **Live device acceptance owed.**
+- `app-6` — two-way resume sync (closed #546): pure `reconcileResume` (LWW by client
+  `listenedAt`, not network-receive time) + `ResumeSyncService` (push/pull/noop over an
+  injectable `ListenProgressApi`+`PlaybackStore`+`chapterIdResolver`; local Playback row =
+  the offline queue) + `ApiClient.get/putListenProgress` (CA-pinned, `listenedAt` per srv-34).
+  12 paired Dart tests; clean + APK builds. **Live device acceptance owed.**
 
 All MVP server prerequisites are merged. Toolchain installed + the app validated on a
 `Pixel_10_Pro` emulator. Per the user's directive, the app track is being built through
 `app-10` with **all live-device acceptance batched at the end** for the whole feature set.
-Next up: `app-6` (two-way resume sync).
+Next up: `app-7` (library browse).

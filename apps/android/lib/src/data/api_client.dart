@@ -4,6 +4,7 @@ import 'dart:io';
 import '../domain/sync_manifest.dart';
 import 'chapter_downloader.dart' show RangeFetch, RangeResponse;
 import 'pairing_service.dart' show Connection;
+import 'resume_sync_service.dart' show ListenProgressApi, RemoteProgress;
 import 'sync_engine.dart' show ManifestApi;
 
 /// Result of a raw HTTP send (status + body) — the injection seam that lets the
@@ -76,6 +77,56 @@ class ApiClient {
   /// Adapter so this client satisfies the sync engine's [ManifestApi] port.
   ManifestApi get manifestApi => _ApiManifestApi(this);
 
+  /// Adapter so this client satisfies the resume sync's [ListenProgressApi].
+  ListenProgressApi get listenProgressApi => _ApiListenProgressApi(this);
+
+  /// GET the server resume bookmark; null when the server has none (404).
+  Future<RemoteProgress?> getListenProgress(String bookId) async {
+    try {
+      final j = await getJson('/api/books/$bookId/listen-progress');
+      return RemoteProgress(
+        chapterUuid: j['chapterUuid'] as String?,
+        chapterId: (j['chapterId'] as num?)?.toInt() ?? 0,
+        currentSec: (j['currentSec'] as num?)?.toDouble() ?? 0,
+        updatedAt: j['updatedAt'] as String? ?? '',
+      );
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  /// PUT a resume bookmark with the client [listenedAt] (srv-34). Real, CA-pinned
+  /// transport (device-tested, like [pinnedRangeFetch]).
+  Future<void> putListenProgress(
+    String bookId, {
+    required int chapterId,
+    required double currentSec,
+    required String listenedAt,
+  }) async {
+    final ctx = SecurityContext(withTrustedRoots: false)
+      ..setTrustedCertificatesBytes(utf8.encode(connection.caPem));
+    final client = HttpClient(context: ctx);
+    try {
+      final req = await client.putUrl(_u('/api/books/$bookId/listen-progress'));
+      req.headers.set(HttpHeaders.authorizationHeader,
+          'Bearer ${connection.server.token}');
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'chapterId': chapterId,
+        'currentSec': currentSec,
+        'listenedAt': listenedAt,
+      }));
+      final res = await req.close();
+      await res.drain<void>();
+      if (res.statusCode >= 400) {
+        throw ApiException(res.statusCode, 'listen-progress PUT failed');
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   /// A range-capable, CA-pinned, authenticated byte fetcher for chapter audio
   /// downloads — the engine's [RangeFetch] seam. Streams the response body so
   /// large chapters never buffer fully in memory; the `Range` header (set by the
@@ -107,6 +158,24 @@ class _ApiManifestApi implements ManifestApi {
   @override
   Future<SyncManifestBookDetail> bookDetail(String bookId) =>
       _client.syncManifestBookDetail(bookId);
+}
+
+/// Wraps [ApiClient] as the resume sync's [ListenProgressApi].
+class _ApiListenProgressApi implements ListenProgressApi {
+  _ApiListenProgressApi(this._client);
+  final ApiClient _client;
+
+  @override
+  Future<RemoteProgress?> getListenProgress(String bookId) =>
+      _client.getListenProgress(bookId);
+
+  @override
+  Future<void> putListenProgress(String bookId,
+          {required int chapterId,
+          required double currentSec,
+          required String listenedAt}) =>
+      _client.putListenProgress(bookId,
+          chapterId: chapterId, currentSec: currentSec, listenedAt: listenedAt);
 }
 
 /// Real transport: a `dart:io` HttpClient that trusts ONLY the pinned CA and
