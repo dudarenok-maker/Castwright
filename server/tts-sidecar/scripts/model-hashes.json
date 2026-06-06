@@ -1,0 +1,18 @@
+{
+  "_comment": "ops-7 (#430) — pinned SHA256 + size for downloaded model/wheel artifacts. install-kokoro.ps1 (PowerShell Get-FileHash) and install-qwen3.mjs (Node crypto) verify a download against these and refuse + delete on mismatch. The Model Manager inventory reflects a lightweight on-disk SIZE match as the `integrity` badge. RE-BLESS when an upstream asset legitimately changes: download the new asset, compute its SHA256 (PowerShell `Get-FileHash -Algorithm SHA256 <file>` / `sha256sum <file>`), and update the entry — otherwise a stale pin reads as a false mismatch and blocks install.",
+  "kokoro": {
+    "kokoro-v1.0.onnx": {
+      "sha256": "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+      "sizeBytes": 325532387
+    },
+    "voices-v1.0.bin": {
+      "sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+      "sizeBytes": 28214398
+    }
+  },
+  "flashAttentionWheel": {
+    "_comment": "Single-maintainer community FA2 wheel — the sharpest supply-chain risk (runs with the user's privileges on install). Opt-in (Windows AMD64 + cp311 only). UNPINNED until blessed on a box that has the wheel: download it, sha256 it, and set `sha256` here. Until then install-qwen3.mjs warns + proceeds (it can't verify without a pin).",
+    "url": "https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4+cu124torch2.6.0cxx11abiFALSE-cp311-cp311-win_amd64.whl",
+    "sha256": null
+  }
+}

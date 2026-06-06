@@ -72,6 +72,7 @@ import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { ollamaHealthRouter } from './routes/ollama-health.js';
 import { qwenInstallRouter } from './routes/qwen-install.js';
+import { modelsInventoryRouter } from './routes/models-inventory.js';
 import { whisperInstallRouter } from './routes/whisper-install.js';
 import { coquiInstallRouter } from './routes/coqui-install.js';
 import { gpuQueueRouter } from './routes/gpu-queue.js';
@@ -226,6 +227,7 @@ app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM ana
 app.use('/api/qwen', qwenInstallRouter); // in-app Qwen3-TTS installer (detect/install/poll/recheck)
 app.use('/api/coqui', coquiInstallRouter); // in-app Coqui XTTS v2 installer (detect/install/poll/recheck)
 app.use('/api/whisper', whisperInstallRouter); // in-app Whisper ASR installer (srv-31: detect/install/poll/recheck)
+app.use('/api/models', modelsInventoryRouter); // fs-23 — in-app Model Manager: inventory + remove
 app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inFlight for the top-bar pill)
 app.use('/api/diagnostics', diagnosticsRouter); // fs-18 — GET / one-shot health board (admin console)
 

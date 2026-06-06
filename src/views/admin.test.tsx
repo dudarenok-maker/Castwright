@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
+import { configureStore } from '@reduxjs/toolkit';
+import { Provider } from 'react-redux';
 import { AdminView } from './admin';
+import { uiSlice } from '../store/ui-slice';
 import { api } from '../lib/api';
 import type {
   GenerationStatsResponse,
@@ -79,6 +82,21 @@ const telemetry = (over: Partial<ResourceTelemetryRecord>): ResourceTelemetryRec
   ...over,
 });
 
+/* AdminView dispatches (the fs-23 "Open Model Manager" link), so it must
+   render inside a Provider. A minimal store with just the ui slice is enough —
+   the view only reads diagnostics/stats through the mocked api. */
+function renderAdmin() {
+  const store = configureStore({ reducer: { ui: uiSlice.reducer } });
+  return {
+    store,
+    ...render(
+      <Provider store={store}>
+        <AdminView />
+      </Provider>,
+    ),
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockWorktrees.mockResolvedValue({ worktrees: [] });
@@ -93,7 +111,7 @@ afterEach(() => {
 
 describe('AdminView — health board', () => {
   it('renders one row per diagnostics check with its status', async () => {
-    render(<AdminView />);
+    renderAdmin();
     const board = await screen.findByTestId('health-board');
     const ids = within(board)
       .getAllByTestId(/^health-row-/)
@@ -112,17 +130,26 @@ describe('AdminView — health board', () => {
   });
 });
 
+describe('AdminView — model manager link (fs-23)', () => {
+  it('opens the Model Manager when the link is clicked', async () => {
+    const { store } = renderAdmin();
+    const link = await screen.findByTestId('admin-open-model-manager');
+    link.click();
+    expect(store.getState().ui.stage.kind).toBe('model-manager');
+  });
+});
+
 describe('AdminView — dev-only worktrees gating', () => {
   it('renders the worktrees section in dev (import.meta.env.DEV true)', async () => {
     // vitest runs with DEV === true by default.
-    render(<AdminView />);
+    renderAdmin();
     expect(await screen.findByRole('heading', { name: 'Worktrees' })).toBeInTheDocument();
     await waitFor(() => expect(mockWorktrees).toHaveBeenCalled());
   });
 
   it('hides the worktrees section in production builds', async () => {
     vi.stubEnv('DEV', false);
-    render(<AdminView />);
+    renderAdmin();
     // Health board still renders for all users…
     await screen.findByTestId('health-board');
     // …but the dev-only worktree dashboard does not, and never probes.
@@ -142,7 +169,7 @@ describe('AdminView — generation throughput table', () => {
         chapter({ chapterId: 1, title: 'Alpha', rtf: 1.5 }),
       ],
     });
-    render(<AdminView />);
+    renderAdmin();
 
     const table = await screen.findByTestId('generation-throughput-table');
     const rows = within(table).getAllByTestId(/^throughput-row-/);
@@ -163,7 +190,7 @@ describe('AdminView — generation throughput table', () => {
         chapter({ chapterId: 1, title: 'Alpha', rtf: 1.5 }), // no older entry → no glyph
       ],
     });
-    render(<AdminView />);
+    renderAdmin();
 
     const table = await screen.findByTestId('generation-throughput-table');
     expect(within(within(table).getByTestId('throughput-row-3')).getByText('▲')).toBeInTheDocument();
@@ -181,7 +208,7 @@ describe('AdminView — generation throughput table', () => {
         chapter({ chapterId: 1, title: 'Alpha', rtf: 1.5 }),
       ],
     });
-    render(<AdminView />);
+    renderAdmin();
 
     const table = await screen.findByTestId('generation-throughput-table');
     const row = within(table).getByTestId('throughput-row-2');
@@ -191,7 +218,7 @@ describe('AdminView — generation throughput table', () => {
 
   it('shows the empty-state copy when no chapters have been recorded', async () => {
     mockStats.mockResolvedValue(idleStats);
-    render(<AdminView />);
+    renderAdmin();
     await waitFor(() => expect(mockStats).toHaveBeenCalled());
     expect(screen.queryByTestId('generation-throughput-table')).toBeNull();
     expect(screen.getByText(/No chapters recorded yet/i)).toBeInTheDocument();
@@ -204,7 +231,7 @@ describe('AdminView — generation throughput table', () => {
       chaptersPerHour: 6.4,
       recentChapters: [chapter({ chapterId: 1, rtf: 1.6 })],
     });
-    render(<AdminView />);
+    renderAdmin();
 
     const summary = await screen.findByTestId('throughput-summary');
     expect(within(summary).getByText('1.60')).toBeInTheDocument();
@@ -216,7 +243,7 @@ describe('AdminView — generation throughput table', () => {
       ...idleStats,
       recentChapters: [chapter({ chapterId: 1, rtf: 1.0 })],
     });
-    render(<AdminView />);
+    renderAdmin();
     await screen.findByTestId('generation-throughput-table');
     expect(screen.queryByTestId('throughput-summary')).toBeNull();
   });
@@ -231,7 +258,7 @@ describe('AdminView — fs-20 resource trends panel', () => {
         telemetry({ chapterId: 1, title: 'Alpha', rtf: 1.0, wallSec: 600, vramReservedMb: 3000 }),
       ],
     });
-    render(<AdminView />);
+    renderAdmin();
 
     const panel = await screen.findByTestId('resource-trends');
     const rows = within(panel).getAllByTestId(/^resource-row-/);
@@ -251,7 +278,7 @@ describe('AdminView — fs-20 resource trends panel', () => {
 
   it('shows the empty-state copy when no telemetry has been recorded', async () => {
     mockTelemetry.mockResolvedValue({ records: [] });
-    render(<AdminView />);
+    renderAdmin();
     await waitFor(() => expect(mockTelemetry).toHaveBeenCalled());
     expect(screen.queryByTestId('resource-trends')).toBeNull();
     expect(screen.getByText(/No telemetry recorded yet/i)).toBeInTheDocument();

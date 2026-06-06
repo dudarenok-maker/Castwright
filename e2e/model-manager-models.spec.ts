@@ -179,7 +179,7 @@ test.describe('plan 61 — in-app multi-model management UX', () => {
       });
     });
 
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     /* Step 1 — Models card surfaces. */

@@ -37,7 +37,7 @@ async function readAccountSlice(page: import('@playwright/test').Page) {
 
 test.describe('Account — dual-model TTS flag', () => {
   test('renders the dual-model checkbox unchecked by default', async ({ page }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     const checkbox = page.getByTestId('account-dual-model-enabled');
@@ -46,7 +46,7 @@ test.describe('Account — dual-model TTS flag', () => {
   });
 
   test('toggling the checkbox + Save round-trips through the slice', async ({ page }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     const checkbox = page.getByTestId('account-dual-model-enabled');
@@ -74,7 +74,7 @@ test.describe('Account — dual-model TTS flag', () => {
 
 test.describe('Account — Qwen install card', () => {
   test('renders the in-app Qwen3-TTS installer card', async ({ page }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     /* The display-only snippet was replaced by the one-click QwenInstall
@@ -87,7 +87,7 @@ test.describe('Account — Qwen install card', () => {
 
 test.describe('Account — Coqui install card', () => {
   test('renders the in-app Coqui XTTS v2 installer card', async ({ page }) => {
-    await page.goto('/#/account');
+    await page.goto('/#/models');
     await waitForRouteReady(page);
 
     /* The display-only install snippet was replaced by the one-click
