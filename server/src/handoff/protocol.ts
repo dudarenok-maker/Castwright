@@ -17,8 +17,14 @@ const OUTBOX = join(HANDOFF_ROOT, 'outbox');
 /* Handoff key identifying the slice of work the inbox/outbox pair carries.
    Literal types instead of free strings so callers can't typo a key.
    `1-ch{n}` is per-chapter Phase 0a cast detection (the current flow);
-   plain `1` is the legacy whole-book stage 1 (kept for back-compat). */
-export type HandoffKey = '1' | `1-ch${number}` | '2' | `2-ch${number}`;
+   plain `1` is the legacy whole-book stage 1 (kept for back-compat).
+   `emotion-ch{n}` is the fs-33 emotion-only backfill pass. */
+export type HandoffKey =
+  | '1'
+  | `1-ch${number}`
+  | '2'
+  | `2-ch${number}`
+  | `emotion-ch${number}`;
 
 async function ensureDirs(): Promise<void> {
   await mkdir(INBOX, { recursive: true });
