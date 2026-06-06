@@ -10,6 +10,7 @@ export const SCOPES = [
   'frontend',
   'server',
   'sidecar',
+  'app',
   'scripts',
   'e2e',
   'mocks',
