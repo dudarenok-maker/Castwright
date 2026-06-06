@@ -534,6 +534,49 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
     );
     expect(next.characters).toEqual(start.characters);
   });
+
+  it('applies the merged profile the server carried over (quotes/attributes/etc.)', () => {
+    /* The carry-over fix: the link-prior response now echoes the prior
+       character's representative quotes + descriptors so the open drawer
+       reflects them without a reload. */
+    const start = baseState([makeChar('dame-alina_from', { voiceState: 'reused' })]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'dame-alina_from',
+        matchedFrom: { bookId: 'kotlc_1', characterId: 'alina', bookTitle: 'Neverseen', confidence: 1 },
+        voiceId: 'dame-alina',
+        profile: {
+          evidence: [{ quote: 'The Council has spoken.', note: 'imperious' }],
+          attributes: ['imperious', 'vain'],
+          description: 'A vain Councillor.',
+          gender: 'female',
+          ageRange: 'adult',
+        },
+      }),
+    );
+    const alina = next.characters.find((c) => c.id === 'dame-alina_from')!;
+    expect(alina.evidence).toHaveLength(1);
+    expect(alina.attributes).toEqual(['imperious', 'vain']);
+    expect(alina.description).toBe('A vain Councillor.');
+    expect(alina.gender).toBe('female');
+    expect(alina.ageRange).toBe('adult');
+  });
+
+  it('leaves the profile untouched when the response carries none', () => {
+    const start = baseState([
+      makeChar('dexter-alvin-diznee', { voiceState: 'generated', attributes: ['original'] }),
+    ]);
+    const next = castSlice.reducer(
+      start,
+      castActions.applyManualMatch({
+        characterId: 'dexter-alvin-diznee',
+        matchedFrom: { bookId: 'kotlc_1', characterId: 'dex', bookTitle: 'Keeper #1', confidence: 1 },
+        voiceId: 'v_dex',
+      }),
+    );
+    expect(next.characters[0].attributes).toEqual(['original']);
+  });
 });
 
 describe('castSlice — applyUnlinkAlias (POST /cast/unlink-alias response)', () => {
