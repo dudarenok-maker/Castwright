@@ -315,7 +315,7 @@ Source for the whole sub-group: the [2026-05-31 security review](security/2026-0
 
 - _What:_ a single shared-secret token (env-configured, surfaced in the LAN URL / QR alongside the existing cert flow) checked by a small Express middleware on `/api/*` and the `/workspace` mount when LAN mode is on. Loopback requests bypass the check (so `npm start` is unaffected). Reuse the existing LAN-URL/QR plumbing (`GET /api/export/lan`, `npm run install:cert-mobile`) to carry the token.
 - _Benefit (user):_ the mobile flow stops being "open to everyone on the network" without re-introducing friction — the token rides the URL the user already scans.
-- _Companion dependency:_ the **Android companion app** (plan 188, `app-2`) depends on this token as its v1 auth primitive — a kickoff-time reason to prioritise it. The multi-device / revocable evolution is `srv-33`.
+- _Companion dependency:_ the **Android companion app** (plan 188, `app-2`) depends on this token as its v1 auth primitive, and needs the QR/pairing payload to also carry the CA **SHA-256 fingerprint** so the app auto-verifies the pinned cert (no manual hex compare) — a kickoff-time reason to prioritise it. The multi-device / revocable evolution is `srv-33`.
 _Full detail + acceptance:_ [#425](https://github.com/dudarenok-maker/AudioBook-Generator/issues/425).
 
 #### `srv-21` — Validate `sidecarUrl` (scheme + private-host allowlist) before fetch ([#426](https://github.com/dudarenok-maker/AudioBook-Generator/issues/426))
@@ -398,28 +398,32 @@ flow above (`fe-3`/`fs-7`/`fs-8`, which it complements, not obsoletes). Full spe
 definition-of-done, and the 7-wave delivery roadmap live in **[plan
 188](features/188-android-companion-app.md)** — the canonical detail home for this
 group. Flutter (`just_audio`/`audio_service`) so iOS is an incremental follow-up; the
-load-bearing iOS-readiness move is **app-managed TLS trust** (pin the fetched
-`/cert/root.crt` in the Dart `SecurityContext`, no OS cert install).
+load-bearing iOS-readiness move is **app-managed, auto-verified TLS trust** (the QR
+carries the CA fingerprint; the app pins the fetched `/cert/root.crt` after asserting its
+hash matches — no OS cert install, no manual hex compare).
 
-> _GitHub issues for these `app-*` / `srv-32` / `srv-33` items are filed after the user's
-> review of plan 188; until then each row links the plan. IDs + positions are final._
+> _GitHub issues for these `app-*` / `srv-32` / `srv-34` / `srv-33` items are filed after
+> the user's review of plan 188; until then each row links the plan. IDs + positions are
+> final. (A 2026-06-06 secondary review folded fixes into the plan — see its "Secondary
+> review" section.)_
 
-**Server prereq:**
+**Server prereqs:**
 
-- `srv-32` — **Per-chapter sync-manifest endpoint** (`GET /api/library/sync-manifest`, `?since` + deletion tombstones; fingerprint must bump on every audio-mutating path). _Benefit:_ the one change that makes delta sync possible; reshapes existing scan data. Also feeds `fs-15`. → [plan 188](features/188-android-companion-app.md#srv-32--per-chapter-sync-manifest-endpoint-delta-friendly)
+- `srv-32` — **Per-chapter sync-manifest endpoint** (`GET /api/library/sync-manifest`, `?since` delta + the full **active-ID set** for stateless client-side deletion; fingerprint must bump on every audio-mutating path). _Benefit:_ the one change that makes delta sync possible; reshapes existing scan data. Also feeds `fs-15`. → [plan 188](features/188-android-companion-app.md#srv-32--per-chapter-sync-manifest-endpoint-delta-friendly)
+- `srv-34` — **Listen-progress PUT accepts client `listenedAt`** (server sanity-bounds it). _Benefit:_ offline-correct conflict ordering — a late offline push can't overwrite a newer position set elsewhere; unblocks `app-6`. → [plan 188](features/188-android-companion-app.md#srv-34--listen-progress-put-accepts-a-client-listenedat-offline-correct-ordering)
 
 **MVP block (v1)** — ranked:
 
 1. `app-1` — Flutter scaffold (`apps/android/`) + test harness + CI lane (incl. unsigned iOS compile) + debug APK. _Benefit:_ the foundation everything builds on.
-2. `app-2` — Pairing + **app-managed TLS trust** + generated API client + secure token. _Benefit:_ one-time pairing that works on Android *and* iOS. _Depends:_ `srv-20`.
-3. `app-3` — Delta sync engine (pull only changed/new chapters; resumable + integrity + tombstones). _Benefit:_ the killer feature — no full-book resync when one chapter is fixed.
-4. `app-4` — Offline library store (per-chapter audio + storage accounting). _Benefit:_ listen anywhere.
-5. `app-5` — Native player (background, lock-screen, Bluetooth, sleep-timer hooks, **per-book state**). _Benefit:_ table-stakes listening UX.
-6. `app-6` — Two-way resume sync (last-write-wins by server `updatedAt`). _Benefit:_ in-car position flows back to the server.
+2. `app-2` — Pairing + **auto-verified app-managed TLS trust** (QR fingerprint match; bad-cert-bypass bootstrap then pin) + generated API client + secure token. _Benefit:_ one-time, MitM-safe pairing that works on Android *and* iOS. _Depends:_ `srv-20` (token + CA fingerprint in QR).
+3. `app-3` — Delta sync engine (pull only changed/new chapters; resumable + integrity; **atomic `.tmp`→rename** swap, defer if playing; evict via active-ID diff). _Benefit:_ the killer feature — no full-book resync; an in-progress chapter never corrupts mid-listen.
+4. `app-4` — Offline library store (per-chapter audio + storage accounting + auto-eviction). _Benefit:_ listen anywhere; cache never silently fills the phone.
+5. `app-5` — Native player (background, lock-screen, Bluetooth, **per-book state**; media keys default to **seek ±30/±15 s** not chapter-skip; **autosave ~5–10 s** survives an OS kill). _Benefit:_ table-stakes UX that survives backgrounding + car controls.
+6. `app-6` — Two-way resume sync (**last-write-wins by client `listenedAt`**, not network-receive time). _Benefit:_ in-car position flows back without clobbering a newer position set elsewhere. _Depends:_ `srv-34`.
 7. `app-7` — Hierarchical browse + management (**by author → series → book**, state pills, download/remove). _Benefit:_ find any book fast in a big multi-series library.
 8. `app-14` — Home shelf + multi-book switching ("Continue listening", seamless book swap). _Benefit:_ the listen-to-several-books day-to-day surface.
 9. `app-8` — Auto-sync on reconnect (background delta-pull + resume flush). _Benefit:_ fixes + new chapters appear with no manual action.
-10. `app-13` — Playback & download settings incl. **sleep timer** (speed, skip-silence, Wi-Fi-only, storage cap). _Benefit:_ the settings a real listening app needs.
+10. `app-13` — Playback & download settings incl. **sleep timer**, skip-button toggle (seek vs chapter), Wi-Fi-only, and **storage-cap auto-eviction** (auto-delete finished chapters; LRU book eviction). _Benefit:_ the settings a real listening app needs.
 
 **Follow-ups (post-MVP)** — ranked:
 
