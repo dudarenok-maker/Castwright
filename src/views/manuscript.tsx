@@ -611,8 +611,13 @@ export function ManuscriptView({
         </div>
         <div className="mb-6">
           <SectionLabel>Manuscript analysis</SectionLabel>
-          <div className="mt-4 flex flex-col gap-4 md:flex-row md:items-start md:gap-6">
-            <h1 className="flex-1 min-w-0 wrap-break-word text-2xl md:text-3xl lg:text-4xl font-medium leading-[1.1] tracking-tight">
+          {/* Actions stack BELOW the title: the manuscript main column is narrow
+              (a wide chapter sidebar sits beside it), so a title + 3 action
+              buttons on one row starved the flex-1 title to zero width. Stacking
+              keeps the title full-width at every viewport with no horizontal
+              scroll. */}
+          <div className="mt-4 flex flex-col gap-4">
+            <h1 className="min-w-0 wrap-break-word text-2xl md:text-3xl lg:text-4xl font-medium leading-[1.1] tracking-tight">
               Chapter {currentChapter.id} —{' '}
               <span className="font-bold">{stripChapterPrefix(currentChapter.title)}</span>
               {currentChapter.excluded && (
