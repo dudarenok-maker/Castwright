@@ -10,7 +10,7 @@
    shell (not on the listen view), so this region only exposes the
    chapter-row triggers + the markers sidebar. */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconPlay,
@@ -21,6 +21,7 @@ import {
 } from '../../lib/icons';
 import { SectionLabel, Pill } from '../primitives';
 import { Waveform } from '../waveform';
+import { api } from '../../lib/api';
 import { parseDuration, formatTime } from '../../lib/time';
 import { stripChapterPrefix } from '../../lib/format-chapter-title';
 import { useAppSelector } from '../../store';
@@ -224,6 +225,62 @@ interface ChapterListenRowProps {
   onRename: () => void;
 }
 
+/* Module-level cache of fetched per-chapter loudness envelopes, keyed by
+   book + chapter + render stamp. A re-record (new audioRenderedAt) busts the
+   entry — mirroring the mini-player's render-stamp cache-bust — while ordinary
+   re-renders and virtualiser re-mounts reuse the cached array instead of
+   refetching. Shared across every row in the list. */
+const peaksCache = new Map<string, number[]>();
+
+function peaksCacheKey(bookId: string, chapter: Chapter): string {
+  return `${bookId}:${chapter.id}:${chapter.audioRenderedAt ?? ''}`;
+}
+
+/* Lazily fetch the real loudness envelope for a `done` chapter so its row's
+   waveform reflects the actual audio rather than the seeded decorative shape.
+   Reuses the same getChapterAudio endpoint the mini-player already calls.
+   Returns null while loading, on error, or for chapters with no rendered audio
+   — in which case <Waveform> falls back to its seeded bars. */
+function useChapterPeaks(bookId: string, chapter: Chapter): number[] | null {
+  const hasAudio = chapter.state === 'done';
+  const key = peaksCacheKey(bookId, chapter);
+  const [peaks, setPeaks] = useState<number[] | null>(() =>
+    hasAudio ? peaksCache.get(key) ?? null : null,
+  );
+  useEffect(() => {
+    if (!hasAudio) {
+      setPeaks(null);
+      return;
+    }
+    const cached = peaksCache.get(key);
+    if (cached) {
+      setPeaks(cached);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getChapterAudio({ bookId, chapterId: chapter.id, duration: chapter.duration })
+      .then((meta) => {
+        if (cancelled) return;
+        const next = meta.peaks ?? [];
+        if (next.length > 0) {
+          peaksCache.set(key, next);
+          setPeaks(next);
+        } else {
+          setPeaks(null);
+        }
+      })
+      .catch(() => {
+        /* Non-fatal — the row keeps the seeded waveform shape. */
+        if (!cancelled) setPeaks(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, chapter.id, chapter.duration, hasAudio, key]);
+  return peaks;
+}
+
 function ChapterListenRow({
   bookId,
   chapter,
@@ -249,6 +306,10 @@ function ChapterListenRow({
   const totalSec = live?.durationSec || parseDuration(chapter.duration);
   const elapsedSec = live ? Math.min(live.currentSec, totalSec) : 0;
   const progress = totalSec ? elapsedSec / totalSec : 0;
+  /* Real per-chapter loudness envelope for the waveform bars; null until the
+     fetch lands (or for not-yet-generated rows), where <Waveform> falls back
+     to its seeded shape. */
+  const peaks = useChapterPeaks(bookId, chapter);
   /* A chapter only has audio to play or share once it's `done` — the
      other states (queued / in_progress / failed) carry a placeholder
      "0:00" duration and no file. Gate the Play + Share affordances on
@@ -337,7 +398,11 @@ function ChapterListenRow({
             on phone keeps the row scannable in a single tap-friendly
             column. */}
         <div className="hidden md:block">
-          <Waveform progress={isPlaying ? progress : 0} active={isPlaying} />
+          <Waveform
+            progress={isPlaying ? progress : 0}
+            active={isPlaying}
+            peaks={peaks ?? undefined}
+          />
         </div>
         {/* Mobile bottom strip: duration on the left, action pills on
             the right. md+ promotes the spans into their original grid
