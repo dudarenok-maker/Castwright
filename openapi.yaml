@@ -4280,6 +4280,12 @@ components:
         urls:
           type: array
           items: { type: string, description: "Reachable URL, e.g. 'http://192.168.1.42:8080' or 'https://192.168.1.42:8443'" }
+        token:
+          type: string
+          description: "srv-20 — the shared-secret LAN token, present only when LAN_AUTH_TOKEN is configured. The companion pairing QR carries it so a device can authenticate to the otherwise-guarded /api surface."
+        caFingerprint:
+          type: string
+          description: "srv-20 — the LAN CA's SHA-256 (X.509 fingerprint256), present only when the mkcert root CA is resolvable. A pairing client fetches /cert/root.crt, computes the same fingerprint, and pins only if it matches."
 
     GpuQueueState:
       type: object
