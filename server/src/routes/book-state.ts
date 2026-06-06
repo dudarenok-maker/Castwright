@@ -229,6 +229,14 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        — without this the reducer falls back to all-cast and the pill list
        flickers from "filtered" to "everyone" on hydrate. */
     const chapterCharacters: Record<number, string[]> = {};
+    /* Total attributed-sentence count per character id, derived from the same
+       post-fold sentence list used for chapterCharacters. Used below to
+       backfill the denormalised `lines` field on cast rows that were created
+       WITHOUT one — a roster-added / cross-book-linked row (cast-add-from-
+       roster.ts mints `<id>_from_<book>` with no `lines`, and nothing rewrites
+       it after attribution), which otherwise renders a blank line count in the
+       cast view even though the manuscript attributes lines to it. */
+    const lineCountById = new Map<string, number>();
     /* Chapters whose Phase 0a cast detection failed across the analyzer's
        built-in retry. Surfaced so the analysing view can render a
        per-chapter Retry button that survives reload — without this, the
@@ -282,6 +290,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
             bucketByChapter.set(sent.chapterId, bucket);
           }
           bucket.add(sent.characterId);
+          lineCountById.set(sent.characterId, (lineCountById.get(sent.characterId) ?? 0) + 1);
         }
         for (const [id, ids] of bucketByChapter) chapterCharacters[id] = [...ids];
       } else {
@@ -289,9 +298,34 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
           const id = Number(chapterId);
           if (Number.isNaN(id)) continue;
           const ids = new Set<string>();
-          for (const sent of sentences) ids.add(sent.characterId);
+          for (const sent of sentences) {
+            ids.add(sent.characterId);
+            lineCountById.set(sent.characterId, (lineCountById.get(sent.characterId) ?? 0) + 1);
+          }
           chapterCharacters[id] = [...ids];
         }
+      }
+    }
+
+    /* Derive the denormalised `lines` count on every cast row from the
+       attribution above, so the cast view always reflects the CURRENT
+       manuscript-edits attribution rather than a stale value stamped at
+       analysis time. This fixes two classes of wrong count at once:
+         - roster-added / cross-book-linked rows (`<id>_from_<book>`, minted by
+           cast-add-from-roster.ts with no `lines` field) that read as blank;
+         - any row whose stored count drifted after a manual reattribution /
+           boundary move that never rewrote the cast.
+
+       Gated on having an attribution source: `lineCountById` is only populated
+       when a non-empty sentence list (manuscript-edits.json, or the cache
+       fallback) was loaded above. When analysis hasn't produced sentences yet
+       the map is empty — leave the stored counts alone rather than wiping every
+       row to 0. A row with an attribution source but no sentences of its own
+       becomes a truthful 0. */
+    if (lineCountById.size > 0 && cast?.characters && Array.isArray(cast.characters)) {
+      for (const c of cast.characters as Array<{ id?: unknown; lines?: unknown }>) {
+        if (typeof c?.id !== 'string') continue;
+        c.lines = lineCountById.get(c.id) ?? 0;
       }
     }
 
