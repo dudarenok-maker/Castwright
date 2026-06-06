@@ -239,6 +239,13 @@ _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ design expressive variants for a recurring cast across a whole series in one flow. _Re-homed from `fs-25` on archive._
 _Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512).
 
+#### fs-33/fs-34 follow-ups (per-quote emotion, shipped 2026-06-07)
+
+- Per-chapter Detect-emotions trigger ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592)) — _scope the backfill pass to one chapter; v1 shipped whole-book only._
+- "Manual clear sticks" sentinel ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593)) — _a manually-cleared emotion currently gets re-filled on re-detect._
+- Detect-emotions for `ANALYZER=manual` file-drop mode ([#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594)).
+- Voices view "Has emotion variants" filter ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595)) — _the badge shipped; the standalone filter is deferred._
+
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
 - _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) drives today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. Per the 2026-05-21 Kokoro-Stop-pill change, the hook now fans out per engine: it returns `{ coqui, kokoro, evictionNotice, loadErrorNotice, dismissNotices }` from a single /health probe. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
