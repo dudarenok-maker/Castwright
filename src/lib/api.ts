@@ -290,6 +290,18 @@ export interface LinkPriorCharacterResponse {
     confidence: number;
   };
   voiceId?: string;
+  /* Profile content merged FROM the prior character onto the source at link
+     time (representative quotes + descriptors). Present only when the merge
+     actually changed something. The frontend applies it via applyManualMatch
+     so the open drawer shows the reused character's quotes without a reload. */
+  profile?: {
+    evidence?: import('./types').Character['evidence'];
+    attributes?: string[];
+    description?: string;
+    tone?: import('./types').Character['tone'];
+    gender?: import('./types').Character['gender'];
+    ageRange?: import('./types').Character['ageRange'];
+  };
 }
 /* Series roster — the union of confirmed casts across every prior book
    in the same (author, series). Powers the Profile Drawer's "From prior
