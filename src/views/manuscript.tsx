@@ -32,6 +32,7 @@ import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
 import { RestructureChaptersButton } from '../components/restructure-chapters-button';
+import { DetectEmotionsButton } from '../components/detect-emotions-button';
 import { ManuscriptStickyStatsBar } from '../components/manuscript/sticky-stats-bar';
 import type { Character, Chapter, Sentence, CharColor } from '../lib/types';
 import type { SeriesRosterEntry } from '../lib/api';
@@ -624,6 +625,7 @@ export function ManuscriptView({
               <RestructureChaptersButton
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
+              <DetectEmotionsButton disabled={sentences.length === 0} />
               {onStartGenerating && (
                 <button
                   onClick={onStartGenerating}

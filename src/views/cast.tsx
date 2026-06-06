@@ -19,9 +19,23 @@ import {
   ReusedBadge,
   VariantsBadge,
 } from '../components/primitives';
-import { resolveVoiceStatus, statusFilterKeys, type StatusPillColor } from '../lib/voice-status';
+import {
+  resolveVoiceStatus,
+  statusFilterKeys,
+  usedEmotionsByCharacter,
+  countMissingVariants,
+  type StatusPillColor,
+} from '../lib/voice-status';
 import { VoiceLibraryPanel } from '../components/voice-library-panel';
-import type { Character, Voice, DriftEvent, CharColor, TtsModelKey, TtsEngine } from '../lib/types';
+import type {
+  Character,
+  Voice,
+  DriftEvent,
+  CharColor,
+  TtsModelKey,
+  TtsEngine,
+  Sentence,
+} from '../lib/types';
 import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
@@ -45,6 +59,10 @@ interface Props {
   characters: Character[];
   setCharacters: (next: Character[] | ((prev: Character[]) => Character[])) => void;
   library: Voice[];
+  /** fs-34 — the book's attributed sentences, used to count, per character, how
+      many distinct per-quote emotions still lack a designed Qwen variant
+      ("N tags need a variant"). Optional; absent → no count shown. */
+  sentences?: Sentence[];
   title?: string | null;
   /** fe-16 — BCP-47 language of the open book (default 'en'). When it isn't
       English the cast view shows the Qwen design banner and auto-loads Qwen,
@@ -101,6 +119,7 @@ export function CastView({
   characters,
   setCharacters,
   library,
+  sentences,
   title,
   bookLanguage = 'en',
   onOpenProfile,
@@ -108,6 +127,9 @@ export function CastView({
   driftEvents,
   onShowDrift,
 }: Props) {
+  /* fs-34 — index used emotions per character ONCE (not per row) for the
+     "N tags need a variant" cast-row count. */
+  const usedEmotions = useMemo(() => usedEmotionsByCharacter(sentences ?? []), [sentences]);
   const [query, setQuery] = useState('');
   /* fe-16 — non-English books are Qwen-locked. On entry, eagerly load Qwen so
      the user isn't blocked on a manual ModelControlPill load before designing
@@ -707,6 +729,7 @@ export function CastView({
                     voice={voice}
                     projectEngine={ttsEngine}
                     renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
+                    missingVariants={countMissingVariants(c, usedEmotions.get(c.id))}
                   />
                 </span>
                 <span
@@ -910,6 +933,7 @@ export function CastView({
                     voice={voice}
                     projectEngine={ttsEngine}
                     renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
+                    missingVariants={countMissingVariants(c, usedEmotions.get(c.id))}
                   />
                   </span>
                   <button
@@ -1143,6 +1167,7 @@ function StatusPill({
   voice,
   projectEngine,
   renderedFallbackEngine,
+  missingVariants = 0,
 }: {
   c: Character;
   voice: Voice | undefined;
@@ -1150,22 +1175,39 @@ function StatusPill({
   /* fe-16 — engine this character ACTUALLY rendered in (Qwen → Kokoro
      fallback). `'kokoro'` surfaces the "Fallback (Kokoro)" pill. */
   renderedFallbackEngine?: string | null;
+  /* fs-34 — distinct per-quote emotions this character uses that lack a designed
+     variant. Rendered (Qwen only) as a small "N tags need a variant" hint. */
+  missingVariants?: number;
 }) {
   /* Effective engine = the character's own override folded over the project
      default — so a default-engine character on a Qwen project follows the Qwen
      lifecycle (e.g. "Needs voice"), not a stale preset `voiceState` pill. */
+  const effectiveEngine = c.ttsEngine ?? projectEngine;
   const { lifecycle, reused, hasEmotionVariants, variantCount } = resolveVoiceStatus(
     c,
     voice,
-    c.ttsEngine ?? projectEngine,
+    effectiveEngine,
     renderedFallbackEngine,
   );
-  if (!lifecycle && !reused && !hasEmotionVariants) return null;
+  /* The missing-variant hint only matters where emotion is audible: a Qwen
+     character (own override or matched Qwen voice). */
+  const isQwen = effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen';
+  const showMissing = isQwen && missingVariants > 0;
+  if (!lifecycle && !reused && !hasEmotionVariants && !showMissing) return null;
   return (
     <span className="inline-flex items-center gap-1.5 flex-wrap">
       {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
       {reused && <ReusedBadge />}
       {hasEmotionVariants && <VariantsBadge count={variantCount} />}
+      {showMissing && (
+        <span
+          data-testid="missing-variants-hint"
+          className="text-[10px] font-medium text-ink/45"
+          title="Per-quote emotions in use that have no designed variant yet — they render in the base voice."
+        >
+          {missingVariants} {missingVariants === 1 ? 'tag needs' : 'tags need'} a variant
+        </span>
+      )}
     </span>
   );
 }
