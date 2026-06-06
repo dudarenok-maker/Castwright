@@ -82,7 +82,10 @@ worktreesRouter.get('/worktrees', async (_req: Request, res: Response) => {
     return res.status(404).end();
   }
   try {
-    const porcelain = spawnSync('git', ['worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+    const porcelain = spawnSync('git', ['worktree', 'list', '--porcelain'], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
     if (porcelain.status !== 0) {
       return res
         .status(500)

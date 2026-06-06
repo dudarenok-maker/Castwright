@@ -222,7 +222,7 @@ export async function runLoudnormFirstPass(
   ];
 
   return await new Promise<LoudnormFirstPassStats>((resolve, reject) => {
-    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'] });
+    const child = spawn('ffmpeg', args, { stdio: ['pipe', 'ignore', 'pipe'], windowsHide: true });
     const stderrChunks: Buffer[] = [];
 
     child.stderr.on('data', (chunk) => stderrChunks.push(chunk));
