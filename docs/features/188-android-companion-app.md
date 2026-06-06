@@ -21,9 +21,10 @@ per CLAUDE.md; this doc is what they hang off.
 > `srv-34`, `srv-20`, `srv-35`, `srv-32` — plus the app foundation `app-1` (scaffold + CI),
 > `app-2` (pairing + TLS pinning + API client), `app-3` (delta sync engine),
 > `app-4` (offline store — drift/SQLite), `app-5` (native player —
-> just_audio/audio_service), `app-6` (two-way resume sync), `app-7` (library browse), and now
-> **`app-13` (settings)**. The next items are **`app-8`/`app-14`** (integration), then
-> **`app-11`** (signed APK). See **Build progress & dev setup** immediately below.
+> just_audio/audio_service), `app-6` (two-way resume sync), `app-7` (library browse),
+> `app-13` (settings), and now **`app-8` (auto-sync on reconnect)**. The next item is
+> **`app-14`** (home shelf), then **`app-11`** (signed APK). See **Build progress & dev
+> setup** immediately below.
 
 ---
 
@@ -44,17 +45,17 @@ per CLAUDE.md; this doc is what they hang off.
 | `app-5` | #575 (merge `056ea33`, closed #545) | native player: testable `PlayerController` brain over an injectable `AudioEngine` port — per-book resume/switch (saves position on switch, restores each book's own point), ~10 s **autosave throttle** (survives OS kill), **media-key→seek default** (`skip_behavior` ±30/±15 s, chapter-mode toggle), `isInUse` for app-3 deferred swap; drift **Playback** table (schema v2 + migration); real `JustAudioEngine` (just_audio) + `CompanionAudioHandler` (audio_service: lock-screen/Bluetooth/notification) + `MainActivity`→`AudioServiceActivity` + manifest service. 14 paired Dart tests. **Live device acceptance owed.** |
 | `app-6` | #576 (merge `5042c3f`, closed #546) | two-way resume sync: pure `reconcileResume` (LWW by client `listenedAt`, not network-receive time) + `ResumeSyncService` (push local / pull remote / noop over an injectable `ListenProgressApi` + `PlaybackStore` + a `chapterIdResolver`; the local Playback row IS the offline queue); `ApiClient.get/putListenProgress` (real CA-pinned, `listenedAt` per `srv-34`); `PlaybackPoint` gains `listenedAt`. 12 paired Dart tests. **Live device acceptance owed.** |
 | `app-7` | #577 (merge `9cc7061`, closed #547) | library browse: pure `library_tree` (author→series→book grouping + sort by `seriesPosition`/title + case-insensitive `filterBooks`) + `BookDownloadState`; presentational `LibraryScreen` (collapsible groups, search, per-book state pill + download/remove, prop-driven so it widget-tests). 9 paired Dart tests (6 tree + 3 widget). **Live device acceptance owed.** |
-| `app-13` | _this PR_ (closed #549) | settings: pure `AppSettings` (sleep timer, default speed, skip-silence, skip-button behaviour, unmetered-Wi-Fi-only, storage cap + auto-delete-finished + keep-recent-books, auto-sync/auto-download — drives app-5/app-4/app-8) with json round-trip + tolerant `fromJson`; `SettingsStore` (FileStore JSON, defaults on corrupt); testable `SleepTimer` (injectable scheduler); presentational `SettingsScreen`. 14 paired Dart tests. **Live device acceptance owed.** |
+| `app-13` | #579 (merge `e54c2af`, closed #549) | settings: pure `AppSettings` (sleep timer, default speed, skip-silence, skip-button behaviour, unmetered-Wi-Fi-only, storage cap + auto-delete-finished + keep-recent-books, auto-sync/auto-download — drives app-5/app-4/app-8) with json round-trip + tolerant `fromJson`; `SettingsStore` (FileStore JSON, defaults on corrupt); testable `SleepTimer` (injectable scheduler); presentational `SettingsScreen`. 14 paired Dart tests. **Live device acceptance owed.** |
+| `app-8` | _this PR_ (closed #548) | auto-sync on reconnect: pure `shouldAutoSync` gate (never on mobile/offline, only unmetered Wi-Fi unless opted in, only when the paired server is reachable — token never leaves the home LAN) + `AutoSyncService` (pre-gates before probing so it never probes off-LAN; runs delta sync + resume flush when allowed) + pure `networkTypeFromConnectivity` + real `connectivity_plus` resolver. 17 paired Dart tests. **Live device acceptance owed.** |
 
-### Next up — `app-8` / `app-14` (integration)
+### Next up — `app-14` (home shelf)
 
-`app-13` shipped settings. The integration wave wires it all together: **`app-8`**
-(auto-sync on reconnect, network-gated) and **`app-14`** (home shelf + multi-book switching),
-then **`app-11`** (signed APK). See the item specs below.
+`app-8` added network-gated auto-sync. The last integration item is **`app-14`** (home
+shelf + multi-book switching), then **`app-11`** (signed APK). See the item specs below.
 
 ### Remaining app track
 
-`app-8`/`app-14`
+`app-14`
 (integration) → `app-11` (signed APK). Follow-ups: `srv-33`, `app-9` (Android Auto/CarPlay),
 `app-10`, `app-12` (iOS).
 
@@ -759,8 +760,13 @@ top for the running status):
   keep-recent-books / auto-sync — drives app-5/app-4/app-8) + `SettingsStore` (FileStore JSON,
   defaults-on-corrupt) + testable `SleepTimer` (injectable scheduler) + `SettingsScreen`. 14
   paired Dart tests; clean + APK builds. **Live device acceptance owed.**
+- `app-8` — auto-sync on reconnect (closed #548): pure `shouldAutoSync` gate (never
+  mobile/offline; unmetered Wi-Fi only unless opted in; only when the paired server is
+  reachable → token stays on the home LAN) + `AutoSyncService` (pre-gates before probing, so
+  it never probes off-LAN) + pure `networkTypeFromConnectivity` + real `connectivity_plus`
+  resolver. 17 paired Dart tests; clean + APK builds. **Live device acceptance owed.**
 
 All MVP server prerequisites are merged. Toolchain installed + the app validated on a
 `Pixel_10_Pro` emulator. Per the user's directive, the app track is being built through
 `app-10` with **all live-device acceptance batched at the end** for the whole feature set.
-Next up: `app-8` / `app-14` (integration).
+Next up: `app-14` (home shelf).
