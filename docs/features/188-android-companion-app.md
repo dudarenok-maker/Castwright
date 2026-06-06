@@ -22,9 +22,10 @@ per CLAUDE.md; this doc is what they hang off.
 > `app-2` (pairing + TLS pinning + API client), `app-3` (delta sync engine),
 > `app-4` (offline store — drift/SQLite), `app-5` (native player —
 > just_audio/audio_service), `app-6` (two-way resume sync), `app-7` (library browse),
-> `app-13` (settings), `app-8` (auto-sync on reconnect), and now **`app-14` (home shelf +
-> multi-book switching)** — the full MVP app block is built. The next item is **`app-11`**
-> (signed APK), then follow-ups `app-9`/`app-10`. See **Build progress & dev
+> `app-13` (settings), `app-8` (auto-sync on reconnect), `app-14` (home shelf + multi-book
+> switching) — the full MVP app block — and now **`app-11` (signed release APK + alpha
+> channel)**. Remaining: the ranked follow-ups **`app-9`** (Android Auto/CarPlay) and
+> **`app-10`** (LAN streaming). See **Build progress & dev
 > setup** immediately below.
 
 ---
@@ -48,13 +49,13 @@ per CLAUDE.md; this doc is what they hang off.
 | `app-7` | #577 (merge `9cc7061`, closed #547) | library browse: pure `library_tree` (author→series→book grouping + sort by `seriesPosition`/title + case-insensitive `filterBooks`) + `BookDownloadState`; presentational `LibraryScreen` (collapsible groups, search, per-book state pill + download/remove, prop-driven so it widget-tests). 9 paired Dart tests (6 tree + 3 widget). **Live device acceptance owed.** |
 | `app-13` | #579 (merge `e54c2af`, closed #549) | settings: pure `AppSettings` (sleep timer, default speed, skip-silence, skip-button behaviour, unmetered-Wi-Fi-only, storage cap + auto-delete-finished + keep-recent-books, auto-sync/auto-download — drives app-5/app-4/app-8) with json round-trip + tolerant `fromJson`; `SettingsStore` (FileStore JSON, defaults on corrupt); testable `SleepTimer` (injectable scheduler); presentational `SettingsScreen`. 14 paired Dart tests. **Live device acceptance owed.** |
 | `app-8` | #580 (merge `b064b0d`, closed #548) | auto-sync on reconnect: pure `shouldAutoSync` gate (never on mobile/offline, only unmetered Wi-Fi unless opted in, only when the paired server is reachable — token never leaves the home LAN) + `AutoSyncService` (pre-gates before probing so it never probes off-LAN; runs delta sync + resume flush when allowed) + pure `networkTypeFromConnectivity` + real `connectivity_plus` resolver (pinned 6.x — 7.x iOS uses an iOS-26 `NWPath` API that fails the CI iOS compile). 17 paired Dart tests. **Live device acceptance owed.** |
-| `app-14` | _this PR_ (closed #550) | home shelf + multi-book switching: pure `home_shelf` (`buildContinueListening` = in-progress books most-recently-played first; `buildRecentlyUpdated` newest-first capped) + presentational `HomeScreen` (Continue-listening rail + recently-updated rail; tap → `onOpenBook`, host wires to the player's `switchBook` for seamless per-book resume). 6 paired Dart tests. **Live device acceptance owed.** **MVP app block (app-1..8,13,14) complete.** |
+| `app-14` | #582 (merge `e5b5da9`, closed #550) | home shelf + multi-book switching: pure `home_shelf` (`buildContinueListening` = in-progress books most-recently-played first; `buildRecentlyUpdated` newest-first capped) + presentational `HomeScreen` (Continue-listening rail + recently-updated rail; tap → `onOpenBook`, host wires to the player's `switchBook` for seamless per-book resume). 6 paired Dart tests. **Live device acceptance owed.** **MVP app block (app-1..8,13,14) complete.** |
+| `app-11` | _this PR_ (closed #554) | distribution: Gradle release signing via git-ignored `android/key.properties` (real upload keystore) with a **debug-signed fallback** so `flutter build apk --release` always produces an installable sideload APK; `key.properties.example` + `.gitignore` for the secrets; CI publishes a `companion-release-apk` artifact per build. Build-config (no Dart tests); release APK verified locally (65.6 MB). |
 
-### Next up — `app-11` (signed APK), then follow-ups
+### Next up — `app-9` / `app-10` (follow-ups)
 
-The **MVP app block is built**. Remaining: **`app-11`** (signed release APK + alpha channel),
-then the ranked follow-ups **`app-9`** (Android Auto/CarPlay) and **`app-10`** (LAN streaming).
-See the item specs below.
+The **MVP app block + signed APK are built**. Remaining are the ranked follow-ups:
+**`app-9`** (Android Auto/CarPlay) and **`app-10`** (LAN streaming). See the item specs below.
 
 ### Remaining app track
 
@@ -773,8 +774,16 @@ top for the running status):
   `HomeScreen` (Continue-listening + recently-updated rails; tap → `onOpenBook` → player
   `switchBook`). 6 paired Dart tests; clean + APK builds. **Live device acceptance owed.**
   **MVP app block (app-1..8,13,14) complete.**
+- `app-11` — distribution (closed #554): Gradle release signing reads git-ignored
+  `android/key.properties` (real upload keystore) with a **debug-signed fallback**, so
+  `flutter build apk --release` always builds an installable sideload APK; `key.properties.example`
+  documents keystore generation + CI-secret wiring; CI publishes a `companion-release-apk`
+  artifact each build. Build-config only (no Dart tests); release APK verified locally (65.6 MB).
+  **To ship a properly-signed alpha:** `keytool -genkey -v -keystore upload-keystore.jks
+  -keyalg RSA -keysize 2048 -validity 10000 -alias upload`, drop `android/key.properties`
+  (see the example), then `flutter build apk --release`; sideload `app-release.apk`.
 
 All MVP server prerequisites are merged. Toolchain installed + the app validated on a
 `Pixel_10_Pro` emulator. Per the user's directive, the app track is being built through
 `app-10` with **all live-device acceptance batched at the end** for the whole feature set.
-Next up: `app-11` (signed APK), then `app-9`/`app-10`.
+Next up: `app-9` / `app-10` (follow-ups).
