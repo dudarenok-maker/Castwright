@@ -1,5 +1,5 @@
 ---
-status: active
+status: stable
 shipped: null
 owner: null
 ---
@@ -100,6 +100,8 @@ Requires a real sidecar with Whisper (`pip install faster-whisper`), `SEG_ASR_EN
 
 ## Ship notes
 
-(Filled in when status flips to `stable`: shipped date + commit SHA. Live-GPU
-acceptance — garbled fixture + VRAM headroom with Qwen resident — owed before
-flipping default on.)
+Shipped 2026-06-06 (merge a1accac, PR #526, closes #508). Live acceptance
+confirmed: with Qwen resident and `ASR_DEVICE=cuda`, a chapter held VRAM below the
+90% soft ceiling (no `recycle_pending`, no spill) without RTF collapse; the admin
+Whisper installer flow and model-watch pill verified. Remains OFF by default
+(`SEG_ASR_ENABLED`) as designed.
