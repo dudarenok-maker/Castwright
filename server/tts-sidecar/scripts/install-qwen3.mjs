@@ -89,6 +89,7 @@ function run(python, pyArgs, env) {
     cwd: SIDECAR_DIR,
     stdio: 'inherit',
     env: { ...process.env, ...env },
+    windowsHide: true,
   });
   if (res.error) throw new Error(`spawn failed: ${res.error.message}`);
   return res.status ?? 1;
@@ -100,7 +101,7 @@ function venvPyTag(python) {
   const res = spawnSync(
     python,
     ['-c', 'import sys;print(f"cp{sys.version_info.major}{sys.version_info.minor}")'],
-    { cwd: SIDECAR_DIR },
+    { cwd: SIDECAR_DIR, windowsHide: true },
   );
   if (res.status !== 0 || !res.stdout) return null;
   return res.stdout.toString().trim();
