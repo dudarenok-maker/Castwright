@@ -177,6 +177,7 @@ function readState(): {
     id: number;
     title: string;
     slug: string;
+    uuid?: string;
     audioModelKey?: string;
     audioRenderedAt?: string;
     excluded?: boolean;
@@ -392,6 +393,35 @@ describe('POST /:bookId/chapters/reorder', () => {
     expect(ch1.map((s) => s.text)).toEqual(['Gamma first.', 'Gamma second.']);
     expect(ch2.map((s) => s.text)).toEqual(['Alpha first.', 'Alpha second.']);
     expect(ch3.map((s) => s.text)).toEqual(['Beta first.', 'Beta second.']);
+  });
+
+  it('srv-35: migrates a legacy (uuid-less) book and carries uuid by identity through reorder', async () => {
+    // The seeded state.json has no uuids (legacy book).
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+
+    const state = readState();
+    const UUID_RE = /^[0-9a-f-]{36}$/i;
+    // Every chapter now carries a uuid (lazy migration via applyRestructure).
+    for (const c of state.chapters) expect(c.uuid).toMatch(UUID_RE);
+    // They are distinct (no shared/empty placeholder).
+    const uuids = state.chapters.map((c) => c.uuid);
+    expect(new Set(uuids).size).toBe(3);
+    // old Chapter Two (now id 3) and old Chapter One (now id 2) kept their
+    // identities — uuid follows the title, not the position.
+    const byTitle = new Map(state.chapters.map((c) => [c.title, c.uuid]));
+
+    // A second reorder back to original order preserves those same uuids.
+    await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [2, 3, 1] });
+    const state2 = readState();
+    const byTitle2 = new Map(state2.chapters.map((c) => [c.title, c.uuid]));
+    expect(byTitle2.get('Chapter One')).toBe(byTitle.get('Chapter One'));
+    expect(byTitle2.get('Chapter Two')).toBe(byTitle.get('Chapter Two'));
+    expect(byTitle2.get('Chapter Three')).toBe(byTitle.get('Chapter Three'));
   });
 
   it('400 when order length mismatches chapter count', async () => {

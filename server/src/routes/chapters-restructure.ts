@@ -49,6 +49,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
@@ -140,6 +141,12 @@ async function applyRestructure(
   const editsPath = manuscriptEditsJsonPath(bookDir);
   const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
   const sentences = edits?.sentences ?? [];
+
+  /* srv-35 — ensure the OLD chapters carry uuids before the transform so
+     buildNewStateChapters can inherit them by identity (a book that has
+     never been written since the upgrade has none yet). The result.state
+     is persisted below, so this also migrates the book. */
+  ensureChapterUuids(state);
 
   let result: RestructureResult;
   try {

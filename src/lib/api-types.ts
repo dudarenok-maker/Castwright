@@ -1927,8 +1927,21 @@ export interface components {
          *     `playbackRate` + `markers`.
          */
         ListenProgress: {
-            /** @description Chapter that was playing when the record was last stamped. */
+            /**
+             * @description Chapter that was playing when the record was last stamped. On GET
+             *     this is the chapter's CURRENT positional id, re-derived from
+             *     `chapterUuid` when present (srv-35), so a resume position survives
+             *     a chapter restructure.
+             */
             chapterId: number;
+            /**
+             * @description srv-35 (plan 190) — the stable, restructure-proof uuid of the
+             *     resume chapter. Stamped on PUT (derived from the supplied
+             *     `chapterId`); GET resolves it back to the current `chapterId`.
+             *     Optional / absent on records written before srv-35 and when the
+             *     chapterId didn't map to a chapter.
+             */
+            chapterUuid?: string;
             /** @description Playback position within the chapter, in seconds. */
             currentSec: number;
             /**
