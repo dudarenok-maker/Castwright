@@ -49,6 +49,7 @@ import { snapshotInFlightAnalysis } from './analysis.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
 import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
+import { preserveDesignedVoicesOnCastWrite } from '../workspace/preserve-cast-voices.js';
 import { collectRenderedFallbackEngines } from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
@@ -74,6 +75,26 @@ async function denormaliseCastReusedVoices(patch: unknown): Promise<unknown> {
   }
   const cast = patch as { characters: ReuseHydratable[] };
   const characters = await hydrateCastReusedVoices(cast.characters);
+  return { ...cast, characters };
+}
+
+/* Fill any incoming character's missing voice-DESIGN fields from the on-disk
+   cast.json before the persist (the durable guard against the 2026-06-05
+   The Drowning Bell strip, where the analysing→cast-confirm flow persisted a
+   voiceless in-memory cast and erased the designed Qwen voices). INCOMING WINS
+   when present; the existing value fills only the gap. Reuse-link fields are
+   left to `denormaliseCastReusedVoices` so unlink still works. Tolerates a
+   non-cast-shaped patch (returns it untouched) so the funnel stays generic. */
+async function preserveDesignedVoices(bookDir: string, patch: unknown): Promise<unknown> {
+  if (!patch || typeof patch !== 'object' || !Array.isArray((patch as { characters?: unknown }).characters)) {
+    return patch;
+  }
+  const cast = patch as { characters: Array<{ id: string } & Record<string, unknown>> };
+  const existing = await readJson<{ characters?: Array<{ id: string } & Record<string, unknown>> }>(
+    castJsonPath(bookDir),
+  );
+  const existingChars = existing?.characters ?? [];
+  const characters = preserveDesignedVoicesOnCastWrite(existingChars, cast.characters);
   return { ...cast, characters };
 }
 
@@ -450,9 +471,11 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
 
     const { bookDir, state } = located;
     switch (body.slice) {
-      case 'cast':
-        await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(body.patch));
+      case 'cast': {
+        const guarded = await preserveDesignedVoices(bookDir, body.patch);
+        await writeJsonAtomic(castJsonPath(bookDir), await denormaliseCastReusedVoices(guarded));
         break;
+      }
       case 'manuscript':
         await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), body.patch);
         break;
