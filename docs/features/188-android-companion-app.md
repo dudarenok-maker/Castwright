@@ -17,6 +17,60 @@ the full backlog decomposition (`srv-32` + `app-1..14`), the v1 definition-of-do
 the wave-sequenced delivery roadmap. Each backlog item lands under its own branch + plan
 per CLAUDE.md; this doc is what they hang off.
 
+> **Build status (2026-06-06):** the MVP **foundation is shipped** — `srv-34`, `srv-20`
+> (complete), `app-1` (scaffold + CI), `app-2` (pairing + TLS pinning + API client). The
+> two server prereqs `srv-35` + `srv-32` are **in progress on a parallel agent**; the rest
+> of the app track (`app-3`…`app-14`) is gated on them. See **Build progress & dev setup**
+> immediately below.
+
+---
+
+## Build progress & dev setup (handoff)
+
+### Shipped (2026-06-06)
+
+| Item | PR(s) | Notes |
+|---|---|---|
+| `srv-34` | #558 (closed #539) | listen-progress `listenedAt` + guarded compare-and-set |
+| `srv-20` | #561 (middleware) + #564 (D2 payload), closed #425 | opt-in LAN token guard (`lan-auth.ts`); `/api/export/lan` now carries `token` + `caFingerprint` |
+| `app-1` | #562 (closed #541) | Flutter scaffold at `apps/android/` (pkg `audiobook_companion`), domain seam, CI lane `.github/workflows/app.yml` |
+| `app-2` | #565 + #566 + #567 (closed #542) | full pairing: QR/manual → fetch CA → verify SHA-256 → pin in `SecurityContext` → token probe; `SecurePairingStore`; `ApiClient` (authenticated, CA-pinned) |
+
+### In progress (parallel agent)
+
+- **`srv-35` (#540)** stable per-chapter `uuid` + **`srv-32` (#538)** sync-manifest endpoint.
+  **`app-3` (delta sync) is gated on both** — it consumes the manifest and keys by the `uuid`.
+
+### Remaining (after `srv-32`/`srv-35` land)
+
+`app-3` (delta sync) → `app-4` (offline store) → `app-5` (player) → `app-6`/`app-7`/`app-13`
+(parallel leaves) → `app-8`/`app-14` (integration) → `app-11` (signed APK). Follow-ups:
+`srv-33`, `app-9` (Android Auto/CarPlay), `app-10`, `app-12` (iOS).
+
+### Dev setup (this box — full toolchain installed + validated)
+
+The Flutter + Android toolchain is installed and the app **runs on a Pixel 10 Pro emulator**:
+
+- **Flutter** 3.44.1 at `C:\Users\dudar\flutter` (on the User PATH; or `C:\Users\dudar\flutter\bin\flutter.bat`).
+- **Android SDK** at `%LOCALAPPDATA%\Android\Sdk` — `ANDROID_HOME` set, licences accepted, cmdline-tools + platform-tools installed (`adb` on PATH).
+- **Emulator:** AVD `Pixel_10_Pro` — `flutter emulators --launch Pixel_10_Pro`.
+- **App code:** `apps/android/` (pkg `audiobook_companion`). Layers: `lib/src/domain` (models), `lib/src/data` (cert pinning, pairing service/store, API client), `lib/src/ui` (pairing + QR screens).
+
+### Build / test / run (from `apps/android/`)
+
+- `flutter pub get` · `flutter analyze` · `flutter test` (Dart VM, no device) — all must be green.
+- `flutter build apk --debug` → `build/app/outputs/flutter-apk/app-debug.apk`.
+- Run: boot the emulator, then `flutter run` (or `adb install -r build/app/outputs/flutter-apk/app-debug.apk`).
+- **CI:** `.github/workflows/app.yml` (path-filtered to `apps/android/**`) — analyze + test + debug APK on Ubuntu, unsigned iOS compile on macOS.
+
+### Conventions for the next agent
+
+Each item = its own branch (`feat/app-…` / `feat/server-…`) + PR per CLAUDE.md; `app` is a
+registered commit scope + BACKLOG prefix. The pure-Dart `pair` / `ApiClient` logic is built
+with **injectable IO** so it unit-tests without real TLS/native plugins; the QR camera +
+secure storage are exercised on a physical device. Full OpenAPI Dart codegen is deferred —
+`ApiClient` is a thin hand-written client for now.
+
 ---
 
 ## Benefit / Rationale
@@ -645,5 +699,14 @@ once Wave 6 completes.
 
 ## Ship notes
 
-(Filled per item as each ships; the epic flips to `stable` only when the v1
-definition-of-done passes on a real device.)
+The MVP **foundation** shipped 2026-06-06 (the epic stays `draft` until the full v1
+definition-of-done passes on a real device — see **Build progress & dev setup** near the
+top for the running status):
+
+- `srv-34` — PR #558 (closed #539).
+- `srv-20` — PR #561 (middleware) + #564 (D2 pairing payload) (closed #425).
+- `app-1` — PR #562 (closed #541).
+- `app-2` — PR #565 + #566 + #567 (closed #542).
+
+Toolchain installed + the app validated on a `Pixel_10_Pro` emulator. `srv-35`/`srv-32`
+are in progress on a parallel agent; `app-3`+ are gated on them.
