@@ -21,8 +21,13 @@ import type { SidecarHealthResult } from './sidecar-health.js';
 
 let repoRoot: string;
 let hfCache: string;
+let ttsHome: string;
 const savedHfHubCache = process.env.HF_HUB_CACHE;
 const savedHfHome = process.env.HF_HOME;
+const savedTtsHome = process.env.TTS_HOME;
+
+/* Coqui's XTTS v2 dir under a TTS_HOME, mirroring get_user_data_dir("tts"). */
+const XTTS_DIR = 'tts_models--multilingual--multi-dataset--xtts_v2';
 
 function writeFile(path: string, bytes: number) {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -32,19 +37,27 @@ function writeFile(path: string, bytes: number) {
 beforeEach(() => {
   repoRoot = mkdtempSync(join(tmpdir(), 'mm-repo-'));
   hfCache = mkdtempSync(join(tmpdir(), 'mm-hf-'));
+  ttsHome = mkdtempSync(join(tmpdir(), 'mm-tts-'));
   /* Route the HF-cache resolver at our temp dir so qwen/whisper sizing is
      deterministic, and clear HF_HOME so it can't shadow HF_HUB_CACHE. */
   process.env.HF_HUB_CACHE = hfCache;
   delete process.env.HF_HOME;
+  /* Pin TTS_HOME at a temp dir so the Coqui present-probe (coquiWeightsPresent)
+     can't read the real %LOCALAPPDATA%\tts on the dev box and flake the
+     "coqui absent" assertion. */
+  process.env.TTS_HOME = ttsHome;
 });
 
 afterEach(() => {
   rmSync(repoRoot, { recursive: true, force: true });
   rmSync(hfCache, { recursive: true, force: true });
+  rmSync(ttsHome, { recursive: true, force: true });
   if (savedHfHubCache === undefined) delete process.env.HF_HUB_CACHE;
   else process.env.HF_HUB_CACHE = savedHfHubCache;
   if (savedHfHome === undefined) delete process.env.HF_HOME;
   else process.env.HF_HOME = savedHfHome;
+  if (savedTtsHome === undefined) delete process.env.TTS_HOME;
+  else process.env.TTS_HOME = savedTtsHome;
   vi.restoreAllMocks();
 });
 
@@ -136,6 +149,18 @@ describe('buildModelInventory', () => {
     expect(coqui.present).toBe(false);
     expect(coqui.sizeBytes).toBeNull();
     expect(coqui.removable).toBe(false);
+  });
+
+  it('reports Coqui present when model.pth lives in the TTS user-data dir', () => {
+    /* Regression for the inventory↔installer-card disagreement: present is keyed
+       off the same model.pth probe /api/coqui/detect uses, resolved under
+       TTS_HOME — NOT the old voices/coqui guess the runtime never populates. */
+    writeFile(join(ttsHome, 'tts', XTTS_DIR, 'model.pth'), 4096);
+    const inv = buildModelInventory(baseDeps());
+    const coqui = inv.items.find((i) => i.id === 'coqui')!;
+    expect(coqui.present).toBe(true);
+    expect(coqui.sizeBytes).toBe(4096);
+    expect(coqui.removable).toBe(true);
   });
 
   it('sizes a Qwen Base HF snapshot and surfaces its install state', () => {

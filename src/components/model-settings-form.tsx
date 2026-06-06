@@ -17,9 +17,6 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { saveAccountSettings, saveGeminiApiKey } from '../store/account-slice';
 import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
-import { QwenInstall } from './qwen-install';
-import { WhisperInstall } from './whisper-install';
-import { CoquiInstall } from './coqui-install';
 import { ModelPullStatus } from './model-pull-status';
 
 /* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS
@@ -561,10 +558,11 @@ function ModelsCard() {
       data-testid="account-models-card"
       className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card"
     >
-      <h2 className="text-base font-semibold text-ink">Install / update models</h2>
+      <h2 className="text-base font-semibold text-ink">Install / update analyzer (Ollama)</h2>
       <p className="mt-1 text-xs text-ink/55">
-        Install Ollama, pull analyzer model weights, and pre-fetch Coqui XTTS / Qwen / Whisper — all
-        without dropping to a terminal. Kokoro v1 ships pre-installed via the release bundle.
+        Install the Ollama daemon and pull analyzer model weights without dropping to a terminal.
+        The TTS / ASR models (Kokoro, Qwen, Coqui, Whisper) install from their rows in the inventory
+        above.
       </p>
 
       <div className="mt-4 space-y-6">
@@ -583,40 +581,6 @@ function ModelsCard() {
             highlighted.
           </p>
           <ModelPullStatus health={health} pullableModels={PULLABLE_MODELS} />
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-ink">Coqui XTTS v2 (alternate cloning engine)</h3>
-          <p className="text-xs text-ink/55">
-            The alternate engine — zero-shot voice cloning from a reference clip, plus ~30 baked
-            multilingual voices. Optional: Kokoro and Qwen cover the defaults. Install it here to
-            pre-fetch the model; the CLI (<code className="font-mono">install-coqui.ps1</code> /{' '}
-            <code className="font-mono">.sh</code>) stays available for scripted / offline setups,
-            and the sidecar still auto-downloads on first synth if you skip this.
-          </p>
-          <CoquiInstall />
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-ink">Qwen3-TTS (bespoke per-character voices)</h3>
-          <p className="text-xs text-ink/55">
-            Qwen3-TTS designs a unique voice per character — the headline TTS engine. Install it
-            here to make it the default for new books; the CLI
-            (`node server/tts-sidecar/scripts/install-qwen3.mjs`) stays available for scripted /
-            offline setups.
-          </p>
-          <QwenInstall />
-        </div>
-
-        <div className="space-y-2">
-          <h3 className="text-sm font-medium text-ink">Whisper ASR (per-sentence content QA)</h3>
-          <p className="text-xs text-ink/55">
-            Transcribes each generated sentence and re-records "fluent but wrong words" takes the
-            signal checks can't catch (srv-31). Install it here, then enable the gate with
-            `SEG_ASR_ENABLED=1` (`ASR_DEVICE=cpu|cuda`); the CLI
-            (`node server/tts-sidecar/scripts/install-whisper.mjs`) stays available.
-          </p>
-          <WhisperInstall />
         </div>
       </div>
     </section>
