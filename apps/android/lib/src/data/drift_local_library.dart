@@ -29,6 +29,22 @@ class BookSummary {
   final String? coverThumbPath;
 }
 
+/// A locally-stored chapter (the offline source for the player + durations).
+class DownloadedChapter {
+  const DownloadedChapter({
+    required this.uuid,
+    required this.chapterId,
+    required this.title,
+    required this.durationSec,
+    required this.urlSuffix,
+  });
+  final String uuid;
+  final int chapterId;
+  final String title;
+  final double? durationSec;
+  final String? urlSuffix;
+}
+
 /// The production on-device store (`app-4`): a drift/SQLite-backed
 /// [LocalLibrary] (so the `app-3` sync engine runs against it unchanged) plus
 /// storage accounting, the eviction-plan applier, play/finished tracking, cover
@@ -104,6 +120,69 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
         ),
       );
     }
+  }
+
+  /// Like [recordChapter] but also persists chapter id/title/duration from the
+  /// manifest detail, so the player + library work OFFLINE. Preserves the
+  /// `finished` flag on re-download.
+  Future<void> recordChapterMeta({
+    required String bookId,
+    required String uuid,
+    required int chapterId,
+    required String title,
+    required String fingerprint,
+    required String urlSuffix,
+    double? durationSec,
+  }) async {
+    await _ensureBook(bookId);
+    final size = await _fs.size(audioPath(bookId, uuid, urlSuffix));
+    final bytes = size < 0 ? 0 : size;
+    final existing = await (_db.select(_db.chapters)
+          ..where((c) => c.uuid.equals(uuid)))
+        .getSingleOrNull();
+    if (existing == null) {
+      await _db.into(_db.chapters).insert(ChaptersCompanion.insert(
+            uuid: uuid,
+            bookId: bookId,
+            chapterId: chapterId,
+            title: Value(title),
+            fingerprint: Value(fingerprint),
+            urlSuffix: Value(urlSuffix),
+            bytes: Value(bytes),
+            durationSec: Value(durationSec),
+          ));
+    } else {
+      await (_db.update(_db.chapters)..where((c) => c.uuid.equals(uuid))).write(
+        ChaptersCompanion(
+          bookId: Value(bookId),
+          chapterId: Value(chapterId),
+          title: Value(title),
+          fingerprint: Value(fingerprint),
+          urlSuffix: Value(urlSuffix),
+          bytes: Value(bytes),
+          durationSec: Value(durationSec),
+        ),
+      );
+    }
+  }
+
+  /// Locally-stored chapters for a book, ordered by positional id — the
+  /// offline source for the player playlist + chapter list + durations.
+  Future<List<DownloadedChapter>> chaptersForBook(String bookId) async {
+    final rows = await (_db.select(_db.chapters)
+          ..where((c) => c.bookId.equals(bookId))
+          ..orderBy([(c) => OrderingTerm(expression: c.chapterId)]))
+        .get();
+    return [
+      for (final r in rows)
+        DownloadedChapter(
+          uuid: r.uuid,
+          chapterId: r.chapterId,
+          title: r.title,
+          durationSec: r.durationSec,
+          urlSuffix: r.urlSuffix,
+        ),
+    ];
   }
 
   @override

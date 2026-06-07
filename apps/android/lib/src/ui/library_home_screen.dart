@@ -35,6 +35,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
   final Set<String> _collapsed = {}; // collapsed author/series section keys
   String _query = '';
   bool _loading = true;
+  bool _offline = false;
   String? _error;
 
   @override
@@ -48,23 +49,33 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
       _loading = true;
       _error = null;
     });
+    List<LibraryBook> books;
+    var offline = false;
     try {
-      final books = await widget.runtime.sync.loadLibrary();
-      if (!mounted) return;
-      setState(() {
-        _books = books;
-        _loading = false;
-      });
-      _loadCovers(books);
-      _loadDurations(books);
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _error = '$e';
-          _loading = false;
-        });
+      books = await widget.runtime.sync.loadLibrary(); // server index
+    } catch (_) {
+      // Server unreachable → fall back to the downloaded library on disk.
+      try {
+        books = await widget.runtime.sync.loadLocalLibrary();
+        offline = true;
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _error = '$e';
+            _loading = false;
+          });
+        }
+        return;
       }
     }
+    if (!mounted) return;
+    setState(() {
+      _books = books;
+      _offline = offline;
+      _loading = false;
+    });
+    _loadCovers(books);
+    _loadDurations(books);
   }
 
   Future<void> _loadCovers(List<LibraryBook> books) async {
@@ -148,12 +159,27 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
       appBar: AppBar(
         title: const Text('Library'),
         actions: [
-          IconButton(
-            key: const Key('library-sync'),
-            tooltip: 'Sync',
-            icon: const Icon(Icons.sync),
-            onPressed: _loading ? null : _refresh,
-          ),
+          if (_offline)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+              child: ActionChip(
+                key: const Key('offline-chip'),
+                avatar: Icon(Icons.cloud_off,
+                    size: 18, color: Theme.of(context).colorScheme.onErrorContainer),
+                label: Text(_loading ? 'Connecting…' : 'Offline'),
+                backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                labelStyle: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer),
+                onPressed: _loading ? null : _refresh, // tap to retry
+              ),
+            )
+          else
+            IconButton(
+              key: const Key('library-sync'),
+              tooltip: 'Sync',
+              icon: const Icon(Icons.sync),
+              onPressed: _loading ? null : _refresh,
+            ),
           IconButton(
             tooltip: 'Unpair',
             icon: const Icon(Icons.link_off),

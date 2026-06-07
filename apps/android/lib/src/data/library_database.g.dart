@@ -606,6 +606,17 @@ class $ChaptersTable extends Chapters with TableInfo<$ChaptersTable, Chapter> {
     requiredDuringInsert: false,
     defaultValue: const Constant(0),
   );
+  static const VerificationMeta _durationSecMeta = const VerificationMeta(
+    'durationSec',
+  );
+  @override
+  late final GeneratedColumn<double> durationSec = GeneratedColumn<double>(
+    'duration_sec',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _finishedMeta = const VerificationMeta(
     'finished',
   );
@@ -630,6 +641,7 @@ class $ChaptersTable extends Chapters with TableInfo<$ChaptersTable, Chapter> {
     fingerprint,
     urlSuffix,
     bytes,
+    durationSec,
     finished,
   ];
   @override
@@ -695,6 +707,15 @@ class $ChaptersTable extends Chapters with TableInfo<$ChaptersTable, Chapter> {
         bytes.isAcceptableOrUnknown(data['bytes']!, _bytesMeta),
       );
     }
+    if (data.containsKey('duration_sec')) {
+      context.handle(
+        _durationSecMeta,
+        durationSec.isAcceptableOrUnknown(
+          data['duration_sec']!,
+          _durationSecMeta,
+        ),
+      );
+    }
     if (data.containsKey('finished')) {
       context.handle(
         _finishedMeta,
@@ -738,6 +759,10 @@ class $ChaptersTable extends Chapters with TableInfo<$ChaptersTable, Chapter> {
         DriftSqlType.int,
         data['${effectivePrefix}bytes'],
       )!,
+      durationSec: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}duration_sec'],
+      ),
       finished: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}finished'],
@@ -767,6 +792,10 @@ class Chapter extends DataClass implements Insertable<Chapter> {
   /// storage accounting.
   final int bytes;
 
+  /// PCM-measured chapter length (seconds) from the manifest — stored so the
+  /// player + library show durations + listener progress OFFLINE.
+  final double? durationSec;
+
   /// Whether the user has finished this chapter — drives auto-delete-finished
   /// eviction (the row stays; only the audio file is dropped).
   final bool finished;
@@ -778,6 +807,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
     this.fingerprint,
     this.urlSuffix,
     required this.bytes,
+    this.durationSec,
     required this.finished,
   });
   @override
@@ -794,6 +824,9 @@ class Chapter extends DataClass implements Insertable<Chapter> {
       map['url_suffix'] = Variable<String>(urlSuffix);
     }
     map['bytes'] = Variable<int>(bytes);
+    if (!nullToAbsent || durationSec != null) {
+      map['duration_sec'] = Variable<double>(durationSec);
+    }
     map['finished'] = Variable<bool>(finished);
     return map;
   }
@@ -811,6 +844,9 @@ class Chapter extends DataClass implements Insertable<Chapter> {
           ? const Value.absent()
           : Value(urlSuffix),
       bytes: Value(bytes),
+      durationSec: durationSec == null && nullToAbsent
+          ? const Value.absent()
+          : Value(durationSec),
       finished: Value(finished),
     );
   }
@@ -828,6 +864,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
       fingerprint: serializer.fromJson<String?>(json['fingerprint']),
       urlSuffix: serializer.fromJson<String?>(json['urlSuffix']),
       bytes: serializer.fromJson<int>(json['bytes']),
+      durationSec: serializer.fromJson<double?>(json['durationSec']),
       finished: serializer.fromJson<bool>(json['finished']),
     );
   }
@@ -842,6 +879,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
       'fingerprint': serializer.toJson<String?>(fingerprint),
       'urlSuffix': serializer.toJson<String?>(urlSuffix),
       'bytes': serializer.toJson<int>(bytes),
+      'durationSec': serializer.toJson<double?>(durationSec),
       'finished': serializer.toJson<bool>(finished),
     };
   }
@@ -854,6 +892,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
     Value<String?> fingerprint = const Value.absent(),
     Value<String?> urlSuffix = const Value.absent(),
     int? bytes,
+    Value<double?> durationSec = const Value.absent(),
     bool? finished,
   }) => Chapter(
     uuid: uuid ?? this.uuid,
@@ -863,6 +902,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
     fingerprint: fingerprint.present ? fingerprint.value : this.fingerprint,
     urlSuffix: urlSuffix.present ? urlSuffix.value : this.urlSuffix,
     bytes: bytes ?? this.bytes,
+    durationSec: durationSec.present ? durationSec.value : this.durationSec,
     finished: finished ?? this.finished,
   );
   Chapter copyWithCompanion(ChaptersCompanion data) {
@@ -876,6 +916,9 @@ class Chapter extends DataClass implements Insertable<Chapter> {
           : this.fingerprint,
       urlSuffix: data.urlSuffix.present ? data.urlSuffix.value : this.urlSuffix,
       bytes: data.bytes.present ? data.bytes.value : this.bytes,
+      durationSec: data.durationSec.present
+          ? data.durationSec.value
+          : this.durationSec,
       finished: data.finished.present ? data.finished.value : this.finished,
     );
   }
@@ -890,6 +933,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
           ..write('fingerprint: $fingerprint, ')
           ..write('urlSuffix: $urlSuffix, ')
           ..write('bytes: $bytes, ')
+          ..write('durationSec: $durationSec, ')
           ..write('finished: $finished')
           ..write(')'))
         .toString();
@@ -904,6 +948,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
     fingerprint,
     urlSuffix,
     bytes,
+    durationSec,
     finished,
   );
   @override
@@ -917,6 +962,7 @@ class Chapter extends DataClass implements Insertable<Chapter> {
           other.fingerprint == this.fingerprint &&
           other.urlSuffix == this.urlSuffix &&
           other.bytes == this.bytes &&
+          other.durationSec == this.durationSec &&
           other.finished == this.finished);
 }
 
@@ -928,6 +974,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
   final Value<String?> fingerprint;
   final Value<String?> urlSuffix;
   final Value<int> bytes;
+  final Value<double?> durationSec;
   final Value<bool> finished;
   final Value<int> rowid;
   const ChaptersCompanion({
@@ -938,6 +985,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
     this.fingerprint = const Value.absent(),
     this.urlSuffix = const Value.absent(),
     this.bytes = const Value.absent(),
+    this.durationSec = const Value.absent(),
     this.finished = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -949,6 +997,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
     this.fingerprint = const Value.absent(),
     this.urlSuffix = const Value.absent(),
     this.bytes = const Value.absent(),
+    this.durationSec = const Value.absent(),
     this.finished = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : uuid = Value(uuid),
@@ -962,6 +1011,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
     Expression<String>? fingerprint,
     Expression<String>? urlSuffix,
     Expression<int>? bytes,
+    Expression<double>? durationSec,
     Expression<bool>? finished,
     Expression<int>? rowid,
   }) {
@@ -973,6 +1023,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
       if (fingerprint != null) 'fingerprint': fingerprint,
       if (urlSuffix != null) 'url_suffix': urlSuffix,
       if (bytes != null) 'bytes': bytes,
+      if (durationSec != null) 'duration_sec': durationSec,
       if (finished != null) 'finished': finished,
       if (rowid != null) 'rowid': rowid,
     });
@@ -986,6 +1037,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
     Value<String?>? fingerprint,
     Value<String?>? urlSuffix,
     Value<int>? bytes,
+    Value<double?>? durationSec,
     Value<bool>? finished,
     Value<int>? rowid,
   }) {
@@ -997,6 +1049,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
       fingerprint: fingerprint ?? this.fingerprint,
       urlSuffix: urlSuffix ?? this.urlSuffix,
       bytes: bytes ?? this.bytes,
+      durationSec: durationSec ?? this.durationSec,
       finished: finished ?? this.finished,
       rowid: rowid ?? this.rowid,
     );
@@ -1026,6 +1079,9 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
     if (bytes.present) {
       map['bytes'] = Variable<int>(bytes.value);
     }
+    if (durationSec.present) {
+      map['duration_sec'] = Variable<double>(durationSec.value);
+    }
     if (finished.present) {
       map['finished'] = Variable<bool>(finished.value);
     }
@@ -1045,6 +1101,7 @@ class ChaptersCompanion extends UpdateCompanion<Chapter> {
           ..write('fingerprint: $fingerprint, ')
           ..write('urlSuffix: $urlSuffix, ')
           ..write('bytes: $bytes, ')
+          ..write('durationSec: $durationSec, ')
           ..write('finished: $finished, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -1656,6 +1713,7 @@ typedef $$ChaptersTableCreateCompanionBuilder =
       Value<String?> fingerprint,
       Value<String?> urlSuffix,
       Value<int> bytes,
+      Value<double?> durationSec,
       Value<bool> finished,
       Value<int> rowid,
     });
@@ -1668,6 +1726,7 @@ typedef $$ChaptersTableUpdateCompanionBuilder =
       Value<String?> fingerprint,
       Value<String?> urlSuffix,
       Value<int> bytes,
+      Value<double?> durationSec,
       Value<bool> finished,
       Value<int> rowid,
     });
@@ -1713,6 +1772,11 @@ class $$ChaptersTableFilterComposer
 
   ColumnFilters<int> get bytes => $composableBuilder(
     column: $table.bytes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get durationSec => $composableBuilder(
+    column: $table.durationSec,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -1766,6 +1830,11 @@ class $$ChaptersTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<double> get durationSec => $composableBuilder(
+    column: $table.durationSec,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get finished => $composableBuilder(
     column: $table.finished,
     builder: (column) => ColumnOrderings(column),
@@ -1803,6 +1872,11 @@ class $$ChaptersTableAnnotationComposer
 
   GeneratedColumn<int> get bytes =>
       $composableBuilder(column: $table.bytes, builder: (column) => column);
+
+  GeneratedColumn<double> get durationSec => $composableBuilder(
+    column: $table.durationSec,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<bool> get finished =>
       $composableBuilder(column: $table.finished, builder: (column) => column);
@@ -1843,6 +1917,7 @@ class $$ChaptersTableTableManager
                 Value<String?> fingerprint = const Value.absent(),
                 Value<String?> urlSuffix = const Value.absent(),
                 Value<int> bytes = const Value.absent(),
+                Value<double?> durationSec = const Value.absent(),
                 Value<bool> finished = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChaptersCompanion(
@@ -1853,6 +1928,7 @@ class $$ChaptersTableTableManager
                 fingerprint: fingerprint,
                 urlSuffix: urlSuffix,
                 bytes: bytes,
+                durationSec: durationSec,
                 finished: finished,
                 rowid: rowid,
               ),
@@ -1865,6 +1941,7 @@ class $$ChaptersTableTableManager
                 Value<String?> fingerprint = const Value.absent(),
                 Value<String?> urlSuffix = const Value.absent(),
                 Value<int> bytes = const Value.absent(),
+                Value<double?> durationSec = const Value.absent(),
                 Value<bool> finished = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ChaptersCompanion.insert(
@@ -1875,6 +1952,7 @@ class $$ChaptersTableTableManager
                 fingerprint: fingerprint,
                 urlSuffix: urlSuffix,
                 bytes: bytes,
+                durationSec: durationSec,
                 finished: finished,
                 rowid: rowid,
               ),
