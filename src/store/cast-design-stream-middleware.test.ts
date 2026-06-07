@@ -23,9 +23,22 @@ interface SubscribeCall {
   cb: CastDesignCallbacks;
   resolve: () => void;
 }
+interface SingleStartCall {
+  bookId: string;
+  args: {
+    characterId: string;
+    persona: string;
+    sampleVoiceId: string;
+    modelKey: string;
+    preview: boolean;
+  };
+  cb: CastDesignCallbacks;
+  resolve: () => void;
+}
 
 const startCalls: StartCall[] = [];
 const subscribeCalls: SubscribeCall[] = [];
+const singleStartCalls: SingleStartCall[] = [];
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -41,6 +54,18 @@ vi.mock('../lib/api', () => ({
       new Promise<void>((resolve) => {
         subscribeCalls.push({ bookId, cb, resolve });
       }),
+    startSingleDesign: (
+      bookId: string,
+      args: SingleStartCall['args'],
+      cb: CastDesignCallbacks,
+    ) =>
+      new Promise<void>((resolve) => {
+        singleStartCalls.push({ bookId, args, cb, resolve });
+      }),
+    subscribeSingleDesign: (bookId: string, cb: CastDesignCallbacks) =>
+      new Promise<void>((resolve) => {
+        subscribeCalls.push({ bookId, cb, resolve });
+      }),
   },
 }));
 
@@ -49,20 +74,26 @@ import { castDesignSlice, castDesignActions } from './cast-design-slice';
 import { castSlice } from './cast-slice';
 import { notificationsSlice } from './notifications-slice';
 
-function makeStore() {
+function makeStore(recorded?: { type: string }[]) {
+  const recorder: import('@reduxjs/toolkit').Middleware = () => (next) => (action) => {
+    if (recorded) recorded.push(action as { type: string });
+    return next(action);
+  };
   return configureStore({
     reducer: {
       castDesign: castDesignSlice.reducer,
       cast: castSlice.reducer,
       notifications: notificationsSlice.reducer,
     },
-    middleware: (getDefault) => getDefault().concat(createCastDesignMiddleware()),
+    middleware: (getDefault) =>
+      getDefault().prepend(recorder).concat(createCastDesignMiddleware()),
   });
 }
 
 beforeEach(() => {
   startCalls.length = 0;
   subscribeCalls.length = 0;
+  singleStartCalls.length = 0;
   vi.useFakeTimers();
 });
 afterEach(() => {
@@ -203,5 +234,87 @@ describe('castDesignMiddleware', () => {
       currentName: 'Brann',
       state: 'running',
     });
+  });
+
+  it('designSingleRequested → phases, mirrors designed into cast, toasts', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'c1', name: 'Aria' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'first',
+      }),
+    );
+
+    expect(singleStartCalls).toHaveLength(1);
+    expect(singleStartCalls[0].args).toMatchObject({
+      characterId: 'c1',
+      persona: 'warm',
+      sampleVoiceId: 'char-c1',
+      modelKey: 'qwen3-tts',
+      preview: false,
+    });
+
+    const { cb } = singleStartCalls[0];
+    cb.onPhase?.({ characterId: 'c1', phase: 'designing' });
+    cb.onPhase?.({ characterId: 'c1', phase: 'rendering' });
+    cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-c1' });
+    cb.onIdle?.({ done: 1, total: 1, skipped: 0, failures: [] });
+
+    expect(recorded.map((a) => a.type)).toEqual(
+      expect.arrayContaining([
+        'castDesign/setPhase',
+        'cast/setQwenOverrideName',
+        'notifications/pushToast',
+        'castDesign/settle',
+      ]),
+    );
+    /* Mirrored into the cast slice → row flips to Designed. */
+    expect(
+      store.getState().cast.characters.find((c) => c.id === 'c1')?.overrideTtsVoices?.qwen?.name,
+    ).toBe('qwen-c1');
+  });
+
+  it('preview_ready → ready-to-compare + a "ready to compare" toast', () => {
+    const recorded: { type: string }[] = [];
+    const store = makeStore(recorded);
+    store.dispatch(
+      castDesignActions.designSingleRequested({
+        bookId: 'b1',
+        characterId: 'c1',
+        name: 'Aria',
+        persona: 'warm',
+        sampleVoiceId: 'char-c1',
+        modelKey: 'qwen3-tts',
+        mode: 'redesign',
+      }),
+    );
+
+    expect(singleStartCalls).toHaveLength(1);
+    expect(singleStartCalls[0].args.preview).toBe(true);
+
+    const { cb } = singleStartCalls[0];
+    cb.onPreviewReady?.({
+      characterId: 'c1',
+      name: 'Aria',
+      previewVoiceId: 'qwen-c1-preview',
+      previewUrl: '/x.mp3',
+      persona: 'warm',
+    });
+    cb.onIdle?.({ done: 0, total: 1, skipped: 0, failures: [] });
+
+    const types = recorded.map((a) => a.type);
+    expect(types).toContain('castDesign/previewReady');
+    expect(types).toContain('notifications/pushToast');
+    /* Re-design stays staged for the drawer to resolve — NOT auto-cleared. */
+    expect(store.getState().castDesign.active?.state).toBe('ready-to-compare');
   });
 });

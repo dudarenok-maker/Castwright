@@ -42,7 +42,7 @@ import { designQwenVoiceForCharacter } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
-import { markDesignBusy, clearDesignBusy, isAnalysisBusy } from '../tts/design-lock.js';
+import { markDesignBusy, clearDesignBusy, isAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
 
 export const castDesignRouter = Router();
 
@@ -237,6 +237,12 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
       return res.status(409).json({
         error:
           'Analysis is running for this book. Wait for it to finish before designing the full cast (re-analysis rewrites the cast).',
+      });
+    }
+    if (isDesignBusy(bookDir)) {
+      return res.status(409).json({
+        error:
+          'A single voice design is in progress for this book. Wait for it to finish before designing the full cast.',
       });
     }
     if (!isTtsModelKey(body.modelKey)) {

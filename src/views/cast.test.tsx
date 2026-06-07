@@ -1194,6 +1194,7 @@ describe('CastView — Design full cast button', () => {
   };
 
   type DesignActive = {
+    kind: 'bulk' | 'single';
     bookId: string;
     total: number;
     done: number;
@@ -1277,6 +1278,7 @@ describe('CastView — Design full cast button', () => {
       modelKey: 'qwen3-tts-0.6b',
       ready: true,
       designActive: {
+        kind: 'bulk',
         bookId: 'b1',
         total: 3,
         done: 1,

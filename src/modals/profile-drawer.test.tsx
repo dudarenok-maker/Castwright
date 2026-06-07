@@ -1,13 +1,13 @@
 // Pairs with docs/features/archive/10-profile-drawer.md
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
-import { castSlice } from '../store/cast-slice';
-import { castDesignSlice } from '../store/cast-design-slice';
+import { castSlice, castActions } from '../store/cast-slice';
+import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
@@ -1024,6 +1024,10 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
      design + series-scoped override path can be exercised. */
   function renderWithBook(character: Character, onSave = vi.fn()) {
     const store = makeStore({});
+    /* Spy on dispatch BEFORE render so the component's useAppDispatch captures
+       the spied reference — lets the background-design tests assert the
+       designSingleRequested dispatch fired on click. */
+    const dispatchSpy = vi.spyOn(store, 'dispatch');
     const utils = render(
       <Provider store={store}>
         <ProfileDrawer
@@ -1036,7 +1040,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
         />
       </Provider>,
     );
-    return { store, onSave, ...utils };
+    return { store, onSave, dispatchSpy, ...utils };
   }
 
   function selectQwen() {
@@ -1124,12 +1128,15 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     });
   });
 
-  it('RE-design (existing voice) stages a PREVIEW + opens the A/B compare; approve promotes it (plan 161)', async () => {
+  it('RE-design (existing voice) dispatches a redesign request; the slice opens the A/B compare; approve promotes it (plan 161 + single-design slice)', async () => {
     /* A character that ALREADY has a designed bespoke voice has something to
-       put on Side A, so re-designing opens the A/B compare against it. */
-    designQwenVoice.mockClear();
+       put on Side A, so re-designing opens the A/B compare against it. The
+       drawer now DISPATCHES a background redesign instead of awaiting the API;
+       the middleware drives the slice to `ready-to-compare`, which the drawer
+       reflects by opening the compare modal. Here we seed that slice state
+       directly (no middleware in this store). */
     promoteQwenVoice.mockClear();
-    renderWithBook({
+    const { store, dispatchSpy } = renderWithBook({
       ...baseChar,
       ttsEngine: 'qwen',
       voiceId: 'v_hal',
@@ -1140,20 +1147,44 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     /* The button reads "Design & compare" when there's an existing voice. */
     expect(screen.getByTestId('qwen-design-voice').textContent).toMatch(/Design & compare/i);
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
-    await waitFor(() => {
-      /* preview:true stages a `…-preview` sibling so the live voice isn't
-         overwritten while the user compares. */
-      expect(designQwenVoice).toHaveBeenCalledWith(
-        'book-1',
-        'halloran',
-        expect.objectContaining({
+    /* The click dispatched a background redesign request (mode:'redesign'). */
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: castDesignActions.designSingleRequested.type,
+        payload: expect.objectContaining({
+          bookId: 'book-1',
+          characterId: 'halloran',
           persona: 'a steady adult voice',
+          mode: 'redesign',
           modelKey: 'qwen3-tts-0.6b',
-          sampleVoiceId: expect.any(String),
-          preview: true,
+        }),
+      }),
+    );
+
+    /* Simulate the middleware completing the redesign: the preview is staged
+       and the slice flips to ready-to-compare. */
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-halloran-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
         }),
       );
     });
+
     /* The compare modal opens; staging the promoted voice is deferred to approve
        (promote not called until the user keeps the proposed voice). */
     await waitFor(() => expect(screen.getByTestId('voice-compare-overlay')).toBeTruthy());
@@ -1162,48 +1193,104 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
     fireEvent.click(screen.getByTestId('voice-compare-approve'));
     await waitFor(() => expect(promoteQwenVoice).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByTestId('voice-compare-overlay')).toBeNull());
+    /* Resolving the compare cleared the slice. */
+    expect(store.getState().castDesign.active).toBeNull();
   });
 
-  it('FIRST design (no existing voice) auditions in place — no compare modal (nothing to compare)', async () => {
+  it('FIRST design (no existing voice) dispatches a first-design request; never opens the compare modal', async () => {
     /* A/B compare is only useful when there is something to compare to. A
-       first-time design has no current bespoke voice, so it falls back to the
-       one-shot "Design & preview": design in place (preview:false), stage it,
-       and play — without opening the compare modal. */
-    designQwenVoice.mockClear();
+       first-time design has no current bespoke voice, so it dispatches a
+       background first design (mode:'first'). The middleware persists + mirrors
+       the qwen override into the cast slice; the drawer reflects that into its
+       local designedVoiceId. No compare modal is ever opened. */
     promoteQwenVoice.mockClear();
-    renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
+    const { store, dispatchSpy } = renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
     selectQwen();
     /* No existing voice → the button reads "Design & preview". */
     expect(screen.getByTestId('qwen-design-voice').textContent).toMatch(/Design & preview/i);
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
-    await waitFor(() => {
-      expect(designQwenVoice).toHaveBeenCalledWith(
-        'book-1',
-        'halloran',
-        expect.objectContaining({
-          persona: 'a steady adult voice',
-          modelKey: 'qwen3-tts-0.6b',
-          sampleVoiceId: expect.any(String),
-          preview: false,
-        }),
-      );
-    });
-    /* Stages the voice directly (designed-confirm) and never opens the compare
-       modal or promotes (there's no preview to promote). */
+    /* The click dispatched a first-design request (mode:'first'). */
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: castDesignActions.designSingleRequested.type,
+        payload: expect.objectContaining({ characterId: 'halloran', mode: 'first' }),
+      }),
+    );
+
+    /* Simulate the middleware completing the first design + persisting the
+       override into the cast slice. */
+    store.dispatch(castActions.setCharacters([{ ...baseChar }]));
+    store.dispatch(castActions.setQwenOverrideName({ characterId: 'halloran', voiceId: 'qwen-halloran' }));
+
+    /* The drawer mirrors the new qwen override into its local designedVoiceId
+       (designed-confirm) and never opens the compare modal or promotes. */
     await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
     expect(screen.queryByTestId('voice-compare-overlay')).toBeNull();
     expect(promoteQwenVoice).not.toHaveBeenCalled();
   });
 
+  it('renders DesignProgress when a single design is in flight for this character', async () => {
+    const { store } = renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
+    selectQwen();
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'first',
+          lastTickAt: 1,
+        }),
+      );
+    });
+    expect(await screen.findByTestId('design-waveform')).toBeInTheDocument();
+    expect(screen.getByText(/designing the voice/i)).toBeInTheDocument();
+  });
+
+  it('opens the compare modal when the slice is ready-to-compare for this character', async () => {
+    const { store } = renderWithBook({
+      ...baseChar,
+      ttsEngine: 'qwen',
+      voiceId: 'v_hal',
+      overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
+      voiceStyle: 'a steady adult voice',
+    });
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-halloran-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
+        }),
+      );
+    });
+    expect(await screen.findByRole('dialog', { name: /compare/i })).toBeInTheDocument();
+  });
+
   it('on Save writes ttsEngine=qwen + the qwen override series-scoped', async () => {
     setVoiceOverride.mockClear();
     const onSave = vi.fn();
-    renderWithBook({ ...baseChar, voiceId: 'v_hal', voiceStyle: 'a steady adult voice' }, onSave);
+    const char = { ...baseChar, voiceId: 'v_hal', voiceStyle: 'a steady adult voice' };
+    const { store } = renderWithBook(char, onSave);
     selectQwen();
-    /* First design (no existing voice) stages the designed voiceId directly —
-       no compare modal — then Save persists it. */
+    /* First design dispatches a background request; the middleware persists +
+       mirrors the qwen override into the cast slice, which the drawer reflects
+       into designedVoiceId. Seed that mirror here (no middleware in this store). */
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
-    await waitFor(() => expect(designQwenVoice).toHaveBeenCalled());
+    store.dispatch(castActions.setCharacters([char]));
+    store.dispatch(castActions.setQwenOverrideName({ characterId: 'halloran', voiceId: 'qwen-halloran' }));
     await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
@@ -1293,17 +1380,20 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
   });
 
   it('enables Play sample after designing a voice this session, with the staged voiceId', async () => {
-    designQwenVoice.mockClear();
     vi.mocked(playSampleWithAutoLoad).mockClear();
     vi.mocked(playSampleWithAutoLoad).mockResolvedValueOnce({ analyzerEvicted: false });
     /* No persisted override yet → Play starts disabled. */
-    renderWithBook({ ...baseChar, ttsEngine: 'qwen', voiceStyle: 'a steady adult voice' });
+    const char = { ...baseChar, ttsEngine: 'qwen' as const, voiceStyle: 'a steady adult voice' };
+    const { store } = renderWithBook(char);
     expect(
       (screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
-    /* First design (one-shot, no compare) stages the voiceId returned by the
-       mock (qwen-halloran) directly. */
+    /* First design dispatches a background request; once the middleware mirrors
+       the qwen override into the cast slice (seeded here), the drawer reflects
+       it into designedVoiceId and the sample unblocks. */
     fireEvent.click(screen.getByTestId('qwen-design-voice'));
+    store.dispatch(castActions.setCharacters([char]));
+    store.dispatch(castActions.setQwenOverrideName({ characterId: 'halloran', voiceId: 'qwen-halloran' }));
     await waitFor(() => expect(screen.getByTestId('qwen-designed-confirm')).toBeTruthy());
     const playBtn = screen.getByRole('button', { name: /Play 12s sample/i }) as HTMLButtonElement;
     expect(playBtn.disabled).toBe(false);

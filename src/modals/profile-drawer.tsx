@@ -40,6 +40,7 @@ import { EmotionVariantDesigner } from '../components/emotion-variant-designer';
 import { VoiceCompareModal } from './voice-compare-modal';
 import { CharacterSearchPicker } from '../components/character-search-picker';
 import { castActions } from '../store/cast-slice';
+import { castDesignActions } from '../store/cast-design-slice';
 
 /* Default preview line. Pangram + a short follow-on so the user can
    hear consonant + vowel coverage AND a held sentence at typical
@@ -232,8 +233,23 @@ export function ProfileDrawer({
   /* "Design full cast" — lock the single-design button while a bulk run owns
      this book's designs (the server also 409s; this stops a doomed click). */
   const bulkDesignActive = useAppSelector(
-    (s) => s.castDesign.active?.state === 'running' && s.castDesign.active.bookId === bookId,
+    (s) =>
+      s.castDesign.active?.kind === 'bulk' &&
+      s.castDesign.active.state === 'running' &&
+      s.castDesign.active.bookId === bookId,
   );
+  /* This character's live single-design snapshot (background job, plan
+     single-voice-design-background). Non-null only while a single design for
+     THIS character is in flight (or staged ready-to-compare) — so reopening the
+     drawer mid-design shows live progress and a completed re-design opens the
+     A/B compare. Drives the engine picker's progress + the compare effect. */
+  const singleDesign = useAppSelector((s) =>
+    s.castDesign.active?.kind === 'single' && s.castDesign.active.characterId === character.id
+      ? s.castDesign.active
+      : null,
+  );
+  const sliceDesigning = singleDesign?.state === 'running';
+  const slicePhase: 'designing' | 'rendering' = singleDesign?.phase ?? 'designing';
   const [overrideError, setOverrideError] = useState<string | null>(null);
   const [sampleStatus, setSampleStatus] = useState<SampleStatus | 'idle'>('idle');
   const [sampleError, setSampleError] = useState<string | null>(null);
@@ -260,7 +276,6 @@ export function ProfileDrawer({
   );
   const [persona, setPersona] = useState<string>(character.voiceStyle ?? '');
   const [personaBusy, setPersonaBusy] = useState(false);
-  const [designBusy, setDesignBusy] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
   /* Designed voiceId staged this session — set by Design & preview, read
      by Save to write overrideTtsVoices.qwen.name. Seeds from the existing
@@ -699,6 +714,38 @@ export function ProfileDrawer({
     };
   }, [bookId, character.id, character.voiceStyle, designedVoiceId, dispatch]);
 
+  /* First-design completion while the drawer is open: the middleware persisted
+     the override + mirrored it into the cast slice. Reflect the designed
+     voiceId into local state so the card flips to "designed" and the sample
+     unblocks. (v1 does NOT auto-play the audition — the user clicks "Play 12s
+     sample".) Ignore `-preview` names (those belong to a staged re-design that
+     the A/B compare resolves). */
+  const qwenOverrideName = useAppSelector(
+    (s) =>
+      s.cast.characters.find((c) => c.id === character.id)?.overrideTtsVoices?.qwen?.name ?? null,
+  );
+  useEffect(() => {
+    if (
+      qwenOverrideName &&
+      qwenOverrideName !== designedVoiceId &&
+      !qwenOverrideName.endsWith('-preview')
+    ) {
+      setDesignedVoiceId(qwenOverrideName);
+    }
+  }, [qwenOverrideName, designedVoiceId]);
+
+  /* Re-design completion: when the slice flips to `ready-to-compare` for this
+     character, open the A/B compare seeded from the staged preview. */
+  useEffect(() => {
+    if (singleDesign?.state === 'ready-to-compare' && singleDesign.preview && !voiceCompareInitial) {
+      setVoiceCompareInitial({
+        voiceId: singleDesign.preview.previewVoiceId,
+        previewUrl: singleDesign.preview.previewUrl,
+        persona: singleDesign.preview.persona,
+      });
+    }
+  }, [singleDesign, voiceCompareInitial]);
+
   function onSelectEngine(next: EngineChoice) {
     setEngineChoice(next);
     setEngineError(null);
@@ -709,54 +756,39 @@ export function ProfileDrawer({
     }
   }
 
-  async function designVoice() {
+  function designVoice() {
     if (designPlaying) {
       playback.stop();
       return;
     }
-    if (!bookId || designBusy) return;
+    if (!bookId || sliceDesigning) return;
     const trimmed = persona.trim();
     if (!trimmed) {
       setEngineError('Add a persona before designing a voice.');
       return;
     }
-    setDesignBusy(true);
     setEngineError(null);
     /* The A/B "current vs proposed" compare is only meaningful when the
        character ALREADY has a designed bespoke voice to put on Side A. On a
-       FIRST design there is nothing to compare against, so fall back to the
-       one-shot "design & preview": design in place and play it. `designedVoiceId`
-       is non-null iff a bespoke voice already exists for this character. */
+       FIRST design there is nothing to compare against. `designedVoiceId` is
+       non-null iff a bespoke voice already exists for this character. */
     const isRedesign = designedVoiceId !== null;
-    try {
-      /* Pass the same cache identity the "Play 12s" player uses so the
-         audition is rendered straight into the sample cache — designing here
-         and playing the 12s sample later is one synthesis, not two. */
-      const { voiceId, previewUrl } = await api.designQwenVoice(bookId, character.id, {
+    /* DISPATCH a background single design instead of awaiting the API: the job
+       survives closing the drawer / a reload (the middleware owns the SSE,
+       persists a first design, and stages a re-design's preview). The drawer
+       drives its progress UI off `singleDesign` and opens the A/B compare when
+       the slice reports `ready-to-compare`. */
+    dispatch(
+      castDesignActions.designSingleRequested({
+        bookId,
+        characterId: character.id,
+        name: character.name,
         persona: trimmed,
         sampleVoiceId,
         modelKey: effectiveSampleModelKey,
-        /* Re-design stages a `…-preview` sibling so the live voice survives a
-           Cancel; first design has no live voice to protect, so design in place. */
-        preview: isRedesign,
-      });
-      if (isRedesign) {
-        /* Open the A/B compare with the staged preview. Staging into the drawer
-           (designedVoiceId / persona) is deferred to the modal's approve, so
-           Cancel leaves the character's live voice untouched. */
-        setVoiceCompareInitial({ voiceId, previewUrl, persona: trimmed });
-      } else {
-        /* One-shot: stage the freshly designed voice straight into the drawer
-           and audition it (no compare modal — there's nothing to compare to). */
-        designPreviewUrlRef.current = previewUrl;
-        setDesignedVoiceId(voiceId);
-        await playback.play(previewUrl);
-      }
-    } catch (e) {
-      setEngineError((e as Error).message || 'Voice design failed.');
-    } finally {
-      setDesignBusy(false);
-    }
+        mode: isRedesign ? 'redesign' : 'first',
+      }),
+    );
   }
 
   return (
@@ -985,8 +1017,9 @@ export function ProfileDrawer({
               onPersonaChange={setPersona}
               onRegeneratePersona={() => void generatePersona()}
               personaBusy={personaBusy}
-              onDesignVoice={() => void designVoice()}
-              designBusy={designBusy || bulkDesignActive}
+              onDesignVoice={() => designVoice()}
+              designBusy={sliceDesigning || bulkDesignActive}
+              designPhase={slicePhase}
               designPlaying={designPlaying}
               designedVoiceId={designedVoiceId}
               error={engineError}
@@ -1028,8 +1061,15 @@ export function ProfileDrawer({
                     }),
                   );
                   setVoiceCompareInitial(null);
+                  /* Resolving the compare ends the single-design lifecycle —
+                     clear the slice so the Design pill / ready-to-compare state
+                     reset (otherwise the effect would re-open the modal). */
+                  dispatch(castDesignActions.clear());
                 }}
-                onClose={() => setVoiceCompareInitial(null)}
+                onClose={() => {
+                  setVoiceCompareInitial(null);
+                  dispatch(castDesignActions.clear());
+                }}
               />
             )}
 

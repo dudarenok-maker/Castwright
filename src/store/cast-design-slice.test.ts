@@ -26,6 +26,7 @@ describe('castDesignSlice — active snapshot reducers', () => {
     const s = castDesignSlice.reducer(undefined, begin);
     expect(s.active).toEqual({
       bookId: 'b1',
+      kind: 'bulk',
       total: 3,
       done: 0,
       skipped: 0,
@@ -113,5 +114,42 @@ describe('castDesignSlice — active snapshot reducers', () => {
     expect(s1.active).toEqual(s0.active);
     const s2 = castDesignSlice.reducer(s1, castDesignActions.resubscribe({ bookId: 'b1' }));
     expect(s2.active).toEqual(s0.active);
+  });
+});
+
+describe('single-design snapshot', () => {
+  it('beginSingle opens a kind:single snapshot with phase designing', () => {
+    const s = castDesignSlice.reducer(undefined, castDesignActions.beginSingle({
+      bookId: 'b1', characterId: 'c1', name: 'Aria', mode: 'first', lastTickAt: 10,
+    }));
+    expect(s.active).toMatchObject({
+      kind: 'single', bookId: 'b1', characterId: 'c1', currentName: 'Aria',
+      total: 1, done: 0, mode: 'first', phase: 'designing', state: 'running',
+    });
+  });
+
+  it('setPhase advances the phase (guarded by character)', () => {
+    let s = castDesignSlice.reducer(undefined, castDesignActions.beginSingle({
+      bookId: 'b1', characterId: 'c1', name: 'Aria', mode: 'first', lastTickAt: 10,
+    }));
+    s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b1', characterId: 'c1', phase: 'rendering', lastTickAt: 20 }));
+    expect(s.active!.phase).toBe('rendering');
+    // wrong character is ignored
+    s = castDesignSlice.reducer(s, castDesignActions.setPhase({ bookId: 'b1', characterId: 'cX', phase: 'designing', lastTickAt: 30 }));
+    expect(s.active!.phase).toBe('rendering');
+  });
+
+  it('previewReady flips to ready-to-compare carrying the preview payload', () => {
+    let s = castDesignSlice.reducer(undefined, castDesignActions.beginSingle({
+      bookId: 'b1', characterId: 'c1', name: 'Aria', mode: 'redesign', lastTickAt: 10,
+    }));
+    s = castDesignSlice.reducer(s, castDesignActions.previewReady({
+      bookId: 'b1', characterId: 'c1',
+      previewVoiceId: 'qwen-c1-preview', previewUrl: '/x.mp3', persona: 'warm', lastTickAt: 20,
+    }));
+    expect(s.active).toMatchObject({
+      state: 'ready-to-compare',
+      preview: { characterId: 'c1', previewVoiceId: 'qwen-c1-preview', previewUrl: '/x.mp3', persona: 'warm' },
+    });
   });
 });
