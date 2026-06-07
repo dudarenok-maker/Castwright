@@ -21,6 +21,7 @@
 
 import { IconSparkle, IconRefresh, IconWaveform, IconSpinner, IconPause } from '../lib/icons';
 import type { TtsEngine } from '../lib/types';
+import { DesignProgress } from './design-progress';
 
 /* Engine value the selector emits. 'default' maps to "no per-character
    engine" (use the project default). The rest are real TtsEngine ids. */
@@ -63,6 +64,9 @@ interface Props {
   /** Design + audition the bespoke voice from the current persona. */
   onDesignVoice: () => void;
   designBusy: boolean;
+  /** Sub-phase of the in-flight background design — drives the
+      `DesignProgress` label while `designBusy`. Defaults to 'designing'. */
+  designPhase?: 'designing' | 'rendering';
   /** True while the designed-voice audition is playing (toggles the
       button to a Stop affordance). */
   designPlaying: boolean;
@@ -85,6 +89,7 @@ export function VoiceEnginePicker({
   personaBusy,
   onDesignVoice,
   designBusy,
+  designPhase,
   designPlaying,
   designedVoiceId,
   error,
@@ -163,38 +168,51 @@ export function VoiceEnginePicker({
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={onDesignVoice}
-            disabled={designBusy || persona.trim().length === 0}
-            data-testid="qwen-design-voice"
-            className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-colors min-h-[44px] sm:min-h-0 ${
-              designBusy
-                ? 'bg-magenta/10 text-magenta cursor-wait'
-                : designPlaying
-                  ? 'bg-magenta text-white hover:bg-magenta/90'
-                  : 'bg-magenta/10 text-magenta hover:bg-magenta/20 disabled:opacity-50 disabled:cursor-not-allowed'
-            }`}
-          >
-            {designBusy ? (
-              <>
+          {designBusy ? (
+            <>
+              {/* The design now runs as a background job (survives closing the
+                  drawer / a reload). Show honest sub-phase progress + a note. */}
+              <button
+                type="button"
+                disabled
+                data-testid="qwen-design-voice"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold bg-magenta/10 text-magenta cursor-wait min-h-[44px] sm:min-h-0"
+              >
                 <IconSpinner className="w-4 h-4" />
                 <span>Designing voice…</span>
-              </>
-            ) : designPlaying ? (
-              <>
-                <IconPause className="w-4 h-4" />
-                <span>Stop audition</span>
-              </>
-            ) : (
-              <>
-                <IconSparkle className="w-4 h-4" />
-                {/* "compare" only when a bespoke voice already exists to put on
-                    Side A of the A/B; a first design just previews (no compare). */}
-                <span>{designedVoiceId ? 'Design & compare' : 'Design & preview'}</span>
-              </>
-            )}
-          </button>
+              </button>
+              <DesignProgress phase={designPhase ?? 'designing'} />
+              <p className="mt-1 text-[10px] text-ink/45 text-center">
+                Keeps running if you close — we'll let you know when it's ready.
+              </p>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={onDesignVoice}
+              disabled={persona.trim().length === 0}
+              data-testid="qwen-design-voice"
+              className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-semibold transition-colors min-h-[44px] sm:min-h-0 ${
+                designPlaying
+                  ? 'bg-magenta text-white hover:bg-magenta/90'
+                  : 'bg-magenta/10 text-magenta hover:bg-magenta/20 disabled:opacity-50 disabled:cursor-not-allowed'
+              }`}
+            >
+              {designPlaying ? (
+                <>
+                  <IconPause className="w-4 h-4" />
+                  <span>Stop audition</span>
+                </>
+              ) : (
+                <>
+                  <IconSparkle className="w-4 h-4" />
+                  {/* "compare" only when a bespoke voice already exists to put on
+                      Side A of the A/B; a first design just previews (no compare). */}
+                  <span>{designedVoiceId ? 'Design & compare' : 'Design & preview'}</span>
+                </>
+              )}
+            </button>
+          )}
 
           {designedVoiceId && !designBusy && (
             <p
