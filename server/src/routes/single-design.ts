@@ -115,7 +115,7 @@ async function runSingleDesign(
     job.phase = 'designing';
     broadcast(job, { type: 'phase', phase: 'designing', characterId: job.characterId });
 
-    const { voiceId } = await designQwenVoiceForCharacter({
+    const { voiceId, url } = await designQwenVoiceForCharacter({
       bookDir: job.bookDir,
       character,
       characterId: job.characterId,
@@ -132,13 +132,12 @@ async function runSingleDesign(
     if (job.preview) {
       /* Re-design: hold the preview, do NOT persist. The drawer's A/B compare
          promotes (promote-voice) or discards (discard-voice). */
-      const previewUrl = `/api/voice-sample/${encodeURIComponent(sampleVoiceId)}.mp3`;
       endJob(job, {
         type: 'preview_ready',
         characterId: job.characterId,
         name: job.characterName,
         previewVoiceId: voiceId,
-        previewUrl,
+        previewUrl: url,
         persona,
       });
       return;
@@ -152,6 +151,7 @@ async function runSingleDesign(
       characterId: job.characterId,
       name: job.characterName,
       voiceId,
+      url,
     });
   } catch (e) {
     const message = (e as Error).message || 'Voice design failed.';
