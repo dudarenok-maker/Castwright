@@ -1238,14 +1238,17 @@ function ChapterRow({
   }
 
   const assembling = chapter.phase === 'assembling';
+  const verifying = chapter.phase === 'verifying';
   const rowStalled = stalled && chapter.state === 'in_progress';
   const inProgressLabel = rowStalled
     ? 'Stalled'
     : assembling
       ? 'Assembling…'
-      : paused
-        ? 'Paused'
-        : 'Generating';
+      : verifying
+        ? 'Verifying speech…'
+        : paused
+          ? 'Paused'
+          : 'Generating';
   const inProgressPill = rowStalled ? (
     <Pill color="warning">Stalled</Pill>
   ) : (
@@ -1328,7 +1331,14 @@ function ChapterRow({
           <span className="block font-semibold text-ink truncate">
             {stripChapterPrefix(chapter.title)}
           </span>
-          {chapter.state === 'in_progress' && liveTotal > 0 ? (
+          {chapter.state === 'in_progress' && verifying ? (
+            /* srv-31 ASR content-QA pass: the synthesis groups are done and
+               counters are frozen near 99 %, so show the QA step explicitly
+               instead of a stuck "Synthesising …" line. */
+            <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
+              Verifying speech…
+            </span>
+          ) : chapter.state === 'in_progress' && liveTotal > 0 ? (
             /* Live caption — swaps in once a tick has shipped totalLines so
                the user has a per-tick "moving" signal at eye level.
                Falls through to the static meta until then. */
