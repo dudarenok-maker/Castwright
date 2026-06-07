@@ -1874,3 +1874,74 @@ describe('LibraryView Base voices tab', () => {
     expect(screen.getByLabelText('Coqui')).toBeInTheDocument();
   });
 });
+
+describe('fe-34 — variant filter toggle', () => {
+  const designedNeeds: Character = {
+    id: 'fury', name: 'Fury', role: 'Rival', color: 'mentor', lines: 4, scenes: 1, attributes: [],
+    ttsEngine: 'qwen', voiceId: 'qwen-fury',
+    overrideTtsVoices: { qwen: { name: 'qwen-fury', variants: {} } },
+  };
+  const designedHas: Character = {
+    id: 'calm', name: 'Calm', role: 'Sage', color: 'mentor', lines: 4, scenes: 1, attributes: [],
+    ttsEngine: 'qwen', voiceId: 'qwen-calm',
+    overrideTtsVoices: { qwen: { name: 'qwen-calm', variants: { angry: { name: 'qwen-calm-angry' } } } },
+  };
+  const toggleSentences: Sentence[] = [
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'fury', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Peace.', characterId: 'calm', emotion: 'angry' },
+  ];
+  const qwenLib: Voice[] = [
+    { id: 'qwen-fury', character: 'Fury', bookId: 'b1', bookTitle: 'Book One', attributes: [],
+      usedIn: 1, source: 'current', gradient: ['#000', '#111'],
+      ttsVoice: { provider: 'qwen', name: 'qwen-fury', description: '' } },
+    { id: 'qwen-calm', character: 'Calm', bookId: 'b1', bookTitle: 'Book One', attributes: [],
+      usedIn: 1, source: 'current', gradient: ['#000', '#111'],
+      ttsVoice: { provider: 'qwen', name: 'qwen-calm', description: '' } },
+  ];
+
+  function renderToggleView() {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    /* Set ui.stage to ready with bookId='b1' so currentBookId resolves and the
+       voices view reads cast + sentences from redux (not foreign-cast cache). */
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    /* Hydrate cast with the two Qwen characters used by the qwenLib voices. */
+    store.dispatch(castSlice.actions.setCharacters([designedNeeds, designedHas]));
+    /* Hydrate manuscript sentences so usedEmotionsByCharacter has data. */
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        chapters: [],
+        characters: [designedNeeds, designedHas],
+        sentences: toggleSentences,
+      } as never),
+    );
+    return render(
+      <Provider store={store}>
+        <LibraryView library={qwenLib} />
+      </Provider>,
+    );
+  }
+
+  it('narrows the designed voices to needs-variants when "Needs variants" is selected', () => {
+    renderToggleView();
+    expect(screen.getByText('Calm')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Needs variants/ }));
+    expect(screen.getByText('Fury')).toBeInTheDocument();
+    expect(screen.queryByText('Calm')).toBeNull();
+  });
+
+  it('narrows to has-variants when "Has variants" is selected', () => {
+    renderToggleView();
+    fireEvent.click(screen.getByRole('button', { name: /^Has variants/ }));
+    expect(screen.getByText('Calm')).toBeInTheDocument();
+    expect(screen.queryByText('Fury')).toBeNull();
+  });
+});

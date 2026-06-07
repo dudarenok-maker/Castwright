@@ -7,10 +7,12 @@ import type {
   BaseVoice,
   Character,
   LibraryBook,
+  Sentence,
   TtsEngine,
   TtsModelKey,
   Voice,
 } from '../lib/types';
+import { usedEmotionsByCharacter, countMissingVariants } from '../lib/voice-status';
 import {
   TTS_ENGINES,
   engineForModelKey,
@@ -154,6 +156,13 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      button per pair. */
   const [showIgnored, setShowIgnored] = useState(false);
   const [unmarkBusyKey, setUnmarkBusyKey] = useState<string | null>(null);
+  /* fe-34 — variant filter for the Qwen "Designed voices" section. */
+  const [variantFilter, setVariantFilter] = useState<'all' | 'has' | 'needs'>('all');
+  /* fe-34 — sentences per foreign book, cached from the same getBookState the
+     duplicate/compare flows already fetch. The open book reads redux below. */
+  const [sentencesByBookId, setSentencesByBookId] = useState<Map<string, Sentence[]>>(
+    () => new Map(),
+  );
   const dispatch = useAppDispatch();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
@@ -170,6 +179,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
      the series' representative book for the per-series global-view buttons). */
   const rebaselineBookId = useAppSelector((s) => s.ui.rebaselineBookId);
   const characters = useAppSelector((s) => s.cast.characters);
+  const openBookSentences = useAppSelector((s) => s.manuscript.sentences);
   /* Plan 101 — series metadata per bookId for cross-book duplicate
      detection. The library slice carries the (author, series,
      isStandalone) trio for every book; combining it with `globalCastCache`
@@ -225,7 +235,6 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     [library],
   );
   const families = useMemo(() => buildFamilies(presetLibrary, tab), [presetLibrary, tab]);
-  const qwenGroups = useMemo(() => buildQwenStatusGroups(qwenLibrary, tab), [qwenLibrary, tab]);
   /* fs-34 — per-voice designed-variant count for the cross-book Voices badge.
      Resolve each Qwen voice to its character (redux for the open book, the
      global cast cache for others) and count its qwen.variants. */
@@ -240,6 +249,36 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     }
     return map;
   }, [qwenLibrary, currentBookId, characters, globalCastCache]);
+  /* fe-34 — per-voice count of in-use emotions that LACK a designed variant.
+     Mirrors variantCountByVoiceId but needs the book's sentences (redux for the
+     open book, the cache for foreign books — 0 until a book hydrates). */
+  const missingVariantCountByVoiceId = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const v of qwenLibrary) {
+      const source =
+        v.bookId === currentBookId ? characters : (globalCastCache.get(v.bookId) ?? null);
+      const ch = source ? findCharacterForVoice(v, source) : null;
+      if (!ch) continue;
+      const sents =
+        v.bookId === currentBookId ? openBookSentences : (sentencesByBookId.get(v.bookId) ?? []);
+      const used = usedEmotionsByCharacter(sents).get(ch.id);
+      const n = countMissingVariants(ch, used);
+      if (n > 0) map.set(v.id, n);
+    }
+    return map;
+  }, [qwenLibrary, currentBookId, characters, globalCastCache, openBookSentences, sentencesByBookId]);
+  const filteredQwenLibrary = useMemo(() => {
+    if (variantFilter === 'all') return qwenLibrary;
+    const map = variantFilter === 'has' ? variantCountByVoiceId : missingVariantCountByVoiceId;
+    return qwenLibrary.filter((v) => (map.get(v.id) ?? 0) > 0);
+  }, [qwenLibrary, variantFilter, variantCountByVoiceId, missingVariantCountByVoiceId]);
+  const qwenGroups = useMemo(
+    () => buildQwenStatusGroups(filteredQwenLibrary, tab),
+    [filteredQwenLibrary, tab],
+  );
+  /* When a variant filter is active, preset families + the "Needs a voice" bucket
+     aren't variant-relevant, so show only the matching Qwen designed voices. */
+  const showFamilies = variantFilter === 'all';
   const books = [...new Set(library.map((v) => v.bookId))];
 
   /* Compare derivations. Memoised so a transient render doesn't recompute
@@ -740,6 +779,12 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         next.set(bookId, cast);
         return next;
       });
+      const sents = res?.manuscriptEdits?.sentences ?? [];
+      setSentencesByBookId((prev) => {
+        const next = new Map(prev);
+        next.set(bookId, sents);
+        return next;
+      });
       return cast;
     } catch (err) {
       console.error('[voices] foreign cast fetch failed', err);
@@ -1073,7 +1118,39 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               </div>
             )}
           </div>
-          {families.map((f) => (
+          {qwenLibrary.length > 0 && (
+            <div
+              className="flex items-center gap-2 flex-wrap"
+              role="group"
+              aria-label="Filter by emotion variants"
+            >
+              <span className="text-xs text-ink/50">Variants:</span>
+              {(['all', 'has', 'needs'] as const).map((key) => {
+                const label =
+                  key === 'all' ? 'All' : key === 'has' ? 'Has variants' : 'Needs variants';
+                const active = variantFilter === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setVariantFilter(key)}
+                    aria-pressed={active}
+                    className={`min-h-[44px] sm:min-h-0 inline-flex items-center px-3 py-2 sm:py-1.5 rounded-full text-sm font-medium transition-colors ${
+                      active
+                        ? 'bg-ink text-canvas'
+                        : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/4'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+              {variantFilter !== 'all' && (
+                <span className="text-[11px] text-ink/45">Counts fill in as other books load.</span>
+              )}
+            </div>
+          )}
+          {showFamilies && families.map((f) => (
             <VoiceFamilySection
               key={f.key}
               family={f}
