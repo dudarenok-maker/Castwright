@@ -30,9 +30,12 @@ read, and surface the mismatch in the Generation view.
 ## Invariants
 
 1. **Each chapter audio render writes `audioModelKey` and
-   `audioRenderedAt` into `state.json`** (`server/src/routes/generation.ts`
-   post-render block). The stamp matches the `modelKey` passed to the
-   generation route for that run.
+   `audioRenderedAt` into `state.json`** (`finalize-chapter-write.ts`). The
+   stamp is the engine the audio ACTUALLY rendered in — derived from the
+   per-character render snapshots, NOT blindly the request `modelKey`. See
+   the per-character reconciliation section below; before that fix this field
+   was the request default, which produced a false drift badge on any chapter
+   whose speakers all rendered on a non-default engine.
 
 2. **Legacy chapters are lazy-backfilled from
    `audio/<slug>.segments.json`** by
@@ -188,6 +191,50 @@ read, and surface the mismatch in the Generation view.
     chapter finishes on its original engine and stamps that engine.
     The drift detector then correctly flags it the next time the user
     looks at the chapter list.
+
+## Per-character engine reconciliation (false-drift fix, 2026-06-07)
+
+This plan (chapter-wide drift) predated plan 108 (per-character engine
+routing). The chapter stamp was the generation request's DEFAULT engine, so a
+chapter whose speakers all rendered on a different engine than the project
+default got a wrong stamp — classically a narration-only chapter whose narrator
+carries `ttsEngine: 'qwen'`, regenerated while the project default was Kokoro:
+it renders 100% on Qwen but stamped `kokoro-v1`, firing a false "Generated with
+Kokoro · current engine is Qwen" badge once the project engine was set to Qwen.
+The audio was correct; only the stamp lied.
+
+Reconciliation invariants:
+
+A. **The stamp reflects the rendered engine, not the request default.**
+   `finalize-chapter-write.ts` computes a per-engine breakdown from the render
+   `characterSnapshots` (each character's `renderedFallbackEngine ?? voiceEngine`)
+   via `engineBreakdownFromSnapshots`, then stamps `audioModelKey` with
+   `effectiveAudioModelKey`: the single engine's canonical key when the chapter
+   is UNIFORM, else the request key (a single key can't represent a mixed
+   chapter). Both helpers live in `server/src/audio/engine-breakdown.ts`; the
+   engine→key map is the shared `canonicalModelKeyForEngine` (`model-keys.ts`),
+   which also replaced generation.ts's local copy.
+
+B. **A new per-chapter `audioEngines` map carries the breakdown** — distinct
+   speaking characters per engine, e.g. `{ kokoro: 1, qwen: 6 }`. Stamped on
+   render, returned on the `chapter_complete` SSE tick, persisted in
+   `state.json`, and lazy-backfilled from `characterSnapshots` by
+   `backfillAudioModelKeysFromSegments` (scan.ts) for legacy chapters.
+
+C. **Mixed-engine chapters show a breakdown, not a drift warning.** A chapter
+   with >1 engine in `audioEngines` is intentional (narrator on Kokoro +
+   dialogue on Qwen). The Generation view (`generation.tsx`,
+   `isMixedEngineChapter`) renders a neutral "Voices: Kokoro (1), Qwen (6)"
+   caption (`formatEngineBreakdown`, `tts-models.ts`) and excludes the chapter
+   from the drift banner / bulk-regen set. Uniform chapters keep the existing
+   amber drift caption, now driven by the corrected stamp.
+
+D. **Existing wrong stamps are repaired by
+   `scripts/repair-audio-engine-stamp.mjs`** (dry-run default, `--apply`): it
+   recomputes the effective engine from `characterSnapshots` and corrects
+   `audioModelKey` only where it disagrees, plus backfills `audioEngines`.
+   First run (2026-06-07) corrected 2 stamps (Unlocked CH12/13, narrator-only
+   Qwen chapters mis-stamped Kokoro) and set 355 breakdowns library-wide.
 
 ## Modal fidelity contract (drift-report-fidelity, 2026-05-19)
 

@@ -66,6 +66,27 @@ export function ttsModelLabel(key: TtsModelKey): string {
   return TTS_MODEL_OPTIONS.find((m) => m.id === key)?.label ?? key;
 }
 
+/* Short, engine-level labels (not model-level) for the mixed-engine chapter
+   caption — "Kokoro (1), Qwen (6)". The model labels ("Kokoro v1") are too long
+   to repeat per engine in a compact row caption. */
+const TTS_ENGINE_LABELS: Record<string, string> = {
+  kokoro: 'Kokoro',
+  qwen: 'Qwen',
+  coqui: 'Coqui',
+  gemini: 'Gemini',
+  piper: 'Piper',
+};
+
+/** Format a per-engine voice-count breakdown as "Kokoro (1), Qwen (6)", sorted
+    alphabetically by engine label for stable display. Empty/missing → ''. */
+export function formatEngineBreakdown(breakdown?: Record<string, number>): string {
+  if (!breakdown) return '';
+  return Object.entries(breakdown)
+    .map(([engine, count]) => `${TTS_ENGINE_LABELS[engine] ?? engine} (${count})`)
+    .sort((a, b) => a.localeCompare(b))
+    .join(', ');
+}
+
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 
 /* Single source of truth for the frontend's TTS default — mirrors server's
