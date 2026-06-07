@@ -12,6 +12,7 @@ import 'api_client.dart';
 import 'auto_sync_service.dart';
 import 'chapter_downloader.dart';
 import 'companion_audio_handler.dart';
+import 'download_foreground_service.dart';
 import 'network_info.dart';
 import 'cover_thumbnails.dart';
 import 'drift_local_library.dart';
@@ -56,6 +57,9 @@ class CompanionRuntime {
 
   /// Bedtime sleep timer (app-13) — pauses the player on expire.
   final SleepTimer sleepTimer;
+
+  /// app-3: foreground service that keeps long downloads alive when backgrounded.
+  final ForegroundController foreground = FlutterForegroundController();
 
   /// Background stream subscriptions (app-8 connectivity, app-4 finished-track).
   final List<StreamSubscription<Object?>> _subs;
