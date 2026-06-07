@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Castwright — theme-responsive logo</title>
+<style>
+  :root{--canvas:#fffdfb;--ink:#0f0e0d;--peach:#f79a83;--magenta:#a43c6c}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:ui-sans-serif,system-ui,"Segoe UI",sans-serif;color:#0f0e0d;background:#fff}
+  .wrap{max-width:900px;margin:0 auto;padding:44px 32px 80px}
+  h1{font-family:Georgia,serif;font-size:30px;margin:0 0 4px}
+  p{color:#6b6460;font-size:14px;line-height:1.55;margin:0 0 26px}
+  .pair{display:flex;gap:24px;flex-wrap:wrap;margin-bottom:34px}
+  .panel{flex:1;min-width:280px;border-radius:18px;padding:42px;display:flex;flex-direction:column;align-items:center;gap:16px}
+  .light{background:var(--canvas);border:1px solid #eee2da}
+  .dark{background:var(--ink)}
+  .panel .lab{font-size:12px;letter-spacing:1px;text-transform:uppercase}
+  .light .lab{color:#9a918b}.dark .lab{color:#8a837d}
+  .row{display:flex;align-items:center;gap:16px}
+  .name{font-family:Georgia,serif;font-size:34px;letter-spacing:-.5px}
+  .name .d{font-family:ui-sans-serif,system-ui,sans-serif;font-size:14px;opacity:.5}
+  /* simulated app toggle */
+  .sim{border-radius:18px;padding:30px;display:flex;align-items:center;justify-content:space-between;transition:.25s}
+  .sim.l{background:var(--canvas);border:1px solid #eee2da;color:#0f0e0d}
+  .sim.d{background:var(--ink);color:#fffdfb}
+  button{font:inherit;padding:9px 16px;border-radius:999px;border:1px solid currentColor;background:transparent;color:inherit;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Castwright — theme-responsive logo</h1>
+  <p>Two matched, tile-less, full-colour logos. The app swaps the file when the user flips light/dark mode — peach &amp; magenta voices stay constant; the third voice + the book page flip between ink and canvas so the mark always reads. (A single self-adapting <code>castwright-logo-auto.svg</code> also exists for OS-theme contexts.)</p>
+
+  <div class="pair">
+    <div class="panel light">
+      <span class="lab">Natural / light</span>
+      <img src="castwright-logo-light.svg" width="150" height="150" alt="">
+      <div class="row"><img src="castwright-logo-light.svg" width="40" height="40" alt=""><span class="name">Castwright<span class="d"> .ai</span></span></div>
+    </div>
+    <div class="panel dark">
+      <span class="lab">Dark mode</span>
+      <img src="castwright-logo-dark.svg" width="150" height="150" alt="">
+      <div class="row"><img src="castwright-logo-dark.svg" width="40" height="40" alt=""><span class="name" style="color:#fffdfb">Castwright<span class="d" style="color:#9a918b"> .ai</span></span></div>
+    </div>
+  </div>
+
+  <div id="sim" class="sim l">
+    <div class="row">
+      <img id="simlogo" src="castwright-logo-light.svg" width="44" height="44" alt="">
+      <span class="name" id="simname">Castwright</span>
+    </div>
+    <button onclick="toggle()">Toggle app theme</button>
+  </div>
+</div>
+<script>
+let dark=false;
+function toggle(){
+  dark=!dark;
+  const sim=document.getElementById('sim');
+  sim.className='sim '+(dark?'d':'l');
+  document.getElementById('simlogo').src=dark?'castwright-logo-dark.svg':'castwright-logo-light.svg';
+}
+</script>
+</body>
+</html>

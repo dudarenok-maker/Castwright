@@ -14,13 +14,13 @@ owner: null
 
 ## What this covers
 
-Opt-in analyzer mode that hits the Gemini free-tier API directly instead of the manual file-drop loop. Same Zod schemas, same SSE stream surface — only the source of the JSON differs. Per-chapter stage-2 keeps each request under the context window and a per-model RPM/TPM/RPD limiter ensures retries can't compound rate-limit pressure into 429/500 storms.
+Opt-in analyzer mode that hits the Gemini free-tier API directly. Same Zod schemas, same SSE stream surface as the local Ollama analyzer — only the source of the JSON differs. Per-chapter stage-2 keeps each request under the context window and a per-model RPM/TPM/RPD limiter ensures retries can't compound rate-limit pressure into 429/500 storms.
 
 ## Invariants to preserve
 
-- Activated by env var `ANALYZER=gemini`; requires `GEMINI_API_KEY`. Without the key the analyzer fails fast at construction; do not fall back silently to manual mode.
+- Activated by env var `ANALYZER=gemini`; requires `GEMINI_API_KEY`. Without the key the analyzer fails fast at construction; do not fall back silently.
 - `GEMINI_MODEL` env var picks the model id; default `gemma-4-31b-it` (separate free-tier bucket from `gemini-*` and the most generous daily cap at 1,500 RPD). Switching to `gemini-3.1-flash-lite` etc. requires only an env var change.
-- Stage-1 + stage-2 responses are validated against the **same** Zod schemas as the manual analyzer (`server/src/handoff/schemas.ts`). A Gemini response that fails validation surfaces as an `AnalysisError` to the client, not a 500 with raw API output.
+- Stage-1 + stage-2 responses are validated against the **same** Zod schemas as the local Ollama analyzer (`server/src/handoff/schemas.ts`). A Gemini response that fails validation surfaces as an `AnalysisError` to the client, not a 500 with raw API output.
 - Per-chapter stage-2 mode (current default): the analyzer iterates chapters and calls Gemini once per chapter. Whole-manuscript stage-2 (legacy) is still supported for tiny manuscripts but not the default.
 - **Every outbound Gemini call (primary AND retry) goes through `GeminiRateLimiter.acquire()`** — a per-model token bucket tracking RPM, input-TPM, and RPD. Retries can never bypass it; this is the load-bearing safety net against the retry-storm pathology where a 5xx retry on a 3-s tick from N parallel workers spikes RPM and creates more 429s than primaries.
 - **Retry policy**: max 3 attempts per call, 90 s total wall-clock budget, exponential backoff with jitter `[1.5s, 6s]` (override the backoff values via `GEMINI_RETRY_BACKOFFS_MS=ms1,ms2` for tests). Retries on 5xx (500/503/504), per-minute 429, AND `GeminiStreamIdleError` (see next bullet). Per-minute 429s honor Google's `retry-delay` from `details[].RetryInfo` — the limiter is notified via `recordRejection()` so the next acquire waits at least that long. **Daily-quota 429s are NOT retried** — they throw `DailyQuotaExhaustedError` and surface as `code: 'daily_quota'` with the next-UTC-midnight reset time in the detail blob.

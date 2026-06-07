@@ -1,4 +1,4 @@
-/* Zod schemas validating the JSON drops produced by the cowork skills.
+/* Zod schemas validating the JSON the analyzer (Gemini / Ollama) produces.
    Shapes mirror the OpenAPI Character / Chapter / Sentence definitions. */
 
 import { z } from 'zod';

@@ -4,6 +4,14 @@ Frontend for an audiobook-generation tool. Vite + React 18 + TypeScript +
 Redux Toolkit. Mocked API surface today; designed to swap to a real backend
 without changing component code.
 
+**Brand:** the product is **Castwright** (`castwright.ai`) — _any book, performed by a full
+cast — effortlessly. Even in your own voice._ Brand assets + guidelines live in `brand/`; the
+design spec is `docs/superpowers/specs/2026-06-07-castwright-brand-design.md`; the brand story
+is `docs/project-narrative.md`. The **internal package name and repo dir stay
+`audiobook-generator`** (it's the release-zip / upgrade-flow artifact) — only user-facing
+surfaces say "Castwright". App fonts: **General Sans** (sans) + **Lora** (serif). Next big
+release = voice cloning (`fs-38`, plan `docs/features/194-voice-cloning.md`).
+
 ## Working principles
 
 General working style layered on top of the project-specific rules below.
@@ -91,8 +99,8 @@ Define success criteria, then loop until verified.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep).
-  - `ANALYZER=manual` (default) — writes prompts to `server/handoff/inbox/`, waits
-    for the user to drop JSON into `server/handoff/outbox/` (file-drop cowork flow).
+  - `ANALYZER=local` (default) — calls a local Ollama model (with Gemini as an
+    automatic fallback when `GEMINI_API_KEY` is set and the daemon is unreachable).
   - `ANALYZER=gemini` + `GEMINI_API_KEY=…` — calls the free-tier Gemini API
     directly. Optional `GEMINI_MODEL` (default `gemma-4-31b-it` — separate
     free-tier bucket from `gemini-*` and 1,500 RPD; flip to

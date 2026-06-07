@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Castwright — icon concepts</title>
+<style>
+  :root{
+    --canvas:#fffdfb; --ink:#0f0e0d; --peach:#f79a83; --magenta:#a43c6c;
+    --magenta-deep:#7a1b49;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--canvas);color:var(--ink);
+    font-family:"Georgia",ui-serif,serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 32px 80px}
+  h1{font-size:40px;margin:0 0 4px;letter-spacing:-.5px}
+  .tag{font-style:italic;color:var(--magenta);margin:0 0 8px;font-size:18px}
+  .note{font-family:ui-sans-serif,system-ui,Segoe UI,sans-serif;color:#6b6460;font-size:13px;margin:0 0 40px}
+  .card{border:1px solid #eee2da;border-radius:18px;padding:28px;margin:0 0 28px;background:#fff}
+  .card h2{font-size:22px;margin:0 0 2px}
+  .card .why{font-family:ui-sans-serif,system-ui,sans-serif;font-size:14px;color:#4a4440;margin:6px 0 22px;line-height:1.5}
+  .row{display:flex;align-items:center;gap:34px;flex-wrap:wrap}
+  .swatchset{display:flex;align-items:flex-end;gap:22px}
+  .size{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .size small{font-family:ui-sans-serif,system-ui,sans-serif;font-size:11px;color:#9a918b}
+  .dark{background:var(--ink);border-radius:14px;padding:18px}
+  .lockup{font-size:30px;letter-spacing:-.5px;display:flex;align-items:center;gap:12px}
+  .lockup small{font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;color:#9a918b}
+  .reco{display:inline-block;font-family:ui-sans-serif,system-ui,sans-serif;font-size:11px;
+    background:var(--peach);color:#5a2417;border-radius:999px;padding:3px 10px;margin-left:8px;vertical-align:middle}
+  .legend{font-family:ui-sans-serif,system-ui,sans-serif;font-size:12px;color:#9a918b;margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Castwright</h1>
+  <p class="tag">Any book, performed by a full cast — effortlessly. Even in your own voice.</p>
+  <p class="note">Concept sheet · palette: peach #f79a83 · magenta #a43c6c · ink #0f0e0d · canvas #fffdfb · each mark shown at 128 / 64 / 16&nbsp;px and on dark.</p>
+
+  <!-- ============ CONCEPT 1 : QUOTE-CAST ============ -->
+  <div class="card">
+    <h2>1 · Quote-Cast <span class="reco">recommended</span></h2>
+    <p class="why">A typographic quotation mark = spoken words, the most literary, premium read. The <b>pair</b> of marks quietly says “more than one voice” — a cast. Ages well, scales to a 16px favicon, and the “ shape doubles as a soft <b>C</b> for Castwright. This is the Medium/“literary brand” move.</p>
+    <div class="row">
+      <div class="swatchset">
+        <div class="size">
+          <svg width="128" height="128" viewBox="0 0 512 512" role="img" aria-label="Castwright quote mark">
+            <rect width="512" height="512" rx="118" fill="#a43c6c"/>
+            <text x="256" y="392" text-anchor="middle" font-family="Georgia,serif" font-size="430" fill="#f79a83">&#8220;</text>
+          </svg>
+          <small>128</small>
+        </div>
+        <div class="size">
+          <svg width="64" height="64" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#a43c6c"/>
+            <text x="256" y="392" text-anchor="middle" font-family="Georgia,serif" font-size="430" fill="#f79a83">&#8220;</text>
+          </svg>
+          <small>64</small>
+        </div>
+        <div class="size">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#a43c6c"/>
+            <text x="256" y="392" text-anchor="middle" font-family="Georgia,serif" font-size="430" fill="#f79a83">&#8220;</text>
+          </svg>
+          <small>16 favicon</small>
+        </div>
+      </div>
+      <div class="dark">
+        <svg width="96" height="96" viewBox="0 0 512 512">
+          <rect width="512" height="512" rx="118" fill="#f79a83"/>
+          <text x="256" y="392" text-anchor="middle" font-family="Georgia,serif" font-size="430" fill="#0f0e0d">&#8220;</text>
+        </svg>
+      </div>
+      <div class="lockup">
+        <svg width="44" height="44" viewBox="0 0 512 512">
+          <rect width="512" height="512" rx="118" fill="#a43c6c"/>
+          <text x="256" y="392" text-anchor="middle" font-family="Georgia,serif" font-size="430" fill="#f79a83">&#8220;</text>
+        </svg>
+        <span>Castwright<small>.ai</small></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CONCEPT 2 : CAST WAVE ============ -->
+  <div class="card">
+    <h2>2 · Castwave</h2>
+    <p class="why">Audio-forward. Three <b>clusters</b> of equalizer bars in different tones = three distinct voices = a full cast. Reads instantly as “sound,” modern and techy. Slightly busier at 16px, but the three-colour grouping is the differentiator no single-narrator app can claim.</p>
+    <div class="row">
+      <div class="swatchset">
+        <div class="size">
+          <svg width="128" height="128" viewBox="0 0 512 512" role="img" aria-label="Castwright wave">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <g>
+              <rect x="96"  y="210" width="34" height="92"  rx="17" fill="#f79a83"/>
+              <rect x="146" y="160" width="34" height="192" rx="17" fill="#f79a83"/>
+              <rect x="216" y="120" width="34" height="272" rx="17" fill="#a43c6c"/>
+              <rect x="266" y="186" width="34" height="140" rx="17" fill="#a43c6c"/>
+              <rect x="336" y="172" width="34" height="168" rx="17" fill="#fffdfb"/>
+              <rect x="386" y="214" width="34" height="84"  rx="17" fill="#fffdfb"/>
+            </g>
+          </svg>
+          <small>128</small>
+        </div>
+        <div class="size">
+          <svg width="64" height="64" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="96"  y="210" width="34" height="92"  rx="17" fill="#f79a83"/>
+            <rect x="146" y="160" width="34" height="192" rx="17" fill="#f79a83"/>
+            <rect x="216" y="120" width="34" height="272" rx="17" fill="#a43c6c"/>
+            <rect x="266" y="186" width="34" height="140" rx="17" fill="#a43c6c"/>
+            <rect x="336" y="172" width="34" height="168" rx="17" fill="#fffdfb"/>
+            <rect x="386" y="214" width="34" height="84"  rx="17" fill="#fffdfb"/>
+          </svg>
+          <small>64</small>
+        </div>
+        <div class="size">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="96"  y="210" width="34" height="92"  rx="17" fill="#f79a83"/>
+            <rect x="146" y="160" width="34" height="192" rx="17" fill="#f79a83"/>
+            <rect x="216" y="120" width="34" height="272" rx="17" fill="#a43c6c"/>
+            <rect x="266" y="186" width="34" height="140" rx="17" fill="#a43c6c"/>
+            <rect x="336" y="172" width="34" height="168" rx="17" fill="#fffdfb"/>
+            <rect x="386" y="214" width="34" height="84"  rx="17" fill="#fffdfb"/>
+          </svg>
+          <small>16 favicon</small>
+        </div>
+      </div>
+      <div class="lockup">
+        <svg width="44" height="44" viewBox="0 0 512 512">
+          <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+          <rect x="96"  y="210" width="34" height="92"  rx="17" fill="#f79a83"/>
+          <rect x="146" y="160" width="34" height="192" rx="17" fill="#f79a83"/>
+          <rect x="216" y="120" width="34" height="272" rx="17" fill="#a43c6c"/>
+          <rect x="266" y="186" width="34" height="140" rx="17" fill="#a43c6c"/>
+          <rect x="336" y="172" width="34" height="168" rx="17" fill="#fffdfb"/>
+          <rect x="386" y="214" width="34" height="84"  rx="17" fill="#fffdfb"/>
+        </svg>
+        <span>Castwright<small>.ai</small></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ CONCEPT 3 : OPEN BOOK -> VOICES ============ -->
+  <div class="card">
+    <h2>3 · Open Book → Voices</h2>
+    <p class="why">The warmest / most consumer-literal: an open book whose pages rise into a few sound bars — “book becomes audio.” Friendliest of the three for a family/bedtime audience, but the most detail to hold at small sizes.</p>
+    <div class="row">
+      <div class="swatchset">
+        <div class="size">
+          <svg width="128" height="128" viewBox="0 0 512 512" role="img" aria-label="Castwright open book">
+            <rect width="512" height="512" rx="118" fill="#f79a83"/>
+            <g fill="none" stroke="#7a1b49" stroke-width="24" stroke-linejoin="round" stroke-linecap="round">
+              <path d="M256 330 C 210 300, 150 300, 110 318 L110 200 C150 182, 210 182, 256 212 Z"/>
+              <path d="M256 330 C 302 300, 362 300, 402 318 L402 200 C362 182, 302 182, 256 212 Z"/>
+            </g>
+            <g fill="#7a1b49">
+              <rect x="232" y="118" width="22" height="70"  rx="11"/>
+              <rect x="268" y="92"  width="22" height="96"  rx="11"/>
+              <rect x="304" y="132" width="22" height="56"  rx="11"/>
+            </g>
+          </svg>
+          <small>128</small>
+        </div>
+        <div class="size">
+          <svg width="64" height="64" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#f79a83"/>
+            <g fill="none" stroke="#7a1b49" stroke-width="24" stroke-linejoin="round" stroke-linecap="round">
+              <path d="M256 330 C 210 300, 150 300, 110 318 L110 200 C150 182, 210 182, 256 212 Z"/>
+              <path d="M256 330 C 302 300, 362 300, 402 318 L402 200 C362 182, 302 182, 256 212 Z"/>
+            </g>
+            <g fill="#7a1b49">
+              <rect x="232" y="118" width="22" height="70"  rx="11"/>
+              <rect x="268" y="92"  width="22" height="96"  rx="11"/>
+              <rect x="304" y="132" width="22" height="56"  rx="11"/>
+            </g>
+          </svg>
+          <small>64</small>
+        </div>
+        <div class="size">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#f79a83"/>
+            <g fill="none" stroke="#7a1b49" stroke-width="24" stroke-linejoin="round" stroke-linecap="round">
+              <path d="M256 330 C 210 300, 150 300, 110 318 L110 200 C150 182, 210 182, 256 212 Z"/>
+              <path d="M256 330 C 302 300, 362 300, 402 318 L402 200 C362 182, 302 182, 256 212 Z"/>
+            </g>
+            <g fill="#7a1b49">
+              <rect x="232" y="118" width="22" height="70"  rx="11"/>
+              <rect x="268" y="92"  width="22" height="96"  rx="11"/>
+              <rect x="304" y="132" width="22" height="56"  rx="11"/>
+            </g>
+          </svg>
+          <small>16 favicon</small>
+        </div>
+      </div>
+      <div class="lockup">
+        <svg width="44" height="44" viewBox="0 0 512 512">
+          <rect width="512" height="512" rx="118" fill="#f79a83"/>
+          <g fill="none" stroke="#7a1b49" stroke-width="24" stroke-linejoin="round" stroke-linecap="round">
+            <path d="M256 330 C 210 300, 150 300, 110 318 L110 200 C150 182, 210 182, 256 212 Z"/>
+            <path d="M256 330 C 302 300, 362 300, 402 318 L402 200 C362 182, 302 182, 256 212 Z"/>
+          </g>
+          <g fill="#7a1b49">
+            <rect x="232" y="118" width="22" height="70"  rx="11"/>
+            <rect x="268" y="92"  width="22" height="96"  rx="11"/>
+            <rect x="304" y="132" width="22" height="56"  rx="11"/>
+          </g>
+        </svg>
+        <span>Castwright<small>.ai</small></span>
+      </div>
+    </div>
+  </div>
+
+  <p class="legend">Open this file in a browser. Tell me which concept (and any colour swap, e.g. peach tile vs magenta tile) to refine — then I’ll export real favicon.svg / app-icon assets.</p>
+</div>
+</body>
+</html>

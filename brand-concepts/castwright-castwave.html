@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Castwright — Castwave variants + reversible logo</title>
+<style>
+  :root{--canvas:#fffdfb;--ink:#0f0e0d;--peach:#f79a83;--magenta:#a43c6c;--deep:#7a1b49}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--canvas);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1120px;margin:0 auto;padding:48px 32px 90px}
+  h1{font-family:Georgia,serif;font-size:38px;margin:0 0 2px;letter-spacing:-.5px}
+  .tag{font-family:Georgia,serif;font-style:italic;color:var(--magenta);margin:0 0 6px;font-size:17px}
+  .note{color:#6b6460;font-size:13px;margin:0 0 36px}
+  h2{font-size:14px;text-transform:uppercase;letter-spacing:1.5px;color:#9a918b;margin:46px 0 18px;border-bottom:1px solid #eee2da;padding-bottom:8px}
+  .grid{display:flex;gap:24px;flex-wrap:wrap}
+  .card{border:1px solid #eee2da;border-radius:16px;padding:22px;background:#fff;width:248px}
+  .card h3{font-size:16px;margin:0 0 4px}
+  .card p{font-size:12.5px;color:#5a534e;margin:6px 0 16px;line-height:1.45;min-height:54px}
+  .sizes{display:flex;align-items:flex-end;gap:16px}
+  .sz{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .sz small{font-size:10px;color:#b3aaa3}
+  .rev{display:flex;gap:18px;flex-wrap:wrap;align-items:center}
+  .panel{border-radius:14px;padding:22px;display:flex;flex-direction:column;align-items:center;gap:10px;width:200px}
+  .panel small{font-size:11px}
+  .pl{background:var(--canvas);border:1px solid #eee2da;color:#6b6460}
+  .pd{background:var(--ink);color:#b9b2ac}
+  .pm{background:var(--magenta);color:#f6d8e4}
+  .checker{background:
+    linear-gradient(45deg,#ddd 25%,transparent 25%),linear-gradient(-45deg,#ddd 25%,transparent 25%),
+    linear-gradient(45deg,transparent 75%,#ddd 75%),linear-gradient(-45deg,transparent 75%,#ddd 75%);
+    background-size:18px 18px;background-position:0 0,0 9px,9px -9px,-9px 0;color:#555}
+  .lockrow{display:flex;gap:26px;flex-wrap:wrap;margin-top:6px}
+  .lock{border-radius:14px;padding:22px 26px;display:flex;align-items:center;gap:14px}
+  .lock .name{font-family:Georgia,serif;font-size:30px;letter-spacing:-.5px}
+  .lock .name .dom{font-family:ui-sans-serif,system-ui,sans-serif;font-size:13px;opacity:.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Castwright</h1>
+  <p class="tag">Any book, performed by a full cast — effortlessly. Even in your own voice.</p>
+  <p class="note">Castwave direction · 3 colours = 3 distinct voices = a full cast · palette peach #f79a83 / magenta #a43c6c / deep #7a1b49 / ink #0f0e0d / canvas #fffdfb</p>
+
+  <!-- ================= VARIANTS ================= -->
+  <h2>Castwave variants</h2>
+  <div class="grid">
+
+    <!-- A: pure wave (baseline) -->
+    <div class="card">
+      <h3>A · Pure wave</h3>
+      <p>The original — three colour clusters, no book. Cleanest read as “sound + cast.”</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="96"  y="210" width="34" height="92"  rx="17" fill="#f79a83"/>
+            <rect x="146" y="160" width="34" height="192" rx="17" fill="#f79a83"/>
+            <rect x="216" y="120" width="34" height="272" rx="17" fill="#a43c6c"/>
+            <rect x="266" y="186" width="34" height="140" rx="17" fill="#a43c6c"/>
+            <rect x="336" y="172" width="34" height="168" rx="17" fill="#fffdfb"/>
+            <rect x="386" y="214" width="34" height="84"  rx="17" fill="#fffdfb"/>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="32" height="32" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="96" y="210" width="34" height="92" rx="17" fill="#f79a83"/>
+            <rect x="146" y="160" width="34" height="192" rx="17" fill="#f79a83"/>
+            <rect x="216" y="120" width="34" height="272" rx="17" fill="#a43c6c"/>
+            <rect x="266" y="186" width="34" height="140" rx="17" fill="#a43c6c"/>
+            <rect x="336" y="172" width="34" height="168" rx="17" fill="#fffdfb"/>
+            <rect x="386" y="214" width="34" height="84" rx="17" fill="#fffdfb"/>
+          </svg><small>32</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- B: wave rising from open book (HERO) -->
+    <div class="card">
+      <h3>B · Wave from book ★</h3>
+      <p>Voices rising out of an open book — “the words become a cast.” The clearest book + audio fusion.</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <!-- bars rising from gutter (baseline y=300) -->
+            <rect x="170" y="150" width="28" height="150" rx="14" fill="#f79a83"/>
+            <rect x="206" y="112" width="28" height="188" rx="14" fill="#f79a83"/>
+            <rect x="242" y="86"  width="28" height="214" rx="14" fill="#a43c6c"/>
+            <rect x="278" y="124" width="28" height="176" rx="14" fill="#a43c6c"/>
+            <rect x="314" y="166" width="28" height="134" rx="14" fill="#fffdfb"/>
+            <!-- open book -->
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+            </g>
+            <rect x="252" y="326" width="8" height="82" rx="4" fill="#0f0e0d"/>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="32" height="32" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="170" y="150" width="28" height="150" rx="14" fill="#f79a83"/>
+            <rect x="206" y="112" width="28" height="188" rx="14" fill="#f79a83"/>
+            <rect x="242" y="86"  width="28" height="214" rx="14" fill="#a43c6c"/>
+            <rect x="278" y="124" width="28" height="176" rx="14" fill="#a43c6c"/>
+            <rect x="314" y="166" width="28" height="134" rx="14" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+            </g>
+            <rect x="252" y="326" width="8" height="82" rx="4" fill="#0f0e0d"/>
+          </svg><small>32</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- C: book = the bars (pages as equalizer) -->
+    <div class="card">
+      <h3>C · Pages as wave</h3>
+      <p>An open book whose page-edges <i>are</i> the equalizer bars. Most “literary,” one shape doing double duty.</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <!-- spine -->
+            <rect x="248" y="150" width="16" height="226" rx="8" fill="#fffdfb"/>
+            <!-- left page bars (descending toward spine) -->
+            <g fill="#f79a83">
+              <rect x="96"  y="206" width="26" height="150" rx="13"/>
+              <rect x="132" y="190" width="26" height="166" rx="13"/>
+              <rect x="168" y="176" width="26" height="180" rx="13"/>
+              <rect x="204" y="164" width="26" height="192" rx="13"/>
+            </g>
+            <!-- right page bars (ascending from spine) -->
+            <g fill="#a43c6c">
+              <rect x="282" y="164" width="26" height="192" rx="13"/>
+              <rect x="318" y="176" width="26" height="180" rx="13"/>
+              <rect x="354" y="190" width="26" height="166" rx="13"/>
+              <rect x="390" y="206" width="26" height="150" rx="13"/>
+            </g>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="32" height="32" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="248" y="150" width="16" height="226" rx="8" fill="#fffdfb"/>
+            <g fill="#f79a83">
+              <rect x="96" y="206" width="26" height="150" rx="13"/>
+              <rect x="132" y="190" width="26" height="166" rx="13"/>
+              <rect x="168" y="176" width="26" height="180" rx="13"/>
+              <rect x="204" y="164" width="26" height="192" rx="13"/>
+            </g>
+            <g fill="#a43c6c">
+              <rect x="282" y="164" width="26" height="192" rx="13"/>
+              <rect x="318" y="176" width="26" height="180" rx="13"/>
+              <rect x="354" y="190" width="26" height="166" rx="13"/>
+              <rect x="390" y="206" width="26" height="150" rx="13"/>
+            </g>
+          </svg><small>32</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- D: minimal bars on book baseline (favicon champion) -->
+    <div class="card">
+      <h3>D · Wave + shelf</h3>
+      <p>Three fat bars on a split baseline (an open book seen edge-on). Simplest — survives a 16px favicon, easiest to make mono.</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="150" y="190" width="46" height="150" rx="23" fill="#f79a83"/>
+            <rect x="233" y="140" width="46" height="200" rx="23" fill="#a43c6c"/>
+            <rect x="316" y="214" width="46" height="126" rx="23" fill="#fffdfb"/>
+            <!-- open-book baseline (two segments + gutter) -->
+            <rect x="120" y="356" width="124" height="22" rx="11" fill="#fffdfb"/>
+            <rect x="268" y="356" width="124" height="22" rx="11" fill="#fffdfb"/>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="32" height="32" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="150" y="190" width="46" height="150" rx="23" fill="#f79a83"/>
+            <rect x="233" y="140" width="46" height="200" rx="23" fill="#a43c6c"/>
+            <rect x="316" y="214" width="46" height="126" rx="23" fill="#fffdfb"/>
+            <rect x="120" y="356" width="124" height="22" rx="11" fill="#fffdfb"/>
+            <rect x="268" y="356" width="124" height="22" rx="11" fill="#fffdfb"/>
+          </svg><small>32</small>
+        </div>
+        <div class="sz">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="150" y="190" width="46" height="150" rx="23" fill="#f79a83"/>
+            <rect x="233" y="140" width="46" height="200" rx="23" fill="#a43c6c"/>
+            <rect x="316" y="214" width="46" height="126" rx="23" fill="#fffdfb"/>
+            <rect x="120" y="356" width="124" height="22" rx="11" fill="#fffdfb"/>
+            <rect x="268" y="356" width="124" height="22" rx="11" fill="#fffdfb"/>
+          </svg><small>16</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= REVERSIBLE / MONO ================= -->
+  <h2>Reversible logo set — using variant B</h2>
+  <p class="note" style="margin-top:-6px">A “reversible” logo needs to hold up on any background. Full-colour for primary use; one-colour (mono) for reverse-out on dark/photos, single-colour print, embossing, and tiny sizes.</p>
+  <div class="rev">
+    <!-- full colour on light -->
+    <div class="panel pl">
+      <svg width="120" height="120" viewBox="0 0 512 512">
+        <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+        <rect x="170" y="150" width="28" height="150" rx="14" fill="#f79a83"/>
+        <rect x="206" y="112" width="28" height="188" rx="14" fill="#f79a83"/>
+        <rect x="242" y="86" width="28" height="214" rx="14" fill="#a43c6c"/>
+        <rect x="278" y="124" width="28" height="176" rx="14" fill="#a43c6c"/>
+        <rect x="314" y="166" width="28" height="134" rx="14" fill="#fffdfb"/>
+        <g fill="#fffdfb">
+          <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+          <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+        </g>
+        <rect x="252" y="326" width="8" height="82" rx="4" fill="#0f0e0d"/>
+      </svg>
+      <small>Full colour · light bg</small>
+    </div>
+
+    <!-- full colour on magenta brand bg (knock tile to transparent) -->
+    <div class="panel pm">
+      <svg width="120" height="120" viewBox="0 0 512 512">
+        <rect x="170" y="150" width="28" height="150" rx="14" fill="#f79a83"/>
+        <rect x="206" y="112" width="28" height="188" rx="14" fill="#f79a83"/>
+        <rect x="242" y="86" width="28" height="214" rx="14" fill="#fffdfb"/>
+        <rect x="278" y="124" width="28" height="176" rx="14" fill="#fffdfb"/>
+        <rect x="314" y="166" width="28" height="134" rx="14" fill="#f79a83"/>
+        <g fill="#fffdfb">
+          <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+          <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+        </g>
+        <rect x="252" y="326" width="8" height="82" rx="4" fill="#a43c6c"/>
+      </svg>
+      <small>On brand magenta</small>
+    </div>
+
+    <!-- mono positive (ink) on light -->
+    <div class="panel pl">
+      <svg width="120" height="120" viewBox="0 0 512 512">
+        <g fill="#0f0e0d">
+          <rect x="170" y="150" width="28" height="150" rx="14"/>
+          <rect x="206" y="112" width="28" height="188" rx="14"/>
+          <rect x="242" y="86" width="28" height="214" rx="14"/>
+          <rect x="278" y="124" width="28" height="176" rx="14"/>
+          <rect x="314" y="166" width="28" height="134" rx="14"/>
+          <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+          <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+        </g>
+      </svg>
+      <small>1-colour positive (ink)</small>
+    </div>
+
+    <!-- mono reversed (white) on ink -->
+    <div class="panel pd">
+      <svg width="120" height="120" viewBox="0 0 512 512">
+        <g fill="#fffdfb">
+          <rect x="170" y="150" width="28" height="150" rx="14"/>
+          <rect x="206" y="112" width="28" height="188" rx="14"/>
+          <rect x="242" y="86" width="28" height="214" rx="14"/>
+          <rect x="278" y="124" width="28" height="176" rx="14"/>
+          <rect x="314" y="166" width="28" height="134" rx="14"/>
+          <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+          <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+        </g>
+      </svg>
+      <small>1-colour reversed (knockout)</small>
+    </div>
+
+    <!-- on photo / checker to prove transparency -->
+    <div class="panel checker">
+      <svg width="120" height="120" viewBox="0 0 512 512">
+        <g fill="#0f0e0d">
+          <rect x="170" y="150" width="28" height="150" rx="14"/>
+          <rect x="206" y="112" width="28" height="188" rx="14"/>
+          <rect x="242" y="86" width="28" height="214" rx="14"/>
+          <rect x="278" y="124" width="28" height="176" rx="14"/>
+          <rect x="314" y="166" width="28" height="134" rx="14"/>
+          <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+          <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+        </g>
+      </svg>
+      <small>transparent bg</small>
+    </div>
+  </div>
+
+  <!-- ================= HORIZONTAL LOCKUP ================= -->
+  <h2>Horizontal wordmark lockup (positive + reversed)</h2>
+  <div class="lockrow">
+    <div class="lock" style="background:var(--canvas);border:1px solid #eee2da">
+      <svg width="58" height="58" viewBox="0 0 512 512">
+        <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+        <rect x="170" y="150" width="28" height="150" rx="14" fill="#f79a83"/>
+        <rect x="206" y="112" width="28" height="188" rx="14" fill="#f79a83"/>
+        <rect x="242" y="86" width="28" height="214" rx="14" fill="#a43c6c"/>
+        <rect x="278" y="124" width="28" height="176" rx="14" fill="#a43c6c"/>
+        <rect x="314" y="166" width="28" height="134" rx="14" fill="#fffdfb"/>
+        <g fill="#fffdfb">
+          <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+          <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+        </g>
+        <rect x="252" y="326" width="8" height="82" rx="4" fill="#0f0e0d"/>
+      </svg>
+      <span class="name" style="color:var(--ink)">Castwright <span class="dom">.ai</span></span>
+    </div>
+
+    <div class="lock" style="background:var(--ink)">
+      <svg width="58" height="58" viewBox="0 0 512 512">
+        <g fill="#fffdfb">
+          <rect x="170" y="150" width="28" height="150" rx="14"/>
+          <rect x="206" y="112" width="28" height="188" rx="14"/>
+          <rect x="242" y="86" width="28" height="214" rx="14"/>
+          <rect x="278" y="124" width="28" height="176" rx="14"/>
+          <rect x="314" y="166" width="28" height="134" rx="14"/>
+          <path d="M256 408 C 208 380, 150 380, 108 396 L108 318 C150 302, 208 302, 256 330 Z"/>
+          <path d="M256 408 C 304 380, 362 380, 404 396 L404 318 C362 302, 304 302, 256 330 Z"/>
+        </g>
+      </svg>
+      <span class="name" style="color:var(--canvas)">Castwright <span class="dom" style="color:#9a918b">.ai</span></span>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:36px">Tell me: which variant (A / B / C / D), and whether to swap the tile colour (ink vs magenta) or the 3rd-voice colour (white vs a third hue like a deep plum). Then I export favicon.svg + 1024 app icon + the mono set and write the brand doc.</p>
+</div>
+</body>
+</html>

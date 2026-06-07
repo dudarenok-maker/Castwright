@@ -193,11 +193,10 @@ describe('createPhaseWatermark — monotonicity + idempotency invariants', () =>
   });
 });
 
-describe('createSequentialWatermark — manual handoff / legacy short-circuit', () => {
+describe('createSequentialWatermark — non-pipelined sequential gate', () => {
   it('awaitPhase1Dispatch parks indefinitely until markPhase0AllDone fires', async () => {
-    /* Manual cowork loop can't pipeline because it waits for human
-       input between phases. The stub watermark behaves as an infinite
-       lag — any chapter parked until Phase 0b consolidation completes. */
+    /* The non-pipelined default behaves as an infinite lag — any chapter
+       parks until Phase 0b consolidation completes. */
     const wm = createSequentialWatermark();
     let r0 = false;
     let r5 = false;
