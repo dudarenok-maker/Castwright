@@ -103,6 +103,7 @@ describe('GET /api/generation/telemetry (fs-20)', () => {
     await appendTelemetry({
       at: new Date().toISOString(),
       bookId: 'book-a',
+      bookTitle: 'Book A',
       chapterId: 1,
       title: 'Chapter 1',
       modelKey: 'qwen3-tts-0.6b',
@@ -116,6 +117,7 @@ describe('GET /api/generation/telemetry (fs-20)', () => {
     await appendTelemetry({
       at: new Date().toISOString(),
       bookId: 'book-a',
+      bookTitle: 'Book A',
       chapterId: 2,
       title: 'Chapter 2',
       modelKey: 'qwen3-tts-0.6b',
@@ -137,6 +139,7 @@ describe('GET /api/generation/telemetry (fs-20)', () => {
       await appendTelemetry({
         at: new Date().toISOString(),
         bookId: 'book-a',
+        bookTitle: 'Book A',
         chapterId: i,
         title: `Chapter ${i}`,
         modelKey: 'qwen3-tts-0.6b',

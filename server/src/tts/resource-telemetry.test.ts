@@ -16,6 +16,7 @@ let telemetryFilePath: () => string;
 const rec = (over: Partial<Parameters<typeof mod.appendTelemetry>[0]> = {}) => ({
   at: new Date().toISOString(),
   bookId: 'book-a',
+  bookTitle: 'Book A',
   chapterId: 1,
   title: 'Chapter 1',
   modelKey: 'qwen3-tts-0.6b',
@@ -58,6 +59,7 @@ describe('resource-telemetry', () => {
     expect(out[0].chapterId).toBe(7);
     expect(out[0].rtf).toBe(0.9);
     expect(out[0].vramTotalMb).toBe(8192);
+    expect(out[0].bookTitle).toBe('Book A');
   });
 
   it('returns records newest-first and honours the limit', async () => {

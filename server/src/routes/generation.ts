@@ -1425,6 +1425,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         await appendTelemetry({
           at: new Date().toISOString(),
           bookId: job.bookId,
+          bookTitle: state.title ?? null,
           chapterId: chapter.id,
           title: chapter.title ?? null,
           modelKey,

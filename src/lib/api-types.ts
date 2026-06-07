@@ -3480,6 +3480,8 @@ export interface components {
             /** Format: date-time */
             at: string;
             bookId: string | null;
+            /** @description Human-readable book title at render time (state.json title); null for legacy records written before this field or when the book title was unknown. */
+            bookTitle: string | null;
             chapterId: number | string;
             title: string | null;
             modelKey: string | null;
