@@ -63,6 +63,12 @@ export const MODEL_OPTIONS: ModelOption[] = [
     engine: 'gemini',
   },
   {
+    id: 'gemini-3.5-flash',
+    label: 'Gemini 3.5 Flash',
+    hint: '5 RPM, 250K TPM, 20/day — strongest Flash, but only enough for a short book',
+    engine: 'gemini',
+  },
+  {
     id: 'gemini-3-flash-preview',
     label: 'Gemini 3 Flash',
     hint: '5 RPM, 250K TPM, 20/day — only enough for a short book',

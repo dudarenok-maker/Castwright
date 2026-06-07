@@ -31,6 +31,7 @@ Opt-in analyzer mode that hits the Gemini free-tier API directly instead of the 
   | Model                    | RPM | TPM       | RPD   |
   | ------------------------ | --- | --------- | ----- |
   | `gemini-3.1-flash-lite`  | 15  | 250,000   | 500   |
+  | `gemini-3.5-flash`       | 5   | 250,000   | 20    |
   | `gemini-3-flash-preview` | 5   | 250,000   | 20    |
   | `gemini-2.5-flash`       | 5   | 250,000   | 20    |
   | `gemma-4-31b-it`         | 15  | Unlimited | 1,500 |
