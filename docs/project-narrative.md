@@ -43,7 +43,7 @@ Then, chapter by chapter, the system renders the audio. Every line of dialogue l
 
 Voices are reusable across books in a series. The narrator who carried Book 1 keeps carrying Book 2. A recurring character keeps their voice from one book to the next — and if the writer renamed them, the cast merge writes the old name into the new one's aliases, so the matcher in Book N+1 still recognises them. Your library learns who you've cast and offers them back, with provenance, every time you start a new manuscript.
 
-You drop the resulting chapters into the audiobook app you already use. There's no new player. The magic isn't in the playback — it's in the conversion.
+When it's done, you listen however you like. Castwright has its own companion app — **Android today, iOS as we get moving** — that pairs with your library over the network, downloads books for offline listening, and remembers exactly where you left off. Or drop the chapters straight into the audiobook app you already use; nothing locks you in. Either way, the magic isn't in the playback — it's in the conversion.
 
 And it runs on the machine you own. The analysis pass runs locally by default, with a free-tier cloud fallback if the local model isn't reachable. Audio synthesis runs locally on a voice engine that fits on a mid-market GPU. Per book, not per listen. The frontier never sees a chapter.
 
@@ -183,6 +183,8 @@ The analysing view is more pipeline than progress bar. Phase 0a finds chapter bo
 
 **Cross-book voice continuity.** Voices generated for one book in a series are offered back when you start a new manuscript in the same series. The matcher scores name + alias + token overlap so a character renamed between books still matches. Manual cast merge writes the merged source's name into the target's aliases, building the matching key for the next book in the same step.
 
+**Companion apps.** A first-party Castwright listener — **Android today, iOS on the roadmap** — pairs with the server over your home network, syncs the library (grouped by author and series, with filters and collapsible sections), downloads books for offline playback, and tracks position, chapters, playback speed, and auto-advance between chapters. Optional, never required: the conversion is the product, and rendered audio always exports to any player.
+
 **Listener app handoff.** Generated chapters export as M4B with chapter markers (or per-chapter MP3 as a fallback, since chapter audio is MP3 VBR V2 on disk via ffmpeg). Multi-step walkthrough modals guide the user through getting the file into the listener app of their choice — PocketBook, Voice, BookPlayer, Apple Books, Smart AudioBook Player, Audiobookshelf, Plex — with platform-accurate iOS and Android share-sheet phone-frame mockups embedded in the walkthrough.
 
 **Unified Status pill.** The top bar's separate state indicators collapsed into a single _Status_ pill backed by a status modal, with a hover popover that reveals the detail inline without opening the modal (and keeps the cast drawer open underneath). It surfaces TTS load errors, analyzer and generation state, and pipeline readiness in one place, so the global picture stays legible across the concurrent multi-book workflow regardless of which book's view is active. Model lifecycle still lives here: the analyzer (Ollama qwen3.5:4b) and the button-driven TTS engines (Coqui XTTS v2 and Qwen3-TTS; Kokoro v1 is eager-loaded and needs no load step) load and unload explicitly, with an auto-eviction banner when loading one frees the other and an `/api/ps`-backed "currently resident" indicator; an auto-load helper warms an engine just-in-time when the user hits a sample play button on a cold pipeline.
@@ -286,7 +288,7 @@ Five harnesses, three-tier git gate.
 - **Open formats throughout.** EPUB and PDF in. Markdown intermediate. M4B and MP3 out. Voice profiles in a documented schema.
 - **Privacy by default.** Books, profiles, and renders all stay on the user's machine unless explicitly exported.
 - **Mid-market hardware target.** Production target is an 8 GB consumer GPU. The default Kokoro engine is light enough to sit resident alongside the analyzer; a heavy TTS engine (XTTS, Qwen voice design) evicts the analyzer and back, arbitrated by the VRAM semaphore. If it requires datacentre GPUs to be useful, the project has missed its point.
-- **No proprietary player.** The magic is in the conversion, not the playback; the audiobook drops into the app the listener already uses.
+- **No lock-in.** Castwright ships its own companion apps (Android now, iOS next), but the magic is in the conversion, not the playback — rendered audio always exports as M4B/MP3 to whatever player the listener prefers. You're never trapped.
 - **OpenAPI is the contract, not the documentation.** Types come from the generated file; hand-written shapes are a regression.
 
 ### Open questions and known risks
