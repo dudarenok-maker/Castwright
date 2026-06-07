@@ -239,12 +239,29 @@ _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ design expressive variants for a recurring cast across a whole series in one flow. _Re-homed from `fs-25` on archive._
 _Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512).
 
-#### fs-33/fs-34 follow-ups (per-quote emotion, shipped 2026-06-07)
+#### `fs-35` — per-chapter Detect-emotions trigger (fs-33 follow-up) ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592))
 
-- Per-chapter Detect-emotions trigger ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592)) — _scope the backfill pass to one chapter; v1 shipped whole-book only._
-- "Manual clear sticks" sentinel ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593)) — _a manually-cleared emotion currently gets re-filled on re-detect._
-- Detect-emotions for `ANALYZER=manual` file-drop mode ([#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594)).
-- Voices view "Has emotion variants" filter ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595)) — _the badge shipped; the standalone filter is deferred._
+- _What:_ Add a per-chapter "Detect emotions" option (the emotion-only backfill pass scoped to the current chapter) alongside the whole-book trigger. The fs-33 v1 shipped whole-book only.
+- _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
+_Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
+
+#### `fs-36` — per-quote emotion: "manual clear sticks" sentinel (fs-33 follow-up) ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593))
+
+- _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.
+- _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
+_Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
+
+#### `fs-37` — Detect-emotions support for `ANALYZER=manual` (file-drop) mode (fs-33 follow-up) ([#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594))
+
+- _What:_ The emotion-only pass uses `selectAnalyzerForPhase` (Gemini/Ollama); the `ANALYZER=manual` file-drop cowork flow has no emotion-annotation path. Add a manual-handoff branch (inbox prompt → outbox JSON) for the annotate-emotion route.
+- _Benefit (user/dev):_ dev/cowork users on manual mode can backfill emotions too.
+_Full detail + acceptance:_ [#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594).
+
+#### `fe-34` — Voices view: "Has emotion variants" filter (fs-34 follow-up) ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595))
+
+- _What:_ The cross-book Voices view renders the `VariantsBadge` on Qwen designed-voice cards (shipped), but has no status-filter like the cast view's chips. Add a filter toggle to narrow the view to voices whose character has ≥1 designed emotion variant.
+- _Benefit (user):_ quickly find which cross-book voices already have expressive variants.
+_Full detail + acceptance:_ [#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595).
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
