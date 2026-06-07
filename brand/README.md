@@ -39,6 +39,14 @@ The uneven bottom edge of the wave "reaches" toward the page, tying voice to boo
 The app swaps `-light` / `-dark` when the user toggles theme (peach + magenta stay constant;
 only the third voice + book flip). Preview: open `castwright-theme-pair.html`.
 
+## Brand system & marketing
+
+| File | Use |
+|---|---|
+| `brand-guidelines.md` | Verbal voice & tone (+ sample copy), typography, colour system. |
+| `castwright-og.svg` | Social / OG share image (1200×630, signature gradient + lockup + tagline). |
+| `castwright-hero.html` | Landing hero mock — gradient, headline rule, 3 pillars, CTAs. |
+
 ## Exporting PNGs / favicons
 
 No design tool needed — open **`export-png.html`** in any browser, choose a variant and size
