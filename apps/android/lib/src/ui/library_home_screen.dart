@@ -137,6 +137,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
             setState(() => _progress[book.bookId] = t > 0 ? '$d/$t' : '…'),
       );
       if (mounted) setState(() => _progress.remove(book.bookId));
+      await widget.runtime.enforceStorageCap(); // app-4: keep under the cap
       await _refresh();
     } catch (e) {
       if (mounted) {

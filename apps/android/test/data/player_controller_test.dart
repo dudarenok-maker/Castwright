@@ -20,8 +20,10 @@ class FakeAudioEngine implements AudioEngine {
   Duration? get duration => null;
   @override
   Stream<Duration?> get durationStream => const Stream.empty();
+  final _completionCtl = StreamController<void>.broadcast();
   @override
-  Stream<void> get completionStream => const Stream.empty();
+  Stream<void> get completionStream => _completionCtl.stream;
+  void emitCompletion() => _completionCtl.add(null);
 
   @override
   Future<void> setFilePath(String path) async {
@@ -70,6 +72,7 @@ class FakeAudioEngine implements AudioEngine {
   Future<void> dispose() async {
     await _pos.close();
     await _playingCtl.close();
+    await _completionCtl.close();
   }
 
   void emit(Duration p) {
@@ -244,6 +247,19 @@ void main() {
       expect(np.album, 'My Book');
       expect(np.artPath, '/art.jpg');
       expect(np.duration, const Duration(seconds: 60));
+      await sub.cancel();
+      await pc.dispose();
+    });
+
+    test('emits the finished chapter uuid on completion (app-4)', () async {
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore());
+      final done = <String>[];
+      final sub = pc.chapterCompletedStream.listen(done.add);
+      await pc.openBook('b1'); // u1
+      engine.emitCompletion();
+      await Future<void>.delayed(Duration.zero);
+      expect(done, contains('u1'));
       await sub.cancel();
       await pc.dispose();
     });
