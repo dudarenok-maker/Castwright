@@ -61,6 +61,21 @@ void main() {
       await lib.close();
     });
 
+    test('clearAllBooks evicts every book + its files', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1]);
+      await fs.writeBytes('/data/books/b2/u1/audio.mp3', [2]);
+      await lib.recordChapter('b1', 'u1', 'fp1', 'audio.mp3');
+      await lib.recordChapter('b2', 'u1', 'fp2', 'audio.mp3');
+      expect((await lib.listBooks()).length, 2);
+
+      await lib.clearAllBooks();
+      expect(await lib.listBooks(), isEmpty);
+      expect(await fs.read('/data/books/b1/u1/audio.mp3'), isNull);
+      await lib.close();
+    });
+
     test('recordChapter stats the on-disk file for byte accounting', () async {
       final fs = InMemoryFileStore();
       final lib = makeLib(fs);
