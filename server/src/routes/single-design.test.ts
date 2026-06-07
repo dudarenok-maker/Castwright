@@ -150,3 +150,45 @@ describe('single-design job — first design', () => {
     );
   });
 });
+
+describe('single-design job — preview (re-design)', () => {
+  it('emits preview_ready WITHOUT persisting, and previewUrl matches the core stub', async () => {
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'warmer', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b', preview: true });
+
+    expect(res.status).toBe(200);
+    const events = collectSse(res);
+    const ready = events.find((e) => e.type === 'preview_ready');
+    expect(ready).toMatchObject({
+      characterId: 'c1',
+      previewVoiceId: 'qwen-c1-preview',
+      previewUrl: '/api/voice-sample/c1.mp3', // URL forwarded from designQwenVoiceForCharacter stub
+    });
+    expect(applyOverrideStub).not.toHaveBeenCalled();
+  });
+});
+
+describe('single-design job — reattach + busy', () => {
+  it('bare subscribe to a book with no job idles immediately', async () => {
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/design-single/subscribe`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    const events = collectSse(res);
+    expect(events.map((e) => e.type)).toContain('idle');
+  });
+
+  it('409s the start route when a design is already busy for the book', async () => {
+    designLock.markDesignBusy(bookDir);
+    try {
+      const res = await request(app)
+        .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+        .send({ persona: 'warm', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+      expect(res.status).toBe(409);
+    } finally {
+      designLock.clearDesignBusy(bookDir);
+    }
+  });
+});
