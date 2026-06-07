@@ -51,3 +51,25 @@ describe('VoiceEnginePicker — fs-2 lockedToQwen', () => {
     expect(screen.queryByTestId('qwen-locked-note')).not.toBeInTheDocument();
   });
 });
+
+describe('VoiceEnginePicker — background design progress', () => {
+  it('renders DesignProgress + the "keeps running" note while designBusy', () => {
+    render(<VoiceEnginePicker {...baseProps} designBusy designPhase="rendering" />);
+    /* Branded progress + honest phase label (rendering). */
+    expect(screen.getByTestId('design-waveform')).toBeInTheDocument();
+    expect(screen.getByText(/rendering the 12s audition/i)).toBeInTheDocument();
+    expect(screen.getByText(/keeps running if you close/i)).toBeInTheDocument();
+    /* The design button is the disabled "Designing voice…" affordance. */
+    const btn = screen.getByTestId('qwen-design-voice') as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveTextContent(/designing voice/i);
+  });
+
+  it('does not click through to onDesignVoice while designBusy (button disabled)', () => {
+    const onDesignVoice = vi.fn();
+    render(<VoiceEnginePicker {...baseProps} designBusy onDesignVoice={onDesignVoice} />);
+    /* No DesignProgress in the idle branch; phase defaults to designing here. */
+    expect(screen.getByText(/designing the voice/i)).toBeInTheDocument();
+    expect(onDesignVoice).not.toHaveBeenCalled();
+  });
+});
