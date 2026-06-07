@@ -269,12 +269,6 @@ _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
 
-#### `fe-34` — Voices view: "Has emotion variants" filter (fs-34 follow-up) ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595))
-
-- _What:_ The cross-book Voices view renders the `VariantsBadge` on Qwen designed-voice cards (shipped), but has no status-filter like the cast view's chips. Add a filter toggle to narrow the view to voices whose character has ≥1 designed emotion variant.
-- _Benefit (user):_ quickly find which cross-book voices already have expressive variants.
-_Full detail + acceptance:_ [#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595).
-
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
 - _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) drives today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. Per the 2026-05-21 Kokoro-Stop-pill change, the hook now fans out per engine: it returns `{ coqui, kokoro, evictionNotice, loadErrorNotice, dismissNotices }` from a single /health probe. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
