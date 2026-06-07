@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
+import '../domain/home_shelf.dart';
 import '../domain/library_tree.dart';
 import '../domain/listen_progress.dart';
 import '../domain/paired_server.dart';
@@ -30,6 +31,7 @@ class LibraryHomeScreen extends StatefulWidget {
 
 class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
   List<LibraryBook> _books = [];
+  List<ShelfBook> _continue = []; // app-14: in-progress, most-recent first
   final Map<String, String> _covers = {}; // bookId -> thumb path
   final Map<String, String> _progress = {}; // bookId -> "done/total"
   final Map<String, double> _totalSec = {}; // bookId -> total duration (s)
@@ -70,9 +72,21 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
         return;
       }
     }
+    // app-14: continue-listening rail from local lastPlayedAt.
+    final shelf = buildContinueListening([
+      for (final s in await widget.runtime.library.listBooks())
+        ShelfBook(
+          bookId: s.bookId,
+          title: s.title,
+          author: s.author,
+          lastPlayedAt: s.lastPlayedAt,
+          updatedAt: '',
+        ),
+    ]);
     if (!mounted) return;
     setState(() {
       _books = books;
+      _continue = shelf;
       _offline = offline;
       _loading = false;
     });
@@ -155,6 +169,72 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     ));
   }
 
+  Widget _continueRail() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text('Continue listening',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold)),
+        ),
+        SizedBox(
+          height: 156,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            children: [for (final b in _continue) _shelfCard(b)],
+          ),
+        ),
+        const Divider(),
+      ],
+    );
+  }
+
+  Widget _shelfCard(ShelfBook b) {
+    final path = _covers[b.bookId];
+    return InkWell(
+      key: Key('continue-${b.bookId}'),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) =>
+            PlayerScreen(runtime: widget.runtime, bookId: b.bookId, title: b.title),
+      )),
+      child: SizedBox(
+        width: 100,
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: SizedBox(
+                  width: 88,
+                  height: 112,
+                  child: path != null
+                      ? Image.file(File(path),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const Icon(Icons.menu_book))
+                      : const ColoredBox(
+                          color: Color(0x22000000),
+                          child: Icon(Icons.menu_book)),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(b.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final tree = buildLibraryTree(filterBooks(_books, _query));
@@ -228,6 +308,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
             Expanded(
               child: ListView(
                 children: [
+                  if (_continue.isNotEmpty && _query.isEmpty) _continueRail(),
                   for (final author in tree) ..._authorSection(author),
                 ],
               ),
