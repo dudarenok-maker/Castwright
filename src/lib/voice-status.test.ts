@@ -261,6 +261,21 @@ describe('statusFilterKeys — cast-view filter keys', () => {
     ]);
   });
 
+  it('keys both "Variants" and "Needs variants" for a partially-designed character', () => {
+    // Realistic mid-design state: angry/sad designed, surprised still in use but unmet.
+    const c = char({
+      overrideTtsVoices: {
+        qwen: {
+          name: 'qwen-x',
+          variants: { angry: { name: 'qwen-x-angry' }, sad: { name: 'qwen-x-sad' } },
+        },
+      },
+    });
+    expect(
+      statusFilterKeys(c, voice({ generated: true }), QWEN, new Set(['angry', 'sad', 'surprised'])),
+    ).toEqual(['Generated', 'Variants', 'Needs variants']);
+  });
+
   it('omits "Needs variants" when usedEmotions is undefined', () => {
     const c = char({ overrideTtsVoices: { qwen: { name: 'qwen-x', variants: {} } } });
     expect(statusFilterKeys(c, voice({ generated: true }), QWEN)).toEqual(['Generated']);
