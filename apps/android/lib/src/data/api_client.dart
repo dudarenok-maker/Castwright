@@ -80,6 +80,21 @@ class ApiClient {
   /// Adapter so this client satisfies the resume sync's [ListenProgressApi].
   ListenProgressApi get listenProgressApi => _ApiListenProgressApi(this);
 
+  /// CA-pinned, authenticated GET returning the full response bytes (e.g. a
+  /// book cover). Throws [ApiException] on >= 400 (404 = no cover).
+  Future<List<int>> getBytes(String path) async {
+    final fetch = pinnedRangeFetch();
+    final res = await fetch(_u(path), const {});
+    if (res.statusCode >= 400) {
+      throw ApiException(res.statusCode, 'GET $path failed (${res.statusCode}).');
+    }
+    final out = <int>[];
+    await for (final chunk in res.body) {
+      out.addAll(chunk);
+    }
+    return out;
+  }
+
   /// GET the server resume bookmark; null when the server has none (404).
   Future<RemoteProgress?> getListenProgress(String bookId) async {
     try {

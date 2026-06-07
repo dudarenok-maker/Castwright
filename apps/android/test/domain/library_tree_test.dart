@@ -5,7 +5,7 @@ LibraryBook bk(
   String id, {
   String author = 'A',
   String series = '',
-  int? pos,
+  double? pos,
   String? title,
   BookDownloadState state = BookDownloadState.downloaded,
 }) =>
@@ -44,6 +44,22 @@ void main() {
       expect(tree.single.series.single.books.single.title, 'Solo');
     });
 
+    test('orders by decimal series position (novella 8.5 between 8 and 9)', () {
+      final tree = buildLibraryTree([
+        bk('b1', author: 'SM', series: 'the Hollow Tide', pos: 9, title: 'The Drowning Bell'),
+        bk('b2', author: 'SM', series: 'the Hollow Tide', pos: 8, title: 'Legacy'),
+        bk('b3', author: 'SM', series: 'the Hollow Tide', pos: 8.5, title: 'Unlocked'),
+      ]);
+      expect(tree.single.series.single.books.map((b) => b.title),
+          ['Legacy', 'Unlocked', 'The Drowning Bell']);
+    });
+
+    test('formatSeriesPosition shows decimals only when needed', () {
+      expect(formatSeriesPosition(8.5), '8.5');
+      expect(formatSeriesPosition(1), '1');
+      expect(formatSeriesPosition(null), '');
+    });
+
     test('a series with null positions falls back to title order', () {
       final tree = buildLibraryTree([
         bk('b1', author: 'A', series: 'S', title: 'Beta'),
@@ -70,6 +86,16 @@ void main() {
 
     test('matches author', () {
       expect(filterBooks(books, 'sanderson').single.bookId, 'b1');
+    });
+
+    test('matches series — keeps every book in a matched series', () {
+      final series = [
+        bk('b1', author: 'Della Renwick', series: 'The Hollow Tide', title: 'Exile'),
+        bk('b2', author: 'Della Renwick', series: 'The Hollow Tide', title: 'Saltgrave'),
+        bk('b3', author: 'Other', series: 'Different', title: 'Standalone'),
+      ];
+      final hit = filterBooks(series, 'keeper');
+      expect(hit.map((b) => b.bookId), ['b1', 'b2']);
     });
   });
 }
