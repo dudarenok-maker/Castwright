@@ -11,6 +11,11 @@ abstract class AudioEngine {
   Future<void> seek(Duration position);
   Future<void> setSpeed(double speed);
 
+  /// Boost loudness above the source's unity (decibels, 0 = off). `setVolume`
+  /// can only attenuate; this adds gain (Android LoudnessEnhancer) so a quiet
+  /// −16 LUFS master can be lifted on-device.
+  Future<void> setVolumeBoost(double db);
+
   /// Current playback position.
   Duration get position;
 
