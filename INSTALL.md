@@ -235,6 +235,26 @@ The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android t
 
 ---
 
+## Android companion app
+
+The native Flutter **Audiobook Companion** (a separate sideload app — **not** part of this release zip) pairs to the server over the LAN and delta-syncs only the chapters that changed, for offline playback with background / lock-screen / Bluetooth controls. To use it:
+
+1. Do the LAN-HTTPS setup above (mkcert + `npm run install:cert-mobile`).
+2. Set **both** in `server/.env`, then restart in LAN mode:
+
+   ```
+   LAN_HTTPS=1
+   LAN_AUTH_TOKEN=<a-strong-secret>
+   ```
+
+   `LAN_AUTH_TOKEN` is the **pairing token**. With `LAN_HTTPS=1` set, the server **won't start if the LAN cert is missing** — run step 1 first.
+3. The pairing values are served at `GET /api/export/lan` (`{ urls, protocol: "https", token, caFingerprint }`).
+4. In the app: **Pair a device** → scan the pairing QR or enter the server URL (`https://<lan-ip>:8443`), access token, and CA fingerprint. The app pins the CA itself, so — unlike the mobile *web* UI — **you do not install the root CA on the phone**.
+
+Build/sideload instructions for the app live in [`apps/android/README.md`](apps/android/README.md); the full design is [`docs/features/188-android-companion-app.md`](docs/features/188-android-companion-app.md).
+
+---
+
 ## Updating
 
 From **v1.6.0 onward, upgrading is one click in the Account tab** — open **Account → Application updates**, pick the new `audiobook-generator-vX.Y.Z.zip`, confirm the version delta, and the app stages, validates, swaps, reinstalls deps, migrates your book data (with an automatic backup first), and restarts itself. No terminal commands.
