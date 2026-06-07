@@ -91,8 +91,8 @@ Define success criteria, then loop until verified.
 - `npm run openapi:types` — regenerate `src/lib/api-types.ts` from `openapi.yaml`.
 - `cd server && npm run dev` — local analysis backend on `:8080`. Reads `server/.env`
   (Node 20.6+ native `process.loadEnvFile`, no dotenv dep).
-  - `ANALYZER=manual` (default) — writes prompts to `server/handoff/inbox/`, waits
-    for the user to drop JSON into `server/handoff/outbox/` (file-drop cowork flow).
+  - `ANALYZER=local` (default) — calls a local Ollama model (with Gemini as an
+    automatic fallback when `GEMINI_API_KEY` is set and the daemon is unreachable).
   - `ANALYZER=gemini` + `GEMINI_API_KEY=…` — calls the free-tier Gemini API
     directly. Optional `GEMINI_MODEL` (default `gemma-4-31b-it` — separate
     free-tier bucket from `gemini-*` and 1,500 RPD; flip to

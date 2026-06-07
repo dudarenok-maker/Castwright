@@ -17,9 +17,9 @@
      3. Back-pressure under stall — Phase 0 stalls mid-book (chapter 13
         hangs). Phase 1 chapters 0-2 dispatch quickly; chapter 3 parks
         until chapter 13 completes.
-     4. Manual handoff regression — `ANALYZER=manual` collapses to
-        sequential. Phase 1 NEVER dispatches while any Phase 0 chapter
-        is pending.
+     4. Non-pipelined sequential mode — with per-phase selection
+        inactive the pipeline collapses to sequential. Phase 1 NEVER
+        dispatches while any Phase 0 chapter is pending.
      5. Concurrent quota usage — both pools in flight produces
         interleaved calls (Phase 1 calls fire while Phase 0 calls are
         still active), proving the limiter buckets advance in parallel.
