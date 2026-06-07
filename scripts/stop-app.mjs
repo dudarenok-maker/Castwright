@@ -58,7 +58,9 @@ for (const name of ['server', 'tts']) {
 }
 
 // Belt-and-braces: sweep listeners on our prod ports. (No 5173 here — prod
-// doesn't run Vite.)
+// doesn't run Vite.) :8443 is the LAN HTTPS port (start:lan / LAN_HTTPS=1 in
+// server/.env) — sweep it too so a LAN server with no surviving PID file is
+// still reaped.
 async function probeAndSweep(port) {
   return new Promise((resolveProbe) => {
     const sock = net.connect({ port, host: '127.0.0.1' });
@@ -78,7 +80,7 @@ async function probeAndSweep(port) {
 }
 
 const stillListening = [];
-for (const port of [8080, 9000]) {
+for (const port of [8080, 8443, 9000]) {
   if (await probeAndSweep(port)) stillListening.push(port);
 }
 
