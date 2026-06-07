@@ -36,6 +36,25 @@ jobs:
       # app-11: also build the release APK (debug-signed fallback unless signing
       # secrets are wired) and publish it as an installable alpha sideload artifact.
       - run: flutter build apk --release
+      # Guard the 16 KB page-size fix (mobile_scanner 7 / secure_storage 10 /
+      # NDK r28): every bundled arm64 native lib must have ≥16 KB-aligned LOAD
+      # segments or it warns / runs in compat-mode on 16 KB-page devices.
+      - name: Verify 16 KB ELF alignment (arm64)
+        run: |
+          set -euo pipefail
+          apk="build/app/outputs/flutter-apk/app-release.apk"
+          work="$(mktemp -d)"
+          unzip -o -q "$apk" 'lib/arm64-v8a/*.so' -d "$work"
+          fail=0
+          for so in "$work"/lib/arm64-v8a/*.so; do
+            bad=$(readelf -lW "$so" | awk '/LOAD/{a=strtonum($NF); if(a<16384) print a}')
+            if [ -n "$bad" ]; then
+              echo "::error::$(basename "$so") is NOT 16 KB-aligned"; fail=1
+            else
+              echo "ok: $(basename "$so")"
+            fi
+          done
+          exit $fail
       - uses: actions/upload-artifact@v4
         with:
           name: companion-release-apk
