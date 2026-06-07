@@ -274,6 +274,7 @@ describe('castDesignMiddleware', () => {
         'castDesign/setPhase',
         'cast/setQwenOverrideName',
         'notifications/pushToast',
+        'castDesign/settle',
       ]),
     );
     /* Mirrored into the cast slice → row flips to Designed. */
