@@ -18,7 +18,7 @@ import { voicesSlice } from '../store/voices-slice';
 import { CastView, compareCastRows } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { api } from '../lib/api';
-import type { Character, Voice, TtsModelKey } from '../lib/types';
+import type { Character, Voice, TtsModelKey, Sentence } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -1114,6 +1114,69 @@ describe('CastView status filter', () => {
     expect(isPresent('Blank')).toBe(true);
     /* Clear disappears once no filter is active. */
     expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
+  });
+
+  // Designed Qwen voice, speaks an "angry" quote, but has NO angry variant ⇒ "Needs variants".
+  const fury: Character = {
+    id: 'fury',
+    name: 'Fury',
+    role: 'Rival',
+    color: 'mentor',
+    lines: 4,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-fury', variants: {} } },
+  };
+  // Designed Qwen voice WITH the matching variant ⇒ "Has variants", not "Needs variants".
+  const calm: Character = {
+    id: 'calm',
+    name: 'Calm',
+    role: 'Sage',
+    color: 'mentor',
+    lines: 4,
+    scenes: 1,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-calm', variants: { angry: { name: 'qwen-calm-angry' } } } },
+  };
+  const variantSentences: Sentence[] = [
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'fury', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Peace.', characterId: 'calm', emotion: 'angry' },
+  ];
+
+  function renderVariantView() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+    });
+    return render(
+      <Provider store={store}>
+        <CastView
+          characters={[fury, calm]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={variantSentences}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('renders the resurrected "Has variants" chip with its count', () => {
+    renderVariantView();
+    expect(chip(/^Has variants/).textContent).toContain('1'); // calm only
+  });
+
+  it('renders the "Needs variants" chip and filters to unmet-variant rows', () => {
+    renderVariantView();
+    expect(chip(/^Needs variants/).textContent).toContain('1'); // fury only
+    fireEvent.click(chip(/^Needs variants/));
+    expect(isPresent('Fury')).toBe(true);
+    expect(isPresent('Calm')).toBe(false);
   });
 });
 
