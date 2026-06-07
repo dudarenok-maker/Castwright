@@ -162,7 +162,7 @@ const MODEL_LABELS: Record<string, string> = {
 };
 
 function humanModel(modelId: string | undefined): string {
-  if (!modelId) return 'cowork reviewer';
+  if (!modelId) return 'analyzer';
   return MODEL_LABELS[modelId] ?? modelId;
 }
 
@@ -185,15 +185,11 @@ function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
    as the per-chapter roster snapshot exists for its chapter). */
 
 /* Per-job watermark factory. Real watermark when the per-phase
-   knobs are active AND we're not in legacy manual mode. Otherwise the
-   sequential stub (Phase 1 waits for `markPhase0AllDone()` exactly
-   like today's hard phase gate). Exported for unit testing. */
+   knobs are active. Otherwise the sequential stub (Phase 1 waits for
+   `markPhase0AllDone()` exactly like today's hard phase gate). Exported
+   for unit testing. */
 export function createWatermarkForJob(userSettings?: UserSettings): PhaseWatermark {
-  /* Manual cowork loop can't pipeline because it waits for human
-     input between phases — short-circuit to the sequential stub
-     regardless of any per-phase env vars. */
-  const manual = process.env.ANALYZER === 'manual';
-  if (manual || !isPerPhaseModelSelectionActive(userSettings)) {
+  if (!isPerPhaseModelSelectionActive(userSettings)) {
     return createSequentialWatermark();
   }
   return createPhaseWatermark({ minLagChapters: resolvePhase1MinLagChapters(userSettings) });
@@ -979,7 +975,7 @@ export interface SeriesPriorCharacter {
   fromBookTitles?: string[];
 }
 
-/* Build the per-chapter Phase 0a inbox markdown that drives the manual /
+/* Build the per-chapter Phase 0a inbox markdown that drives the
    Gemini / Ollama analyzer. Exported for unit testing — the test asserts
    that the template includes the broadened first-person guidance so
    journal / registry-file / bio chapters (the Unlocked format) get
@@ -1863,7 +1859,7 @@ export async function runMainAnalyzerJob(
          model for this run (env still trumps it).
 
      The watermark decides the dispatch contract. When the per-phase split
-     is active (and not manual), Phase 1 chapter K dispatches once Phase 0's
+     is active, Phase 1 chapter K dispatches once Phase 0's
      watermark reaches `K + LAG` — `runPhase0Pool` and `runPhase1Pool` run
      concurrently, joined by the outer `Promise.all` below. Otherwise the
      sequential stub makes Phase 1 wait for `markPhase0AllDone()` (today's
@@ -1877,9 +1873,7 @@ export async function runMainAnalyzerJob(
   const phase1ModelId = phase1Selection.model;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
   const pipelinedPerPhase =
-    !opts.requestedModel &&
-    isPerPhaseModelSelectionActive(userSettings) &&
-    process.env.ANALYZER !== 'manual';
+    !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
   if (pipelinedPerPhase) {
     console.log(
       `[analysis] manuscript=${manuscriptId} pipelined ` +
@@ -2047,7 +2041,7 @@ export async function runMainAnalyzerJob(
     let stage1!: Stage1Output;
     const totalCastChapters = record.chapterHints.length;
     /* Plan 88 follow-up — pipelined Phase 0/Phase 1 execution.
-       In pipelined mode (per-phase env vars set, not manual), Phase 1
+       In pipelined mode (per-phase env vars set), Phase 1
        workers dispatch against a rolling-roster snapshot taken when
        the watermark releases their chapter (`awaitPhase1Dispatch`).
        `phase1Stage1Ready` flips true once Phase 0b consolidation (or
@@ -2505,7 +2499,7 @@ export async function runMainAnalyzerJob(
            per-chapter completion. The watermark is monotonic and
            tolerates out-of-order completions (worker for chapter N+2
            may finish before worker for chapter N). With the sequential
-           stub watermark (legacy / manual mode), this is a no-op. With
+           stub watermark (legacy single-model / non-pipelined mode), this is a no-op. With
            the real watermark (pipelined mode), it releases any parked
            Phase 1 waiter whose chapter is within `LAG` of the new
            value. */
@@ -2772,7 +2766,7 @@ export async function runMainAnalyzerJob(
       };
       /* Defer the await — Phase 1 is launched concurrently below and
          the outer Promise.all joins both pools. In sequential mode
-         (no per-phase env vars / manual) Phase 1 workers all park on
+         (no per-phase env vars) Phase 1 workers all park on
          `awaitPhase1Dispatch` until `markPhase0AllDone()` fires inside
          this function, so observable behaviour matches today's strict
          phase gate. In pipelined mode, Phase 1 dispatches as Phase 0
@@ -3039,7 +3033,7 @@ export async function runMainAnalyzerJob(
       let chapterLastHeartbeatAt = 0;
       /* Plan 88 — Phase 1 attribution runs on `phase1Analyzer`.
          In pipelined mode this is a separate model (e.g. Gemini Flash
-         while Phase 0 used Gemma); in legacy / manual mode it's the
+         while Phase 0 used Gemma); in legacy single-model / non-pipelined mode it's the
          same instance as `analyzer` so behaviour is unchanged. The
          throttle event carries the Phase-1 model id so the UI can
          label the rate-limit pause correctly. */
