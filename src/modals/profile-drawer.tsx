@@ -475,7 +475,13 @@ export function ProfileDrawer({
        character's own (empty-when-reused) override and reporting "No voice
        designed yet". */
     overrideTtsVoices: designedVoiceId
-      ? { ...(character.overrideTtsVoices ?? {}), qwen: { name: designedVoiceId } }
+      ? {
+          ...(character.overrideTtsVoices ?? {}),
+          /* Spread the existing qwen slot so designed emotion `variants`
+             (fs-25/fs-34) survive — overwriting it with a bare `{ name }`
+             dropped them, which on Save erased them from cast.json. */
+          qwen: { ...(character.overrideTtsVoices?.qwen ?? {}), name: designedVoiceId },
+        }
       : character.overrideTtsVoices,
   };
   const stubTtsVoice = resolveTtsVoiceForCharacter(editedCharacter, ttsEngine);
@@ -1614,7 +1620,12 @@ export function ProfileDrawer({
               if (engineChoice === 'qwen' && qwenVoiceId) {
                 next.overrideTtsVoices = {
                   ...(character.overrideTtsVoices ?? {}),
-                  qwen: { name: qwenVoiceId },
+                  /* Preserve the existing qwen slot (esp. designed emotion
+                     `variants`, fs-25/fs-34) when re-pinning the base name —
+                     a bare `{ name: qwenVoiceId }` dropped variants, and the
+                     onSave → setCharacters persist then erased them from
+                     cast.json (the server-written variant clobbered on Save). */
+                  qwen: { ...(character.overrideTtsVoices?.qwen ?? {}), name: qwenVoiceId },
                 };
               }
               /* Conflict reset: drop the library voiceId + matchedFrom so the
