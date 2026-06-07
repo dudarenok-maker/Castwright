@@ -134,6 +134,44 @@ describe('runStage2ChapterChunked', () => {
     expect(out.coverage.ok).toBe(true);
   });
 
+  it('re-splits an UNDER-budget body that still truncates on the single call', async () => {
+    /* A dense chapter whose char count fits the budget but whose per-sentence
+       JSON output overflows the model cap (output scales with sentence count,
+       not chars). The single-call path must fall back to the adaptive split
+       instead of propagating the truncation. */
+    const body = makeBody(6);
+    let fullBodyTruncations = 0;
+    const call = vi.fn(async (subBody: string, _preceding: string | null) => {
+      // The whole body truncates; any strictly-smaller span succeeds.
+      if (subBody.length >= body.length) {
+        fullBodyTruncations += 1;
+        throw new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', subBody.length);
+      }
+      return fakeAttribute(subBody);
+    });
+    const out = await runStage2ChapterChunked({
+      body,
+      charBudget: 10_000, // > body.length → single-call path is selected first
+      coverageRetries: 1,
+      callForBody: call,
+    });
+    expect(fullBodyTruncations).toBe(1); // tried the single call once, then split
+    expect(out.chunkCount).toBeGreaterThan(1); // reported as a chunked run
+    expect(out.sentences.map((s) => s.id)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(out.coverage.ok).toBe(true);
+  });
+
+  it('propagates an under-budget truncation that is a single un-splittable paragraph', async () => {
+    // One paragraph, under budget, but the model truncates on it: nothing to split.
+    const body = 'word '.repeat(40).trim();
+    const call = vi.fn(async (_subBody: string, _preceding: string | null) => {
+      throw new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', body.length);
+    });
+    await expect(
+      runStage2ChapterChunked({ body, charBudget: 10_000, coverageRetries: 1, callForBody: call }),
+    ).rejects.toBeInstanceOf(AnalyzerTruncatedError);
+  });
+
   it('retries a chunk whose first attempt has low coverage', async () => {
     const body = makeBody(8);
     const onRetry = vi.fn();

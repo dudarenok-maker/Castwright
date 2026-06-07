@@ -126,23 +126,6 @@ export async function runStage2ChapterChunked(
 ): Promise<Stage2ChunkRunResult> {
   const contextParagraphs = opts.contextParagraphs ?? 2;
   const maxSplitDepth = opts.maxSplitDepth ?? 3;
-  const chunks = splitBodyIntoChunks(opts.body, opts.charBudget);
-
-  if (chunks.length <= 1) {
-    /* Common case: chapter fits in one call. Preserve the exact current
-       behaviour — one guarded call against the full body, model ids untouched,
-       the guard's own verdict returned. (A sub-budget chapter that still
-       truncates is effectively impossible at sane budgets; if it ever did, the
-       AnalyzerTruncatedError now surfaces loudly instead of a silent reset.) */
-    const { result, coverage } = await runStage2WithCoverageGuard({
-      body: opts.body,
-      maxRetries: opts.coverageRetries,
-      call: () => opts.callForBody(opts.body, null),
-      thresholds: opts.coverageThresholds,
-      onRetry: opts.onRetry,
-    });
-    return { sentences: result.sentences, coverage, chunkCount: 1 };
-  }
 
   /* Attribute one span, splitting it further if the model truncates on it. */
   const attributeSpan = async (
@@ -176,19 +159,53 @@ export async function runStage2ChapterChunked(
     }
   };
 
-  const all: SentenceOutput[] = [];
-  let preceding: string | null = null;
-  for (let i = 0; i < chunks.length; i += 1) {
-    opts.onChunk?.({ index: i, total: chunks.length, chars: chunks[i].length });
-    all.push(...(await attributeSpan(chunks[i], 0, preceding)));
-    preceding = tailParagraphs(chunks[i], contextParagraphs);
+  /* Run a pre-split chunk list and stitch the result back into the single-call
+     shape (ids renumbered 1..N — each chunk numbered its own 1..M, which would
+     collide on concat; a single call would have produced one contiguous 1..N).
+     chapterId is the caller's to stamp (it already does
+     `for (s of result.sentences) s.chapterId = ch.id`). */
+  const runChunks = async (chunks: string[]): Promise<Stage2ChunkRunResult> => {
+    const all: SentenceOutput[] = [];
+    let preceding: string | null = null;
+    for (let i = 0; i < chunks.length; i += 1) {
+      opts.onChunk?.({ index: i, total: chunks.length, chars: chunks[i].length });
+      all.push(...(await attributeSpan(chunks[i], 0, preceding)));
+      preceding = tailParagraphs(chunks[i], contextParagraphs);
+    }
+    const sentences = all.map((s, i) => ({ ...s, id: i + 1 }));
+    const coverage = validateStage2Coverage(opts.body, sentences, opts.coverageThresholds);
+    return { sentences, coverage, chunkCount: chunks.length };
+  };
+
+  const chunks = splitBodyIntoChunks(opts.body, opts.charBudget);
+
+  if (chunks.length <= 1) {
+    /* Common case: chapter fits the char budget → one guarded call against the
+       full body, model ids untouched, the guard's own verdict returned
+       (byte-identical to the pre-chunking behaviour for the vast majority of
+       chapters). The char budget is only a PROXY for the model's output-token
+       cap, though: stage-2 output scales with sentence count, so a dense
+       (dialogue-heavy) chapter can fit the char budget yet still overflow the
+       cap. When that single call truncates, fall back to the adaptive split
+       instead of failing the whole run — the same self-tuning the multi-chunk
+       path already has. A body that's a single un-splittable paragraph has
+       nowhere to split, so the truncation still surfaces loudly. */
+    try {
+      const { result, coverage } = await runStage2WithCoverageGuard({
+        body: opts.body,
+        maxRetries: opts.coverageRetries,
+        call: () => opts.callForBody(opts.body, null),
+        thresholds: opts.coverageThresholds,
+        onRetry: opts.onRetry,
+      });
+      return { sentences: result.sentences, coverage, chunkCount: 1 };
+    } catch (err) {
+      if (!(err instanceof AnalyzerTruncatedError)) throw err;
+      const forced = splitBodyIntoChunks(opts.body, Math.max(1, Math.floor(opts.body.length / 2)));
+      if (forced.length <= 1) throw err; // single paragraph: nothing to split
+      return runChunks(forced);
+    }
   }
 
-  /* Renumber ids 1..N within the chapter — each chunk numbered its own 1..M,
-     which would collide on concat; a single call would have produced one
-     contiguous 1..N, so this restores that contract. chapterId is the caller's
-     to stamp (it already does `for (s of result.sentences) s.chapterId = ch.id`). */
-  const sentences = all.map((s, i) => ({ ...s, id: i + 1 }));
-  const coverage = validateStage2Coverage(opts.body, sentences, opts.coverageThresholds);
-  return { sentences, coverage, chunkCount: chunks.length };
+  return runChunks(chunks);
 }
