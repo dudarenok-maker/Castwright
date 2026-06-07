@@ -243,7 +243,6 @@ _Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-
 
 - Per-chapter Detect-emotions trigger ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592)) — _scope the backfill pass to one chapter; v1 shipped whole-book only._
 - "Manual clear sticks" sentinel ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593)) — _a manually-cleared emotion currently gets re-filled on re-detect._
-- Detect-emotions for `ANALYZER=manual` file-drop mode ([#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594)).
 - Voices view "Has emotion variants" filter ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595)) — _the badge shipped; the standalone filter is deferred._
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
