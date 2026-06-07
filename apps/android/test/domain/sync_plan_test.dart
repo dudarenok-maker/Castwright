@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/sync_manifest.dart';
-import 'package:audiobook_companion/src/domain/sync_plan.dart';
+import 'package:castwright/src/domain/sync_manifest.dart';
+import 'package:castwright/src/domain/sync_plan.dart';
 
 SyncManifestIndex index(List<SyncManifestIndexBook> books, List<String> active) =>
     SyncManifestIndex(schemaVersion: 1, books: books, activeBookIds: active);

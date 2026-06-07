@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/cert_pinning.dart';
+import 'package:castwright/src/data/cert_pinning.dart';
 
 String pemOf(List<int> der) =>
     '-----BEGIN CERTIFICATE-----\n${base64.encode(der)}\n-----END CERTIFICATE-----\n';

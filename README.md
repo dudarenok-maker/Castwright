@@ -138,7 +138,7 @@ server/               Node + Express API (TypeScript)
   tts-sidecar/        Python FastAPI TTS sidecar (Coqui + Kokoro)
     scripts/          install-kokoro.{sh,ps1} + install-coqui.{sh,ps1} (v1.3.0)
   handoff/            Gemini analyzer prompt/response traceability
-apps/android/         Flutter companion app (pkg audiobook_companion) — domain
+apps/android/         Flutter companion app (pkg castwright) — domain
                       (pure logic) / data (cert-pinned client, drift store, sync
                       engine, player) / ui; iOS target lives here too. See
                       apps/android/README.md + docs/features/188-…md
@@ -250,9 +250,10 @@ individually-revocable token; `GET /api/devices` lists them; `DELETE
 keeps working.
 
 Build/run/test the app itself per [`apps/android/README.md`](apps/android/README.md).
-The MVP installs via the debug APK; a signed release APK (`app-11`) is the proper
-sideload channel. _Distribution note: the companion is **not** part of the
-server release zip — it's a separate Flutter build._
+_Distribution: each tagged [GitHub Release](#releases) attaches a built
+`castwright-vX.Y.Z.apk` (sideload it) plus an unsigned iOS build —
+it's a separate Flutter build from the server zip, but shipped alongside it on
+the same release._
 
 ## Parallel sessions (developer-only)
 
@@ -301,10 +302,20 @@ for the full workflow.
 
 Packaged downloads of tagged releases are published to
 [GitHub Releases](https://github.com/dudarenok-maker/Audiobook-Generator/releases).
-Each release is a single platform-independent `audiobook-generator-vX.Y.Z.zip`
-plus a `.sha256` checksum. Follow [`INSTALL.md`](INSTALL.md) for the
-extract-and-run walkthrough (Windows, macOS, Linux). The release pipeline
-is documented in [`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
+Each release attaches (all with `.sha256` checksums):
+
+- `audiobook-generator-vX.Y.Z.zip` — the platform-independent **server** bundle
+  (Windows / macOS / Linux); follow [`INSTALL.md`](INSTALL.md).
+- `castwright-vX.Y.Z.apk` — the installable **Android companion** app
+  (plan 188), versioned in lockstep via `scripts/bump-version.mjs` (which now
+  also bumps `apps/android/pubspec.yaml`). Sideload it onto the phone.
+- `castwright-vX.Y.Z-ios-unsigned.*` — the **unsigned iOS** build
+  (app-12 prep): the release pipeline compiles the iOS app every release so the
+  pathway stays green; it needs Apple signing certs to become an installable
+  `.ipa` (tracked as `app-12`).
+
+The release pipeline is documented in
+[`docs/features/archive/49-release-package.md`](docs/features/archive/49-release-package.md).
 
 ## Testing
 

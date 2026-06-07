@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/file_store.dart';
+import 'package:castwright/src/data/file_store.dart';
 
 void main() {
   group('InMemoryFileStore', () {

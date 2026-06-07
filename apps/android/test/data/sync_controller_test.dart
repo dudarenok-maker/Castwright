@@ -1,12 +1,12 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/chapter_downloader.dart';
-import 'package:audiobook_companion/src/data/drift_local_library.dart';
-import 'package:audiobook_companion/src/data/file_store.dart';
-import 'package:audiobook_companion/src/data/library_database.dart';
-import 'package:audiobook_companion/src/data/sync_controller.dart';
-import 'package:audiobook_companion/src/data/sync_engine.dart';
-import 'package:audiobook_companion/src/domain/sync_manifest.dart';
+import 'package:castwright/src/data/chapter_downloader.dart';
+import 'package:castwright/src/data/drift_local_library.dart';
+import 'package:castwright/src/data/file_store.dart';
+import 'package:castwright/src/data/library_database.dart';
+import 'package:castwright/src/data/sync_controller.dart';
+import 'package:castwright/src/data/sync_engine.dart';
+import 'package:castwright/src/domain/sync_manifest.dart';
 
 class _FakeApi implements ManifestApi {
   _FakeApi(this.indexValue, this.details);

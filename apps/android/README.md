@@ -1,6 +1,6 @@
-# Audiobook Companion (Android)
+# Castwright — Android companion
 
-`audiobook_companion` — a native **Flutter** listening companion for the
+`castwright` — a native **Flutter** listening companion for the
 Audiobook Generator. It pairs to your server over the home LAN (HTTPS,
 cert-pinned), **delta-syncs only the chapters that changed**, and plays them
 offline with background / lock-screen / Bluetooth controls. Android-first; the
