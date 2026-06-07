@@ -4,6 +4,13 @@
 // the server itself (plan 43, gated on autoStartSidecar). Cross-platform —
 // runs on Windows, macOS, Linux. Logs to logs/server.log + .err.log, PID at
 // .run/server.pid (forward slashes — Node's fs handles both).
+//
+// LAN mode (companion app, plan 188): when server/.env has LAN_HTTPS=1 (or
+// `npm run start:lan` injects it via cross-env), the server flips to HTTPS on
+// :8443 bound to 0.0.0.0 (see server/src/index.ts + bind-host.ts). The
+// launcher must therefore health-check the SAME port/protocol the server will
+// actually bind, or it false-FAILs waiting on :8080 while the server is up on
+// :8443. resolveLaunchTarget() mirrors the server's selection so the two agree.
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, writeFileSync } from 'node:fs';
@@ -13,6 +20,7 @@ import net from 'node:net';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
+const serverDir = resolve(repoRoot, 'server');
 /* runDir / logDir default to repoRoot but honour APP_RUN_DIR / APP_LOG_DIR so a
    versioned-dir install (fs-1) parks server.pid + logs in a shared sibling
    OUTSIDE releases/vX.Y.Z/ — the restarter waits on this server.pid across the
@@ -22,13 +30,42 @@ const repoRoot = resolve(__dirname, '..');
 const runDir = process.env.APP_RUN_DIR ? resolve(process.env.APP_RUN_DIR) : resolve(repoRoot, '.run');
 const logDir = process.env.APP_LOG_DIR ? resolve(process.env.APP_LOG_DIR) : resolve(repoRoot, 'logs');
 const distIndex = resolve(repoRoot, 'dist', 'index.html');
-const serverEntry = resolve(repoRoot, 'server', 'dist', 'index.js');
+const serverEntry = resolve(serverDir, 'dist', 'index.js');
 
-mkdirSync(runDir, { recursive: true });
-mkdirSync(logDir, { recursive: true });
-
-const SERVER_PORT = Number(process.env.PORT ?? 8080);
 const HEALTH_TIMEOUT_MS = 60_000;
+
+/* Pure: which port/protocol will the server actually bind? Mirrors
+   server/src/index.ts (PORT ?? 8080, LAN_HTTPS_PORT ?? 8443) and
+   routes/export-lan.ts isLanHttpsEnabled() (LAN_HTTPS === '1'). Exported so
+   scripts/tests/start-app-prod.test.mjs can pin the contract without spawning. */
+export function resolveLaunchTarget(env = process.env) {
+  const lanHttps = env.LAN_HTTPS === '1';
+  const httpPort = Number(env.PORT ?? 8080);
+  const lanPort = Number(env.LAN_HTTPS_PORT ?? 8443);
+  return {
+    lanHttps,
+    port: lanHttps ? lanPort : httpPort,
+    protocol: lanHttps ? 'https' : 'http',
+  };
+}
+
+/* Load server/.env into process.env so the launcher sees the SAME LAN_HTTPS /
+   PORT / LAN_HTTPS_PORT the server will read on boot. The server re-loads it
+   itself (cwd-relative process.loadEnvFile), so this is purely to keep the
+   launcher's health-check port in sync. A value injected on the CLI (start:lan
+   does `cross-env LAN_HTTPS=1`) takes precedence over the file. */
+function loadServerEnv() {
+  const cliLanHttps = process.env.LAN_HTTPS; // start:lan's cross-env injection, if any
+  const envPath = resolve(serverDir, '.env');
+  if (existsSync(envPath)) {
+    try {
+      process.loadEnvFile(envPath);
+    } catch {
+      /* unreadable/malformed .env — fall back to whatever is already in env */
+    }
+  }
+  if (cliLanHttps !== undefined) process.env.LAN_HTTPS = cliLanHttps;
+}
 
 function info(msg) {
   process.stdout.write(`${msg}\n`);
@@ -36,17 +73,6 @@ function info(msg) {
 function fail(msg) {
   process.stderr.write(`[FAIL] ${msg}\n`);
   process.exit(1);
-}
-
-if (!existsSync(distIndex)) {
-  fail(
-    `Frontend bundle missing at dist/index.html. Run "npm run build" before "npm run start:prod".`,
-  );
-}
-if (!existsSync(serverEntry)) {
-  fail(
-    `Server bundle missing at server/dist/index.js. Run "npm run build" before "npm run start:prod".`,
-  );
 }
 
 function probePort(port) {
@@ -71,51 +97,76 @@ async function waitForListen(port, timeoutMs) {
   return false;
 }
 
-const alreadyUp = await probePort(SERVER_PORT);
-if (alreadyUp) {
-  info(`[SKIP] something already listening on :${SERVER_PORT} — leaving it alone`);
-  info(`[READY] http://localhost:${SERVER_PORT}/`);
+async function main() {
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(logDir, { recursive: true });
+
+  loadServerEnv();
+  const { lanHttps, port, protocol } = resolveLaunchTarget(process.env);
+  const url = `${protocol}://localhost:${port}/`;
+
+  if (!existsSync(distIndex)) {
+    fail(
+      `Frontend bundle missing at dist/index.html. Run "npm run build" before "npm run start:prod".`,
+    );
+  }
+  if (!existsSync(serverEntry)) {
+    fail(
+      `Server bundle missing at server/dist/index.js. Run "npm run build" before "npm run start:prod".`,
+    );
+  }
+
+  const alreadyUp = await probePort(port);
+  if (alreadyUp) {
+    info(`[SKIP] something already listening on :${port} — leaving it alone`);
+    info(`[READY] ${url}`);
+    process.exit(0);
+  }
+
+  const outLog = openSync(resolve(logDir, 'server.log'), 'a');
+  const errLog = openSync(resolve(logDir, 'server.err.log'), 'a');
+
+  /* Spawn the built server directly with the current Node binary instead of going
+     through `npm.cmd` — on Node >=20.6 spawning a `.cmd` without `shell: true`
+     throws EINVAL on Windows (the CVE-2024-27980 mitigation), which broke
+     `npm run start:prod`. Running `node dist/index.js` with cwd=server is simpler
+     and ALSO guarantees `process.loadEnvFile('.env')` resolves server/.env
+     (it's cwd-relative) — so prod gets the same WORKSPACE_DIR / analyzer / GPU
+     tuning the dev server reads. detached + unref so the server outlives this
+     launcher and the console window that double-clicked the .bat. */
+  const child = spawn(process.execPath, ['dist/index.js'], {
+    cwd: serverDir,
+    env: { ...process.env, NODE_ENV: 'production' },
+    stdio: ['ignore', outLog, errLog],
+    detached: true,
+    windowsHide: true,
+  });
+
+  if (typeof child.pid !== 'number') {
+    fail('Failed to spawn server process.');
+  }
+
+  writeFileSync(resolve(runDir, 'server.pid'), String(child.pid), 'utf8');
+  info(
+    `[START] server pid=${child.pid} -> logs/server.log ` +
+      `(NODE_ENV=production${lanHttps ? ', LAN_HTTPS=1' : ''})`,
+  );
+
+  child.unref();
+
+  const ready = await waitForListen(port, HEALTH_TIMEOUT_MS);
+  if (!ready) {
+    fail(
+      `Server did not start listening on :${port} within ${HEALTH_TIMEOUT_MS / 1000}s. ` +
+        `Tail logs/server.err.log for details.`,
+    );
+  }
+
+  info(`[OK] server on :${port}${lanHttps ? ' (LAN HTTPS)' : ''}`);
+  info(`[READY] ${url}  (stop with "npm run stop:prod")`);
   process.exit(0);
 }
 
-const outLog = openSync(resolve(logDir, 'server.log'), 'a');
-const errLog = openSync(resolve(logDir, 'server.err.log'), 'a');
-
-const serverDir = resolve(repoRoot, 'server');
-
-/* Spawn the built server directly with the current Node binary instead of going
-   through `npm.cmd` — on Node >=20.6 spawning a `.cmd` without `shell: true`
-   throws EINVAL on Windows (the CVE-2024-27980 mitigation), which broke
-   `npm run start:prod`. Running `node dist/index.js` with cwd=server is simpler
-   and ALSO guarantees `process.loadEnvFile('.env')` resolves server/.env
-   (it's cwd-relative) — so prod gets the same WORKSPACE_DIR / analyzer / GPU
-   tuning the dev server reads. detached + unref so the server outlives this
-   launcher and the console window that double-clicked the .bat. */
-const child = spawn(process.execPath, ['dist/index.js'], {
-  cwd: serverDir,
-  env: { ...process.env, NODE_ENV: 'production' },
-  stdio: ['ignore', outLog, errLog],
-  detached: true,
-  windowsHide: true,
-});
-
-if (typeof child.pid !== 'number') {
-  fail('Failed to spawn server process.');
-}
-
-writeFileSync(resolve(runDir, 'server.pid'), String(child.pid), 'utf8');
-info(`[START] server pid=${child.pid} -> logs/server.log (NODE_ENV=production)`);
-
-child.unref();
-
-const ready = await waitForListen(SERVER_PORT, HEALTH_TIMEOUT_MS);
-if (!ready) {
-  fail(
-    `Server did not start listening on :${SERVER_PORT} within ${HEALTH_TIMEOUT_MS / 1000}s. ` +
-      `Tail logs/server.err.log for details.`,
-  );
-}
-
-info(`[OK] server on :${SERVER_PORT}`);
-info(`[READY] http://localhost:${SERVER_PORT}/  (stop with "npm run stop:prod")`);
-process.exit(0);
+// CLI guard — only run main() when invoked directly, not when imported by tests.
+const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (invokedDirectly) await main();
