@@ -19,6 +19,15 @@ void main() {
       expect(PairedServer.fromJson(s.toJson()).toJson(), s.toJson());
     });
 
+    test('copyWith stamps pairedAt and it round-trips; legacy json has none', () {
+      const base = PairedServer(url: 'u', token: 't', caFingerprint: 'f');
+      expect(base.pairedAt, isNull);
+      expect(base.toJson().containsKey('pairedAt'), isFalse); // legacy-clean
+      final stamped = base.copyWith(pairedAt: '2026-06-07T10:00:00.000Z');
+      expect(PairedServer.fromJson(stamped.toJson()).pairedAt,
+          '2026-06-07T10:00:00.000Z');
+    });
+
     test('rejects a payload with a missing or empty required field', () {
       expect(
         () => PairedServer.fromJson({'url': 'u', 'token': 't'}),
