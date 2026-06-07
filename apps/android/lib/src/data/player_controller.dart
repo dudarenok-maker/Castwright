@@ -34,6 +34,7 @@ class PlayerController {
         _autosaveInterval = saveInterval {
     skipBehavior_ = skipBehavior;
     _sub = _engine.positionStream.listen(_onTick);
+    _completionSub = _engine.completionStream.listen((_) => _advance());
   }
 
   final AudioEngine _engine;
@@ -46,10 +47,30 @@ class PlayerController {
   late SkipButtonBehavior skipBehavior_;
 
   StreamSubscription<Duration>? _sub;
+  StreamSubscription<void>? _completionSub;
   List<PlayableChapter> _playlist = const [];
   String? _bookId;
   int _index = -1;
+  double _speed = 1.0;
   DateTime? _lastSave;
+
+  /// Live playback duration of the loaded chapter (null until known).
+  Stream<Duration?> get durationStream => _engine.durationStream;
+  Duration? get duration => _engine.duration;
+
+  double get speed => _speed;
+  Future<void> setSpeed(double speed) {
+    _speed = speed;
+    return _engine.setSpeed(speed);
+  }
+
+  /// Auto-advance to the next chapter when the current one ends.
+  Future<void> _advance() async {
+    if (_index >= 0 && _index + 1 < _playlist.length) {
+      await _loadIndex(_index + 1);
+      await play();
+    }
+  }
 
   String? get currentBookId => _bookId;
   String? get currentChapterUuid =>
@@ -58,6 +79,17 @@ class PlayerController {
   /// True only for the chapter currently loaded in the engine — the `app-3`
   /// sync engine uses this as its deferred-swap `isInUse` predicate.
   bool isInUse(String uuid) => uuid == currentChapterUuid;
+
+  /// The loaded playlist (for a chapter-list UI).
+  List<PlayableChapter> get chapters => List.unmodifiable(_playlist);
+
+  /// Load + play a specific chapter by its stable `uuid`.
+  Future<void> playChapter(String uuid) async {
+    final i = _playlist.indexWhere((c) => c.uuid == uuid);
+    if (i < 0) return;
+    await _loadIndex(i);
+    await play();
+  }
 
   /// Prepare a book for playback: load its playlist, restore the saved resume
   /// point (or start at the first chapter), and seek there.
@@ -77,6 +109,7 @@ class PlayerController {
     if (index < 0 || index >= _playlist.length) return;
     _index = index;
     await _engine.setFilePath(_playlist[index].path);
+    if (_speed != 1.0) await _engine.setSpeed(_speed); // persist speed across chapters
     if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
     // Measure the autosave interval from load time, so we don't persist on the
     // very first position tick.
@@ -85,6 +118,10 @@ class PlayerController {
 
   Future<void> seekTo(Duration position) =>
       _engine.seek(position < Duration.zero ? Duration.zero : position);
+
+  /// Live playback position (for the player UI).
+  Stream<Duration> get positionStream => _engine.positionStream;
+  Duration get position => _engine.position;
 
   Future<void> play() => _engine.play();
   Future<void> pause() async {
@@ -139,6 +176,7 @@ class PlayerController {
 
   Future<void> dispose() async {
     await _sub?.cancel();
+    await _completionSub?.cancel();
     await _engine.dispose();
   }
 }

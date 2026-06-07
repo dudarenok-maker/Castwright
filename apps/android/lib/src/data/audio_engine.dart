@@ -17,5 +17,13 @@ abstract class AudioEngine {
   /// Position ticks (drive the autosave throttle).
   Stream<Duration> get positionStream;
 
+  /// Loaded media duration (null until known).
+  Duration? get duration;
+  Stream<Duration?> get durationStream;
+
+  /// Fires once each time the loaded track plays to its end (drives
+  /// auto-advance to the next chapter).
+  Stream<void> get completionStream;
+
   Future<void> dispose();
 }
