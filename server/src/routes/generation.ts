@@ -1255,8 +1255,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* ASR content-QA pass (srv-31) — OFF unless SEG_ASR_ENABLED. Transcribes
            each sentence and re-records "fluent but wrong words" drift. The cast
            names form the proper-noun allowlist; the non-English language hint is
-           threaded so the WER is meaningful (Phase 6). Re-records feed the same
-           progress heartbeat as the signal gate above. */
+           threaded so the WER is meaningful (Phase 6). Both the per-group
+           progress and any drift re-record emit a `chapter_verifying` tick via
+           `emitVerifying` (a `progress` tick would reset the row's phase). */
         ...(asrEnabled()
           ? {
               asr: {
