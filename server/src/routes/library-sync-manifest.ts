@@ -11,7 +11,8 @@
  * wrapper (book walk, file stat, format probe) + manual gzip. See plan 191. */
 
 import { Router } from 'express';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
@@ -72,7 +73,26 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
           fileSize = undefined;
         }
         if (fileSize !== undefined) {
-          audioByChapterId.set(c.id, { fileSize, urlSuffix: found.urlSuffix });
+          /* Real PCM-measured length lives in the per-chapter segments file
+             (state.json's audioQa.durationSec is often absent on older
+             books). Read it so the companion can show total + per-chapter
+             durations + listener progress. Best-effort: omit on any miss. */
+          let durationSec: number | undefined;
+          try {
+            const seg = JSON.parse(
+              readFileSync(join(audioRoot, `${c.slug}.segments.json`), 'utf8'),
+            ) as { durationSec?: number };
+            if (typeof seg.durationSec === 'number' && Number.isFinite(seg.durationSec)) {
+              durationSec = seg.durationSec;
+            }
+          } catch {
+            /* no segments file / unreadable → omit duration */
+          }
+          audioByChapterId.set(c.id, {
+            fileSize,
+            urlSuffix: found.urlSuffix,
+            ...(durationSec !== undefined ? { durationSec } : {}),
+          });
         }
       }
       return sendMaybeGzip(req, res, buildSyncManifestBookDetail(bookId, state, audioByChapterId));

@@ -151,6 +151,18 @@ describe('buildSyncManifestBookDetail', () => {
     expect(c1.lufs).toBe(-16.2);
   });
 
+  it('uses the audio fact durationSec (from the segments file) when audioQa has none', () => {
+    const s2 = state({
+      bookId: 'b1',
+      chapters: [ch({ id: 1, uuid: 'u1', audioRenderedAt: '2026-04-01T00:00:00.000Z' })],
+    });
+    const audio2 = new Map<number, ChapterAudioFact>([
+      [1, { fileSize: 4096, urlSuffix: 'audio.mp3', durationSec: 99.5 }],
+    ]);
+    const detail = buildSyncManifestBookDetail('b1', s2, audio2);
+    expect(detail.chapters[0].durationSec).toBe(99.5);
+  });
+
   it('lists a chapter without audio but with no fingerprint/urlSuffix', () => {
     const detail = buildSyncManifestBookDetail('b1', s, audio);
     const c2 = detail.chapters.find((c) => c.uuid === 'u2')!;
