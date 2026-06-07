@@ -104,6 +104,14 @@ describe('dark-mode CSS overrides (styles.css)', () => {
        painted a cream wash with light-on-light body text and a dark-green
        dismiss control. */
     { selector: '.bg-emerald-50\\/70', label: 'emerald-50 /70 (eviction banner base)' },
+    /* Analysing-view PhaseModelChip done/streaming pill
+       (`src/components/analysing/phase-model-chip.tsx`): `bg-emerald-100/70`
+       fill under `text-emerald-700` model-name text (e.g. "Gemini 3.1 Flash
+       Lite"). The bare `.bg-emerald-100` has a dark override but the `/70`
+       alpha variant compiles to its own selector that rule can't reach —
+       without this the pill painted near-white emerald-100 at 70% alpha over
+       the dark canvas, washing the light-green text out to low contrast. */
+    { selector: '.bg-emerald-100\\/70', label: 'emerald-100 /70 (phase-model-chip pill)' },
     { selector: '.text-emerald-700\\/60', label: 'emerald-700 /60 (dismiss button)' },
     { selector: '.hover\\:text-emerald-700:hover', label: 'emerald-700 hover (dismiss)' },
     /* Floating reassign picker (CharacterSearchPicker) — `bg-white` alone
