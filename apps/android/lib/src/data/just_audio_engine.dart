@@ -7,7 +7,14 @@ import 'audio_engine.dart';
 /// Real [AudioEngine] backed by `just_audio`. Thin wrapper — behaviour is
 /// validated on a device (no unit tests for the native player).
 class JustAudioEngine implements AudioEngine {
-  final AudioPlayer _player = AudioPlayer();
+  JustAudioEngine() : this._(AndroidLoudnessEnhancer());
+  JustAudioEngine._(this._loudness)
+      : _player = AudioPlayer(
+          audioPipeline: AudioPipeline(androidAudioEffects: [_loudness]),
+        );
+
+  final AndroidLoudnessEnhancer _loudness;
+  final AudioPlayer _player;
 
   @override
   Duration get position => _player.position;
@@ -52,6 +59,12 @@ class JustAudioEngine implements AudioEngine {
 
   @override
   Future<void> setSpeed(double speed) => _player.setSpeed(speed);
+
+  @override
+  Future<void> setVolumeBoost(double db) async {
+    await _loudness.setEnabled(db > 0);
+    await _loudness.setTargetGain(db); // decibels above unity
+  }
 
   @override
   Future<void> dispose() => _player.dispose();

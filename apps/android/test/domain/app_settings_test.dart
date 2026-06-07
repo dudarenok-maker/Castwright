@@ -36,6 +36,7 @@ void main() {
         storageCapBytes: 1234,
         autoDeleteFinished: true,
         streamOverLan: true,
+        volumeBoostDb: 8,
       );
       final back = AppSettings.fromJson(s.toJson());
       expect(back.sleepTimerMinutes, 30);
@@ -44,6 +45,12 @@ void main() {
       expect(back.storageCapBytes, 1234);
       expect(back.autoDeleteFinished, isTrue);
       expect(back.streamOverLan, isTrue);
+      expect(back.volumeBoostDb, 8.0);
+    });
+
+    test('volumeBoostDb defaults to 0 (off)', () {
+      expect(AppSettings.defaults.volumeBoostDb, 0);
+      expect(AppSettings.fromJson(const {}).volumeBoostDb, 0);
     });
 
     test('fromJson tolerates missing keys (falls back to defaults)', () {

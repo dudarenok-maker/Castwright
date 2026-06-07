@@ -20,6 +20,7 @@ class AppSettings {
     this.autoSyncOnReconnect = true,
     this.autoDownloadInProgress = true,
     this.streamOverLan = false,
+    this.volumeBoostDb = 0,
   });
 
   /// 0 = off.
@@ -48,6 +49,10 @@ class AppSettings {
   /// play (drives `app-10`). Off by default — the app is offline-first.
   final bool streamOverLan;
 
+  /// Loudness boost in dB above unity (0 = off, max 12) — lifts the moderate
+  /// −16 LUFS masters on-device. Drives `app-5` via the player.
+  final double volumeBoostDb;
+
   static const AppSettings defaults = AppSettings();
 
   AppSettings copyWith({
@@ -64,6 +69,7 @@ class AppSettings {
     bool? autoSyncOnReconnect,
     bool? autoDownloadInProgress,
     bool? streamOverLan,
+    double? volumeBoostDb,
   }) {
     return AppSettings(
       sleepTimerMinutes: sleepTimerMinutes ?? this.sleepTimerMinutes,
@@ -80,6 +86,7 @@ class AppSettings {
       autoDownloadInProgress:
           autoDownloadInProgress ?? this.autoDownloadInProgress,
       streamOverLan: streamOverLan ?? this.streamOverLan,
+      volumeBoostDb: volumeBoostDb ?? this.volumeBoostDb,
     );
   }
 
@@ -97,6 +104,7 @@ class AppSettings {
         'autoSyncOnReconnect': autoSyncOnReconnect,
         'autoDownloadInProgress': autoDownloadInProgress,
         'streamOverLan': streamOverLan,
+        'volumeBoostDb': volumeBoostDb,
       };
 
   factory AppSettings.fromJson(Map<String, dynamic> json) {
@@ -123,6 +131,8 @@ class AppSettings {
       autoDownloadInProgress:
           json['autoDownloadInProgress'] as bool? ?? d.autoDownloadInProgress,
       streamOverLan: json['streamOverLan'] as bool? ?? d.streamOverLan,
+      volumeBoostDb:
+          (json['volumeBoostDb'] as num?)?.toDouble() ?? d.volumeBoostDb,
     );
   }
 
