@@ -23,7 +23,7 @@
    matched library `voice` itself resolves to Qwen (a reused character carries
    its bespoke voice on the matched `Voice`, not its own fields). */
 
-import type { Character, Voice, TtsEngine } from './types';
+import type { Character, Voice, TtsEngine, Sentence } from './types';
 
 export type StatusPillColor = 'success' | 'warning' | 'library' | 'neutral' | 'peach';
 
@@ -48,6 +48,38 @@ export interface VoiceStatusBadges {
 /** fs-25 — count a character's designed Qwen emotion variants. */
 function countEmotionVariants(c: Character): number {
   return Object.keys(c.overrideTtsVoices?.qwen?.variants ?? {}).length;
+}
+
+/** fs-34 — index the distinct non-neutral emotions each character's quotes use,
+    across the whole book. Built ONCE per cast render and shared across rows so
+    the "N tags need a variant" count is O(sentences), not O(chars × sentences). */
+export function usedEmotionsByCharacter(sentences: Sentence[]): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  for (const s of sentences) {
+    if (!s.emotion || s.emotion === 'neutral') continue;
+    let set = map.get(s.characterId);
+    if (!set) {
+      set = new Set();
+      map.set(s.characterId, set);
+    }
+    set.add(s.emotion);
+  }
+  return map;
+}
+
+/** fs-34 — how many distinct emotions this character's quotes use that DON'T yet
+    have a designed Qwen variant. `usedEmotions` comes from
+    `usedEmotionsByCharacter`. Engine-agnostic (the caller gates rendering to
+    Qwen characters, where a missing variant actually changes the audio). */
+export function countMissingVariants(
+  c: Character,
+  usedEmotions: Set<string> | undefined,
+): number {
+  if (!usedEmotions || usedEmotions.size === 0) return 0;
+  const designed = new Set(Object.keys(c.overrideTtsVoices?.qwen?.variants ?? {}));
+  let n = 0;
+  for (const e of usedEmotions) if (!designed.has(e)) n += 1;
+  return n;
 }
 
 function resolveLifecyclePill(

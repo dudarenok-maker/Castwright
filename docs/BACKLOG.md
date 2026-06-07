@@ -233,23 +233,18 @@ _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ graceful re-entry into a long book after days away.
 _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481).
 
-#### `fs-33` — Emotion-only LLM annotation pass + Detect-emotions trigger (fs-25 Wave 4b) ([#510](https://github.com/dudarenok-maker/AudioBook-Generator/issues/510))
-
-- _What:_ A lightweight analyzer pass (`audiobook-emotion-annotation`) + `POST /api/books/:bookId/annotate-emotion` that backfills `{ sentenceId, emotion }` onto already-attributed sentences without re-attributing, plus a "Detect emotions" trigger in the manuscript header (cost-confirm → stream → chips populate). Manual per-quote tags always win.
-- _Benefit (user):_ existing books adopt per-quote emotion in one click instead of a full (quota-costly) re-analysis. _Re-homed from `fs-25` on archive._
-_Full detail + acceptance:_ [#510](https://github.com/dudarenok-maker/AudioBook-Generator/issues/510).
-
-#### `fs-34` — fs-25 5e remainder: remove-variant route + Voices-view badge + staleness/cast-row hints ([#511](https://github.com/dudarenok-maker/AudioBook-Generator/issues/511))
-
-- _What:_ Four 5e UX gaps left after `fe-31` shipped the manuscript missing-variant hint: a `DELETE …/cast/:characterId/emotion-variant/:emotion` route + a cast remove affordance; verify the `VariantsBadge` + "Has emotion variants" filter render in the cross-book Voices view; mark chapters stale on emotion/variant edits via the existing `ui.staleAudio` banner; a "N tags need a variant" count on the cast row.
-- _Benefit (user):_ closes the per-quote-emotion UX loop — discardable bad designs, visible staleness, cross-book parity. _Re-homed from `fs-25` on archive._
-_Full detail + acceptance:_ [#511](https://github.com/dudarenok-maker/AudioBook-Generator/issues/511).
-
 #### `fe-32` — Rebaseline modal: series-wide emotion-variant design (fs-25 Wave 6b) ([#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512))
 
 - _What:_ Extend the plan-108 "Rebaseline the series" modal to also design chosen emotion variants for the principal cast across a series (gated on each base existing), reusing the Wave-5b per-emotion controls + variant-aware audition; the base-only path stays intact when no variants are selected.
 - _Benefit (user):_ design expressive variants for a recurring cast across a whole series in one flow. _Re-homed from `fs-25` on archive._
 _Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512).
+
+#### fs-33/fs-34 follow-ups (per-quote emotion, shipped 2026-06-07)
+
+- Per-chapter Detect-emotions trigger ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592)) — _scope the backfill pass to one chapter; v1 shipped whole-book only._
+- "Manual clear sticks" sentinel ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593)) — _a manually-cleared emotion currently gets re-filled on re-detect._
+- Detect-emotions for `ANALYZER=manual` file-drop mode ([#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594)).
+- Voices view "Has emotion variants" filter ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595)) — _the badge shipped; the standalone filter is deferred._
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 

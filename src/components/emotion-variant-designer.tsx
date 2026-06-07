@@ -20,7 +20,8 @@ import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { buildCharacterHint } from '../lib/build-character-hint';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
-import { IconPlay, IconSpinner } from '../lib/icons';
+import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
+import { IconPlay, IconSpinner, IconTrash } from '../lib/icons';
 import type { Character, Emotion, TtsModelKey, Voice } from '../lib/types';
 
 const VARIANT_EMOTIONS: { value: Exclude<Emotion, 'neutral'>; label: string }[] = [
@@ -50,11 +51,13 @@ export function EmotionVariantDesigner({
   const characterId = character.id;
   const dispatch = useAppDispatch();
   const playback = useSamplePlayback();
+  const markStale = useMarkCharacterStaleIfRendered();
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   /* Variant voiceIds designed THIS session (merged with the `variants` prop so
      a just-designed variant resolves before the parent's redux round-trip). */
   const [sessionIds, setSessionIds] = useState<Record<string, string>>({});
   const [playBusy, setPlayBusy] = useState<Record<string, boolean>>({});
+  const [removeBusy, setRemoveBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
   const variantVoiceId = (emotion: string): string | undefined =>
@@ -119,6 +122,9 @@ export function EmotionVariantDesigner({
       });
       dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
       setSessionIds((s) => ({ ...s, [emotion]: voiceId }));
+      /* A (re)designed variant changes how this character's tagged lines render,
+         so any already-rendered chapter they speak in is now stale. */
+      markStale(character);
       /* Auto-play the fresh audition (the design route returns its cached URL),
          so designing a variant immediately lets you hear it. */
       if (previewUrl) void playback.play(previewUrl);
@@ -126,6 +132,27 @@ export function EmotionVariantDesigner({
       setError(`${emotion}: ${(e as Error).message}`);
     } finally {
       setBusy((b) => ({ ...b, [emotion]: false }));
+    }
+  };
+
+  /* fs-34 — discard a designed variant (drops the slot + its .pt server-side).
+     The base voice and sibling variants are untouched; removing one also marks
+     rendered chapters stale since those tagged lines now fall back to base. */
+  const removeOne = async (emotion: Exclude<Emotion, 'neutral'>) => {
+    setRemoveBusy((b) => ({ ...b, [emotion]: true }));
+    setError(null);
+    try {
+      await api.removeQwenVariant(bookId, characterId, emotion);
+      dispatch(castActions.removeCharacterEmotionVariant({ characterId, emotion }));
+      setSessionIds((s) => {
+        const { [emotion]: _dropped, ...rest } = s;
+        return rest;
+      });
+      markStale(character);
+    } catch (e) {
+      setError(`${emotion}: ${(e as Error).message}`);
+    } finally {
+      setRemoveBusy((b) => ({ ...b, [emotion]: false }));
     }
   };
 
@@ -181,6 +208,20 @@ export function EmotionVariantDesigner({
                   <span className="text-[10px] font-semibold text-ink/55" data-testid={`variant-done-${value}`}>
                     Designed
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => void removeOne(value)}
+                    disabled={!!removeBusy[value]}
+                    aria-label={`Remove the ${label} variant`}
+                    data-testid={`variant-remove-${value}`}
+                    className="inline-flex items-center justify-center w-4 h-4 text-ink/40 hover:text-magenta disabled:opacity-40"
+                  >
+                    {removeBusy[value] ? (
+                      <IconSpinner className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <IconTrash className="w-3.5 h-3.5" />
+                    )}
+                  </button>
                 </span>
               ) : (
                 <button

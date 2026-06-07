@@ -6,8 +6,13 @@
    lifecycle ("Needs voice" when undesigned), not a stale preset pill. */
 
 import { describe, it, expect } from 'vitest';
-import { resolveVoiceStatus, statusFilterKeys } from './voice-status';
-import type { Character, Voice, TtsEngine } from './types';
+import {
+  resolveVoiceStatus,
+  statusFilterKeys,
+  usedEmotionsByCharacter,
+  countMissingVariants,
+} from './voice-status';
+import type { Character, Voice, TtsEngine, Sentence } from './types';
 
 function char(partial: Partial<Character>): Character {
   return {
@@ -272,5 +277,44 @@ describe('fs-25 — hasEmotionVariants (additive Variants badge + filter)', () =
   it('adds a "Variants" filter key only when variants exist', () => {
     expect(statusFilterKeys(withVariants, undefined, QWEN)).toContain('Variants');
     expect(statusFilterKeys(noVariants, undefined, QWEN)).not.toContain('Variants');
+  });
+});
+
+describe('fs-34 — usedEmotionsByCharacter + countMissingVariants', () => {
+  const sentence = (characterId: string, emotion?: string): Sentence =>
+    ({ id: Math.random(), chapterId: 1, characterId, text: 'x', emotion } as unknown as Sentence);
+
+  it('indexes the distinct non-neutral emotions each character uses', () => {
+    const map = usedEmotionsByCharacter([
+      sentence('sophie', 'angry'),
+      sentence('sophie', 'angry'),
+      sentence('sophie', 'whisper'),
+      sentence('sophie', 'neutral'),
+      sentence('keefe'),
+      sentence('keefe', 'excited'),
+    ]);
+    expect([...(map.get('sophie') ?? [])].sort()).toEqual(['angry', 'whisper']);
+    expect([...(map.get('keefe') ?? [])]).toEqual(['excited']);
+  });
+
+  it('counts used emotions that lack a designed variant', () => {
+    const c = char({
+      id: 'sophie',
+      overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: { angry: { name: 'x' } } } },
+    });
+    const used = new Set(['angry', 'whisper', 'sad']);
+    // angry is designed; whisper + sad are missing.
+    expect(countMissingVariants(c, used)).toBe(2);
+  });
+
+  it('returns 0 when the character uses no emotions or all are designed', () => {
+    const c = char({ id: 'sophie' });
+    expect(countMissingVariants(c, undefined)).toBe(0);
+    expect(countMissingVariants(c, new Set())).toBe(0);
+    const allDesigned = char({
+      id: 'sophie',
+      overrideTtsVoices: { qwen: { name: 'q', variants: { angry: { name: 'a' } } } },
+    });
+    expect(countMissingVariants(allDesigned, new Set(['angry']))).toBe(0);
   });
 });

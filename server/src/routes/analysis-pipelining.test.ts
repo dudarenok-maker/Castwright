@@ -186,6 +186,9 @@ function makePipelineFixture(): {
     async runStage2Chapter(): Promise<Stage2ChapterOutput> {
       throw new Error('Phase 0 analyzer does not run Phase 1 calls');
     },
+    async runEmotionChapter() {
+      throw new Error('Phase 0 analyzer does not run emotion calls');
+    },
   };
 
   const phase1Analyzer: Analyzer = {
@@ -227,6 +230,9 @@ function makePipelineFixture(): {
           },
         ],
       };
+    },
+    async runEmotionChapter() {
+      throw new Error('Phase 1 analyzer does not run emotion calls');
     },
   };
 

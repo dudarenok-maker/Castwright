@@ -954,3 +954,60 @@ describe('castSlice — applyMerge (srv-13 preservation)', () => {
     expect(sophie.aliases).toEqual(['Sophie Foster', 'Soph']);
   });
 });
+
+describe('castSlice — removeCharacterEmotionVariant (fs-34)', () => {
+  const withVariants = () =>
+    baseState([
+      makeChar('biana', {
+        overrideTtsVoices: {
+          qwen: {
+            name: 'qwen-v_biana',
+            variants: {
+              angry: { name: 'qwen-v_biana__angry' },
+              sad: { name: 'qwen-v_biana__sad' },
+            },
+          },
+        },
+      }),
+    ]);
+
+  it('drops one variant, leaving base + siblings intact', () => {
+    const next = castSlice.reducer(
+      withVariants(),
+      castActions.removeCharacterEmotionVariant({ characterId: 'biana', emotion: 'angry' }),
+    );
+    const qwen = next.characters[0].overrideTtsVoices!.qwen!;
+    expect(qwen.variants).toEqual({ sad: { name: 'qwen-v_biana__sad' } });
+    expect(qwen.name).toBe('qwen-v_biana');
+  });
+
+  it('clears the variants map when the last variant is removed', () => {
+    const single = baseState([
+      makeChar('biana', {
+        overrideTtsVoices: { qwen: { name: 'qwen-v_biana', variants: { angry: { name: 'x' } } } },
+      }),
+    ]);
+    const next = castSlice.reducer(
+      single,
+      castActions.removeCharacterEmotionVariant({ characterId: 'biana', emotion: 'angry' }),
+    );
+    expect(next.characters[0].overrideTtsVoices!.qwen!.variants).toBeUndefined();
+  });
+
+  it('is a no-op for an unknown character or absent variant', () => {
+    const start = withVariants();
+    const unknown = castSlice.reducer(
+      start,
+      castActions.removeCharacterEmotionVariant({ characterId: 'ghost', emotion: 'angry' }),
+    );
+    expect(unknown.characters[0].overrideTtsVoices!.qwen!.variants).toEqual({
+      angry: { name: 'qwen-v_biana__angry' },
+      sad: { name: 'qwen-v_biana__sad' },
+    });
+    const absent = castSlice.reducer(
+      start,
+      castActions.removeCharacterEmotionVariant({ characterId: 'biana', emotion: 'excited' }),
+    );
+    expect(Object.keys(absent.characters[0].overrideTtsVoices!.qwen!.variants!)).toHaveLength(2);
+  });
+});
