@@ -1,9 +1,11 @@
-# Many Voices, One Machine
+# Castwright
 
-_A project narrative — updated 29 May 2026_
+**Many voices, one machine.**
+
+_A project narrative — named & updated 7 June 2026_
 
 **Estimated read time:** 6 minutes for the narrative; 7 more for the functional and technical sections below.
-**What this is:** The story behind a project I'm building during my time between roles — why fiction listening is broken, what I think can fix it, and where I am with the work. A functional section and a technical section sit below the narrative for design and engineering conversations. I refresh this every couple of days, so the dates and the state are honest at the top.
+**What this is:** The story behind **Castwright** — _any book, performed by a full cast; effortlessly, even in your own voice._ Why fiction listening is broken, what fixes it, and where the product stands today. A functional section and a technical section sit below the narrative for design and engineering conversations. I refresh this every couple of days, so the dates and the state are honest at the top.
 
 ---
 
@@ -31,39 +33,35 @@ The reason nobody's built it isn't that the technology is missing. It's that the
 
 That's the bet I'm taking.
 
-## What I'm building
+## What Castwright is
 
-The shape of it is simple to describe.
+A _cast-wright_ is the one who builds the cast — and that is the whole job. The shape of it is simple to describe.
 
-You drop in a book. EPUB, PDF, MOBI, plain text, paste. The system reads it, identifies the twenty or thirty main characters, and builds a voice profile for each — age, gender, accent if the text implies one, personality, the vocal qualities the writer keeps gesturing at. The narrator gets a profile too. Those profiles are unique to _this book_ and they travel with it.
+You drop in a book. EPUB, PDF, MOBI, plain text, paste. Castwright reads it, identifies the twenty or thirty main characters, and builds a voice profile for each — age, gender, accent if the text implies one, personality, the vocal qualities the writer keeps gesturing at. The narrator gets a profile too. Those profiles are unique to _this book_ and they travel with it.
 
-Then, chapter by chapter, the system renders the audio. Every line of dialogue lands in the right voice. Every paragraph of narration is delivered by the narrator the book has earned. Tone is read from the surrounding prose — fear sounds like fear, dry humour lands dry. When the apprentice speaks, you hear a thirteen-year-old. When the swordsmith answers, you hear seventy years and a forge.
+Then, chapter by chapter, the system renders the audio. Every line of dialogue lands in the right voice. Every paragraph of narration is delivered by the narrator the book has earned. Tone is read from the surrounding prose — fear sounds like fear, dry humour lands dry. When the apprentice speaks, you hear a thirteen-year-old. When the swordsmith answers, you hear seventy years and a forge. And it isn't English-only — Castwright performs in **English and Russian today, with more languages to come**, and it never lets a cast cross languages within a book.
 
 Voices are reusable across books in a series. The narrator who carried Book 1 keeps carrying Book 2. A recurring character keeps their voice from one book to the next — and if the writer renamed them, the cast merge writes the old name into the new one's aliases, so the matcher in Book N+1 still recognises them. Your library learns who you've cast and offers them back, with provenance, every time you start a new manuscript.
 
-You drop the resulting chapters into the audiobook app you already use. There's no new player. The magic isn't in the playback — it's in the conversion.
+When it's done, you listen however you like. Castwright has its own companion app — **Android today, iOS as we get moving** — that pairs with your library over the network, downloads books for offline listening, and remembers exactly where you left off. Or drop the chapters straight into the audiobook app you already use; nothing locks you in. Either way, the magic isn't in the playback — it's in the conversion.
 
-And it runs on the machine you own. The analysis pass runs locally by default, with a free-tier cloud fallback if the local model isn't reachable. Audio synthesis runs locally on a voice engine that fits on a mid-market GPU. Per-book, not per-listen. The frontier never sees a chapter.
+And it runs on the machine you own. The analysis pass runs locally by default, with a free-tier cloud fallback if the local model isn't reachable. Audio synthesis runs locally on a voice engine that fits on a mid-market GPU. Per book, not per listen. The frontier never sees a chapter.
 
-## Why I'm building it
+## The bet
 
-There are smarter business questions I could be working on. There are more obvious projects to put on a portfolio.
+The reason nobody had built this isn't that the technology was missing. It's the economics. Render every audiobook in the cloud, with a frontier model orchestrating every chapter, and you've priced it for streaming services, not for readers. So the cast never gets built, and fiction keeps getting read by one tired voice.
 
-This one earns its place for three reasons, and I'd offer all three honestly.
+Castwright takes the other path. The expensive part — finding the cast, designing the voices, rendering the performance — happens on a machine you already own. Per book, not per listen. The frontier never sees a chapter. That single choice is what turns a full-cast audiobook from a streaming-budget luxury into something anyone with a mid-market GPU can make at home, for the price of the electricity.
 
-I read a lot, and I drive a lot, and the gap between what I want from those two activities and what currently bridges them is personally insulting in the way only a small, fixable problem can be. I'm building this for me first.
-
-The technology lives at the intersection of everything I've spent a career being interested in: AI, audio, taste, product, the boundary between what runs on a server and what runs at the edge. I cannot remember the last project I worked on where engineering, design, and craft all sat in the same room. This one does.
-
-And — this is the part I haven't said out loud yet — I think the more interesting AI bets over the next two years are at the edge, on local hardware, doing things the cloud is too expensive to do. I want to be building one of those, with my own hands, while I'm thinking about what to build next at scale.
+It's a bet on the edge: that the most interesting things AI will do over the next few years are the ones the cloud is too expensive to do — run instead on local hardware, privately, one render at a time. A book is exactly that kind of problem. It's personal, it happens once, and it has no business phoning home. Castwright is what that bet looks like pointed at the thing readers actually want — their stories, performed, in voices they'll remember the next morning.
 
 ## Where it stands now
 
 The first time I wrote this note, I called it _planning, paper, and a couple of small spikes_. That description is two months out of date in the way _small spike_ turns into _the thing that runs the house_ if you keep going.
 
-The honest summary, as of v1.5.0: the engine runs end-to-end on the machine it's supposed to run on, against the book it's supposed to run on, and **the install can now go straight into someone else's hands.** Everything beyond that is calibration.
+The honest summary, as of v1.6.0 and the fortnight since: the engine runs end-to-end on the machine it's supposed to run on, against the book it's supposed to run on; **the install goes straight into someone else's hands and upgrades itself in place**; there's a companion app to listen on; the performance is expressive and gated for quality; and the rough edges that only show up on real, multi-book series are getting filed down one at a time. Everything beyond that is calibration.
 
-What "runs" actually covers, in six plot points.
+What "runs" actually covers, in nine plot points.
 
 ### The engine runs end-to-end
 
@@ -117,25 +115,41 @@ The matcher scores name plus alias plus token overlap on the descriptors. Return
 
 Cross-book continuity is now a workflow, not an aspiration.
 
+### The performance got expressive
+
+Designing a distinct voice per character solved _who_ is speaking. The next question was _how_ — a line is furious here, broken there, deadpan a page later. Castwright now reads emotion per quote and renders the line in a matching expressive variant, with a detect-emotions pass that backfills tone across a chapter and a per-quote control so you can overrule it by hand. A flat read was the easy thing to ship; an expressive one is the reason it's worth listening to.
+
+### Quality became a gate, not a hope
+
+The honest worry with any AI voice is the line that comes out fluent but _wrong_ — a dropped clause, a hallucinated word, a clip of dead air — and you only catch it three chapters later. So generation grew a gate. Before a chapter is assembled, every sentence is checked acoustically — dead air, silence runs, duration drift — and re-recorded automatically if it fails; an optional speech-to-text pass transcribes the render and flags lines whose words don't match the script. A committed golden-audio harness guards the render path itself against regressions. And once a chapter is rendered, a drift detector compares it against each character's established voice profile and flags the ones that have wandered — severity-tiered, with a one-click route back into regeneration, and the rendered engine stamped per character so the comparison is honest. The _taste_ judgement still needs ears; the plainly broken lines no longer reach them.
+
+### A companion app, not just a converter
+
+The bet was always that the magic is in the conversion, not the playback — but "sideload an M4B" is a clumsy last mile. So there's now a **Castwright companion app** — Android today, iOS as we get moving. Pair it to your library with a QR code over your home network and it syncs chapters as they render, downloads books for offline listening, and plays them in a real native player: resume across devices, lock-screen and Android-Auto / CarPlay controls, a sleep timer, per-chapter waveforms. The conversion is still the product; the app just makes the last mile feel like the rest of it. (It ships to an alpha channel as a signed build; the server pairs over LAN with per-device tokens you can revoke.)
+
 ### What's not good enough yet to put in front of someone else
 
 With Qwen3-TTS designing a bespoke voice per character, a twenty-plus-character book no longer collapses onto a handful of catalogue voices. Every character gets its own designed voice. Differentiation is handled by construction rather than rationed from a fixed pool.
 
 What I still can't judge from inside the application is the _taste_ layer above that: whether those designed voices are perceptually distinct and well-matched enough, across a whole cast, to carry a long listen. That needs ears, not metrics, and probably not mine alone.
 
-Drift-detection cutoffs are still placeholders pending a labelled set. I haven't measured the analyzer's malformed-JSON rate cleanly — it's acceptable in practice after the schema-format and divergent-retry repair passes, but a parked experiment to swap to a heavier local model once the memory math says it fits hasn't run yet. F5-TTS and OpenVoice v2 haven't been evaluated head-to-head on this manuscript against the three engines I'm using.
+Drift detection now ships and runs on every rendered chapter; what's left there is tightening its severity cutoffs against a larger labelled set. I haven't measured the analyzer's malformed-JSON rate cleanly — it's acceptable in practice after the schema-format and divergent-retry repair passes, but a parked experiment to swap to a heavier local model once the memory math says it fits hasn't run yet. F5-TTS and OpenVoice v2 haven't been evaluated head-to-head on this manuscript against the engines I'm using.
 
-And multi-language is half-built. The engine plumbing is in via Qwen3-TTS; the language-detection-and-filtering half — auto-detecting a non-English manuscript, filtering the voice library by language, never letting a cast cross languages — is the next big piece, and the most-requested one.
+Multi-language is real now — English and Russian render end to end, with the hard rule that a cast never crosses languages. More languages are the obvious next step, along with the polish around them: auto-detecting a manuscript's language and filtering the voice library by it. It's among the most-requested directions.
 
 That list is honest, not alarming. The engine runs. The install travels. The next round is calibration on top of a foundation that holds.
 
-## What I'd ask of you, if you've read this far
+### Next: the book, in your own voice
 
-Two things, slightly different from the last revision.
+The tagline makes a promise the engine doesn't fully keep yet — _even in your own voice._ Cloning a specific person from a short sample is the **next big release**: a parent reading a bedtime story in their own voice even when they're away; a kid hearing themselves as the hero. The pieces are within reach — XTTS already clones zero-shot from a reference clip, and Qwen can design toward a target — so the real work is the experience around them: capturing a clean sample, getting consent on the record, holding that voice consistent across a whole book and series the way designed voices already are, and keeping every byte of it on the machine it was recorded on. It's the most personal thing Castwright could do, which is exactly why it's next.
 
-If you know voice-conversion or TTS people — XTTS v2 internals, F5-TTS, the prosody-control end of the field, anyone working on local-AI audio quality — I'd like to meet them. The wall-clock problem is largely solved — Kokoro and XTTS render faster than they play, and the bespoke-Qwen path (~RTF 2) is the holdout — but the _taste_ problem is wide open, and an introduction has saved me weeks every time in past lives.
+It also reshapes the voice library. A cloned voice — tied to a real, consenting person — can't sit in the same drawer as a voice _designed_ from a fictional persona. The library will split the two: cloned voices get their own section, their own provenance and consent trail, and their own reuse rules, so a family member's voice is never quietly offered back to a stranger's book the way a designed cast member's is.
 
-If you want to react to the running application honestly — I can hand you a build and the canonical regression manuscript and you can hear it. I'd rather hear what's confusing now than what's polished later. The first ten minutes is the test: if you forget you're listening to AI, the bet works. If you don't, tell me where it broke.
+## Hear it for yourself
+
+There's only one test that matters, and it takes ten minutes.
+
+Drop a book into Castwright, let it cast the thing, and listen. If you forget you're hearing AI — if the apprentice, the swordsmith, and the dragon land as three different people, and you reach the next chapter without reaching for the volume — then it works. If you don't, the exact moment it breaks is the most useful thing you can tell us. We'd rather hear what's confusing now than what's polished later.
 
 The book can wait. Building can't.
 
@@ -187,6 +201,8 @@ The analysing view is more pipeline than progress bar. Phase 0a finds chapter bo
 
 **Cross-book voice continuity.** Voices generated for one book in a series are offered back when you start a new manuscript in the same series. The matcher scores name + alias + token overlap so a character renamed between books still matches. Manual cast merge writes the merged source's name into the target's aliases, building the matching key for the next book in the same step.
 
+**Companion apps.** A first-party Castwright listener — **Android today, iOS on the roadmap** — pairs with the server over your home network, syncs the library (grouped by author and series, with filters and collapsible sections), downloads books for offline playback, and tracks position, chapters, playback speed, and auto-advance between chapters. Optional, never required: the conversion is the product, and rendered audio always exports to any player.
+
 **Listener app handoff.** Generated chapters export as M4B with chapter markers (or per-chapter MP3 as a fallback, since chapter audio is MP3 VBR V2 on disk via ffmpeg). Multi-step walkthrough modals guide the user through getting the file into the listener app of their choice — PocketBook, Voice, BookPlayer, Apple Books, Smart AudioBook Player, Audiobookshelf, Plex — with platform-accurate iOS and Android share-sheet phone-frame mockups embedded in the walkthrough.
 
 **Unified Status pill.** The top bar's separate state indicators collapsed into a single _Status_ pill backed by a status modal, with a hover popover that reveals the detail inline without opening the modal (and keeps the cast drawer open underneath). It surfaces TTS load errors, analyzer and generation state, and pipeline readiness in one place, so the global picture stays legible across the concurrent multi-book workflow regardless of which book's view is active. Model lifecycle still lives here: the analyzer (Ollama qwen3.5:4b) and the button-driven TTS engines (Coqui XTTS v2 and Qwen3-TTS; Kokoro v1 is eager-loaded and needs no load step) load and unload explicitly, with an auto-eviction banner when loading one frees the other and an `/api/ps`-backed "currently resident" indicator; an auto-load helper warms an engine just-in-time when the user hits a sample play button on a cold pipeline.
@@ -197,7 +213,7 @@ The analysing view is more pipeline than progress bar. Phase 0a finds chapter bo
 
 ### The design language, in one paragraph
 
-Cream canvas, near-black ink, Neue Montreal type (Inter as the free fallback). The accent palette is restrained to three colours, each with a single job. **Peach** (`#F79A83`) is the action colour — drag rings, drop indicators, regen affirmations, selected segments, active filter pills. Nothing idle uses it. **Magenta** (`#A43C6C`) carries the brand and the horizontal accent gradient. **Deep purple** (`#3C194F`) is series-context — reused voices, library matches, anything that belongs to a book beyond the current one. The signature four-stop vertical gradient (`#0F0E0D` → `#3C194F` → `#A43C6C` → `#F79A83`) appears no more than three times per page — at the end-of-page CTA or album-cover hero, at the active progress bar, and at one "magic moment" (analysis, cast confirmation, or the listen page hero). Every h1 and h2 carries one bold span inside an otherwise medium-weight sentence — the bold word carries the meaning, the rest is context. Tokens live as CSS custom properties in `src/styles.css`; Tailwind references the vars. Component code never sees a hex literal.
+This is the **Castwright** brand now, not just an app theme — the mark is a ragged three-voice waveform rising off an open book (peach and magenta voices over a page), and the four-stop gradient below is its signature. Cream canvas, near-black ink, Neue Montreal type (Inter as the free fallback). The accent palette is restrained to three colours, each with a single job. **Peach** (`#F79A83`) is the action colour — drag rings, drop indicators, regen affirmations, selected segments, active filter pills. Nothing idle uses it. **Magenta** (`#A43C6C`) carries the brand and the horizontal accent gradient. **Deep purple** (`#3C194F`) is series-context — reused voices, library matches, anything that belongs to a book beyond the current one. The signature four-stop vertical gradient (`#0F0E0D` → `#3C194F` → `#A43C6C` → `#F79A83`) appears no more than three times per page — at the end-of-page CTA or album-cover hero, at the active progress bar, and at one "magic moment" (analysis, cast confirmation, or the listen page hero). Every h1 and h2 carries one bold span inside an otherwise medium-weight sentence — the bold word carries the meaning, the rest is context. Tokens live as CSS custom properties in `src/styles.css`; Tailwind references the vars. Component code never sees a hex literal.
 
 ---
 
@@ -269,7 +285,7 @@ The wall-clock characteristics that used to live in the narrative section, gathe
 
 ### Server layer
 
-- **Express + TypeScript**, served from `server/`. Routes wire the OpenAPI contract end-to-end. Three analyzer adapters, one TTS sidecar adapter, one library scanner.
+- **Express + TypeScript**, served from `server/`. Routes wire the OpenAPI contract end-to-end. Two analyzer adapters, one TTS sidecar adapter, one library scanner.
 - **`.env` via Node 20.6+ native `process.loadEnvFile`** — no dotenv dependency. `server/.env.example` documents the surface.
 - **Persistence is per-book under `.audiobook/`** — `state.json` (slice payload), `cast.json` (live cast, persisted incrementally during analysis), `dropped-quotes.json` (append-only verifier ledger), chapter audio + voice samples. The generation queue lives one level up, workspace-wide, in `.queue.json`.
 - **Log lines carry millisecond timestamps** so 6 a.m. me has a chance of debugging midnight me.
@@ -291,7 +307,7 @@ Five harnesses, three-tier git gate.
 - **Open formats throughout.** EPUB and PDF in. Markdown intermediate. M4B and MP3 out. Voice profiles in a documented schema.
 - **Privacy by default.** Books, profiles, and renders all stay on the user's machine unless explicitly exported.
 - **Mid-market hardware target.** Production target is an 8 GB consumer GPU. The default Kokoro engine is light enough to sit resident alongside the analyzer; a heavy TTS engine (XTTS, Qwen voice design) evicts the analyzer and back, arbitrated by the VRAM semaphore. If it requires datacentre GPUs to be useful, the project has missed its point.
-- **No proprietary player.** The magic is in the conversion, not the playback; the audiobook drops into the app the listener already uses.
+- **No lock-in.** Castwright ships its own companion apps (Android now, iOS next), but the magic is in the conversion, not the playback — rendered audio always exports as M4B/MP3 to whatever player the listener prefers. You're never trapped.
 - **OpenAPI is the contract, not the documentation.** Types come from the generated file; hand-written shapes are a regression.
 
 ### Open questions and known risks
