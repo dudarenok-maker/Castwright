@@ -12,7 +12,7 @@ rewrite anything — speaker assignment is final and out of scope.
 
 ## Input
 
-The inbox contains the chapter's sentences as a JSON array, each with:
+The input contains the chapter's sentences as a JSON array, each with:
 
 ```jsonc
 { "sentenceId": 3, "characterId": "halloran", "text": "“Hard to starboard,”" }
