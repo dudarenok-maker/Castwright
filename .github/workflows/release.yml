@@ -182,17 +182,17 @@ jobs:
       - name: Rename + checksum
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk \
-            "audiobook-companion-${{ github.ref_name }}.apk"
-          shasum -a 256 "audiobook-companion-${{ github.ref_name }}.apk" \
-            > "audiobook-companion-${{ github.ref_name }}.apk.sha256"
-          cat "audiobook-companion-${{ github.ref_name }}.apk.sha256"
+            "castwright-${{ github.ref_name }}.apk"
+          shasum -a 256 "castwright-${{ github.ref_name }}.apk" \
+            > "castwright-${{ github.ref_name }}.apk.sha256"
+          cat "castwright-${{ github.ref_name }}.apk.sha256"
       - name: Attach to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" \
-            "audiobook-companion-${{ github.ref_name }}.apk" \
-            "audiobook-companion-${{ github.ref_name }}.apk.sha256" --clobber
+            "castwright-${{ github.ref_name }}.apk" \
+            "castwright-${{ github.ref_name }}.apk.sha256" --clobber
 
   # plan 188 / app-12 prep — build the companion for iOS UNSIGNED so the release
   # pathway exists + the iOS build is gated each release. An installable .ipa
@@ -218,7 +218,7 @@ jobs:
       - name: Package unsigned artifact
         run: |
           set -e
-          out="audiobook-companion-${{ github.ref_name }}-ios-unsigned"
+          out="castwright-${{ github.ref_name }}-ios-unsigned"
           if ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
             cp build/ios/ipa/*.ipa "$out.ipa"
             echo "ASSET=apps/android/$out.ipa" >> "$GITHUB_ENV"

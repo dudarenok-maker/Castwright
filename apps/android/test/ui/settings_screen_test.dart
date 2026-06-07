@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/app_settings.dart';
-import 'package:audiobook_companion/src/domain/skip_behavior.dart';
-import 'package:audiobook_companion/src/ui/settings_screen.dart';
+import 'package:castwright/src/domain/app_settings.dart';
+import 'package:castwright/src/domain/skip_behavior.dart';
+import 'package:castwright/src/ui/settings_screen.dart';
 
 void main() {
   Widget host(AppSettings s, void Function(AppSettings) onChanged) =>

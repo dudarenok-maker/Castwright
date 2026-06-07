@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/waveform.dart';
+import 'package:castwright/src/domain/waveform.dart';
 
 void main() {
   group('resamplePeaks', () {

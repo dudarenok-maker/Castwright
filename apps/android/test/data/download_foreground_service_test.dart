@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/download_foreground_service.dart';
-import 'package:audiobook_companion/src/data/sync_engine.dart';
+import 'package:castwright/src/data/download_foreground_service.dart';
+import 'package:castwright/src/data/sync_engine.dart';
 
 class _FakeController implements ForegroundController {
   final List<String> calls = [];

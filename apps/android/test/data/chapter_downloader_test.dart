@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/chapter_downloader.dart';
-import 'package:audiobook_companion/src/data/file_store.dart';
+import 'package:castwright/src/data/chapter_downloader.dart';
+import 'package:castwright/src/data/file_store.dart';
 
 /// A fetch stub that plays back a queued list of responses, one per call, and
 /// records the headers it was sent (so tests can assert the Range header).

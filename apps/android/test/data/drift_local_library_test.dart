@@ -2,10 +2,10 @@ import 'dart:convert';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/drift_local_library.dart';
-import 'package:audiobook_companion/src/data/file_store.dart';
-import 'package:audiobook_companion/src/data/library_database.dart';
-import 'package:audiobook_companion/src/domain/storage_policy.dart';
+import 'package:castwright/src/data/drift_local_library.dart';
+import 'package:castwright/src/data/file_store.dart';
+import 'package:castwright/src/data/library_database.dart';
+import 'package:castwright/src/domain/storage_policy.dart';
 
 DriftLocalLibrary makeLib(FileStore fs) =>
     DriftLocalLibrary(LibraryDatabase(NativeDatabase.memory()), fs, root: '/data');

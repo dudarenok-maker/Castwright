@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/playback_store.dart';
-import 'package:audiobook_companion/src/data/resume_sync_service.dart';
-import 'package:audiobook_companion/src/domain/resume_reconcile.dart';
+import 'package:castwright/src/data/playback_store.dart';
+import 'package:castwright/src/data/resume_sync_service.dart';
+import 'package:castwright/src/domain/resume_reconcile.dart';
 
 class FakeProgressApi implements ListenProgressApi {
   FakeProgressApi(this._remote);

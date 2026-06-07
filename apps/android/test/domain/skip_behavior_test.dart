@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/skip_behavior.dart';
+import 'package:castwright/src/domain/skip_behavior.dart';
 
 void main() {
   group('resolveSkipAction', () {

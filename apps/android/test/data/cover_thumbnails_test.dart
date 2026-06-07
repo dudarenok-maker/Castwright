@@ -2,8 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
-import 'package:audiobook_companion/src/data/cover_thumbnails.dart';
-import 'package:audiobook_companion/src/data/file_store.dart';
+import 'package:castwright/src/data/cover_thumbnails.dart';
+import 'package:castwright/src/data/file_store.dart';
 
 class _FakeStore implements ThumbnailStore {
   final Map<String, String> paths = {};
