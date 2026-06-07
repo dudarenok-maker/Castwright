@@ -16,6 +16,12 @@ class FakeAudioEngine implements AudioEngine {
   Duration get position => _position;
   @override
   Stream<Duration> get positionStream => _pos.stream;
+  @override
+  Duration? get duration => null;
+  @override
+  Stream<Duration?> get durationStream => const Stream.empty();
+  @override
+  Stream<void> get completionStream => const Stream.empty();
 
   @override
   Future<void> setFilePath(String path) async {

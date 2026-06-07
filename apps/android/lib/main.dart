@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
+import 'src/data/companion_runtime.dart';
 import 'src/data/pairing_service.dart';
 import 'src/data/pairing_store.dart';
 import 'src/domain/paired_server.dart';
+import 'src/ui/library_home_screen.dart';
 import 'src/ui/pairing_screen.dart';
 
 /// Audiobook Companion — the native listening client (plan 188). app-1 shell +
-/// app-2 pairing; the library and the player land on top.
+/// app-2 pairing + the app-3..14 library / sync / player wired on top.
 void main() {
   runApp(AudiobookCompanionApp(store: SecurePairingStore()));
 }
@@ -45,19 +47,48 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   PairedServer? _paired;
+  CompanionRuntime? _runtime;
   bool _loading = true;
+  String? _connError;
 
   @override
   void initState() {
     super.initState();
-    widget.store.load().then((p) {
+    widget.store.load().then((p) async {
+      if (!mounted) return;
+      if (p == null) {
+        setState(() => _loading = false);
+        return;
+      }
+      _paired = p;
+      await _establish();
+    });
+  }
+
+  /// Re-establish the cert-pinned connection from stored credentials (re-fetch
+  /// + verify the CA, re-probe the token), then build the wired runtime.
+  Future<void> _establish() async {
+    setState(() {
+      _loading = true;
+      _connError = null;
+    });
+    try {
+      final conn = await widget.service.pair(_paired!);
+      final runtime = await CompanionRuntime.forConnection(conn);
       if (mounted) {
         setState(() {
-          _paired = p;
+          _runtime = runtime;
           _loading = false;
         });
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _connError = '$e';
+          _loading = false;
+        });
+      }
+    }
   }
 
   Future<void> _openPairing() async {
@@ -66,41 +97,73 @@ class _HomePageState extends State<HomePage> {
         builder: (_) => PairingScreen(service: widget.service, store: widget.store),
       ),
     );
-    if (result != null && mounted) setState(() => _paired = result);
+    if (result != null && mounted) {
+      _paired = result;
+      await _establish();
+    }
   }
 
   Future<void> _unpair() async {
+    await _runtime?.dispose();
     await widget.store.clear();
-    if (mounted) setState(() => _paired = null);
+    if (mounted) {
+      setState(() {
+        _runtime = null;
+        _paired = null;
+        _connError = null;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Audiobook Companion')),
-      body: Center(child: _body()),
-    );
-  }
-
-  Widget _body() {
-    if (_loading) return const CircularProgressIndicator();
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     if (_paired == null) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text('Not paired yet', key: Key('home-status')),
-          const SizedBox(height: 16),
-          FilledButton(onPressed: _openPairing, child: const Text('Pair a device')),
-        ],
+      return Scaffold(
+        appBar: AppBar(title: const Text('Audiobook Companion')),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Not paired yet', key: Key('home-status')),
+              const SizedBox(height: 16),
+              FilledButton(
+                  onPressed: _openPairing, child: const Text('Pair a device')),
+            ],
+          ),
+        ),
       );
     }
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('Paired with ${_paired!.url}', key: const Key('home-status')),
-        const SizedBox(height: 16),
-        OutlinedButton(onPressed: _unpair, child: const Text('Unpair')),
-      ],
+    if (_runtime == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Audiobook Companion')),
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Paired with ${_paired!.url}', key: const Key('home-status')),
+              const SizedBox(height: 8),
+              if (_connError != null)
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Text("Couldn't reach the server:\n$_connError",
+                      textAlign: TextAlign.center),
+                ),
+              Wrap(spacing: 12, children: [
+                FilledButton(onPressed: _establish, child: const Text('Retry')),
+                OutlinedButton(onPressed: _unpair, child: const Text('Unpair')),
+              ]),
+            ],
+          ),
+        ),
+      );
+    }
+    return LibraryHomeScreen(
+      runtime: _runtime!,
+      serverLabel: _paired!.url,
+      onUnpair: _unpair,
     );
   }
 }
