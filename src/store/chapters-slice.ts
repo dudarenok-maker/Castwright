@@ -421,6 +421,19 @@ export const chaptersSlice = createSlice({
         return;
       }
 
+      if (ev.type === 'chapter_verifying') {
+        /* srv-31 ASR content-QA pass runs after synthesis, before assembly.
+           Mirror chapter_assembling: hold the row in_progress with a distinct
+           phase so the Generate view shows "Verifying speech…" instead of a
+           frozen "Synthesising …" caption. */
+        ch.phase = 'verifying';
+        ch.state = 'in_progress';
+        ch.progress = ev.progress ?? 0.99;
+        if (ev.currentLine != null) ch.currentLine = ev.currentLine;
+        if (ev.totalLines != null) ch.totalLines = ev.totalLines;
+        return;
+      }
+
       if (ev.type === 'chapter_complete') {
         ch.state = 'done';
         ch.progress = 1;
