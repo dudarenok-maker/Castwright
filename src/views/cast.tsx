@@ -122,7 +122,6 @@ const CHIP_ORDER = [
    only the displayed text changes. */
 const CHIP_LABELS: Record<string, string> = {
   Variants: 'Has variants',
-  'Needs variants': 'Needs variants',
 };
 
 export function CastView({
