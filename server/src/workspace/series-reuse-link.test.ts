@@ -158,6 +158,91 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     expect(linked).toBe(0);
   });
 
+  /* Stable-key continuity — the narrator (and any character that keeps its
+     deterministic voiceId/id across books) must link even when the analyzer
+     renames it to something with ZERO name-token overlap with the prior. This
+     is the Unraveled narrator regression: prior books call it "Narrator", this
+     book's analysis named it "Author" → the name scorer's 0.34 floor drops it,
+     so the bespoke qwen voice silently fails to carry over. */
+  it('links by stable voiceId even when the name has no token overlap (narrator rename)', async () => {
+    const NARRATOR_LIBRARY: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'narrator', name: 'Narrator', voiceId: 'narrator' },
+      },
+    ];
+    const options: LinkSeriesReuseOptions = {
+      scanLibrary: async () => NARRATOR_LIBRARY,
+      resolveAuthorSeries: async () => ({ author: AUTHOR, series: SERIES }),
+      positions: async () =>
+        new Map<string, number | null>([
+          [BOOK1, 1],
+          [BOOK2, 2],
+        ]),
+      castLoader: async (bookId: string) =>
+        bookId === BOOK1
+          ? [
+              {
+                id: 'narrator',
+                ttsEngine: 'qwen',
+                overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+                voiceStyle: 'a warm, articulate British narrator',
+              },
+            ]
+          : null,
+    };
+
+    /* Analyzer renamed the narrator to "Author" but kept the stable id/voiceId. */
+    const characters: LinkableCharacter[] = [
+      { id: 'narrator', name: 'Author', voiceId: 'narrator', voiceState: 'tuned' },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, options);
+
+    expect(linked).toBe(1);
+    const narrator = characters[0];
+    expect(narrator.matchedFrom?.bookId).toBe(BOOK1);
+    expect(narrator.matchedFrom?.characterId).toBe('narrator');
+    expect(narrator.ttsEngine).toBe('qwen');
+    expect(narrator.overrideTtsVoices?.qwen?.name).toBe('qwen-narrator');
+    expect(narrator.voiceStyle).toBe('a warm, articulate British narrator');
+    /* A user-tuned voiceState is not demoted, but the link still stamps. */
+    expect(narrator.voiceState).toBe('tuned');
+  });
+
+  /* A stable-key match must still respect an explicit notLinkedTo decision —
+     the user's "not the same person" marker overrides even an id match. */
+  it('does not stable-key link a notLinkedTo pair', async () => {
+    const NARRATOR_LIBRARY: LibraryCharacterRecord[] = [
+      {
+        bookId: BOOK1,
+        bookTitle: 'Book One',
+        character: { id: 'narrator', name: 'Narrator', voiceId: 'narrator' },
+      },
+    ];
+    const options: LinkSeriesReuseOptions = {
+      scanLibrary: async () => NARRATOR_LIBRARY,
+      resolveAuthorSeries: async () => ({ author: AUTHOR, series: SERIES }),
+      positions: async () =>
+        new Map<string, number | null>([
+          [BOOK1, 1],
+          [BOOK2, 2],
+        ]),
+      castLoader: async () => null,
+    };
+    const characters: LinkableCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Author',
+        voiceId: 'narrator',
+        notLinkedTo: [{ bookId: BOOK1, characterId: 'narrator' }],
+      },
+    ];
+    const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, options);
+    expect(linked).toBe(0);
+    expect(characters[0].matchedFrom).toBeUndefined();
+  });
+
   /* srv-13 — the fresh analyzer roster carries NO notLinkedTo, so without the
      pre-seed the link pass re-links a pair the user separated on a prior run.
      Seeding the guard fields from the prior cast first must prevent that. */
