@@ -1,0 +1,152 @@
+/* Integration tests for the single-character voice-design background job.
+
+   Seeds a minimal confirmed book with one character and drives the SSE job
+   end to end. Stubs the design core and persist helper so no GPU/sidecar
+   is needed. */
+
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+
+// Stub the shared design core so the job runs without a sidecar/GPU.
+// vi.mock is hoisted to the top of the file, so it runs before any imports —
+// these stubs are in effect for all dynamic imports in beforeAll too.
+vi.mock('./qwen-voice.js', async (orig) => ({
+  ...(await orig<typeof import('./qwen-voice.js')>()),
+  designQwenVoiceForCharacter: vi.fn(async (p: { characterId: string; preview?: boolean }) => ({
+    voiceId: p.preview ? `qwen-${p.characterId}-preview` : `qwen-${p.characterId}`,
+    url: `/api/voice-sample/${p.characterId}.mp3`,
+  })),
+}));
+
+const applyOverrideStub = vi.fn(async () => 1);
+vi.mock('./voices.js', async (orig) => {
+  const real = await orig<typeof import('./voices.js')>();
+  return {
+    ...real,
+    applyOverrideToCastFiles: applyOverrideStub,
+  };
+});
+
+const AUTHOR = 'Test Author';
+const SERIES = 'Test Series';
+const BOOK = 'Test Book';
+
+let workspaceRoot: string;
+let app: Express;
+let BOOK_ID: string;
+let bookDir: string;
+let designLock: typeof import('../tts/design-lock.js');
+
+function writeBookOnDisk(dir: string, id: string) {
+  mkdirSync(join(dir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(dir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId: id,
+      manuscriptId: `m_${id}`,
+      title: BOOK,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: 1,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(dir, 'manuscript.txt'), 'placeholder');
+  writeFileSync(
+    join(dir, '.audiobook', 'cast.json'),
+    JSON.stringify({
+      characters: [
+        {
+          id: 'c1',
+          name: 'Aria',
+          role: 'lead',
+          color: 'rose',
+          voiceStyle: 'a warm, confident voice',
+        },
+      ],
+    }),
+  );
+}
+
+beforeAll(async () => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-single-design-test-'));
+  process.env.WORKSPACE_DIR = workspaceRoot;
+
+  // All imports are dynamic so WORKSPACE_DIR (above) is set before paths.ts
+  // reads process.env.WORKSPACE_DIR at module load time.
+  const [{ singleDesignRouter }, { makeBookId }, lock] = await Promise.all([
+    import('./single-design.js'),
+    import('../workspace/paths.js'),
+    import('../tts/design-lock.js'),
+  ]);
+  designLock = lock;
+
+  BOOK_ID = makeBookId(AUTHOR, SERIES, BOOK);
+  bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+
+  app = express();
+  app.use(express.json());
+  app.use('/api/books', singleDesignRouter);
+});
+
+beforeEach(() => {
+  applyOverrideStub.mockReset();
+  applyOverrideStub.mockResolvedValue(1);
+  writeBookOnDisk(bookDir, BOOK_ID);
+});
+
+afterEach(() => {
+  designLock.clearDesignBusy(bookDir);
+});
+
+afterAll(() => {
+  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  delete process.env.WORKSPACE_DIR;
+});
+
+/** Parse an SSE response body into the list of JSON `data:` events. */
+function collectSse(res: request.Response): Record<string, unknown>[] {
+  return res.text
+    .split('\n\n')
+    .map((b) =>
+      b
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6))
+        .join('\n'),
+    )
+    .filter(Boolean)
+    .map((j) => JSON.parse(j));
+}
+
+describe('single-design job — first design', () => {
+  it('streams phase events, persists the override, and ends with designed', async () => {
+    const res = await request(app)
+      .post(`/api/books/${BOOK_ID}/cast/c1/design-voice/stream`)
+      .send({ persona: 'a warm, confident voice', sampleVoiceId: 'char-c1', modelKey: 'qwen3-tts-0.6b' });
+
+    expect(res.status).toBe(200);
+    const events = collectSse(res);
+    const types = events.map((e) => e.type);
+    expect(types).toContain('phase');
+    expect(events.find((e) => e.type === 'phase' && e.phase === 'designing')).toBeTruthy();
+    expect(events.find((e) => e.type === 'phase' && e.phase === 'rendering')).toBeTruthy();
+    const designed = events.find((e) => e.type === 'designed');
+    expect(designed).toMatchObject({ characterId: 'c1', voiceId: 'qwen-c1' });
+    expect(applyOverrideStub).toHaveBeenCalledWith(
+      'c1', // matchKey = character.voiceId ?? character.id
+      { engine: 'qwen', name: 'qwen-c1' },
+      expect.anything(),
+    );
+  });
+});
