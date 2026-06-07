@@ -50,6 +50,8 @@ class FakeAudioEngine implements AudioEngine {
   @override
   Future<void> setSpeed(double s) async => calls.add('speed:$s');
   @override
+  Future<void> setVolumeBoost(double db) async => calls.add('boost:$db');
+  @override
   Future<void> dispose() async => _pos.close();
 
   void emit(Duration p) {
@@ -179,6 +181,20 @@ void main() {
       await pc.skip(forward: true);
       expect(pc.currentChapterUuid, 'u2');
       expect(engine.loadedPath, '/b1/u2/audio.mp3');
+      await pc.dispose();
+    });
+
+    test('volume boost is applied and re-applied on each chapter load', () async {
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(),
+          behavior: SkipButtonBehavior.chapter);
+      await pc.openBook('b1');
+      await pc.setVolumeBoost(8);
+      expect(engine.calls, contains('boost:8.0'));
+      expect(pc.volumeBoostDb, 8.0);
+      engine.calls.clear();
+      await pc.skip(forward: true); // next chapter
+      expect(engine.calls, contains('boost:8.0')); // persisted across chapters
       await pc.dispose();
     });
 

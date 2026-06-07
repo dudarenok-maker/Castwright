@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../data/companion_runtime.dart';
 import '../domain/library_tree.dart';
 import '../domain/listen_progress.dart';
+import '../domain/paired_server.dart';
+import 'app_settings_screen.dart';
 import 'player_screen.dart';
 
 /// Post-pairing home: a cover-art library grouped into author → series
@@ -14,12 +16,12 @@ class LibraryHomeScreen extends StatefulWidget {
   const LibraryHomeScreen({
     super.key,
     required this.runtime,
-    required this.serverLabel,
+    required this.server,
     required this.onUnpair,
   });
 
   final CompanionRuntime runtime;
-  final String serverLabel;
+  final PairedServer server;
   final Future<void> Function() onUnpair;
 
   @override
@@ -181,9 +183,17 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
               onPressed: _loading ? null : _refresh,
             ),
           IconButton(
-            tooltip: 'Unpair',
-            icon: const Icon(Icons.link_off),
-            onPressed: () async => widget.onUnpair(),
+            key: const Key('open-settings'),
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => AppSettingsScreen(
+                runtime: widget.runtime,
+                server: widget.server,
+                onUnpair: widget.onUnpair,
+                onLibraryCleared: _refresh,
+              ),
+            )),
           ),
         ],
       ),
@@ -340,21 +350,57 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
           onPressed: () => _download(book),
         );
       case BookDownloadState.updateAvailable:
-        return IconButton(
-          key: Key('update-${book.bookId}'),
-          icon: const Icon(Icons.sync_problem),
-          color: Theme.of(context).colorScheme.tertiary,
-          tooltip: 'Update available — re-sync',
-          onPressed: () => _download(book),
-        );
       case BookDownloadState.downloaded:
-        return IconButton(
-          icon: const Icon(Icons.play_circle_outline),
-          tooltip: 'Play',
-          onPressed: () => _open(book),
+        // Downloaded (tap row to play) — menu offers update/remove.
+        return PopupMenuButton<String>(
+          key: Key('book-menu-${book.bookId}'),
+          onSelected: (v) {
+            if (v == 'play') _open(book);
+            if (v == 'update') _download(book);
+            if (v == 'remove') _removeDownload(book);
+          },
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'play', child: Text('Play')),
+            if (book.downloadState == BookDownloadState.updateAvailable)
+              const PopupMenuItem(
+                  value: 'update', child: Text('Update (re-sync)')),
+            const PopupMenuItem(
+                value: 'remove', child: Text('Remove download')),
+          ],
         );
       case BookDownloadState.downloading:
         return _progressWidget(book.bookId);
+    }
+  }
+
+  Future<void> _removeDownload(LibraryBook book) async {
+    if (widget.runtime.player.currentBookId == book.bookId) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Stop playback before removing this book.')));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove download?'),
+        content: Text(
+            'Deletes the downloaded audio for "${book.title}". You can re-download it later.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await widget.runtime.library.evictBook(book.bookId);
+    await _refresh();
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Removed "${book.title}".')));
     }
   }
 

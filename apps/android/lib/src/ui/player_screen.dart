@@ -236,6 +236,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           onPressed: _cycleSpeed,
                           child: Text('${_speed}x'),
                         ),
+                        IconButton(
+                          key: const Key('player-boost'),
+                          tooltip: 'Volume boost',
+                          icon: Icon(widget.runtime.settings.volumeBoostDb > 0
+                              ? Icons.volume_up
+                              : Icons.volume_up_outlined),
+                          onPressed: _openBoostSheet,
+                        ),
                       ],
                     ),
                   ],
@@ -250,6 +258,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   static const _speeds = [1.0, 1.25, 1.5, 2.0, 0.75];
   double _speed = 1.0;
+
+  /// Quick volume-boost slider; writes through the runtime so it persists and
+  /// stays in sync with the settings screen.
+  void _openBoostSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (_) {
+        var boost = widget.runtime.settings.volumeBoostDb;
+        return StatefulBuilder(
+          builder: (ctx, setSheet) => Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Volume boost  +${boost.toStringAsFixed(0)} dB',
+                    style: Theme.of(ctx).textTheme.titleMedium),
+                Slider(
+                  value: boost,
+                  min: 0,
+                  max: 12,
+                  divisions: 12,
+                  label: '+${boost.toStringAsFixed(0)} dB',
+                  onChanged: (v) => setSheet(() => boost = v),
+                  onChangeEnd: (v) => widget.runtime.updateSettings(
+                      widget.runtime.settings.copyWith(volumeBoostDb: v)),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ).then((_) => mounted ? setState(() {}) : null); // refresh the boost icon
+  }
 
   Future<void> _cycleSpeed() async {
     final next = _speeds[(_speeds.indexOf(_speed) + 1) % _speeds.length];

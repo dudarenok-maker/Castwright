@@ -10,11 +10,23 @@ class PairedServer {
     required this.url,
     required this.token,
     required this.caFingerprint,
+    this.pairedAt,
   });
 
   final String url;
   final String token;
   final String caFingerprint;
+
+  /// ISO-8601 timestamp this server was paired (set at save; null for legacy
+  /// pairings predating this field). Surfaced as "paired since" in settings.
+  final String? pairedAt;
+
+  PairedServer copyWith({String? pairedAt}) => PairedServer(
+        url: url,
+        token: token,
+        caFingerprint: caFingerprint,
+        pairedAt: pairedAt ?? this.pairedAt,
+      );
 
   /// Parse the raw text of a scanned pairing QR (a JSON object).
   factory PairedServer.fromQrPayload(String raw) {
@@ -34,13 +46,19 @@ class PairedServer {
     final url = _requireNonEmptyString(json, 'url');
     final token = _requireNonEmptyString(json, 'token');
     final caFingerprint = _requireNonEmptyString(json, 'caFingerprint');
-    return PairedServer(url: url, token: token, caFingerprint: caFingerprint);
+    return PairedServer(
+      url: url,
+      token: token,
+      caFingerprint: caFingerprint,
+      pairedAt: json['pairedAt'] as String?,
+    );
   }
 
   Map<String, dynamic> toJson() => {
         'url': url,
         'token': token,
         'caFingerprint': caFingerprint,
+        if (pairedAt != null) 'pairedAt': pairedAt,
       };
 
   static String _requireNonEmptyString(Map<String, dynamic> json, String key) {
