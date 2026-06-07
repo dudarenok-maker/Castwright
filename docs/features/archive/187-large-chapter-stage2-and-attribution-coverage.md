@@ -64,7 +64,9 @@ workaround. On ch19: Prentice was in cast.json with 0 lines, narrator had 221.
    ids 1..N** so the result is the exact shape a single call produces. If a
    section *still* truncates (`AnalyzerTruncatedError`), it is **adaptively
    re-split** — self-tuning to the real cap, engine-agnostic. A chapter within
-   budget runs exactly one guarded call (byte-identical to before).
+   budget runs exactly one guarded call (byte-identical to before) — and if that
+   single call *itself* truncates (see the post-ship addendum), it falls back to
+   the same adaptive split.
 
 3. **One shared resilient runner across both routes** (`routes/analysis.ts`).
    `attributeChapterStage2` (built on `buildStage2ChunkInbox` +
@@ -128,6 +130,26 @@ manual escape hatch).
   chapters on Ollama's 16K window.
 - Cross-chunk overlap beyond the small preceding-context preamble — only if seam
   mis-attribution shows up in live runs.
+
+## Post-ship addendum (2026-06-07) — single-call truncation fallback
+
+The original `runStage2ChapterChunked` only gave the **multi-chunk** path the
+adaptive re-split safety net. The **single-call** path (a body *under*
+`STAGE2_CHUNK_CHAR_BUDGET`) re-threw `AnalyzerTruncatedError` straight to the UI,
+on the assumption that a sub-budget chapter "can't" truncate. That assumption is
+false: the char budget is only a proxy for the model's **output-token** cap, and
+stage-2 output scales with **sentence count**, not chars — so a dense,
+dialogue-heavy chapter can sit under the char budget yet overflow the 8192-token
+output cap. Live hit: a 8,348-char chapter on `gemini-3.1-flash-lite` failed the
+whole run with "Analysis failed — … Lower STAGE2_CHUNK_CHAR_BUDGET and retry."
+
+Fix: when the single guarded call truncates, force-split the body in half (at
+paragraph boundaries) and run it through the same `attributeSpan` adaptive path
+the multi-chunk route already uses. A body that's a single un-splittable
+paragraph still surfaces the truncation loudly (nothing to split). New tests in
+`stage2-chunk.test.ts`: "re-splits an UNDER-budget body that still truncates on
+the single call" and "propagates an under-budget truncation that is a single
+un-splittable paragraph".
 
 ## Ship notes
 
