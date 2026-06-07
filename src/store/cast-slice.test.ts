@@ -143,7 +143,7 @@ describe('castSlice — hydrateFromAnalysis', () => {
 
   it('defaults missing voiceState to "generated" so the Cast Status column renders a pill', () => {
     /* Regression: AnalyseResponse leaves voiceState optional, and the
-       file-drop analyser doesn't always fill it in. Without this default,
+       analyzer doesn't always fill it in. Without this default,
        freshly-analysed characters land in the Cast view with the Status
        column empty even though their voices were just generated. */
     const { voiceState: _omit, ...narratorNoState } = makeChar('narrator');

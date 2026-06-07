@@ -36,6 +36,12 @@ listener wins interleaved near the top, big multi-week bets grouped lower in Cou
 - _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved. **Promoted to Must on 2026-06-02:** dropped chapters on long books actively hurt existing users.
 _Full detail + acceptance:_ [#399](https://github.com/dudarenok-maker/AudioBook-Generator/issues/399).
 
+### `ops-12` — Trademark clearance for Castwright + defensive domains ([#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626))
+
+- _What:_ Before launch, run a real trademark clearance for **Castwright** on TMview / USPTO / EUIPO / IP Australia in classes 9 (software), 41 (entertainment/audio), 42 (SaaS) — the 2026-06-07 automated sweep found no software/audio mark (only an unrelated US construction LLC) but that is **not** legal clearance. Register defensive domains (`castwright.io`, typo redirects `castwrite.ai` / `castright.ai`). `castwright.ai` is owned. _(Owner: user / business.)_
+- _Benefit (business):_ protects the brand a real business is being built on; avoids a forced rename after launch.
+_Full detail + acceptance:_ [#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626).
+
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
 [plan 162](features/162-fs2-multilanguage.md); the library/cast language UX
@@ -227,6 +233,12 @@ _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-
 
 ### Net-new capabilities
 
+#### `fs-38` — Voice cloning (your own / family voice) + cloned-vs-designed library split ([#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
+
+- _What:_ Clone a real person's voice from a short in-app sample (XTTS reference first, then Qwen design-to-target) and cast it like any other voice — held consistent across a book/series. Explicit consent on the record; cloned voices get their own `#/voices` section and are excluded from the cross-book reuse matcher; local-only. The **next big release** — pays off the _"even in your own voice"_ promise.
+- _Benefit (user):_ the most personal, gift-able feature — a bedtime story in your own voice, or your kid as the hero.
+_Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-cloning.md) · [#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624).
+
 #### `fs-27` — Chapter recaps / "previously…" summaries ([#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481))
 
 - _What:_ LLM-generated short recap per chapter (the analyzer already does LLM work), shown — and optionally synthesized as a spoken "previously…" intro — when the user resumes a book after a gap. Opt-in per book; cost surfaced up front.
@@ -250,12 +262,6 @@ _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
-
-#### `fs-37` — Detect-emotions support for `ANALYZER=manual` (file-drop) mode (fs-33 follow-up) ([#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594))
-
-- _What:_ The emotion-only pass uses `selectAnalyzerForPhase` (Gemini/Ollama); the `ANALYZER=manual` file-drop cowork flow has no emotion-annotation path. Add a manual-handoff branch (inbox prompt → outbox JSON) for the annotate-emotion route.
-- _Benefit (user/dev):_ dev/cowork users on manual mode can backfill emotions too.
-_Full detail + acceptance:_ [#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594).
 
 #### `fe-34` — Voices view: "Has emotion variants" filter (fs-34 follow-up) ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595))
 
