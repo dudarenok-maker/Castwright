@@ -1171,6 +1171,13 @@ describe('CastView status filter', () => {
     expect(chip(/^Has variants/).textContent).toContain('1'); // calm only
   });
 
+  it('filters to has-variants rows when the "Has variants" chip is active', () => {
+    renderVariantView();
+    fireEvent.click(chip(/^Has variants/));
+    expect(isPresent('Calm')).toBe(true);
+    expect(isPresent('Fury')).toBe(false);
+  });
+
   it('renders the "Needs variants" chip and filters to unmet-variant rows', () => {
     renderVariantView();
     expect(chip(/^Needs variants/).textContent).toContain('1'); // fury only
