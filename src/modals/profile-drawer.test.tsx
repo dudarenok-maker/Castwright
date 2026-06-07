@@ -207,6 +207,50 @@ describe('ProfileDrawer evidence rendering', () => {
   });
 });
 
+describe('ProfileDrawer Qwen emotion-variant persistence (regression)', () => {
+  /* Designing a whisper variant persists `overrideTtsVoices.qwen.variants` to
+     cast.json server-side. The drawer's Save handler then rebuilt the qwen slot
+     as a bare `{ name }` — dropping `variants` — and onSave → setCharacters →
+     persist wrote the whole cast back WITHOUT the variant, erasing the
+     server-written whisper variant from disk on the next Save. This guards the
+     fix: Save must preserve the existing qwen slot (variants included). */
+  it('preserves designed emotion variants in the qwen slot on Save', () => {
+    const onSave = vi.fn();
+    const character: Character = {
+      ...baseChar,
+      id: 'keefe',
+      name: 'Keefe Sencen',
+      voiceId: 'keefe',
+      ttsEngine: 'qwen',
+      voiceStyle: 'a charming, smooth-talking teenage boy',
+      overrideTtsVoices: {
+        qwen: { name: 'qwen-keefe', variants: { whisper: { name: 'qwen-keefe__whisper' } } },
+      },
+    };
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <ProfileDrawer
+          character={character}
+          voice={undefined}
+          onClose={() => {}}
+          onSave={onSave}
+          onLock={() => {}}
+        />
+      </Provider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    const next = onSave.mock.calls[0][0] as Character;
+    expect(next.overrideTtsVoices?.qwen).toEqual({
+      name: 'qwen-keefe',
+      variants: { whisper: { name: 'qwen-keefe__whisper' } },
+    });
+  });
+});
+
 describe('ProfileDrawer cast roster (merge + aliases)', () => {
   const sophie: Character = {
     id: 'sophie',
