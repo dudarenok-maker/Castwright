@@ -40,6 +40,10 @@ class Chapters extends Table {
   /// storage accounting.
   IntColumn get bytes => integer().withDefault(const Constant(0))();
 
+  /// PCM-measured chapter length (seconds) from the manifest — stored so the
+  /// player + library show durations + listener progress OFFLINE.
+  RealColumn get durationSec => real().nullable()();
+
   /// Whether the user has finished this chapter — drives auto-delete-finished
   /// eviction (the row stays; only the audio file is dropped).
   BoolColumn get finished => boolean().withDefault(const Constant(false))();
@@ -70,13 +74,14 @@ class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase.open() : this(driftDatabase(name: 'library'));
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
         onCreate: (m) => m.createAll(),
         onUpgrade: (m, from, to) async {
           if (from < 2) await m.createTable(playback);
+          if (from < 3) await m.addColumn(chapters, chapters.durationSec);
         },
       );
 }
