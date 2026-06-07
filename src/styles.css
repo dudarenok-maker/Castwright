@@ -348,6 +348,18 @@
 [data-theme='dark'] .bg-emerald-100 {
   background-color: rgba(16, 185, 129, 0.18);
 }
+/* Translucent /70 variant — the analysing-view PhaseModelChip done/streaming
+   pill (`src/components/analysing/phase-model-chip.tsx`), the green capsule
+   carrying the active model name (e.g. "Gemini 3.1 Flash Lite"). Same `/N`
+   selector caveat as the variants below — Tailwind compiles `.bg-emerald-100\/70`
+   separately, so the bare `.bg-emerald-100` redirect above doesn't reach it.
+   Without this the pill painted 70% of the near-white `#d1fae5` over the dark
+   canvas, washing the lightened `text-emerald-700` model text out to
+   low contrast. Alpha sits one step below the un-multiplied base (0.18),
+   mirroring the `/70`-below-base step in the emerald-50 ladder. */
+[data-theme='dark'] .bg-emerald-100\/70 {
+  background-color: rgba(16, 185, 129, 0.16);
+}
 /* Translucent /50 variant used by the generation-view "Done" chapter card
    tint (`src/views/generation.tsx` stateConfig.done.tint). Same selector
    caveat as the `.bg-rose-50\/N` overrides above — Tailwind compiles
