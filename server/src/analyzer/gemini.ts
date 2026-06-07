@@ -15,9 +15,11 @@ import {
   stage1Schema,
   stage1ChapterSchema,
   stage2ChapterSchema,
+  emotionAnnotationSchema,
   type Stage1Output,
   type Stage1ChapterOutput,
   type Stage2ChapterOutput,
+  type EmotionAnnotationOutput,
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
@@ -99,6 +101,8 @@ const SKILL_FILES = {
   per_chapter_stage1: 'audiobook-character-detection-per-chapter.md',
   /* Phase 1 — per-chapter sentence attribution. */
   per_chapter_stage2: 'audiobook-sentence-attribution.md',
+  /* fs-33 — emotion-only backfill pass (does NOT re-attribute). */
+  emotion_annotation: 'audiobook-emotion-annotation.md',
 } as const;
 export type SkillName = keyof typeof SKILL_FILES;
 
@@ -191,6 +195,23 @@ export class GeminiAnalyzer implements Analyzer {
       'per_chapter_stage2',
       promptMd,
       stage2ChapterSchema,
+      call,
+    );
+  }
+
+  async runEmotionChapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<EmotionAnnotationOutput> {
+    const key = `emotion-ch${chapterId}` as const;
+    return this.runStage(
+      manuscriptId,
+      key,
+      'emotion_annotation',
+      promptMd,
+      emotionAnnotationSchema,
       call,
     );
   }

@@ -236,6 +236,59 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
     expect(cleared.sentences[1].emotion).toBeUndefined();
   });
 
+  describe('fs-33 — applyDetectedEmotions (bulk backfill, fill-only-empty)', () => {
+    const start = () =>
+      baseState(
+        sentences([
+          { id: 1, chapterId: 1, text: 'a', characterId: 'narrator' },
+          { id: 2, chapterId: 1, text: 'b', characterId: 'Wren' },
+          { id: 3, chapterId: 1, text: 'c', characterId: 'Marlow', emotion: 'sad' },
+        ]),
+      );
+
+    it('fills emotion on sentences that have none', () => {
+      const next = manuscriptSlice.reducer(
+        start(),
+        manuscriptActions.applyDetectedEmotions({
+          chapterId: 1,
+          annotations: [{ sentenceId: 2, emotion: 'angry' }],
+        }),
+      );
+      expect(next.sentences.find((s) => s.id === 2)?.emotion).toBe('angry');
+    });
+
+    it('NEVER clobbers a hand-set emotion (manual always wins)', () => {
+      const next = manuscriptSlice.reducer(
+        start(),
+        manuscriptActions.applyDetectedEmotions({
+          chapterId: 1,
+          annotations: [{ sentenceId: 3, emotion: 'excited' }],
+        }),
+      );
+      // sentence 3 already had a manual 'sad' — detection must not overwrite it.
+      expect(next.sentences.find((s) => s.id === 3)?.emotion).toBe('sad');
+    });
+
+    it('ignores a neutral annotation and is scoped by (chapterId, sentenceId)', () => {
+      const withCh2 = baseState([
+        ...sentences([{ id: 1, chapterId: 1, text: 'a', characterId: 'Wren' }]),
+        ...sentences([{ id: 1, chapterId: 2, text: 'a2', characterId: 'Wren' }]),
+      ]);
+      const next = manuscriptSlice.reducer(
+        withCh2,
+        manuscriptActions.applyDetectedEmotions({
+          chapterId: 2,
+          annotations: [
+            { sentenceId: 1, emotion: 'neutral' },
+          ],
+        }),
+      );
+      // neutral is a no-op; ch1's id-1 is untouched (scoped to ch2).
+      expect(next.sentences.find((s) => s.chapterId === 2 && s.id === 1)?.emotion).toBeUndefined();
+      expect(next.sentences.find((s) => s.chapterId === 1 && s.id === 1)?.emotion).toBeUndefined();
+    });
+  });
+
   /* Regression: sentence ids restart at 1 in every chapter (the hydrate merge
      keys by `${chapterId}:${id}` for the same reason — see the
      "keeps per-chapter sentence ids distinct" test below). The reassign
