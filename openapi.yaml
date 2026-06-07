@@ -4627,7 +4627,7 @@ components:
     ResourceTelemetryRecord:
       type: object
       required:
-        [at, bookId, chapterId, title, modelKey, rtf, audioSec, wallSec, vramReservedMb, vramTotalMb, committedHostMb]
+        [at, bookId, bookTitle, chapterId, title, modelKey, rtf, audioSec, wallSec, vramReservedMb, vramTotalMb, committedHostMb]
       description: |
         One per-chapter telemetry sample captured right after a chapter
         rendered: throughput (RTF, audio/wall seconds) + GPU and host-RAM
@@ -4636,6 +4636,7 @@ components:
       properties:
         at: { type: string, format: date-time }
         bookId: { type: string, nullable: true }
+        bookTitle: { type: string, nullable: true, description: 'Human-readable book title at render time (state.json title); null for legacy records written before this field or when the book title was unknown.' }
         chapterId:
           oneOf:
             - type: integer
