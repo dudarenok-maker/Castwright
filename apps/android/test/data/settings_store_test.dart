@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/file_store.dart';
-import 'package:audiobook_companion/src/data/settings_store.dart';
-import 'package:audiobook_companion/src/domain/app_settings.dart';
-import 'package:audiobook_companion/src/domain/skip_behavior.dart';
+import 'package:castwright/src/data/file_store.dart';
+import 'package:castwright/src/data/settings_store.dart';
+import 'package:castwright/src/domain/app_settings.dart';
+import 'package:castwright/src/domain/skip_behavior.dart';
 
 void main() {
   group('SettingsStore', () {

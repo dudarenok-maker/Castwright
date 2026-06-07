@@ -1,4 +1,4 @@
-package com.audiobookgenerator.audiobook_companion
+package ai.castwright
 
 import com.ryanheise.audioservice.AudioServiceActivity
 

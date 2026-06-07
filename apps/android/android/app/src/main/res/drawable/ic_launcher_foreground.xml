@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Castwright app icon foreground — full-cast waveform + open-book swoosh.
+     Derived from /brand/castwright-icon.svg. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="512" android:viewportHeight="512">
+    <group android:scaleX="0.82" android:scaleY="0.82" android:pivotX="256" android:pivotY="256">
+        <path android:fillColor="#F79A83" android:pathData="M104,225 A15,15 0 0 1 134,225 L134,287 A15,15 0 0 1 104,287 Z"/>
+        <path android:fillColor="#F79A83" android:pathData="M158,131 A15,15 0 0 1 188,131 L188,357 A15,15 0 0 1 158,357 Z"/>
+        <path android:fillColor="#A43C6C" android:pathData="M212,175 A15,15 0 0 1 242,175 L242,305 A15,15 0 0 1 212,305 Z"/>
+        <path android:fillColor="#A43C6C" android:pathData="M266,107 A15,15 0 0 1 296,107 L296,361 A15,15 0 0 1 266,361 Z"/>
+        <path android:fillColor="#FFFDFB" android:pathData="M320,161 A15,15 0 0 1 350,161 L350,333 A15,15 0 0 1 320,333 Z"/>
+        <path android:fillColor="#FFFDFB" android:pathData="M374,215 A15,15 0 0 1 404,215 L404,293 A15,15 0 0 1 374,293 Z"/>
+        <path android:strokeColor="#FFFDFB" android:strokeWidth="15" android:strokeLineCap="round"
+            android:pathData="M110,416 C170,392 226,392 256,412 C286,392 342,392 402,416"/>
+    </group>
+</vector>

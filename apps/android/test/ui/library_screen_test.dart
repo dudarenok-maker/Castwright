@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/library_tree.dart';
-import 'package:audiobook_companion/src/ui/library_screen.dart';
+import 'package:castwright/src/domain/library_tree.dart';
+import 'package:castwright/src/ui/library_screen.dart';
 
 LibraryBook bk(String id, String author, String title,
         {BookDownloadState state = BookDownloadState.downloaded}) =>
