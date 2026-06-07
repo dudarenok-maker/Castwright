@@ -36,7 +36,7 @@ Premium, ownable, implies skilled craft (the auto-casting engine). The `“`/`C`
 "cast" root tie directly to the multi-voice differentiator.
 
 **Availability (checked 2026-06-07)**
-- `castwright.ai` — **free** (RDAP-verified). Primary domain. `.ai` is on-brand for an AI product.
+- `castwright.ai` — **registered & owned** (7 June 2026). Primary domain. `.ai` is on-brand for an AI product.
 - `castwright.com` — taken (a US construction company, Class 37 — unrelated).
 - `.io` — confirm at registrar (no public RDAP for `.io`); grab as defensive redirect.
 - Google Play app name — free (user-confirmed). Apple App Store — no exact match.
@@ -83,7 +83,7 @@ on dark. Wordmark type previews in Georgia — **outline to paths for production
 ## Out of scope / follow-ups
 
 - Final paid trademark clearance + registration (classes 9/41/42).
-- Register `castwright.ai` (+ defensive `.io` / typo redirects).
+- ~~Register `castwright.ai`~~ — **done 7 June 2026.** Still worth grabbing defensive `.io` / typo redirects.
 - Outline the wordmark font to paths; choose a production display typeface.
 - Wire assets into the app (`index.html` favicon, PWA manifest, app-store icons,
   `apps/android` launcher icons) — separate implementation task, not part of this brand spec.

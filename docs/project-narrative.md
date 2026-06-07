@@ -1,9 +1,11 @@
-# Many Voices, One Machine
+# Castwright
 
-_A project narrative — updated 29 May 2026_
+**Many voices, one machine.**
+
+_A project narrative — named & updated 7 June 2026_
 
 **Estimated read time:** 6 minutes for the narrative; 7 more for the functional and technical sections below.
-**What this is:** The story behind a project I'm building during my time between roles — why fiction listening is broken, what I think can fix it, and where I am with the work. A functional section and a technical section sit below the narrative for design and engineering conversations. I refresh this every couple of days, so the dates and the state are honest at the top.
+**What this is:** The story behind **Castwright** — _any book, performed by a full cast; effortlessly, even in your own voice._ Why fiction listening is broken, what fixes it, and where the product stands today. A functional section and a technical section sit below the narrative for design and engineering conversations. I refresh this every couple of days, so the dates and the state are honest at the top.
 
 ---
 
@@ -31,11 +33,11 @@ The reason nobody's built it isn't that the technology is missing. It's that the
 
 That's the bet I'm taking.
 
-## What I'm building
+## What Castwright is
 
-The shape of it is simple to describe.
+A _cast-wright_ is the one who builds the cast — and that is the whole job. The shape of it is simple to describe.
 
-You drop in a book. EPUB, PDF, MOBI, plain text, paste. The system reads it, identifies the twenty or thirty main characters, and builds a voice profile for each — age, gender, accent if the text implies one, personality, the vocal qualities the writer keeps gesturing at. The narrator gets a profile too. Those profiles are unique to _this book_ and they travel with it.
+You drop in a book. EPUB, PDF, MOBI, plain text, paste. Castwright reads it, identifies the twenty or thirty main characters, and builds a voice profile for each — age, gender, accent if the text implies one, personality, the vocal qualities the writer keeps gesturing at. The narrator gets a profile too. Those profiles are unique to _this book_ and they travel with it.
 
 Then, chapter by chapter, the system renders the audio. Every line of dialogue lands in the right voice. Every paragraph of narration is delivered by the narrator the book has earned. Tone is read from the surrounding prose — fear sounds like fear, dry humour lands dry. When the apprentice speaks, you hear a thirteen-year-old. When the swordsmith answers, you hear seventy years and a forge.
 
@@ -43,19 +45,15 @@ Voices are reusable across books in a series. The narrator who carried Book 1 ke
 
 You drop the resulting chapters into the audiobook app you already use. There's no new player. The magic isn't in the playback — it's in the conversion.
 
-And it runs on the machine you own. The analysis pass runs locally by default, with a free-tier cloud fallback if the local model isn't reachable. There's a manual mode too — drop the prompt into a folder, let a separate Claude window do the heavy thinking, drop the answer back. Audio synthesis runs locally on a voice engine that fits on a mid-market GPU. Per-book, not per-listen. The frontier never sees a chapter.
+And it runs on the machine you own. The analysis pass runs locally by default, with a free-tier cloud fallback if the local model isn't reachable. Audio synthesis runs locally on a voice engine that fits on a mid-market GPU. Per book, not per listen. The frontier never sees a chapter.
 
-## Why I'm building it
+## The bet
 
-There are smarter business questions I could be working on. There are more obvious projects to put on a portfolio.
+The reason nobody had built this isn't that the technology was missing. It's the economics. Render every audiobook in the cloud, with a frontier model orchestrating every chapter, and you've priced it for streaming services, not for readers. So the cast never gets built, and fiction keeps getting read by one tired voice.
 
-This one earns its place for three reasons, and I'd offer all three honestly.
+Castwright takes the other path. The expensive part — finding the cast, designing the voices, rendering the performance — happens on a machine you already own. Per book, not per listen. The frontier never sees a chapter. That single choice is what turns a full-cast audiobook from a streaming-budget luxury into something anyone with a mid-market GPU can make at home, for the price of the electricity.
 
-I read a lot, and I drive a lot, and the gap between what I want from those two activities and what currently bridges them is personally insulting in the way only a small, fixable problem can be. I'm building this for me first.
-
-The technology lives at the intersection of everything I've spent a career being interested in: AI, audio, taste, product, the boundary between what runs on a server and what runs at the edge. I cannot remember the last project I worked on where engineering, design, and craft all sat in the same room. This one does.
-
-And — this is the part I haven't said out loud yet — I think the more interesting AI bets over the next two years are at the edge, on local hardware, doing things the cloud is too expensive to do. I want to be building one of those, with my own hands, while I'm thinking about what to build next at scale.
+It's a bet on the edge: that the most interesting things AI will do over the next few years are the ones the cloud is too expensive to do — run instead on local hardware, privately, one render at a time. A book is exactly that kind of problem. It's personal, it happens once, and it has no business phoning home. Castwright is what that bet looks like pointed at the thing readers actually want — their stories, performed, in voices they'll remember the next morning.
 
 ## Where it stands now
 
@@ -129,13 +127,11 @@ And multi-language is half-built. The engine plumbing is in via Qwen3-TTS; the l
 
 That list is honest, not alarming. The engine runs. The install travels. The next round is calibration on top of a foundation that holds.
 
-## What I'd ask of you, if you've read this far
+## Hear it for yourself
 
-Two things, slightly different from the last revision.
+There's only one test that matters, and it takes ten minutes.
 
-If you know voice-conversion or TTS people — XTTS v2 internals, F5-TTS, the prosody-control end of the field, anyone working on local-AI audio quality — I'd like to meet them. The wall-clock problem is largely solved — Kokoro and XTTS render faster than they play, and the bespoke-Qwen path (~RTF 2) is the holdout — but the _taste_ problem is wide open, and an introduction has saved me weeks every time in past lives.
-
-If you want to react to the running application honestly — I can hand you a build and the canonical regression manuscript and you can hear it. I'd rather hear what's confusing now than what's polished later. The first ten minutes is the test: if you forget you're listening to AI, the bet works. If you don't, tell me where it broke.
+Drop a book into Castwright, let it cast the thing, and listen. If you forget you're hearing AI — if the apprentice, the swordsmith, and the dragon land as three different people, and you reach the next chapter without reaching for the volume — then it works. If you don't, the exact moment it breaks is the most useful thing you can tell us. We'd rather hear what's confusing now than what's polished later.
 
 The book can wait. Building can't.
 
@@ -197,7 +193,7 @@ The analysing view is more pipeline than progress bar. Phase 0a finds chapter bo
 
 ### The design language, in one paragraph
 
-Cream canvas, near-black ink, Neue Montreal type (Inter as the free fallback). The accent palette is restrained to three colours, each with a single job. **Peach** (`#F79A83`) is the action colour — drag rings, drop indicators, regen affirmations, selected segments, active filter pills. Nothing idle uses it. **Magenta** (`#A43C6C`) carries the brand and the horizontal accent gradient. **Deep purple** (`#3C194F`) is series-context — reused voices, library matches, anything that belongs to a book beyond the current one. The signature four-stop vertical gradient (`#0F0E0D` → `#3C194F` → `#A43C6C` → `#F79A83`) appears no more than three times per page — at the end-of-page CTA or album-cover hero, at the active progress bar, and at one "magic moment" (analysis, cast confirmation, or the listen page hero). Every h1 and h2 carries one bold span inside an otherwise medium-weight sentence — the bold word carries the meaning, the rest is context. Tokens live as CSS custom properties in `src/styles.css`; Tailwind references the vars. Component code never sees a hex literal.
+This is the **Castwright** brand now, not just an app theme — the mark is a ragged three-voice waveform rising off an open book (peach and magenta voices over a page), and the four-stop gradient below is its signature. Cream canvas, near-black ink, Neue Montreal type (Inter as the free fallback). The accent palette is restrained to three colours, each with a single job. **Peach** (`#F79A83`) is the action colour — drag rings, drop indicators, regen affirmations, selected segments, active filter pills. Nothing idle uses it. **Magenta** (`#A43C6C`) carries the brand and the horizontal accent gradient. **Deep purple** (`#3C194F`) is series-context — reused voices, library matches, anything that belongs to a book beyond the current one. The signature four-stop vertical gradient (`#0F0E0D` → `#3C194F` → `#A43C6C` → `#F79A83`) appears no more than three times per page — at the end-of-page CTA or album-cover hero, at the active progress bar, and at one "magic moment" (analysis, cast confirmation, or the listen page hero). Every h1 and h2 carries one bold span inside an otherwise medium-weight sentence — the bold word carries the meaning, the rest is context. Tokens live as CSS custom properties in `src/styles.css`; Tailwind references the vars. Component code never sees a hex literal.
 
 ---
 
@@ -209,12 +205,10 @@ _For readers who want to challenge the architecture rather than the story. Compa
 
 **1. Ingest.** Accept EPUB, PDF, MOBI, plain text, paste. EPUB chapter titles are read from the NCX, with a raw-zip fallback that recovers books whose OPF uses namespace-prefixed elements or that the primary parser rejects; a DRM-locked MOBI returns a clean 415 with an actionable message rather than an opaque 500. The original bytes are persisted verbatim so re-parse can run without a `%TEMP%` roundtrip. Markdown is the canonical intermediate; chapter structure preserved, front-matter and back-matter chapters excluded from analysis and audio at the user's discretion.
 
-**2. Analysis.** Three engines, one contract:
+**2. Analysis.** Two engines, one contract:
 
 - **Local Ollama** (`ANALYZER=local`, default) — qwen3.5:4b as the default model; warmed with the same `num_ctx` as the analyzer uses (16384, after silent hangs on long chapters at lower values); GPU pinned via `num_gpu: 999`; `keep_alive` is 5m for qwen3.5:4b and 0 for heavier models so VRAM frees promptly. Auto-falls back to Gemini if the daemon is unreachable.
 - **Gemini direct** (`ANALYZER=gemini`) — `gemma-4-31b-it` by default (its own free-tier bucket at 1,500 requests/day; flip to `gemini-3.1-flash-lite` etc. without code changes via `GEMINI_MODEL`). Every outbound call is gated through a per-model RPM/TPM/RPD limiter so retries can't compound into 429/500 storms. Streamed responses with a live heartbeat and a silence watchdog. Free-tier friendly.
-- **Manual file-drop** (`ANALYZER=manual`) — writes the analyzer prompt to `server/handoff/inbox/`, waits for a JSON response in `server/handoff/outbox/`. A second Claude window does the thinking; zero API cost. The mode I use when iterating on prompts.
-
 The analysis itself runs in phases:
 
 - **Phase 0a — Chapter boundary discovery.** Walks the headings with an observed-rate ETA so the progress bar reflects measured throughput. Watchdog recovers from a wedged response without aborting the run.
@@ -270,7 +264,7 @@ The wall-clock characteristics that used to live in the narrative section, gathe
 
 ### Server layer
 
-- **Express + TypeScript**, served from `server/`. Routes wire the OpenAPI contract end-to-end. Three analyzer adapters, one TTS sidecar adapter, one library scanner.
+- **Express + TypeScript**, served from `server/`. Routes wire the OpenAPI contract end-to-end. Two analyzer adapters, one TTS sidecar adapter, one library scanner.
 - **`.env` via Node 20.6+ native `process.loadEnvFile`** — no dotenv dependency. `server/.env.example` documents the surface.
 - **Persistence is per-book under `.audiobook/`** — `state.json` (slice payload), `cast.json` (live cast, persisted incrementally during analysis), `dropped-quotes.json` (append-only verifier ledger), chapter audio + voice samples. The generation queue lives one level up, workspace-wide, in `.queue.json`.
 - **Log lines carry millisecond timestamps** so 6 a.m. me has a chance of debugging midnight me.
