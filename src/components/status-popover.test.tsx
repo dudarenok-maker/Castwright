@@ -39,10 +39,12 @@ function makeProps(over: Partial<Parameters<typeof StatusPopover>[0]> = {}) {
     ttsControls: <span data-testid="tts-sentinel">Kokoro ready</span>,
     analysis,
     generation,
+    design: null,
     pendingRevisionsCount: 2,
     onOpenRevisions: vi.fn(),
     onGoToAnalysing: vi.fn(),
     onGoToGeneration: vi.fn(),
+    onGoToDesign: vi.fn(),
     ...over,
   };
 }

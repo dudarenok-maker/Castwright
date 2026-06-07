@@ -513,7 +513,7 @@ function parseOverrideField(
    Each touched character is also normalised: the legacy singular
    `overrideTtsVoice` field is folded into the new map and removed,
    so one user action upgrades the cast.json shape. */
-async function applyOverrideToCastFiles(
+export async function applyOverrideToCastFiles(
   voiceId: string,
   override: { engine: TtsEngine; name: string } | null,
   /* When provided, only cast.json files whose state.json (author, series)
