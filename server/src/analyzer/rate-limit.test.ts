@@ -70,6 +70,16 @@ describe('GeminiRateLimiter', () => {
     await pending;
   });
 
+  it('applies the baked-in limits for gemini-3.5-flash (250K TPM, not the 100K fallback)', async () => {
+    /* Registered in BUILTIN_LIMITS as 5 RPM / 250K TPM / 20 RPD. A single
+       120K-token acquire fits the baked 250K cap without waiting; under the
+       unknown-model fallback (100K TPM) that same call would block — so a
+       non-blocking acquire proves the entry is wired up, not falling back. */
+    const onWait = vi.fn();
+    await limiter.acquire('gemini-3.5-flash', 120_000, { onWait });
+    expect(onWait).not.toHaveBeenCalled();
+  });
+
   it('reconciles an over-estimated entry via recordActualTokens', async () => {
     /* Reserve 50K; reconcile down to 10K — a follow-up 200K request
        must now fit (10K + 200K = 210K, under 250K). */
