@@ -21,7 +21,7 @@ export type Character = components['schemas']['Character'] & {
    / disabled / silent-source). `null` distinguishes "fetched but no data"
    from "not fetched yet". See plan 77 for the report-card consumer. */
 export type Chapter = components['schemas']['Chapter'] & {
-  phase?: 'assembling' | null;
+  phase?: 'assembling' | 'verifying' | null;
   lufs?: components['schemas']['ChapterLoudness'] | null;
   /* fs-13 — accumulated SET (as a Redux-serialisable array) of manuscript
      sentence ids whose same-speaker group has COMPLETED during the live run.
