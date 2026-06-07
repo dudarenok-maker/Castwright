@@ -237,6 +237,17 @@ describe('fs-2 — languagePreamble + estimateInputTokens', () => {
     expect(buildSystemInstruction('SKILL')).not.toMatch(/manuscript text is in/i);
   });
 
+  it('buildSystemInstruction keeps the automated-worker framing and drops the retired cowork guard', async () => {
+    const { buildSystemInstruction } = await import('./gemini.js');
+    const sys = buildSystemInstruction('SKILL');
+    // Automated-worker framing stays — the model must not behave like a human reviewer.
+    expect(sys).toMatch(/automated worker/i);
+    // The manual file-drop cowork loop is retired (71b35a8); the guard clause that
+    // told the model to ignore "opening Claude windows or writing files" is gone so
+    // an edit can't silently reintroduce the cowork framing.
+    expect(sys).not.toMatch(/opening Claude windows|writing files/i);
+  });
+
   it('estimateInputTokens: Latin uses chars/4, Cyrillic ~chars/2.5, mixed between', async () => {
     const { estimateInputTokens } = await import('./gemini.js');
     const latin = 'a'.repeat(1000);

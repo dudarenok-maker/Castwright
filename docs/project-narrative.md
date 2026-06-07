@@ -43,7 +43,7 @@ Voices are reusable across books in a series. The narrator who carried Book 1 ke
 
 You drop the resulting chapters into the audiobook app you already use. There's no new player. The magic isn't in the playback — it's in the conversion.
 
-And it runs on the machine you own. The analysis pass runs locally by default, with a free-tier cloud fallback if the local model isn't reachable. There's a manual mode too — drop the prompt into a folder, let a separate Claude window do the heavy thinking, drop the answer back. Audio synthesis runs locally on a voice engine that fits on a mid-market GPU. Per-book, not per-listen. The frontier never sees a chapter.
+And it runs on the machine you own. The analysis pass runs locally by default, with a free-tier cloud fallback if the local model isn't reachable. Audio synthesis runs locally on a voice engine that fits on a mid-market GPU. Per-book, not per-listen. The frontier never sees a chapter.
 
 ## Why I'm building it
 
@@ -209,11 +209,10 @@ _For readers who want to challenge the architecture rather than the story. Compa
 
 **1. Ingest.** Accept EPUB, PDF, MOBI, plain text, paste. EPUB chapter titles are read from the NCX, with a raw-zip fallback that recovers books whose OPF uses namespace-prefixed elements or that the primary parser rejects; a DRM-locked MOBI returns a clean 415 with an actionable message rather than an opaque 500. The original bytes are persisted verbatim so re-parse can run without a `%TEMP%` roundtrip. Markdown is the canonical intermediate; chapter structure preserved, front-matter and back-matter chapters excluded from analysis and audio at the user's discretion.
 
-**2. Analysis.** Three engines, one contract:
+**2. Analysis.** Two engines, one contract:
 
 - **Local Ollama** (`ANALYZER=local`, default) — qwen3.5:4b as the default model; warmed with the same `num_ctx` as the analyzer uses (16384, after silent hangs on long chapters at lower values); GPU pinned via `num_gpu: 999`; `keep_alive` is 5m for qwen3.5:4b and 0 for heavier models so VRAM frees promptly. Auto-falls back to Gemini if the daemon is unreachable.
 - **Gemini direct** (`ANALYZER=gemini`) — `gemma-4-31b-it` by default (its own free-tier bucket at 1,500 requests/day; flip to `gemini-3.1-flash-lite` etc. without code changes via `GEMINI_MODEL`). Every outbound call is gated through a per-model RPM/TPM/RPD limiter so retries can't compound into 429/500 storms. Streamed responses with a live heartbeat and a silence watchdog. Free-tier friendly.
-- **Manual file-drop** (`ANALYZER=manual`) — writes the analyzer prompt to `server/handoff/inbox/`, waits for a JSON response in `server/handoff/outbox/`. A second Claude window does the thinking; zero API cost. The mode I use when iterating on prompts.
 
 The analysis itself runs in phases:
 
