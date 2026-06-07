@@ -71,8 +71,11 @@ class PlayerController {
   final DateTime Function() _now;
   final Duration _autosaveInterval;
 
-  /// Skip-button behaviour (driven by `app-13`); mutable so settings can flip it.
+  /// Skip-button behaviour + seek amounts (driven by `app-13`); mutable so
+  /// settings can change them at runtime.
   late SkipButtonBehavior skipBehavior_;
+  int skipForwardSeconds_ = 30;
+  int skipBackwardSeconds_ = 15;
 
   StreamSubscription<Duration>? _sub;
   StreamSubscription<void>? _completionSub;
@@ -210,7 +213,10 @@ class PlayerController {
   }
 
   Future<void> skip({required bool forward}) async {
-    final action = resolveSkipAction(skipBehavior_, forward: forward);
+    final action = resolveSkipAction(skipBehavior_,
+        forward: forward,
+        forwardSeconds: skipForwardSeconds_,
+        backwardSeconds: skipBackwardSeconds_);
     switch (action) {
       case SeekBy(:final delta):
         var target = _engine.position + delta;
