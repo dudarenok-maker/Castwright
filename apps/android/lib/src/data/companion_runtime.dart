@@ -1,11 +1,17 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../domain/app_settings.dart';
 import '../domain/media_browse_tree.dart';
+import '../domain/sleep_timer.dart';
 import 'api_client.dart';
+import 'auto_sync_service.dart';
 import 'chapter_downloader.dart';
 import 'companion_audio_handler.dart';
+import 'network_info.dart';
 import 'cover_thumbnails.dart';
 import 'drift_local_library.dart';
 import 'file_store.dart';
@@ -32,7 +38,9 @@ class CompanionRuntime {
     this.settingsStore,
     this.settings,
     this.resumeSync,
+    this.sleepTimer,
     this.audioHandler,
+    this._connectivitySub,
   );
 
   final ApiClient api;
@@ -44,6 +52,12 @@ class CompanionRuntime {
 
   /// Two-way resume sync (app-6): push local position / pull the server's.
   final ResumeSyncService resumeSync;
+
+  /// Bedtime sleep timer (app-13) — pauses the player on expire.
+  final SleepTimer sleepTimer;
+
+  /// app-8: connectivity listener that triggers auto-sync on reconnect.
+  final StreamSubscription<Object?>? _connectivitySub;
 
   /// Current device settings (mutable — updated via [updateSettings]).
   AppSettings settings;
@@ -90,6 +104,11 @@ class CompanionRuntime {
     final settings = await settingsStore.load();
     await player.setSpeed(settings.defaultSpeed);
     await player.setVolumeBoost(settings.volumeBoostDb);
+    player.skipBehavior_ = settings.skipButtonBehavior;
+    player.skipForwardSeconds_ = settings.skipForwardSeconds;
+    player.skipBackwardSeconds_ = settings.skipBackwardSeconds;
+
+    final sleepTimer = SleepTimer(onExpire: () => player.pause());
 
     final resumeSync = ResumeSyncService(
       progressApi: api.listenProgressApi,
@@ -101,6 +120,27 @@ class CompanionRuntime {
         return null;
       },
     );
+
+    // app-8: auto-sync on reconnect — flush resume for all local books when the
+    // device returns to a usable, reachable network (gated; token stays on LAN).
+    final autoSync = AutoSyncService(
+      loadSettings: settingsStore.load,
+      currentNetwork: currentNetwork,
+      probeReachable: () async {
+        try {
+          await api.getJson('/api/info');
+          return true;
+        } catch (_) {
+          return false;
+        }
+      },
+      runSync: () async {
+        final books = await library.listBooks();
+        await resumeSync.syncAll([for (final b in books) b.bookId]);
+      },
+    );
+    final connectivitySub =
+        Connectivity().onConnectivityChanged.listen((_) => autoSync.maybeSync());
 
     // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
     // the live player + a library-backed browse tree.
@@ -150,7 +190,7 @@ class CompanionRuntime {
     );
 
     return CompanionRuntime._(api, library, sync, player, thumbnails,
-        settingsStore, settings, resumeSync, handler);
+        settingsStore, settings, resumeSync, sleepTimer, handler, connectivitySub);
   }
 
   /// Persist new settings and apply the playback-affecting ones immediately.
@@ -159,9 +199,13 @@ class CompanionRuntime {
     await settingsStore.save(next);
     await player.setVolumeBoost(next.volumeBoostDb);
     await player.setSpeed(next.defaultSpeed);
+    player.skipBehavior_ = next.skipButtonBehavior;
+    player.skipForwardSeconds_ = next.skipForwardSeconds;
+    player.skipBackwardSeconds_ = next.skipBackwardSeconds;
   }
 
   Future<void> dispose() async {
+    await _connectivitySub?.cancel();
     audioHandler?.detach();
     await player.dispose();
     await library.close();

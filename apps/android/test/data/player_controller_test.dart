@@ -181,6 +181,17 @@ void main() {
       await pc.dispose();
     });
 
+    test('skip honours the configured forward seconds (app-13)', () async {
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore());
+      pc.skipForwardSeconds_ = 45;
+      await pc.openBook('b1');
+      engine.emit(const Duration(seconds: 10));
+      await pc.skip(forward: true);
+      expect(engine.calls, contains('seek:55000')); // 10s + 45s
+      await pc.dispose();
+    });
+
     test('skip back never seeks below zero', () async {
       final engine = FakeAudioEngine();
       final pc = make(engine, MemPlaybackStore());

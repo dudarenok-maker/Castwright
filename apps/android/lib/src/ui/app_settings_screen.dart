@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
+import '../domain/app_settings.dart';
 import '../domain/paired_server.dart';
+import '../domain/skip_behavior.dart';
 
 /// App settings + device management: the volume-boost control, the paired-server
 /// info (URL, certificate fingerprint, paired-since — never the token), and the
@@ -27,8 +29,48 @@ class AppSettingsScreen extends StatefulWidget {
 class _AppSettingsScreenState extends State<AppSettingsScreen> {
   late double _boost = widget.runtime.settings.volumeBoostDb;
 
+  AppSettings get _s => widget.runtime.settings;
+
   Future<void> _commitBoost(double db) => widget.runtime.updateSettings(
       widget.runtime.settings.copyWith(volumeBoostDb: db));
+
+  Future<void> _update(AppSettings next) async {
+    await widget.runtime.updateSettings(next);
+    if (mounted) setState(() {});
+  }
+
+  Widget _secondsDropdown(int value, void Function(int) onChanged) {
+    const opts = [5, 10, 15, 30, 45, 60];
+    final v = opts.contains(value) ? value : 30;
+    return DropdownButton<int>(
+      value: v,
+      items: [
+        for (final s in opts) DropdownMenuItem(value: s, child: Text('${s}s')),
+      ],
+      onChanged: (x) => x == null ? null : onChanged(x),
+    );
+  }
+
+  Widget _sleepMenu() => PopupMenuButton<int>(
+        key: const Key('sleep-menu'),
+        child: const Padding(
+          padding: EdgeInsets.all(8),
+          child: Icon(Icons.more_time),
+        ),
+        onSelected: (m) {
+          if (m == 0) {
+            widget.runtime.sleepTimer.cancel();
+          } else {
+            widget.runtime.sleepTimer.start(Duration(minutes: m));
+          }
+          setState(() {});
+        },
+        itemBuilder: (_) => [
+          const PopupMenuItem(value: 0, child: Text('Off')),
+          for (final m in const [5, 10, 15, 30, 45, 60])
+            PopupMenuItem(value: m, child: Text('$m min')),
+        ],
+      );
 
   Future<bool> _confirm(String title, String message, String action) async {
     final ok = await showDialog<bool>(
@@ -109,6 +151,52 @@ class _AppSettingsScreenState extends State<AppSettingsScreen> {
               onChanged: (v) => setState(() => _boost = v),
               onChangeEnd: _commitBoost,
             ),
+          ),
+          SwitchListTile(
+            key: const Key('skip-chapter-mode'),
+            title: const Text('Skip buttons change chapter'),
+            subtitle: const Text('Off: jump ±seconds · On: previous/next chapter'),
+            value: _s.skipButtonBehavior == SkipButtonBehavior.chapter,
+            onChanged: (v) => _update(_s.copyWith(
+                skipButtonBehavior:
+                    v ? SkipButtonBehavior.chapter : SkipButtonBehavior.seek)),
+          ),
+          ListTile(
+            title: const Text('Skip forward'),
+            trailing: _secondsDropdown(_s.skipForwardSeconds,
+                (v) => _update(_s.copyWith(skipForwardSeconds: v))),
+          ),
+          ListTile(
+            title: const Text('Skip back'),
+            trailing: _secondsDropdown(_s.skipBackwardSeconds,
+                (v) => _update(_s.copyWith(skipBackwardSeconds: v))),
+          ),
+          ListTile(
+            key: const Key('sleep-timer'),
+            leading: const Icon(Icons.bedtime_outlined),
+            title: const Text('Sleep timer'),
+            subtitle: Text(
+                widget.runtime.sleepTimer.isActive ? 'On' : 'Off — pauses playback'),
+            trailing: _sleepMenu(),
+          ),
+          const Divider(),
+          _sectionLabel('Sync & downloads'),
+          SwitchListTile(
+            title: const Text('Only on un-metered Wi-Fi'),
+            subtitle: const Text('Never sync/download on mobile data'),
+            value: _s.unmeteredWifiOnly,
+            onChanged: (v) => _update(_s.copyWith(unmeteredWifiOnly: v)),
+          ),
+          SwitchListTile(
+            key: const Key('auto-sync'),
+            title: const Text('Auto-sync on reconnect'),
+            value: _s.autoSyncOnReconnect,
+            onChanged: (v) => _update(_s.copyWith(autoSyncOnReconnect: v)),
+          ),
+          SwitchListTile(
+            title: const Text('Auto-download in-progress books'),
+            value: _s.autoDownloadInProgress,
+            onChanged: (v) => _update(_s.copyWith(autoDownloadInProgress: v)),
           ),
           const Divider(),
           _sectionLabel('Server'),
