@@ -74,6 +74,11 @@ import {
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
+import {
+  markAnalysisBusy,
+  clearAnalysisBusy,
+  isDesignBusy,
+} from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
 import { linkSeriesReuseAtAnalysis } from '../workspace/series-reuse-link.js';
@@ -1601,6 +1606,10 @@ function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (targetMap.get(job.manuscriptId) === job) {
     targetMap.delete(job.manuscriptId);
   }
+  /* Release the cross-operation busy flag so a "Design full cast" run can
+     start once analysis is done (mutual exclusion — re-analysis rewrites the
+     whole cast). Ref-counted, so a sibling main/subset job keeps it held. */
+  if (job.bookDir) clearAnalysisBusy(job.bookDir);
 }
 
 analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
@@ -1653,6 +1662,22 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       kind: 'error',
       code: 'unknown_manuscript',
       message: `No manuscript found for id "${manuscriptId}". Upload a manuscript or open a workspace book to start analysis.`,
+    });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+
+  /* Mutual exclusion: a "Design full cast" run is writing per-character voices
+     to this book's cast.json. Re-analysis rewrites the whole cast and would
+     race those writes, so refuse to start while a design job is live. (No live
+     analysis can exist to subscribe to here — the design guard blocks starts —
+     so blocking unconditionally is safe.) */
+  if (record.bookDir && isDesignBusy(record.bookDir)) {
+    send({
+      kind: 'error',
+      code: 'design_in_progress',
+      message:
+        'A "Design full cast" run is in progress for this book. Wait for it to finish (or cancel it) before re-analysing.',
     });
     clearInterval(keepAlive);
     return res.end();
@@ -1737,6 +1762,7 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
     lastDiskWriteAt: 0,
   };
   inFlightAnalysisByManuscript.set(manuscriptId, job);
+  if (job.bookDir) markAnalysisBusy(job.bookDir);
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
   job.subscribers.add(subscriber);
   res.on('close', () => {
@@ -3580,6 +3606,18 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     return res.end();
   }
 
+  /* Mutual exclusion with a live "Design full cast" run (see the parent route). */
+  if (record.bookDir && isDesignBusy(record.bookDir)) {
+    send({
+      kind: 'error',
+      code: 'design_in_progress',
+      message:
+        'A "Design full cast" run is in progress for this book. Wait for it to finish (or cancel it) before re-analysing.',
+    });
+    clearInterval(keepAlive);
+    return res.end();
+  }
+
   const body = req.body as { chapterIds?: unknown; model?: unknown; allowStage1Shrink?: unknown };
   const rawIds = Array.isArray(body?.chapterIds) ? body.chapterIds : [];
   /* See main route comment on allowStage1Shrink — same opt-in flag for
@@ -3697,6 +3735,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     lastDiskWriteAt: 0,
   };
   inFlightSubsetByManuscript.set(manuscriptId, job);
+  if (job.bookDir) markAnalysisBusy(job.bookDir);
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
   job.subscribers.add(subscriber);
   res.on('close', () => {

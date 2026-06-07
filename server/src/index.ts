@@ -44,6 +44,7 @@ import { castSeriesPatchRouter } from './routes/cast-series-patch.js';
 import { castAddFromRosterRouter } from './routes/cast-add-from-roster.js';
 import { voiceStyleRouter } from './routes/voice-style.js';
 import { qwenVoiceRouter } from './routes/qwen-voice.js';
+import { castDesignRouter } from './routes/cast-design.js';
 import { annotateEmotionRouter } from './routes/annotate-emotion.js';
 import { libraryCastOverrideRouter } from './routes/library-cast-override.js';
 import { seriesRosterRouter } from './routes/series-roster.js';
@@ -201,6 +202,7 @@ app.use('/api/books', castSeriesPatchRouter); // mounts /:bookId/cast/:character
 app.use('/api/books', castAddFromRosterRouter); // mounts /:bookId/cast/add-from-roster (new local character pulled from a prior series-mate)
 app.use('/api/books', voiceStyleRouter); // mounts /:bookId/cast/{:characterId/voice-style/generate,voice-style/generate-all} (plan 108 — Gemini voice-design personas)
 app.use('/api/books', qwenVoiceRouter); // mounts /:bookId/cast/:characterId/design-voice (plan 108 Wave 4 — Qwen bespoke-voice design + audition proxy)
+app.use('/api/books', castDesignRouter); // mounts /:bookId/cast/design{,/status,/pause} ("Design full cast" bulk-design job — server-owned SSE)
 app.use('/api/books', annotateEmotionRouter); // mounts /:bookId/annotate-emotion (fs-33 — emotion-only backfill SSE pass)
 app.use('/api/books', seriesRosterRouter); // mounts /:bookId/series-roster (prior-book characters in the same series)
 app.use('/api/books', seriesCastRouter); // mounts /:bookId/series-cast (full-fidelity cast of every OTHER series book — rebaseline aggregation)
