@@ -229,6 +229,7 @@ _For readers who want to challenge the architecture rather than the story. Compa
 
 - **Local Ollama** (`ANALYZER=local`, default) — qwen3.5:4b as the default model; warmed with the same `num_ctx` as the analyzer uses (16384, after silent hangs on long chapters at lower values); GPU pinned via `num_gpu: 999`; `keep_alive` is 5m for qwen3.5:4b and 0 for heavier models so VRAM frees promptly. Auto-falls back to Gemini if the daemon is unreachable.
 - **Gemini direct** (`ANALYZER=gemini`) — `gemma-4-31b-it` by default (its own free-tier bucket at 1,500 requests/day; flip to `gemini-3.1-flash-lite` etc. without code changes via `GEMINI_MODEL`). Every outbound call is gated through a per-model RPM/TPM/RPD limiter so retries can't compound into 429/500 storms. Streamed responses with a live heartbeat and a silence watchdog. Free-tier friendly.
+
 The analysis itself runs in phases:
 
 - **Phase 0a — Chapter boundary discovery.** Walks the headings with an observed-rate ETA so the progress bar reflects measured throughput. Watchdog recovers from a wedged response without aborting the run.

@@ -130,7 +130,10 @@ describe('selectAnalyzer dispatch', () => {
     expect(s.engine).toBe('local');
   });
 
-  it('legacy ANALYZER=manual is treated as local (manual mode no longer exists)', () => {
+  it('stray legacy ANALYZER=manual is coerced to local (manual mode retired in 71b35a8)', () => {
+    /* The single retained reference to the retired manual analyzer: the
+       safety net for an old `.env` that still sets `ANALYZER=manual`, so
+       startup silently falls back to local instead of breaking. */
     process.env.ANALYZER = 'manual';
     const s = selectAnalyzer();
     expect(s.engine).toBe('local');

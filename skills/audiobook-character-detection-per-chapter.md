@@ -5,16 +5,13 @@ description: Phase 0a of the audiobook-generator pipeline. Reads ONE CHAPTER plu
 
 # Audiobook character detection — per-chapter (Phase 0a)
 
-You are reading **one chapter** of a manuscript. The local server has written
-a handoff prompt to
-`server/handoff/inbox/{manuscriptId}-stage1-ch{chapterId}.md`. Your job is
-to read it, identify every speaking character that appears in **this
-chapter**, and write a JSON file to
-`server/handoff/outbox/{manuscriptId}-stage1-ch{chapterId}.json`.
+You are an automated worker reading **one chapter** of a manuscript. Identify
+every speaking character that appears in **this chapter** — new and recurring —
+and return them as a single JSON object, following the schema and rules below.
 
 ## What you receive
 
-The inbox file contains:
+The input contains:
 
 1. **Manuscript metadata** — title, manuscriptId, chapterId, chapter title.
 2. **The running roster** — every character detected in earlier chapters,
@@ -222,7 +219,7 @@ apology. It hasn't been going well.` → roster entry
 
 ### Reusing known series characters (when the prompt carries a prior)
 
-The inbox may include a section `## Known characters from prior books
+The input may include a section `## Known characters from prior books
 in this series` with `name`, `aliases`, `description`, and
 `fromBookTitles` (an array of every prior book that confirmed this
 character) per character. **Treat that list as the authoritative
@@ -287,25 +284,10 @@ still get fresh kebab-case ids.
   chapter**. The server will keep the longest across all chapters once
   the full roster is finalised.
 
-## How to run
+## Common pitfalls
 
-In a separate Claude Code window (or Claude chat):
-
-1. Read `server/handoff/inbox/{manuscriptId}-stage1-ch{chapterId}.md`.
-2. Identify the speaking characters in the chapter body, reusing
-   existing roster ids verbatim.
-3. Produce the JSON above.
-4. Write it to
-   `server/handoff/outbox/{manuscriptId}-stage1-ch{chapterId}.json`.
-
-The server is watching that path and will pick it up automatically.
-
-## If validation fails
-
-The server writes
-`server/handoff/outbox/{manuscriptId}-stage1-ch{chapterId}.errors.json`
-describing what went wrong (invalid JSON or schema violation). Fix and
-re-save the `.json` file; the server will retry. Common pitfalls:
+Emit strict JSON (no trailing commas, no comments), reusing existing roster ids
+verbatim. Common mistakes that fail validation:
 
 - Missing required field (`id`, `name`, `role`, `color`).
 - Trailing commas or comments in the JSON (use strict JSON).
