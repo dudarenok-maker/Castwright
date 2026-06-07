@@ -4,6 +4,7 @@ import '../data/companion_runtime.dart';
 import '../data/player_controller.dart';
 import '../domain/listen_progress.dart';
 import '../domain/sync_manifest.dart';
+import 'waveform_bar.dart';
 
 /// Player surface: a chapter picker + transport controls over the
 /// [PlayerController]. Pick a chapter to start listening; the position ticks
@@ -29,6 +30,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _playing = false;
   String? _error;
   List<SyncManifestChapter> _chapters = const [];
+  final Map<String, List<double>> _peaks = {}; // chapter uuid -> RMS peaks
+
+  /// Fetch + cache a chapter's waveform peaks (best-effort; needs the server).
+  Future<void> _ensurePeaks(String uuid, int chapterId) async {
+    if (_peaks.containsKey(uuid)) return;
+    final peaks = await widget.runtime.api.getChapterPeaks(widget.bookId, chapterId);
+    if (peaks.isNotEmpty && mounted) setState(() => _peaks[uuid] = peaks);
+  }
+
+  void _ensureCurrentPeaks() {
+    final uuid = widget.runtime.player.currentChapterUuid;
+    if (uuid == null) return;
+    final ch = _chapters.where((c) => c.uuid == uuid);
+    if (ch.isNotEmpty) _ensurePeaks(uuid, ch.first.id);
+  }
 
   @override
   void initState() {
@@ -45,6 +61,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _chapters = widget.runtime.sync.chaptersOf(widget.bookId);
           _ready = true;
         });
+        _ensureCurrentPeaks();
       }
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
@@ -60,6 +77,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _playChapter(String uuid) async {
     await widget.runtime.player.playChapter(uuid);
     if (mounted) setState(() => _playing = true);
+    _ensureCurrentPeaks();
   }
 
   Future<void> _togglePlay() async {
@@ -154,15 +172,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Slider(
-                      key: const Key('player-progress'),
-                      value: v,
-                      max: maxMs > 0 ? maxMs.toDouble() : 1.0,
-                      onChanged: maxMs > 0
-                          ? (x) => player
-                              .seekTo(Duration(milliseconds: x.round()))
-                          : null,
-                    ),
+                    Builder(builder: (context) {
+                      final uuid = player.currentChapterUuid;
+                      final peaks = uuid != null ? _peaks[uuid] : null;
+                      final progress = maxMs > 0
+                          ? pos.inMilliseconds / maxMs
+                          : 0.0;
+                      if (peaks != null && peaks.isNotEmpty) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: WaveformBar(
+                            peaks: peaks,
+                            progress: progress,
+                            onSeek: maxMs > 0
+                                ? (f) => player.seekTo(
+                                    Duration(milliseconds: (f * maxMs).round()))
+                                : null,
+                          ),
+                        );
+                      }
+                      return Slider(
+                        key: const Key('player-progress'),
+                        value: v,
+                        max: maxMs > 0 ? maxMs.toDouble() : 1.0,
+                        onChanged: maxMs > 0
+                            ? (x) => player
+                                .seekTo(Duration(milliseconds: x.round()))
+                            : null,
+                      );
+                    }),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
