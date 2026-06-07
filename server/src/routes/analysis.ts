@@ -1037,21 +1037,13 @@ ${priorJson}
   return `---
 manuscriptId: ${manuscriptId}
 stage: 1-ch${chapter.id}
-expectedOutput: ./outbox/${manuscriptId}-stage1-ch${chapter.id}.json
-schema: see skills/audiobook-character-detection-per-chapter.md
 ---
 
 # Phase 0a — Per-chapter cast detection
 
-Run the **\`audiobook-character-detection-per-chapter\`** skill on the chapter
-below. Save the JSON output to:
-
-\`\`\`
-server/handoff/outbox/${manuscriptId}-stage1-ch${chapter.id}.json
-\`\`\`
-
-Schema and rules live in
-\`skills/audiobook-character-detection-per-chapter.md\`.
+Identify every speaking character that appears in the chapter below — new and
+recurring — and return them as a single JSON object. Reuse running-roster ids
+verbatim.
 
 **Only return characters with a real verbatim utterance in this chapter.**
 A character belongs in the output when at least one of the following is
@@ -1114,24 +1106,15 @@ function buildStage2ChapterInbox(
 manuscriptId: ${manuscriptId}
 stage: 2
 chapterId: ${chapter.id}
-expectedOutput: ./outbox/${manuscriptId}-stage2-ch${chapter.id}.json
-schema: see skills/audiobook-sentence-attribution.md
 ---
 
 # Stage 2 — Sentence attribution (Chapter ${chapter.id})
 
-Run the **\`audiobook-sentence-attribution\`** skill on the single chapter
-below. For every sentence, return the speaking character (or 'narrator' for
-non-dialogue prose). Save to:
-
-\`\`\`
-server/handoff/outbox/${manuscriptId}-stage2-ch${chapter.id}.json
-\`\`\`
-
-Schema and rules live in \`skills/audiobook-sentence-attribution.md\`.
+For every sentence in the single chapter below, return the speaking character
+(or 'narrator' for non-dialogue prose) as a single JSON object.
 
 All \`chapterId\` values in the output MUST be \`${chapter.id}\`. Return ONLY a
-JSON object matching the schema above. No prose, no code fences.
+JSON object matching the schema. No prose, no code fences.
 
 ## Manuscript
 
@@ -1190,21 +1173,16 @@ ${precedingContext}
 manuscriptId: ${manuscriptId}
 stage: 2
 chapterId: ${chapter.id}
-expectedOutput: ./outbox/${manuscriptId}-stage2-ch${chapter.id}.json
-schema: see skills/audiobook-sentence-attribution.md
 ---
 
 # Stage 2 — Sentence attribution (Chapter ${chapter.id}, section)
 
-This is ONE SECTION of a large chapter. Run the
-**\`audiobook-sentence-attribution\`** skill on the **section to attribute**
-below. For every sentence in that section, return the speaking character (or
-'narrator' for non-dialogue prose).
-
-Schema and rules live in \`skills/audiobook-sentence-attribution.md\`.
+This is ONE SECTION of a large chapter. For every sentence in the **section to
+attribute** below, return the speaking character (or 'narrator' for non-dialogue
+prose) as a single JSON object.
 
 All \`chapterId\` values in the output MUST be \`${chapter.id}\`. Return ONLY a
-JSON object matching the schema above. No prose, no code fences.
+JSON object matching the schema. No prose, no code fences.
 
 ## Manuscript
 
