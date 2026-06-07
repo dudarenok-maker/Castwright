@@ -12,5 +12,5 @@
     <path d="M110 416 C 170 392, 226 392, 256 412 C 286 392, 342 392, 402 416"
           fill="none" stroke="#fffdfb" stroke-width="15" stroke-linecap="round"/>
   </g>
-  <text x="338" y="212" font-family="Georgia, 'Times New Roman', serif" font-size="150" letter-spacing="-2" fill="#fffdfb">Castwright<tspan font-size="70" fill="#f79a83" dx="8">.ai</tspan></text>
+  <text x="338" y="212" font-family="'Zodiak', Georgia, serif" font-size="150" letter-spacing="-2" fill="#fffdfb">Castwright<tspan font-size="70" fill="#f79a83" dx="8">.ai</tspan></text>
 </svg>

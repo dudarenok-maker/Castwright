@@ -99,9 +99,8 @@ unhurried, dry-witted, never breathless.
 Inherited from the running app's design language — keep it.
 
 - **Primary (UI + display): Neue Montreal** (Fontshare). **Inter** is the free fallback.
-- **Editorial / book-title serif:** a refined serif for book/album covers and the wordmark
-  (the narrative renders titles in serif). Pick one Fontshare serif (e.g. *Zodiak*) and use it
-  only for titles and the logotype — **outline it to paths in exported logos.**
+- **Editorial / book-title serif: Zodiak** (Fontshare) — for book/album covers, titles, and the
+  logotype only; **Georgia** is the system fallback. **Outline it to paths in exported logos.**
 - **Headline rule (signature):** every h1/h2 is an otherwise medium-weight sentence with **one
   bold span** — the bold word carries the meaning, the rest is context. Do this everywhere copy
   appears; it's a recognisable verbal-visual tic.
@@ -149,7 +148,8 @@ to ~16px; outline wordmark type for production.
 
 ## 7. Open items
 
-- Confirm the editorial serif (Fontshare *Zodiak* or alternative) and outline it in the wordmark.
+- Outline the locked editorial serif (**Zodiak**) to paths in the wordmark export (the SVGs
+  currently declare `'Zodiak', Georgia, serif` and fall back to Georgia until the font ships).
 - Reframe `../docs/project-narrative.md` into the Castwright brand once this is signed off
   (retitle, weave the name + pillars in — keep the candid first-person voice intact).
 - Optional later: sonic identity / audio logo + a "house narrator" voice persona.
