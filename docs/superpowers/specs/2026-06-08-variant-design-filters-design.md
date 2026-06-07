@@ -1,7 +1,7 @@
 # Variant-design filters — design spec
 
 **Date:** 2026-06-08
-**Status:** draft
+**Status:** active
 **Issue:** fe-34 ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595)) + a newly-found `bug` (the dead "Has variants" cast chip — issue to be filed)
 **Scope:** `frontend` (`src/views/cast.tsx`, `src/views/voices.tsx`, `src/lib/voice-status.ts`)
 
