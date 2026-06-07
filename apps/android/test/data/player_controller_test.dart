@@ -37,10 +37,25 @@ class FakeAudioEngine implements AudioEngine {
     calls.add('stream:$url');
   }
 
+  bool _playing = false;
+  final _playingCtl = StreamController<bool>.broadcast();
   @override
-  Future<void> play() async => calls.add('play');
+  bool get playing => _playing;
   @override
-  Future<void> pause() async => calls.add('pause');
+  Stream<bool> get playingStream => _playingCtl.stream;
+  @override
+  Future<void> play() async {
+    _playing = true;
+    _playingCtl.add(true);
+    calls.add('play');
+  }
+
+  @override
+  Future<void> pause() async {
+    _playing = false;
+    _playingCtl.add(false);
+    calls.add('pause');
+  }
   @override
   Future<void> seek(Duration p) async {
     _position = p;
@@ -52,7 +67,10 @@ class FakeAudioEngine implements AudioEngine {
   @override
   Future<void> setVolumeBoost(double db) async => calls.add('boost:$db');
   @override
-  Future<void> dispose() async => _pos.close();
+  Future<void> dispose() async {
+    await _pos.close();
+    await _playingCtl.close();
+  }
 
   void emit(Duration p) {
     _position = p;
@@ -195,6 +213,27 @@ void main() {
       engine.calls.clear();
       await pc.skip(forward: true); // next chapter
       expect(engine.calls, contains('boost:8.0')); // persisted across chapters
+      await pc.dispose();
+    });
+
+    test('nowPlayingStream emits chapter + book metadata on load', () async {
+      final engine = FakeAudioEngine();
+      final pc = make(engine, MemPlaybackStore(), playlists: {
+        'b1': const [
+          PlayableChapter(
+              uuid: 'u1', path: '/b1/u1/a.mp3', title: 'Intro', durationSec: 60),
+        ],
+      });
+      final events = <NowPlaying?>[];
+      final sub = pc.nowPlayingStream.listen(events.add);
+      await pc.openBook('b1', bookTitle: 'My Book', artPath: '/art.jpg');
+      await Future<void>.delayed(Duration.zero);
+      final np = events.whereType<NowPlaying>().last;
+      expect(np.title, 'Intro');
+      expect(np.album, 'My Book');
+      expect(np.artPath, '/art.jpg');
+      expect(np.duration, const Duration(seconds: 60));
+      await sub.cancel();
       await pc.dispose();
     });
 

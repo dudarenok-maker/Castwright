@@ -55,7 +55,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _prepare() async {
     try {
       await widget.runtime.sync.ensureDetail(widget.bookId);
-      await widget.runtime.player.openBook(widget.bookId); // loads + restores resume
+      final art = await widget.runtime.library.coverThumbPath(widget.bookId);
+      await widget.runtime.player.openBook(widget.bookId,
+          bookTitle: widget.title, artPath: art); // loads + restores resume
+      // feeds the lock-screen/notification metadata via nowPlayingStream
       if (mounted) {
         setState(() {
           _chapters = widget.runtime.sync.chaptersOf(widget.bookId);
