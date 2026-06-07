@@ -7,6 +7,7 @@ import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
 import { voicesSlice, voicesActions } from '../store/voices-slice';
 import { castSlice } from '../store/cast-slice';
+import { castDesignSlice } from '../store/cast-design-slice';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
@@ -85,7 +86,12 @@ interface StoreSetup {
 
 function makeStore({ baseVoices, voices }: StoreSetup = {}) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer, cast: castSlice.reducer },
+    reducer: {
+      ui: uiSlice.reducer,
+      voices: voicesSlice.reducer,
+      cast: castSlice.reducer,
+      castDesign: castDesignSlice.reducer,
+    },
   });
   if (baseVoices) store.dispatch(voicesActions.hydrateBaseVoices(baseVoices));
   if (voices) store.dispatch(voicesActions.hydrate({ voices }));
@@ -1316,7 +1322,12 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
 
   function renderReused() {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer, cast: castSlice.reducer },
+      reducer: {
+      ui: uiSlice.reducer,
+      voices: voicesSlice.reducer,
+      cast: castSlice.reducer,
+      castDesign: castDesignSlice.reducer,
+    },
     });
     /* Put the project on Qwen — the scenario where effectiveEngine falls back
        to the project engine. */
@@ -1373,7 +1384,12 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
     /* Guards against over-hiding: a default character whose project engine is
        a preset (Kokoro) must keep the picker. */
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, voices: voicesSlice.reducer, cast: castSlice.reducer },
+      reducer: {
+      ui: uiSlice.reducer,
+      voices: voicesSlice.reducer,
+      cast: castSlice.reducer,
+      castDesign: castDesignSlice.reducer,
+    },
     });
     store.dispatch(uiSlice.actions.setTtsModelKey('kokoro-v1'));
     render(

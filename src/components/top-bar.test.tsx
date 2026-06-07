@@ -32,9 +32,11 @@ import {
   TopBar,
   AnalysisPill,
   GenerationPill,
+  DesignPill,
   summarizeStatus,
   type StatusSummary,
   type AnalysisPillData,
+  type DesignPillData,
 } from './top-bar';
 import { uiSlice } from '../store/ui-slice';
 import { accountSlice } from '../store/account-slice';
@@ -45,10 +47,12 @@ const STATUS_DETAIL: Parameters<typeof TopBar>[0]['statusDetail'] = {
   ttsControls: <span data-testid="tts-sentinel">Kokoro ready</span>,
   analysis: null,
   generation: null,
+  design: null,
   pendingRevisionsCount: 0,
   onOpenRevisions: vi.fn(),
   onGoToAnalysing: vi.fn(),
   onGoToGeneration: vi.fn(),
+  onGoToDesign: vi.fn(),
 };
 
 function makeProps(
@@ -200,6 +204,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
         analysis: null,
         generation: null,
         pendingRevisionsCount: 0,
+        design: null,
         anyModelLoading: false,
       }),
     ).toEqual({ label: 'Status', tone: 'neutral', icon: 'clock' });
@@ -210,6 +215,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: running(),
       generation: { state: 'halted', done: 0, total: 50, percent: 0, onClick: vi.fn() },
       pendingRevisionsCount: 3,
+      design: null,
       anyModelLoading: true,
     });
     expect(s).toEqual({ label: 'Halted', tone: 'rose', icon: 'warning' });
@@ -220,6 +226,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: running({ state: 'halted' }),
       generation: { state: 'running', done: 1, total: 10, percent: 10, onClick: vi.fn() },
       pendingRevisionsCount: 0,
+      design: null,
       anyModelLoading: false,
     });
     expect(s.label).toBe('Halted');
@@ -231,6 +238,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: running({ state: 'stalled' }),
       generation: { state: 'running', done: 1, total: 10, percent: 10, onClick: vi.fn() },
       pendingRevisionsCount: 0,
+      design: null,
       anyModelLoading: false,
     });
     expect(s).toEqual({ label: 'Stalled', tone: 'amber', icon: 'clock' });
@@ -241,6 +249,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: running({ percent: 90 }),
       generation: { state: 'running', done: 2, total: 10, percent: 20, onClick: vi.fn() },
       pendingRevisionsCount: 0,
+      design: null,
       anyModelLoading: false,
     });
     expect(s).toEqual({ label: 'Generating', tone: 'peach', icon: 'spinner', detail: '20%' });
@@ -251,6 +260,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: running({ percent: 42 }),
       generation: null,
       pendingRevisionsCount: 0,
+      design: null,
       anyModelLoading: false,
     });
     expect(s).toEqual({ label: 'Analysing', tone: 'peach', icon: 'spinner', detail: '42%' });
@@ -261,6 +271,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: running({ kind: 'subset', percent: 12 }),
       generation: null,
       pendingRevisionsCount: 0,
+      design: null,
       anyModelLoading: false,
     });
     expect(s.label).toBe('Retrying');
@@ -272,6 +283,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: null,
       generation: null,
       pendingRevisionsCount: 2,
+      design: null,
       anyModelLoading: true,
     });
     expect(s).toEqual({ label: 'Loading model', tone: 'amber', icon: 'spinner' });
@@ -282,6 +294,7 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: running({ state: 'paused' }),
       generation: null,
       pendingRevisionsCount: 5,
+      design: null,
       anyModelLoading: false,
     });
     expect(s).toEqual({ label: 'Paused', tone: 'neutral', icon: 'clock' });
@@ -292,9 +305,110 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
       analysis: null,
       generation: null,
       pendingRevisionsCount: 4,
+      design: null,
       anyModelLoading: false,
     });
     expect(s).toEqual({ label: 'Revisions', tone: 'peach', icon: 'warning', detail: '4' });
+  });
+
+  const designRunning = (over: Partial<DesignPillData> = {}): DesignPillData => ({
+    state: 'running',
+    done: 3,
+    total: 8,
+    percent: 38,
+    skipped: 0,
+    failureCount: 0,
+    onClick: vi.fn(),
+    ...over,
+  });
+
+  it('design running → peach "Designing · {percent}%"', () => {
+    const s = summarizeStatus({
+      analysis: null,
+      generation: null,
+      design: designRunning(),
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Designing', tone: 'peach', icon: 'spinner', detail: '38%' });
+  });
+
+  it('generation AND analysis both outrank design running', () => {
+    const gen = summarizeStatus({
+      analysis: null,
+      generation: { state: 'running', done: 1, total: 4, percent: 25, onClick: vi.fn() },
+      design: designRunning(),
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(gen.label).toBe('Generating');
+    const ana = summarizeStatus({
+      analysis: running({ percent: 50 }),
+      generation: null,
+      design: designRunning(),
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    });
+    expect(ana.label).toBe('Analysing');
+  });
+
+  it('design halted → rose "Halted"; design stalled → amber "Stalled"', () => {
+    expect(
+      summarizeStatus({
+        analysis: null,
+        generation: null,
+        design: designRunning({ state: 'halted' }),
+        pendingRevisionsCount: 0,
+        anyModelLoading: false,
+      }),
+    ).toMatchObject({ label: 'Halted', tone: 'rose' });
+    expect(
+      summarizeStatus({
+        analysis: null,
+        generation: null,
+        design: designRunning({ state: 'stalled' }),
+        pendingRevisionsCount: 0,
+        anyModelLoading: false,
+      }),
+    ).toMatchObject({ label: 'Stalled', tone: 'amber' });
+  });
+});
+
+describe('DesignPill', () => {
+  it('renders the running summary "Designing · done/total · percent"', () => {
+    render(
+      <DesignPill
+        data={{
+          state: 'running',
+          done: 3,
+          total: 8,
+          percent: 38,
+          skipped: 0,
+          failureCount: 0,
+          onClick: vi.fn(),
+        }}
+      />,
+    );
+    expect(screen.getByTestId('design-pill')).toHaveTextContent('Designing · 3/8 · 38%');
+  });
+
+  it('renders the terminal summary "Designed N · M failed · K skipped"', () => {
+    render(
+      <DesignPill
+        data={{
+          state: 'done',
+          done: 6,
+          total: 9,
+          percent: 100,
+          skipped: 2,
+          failureCount: 1,
+          onClick: vi.fn(),
+        }}
+      />,
+    );
+    expect(screen.getByTestId('design-pill')).toHaveTextContent(
+      'Designed · 6 · 1 failed · 2 skipped',
+    );
   });
 });
 
