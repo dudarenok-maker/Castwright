@@ -25,7 +25,25 @@ confident. Loves the *listener's* experience and says the honest version of ever
 
 ---
 
-## 2. Verbal voice & tone
+## 2. Tagline & messaging hierarchy
+
+The line the brand lives or dies on. It **leads every surface** — don't bury it, don't
+paraphrase it per page. Headlines can vary; the tagline is the constant.
+
+- **Primary tagline** *(site hero sub, App Store, social bios, deck covers, email sign-off):*
+  > **Any book, performed by a full cast — effortlessly. Even in your own voice.**
+- **Manifesto line** *(About/origin, footers, merch):* **Many voices, one machine.**
+- **Short form** *(≤ 40 chars — ad headlines, OG alt text, tight UI):* **Any book, fully cast.**
+- **Hero headline** *(the on-page H1 — pairs **with** the tagline, never replaces it):*
+  *Every character. Their own voice. Every book in the series.* — with the primary tagline
+  running as the sub beneath it.
+
+**Rule:** the primary tagline is fixed wording. The hero headline and section heads flex;
+the tagline does not.
+
+---
+
+## 3. Verbal voice & tone
 
 Castwright writes like the narrative reads: first person where it fits, specific, sensory,
 unhurried, dry-witted, never breathless.
@@ -76,7 +94,7 @@ unhurried, dry-witted, never breathless.
 
 ---
 
-## 3. Typography
+## 4. Typography
 
 Inherited from the running app's design language — keep it.
 
@@ -92,7 +110,7 @@ Inherited from the running app's design language — keep it.
 
 ---
 
-## 4. Colour system
+## 5. Colour system
 
 Authoritative tokens live in `../src/styles.css`. Five colours, each with **one job** — restraint
 is the brand.
@@ -121,7 +139,7 @@ keeps it special.
 
 ---
 
-## 5. Logo (summary)
+## 6. Logo (summary)
 
 The **Castwave** mark — a ragged free waveform (three voices) above an open-book page swoosh.
 Full reversible set + theme-responsive pair in `README.md`. Clear space ≥ one bar width; holds
@@ -129,7 +147,7 @@ to ~16px; outline wordmark type for production.
 
 ---
 
-## 6. Open items
+## 7. Open items
 
 - Confirm the editorial serif (Fontshare *Zodiak* or alternative) and outline it in the wordmark.
 - Reframe `../docs/project-narrative.md` into the Castwright brand once this is signed off
