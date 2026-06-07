@@ -70,6 +70,7 @@ const chapter = (over: Partial<RecentChapter>): RecentChapter => ({
 const telemetry = (over: Partial<ResourceTelemetryRecord>): ResourceTelemetryRecord => ({
   at: '2026-06-01T09:00:00Z',
   bookId: 'book-a',
+  bookTitle: 'Book A',
   chapterId: 1,
   title: 'Chapter 1',
   modelKey: 'qwen3-tts-0.6b',
@@ -284,6 +285,44 @@ describe('AdminView — fs-20 resource trends panel', () => {
     expect(within(rows[0]).getByText('21:00')).toBeInTheDocument();
     /* Hand-rolled sparkline present (>= 2 points). */
     expect(within(panel).getByTestId('resource-rtf-sparkline')).toBeInTheDocument();
+  });
+
+  it('groups rows under a sticky per-book header, splitting on book change', async () => {
+    mockTelemetry.mockResolvedValue({
+      records: [
+        telemetry({ chapterId: 26, bookId: 'stellarlune', bookTitle: 'Stellarlune' }),
+        telemetry({ chapterId: 25, bookId: 'stellarlune', bookTitle: 'Stellarlune' }),
+        telemetry({ chapterId: 4, bookId: 'unlocked', bookTitle: 'Unlocked' }),
+      ],
+    });
+    renderAdmin();
+
+    const panel = await screen.findByTestId('resource-trends');
+    const headers = within(panel)
+      .getAllByTestId('resource-book-header')
+      .map((h) => h.textContent);
+    expect(headers).toEqual(['Stellarlune', 'Unlocked']);
+
+    /* The Stellarlune group owns the first two chapter rows; Unlocked owns one. */
+    const groups = within(panel).getAllByTestId('resource-book-group');
+    expect(within(groups[0]).getAllByTestId(/^resource-row-/)).toHaveLength(2);
+    expect(within(groups[1]).getAllByTestId(/^resource-row-/)).toHaveLength(1);
+  });
+
+  it('falls back to the bookId, then a placeholder, when the title is absent', async () => {
+    mockTelemetry.mockResolvedValue({
+      records: [
+        telemetry({ chapterId: 2, bookId: 'legacy-slug', bookTitle: null }),
+        telemetry({ chapterId: 1, bookId: null, bookTitle: null }),
+      ],
+    });
+    renderAdmin();
+
+    const panel = await screen.findByTestId('resource-trends');
+    const headers = within(panel)
+      .getAllByTestId('resource-book-header')
+      .map((h) => h.textContent);
+    expect(headers).toEqual(['legacy-slug', '(unknown book)']);
   });
 
   it('shows the empty-state copy when no telemetry has been recorded', async () => {
