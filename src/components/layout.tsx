@@ -576,6 +576,12 @@ export function Layout() {
       .catch((err) => {
         console.warn('[cast-design] cold-boot probe failed', err);
       });
+    void Promise.resolve(api.getSingleDesignStatus?.(openBookId))
+      .then((st) => {
+        if (cancelled || !st?.active) return;
+        dispatch(castDesignActions.resubscribeSingle({ bookId: openBookId }));
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -1211,6 +1217,7 @@ export function Layout() {
       skipped,
       failureCount: failures.length,
       currentName,
+      phase: designSnapshot.kind === 'single' ? designSnapshot.phase : undefined,
       onClick: () => {
         if (dBookId) navigate(`/books/${dBookId}/cast`);
       },
