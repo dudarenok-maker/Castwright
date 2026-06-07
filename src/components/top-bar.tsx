@@ -235,9 +235,25 @@ export function TopBar({
       <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8 overflow-x-clip">
         <button
           onClick={onHome}
-          className="font-bold text-base tracking-tight inline-flex items-center gap-1 hover:opacity-80 transition-opacity shrink-0 min-h-[44px]"
+          aria-label="Castwright — home"
+          className="font-bold text-base tracking-tight inline-flex items-center gap-2 hover:opacity-80 transition-opacity shrink-0 min-h-[44px]"
         >
-          audiobook<span className="text-peach">.</span>
+          <svg viewBox="0 0 512 512" className="w-6 h-6 shrink-0" aria-hidden="true">
+            <rect x="104" y="210" width="30" height="92" rx="15" fill="#f79a83" />
+            <rect x="158" y="116" width="30" height="256" rx="15" fill="#f79a83" />
+            <rect x="212" y="160" width="30" height="160" rx="15" fill="#a43c6c" />
+            <rect x="266" y="92" width="30" height="284" rx="15" fill="#a43c6c" />
+            <rect x="320" y="146" width="30" height="202" rx="15" fill="currentColor" />
+            <rect x="374" y="200" width="30" height="108" rx="15" fill="currentColor" />
+            <path
+              d="M110 416 C 170 392, 226 392, 256 412 C 286 392, 342 392, 402 416"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="15"
+              strokeLinecap="round"
+            />
+          </svg>
+          <span>Castwright</span>
         </button>
         {projectTitle && (
           <button

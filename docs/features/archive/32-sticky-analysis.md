@@ -128,7 +128,7 @@ Manual smoke against the canonical e2e manuscript (`~/Downloads/the Coalfall Com
 
 Server-side smoke (post-B1, no UI needed):
 
-1. `cd server && npm run dev` (analyzer = `ANALYZER=manual` or `ANALYZER=gemini` per `.env`).
+1. `cd server && npm run dev` (analyzer = `ANALYZER=local` or `ANALYZER=gemini` per `.env`).
 2. From a browser, POST to `/api/manuscripts/m_test/analysis` (with a valid manuscriptId from the workspace). Inspect with curl:
    ```powershell
    curl -X POST -H "Content-Type: application/json" -d '{}' http://localhost:8080/api/manuscripts/m_test/analysis

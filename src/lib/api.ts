@@ -191,8 +191,7 @@ export interface AnalyseOpts {
       `names` is the first three for display; `count` is the total. */
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
   /** Override the server's default analysis model (e.g. 'gemini-3-flash-preview').
-      Sent as JSON body to POST /api/manuscripts/:id/analysis. Ignored when
-      the server runs in ANALYZER=manual mode. */
+      Sent as JSON body to POST /api/manuscripts/:id/analysis. */
   model?: string;
   /** Discard any cached partial progress for this manuscript before running.
       The "Start fresh" button in the analysing view sets this. */

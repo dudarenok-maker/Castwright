@@ -27,9 +27,8 @@
    Phase 1 chapters release immediately against the final roster.
 
    The watermark seam is short-circuited (degrades to today's
-   sequential phase gate) when the new env vars are unset OR when
-   `ANALYZER=manual` — the manual cowork loop fundamentally can't
-   pipeline because it waits for human input between phases. */
+   sequential phase gate) when the new env vars are unset — the
+   non-pipelined default runs both phases through one model. */
 
 export interface PhaseWatermarkOptions {
   /** Minimum number of Phase 0 chapters Gemma must have completed
@@ -136,9 +135,8 @@ export function createPhaseWatermark(opts: PhaseWatermarkOptions): PhaseWatermar
 }
 
 /** Stub watermark used when the pipeline must collapse to today's
-    sequential phase-gate behaviour: `ANALYZER=manual` (file-drop
-    cowork can't pipeline) OR none of the three new env vars are set
-    (legacy single-model regression case).
+    sequential phase-gate behaviour: none of the three new env vars are
+    set (legacy single-model / non-pipelined case).
 
     Behaves as an infinite lag — `awaitPhase1Dispatch` only resolves
     after `markPhase0AllDone()` fires. Drop-in compatible with the real
