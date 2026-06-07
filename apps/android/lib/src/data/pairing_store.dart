@@ -10,6 +10,12 @@ abstract class PairingStore {
   Future<PairedServer?> load();
   Future<void> save(PairedServer server);
   Future<void> clear();
+
+  /// The pinned CA cert (PEM) captured at pairing — persisted so the app can
+  /// rebuild the cert-pinned connection (and play downloaded books) OFFLINE,
+  /// without re-fetching `/cert/root.crt`. Null for legacy pairings.
+  Future<void> saveCaPem(String pem);
+  Future<String?> loadCaPem();
 }
 
 /// Real implementation backed by the OS keystore/keychain via
@@ -20,6 +26,7 @@ class SecurePairingStore implements PairingStore {
       : _storage = storage ?? const FlutterSecureStorage();
 
   static const _key = 'paired_server';
+  static const _caKey = 'paired_server_ca_pem';
   final FlutterSecureStorage _storage;
 
   @override
@@ -38,5 +45,14 @@ class SecurePairingStore implements PairingStore {
       _storage.write(key: _key, value: jsonEncode(server.toJson()));
 
   @override
-  Future<void> clear() => _storage.delete(key: _key);
+  Future<void> clear() async {
+    await _storage.delete(key: _key);
+    await _storage.delete(key: _caKey);
+  }
+
+  @override
+  Future<void> saveCaPem(String pem) => _storage.write(key: _caKey, value: pem);
+
+  @override
+  Future<String?> loadCaPem() => _storage.read(key: _caKey);
 }
