@@ -29,11 +29,22 @@ export interface CastDesignFailure {
   error: string;
 }
 
+/** Preview payload for a re-design (mode: 'redesign') — staged, not yet
+    persisted, awaiting A/B compare in the Profile Drawer. */
+export interface CastDesignPreview {
+  characterId: string;
+  previewVoiceId: string;
+  previewUrl: string;
+  persona: string;
+}
+
 /** Snapshot of the in-flight bulk-design job for ONE book. Opened by the
     middleware on start (or on cold-boot re-subscribe); advanced per character;
     settled then cleared on completion. */
 export interface CastDesignSnapshot {
   bookId: string;
+  /** Distinguishes the bulk job from a single-character design. */
+  kind: 'bulk' | 'single';
   /** Characters enqueued at job start — the denominator for the pill. */
   total: number;
   /** Characters designed + persisted this run (successes only). */
@@ -44,16 +55,24 @@ export interface CastDesignSnapshot {
   skipped: number;
   /** Character currently being designed (pill subtitle "Designing <name>"). */
   currentName: string | null;
+  /** Single-design only. */
+  characterId?: string;
+  mode?: 'first' | 'redesign';
+  phase?: 'designing' | 'rendering';
   /** `running` is the happy path; `done` is the brief terminal-summary state
       before clear; `halted` is a catastrophic abort (rare — per-character
       failures never halt). `stalled` is a derived UI state computed inline in
-      the layout from `lastTickAt`, not stored here. */
-  state: 'running' | 'done' | 'halted';
+      the layout from `lastTickAt`, not stored here.
+      `ready-to-compare` is single-redesign-only: the preview is staged and the
+      drawer must resolve it (approve→promote / cancel→discard). */
+  state: 'running' | 'done' | 'halted' | 'ready-to-compare';
   /** ms since epoch of the most recent tick/heartbeat — drives the pill's
       stall heuristic (recomputed in the layout against `Date.now()`). */
   lastTickAt: number;
   /** Per-character failures; the loop continues past each one. */
   failures: CastDesignFailure[];
+  /** Present iff state === 'ready-to-compare'. */
+  preview?: CastDesignPreview;
 }
 
 export interface CastDesignState {
@@ -93,6 +112,7 @@ export const castDesignSlice = createSlice({
     ) {
       state.active = {
         bookId: action.payload.bookId,
+        kind: 'bulk',
         total: action.payload.total,
         done: action.payload.done ?? 0,
         skipped: action.payload.skipped ?? 0,
@@ -197,6 +217,102 @@ export const castDesignSlice = createSlice({
        after a cold boot / reload (no-op reducer, same rationale as above). */
     resubscribe(_state, _action: PayloadAction<{ bookId: string }>) {
       /* no-op: side effect lives in the middleware */
+    },
+
+    /* Open a single-character design snapshot. */
+    beginSingle(
+      state,
+      action: PayloadAction<{
+        bookId: string;
+        characterId: string;
+        name: string;
+        mode: 'first' | 'redesign';
+        lastTickAt: number;
+      }>,
+    ) {
+      state.active = {
+        bookId: action.payload.bookId,
+        kind: 'single',
+        total: 1,
+        done: 0,
+        skipped: 0,
+        currentName: action.payload.name,
+        characterId: action.payload.characterId,
+        mode: action.payload.mode,
+        phase: 'designing',
+        state: 'running',
+        lastTickAt: action.payload.lastTickAt,
+        failures: [],
+      };
+    },
+
+    /* Advance the sub-phase of an in-flight single design. No-ops when the
+       active snapshot is not a single design or belongs to a different character. */
+    setPhase(
+      state,
+      action: PayloadAction<{
+        bookId: string;
+        characterId: string;
+        phase: 'designing' | 'rendering';
+        lastTickAt: number;
+      }>,
+    ) {
+      const snap = state.active;
+      if (!snap || snap.kind !== 'single') return;
+      if (snap.bookId !== action.payload.bookId || snap.characterId !== action.payload.characterId)
+        return;
+      snap.phase = action.payload.phase;
+      snap.lastTickAt = action.payload.lastTickAt;
+    },
+
+    /* A single re-design finished — stage the preview and flip to
+       ready-to-compare. Guarded by book + character match. */
+    previewReady(
+      state,
+      action: PayloadAction<{
+        bookId: string;
+        characterId: string;
+        previewVoiceId: string;
+        previewUrl: string;
+        persona: string;
+        lastTickAt: number;
+      }>,
+    ) {
+      const snap = state.active;
+      if (!snap || snap.kind !== 'single') return;
+      if (snap.bookId !== action.payload.bookId || snap.characterId !== action.payload.characterId)
+        return;
+      snap.state = 'ready-to-compare';
+      snap.preview = {
+        characterId: action.payload.characterId,
+        previewVoiceId: action.payload.previewVoiceId,
+        previewUrl: action.payload.previewUrl,
+        persona: action.payload.persona,
+      };
+      snap.lastTickAt = action.payload.lastTickAt;
+    },
+
+    /* Intercepted by the middleware to START a single-character design
+       (no-op reducer — side effect lives in the middleware). */
+    designSingleRequested(
+      _state,
+      _action: PayloadAction<{
+        bookId: string;
+        characterId: string;
+        name: string;
+        persona: string;
+        sampleVoiceId: string;
+        modelKey: string;
+        mode: 'first' | 'redesign';
+      }>,
+    ) {
+      /* side effect lives in the middleware */
+    },
+
+    /* Intercepted by the middleware to RE-SUBSCRIBE to an in-flight single
+       design after a cold boot / reload (no-op reducer). */
+    resubscribeSingle(_state, _action: PayloadAction<{ bookId: string }>) {
+      /* side effect lives in the middleware */
     },
   },
 });
