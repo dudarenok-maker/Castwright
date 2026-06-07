@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/10-profile-drawer.md
 
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
@@ -1163,25 +1163,27 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
 
     /* Simulate the middleware completing the redesign: the preview is staged
        and the slice flips to ready-to-compare. */
-    store.dispatch(
-      castDesignActions.beginSingle({
-        bookId: 'book-1',
-        characterId: 'halloran',
-        name: 'Captain Halloran',
-        mode: 'redesign',
-        lastTickAt: 1,
-      }),
-    );
-    store.dispatch(
-      castDesignActions.previewReady({
-        bookId: 'book-1',
-        characterId: 'halloran',
-        previewVoiceId: 'qwen-halloran-preview',
-        previewUrl: '/audio/voices/char-halloran-preview.mp3',
-        persona: 'a steady adult voice',
-        lastTickAt: 2,
-      }),
-    );
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-halloran-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
+        }),
+      );
+    });
 
     /* The compare modal opens; staging the promoted voice is deferred to approve
        (promote not called until the user keeps the proposed voice). */
@@ -1230,15 +1232,17 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
   it('renders DesignProgress when a single design is in flight for this character', async () => {
     const { store } = renderWithBook({ ...baseChar, voiceStyle: 'a steady adult voice' });
     selectQwen();
-    store.dispatch(
-      castDesignActions.beginSingle({
-        bookId: 'book-1',
-        characterId: 'halloran',
-        name: 'Captain Halloran',
-        mode: 'first',
-        lastTickAt: 1,
-      }),
-    );
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'first',
+          lastTickAt: 1,
+        }),
+      );
+    });
     expect(await screen.findByTestId('design-waveform')).toBeInTheDocument();
     expect(screen.getByText(/designing the voice/i)).toBeInTheDocument();
   });
@@ -1251,25 +1255,27 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
       overrideTtsVoices: { qwen: { name: 'qwen-halloran' } },
       voiceStyle: 'a steady adult voice',
     });
-    store.dispatch(
-      castDesignActions.beginSingle({
-        bookId: 'book-1',
-        characterId: 'halloran',
-        name: 'Captain Halloran',
-        mode: 'redesign',
-        lastTickAt: 1,
-      }),
-    );
-    store.dispatch(
-      castDesignActions.previewReady({
-        bookId: 'book-1',
-        characterId: 'halloran',
-        previewVoiceId: 'qwen-halloran-preview',
-        previewUrl: '/audio/voices/char-halloran-preview.mp3',
-        persona: 'a steady adult voice',
-        lastTickAt: 2,
-      }),
-    );
+    act(() => {
+      store.dispatch(
+        castDesignActions.beginSingle({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          name: 'Captain Halloran',
+          mode: 'redesign',
+          lastTickAt: 1,
+        }),
+      );
+      store.dispatch(
+        castDesignActions.previewReady({
+          bookId: 'book-1',
+          characterId: 'halloran',
+          previewVoiceId: 'qwen-halloran-preview',
+          previewUrl: '/audio/voices/char-halloran-preview.mp3',
+          persona: 'a steady adult voice',
+          lastTickAt: 2,
+        }),
+      );
+    });
     expect(await screen.findByRole('dialog', { name: /compare/i })).toBeInTheDocument();
   });
 
