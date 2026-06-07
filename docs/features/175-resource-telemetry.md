@@ -19,6 +19,7 @@ owner: null
 
 ## Architectural impact
 
+- **`bookTitle` on the record (2026-06-07):** the JSONL record carries the human-readable `state.title` alongside the `bookId` slug, stamped at append time in `generation.ts`. Nullable for legacy records written before the field. The admin panel groups newest-first rows into contiguous per-book runs (`groupTelemetryByBook`) under a sticky header (label = `bookTitle ?? bookId ?? '(unknown book)'`), and caps the rows at `max-h-[60vh]` with `overflow-y-auto` so a long run scrolls inside the card instead of running off the page. Filed as a `bug` (no scroll + no book name in the table).
 - **New module** `resource-telemetry.ts`: `ResourceTelemetryRecord`, `TELEMETRY_MAX_LINES = 2000`, `telemetryFilePath()` = `<WORKSPACE_ROOT>/.telemetry/resource-telemetry.jsonl` (new `telemetryDir()` in `paths.ts`, mirroring `.backups`), `appendTelemetry(rec)` (append one JSONL line, dir auto-create, trim oldest over cap, best-effort — swallows IO errors), `readTelemetry(limit?)` (newest-first, skips a corrupt trailing line).
 - `generation.ts` completion block: **fire-and-forget** `void appendTelemetry({...})` right after `recordChapterThroughput` — never awaited, never blocks the hot path. `wallSec = synthSec`; VRAM/host-RAM via a best-effort `probeSidecarHealth()` (short timeout, gated on a sidecar engine), nulls on timeout.
 - **New endpoint** `GET /api/generation/telemetry?limit=` mounted on the existing `generationStatsRouter` → `{ records: ResourceTelemetryRecord[] }` newest-first. `api.getResourceTelemetry()` (real + mock).
@@ -29,10 +30,11 @@ owner: null
 1. The telemetry append is **fire-and-forget** and best-effort — a telemetry failure must never affect chapter generation or RTF.
 2. The JSONL is capped at `TELEMETRY_MAX_LINES`; rotation drops the oldest; a corrupt trailing line is skipped, not thrown.
 3. The panel lives in the **admin console** (`src/views/admin.tsx`), not the DEV-only worktrees view (the fs-20 issue predated the worktrees→admin fold).
+4. Rows group into **contiguous** per-book runs (split on every `bookId` change), preserving the newest-first chronological order — never collapse all of a book's rows together, which would reorder interleaved multi-book runs.
 
 ## Test plan
 
-- **Automated:** `server/src/tts/resource-telemetry.test.ts` — append N to a temp dir; JSONL round-trips; cap rotation drops oldest; `readTelemetry(limit)` newest-first + honors limit; partial trailing line skipped. `server/src/routes/generation-stats.test.ts` — `GET /telemetry` returns records. `src/views/admin.test.tsx` — mock `api.getResourceTelemetry`; panel renders rows incl. VRAM + wall columns + sparkline; empty → "No telemetry recorded yet."
+- **Automated:** `server/src/tts/resource-telemetry.test.ts` — append N to a temp dir; JSONL round-trips; cap rotation drops oldest; `readTelemetry(limit)` newest-first + honors limit; partial trailing line skipped. `server/src/routes/generation-stats.test.ts` — `GET /telemetry` returns records. `src/views/admin.test.tsx` — mock `api.getResourceTelemetry`; panel renders rows incl. VRAM + wall columns + sparkline; empty → "No telemetry recorded yet."; rows group under a per-book header splitting on `bookId` change; header falls back `bookTitle → bookId → '(unknown book)'`.
 - **Manual:** generate a few chapters, open `#/admin`, confirm the Resource trends panel shows RTF + VRAM + wall-time rows and the sparkline tracks RTF.
 
 ## Ship notes

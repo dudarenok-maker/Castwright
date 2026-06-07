@@ -17,6 +17,9 @@ import { join } from 'node:path';
 export interface ResourceTelemetryRecord {
   at: string;
   bookId: string | null;
+  /** Human-readable book title at render time (state.json `title`). Null for
+      legacy records written before this field, or when the title was unknown. */
+  bookTitle: string | null;
   chapterId: number | string;
   title: string | null;
   modelKey: string | null;

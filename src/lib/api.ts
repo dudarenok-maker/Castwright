@@ -5313,10 +5313,22 @@ const mock = {
   getResourceTelemetry: async (
     limit?: number,
   ): Promise<{ records: ResourceTelemetryRecord[] }> => {
+    /* Newest-first; the first three rows come from a second book so the Admin
+       panel's per-book grouping has more than one group to render in mock mode. */
+    const books = [
+      { bookId: 'mock-book-stellarlune', bookTitle: 'Stellarlune' },
+      { bookId: 'mock-book-stellarlune', bookTitle: 'Stellarlune' },
+      { bookId: 'mock-book-stellarlune', bookTitle: 'Stellarlune' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
+    ];
     const records: ResourceTelemetryRecord[] = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map(
       (rtf, i) => ({
         at: new Date(Date.parse('2026-06-01T09:00:00Z') + (6 - i) * 9 * 60_000).toISOString(),
-        bookId: 'mock-book',
+        bookId: books[i].bookId,
+        bookTitle: books[i].bookTitle,
         chapterId: 7 - i,
         title: `Chapter ${7 - i}`,
         modelKey: 'qwen3-tts-0.6b',
