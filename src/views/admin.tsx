@@ -373,6 +373,28 @@ function GenerationThroughput({ stats }: { stats: GenerationStatsResponse | null
    compact per-chapter table plus a hand-rolled inline SVG sparkline of RTF
    across the records (no charting dep). VRAM (reserved/total) + wall-time
    columns surface the resource pressure that climbs across a long run. */
+/* Group newest-first telemetry into contiguous runs by book, so a long
+   workspace run reads as "The Drowning Bell (chapters…), Unlocked (chapters…)"
+   rather than an undifferentiated wall of chapter numbers. We split on every
+   bookId change rather than collapsing all of a book's rows together, so the
+   chronological newest-first ordering is preserved even when two books'
+   generations interleave. Label falls back bookTitle → bookId → unknown. */
+function groupTelemetryByBook(
+  records: ResourceTelemetryRecord[],
+): Array<{ key: string; label: string; rows: ResourceTelemetryRecord[] }> {
+  const groups: Array<{ key: string; label: string; rows: ResourceTelemetryRecord[] }> = [];
+  for (const r of records) {
+    const key = r.bookId ?? r.bookTitle ?? '';
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) {
+      last.rows.push(r);
+    } else {
+      groups.push({ key, label: r.bookTitle ?? r.bookId ?? '(unknown book)', rows: [r] });
+    }
+  }
+  return groups;
+}
+
 function ResourceTrends() {
   const [records, setRecords] = useState<ResourceTelemetryRecord[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -426,28 +448,47 @@ function ResourceTrends() {
             <span className="text-right hidden sm:block">Wall</span>
             <span className="text-right">VRAM</span>
           </div>
-          <div className="divide-y divide-ink/5">
-            {records.map((r) => (
-              <div
-                key={`${r.bookId ?? ''}:${r.chapterId}:${r.at}`}
-                className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 items-center px-4 py-2.5 text-sm"
-                data-testid={`resource-row-${r.chapterId}`}
-              >
-                <span className="min-w-0 truncate text-ink">
-                  <span className="text-ink/40 font-mono mr-2">#{r.chapterId}</span>
-                  {r.title ?? <span className="text-ink/40">(untitled)</span>}
-                </span>
-                <span className="text-right font-mono tabular-nums text-ink/80">{fmtRtf(r.rtf)}</span>
-                <span className="text-right font-mono tabular-nums text-ink/50 hidden sm:block">
-                  {formatDuration(r.wallSec)}
-                </span>
-                <span className="text-right font-mono tabular-nums text-ink/50">
-                  {r.vramReservedMb == null
-                    ? '–'
-                    : `${(r.vramReservedMb / 1024).toFixed(1)}${
-                        r.vramTotalMb != null ? ` / ${(r.vramTotalMb / 1024).toFixed(1)}` : ''
-                      } GB`}
-                </span>
+          {/* Cap the rows at ~60% of the viewport and scroll inside — a long run
+              records hundreds of chapters that would otherwise run off the page.
+              Each book's chapters sit under a sticky header so you can tell which
+              book a row belongs to once you've scrolled past the top group. */}
+          <div className="max-h-[60vh] overflow-y-auto" data-testid="resource-trends-scroll">
+            {groupTelemetryByBook(records).map((group, gi) => (
+              <div key={`${group.key}:${gi}`} data-testid="resource-book-group">
+                <div
+                  className="sticky top-0 z-10 bg-white px-4 py-1.5 text-xs font-medium text-ink/70 border-b border-ink/5 truncate"
+                  data-testid="resource-book-header"
+                  title={group.label}
+                >
+                  {group.label}
+                </div>
+                <div className="divide-y divide-ink/5">
+                  {group.rows.map((r) => (
+                    <div
+                      key={`${r.bookId ?? ''}:${r.chapterId}:${r.at}`}
+                      className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 items-center px-4 py-2.5 text-sm"
+                      data-testid={`resource-row-${r.chapterId}`}
+                    >
+                      <span className="min-w-0 truncate text-ink">
+                        <span className="text-ink/40 font-mono mr-2">#{r.chapterId}</span>
+                        {r.title ?? <span className="text-ink/40">(untitled)</span>}
+                      </span>
+                      <span className="text-right font-mono tabular-nums text-ink/80">
+                        {fmtRtf(r.rtf)}
+                      </span>
+                      <span className="text-right font-mono tabular-nums text-ink/50 hidden sm:block">
+                        {formatDuration(r.wallSec)}
+                      </span>
+                      <span className="text-right font-mono tabular-nums text-ink/50">
+                        {r.vramReservedMb == null
+                          ? '–'
+                          : `${(r.vramReservedMb / 1024).toFixed(1)}${
+                              r.vramTotalMb != null ? ` / ${(r.vramTotalMb / 1024).toFixed(1)}` : ''
+                            } GB`}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
