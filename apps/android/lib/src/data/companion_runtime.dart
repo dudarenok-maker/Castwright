@@ -1,8 +1,11 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../domain/app_settings.dart';
+import '../domain/media_browse_tree.dart';
 import 'api_client.dart';
 import 'chapter_downloader.dart';
+import 'companion_audio_handler.dart';
 import 'cover_thumbnails.dart';
 import 'drift_local_library.dart';
 import 'file_store.dart';
@@ -10,6 +13,7 @@ import 'just_audio_engine.dart';
 import 'library_database.dart';
 import 'pairing_service.dart' show Connection;
 import 'player_controller.dart';
+import 'resume_sync_service.dart';
 import 'settings_store.dart';
 import 'sync_controller.dart';
 
@@ -27,6 +31,8 @@ class CompanionRuntime {
     this.thumbnails,
     this.settingsStore,
     this.settings,
+    this.resumeSync,
+    this.audioHandler,
   );
 
   final ApiClient api;
@@ -36,10 +42,19 @@ class CompanionRuntime {
   final ThumbnailCache thumbnails;
   final SettingsStore settingsStore;
 
+  /// Two-way resume sync (app-6): push local position / pull the server's.
+  final ResumeSyncService resumeSync;
+
   /// Current device settings (mutable — updated via [updateSettings]).
   AppSettings settings;
 
-  static Future<CompanionRuntime> forConnection(Connection connection) async {
+  /// The media-session handler (lock-screen/Bluetooth/car), null in tests.
+  final CompanionAudioHandler? audioHandler;
+
+  static Future<CompanionRuntime> forConnection(
+    Connection connection, {
+    CompanionAudioHandler? handler,
+  }) async {
     final docs = await getApplicationDocumentsDirectory();
     final root = '${docs.path}/companion';
 
@@ -76,8 +91,66 @@ class CompanionRuntime {
     await player.setSpeed(settings.defaultSpeed);
     await player.setVolumeBoost(settings.volumeBoostDb);
 
-    return CompanionRuntime._(
-        api, library, sync, player, thumbnails, settingsStore, settings);
+    final resumeSync = ResumeSyncService(
+      progressApi: api.listenProgressApi,
+      playbackStore: library,
+      chapterIdResolver: (bookId, uuid) async {
+        for (final c in await library.chaptersForBook(bookId)) {
+          if (c.uuid == uuid) return c.chapterId;
+        }
+        return null;
+      },
+    );
+
+    // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
+    // the live player + a library-backed browse tree.
+    handler?.attach(
+      player,
+      childrenProvider: (parentId) async {
+        final parsed = parseMediaId(parentId);
+        if (parsed.kind == MediaIdKind.book && parsed.bookId != null) {
+          try {
+            await sync.ensureDetail(parsed.bookId!);
+          } catch (_) {/* offline — fall back to local rows */}
+          final chs = await library.chaptersForBook(parsed.bookId!);
+          return [
+            for (final c in chs)
+              MediaItem(
+                id: chapterMediaId(parsed.bookId!, c.uuid),
+                title: c.title.isEmpty ? 'Chapter ${c.chapterId}' : c.title,
+                playable: true,
+              ),
+          ];
+        }
+        final books = await library.listBooks();
+        return [
+          for (final b in books)
+            MediaItem(
+                id: bookMediaId(b.bookId),
+                title: b.title,
+                album: b.author,
+                playable: false),
+        ];
+      },
+      onPlayMediaId: (mediaId) async {
+        final parsed = parseMediaId(mediaId);
+        if (parsed.kind != MediaIdKind.chapter) return;
+        final bid = parsed.bookId!;
+        try {
+          await sync.ensureDetail(bid);
+        } catch (_) {/* offline */}
+        BookSummary? meta;
+        for (final b in await library.listBooks()) {
+          if (b.bookId == bid) meta = b;
+        }
+        await player.openBook(bid,
+            bookTitle: meta?.title ?? '', artPath: meta?.coverThumbPath);
+        await player.playChapter(parsed.uuid!);
+      },
+    );
+
+    return CompanionRuntime._(api, library, sync, player, thumbnails,
+        settingsStore, settings, resumeSync, handler);
   }
 
   /// Persist new settings and apply the playback-affecting ones immediately.
@@ -89,6 +162,7 @@ class CompanionRuntime {
   }
 
   Future<void> dispose() async {
+    audioHandler?.detach();
     await player.dispose();
     await library.close();
   }
