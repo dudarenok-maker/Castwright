@@ -8,8 +8,7 @@ character → generate per-chapter audio → listen, revise, export to M4B
 or MP3.
 
 The pipeline runs locally end-to-end. Analysis can use a local Ollama
-model (default), a manual file-drop coworking flow with any chat model,
-or the Gemini free-tier API. TTS uses Kokoro v1 (eager-loaded, ~1 GB
+model (default) or the Gemini free-tier API. TTS uses Kokoro v1 (eager-loaded, ~1 GB
 VRAM) by default, with Coqui XTTS v2 available on demand for zero-shot
 voice cloning.
 
@@ -76,7 +75,7 @@ e2e/build), `npm run test:e2e` (Playwright only).
 
 - **Manuscript ingestion** — paste or upload `.md`, `.txt`, `.epub`, `.pdf`, `.mobi`, or `.azw3`; chapter names extracted, low-confidence speaker assignments surfaced for review. DRM-protected MOBI files are rejected up-front with a clear error. **Diff-on-reupload (v1.4.0)** — side-by-side sentence-level diff (LCS + char-level inner highlight) gates any re-upload of an existing book before slice mutation; an amber banner flags renamed chapters whose sticky title overrides won't match the new parse.
 - **Manuscript editing** — per-sentence speaker reassign, chapter merge/split/reorder, manual chapter rename with a sticky `titleOverridden` flag (v1.4.0) preserved across heuristic refresh passes. **Low-confidence triage polish (v1.4.0)** — J/K shortcuts jump to the next misattribution and auto-open the inspector; a typeahead `<CharacterSearchPicker>` lists local cast + recurring series-mates so a missing series character can be materialised from the prior roster in one click.
-- **Analyzer choice** — local Ollama (default, no API key required), Gemini free-tier (cloud, 1500 RPD), or manual file-drop coworking with any chat model. Sticky across navigation and process restarts. **In-app multi-model management (v1.3.0)** — Install Ollama, pull a model, and pre-fetch Coqui XTTS from the Account → Models card without dropping to a terminal. **Pipelined two-model analyzer (v1.4.0)** — opt-in Phase 0 (cast detection, e.g. `gemma-4-31b-it`) and Phase 1 (sentence attribution, e.g. `gemini-3.1-flash-lite`) run in parallel with a configurable 10-chapter minimum lag, hitting independent rate-limit buckets so effective quota nearly doubles. Phase model picker + min-lag knob live on the Account tab.
+- **Analyzer choice** — local Ollama (default, no API key required) or Gemini free-tier (cloud, 1500 RPD). Sticky across navigation and process restarts. **In-app multi-model management (v1.3.0)** — Install Ollama, pull a model, and pre-fetch Coqui XTTS from the Account → Models card without dropping to a terminal. **Pipelined two-model analyzer (v1.4.0)** — opt-in Phase 0 (cast detection, e.g. `gemma-4-31b-it`) and Phase 1 (sentence attribution, e.g. `gemini-3.1-flash-lite`) run in parallel with a configurable 10-chapter minimum lag, hitting independent rate-limit buckets so effective quota nearly doubles. Phase model picker + min-lag knob live on the Account tab.
 - **Voice library** — per-engine catalogs, family grouping, drag-to-assign, per-character overrides, sample playback, side-by-side cast comparison. **Same-book cast compare from the global Voices tab (v1.3.0)** — on-demand fetches the foreign book's cast so you can audition two characters from a different book side-by-side.
 - **TTS engines** — Kokoro v1 (eager-loaded English-only, 28 voices), Coqui XTTS v2 (button-driven, zero-shot cloning), Gemini cloud. Per-character voice profiles persist across engine switches. **Voice preview while editing (v1.3.0)** — audition multiple voice candidates inside the profile drawer with a user-editable sample line, without committing the assignment. **Kokoro stop pill (v1.4.0)** — top-bar pill evicts Kokoro to free ~1 GB VRAM for an XTTS warm or a heavier analyzer model without restarting the sidecar.
 - **Generation** — per-chapter SSE stream, sticky across navigation, cold-boot resumable. Auto-retry on transient sidecar failures. **Cross-tab state sync (v1.3.0)** — open the same book in two tabs and the analysis / generation pills update in lockstep via `BroadcastChannel`, no round-trip needed. **Parallel chapter synthesis (v1.4.0)** — bounded worker pool over chapters via `GEN_CHAPTER_CONCURRENCY` (default 2); per-chapter SSE tracks isolated through the chapters slice so interleaved events never cross. **Voiced chapter titles + inter-chapter silence (v1.4.0)** — each chapter audio now opens with the title rendered as a period-separated clause (`Chapter 2. Moolark.`) in the project's narrator voice, followed by a baked-in silence; reads cleanly across Coqui / Kokoro / Gemini.
@@ -134,7 +133,7 @@ server/               Node + Express API (TypeScript)
     ollama/           Vendor-installer bootstrap (v1.3.0)
   tts-sidecar/        Python FastAPI TTS sidecar (Coqui + Kokoro)
     scripts/          install-kokoro.{sh,ps1} + install-coqui.{sh,ps1} (v1.3.0)
-  handoff/            Manual-analyzer inbox/outbox (when ANALYZER=manual)
+  handoff/            Gemini analyzer prompt/response traceability
 apps/android/         Flutter companion app (pkg audiobook_companion) — domain
                       (pure logic) / data (cert-pinned client, drift store, sync
                       engine, player) / ui; iOS target lives here too. See
@@ -165,7 +164,7 @@ openapi.yaml          API contract — single source of truth for shapes
 Server reads `server/.env` (Node 20.6+ native `process.loadEnvFile`).
 Copy `server/.env.example` as a starting point. Notable knobs:
 
-- `ANALYZER` — `local` (default, Ollama), `manual`, or `gemini`.
+- `ANALYZER` — `local` (default, Ollama) or `gemini`.
 - `GEMINI_API_KEY`, `GEMINI_MODEL`, and the per-model RPM / TPM / RPD
   caps when `ANALYZER=gemini`.
 - `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` /

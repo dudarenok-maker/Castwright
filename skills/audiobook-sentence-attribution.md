@@ -1,15 +1,13 @@
 ---
 name: audiobook-sentence-attribution
-description: Stage 2 of the audiobook-generator cowork pipeline. Reads a stage-2 handoff file (characters from stage 1 + chapter bodies) and produces per-sentence speaker attributions, saving the result as JSON to the matching outbox path.
+description: Stage 2 of the audiobook-generator analysis pipeline. Produces per-sentence speaker attributions as JSON from the stage-1 character roster + chapter bodies.
 ---
 
 # Audiobook sentence attribution — stage 2
 
-The server has written `server/handoff/inbox/{manuscriptId}-stage2.md`
-containing the character roster from stage 1 and the chapter bodies. Your job
-is to split each chapter into sentences and label every sentence with a
-speaking character, then write the result to
-`server/handoff/outbox/{manuscriptId}-stage2.json`.
+You are an automated worker. From the character roster (stage 1) and the chapter
+bodies provided, split each chapter into sentences and label every sentence with
+a speaking character, returning the result as a single JSON object.
 
 ## What to produce
 
@@ -81,7 +79,7 @@ speaking character, then write the result to
 
 - **Sentence ids are globally unique across the whole manuscript and 1-based**. Number them in reading order: chapter 1 starts at id 1, chapter 2 continues where chapter 1 left off.
 - **`chapterId` matches the `chapters[].id` from stage 1**. Don't invent new chapter ids.
-- **`characterId` must be one of the ids from the stage-1 character roster** (provided in the inbox). If a sentence is non-dialogue prose, use `narrator`.
+- **`characterId` must be one of the ids from the stage-1 character roster** (provided in the input). If a sentence is non-dialogue prose, use `narrator`.
 - **`text`** preserves the manuscript's punctuation, smart quotes, em-dashes — copy from the source verbatim.
 - **`confidence`** is a number in `[0, 1]` and **must be calibrated per sentence — do NOT copy values from the example above**. The UI surfaces anything `< 0.75` with a "Low confidence" pill so the user can review. Use the rubric below:
   - **0.95–1.00** — Pure narrative prose with no quoted speech. Or a quoted line with an explicit, unambiguous dialogue tag in the same source sentence (`"…," Halloran said`).
@@ -177,21 +175,11 @@ the quotes naturally separate):
 
 If a sentence has no embedded quotes at all, do NOT split it — emit as one entry.
 
-## How to run
+## Common pitfalls
 
-1. Open `server/handoff/inbox/{manuscriptId}-stage2.md` in your other Claude window.
-2. Produce the JSON object above. Validate locally that:
-   - `sentences[].id` are unique integers, monotonically increasing.
-   - Every `characterId` exists in the stage-1 roster.
-   - Every `chapterId` exists in the stage-1 chapters list.
-3. Write to `server/handoff/outbox/{manuscriptId}-stage2.json`.
-
-The server's chokidar watcher will pick it up and complete the analysis.
-
-## If validation fails
-
-`server/handoff/outbox/{manuscriptId}-stage2.errors.json` describes the
-problem. Fix and re-save the `.json`. Common pitfalls:
+Emit strict JSON. Validate that `sentences[].id` are unique integers,
+monotonically increasing; every `characterId` exists in the stage-1 roster; and
+every `chapterId` exists in the stage-1 chapters list. Common mistakes:
 
 - Skipping sentence ids or restarting at 1 per chapter.
 - Referring to a `characterId` that wasn't in stage 1.

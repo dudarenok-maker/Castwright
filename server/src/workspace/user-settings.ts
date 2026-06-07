@@ -528,8 +528,8 @@ export function getResolvedOllamaModel(): string {
 }
 
 /** Analyzer engine selector: cached settings → ANALYZER env → 'local'.
-    Defended against legacy values ('manual' was the old default and is
-    no longer routable) by coercing anything outside the schema to 'local'. */
+    Coerces anything outside the `local | gemini` schema to 'local', so a
+    stray legacy value in an old `.env` resolves safely instead of breaking. */
 export function getResolvedAnalysisEngine(): 'local' | 'gemini' {
   const c = cached;
   const raw = c?.analysisEngine ?? process.env.ANALYZER ?? 'local';
