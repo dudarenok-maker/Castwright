@@ -39,6 +39,7 @@ function seedBook(
       audioQa?: unknown;
     }>;
     audioFiles?: Array<{ slug: string; ext: string; bytes: number }>;
+    segmentFiles?: Array<{ slug: string; durationSec: number }>;
   },
 ): { bookId: string; bookDir: string } {
   const bookDir = join(workspaceRoot, 'books', author, SERIES, title);
@@ -65,6 +66,12 @@ function seedBook(
   );
   for (const f of opts.audioFiles ?? []) {
     writeFileSync(join(bookDir, 'audio', `${f.slug}.${f.ext}`), 'x'.repeat(f.bytes));
+  }
+  for (const s of opts.segmentFiles ?? []) {
+    writeFileSync(
+      join(bookDir, 'audio', `${s.slug}.segments.json`),
+      JSON.stringify({ durationSec: s.durationSec }),
+    );
   }
   return { bookId, bookDir };
 }
@@ -104,6 +111,9 @@ beforeAll(async () => {
       { id: 3, uuid: 'uuid-a3', slug: '03-three', title: 'Three', excluded: true },
     ],
     audioFiles: [{ slug: '01-one', ext: 'mp3', bytes: 4096 }],
+    // Segments file carries the authoritative PCM duration (250) — must win
+    // over the audioQa verdict's 100.
+    segmentFiles: [{ slug: '01-one', durationSec: 250 }],
   });
   b1Dir = seededB1.bookDir;
 
@@ -168,7 +178,7 @@ describe('GET /api/library/sync-manifest?bookId= — detail', () => {
     expect(c1.urlSuffix).toBe('audio.mp3');
     expect(c1.audioUrl).toBe(`/api/books/${b1}/chapters/1/audio.mp3`);
     expect(c1.fingerprint).toContain('4096');
-    expect(c1.durationSec).toBe(100);
+    expect(c1.durationSec).toBe(250); // segments-file duration wins over audioQa's 100
     expect(c1.lufs).toBe(-16);
 
     const c2 = res.body.chapters.find((c: { uuid: string }) => c.uuid === 'uuid-a2');
