@@ -46,9 +46,11 @@ class _PairingScreenState extends State<PairingScreen> {
         caFingerprint: _fingerprint.text.trim(),
       );
       final conn = await widget.service.pair(server);
-      await widget.store.save(conn.server);
+      final stamped =
+          conn.server.copyWith(pairedAt: DateTime.now().toIso8601String());
+      await widget.store.save(stamped);
       await widget.store.saveCaPem(conn.caPem);
-      if (mounted) Navigator.of(context).pop(conn.server);
+      if (mounted) Navigator.of(context).pop(stamped);
     } on PairingException catch (e) {
       setState(() => _error = e.message);
     } on FormatException catch (e) {

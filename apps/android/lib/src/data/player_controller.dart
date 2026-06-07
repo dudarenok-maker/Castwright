@@ -52,6 +52,7 @@ class PlayerController {
   String? _bookId;
   int _index = -1;
   double _speed = 1.0;
+  double _boostDb = 0;
   DateTime? _lastSave;
 
   /// Live playback duration of the loaded chapter (null until known).
@@ -62,6 +63,13 @@ class PlayerController {
   Future<void> setSpeed(double speed) {
     _speed = speed;
     return _engine.setSpeed(speed);
+  }
+
+  /// Loudness boost in dB above unity (0 = off), re-applied per chapter.
+  double get volumeBoostDb => _boostDb;
+  Future<void> setVolumeBoost(double db) {
+    _boostDb = db;
+    return _engine.setVolumeBoost(db);
   }
 
   /// Auto-advance to the next chapter when the current one ends.
@@ -110,6 +118,7 @@ class PlayerController {
     _index = index;
     await _engine.setFilePath(_playlist[index].path);
     if (_speed != 1.0) await _engine.setSpeed(_speed); // persist speed across chapters
+    if (_boostDb > 0) await _engine.setVolumeBoost(_boostDb); // persist boost too
     if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
     // Measure the autosave interval from load time, so we don't persist on the
     // very first position tick.

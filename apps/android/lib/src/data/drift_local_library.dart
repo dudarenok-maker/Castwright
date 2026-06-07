@@ -205,6 +205,14 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
     await _fs.deleteDir(_bookDir(bookId));
   }
 
+  /// Remove ALL downloaded books + their audio files (reclaims all storage).
+  /// Pairing + settings are untouched.
+  Future<void> clearAllBooks() async {
+    for (final b in await listBooks()) {
+      await evictBook(b.bookId);
+    }
+  }
+
   // --- app-4 store extensions ---------------------------------------------
 
   /// Per-book usage for the storage-eviction policy.

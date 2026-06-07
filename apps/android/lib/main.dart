@@ -205,7 +205,7 @@ class _HomePageState extends State<HomePage> {
     }
     return LibraryHomeScreen(
       runtime: _runtime!,
-      serverLabel: _paired!.url,
+      server: _paired!,
       onUnpair: _unpair,
     );
   }
