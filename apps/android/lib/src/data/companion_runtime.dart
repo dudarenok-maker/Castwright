@@ -13,6 +13,7 @@ import 'just_audio_engine.dart';
 import 'library_database.dart';
 import 'pairing_service.dart' show Connection;
 import 'player_controller.dart';
+import 'resume_sync_service.dart';
 import 'settings_store.dart';
 import 'sync_controller.dart';
 
@@ -30,6 +31,7 @@ class CompanionRuntime {
     this.thumbnails,
     this.settingsStore,
     this.settings,
+    this.resumeSync,
     this.audioHandler,
   );
 
@@ -39,6 +41,9 @@ class CompanionRuntime {
   final PlayerController player;
   final ThumbnailCache thumbnails;
   final SettingsStore settingsStore;
+
+  /// Two-way resume sync (app-6): push local position / pull the server's.
+  final ResumeSyncService resumeSync;
 
   /// Current device settings (mutable — updated via [updateSettings]).
   AppSettings settings;
@@ -85,6 +90,17 @@ class CompanionRuntime {
     final settings = await settingsStore.load();
     await player.setSpeed(settings.defaultSpeed);
     await player.setVolumeBoost(settings.volumeBoostDb);
+
+    final resumeSync = ResumeSyncService(
+      progressApi: api.listenProgressApi,
+      playbackStore: library,
+      chapterIdResolver: (bookId, uuid) async {
+        for (final c in await library.chaptersForBook(bookId)) {
+          if (c.uuid == uuid) return c.chapterId;
+        }
+        return null;
+      },
+    );
 
     // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
     // the live player + a library-backed browse tree.
@@ -134,7 +150,7 @@ class CompanionRuntime {
     );
 
     return CompanionRuntime._(api, library, sync, player, thumbnails,
-        settingsStore, settings, handler);
+        settingsStore, settings, resumeSync, handler);
   }
 
   /// Persist new settings and apply the playback-affecting ones immediately.
