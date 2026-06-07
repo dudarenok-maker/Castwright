@@ -62,8 +62,19 @@ function buildInfoConstants() {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const vitePort = Number(env.VITE_PORT ?? 5173);
-  const apiPort = Number(env.VITE_API_PORT ?? env.PORT ?? 8080);
+  // VITE_HTTPS=1 is set by both `npm run dev:lan` and start-app.ps1's LAN path,
+  // and it always coincides with the Node server running LAN HTTPS on :8443
+  // (LAN_HTTPS=1). It is the LAN signal Vite actually receives — LAN_HTTPS lives
+  // in server/.env, which loadEnv (root-scoped) never reads — so the proxy
+  // target keys off useHttps, not LAN_HTTPS.
   const useHttps = env.VITE_HTTPS === '1' || process.env.VITE_HTTPS === '1';
+  // In LAN HTTPS dev the server binds HTTPS on :8443, so the dev proxy must
+  // target https://…:8443, not the plain-HTTP :8080 default — otherwise every
+  // /api + /audio call from the Vite frontend hits a dead port. `secure: false`
+  // accepts the local mkcert/LAN cert on the loopback hop. Loopback dev
+  // (no VITE_HTTPS) keeps http://…:8080. VITE_API_PORT/PORT still override.
+  const apiPort = Number(env.VITE_API_PORT ?? env.PORT ?? (useHttps ? 8443 : 8080));
+  const apiTarget = `${useHttps ? 'https' : 'http'}://localhost:${apiPort}`;
   const plugins: PluginOption[] = [react()];
   if (useHttps) plugins.push(mkcert());
   return {
@@ -83,8 +94,8 @@ export default defineConfig(({ mode }) => {
       port: vitePort,
       open: !useHttps, // skip auto-open in LAN mode — user is on a mobile device
       proxy: {
-        '/api': { target: `http://localhost:${apiPort}`, changeOrigin: true },
-        '/audio': { target: `http://localhost:${apiPort}`, changeOrigin: true },
+        '/api': { target: apiTarget, changeOrigin: true, secure: false },
+        '/audio': { target: apiTarget, changeOrigin: true, secure: false },
       },
     },
     build: {
