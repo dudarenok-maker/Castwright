@@ -57,7 +57,7 @@ jobs:
           exit $fail
       - uses: actions/upload-artifact@v4
         with:
-          name: companion-release-apk
+          name: castwright-release-apk
           path: apps/android/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 

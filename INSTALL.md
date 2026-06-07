@@ -237,7 +237,7 @@ The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android t
 
 ## Android companion app
 
-The native Flutter **Audiobook Companion** pairs to the server over the LAN and delta-syncs only the chapters that changed, for offline playback with background / lock-screen / Bluetooth / Android-Auto controls. It's a separate Flutter build from this server zip, but **each [GitHub Release](https://github.com/dudarenok-maker/Audiobook-Generator/releases) attaches a ready-to-sideload `audiobook-companion-vX.Y.Z.apk`** (+ `.sha256`). To use it:
+The native Flutter **Castwright** pairs to the server over the LAN and delta-syncs only the chapters that changed, for offline playback with background / lock-screen / Bluetooth / Android-Auto controls. It's a separate Flutter build from this server zip, but **each [GitHub Release](https://github.com/dudarenok-maker/Audiobook-Generator/releases) attaches a ready-to-sideload `castwright-vX.Y.Z.apk`** (+ `.sha256`). To use it:
 
 1. Do the LAN-HTTPS setup above (mkcert + `npm run install:cert-mobile`).
 2. Set **both** in `server/.env`, then restart in LAN mode:

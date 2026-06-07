@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/home_shelf.dart';
+import 'package:castwright/src/domain/home_shelf.dart';
 
 ShelfBook sb(String id, {String? lastPlayedAt, String updatedAt = 't'}) =>
     ShelfBook(

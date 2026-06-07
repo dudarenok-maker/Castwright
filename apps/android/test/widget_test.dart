@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:audiobook_companion/main.dart';
-import 'package:audiobook_companion/src/data/pairing_store.dart';
-import 'package:audiobook_companion/src/domain/paired_server.dart';
+import 'package:castwright/main.dart';
+import 'package:castwright/src/data/pairing_store.dart';
+import 'package:castwright/src/domain/paired_server.dart';
 
 /// In-memory store so the home widget test runs without platform channels.
 class FakeStore implements PairingStore {
@@ -27,7 +27,7 @@ void main() {
     await tester.pumpWidget(AudiobookCompanionApp(store: FakeStore()));
     await tester.pumpAndSettle();
 
-    expect(find.text('Audiobook Companion'), findsWidgets);
+    expect(find.text('Castwright'), findsWidgets);
     expect(find.byKey(const Key('home-status')), findsOneWidget);
     expect(find.text('Not paired yet'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Pair a device'), findsOneWidget);

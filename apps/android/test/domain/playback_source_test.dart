@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/playback_source.dart';
+import 'package:castwright/src/domain/playback_source.dart';
 
 void main() {
   group('resolvePlaybackSource', () {

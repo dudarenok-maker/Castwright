@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/storage_policy.dart';
+import 'package:castwright/src/domain/storage_policy.dart';
 
 ChapterUsage ch(String uuid, int bytes, {bool finished = false}) =>
     ChapterUsage(uuid: uuid, bytes: bytes, finished: finished);
