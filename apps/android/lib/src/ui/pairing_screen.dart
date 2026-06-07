@@ -47,6 +47,7 @@ class _PairingScreenState extends State<PairingScreen> {
       );
       final conn = await widget.service.pair(server);
       await widget.store.save(conn.server);
+      await widget.store.saveCaPem(conn.caPem);
       if (mounted) Navigator.of(context).pop(conn.server);
     } on PairingException catch (e) {
       setState(() => _error = e.message);

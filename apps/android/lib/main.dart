@@ -8,7 +8,9 @@ import 'src/ui/library_home_screen.dart';
 import 'src/ui/pairing_screen.dart';
 
 /// Audiobook Companion — the native listening client (plan 188). app-1 shell +
-/// app-2 pairing + the app-3..14 library / sync / player wired on top.
+/// app-2 pairing + the app-3..14 library / sync / player wired on top, with
+/// OFFLINE launch (the runtime is rebuilt from the stored cert — no network
+/// needed to open the downloaded library).
 void main() {
   runApp(AudiobookCompanionApp(store: SecurePairingStore()));
 }
@@ -49,31 +51,61 @@ class _HomePageState extends State<HomePage> {
   PairedServer? _paired;
   CompanionRuntime? _runtime;
   bool _loading = true;
-  String? _connError;
+
+  /// Legacy pairing with no stored cert — needs one online reconnect to
+  /// capture it before offline mode works.
+  String? _bootstrapError;
 
   @override
   void initState() {
     super.initState();
-    widget.store.load().then((p) async {
-      if (!mounted) return;
-      if (p == null) {
-        setState(() => _loading = false);
-        return;
-      }
-      _paired = p;
-      await _establish();
-    });
+    _boot();
   }
 
-  /// Re-establish the cert-pinned connection from stored credentials (re-fetch
-  /// + verify the CA, re-probe the token), then build the wired runtime.
-  Future<void> _establish() async {
+  Future<void> _boot() async {
+    final server = await widget.store.load();
+    if (!mounted) return;
+    if (server == null) {
+      setState(() => _loading = false);
+      return;
+    }
+    _paired = server;
+    final caPem = await widget.store.loadCaPem();
+    if (caPem == null || caPem.isEmpty) {
+      // Pre-offline pairing: must reconnect once to capture the cert.
+      await _bootstrapFromServer();
+      return;
+    }
+    // Offline-capable: rebuild the pinned runtime from stored creds, no network.
+    try {
+      final runtime = await CompanionRuntime.forConnection(
+          Connection(server: server, caPem: caPem));
+      if (mounted) {
+        setState(() {
+          _runtime = runtime;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _bootstrapError = '$e';
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  /// One online round-trip to fetch + verify + persist the cert for a legacy
+  /// pairing, then build the runtime.
+  Future<void> _bootstrapFromServer() async {
     setState(() {
       _loading = true;
-      _connError = null;
+      _bootstrapError = null;
     });
     try {
       final conn = await widget.service.pair(_paired!);
+      await widget.store.saveCaPem(conn.caPem);
       final runtime = await CompanionRuntime.forConnection(conn);
       if (mounted) {
         setState(() {
@@ -84,7 +116,7 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _connError = '$e';
+          _bootstrapError = '$e';
           _loading = false;
         });
       }
@@ -99,7 +131,7 @@ class _HomePageState extends State<HomePage> {
     );
     if (result != null && mounted) {
       _paired = result;
-      await _establish();
+      await _boot();
     }
   }
 
@@ -110,7 +142,7 @@ class _HomePageState extends State<HomePage> {
       setState(() {
         _runtime = null;
         _paired = null;
-        _connError = null;
+        _bootstrapError = null;
       });
     }
   }
@@ -137,6 +169,7 @@ class _HomePageState extends State<HomePage> {
       );
     }
     if (_runtime == null) {
+      // Legacy pairing, currently offline → can't open until we capture the cert.
       return Scaffold(
         appBar: AppBar(title: const Text('Audiobook Companion')),
         body: Center(
@@ -144,15 +177,25 @@ class _HomePageState extends State<HomePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text('Paired with ${_paired!.url}', key: const Key('home-status')),
-              const SizedBox(height: 8),
-              if (_connError != null)
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text("Couldn't reach the server:\n$_connError",
-                      textAlign: TextAlign.center),
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  'Connect to the server once to enable offline playback.',
+                  textAlign: TextAlign.center,
                 ),
+              ),
+              if (_bootstrapError != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Text(_bootstrapError!,
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(color: Theme.of(context).colorScheme.error)),
+                ),
+              const SizedBox(height: 12),
               Wrap(spacing: 12, children: [
-                FilledButton(onPressed: _establish, child: const Text('Retry')),
+                FilledButton(
+                    onPressed: _bootstrapFromServer, child: const Text('Connect')),
                 OutlinedButton(onPressed: _unpair, child: const Text('Unpair')),
               ]),
             ],
