@@ -95,6 +95,21 @@ class ApiClient {
     return out;
   }
 
+  /// Per-chapter waveform peaks (240 normalized RMS bins) from the existing
+  /// chapter-audio meta endpoint. Empty list when absent/unreachable.
+  Future<List<double>> getChapterPeaks(String bookId, int chapterId) async {
+    try {
+      final j = await getJson('/api/books/$bookId/chapters/$chapterId/audio');
+      final raw = j['peaks'];
+      if (raw is List) {
+        return [for (final e in raw) (e as num).toDouble()];
+      }
+    } on ApiException {
+      /* no audio meta / offline → no waveform */
+    }
+    return const [];
+  }
+
   /// GET the server resume bookmark; null when the server has none (404).
   Future<RemoteProgress?> getListenProgress(String bookId) async {
     try {
