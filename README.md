@@ -89,6 +89,7 @@ e2e/build), `npm run test:e2e` (Playwright only).
 - **Themes (stable in v1.3.0)** — Light / Dark / System toggle with an account-managed first-visit default. Full dark-mode coverage across white / amber / red / rose ladders + bespoke `floating-pill-inverse` utility for the cast-view selection bar.
 - **Mobile + tablet (v1.4.0)** — every view re-laid out across three Tailwind viewport tiers (`<640px` phone, `640–1024px` tablet, `≥1024px` desktop); LAN HTTPS via `mkcert` (`npm run install:cert-mobile` prints LAN URL + QR + per-OS root-cert install steps; `npm run dev:lan` / `start:lan` brings Vite + Node up on `https://0.0.0.0:5173`/`:8443`); touch-equivalence for every drag/hover affordance (tap-to-assign voice pill, PointerEvents on manuscript paragraph boundaries, `coarse-pointer:` Tailwind variant for hover-reveal labels); 44×44 px touch targets enforced.
 - **Frontend performance (v1.4.0)** — `useWindowVirtualizer` from `@tanstack/react-virtual` wraps the manuscript segment list above 60 segments, and the confirm-cast picker + listen chapter list above 40 rows (short books stay on the flat-render path). Broadcast-middleware shallow-diffs snapshots, `useAppSelectorShallow` applied at five large-slice sites, route-level `React.lazy` code-split. Main bundle 410 kB → 345 kB (gzip 108 kB → 91 kB).
+- **Android companion app** — a native **Flutter** listening companion (`apps/android/`) that pairs to the server over LAN HTTPS, **delta-syncs only the chapters that changed** (per-chapter `…/audio` files, not whole-book re-exports), and plays offline with background / lock-screen / Bluetooth / Android-Auto controls + two-way resume sync. Pairing is cryptographically auto-verified — the app fetches `/cert/root.crt` and pins the CA itself, so **no OS root-cert install is needed on the phone**. See [Companion app (Android)](#companion-app-android) below and [`apps/android/README.md`](apps/android/README.md). The full architecture + delivery log is [`docs/features/188-android-companion-app.md`](docs/features/188-android-companion-app.md).
 
 ## Layout
 
@@ -134,6 +135,10 @@ server/               Node + Express API (TypeScript)
   tts-sidecar/        Python FastAPI TTS sidecar (Coqui + Kokoro)
     scripts/          install-kokoro.{sh,ps1} + install-coqui.{sh,ps1} (v1.3.0)
   handoff/            Manual-analyzer inbox/outbox (when ANALYZER=manual)
+apps/android/         Flutter companion app (pkg audiobook_companion) — domain
+                      (pure logic) / data (cert-pinned client, drift store, sync
+                      engine, player) / ui; iOS target lives here too. See
+                      apps/android/README.md + docs/features/188-…md
 e2e/                  Playwright specs against Vite in mock mode (chromium-only
                       pre-push); responsive/* runs against mobile-chrome (Pixel 7)
                       and tablet-chrome (iPad Pro 11) via npm run test:e2e:mobile
@@ -179,6 +184,16 @@ Copy `server/.env.example` as a starting point. Notable knobs:
   `false` to opt out per server install. Voice samples deliberately
   skip the pass.
 - `WORKSPACE_DIR` — where per-book `.audiobook/` folders live.
+- `LAN_HTTPS` — `1` flips the listener from HTTP `:8080` (loopback) to
+  mkcert-backed HTTPS `:8443` bound on all interfaces (mobile/tablet web access
+  and the Android companion). Off by default; `npm run start:lan` sets it.
+  Requires the LAN cert (`npm run install:cert-mobile`).
+- `LAN_AUTH_TOKEN` — a shared secret that, together with `LAN_HTTPS=1`, turns on
+  the LAN access guard on `/api` + `/workspace` (loopback always bypasses;
+  `/cert/root.crt` + `/audio` stay open). **Required for the companion** — it's
+  the pairing token, surfaced in the `GET /api/export/lan` pairing payload. Per-
+  device, individually-revocable tokens layer on top via `GET/POST/DELETE
+  /api/devices` (`srv-33`).
 
 Frontend reads `VITE_USE_MOCKS` from `.env.development`. Mock mode
 round-trips against an in-memory store and is what the Playwright e2e
@@ -193,6 +208,48 @@ suite runs against.
 5. Open the printed LAN URL on the device — lock icon, no warning.
 
 E2E across phone (Pixel 7) and tablet (iPad Pro 11) viewports is opt-in via `npm run test:e2e:mobile` (~10–15 min); the pre-push gate (`npm run test:e2e`) is chromium-only.
+
+## Companion app (Android)
+
+The native Flutter companion lives in [`apps/android/`](apps/android/README.md).
+It pairs to a server running in **LAN HTTPS mode with an access token** and then
+delta-syncs + plays offline. The web UI's LAN setup above is shared; the
+companion adds an **access token** (the pairing secret) on top.
+
+**Server side — bring it up for pairing:**
+
+1. One-time LAN cert (same as mobile web): install `mkcert` (e.g. `winget install
+   FiloSottile.mkcert` on Windows), then `npm run install:cert-mobile` (runs
+   `mkcert -install` and writes `.run/certs/`).
+2. In `server/.env` set both:
+
+   ```
+   LAN_HTTPS=1
+   LAN_AUTH_TOKEN=<a-strong-secret>
+   ```
+
+3. Start in LAN mode: `npm run start:lan` (binds `https://0.0.0.0:8443`). With
+   `LAN_HTTPS=1` set, the server **hard-exits if the LAN cert is missing** — run
+   step 1 first.
+4. The pairing values come from `GET /api/export/lan` →
+   `{ urls, port, protocol: "https", token, caFingerprint }`.
+
+**Phone/emulator side — pair:** open the app → **Pair a device** → scan the
+pairing QR, or enter **Server URL** (`https://<lan-ip>:8443`), **access token**,
+and **CA fingerprint (SHA-256)** manually. The app fetches `/cert/root.crt`,
+verifies its SHA-256 against the fingerprint, and pins the CA in its own TLS
+context — **no OS root-cert install on the phone** (unlike the web UI, which
+needs the root CA trusted in the device browser).
+
+**Per-device tokens (optional, `srv-33`):** `POST /api/devices` mints an
+individually-revocable token; `GET /api/devices` lists them; `DELETE
+/api/devices/:id` revokes one. Layered on the shared secret — the shared token
+keeps working.
+
+Build/run/test the app itself per [`apps/android/README.md`](apps/android/README.md).
+The MVP installs via the debug APK; a signed release APK (`app-11`) is the proper
+sideload channel. _Distribution note: the companion is **not** part of the
+server release zip — it's a separate Flutter build._
 
 ## Parallel sessions (developer-only)
 
