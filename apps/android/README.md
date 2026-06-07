@@ -1,17 +1,93 @@
-# audiobook_companion
+# Audiobook Companion (Android)
 
-A new Flutter project.
+`audiobook_companion` — a native **Flutter** listening companion for the
+Audiobook Generator. It pairs to your server over the home LAN (HTTPS,
+cert-pinned), **delta-syncs only the chapters that changed**, and plays them
+offline with background / lock-screen / Bluetooth controls. Android-first; the
+codebase is iOS-ready (one Flutter project, the iOS target lives here too).
 
-## Getting Started
+Full architecture, the item-by-item delivery log, and the v1 definition-of-done
+live in the umbrella plan: [`docs/features/188-android-companion-app.md`](../../docs/features/188-android-companion-app.md).
 
-This project is a starting point for a Flutter application.
+## What it does
 
-A few resources to get you started if this is your first Flutter project:
+- **Delta sync** — consumes the server's two-level sync-manifest
+  (`GET /api/library/sync-manifest`) and re-pulls only chapters whose audio
+  changed (keyed by a stable per-chapter `uuid`, not the positional id), with
+  resumable range downloads, integrity checks, and atomic swap.
+- **Offline store** — drift/SQLite per-chapter audio + metadata + cover
+  thumbnails, with storage accounting and auto-eviction (delete-finished /
+  least-recently-listened).
+- **Native player** — `just_audio` + `audio_service`: background playback,
+  lock-screen + Bluetooth controls, per-book resume, ~10 s autosave, sleep
+  timer; media-key skip defaults to ±30/±15 s seek (toggle to chapter-skip).
+- **Two-way resume** — pushes your listening position back to the server,
+  last-write-wins by listen time (never clobbers a newer position).
+- **Browse / home** — author → series → book browse + a "Continue listening"
+  shelf with seamless multi-book switching.
+- **In-car** — Android Auto + CarPlay media-browser tree.
+- **LAN streaming (opt-in)** — start an undownloaded chapter instantly at home.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Prerequisites
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- **Flutter** 3.44.1+ (stable) and the **Android SDK** (cmdline-tools +
+  platform-tools; `adb` on PATH). Confirm with `flutter doctor`.
+- An Android device or emulator (the project's AVD is `Pixel_10_Pro`).
+
+## Build / test / run (from `apps/android/`)
+
+```sh
+flutter pub get
+flutter analyze        # zero-tolerance — even info lints fail CI
+flutter test           # pure Dart VM unit + widget tests (no device needed)
+flutter build apk --debug          # build/app/outputs/flutter-apk/app-debug.apk
+```
+
+Run on a device/emulator:
+
+```sh
+flutter emulators --launch Pixel_10_Pro   # or plug in a phone
+flutter run                                # or: adb install -r build/app/outputs/flutter-apk/app-debug.apk
+```
+
+> On a 16 KB-page-size emulator image (e.g. recent Pixel images) Android shows a
+> one-time "not 16 KB compatible" notice for the **debug** build's native libs
+> and runs them in page-size compatibility mode — it's not a crash. It doesn't
+> appear on typical 4 KB-page phones; proper 16 KB alignment is a release/Play
+> concern.
+
+A signed release APK for sideloading: see **`app-11`** in the plan
+(`flutter build apk --release` — falls back to debug signing unless
+`android/key.properties` is present; copy `android/key.properties.example`).
+
+## Pairing to your server
+
+The companion needs the server running in **LAN HTTPS mode with an access
+token** (see the root [`README.md`](../../README.md#companion-app-android) and
+[`INSTALL.md`](../../INSTALL.md)). Then in the app: **Pair a device** → scan the
+pairing QR, or enter the **Server URL** (`https://<lan-ip>:8443`), **access
+token**, and **CA fingerprint (SHA-256)** by hand. The app fetches
+`/cert/root.crt`, verifies its SHA-256 against the scanned/entered fingerprint,
+and pins the CA itself — **no OS root-cert install is needed on the phone**
+(that's the app-managed-TLS-trust design).
+
+## Architecture (where things live)
+
+- `lib/src/domain/` — pure models + logic (sync manifest/plan, storage policy,
+  resume reconcile, skip behaviour, library tree, home shelf, media-browse tree,
+  app settings, sleep timer) — fully unit-tested, no IO.
+- `lib/src/data/` — adapters over injectable IO seams: `api_client` (cert-pinned
+  HTTP), `sync_engine` + `chapter_downloader` + `file_store` + `local_library`
+  (drift), `player_controller` + `just_audio_engine` + `companion_audio_handler`,
+  `resume_sync_service`, `settings_store`, `network_info`, `cover_thumbnails`.
+- `lib/src/ui/` — screens (pairing, QR scan, library, settings, home).
+
+The discipline throughout: a **pure, unit-tested brain over injectable IO**, with
+native plugins (just_audio / audio_service / drift / connectivity / secure
+storage / mobile_scanner) at the thin, device-tested edge.
+
+## CI
+
+`.github/workflows/app.yml` (path-filtered to `apps/android/**`) runs
+`flutter analyze` + `flutter test` + a debug **and** release APK build on Ubuntu,
+plus an unsigned iOS compile on macOS to keep the codebase iOS-ready.
