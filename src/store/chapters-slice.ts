@@ -304,6 +304,10 @@ export const chaptersSlice = createSlice({
            current ui.ttsModelKey. Absent on unrendered chapters; the
            server backfills it from segments.json for legacy chapters. */
             audioModelKey: c.audioModelKey,
+            /* Per-engine voice-count breakdown (false-drift fix). One key on a
+               uniform chapter, the full map on a mixed-engine chapter — drives
+               the "Kokoro (1), Qwen (6)" caption. */
+            audioEngines: c.audioEngines,
             audioRenderedAt: c.audioRenderedAt,
             /* Plan 77 — per-chapter EBU R128 loudness sidecar (plan 71)
            hydrated from the book-state response. `null` entry = sidecar
@@ -433,6 +437,9 @@ export const chaptersSlice = createSlice({
            is tolerated (older server before this field landed) — the
            chapter stays at its previously-hydrated value. */
         if (ev.audioModelKey) ch.audioModelKey = ev.audioModelKey;
+        /* Carry the per-engine breakdown so a mixed-engine chapter's caption
+           (or a corrected uniform stamp) is right the instant Done flips. */
+        if (ev.audioEngines) ch.audioEngines = ev.audioEngines;
         /* srv-27 — stamp the advisory QA verdict so the "Suspect" badge can
            appear the moment the Done pill flips, without a state.json reload.
            Absent on an older server → leave the hydrated value. */
