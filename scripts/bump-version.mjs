@@ -108,6 +108,38 @@ export function writeSidecarVersion(repoRootDir, version) {
   writeFileSync(p, content.replace(SIDECAR_VERSION_RE, `$1"${version}"`), 'utf8');
 }
 
+/* plan 188 — the Flutter companion (apps/android/pubspec.yaml) carries
+   `version: X.Y.Z+BUILD`. Kept in lockstep with the package.jsons so the
+   installable APK / iOS build reports the same marketing version; the build
+   number is derived monotonically from the semver so store uploads never
+   regress. */
+export const PUBSPEC_VERSION_RE = /^(version:\s*)(\S+)/m;
+
+export function pubspecPath(repoRootDir) {
+  return resolve(repoRootDir, 'apps', 'android', 'pubspec.yaml');
+}
+
+/** The marketing X.Y.Z (drops the `+BUILD`), or null if the file is absent. */
+export function readPubspecVersion(repoRootDir) {
+  const p = pubspecPath(repoRootDir);
+  if (!existsSync(p)) return null;
+  const m = PUBSPEC_VERSION_RE.exec(readFileSync(p, 'utf8'));
+  return m ? m[2].split('+')[0] : null;
+}
+
+/** Deterministic, monotonic build number from a semver: M*10000 + m*100 + p. */
+export function pubspecBuildNumber(version) {
+  const [maj, min, pat] = version.split('.').map((n) => parseInt(n, 10) || 0);
+  return maj * 10000 + min * 100 + pat;
+}
+
+export function writePubspecVersion(repoRootDir, version) {
+  const p = pubspecPath(repoRootDir);
+  const content = readFileSync(p, 'utf8');
+  const next = `${version}+${pubspecBuildNumber(version)}`;
+  writeFileSync(p, content.replace(PUBSPEC_VERSION_RE, `$1${next}`), 'utf8');
+}
+
 export function semverBump(current, level) {
   const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(current);
   if (!m) die(`Current version "${current}" is not strict semver MAJOR.MINOR.PATCH.`);
@@ -327,6 +359,14 @@ async function main() {
         `Manually align them before running bump-version.`,
     );
   }
+  // plan 188 — the companion pubspec marketing version must agree too.
+  const pubspecVersion = readPubspecVersion(repoRoot);
+  if (pubspecVersion !== null && pubspecVersion !== rootVersion) {
+    die(
+      `Lockstep invariant violated: root=${rootVersion} pubspec(apps/android)=${pubspecVersion}. ` +
+        `Manually align apps/android/pubspec.yaml before running bump-version.`,
+    );
+  }
 
   const newVersion = semverBump(rootVersion, args.level);
   const newTag = `v${newVersion}`;
@@ -406,6 +446,11 @@ async function main() {
     info('[STEP] rewrite sidecar version.py ...');
     writeSidecarVersion(repoRoot, newVersion);
   }
+  // plan 188 — bump the companion pubspec (X.Y.Z + monotonic build number).
+  if (existsSync(pubspecPath(repoRoot))) {
+    info('[STEP] rewrite apps/android/pubspec.yaml version ...');
+    writePubspecVersion(repoRoot, newVersion);
+  }
 
   // Stage + commit. The narrative doc is only staged when it exists AND
   // code-stats actually changed it (git add of an unchanged/absent path is a
@@ -419,6 +464,9 @@ async function main() {
   ];
   if (existsSync(sidecarVersionPath(repoRoot))) {
     addPaths.push('server/tts-sidecar/version.py');
+  }
+  if (existsSync(pubspecPath(repoRoot))) {
+    addPaths.push('apps/android/pubspec.yaml');
   }
   if (existsSync(resolve(repoRoot, 'docs', 'project-narrative.md'))) {
     addPaths.push('docs/project-narrative.md');
