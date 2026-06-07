@@ -52,7 +52,10 @@ Design spec: `docs/superpowers/specs/2026-06-08-asr-verifying-phase-design.md`.
 - The `chapter_verifying` slice handler mirrors `chapter_assembling`
   (`src/store/chapters-slice.ts:407`): sets `phase`, forces `state='in_progress'`,
   carries counters, returns early.
-- ASR remains OFF unless `SEG_ASR_ENABLED` — this surface is inert by default.
+- The new code path is gated on the existing `asr` options (strict no-op when
+  ASR is disabled). **ASR is ON in the current production deployment**
+  (`server/.env`: `SEG_ASR_ENABLED=1`, `SEG_ASR_SAMPLE_EVERY=1`, `ASR_DEVICE=cuda`),
+  so the verifying phase shows on every chapter — this is the live symptom fixed.
 
 ## Test plan
 
