@@ -410,6 +410,12 @@ describe('DesignPill', () => {
       'Designed · 6 · 1 failed · 2 skipped',
     );
   });
+
+  it('DesignPill shows the phase for a single design', () => {
+    render(<DesignPill data={{ state: 'running', done: 0, total: 1, percent: 30, skipped: 0, failureCount: 0, currentName: 'Aria', phase: 'rendering', onClick: () => {} }} />);
+    expect(screen.getByText(/Aria/)).toBeInTheDocument();
+    expect(screen.getByText(/rendering audition/i)).toBeInTheDocument();
+  });
 });
 
 /* AnalysisPill / GenerationPill now live inside the Status modal. They no
