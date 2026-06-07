@@ -62,7 +62,11 @@ class PlayerController {
         _autosaveInterval = saveInterval {
     skipBehavior_ = skipBehavior;
     _sub = _engine.positionStream.listen(_onTick);
-    _completionSub = _engine.completionStream.listen((_) => _advance());
+    _completionSub = _engine.completionStream.listen((_) {
+      final finished = currentChapterUuid;
+      if (finished != null) _chapterCompleted.add(finished);
+      _advance();
+    });
   }
 
   final AudioEngine _engine;
@@ -81,6 +85,11 @@ class PlayerController {
   StreamSubscription<void>? _completionSub;
   final StreamController<NowPlaying?> _nowPlaying =
       StreamController<NowPlaying?>.broadcast();
+
+  /// Emits a chapter's `uuid` when it plays to its end (app-4 finished-tracking).
+  final StreamController<String> _chapterCompleted =
+      StreamController<String>.broadcast();
+  Stream<String> get chapterCompletedStream => _chapterCompleted.stream;
   List<PlayableChapter> _playlist = const [];
   String? _bookId;
   String _bookTitle = '';
@@ -247,6 +256,7 @@ class PlayerController {
     await _sub?.cancel();
     await _completionSub?.cancel();
     await _nowPlaying.close();
+    await _chapterCompleted.close();
     await _engine.dispose();
   }
 }
