@@ -282,4 +282,17 @@ describe('single-design mutual exclusion', () => {
     expect(res.status).toBe(409);
     designLock.clearDesignBusy(bookDir);
   });
+
+  it('bulk design 409s while a single voice design is in progress', async () => {
+    designLock.markDesignBusy(bookDir);
+    try {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cast/design`)
+        .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+      expect(res.status).toBe(409);
+      expect(res.body.error).toMatch(/single voice design/i);
+    } finally {
+      designLock.clearDesignBusy(bookDir);
+    }
+  });
 });
