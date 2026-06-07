@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
 import '../data/player_controller.dart';
+import '../domain/listen_progress.dart';
 import '../domain/sync_manifest.dart';
 
 /// Player surface: a chapter picker + transport controls over the
@@ -112,6 +113,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   key: Key('chapter-${c.uuid}'),
                   leading: CircleAvatar(child: Text('${c.id}')),
                   title: Text(c.title.isEmpty ? 'Chapter ${c.id}' : c.title),
+                  subtitle: c.durationSec != null
+                      ? Text(formatDuration(c.durationSec))
+                      : null,
                   trailing: current
                       ? Icon(_playing ? Icons.volume_up : Icons.pause,
                           color: Theme.of(context).colorScheme.primary)
