@@ -21,6 +21,7 @@ import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate
 import { ensureChapterUuids } from './chapter-uuid.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { formatDuration } from '../audio/format-duration.js';
+import { engineBreakdownFromSnapshots } from '../audio/engine-breakdown.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 
 export type LibraryBookStatus =
@@ -71,6 +72,12 @@ export interface BookStateJson {
         engine than the project's current `ui.ttsModelKey`. Optional so
         unrendered chapters and very old state.json files load cleanly. */
     audioModelKey?: string;
+    /** Distinct speaking characters per TTS engine they ACTUALLY rendered in
+        (per-character routing, plan 108). Stamped on render and backfilled
+        from segments `characterSnapshots` on scan. Drives the mixed-engine
+        "Kokoro (1), Qwen (6)" caption; for a uniform chapter it has one key
+        matching `audioModelKey`'s engine. Optional for legacy/unrendered. */
+    audioEngines?: Record<string, number>;
     /** ISO timestamp when the audio was rendered. Mirrors segments file's
         `synthesizedAt`. Used as a tie-breaker for cast-drift detection
         (was the cast confirmed before or after the audio was made?). */
@@ -286,6 +293,9 @@ interface SegmentsJsonForScan {
   durationSec?: number;
   modelKey?: string;
   synthesizedAt?: string;
+  /** Per-character render snapshots — source for the `audioEngines` breakdown
+      backfill on chapters that pre-date that field (false-drift fix). */
+  characterSnapshots?: Record<string, { voiceEngine?: string; renderedFallbackEngine?: string }>;
 }
 
 function formatRuntime(totalSec: number): string {
@@ -762,12 +772,20 @@ export async function backfillAudioModelKeysFromSegments(
         typeof meta.durationSec === 'number' &&
         Number.isFinite(meta.durationSec) &&
         meta.durationSec > 0;
-      if (needsModelKey || needsRenderedAt || needsDuration) {
+      /* Engine breakdown backfill (false-drift fix). Recompute from the render
+         snapshots so a legacy chapter gains the mixed-engine detail. New field,
+         so a simple presence gate — never overwrites an existing breakdown. */
+      const breakdown = meta.characterSnapshots
+        ? engineBreakdownFromSnapshots(meta.characterSnapshots)
+        : {};
+      const needsEngines = !ch.audioEngines && Object.keys(breakdown).length > 0;
+      if (needsModelKey || needsRenderedAt || needsDuration || needsEngines) {
         next[i] = {
           ...ch,
           ...(needsModelKey ? { audioModelKey: meta.modelKey } : {}),
           ...(needsRenderedAt ? { audioRenderedAt: meta.synthesizedAt } : {}),
           ...(needsDuration ? { duration: formatDuration(meta.durationSec as number) } : {}),
+          ...(needsEngines ? { audioEngines: breakdown } : {}),
         };
         backfillNeeded = true;
       }

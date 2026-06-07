@@ -995,6 +995,31 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     expect(screen.getByText(/1 chapter generated with a different engine/i)).toBeTruthy();
   });
 
+  it('shows a per-engine voice-count caption (not a drift warning) for a mixed-engine chapter', () => {
+    /* False-drift fix: a chapter whose voices span engines (narrator on
+       Kokoro + dialogue on Qwen) is intentional, not drift. Show the
+       breakdown instead of the amber "Generated with X" warning, even when
+       its stamped audioModelKey differs from the active engine. */
+    const mixed: Chapter = {
+      ...chapter1,
+      audioModelKey: 'kokoro-v1',
+      audioEngines: { kokoro: 1, qwen: 6 },
+    };
+    renderWithChapters([mixed, chapter2], 'coqui-xtts-v2');
+    expect(screen.getByText(/Kokoro \(1\), Qwen \(6\)/)).toBeTruthy();
+    expect(screen.queryByText(/Generated with .* · current engine is/i)).toBeNull();
+  });
+
+  it('a mixed-engine chapter does not contribute to the top-of-view drift banner', () => {
+    const mixed: Chapter = {
+      ...chapter1,
+      audioModelKey: 'kokoro-v1',
+      audioEngines: { kokoro: 1, qwen: 6 },
+    };
+    renderWithChapters([mixed, chapter2], 'coqui-xtts-v2');
+    expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+  });
+
   it('chapters with no audioModelKey stamp (legacy / never-rendered) do not contribute drift signal', () => {
     /* Unstamped done chapter: silent. The opportunistic backfill runs
        on the server; until it lands we don't nag the user. */

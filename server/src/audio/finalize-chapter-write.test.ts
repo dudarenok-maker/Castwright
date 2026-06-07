@@ -122,3 +122,57 @@ describe('finalizeChapterAudioWrite onEncoded', () => {
     expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
   });
 });
+
+describe('finalizeChapterAudioWrite engine stamp (false-drift fix)', () => {
+  const readChapter = async () => {
+    const { readJson } = await import('../workspace/state-io.js');
+    const state = await readJson<{ chapters: Array<Record<string, unknown>> }>(
+      join(bookDir, '.audiobook', 'state.json'),
+    );
+    return state!.chapters.find((c) => c.id === 1)!;
+  };
+
+  it('stamps the ACTUAL rendered engine, not the request default, for a uniform chapter', async () => {
+    // Narrator-only chapter whose narrator renders on Qwen (per-character
+    // engine), regenerated while the project default + request is Kokoro.
+    const pcm = tone(1.0, 12000);
+    const { audioModelKey } = await finalizeChapterAudioWrite({
+      ...baseInput(),
+      pcm,
+      segments: [
+        { groupIndex: 0, characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+      ],
+      cast: [{ id: 'narrator', name: 'Narrator', gender: 'neutral', attributes: [], ttsEngine: 'qwen' }],
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+    });
+
+    expect(audioModelKey).toBe('qwen3-tts-0.6b');
+    const ch = await readChapter();
+    expect(ch.audioModelKey).toBe('qwen3-tts-0.6b');
+    expect(ch.audioEngines).toEqual({ qwen: 1 });
+  });
+
+  it('records the per-engine breakdown and keeps the request key for a mixed chapter', async () => {
+    const pcm = tone(1.0, 12000);
+    const { audioModelKey } = await finalizeChapterAudioWrite({
+      ...baseInput(),
+      pcm,
+      segments: [
+        { groupIndex: 0, characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 0.5 },
+        { groupIndex: 1, characterId: 'sophie', sentenceIds: [2], startSec: 0.5, endSec: 1.0 },
+      ],
+      cast: [
+        { id: 'narrator', name: 'Narrator', gender: 'neutral', attributes: [] },
+        { id: 'sophie', name: 'Sophie', gender: 'female', attributes: [], ttsEngine: 'qwen' },
+      ],
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+    });
+
+    expect(audioModelKey).toBe('kokoro-v1');
+    const ch = await readChapter();
+    expect(ch.audioModelKey).toBe('kokoro-v1');
+    expect(ch.audioEngines).toEqual({ kokoro: 1, qwen: 1 });
+  });
+});

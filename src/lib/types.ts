@@ -252,6 +252,12 @@ export interface BookStateJson {
         type (`server/src/workspace/scan.ts`). Drives the engine-drift
         badge per plan 35. */
     audioModelKey?: TtsModelKey;
+    /** Distinct speaking characters per TTS engine they rendered in
+        (per-character routing, plan 108). One key on a uniform chapter;
+        the full breakdown on a mixed-engine chapter, which the Generation
+        view shows as a "Kokoro (1), Qwen (6)" caption. Mirror of the
+        server's BookStateJson type. */
+    audioEngines?: Partial<Record<TtsEngine, number>>;
     /** ISO timestamp when the audio was synthesised; mirrors the
         segments file's `synthesizedAt`. */
     audioRenderedAt?: string;
