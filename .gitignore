@@ -19,6 +19,8 @@ RELEASE_NOTES.md
 *.swp
 .claude/
 .claude-*
+# Superpowers brainstorming visual-companion mockups (local-only scratch)
+.superpowers/
 
 # Logs
 *.log

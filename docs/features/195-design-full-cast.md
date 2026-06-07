@@ -72,7 +72,8 @@ book and dispatches `resubscribe` when a job is live.
 
 ## Ship notes
 
-- Shipped: {{date}} · commit {{sha}}
+- Shipped: 2026-06-07 · commit `7f0d5f4b` (merge `e65961ab`, PR #637). Plan stays `active` —
+  it flips to `stable` once the live-GPU acceptance below is signed off.
 - **Live-GPU acceptance owed** (needs a Qwen project with weights + a Gemini key for persona-less
   chars): pill ticks + survives navigation; **reload mid-run resumes** the pill; rows flip; terminal
   "Designed N · M failed · K skipped" summary; series propagation to a sibling book; VRAM headroom
