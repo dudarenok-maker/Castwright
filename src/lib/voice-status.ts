@@ -162,10 +162,17 @@ export function statusFilterKeys(
   c: Character,
   voice: Voice | undefined,
   effectiveEngine: TtsEngine,
+  /** fs-34 — the character's in-use non-neutral emotions
+      (`usedEmotionsByCharacter(...).get(c.id)`). When provided, a Qwen-effective
+      character with ≥1 in-use emotion lacking a designed variant also matches
+      the "Needs variants" chip. Optional so existing callers keep compiling. */
+  usedEmotions?: Set<string>,
 ): string[] {
   const { lifecycle, reused, hasEmotionVariants } = resolveVoiceStatus(c, voice, effectiveEngine);
   const keys = [lifecycle?.label ?? 'Unset'];
   if (reused) keys.push('Reused');
   if (hasEmotionVariants) keys.push('Variants');
+  const isQwen = effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen';
+  if (isQwen && countMissingVariants(c, usedEmotions) > 0) keys.push('Needs variants');
   return keys;
 }
