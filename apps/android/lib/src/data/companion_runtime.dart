@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../domain/app_settings.dart';
 import '../domain/media_browse_tree.dart';
 import '../domain/sleep_timer.dart';
+import '../domain/storage_policy.dart';
 import 'api_client.dart';
 import 'auto_sync_service.dart';
 import 'chapter_downloader.dart';
@@ -40,7 +41,7 @@ class CompanionRuntime {
     this.resumeSync,
     this.sleepTimer,
     this.audioHandler,
-    this._connectivitySub,
+    this._subs,
   );
 
   final ApiClient api;
@@ -56,8 +57,8 @@ class CompanionRuntime {
   /// Bedtime sleep timer (app-13) — pauses the player on expire.
   final SleepTimer sleepTimer;
 
-  /// app-8: connectivity listener that triggers auto-sync on reconnect.
-  final StreamSubscription<Object?>? _connectivitySub;
+  /// Background stream subscriptions (app-8 connectivity, app-4 finished-track).
+  final List<StreamSubscription<Object?>> _subs;
 
   /// Current device settings (mutable — updated via [updateSettings]).
   AppSettings settings;
@@ -142,6 +143,10 @@ class CompanionRuntime {
     final connectivitySub =
         Connectivity().onConnectivityChanged.listen((_) => autoSync.maybeSync());
 
+    // app-4: mark a chapter finished when it plays to its end.
+    final completedSub = player.chapterCompletedStream
+        .listen((uuid) => library.setChapterFinished(uuid, true));
+
     // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
     // the live player + a library-backed browse tree.
     handler?.attach(
@@ -190,7 +195,20 @@ class CompanionRuntime {
     );
 
     return CompanionRuntime._(api, library, sync, player, thumbnails,
-        settingsStore, settings, resumeSync, sleepTimer, handler, connectivitySub);
+        settingsStore, settings, resumeSync, sleepTimer, handler,
+        [connectivitySub, completedSub]);
+  }
+
+  /// app-4: enforce the storage cap (auto-delete finished + LRU book eviction).
+  /// Call after a download lands.
+  Future<void> enforceStorageCap() async {
+    final plan = planStorageEviction(
+      books: await library.bookUsages(),
+      capBytes: settings.storageCapBytes,
+      autoDeleteFinished: settings.autoDeleteFinished,
+      keepRecentBooks: settings.keepRecentBooks,
+    );
+    await library.applyEviction(plan);
   }
 
   /// Persist new settings and apply the playback-affecting ones immediately.
@@ -205,7 +223,9 @@ class CompanionRuntime {
   }
 
   Future<void> dispose() async {
-    await _connectivitySub?.cancel();
+    for (final s in _subs) {
+      await s.cancel();
+    }
     audioHandler?.detach();
     await player.dispose();
     await library.close();

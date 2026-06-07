@@ -60,6 +60,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
       try {
         await widget.runtime.resumeSync.syncBook(widget.bookId);
       } catch (_) {/* offline / no server record */}
+      // app-4: stamp last-played (drives Continue-listening + LRU eviction).
+      await widget.runtime.library
+          .markPlayed(widget.bookId, DateTime.now().toIso8601String());
       final art = await widget.runtime.library.coverThumbPath(widget.bookId);
       await widget.runtime.player.openBook(widget.bookId,
           bookTitle: widget.title, artPath: art); // loads + restores resume
