@@ -5,11 +5,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { VoiceEnginePicker } from './voice-engine-picker';
+import type { TtsEngine } from '../lib/types';
 
 const baseProps = {
   value: 'qwen' as const,
   onChange: vi.fn(),
-  installedEngines: ['kokoro', 'qwen'] as const,
+  installedEngines: ['kokoro', 'qwen'] as TtsEngine[],
   defaultEngineLabel: 'Kokoro',
   persona: 'a warm narrator',
   onPersonaChange: vi.fn(),
