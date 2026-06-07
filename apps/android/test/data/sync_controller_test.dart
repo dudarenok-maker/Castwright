@@ -19,20 +19,31 @@ class _FakeApi implements ManifestApi {
       details[bookId]!;
 }
 
+/// Simulates an unreachable server (offline).
+class _ThrowingApi implements ManifestApi {
+  @override
+  Future<SyncManifestIndex> index({String? since}) async =>
+      throw Exception('offline');
+  @override
+  Future<SyncManifestBookDetail> bookDetail(String bookId) async =>
+      throw Exception('offline');
+}
+
 SyncManifestIndexBook idx(String id, String title) => SyncManifestIndexBook(
     bookId: id, updatedAt: 't', title: title, author: 'A', series: 'S',
     seriesPosition: 1, chapterCount: 1);
 
-SyncManifestChapter ch(String book, String uuid, int id, String fp) =>
+SyncManifestChapter ch(String book, String uuid, int id, String fp,
+        {double? dur}) =>
     SyncManifestChapter(
-      uuid: uuid, id: id, title: 'ch$id', fingerprint: fp,
+      uuid: uuid, id: id, title: 'ch$id', fingerprint: fp, durationSec: dur,
       urlSuffix: 'audio.mp3', audioUrl: '/api/books/$book/chapters/$id/audio.mp3');
 
 void main() {
   late InMemoryFileStore fs;
   late DriftLocalLibrary lib;
 
-  SyncController make(_FakeApi api, Map<String, List<int>> serverBytes) {
+  SyncController make(ManifestApi api, Map<String, List<int>> serverBytes) {
     final downloader = ChapterDownloader(
       (url, headers) async =>
           RangeResponse(statusCode: 200, body: Stream.value(serverBytes[url.path]!)),
@@ -120,5 +131,51 @@ void main() {
         .downloadBook('b1', onProgress: (d, t) => downloaded = t);
     expect(downloaded, 1); // only the changed chapter
     expect(await fs.read('/d/books/b1/u1/audio.mp3'), [9, 9, 9, 9]);
+  });
+
+  test('OFFLINE: ensureDetail synthesizes from the drift store + playlist works',
+      () async {
+    // Download online (records chapter id/title/duration in drift).
+    final online = _FakeApi(
+      SyncManifestIndex(schemaVersion: 1, books: [idx('b1', 'B')], activeBookIds: ['b1']),
+      {
+        'b1': SyncManifestBookDetail(
+          schemaVersion: 1, bookId: 'b1', updatedAt: 't',
+          chapters: [ch('b1', 'u1', 1, 'fp1|3', dur: 30)],
+          activeChapterUuids: ['u1']),
+      },
+    );
+    await make(online, {'/api/books/b1/chapters/1/audio.mp3': [1, 2, 3]})
+        .downloadBook('b1');
+
+    // New controller, server unreachable.
+    final offline = make(_ThrowingApi(), {});
+    await offline.ensureDetail('b1');
+    final chs = offline.chaptersOf('b1');
+    expect(chs.single.uuid, 'u1');
+    expect(chs.single.title, 'ch1');
+    expect(chs.single.durationSec, 30.0);
+    expect(chs.single.hasAudio, isTrue);
+    expect(offline.playlistFor('b1').single.path, '/d/books/b1/u1/audio.mp3');
+  });
+
+  test('OFFLINE: loadLocalLibrary lists downloaded books, all marked downloaded',
+      () async {
+    final online = _FakeApi(
+      SyncManifestIndex(schemaVersion: 1, books: [idx('b1', 'B')], activeBookIds: ['b1']),
+      {
+        'b1': SyncManifestBookDetail(
+          schemaVersion: 1, bookId: 'b1', updatedAt: 't',
+          chapters: [ch('b1', 'u1', 1, 'fp1|3', dur: 30)],
+          activeChapterUuids: ['u1']),
+      },
+    );
+    final c = make(online, {'/api/books/b1/chapters/1/audio.mp3': [1, 2, 3]});
+    await c.loadIndex(); // records book meta
+    await c.downloadBook('b1');
+
+    final local = await make(_ThrowingApi(), {}).loadLocalLibrary();
+    expect(local.single.bookId, 'b1');
+    expect(local.single.title, 'B');
   });
 }

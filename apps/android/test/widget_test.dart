@@ -9,12 +9,17 @@ import 'package:audiobook_companion/src/domain/paired_server.dart';
 class FakeStore implements PairingStore {
   FakeStore([this._value]);
   PairedServer? _value;
+  String? _caPem;
   @override
   Future<PairedServer?> load() async => _value;
   @override
   Future<void> save(PairedServer server) async => _value = server;
   @override
   Future<void> clear() async => _value = null;
+  @override
+  Future<void> saveCaPem(String pem) async => _caPem = pem;
+  @override
+  Future<String?> loadCaPem() async => _caPem;
 }
 
 void main() {

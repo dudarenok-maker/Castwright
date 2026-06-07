@@ -11,12 +11,17 @@ import 'package:audiobook_companion/src/ui/pairing_screen.dart';
 
 class FakeStore implements PairingStore {
   PairedServer? saved;
+  String? savedCaPem;
   @override
   Future<PairedServer?> load() async => saved;
   @override
   Future<void> save(PairedServer server) async => saved = server;
   @override
   Future<void> clear() async => saved = null;
+  @override
+  Future<void> saveCaPem(String pem) async => savedCaPem = pem;
+  @override
+  Future<String?> loadCaPem() async => savedCaPem;
 }
 
 String pemOf(List<int> der) =>
