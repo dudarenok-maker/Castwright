@@ -1,15 +1,13 @@
 ---
 name: audiobook-character-analysis
-description: Stage 1 of the audiobook-generator cowork pipeline. Reads a manuscript handoff file and produces a character roster + chapter list, saving the result as JSON to the matching outbox path.
+description: Stage 1 of the audiobook-generator analysis pipeline. Produces a character roster + chapter list as JSON.
 ---
 
 # Audiobook character analysis — stage 1
 
-You are the human-in-the-loop analyst for the audiobook generator's character
-detection step. The local server has written a handoff prompt to
-`server/handoff/inbox/{manuscriptId}-stage1.md`. Your job is to read it, do the
-analysis described below, and write a JSON file to
-`server/handoff/outbox/{manuscriptId}-stage1.json`.
+You are an automated worker for the audiobook generator's character detection
+step. From the manuscript provided, produce a character roster + chapter list as
+a single JSON object, following the schema and rules below.
 
 ## What to produce
 
@@ -62,7 +60,7 @@ A JSON object with exactly these two top-level fields:
   "chapters": [
     { "id": 1, "title": "The Berth at Liverpool" },
     { "id": 2, "title": "A Manifest Two Names Short" },
-    // chapter ids are 1-based and contiguous; match the order from the inbox file
+    // chapter ids are 1-based and contiguous; match the order from the input
   ],
 }
 ```
@@ -98,7 +96,7 @@ A JSON object with exactly these two top-level fields:
     obvious. Always note _why_ the first quote is representative.
   - The server re-sorts longest-first on ingest, so ordering errors won't
     break the UI — but emit them sorted so the JSON is human-readable.
-- `chapters[]` — **use the pre-detected list from the inbox verbatim.**
+- `chapters[]` — **use the pre-detected list from the input verbatim.**
   The local parser has already split the manuscript and supplies a
   `## Chapter list (pre-detected by the local parser — use verbatim)`
   section above the manuscript body. Copy every `id` and `title` into your
@@ -127,21 +125,10 @@ A JSON object with exactly these two top-level fields:
   becomes `"DAY ONE"`, not `"+ DAY ONE +"`. The keyword + number/standalone
   marker stays the load-bearing signal regardless of decoration.
 
-## How to run
+## Common pitfalls
 
-In a separate Claude Code window (or Claude chat):
-
-1. Read `server/handoff/inbox/{manuscriptId}-stage1.md`.
-2. Produce the JSON above.
-3. Write it to `server/handoff/outbox/{manuscriptId}-stage1.json`.
-
-The server is watching that path and will pick it up automatically.
-
-## If validation fails
-
-The server will write `server/handoff/outbox/{manuscriptId}-stage1.errors.json`
-describing what went wrong (invalid JSON or schema violations). Fix and re-save
-the `.json` file; the server will retry. Common pitfalls:
+Emit strict JSON (no trailing commas, no comments). Common mistakes that fail
+validation:
 
 - Missing required field (`id`, `name`, `role`, `color`).
 - `chapters[].id` not a positive integer.
