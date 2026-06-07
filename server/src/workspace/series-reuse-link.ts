@@ -175,7 +175,9 @@ export async function linkSeriesReuseAtAnalysis(
      the origin: nothing to link against. */
   const scanLibrary = options.scanLibrary ?? scanLibraryCharacters;
   const all = await scanLibrary();
-  const priorVoices: LibraryVoice[] = [];
+  /* Carry each prior's seriesPosition so a stable-key match can prefer the
+     most-recent earlier book (the freshest design of that same voice). */
+  const priorVoices: Array<{ voice: LibraryVoice; pos: number }> = [];
   for (const record of all) {
     if (record.bookId === bookId) continue;
     const recMeta = await resolveAuthorSeries(record.bookId);
@@ -187,7 +189,7 @@ export async function linkSeriesReuseAtAnalysis(
     if (myPosition === null || pos === null || pos >= myPosition) continue;
     if (SKIP_IDS.has(record.character.id)) continue;
     const v = projectVoice(record);
-    if (v) priorVoices.push(v);
+    if (v) priorVoices.push({ voice: v, pos });
   }
   if (priorVoices.length === 0) return 0;
 
@@ -207,17 +209,35 @@ export async function linkSeriesReuseAtAnalysis(
       attributes: c.attributes,
     };
 
-    let best: { voice: LibraryVoice; score: number } | null = null;
-    for (const v of priorVoices) {
+    const notLinkedToPrior = (v: LibraryVoice): boolean =>
       /* notLinkedTo guard — the user explicitly declared this pair is NOT the
          same person (e.g. teenage vs adult Wren); never auto-link it. */
-      const blocked = (c.notLinkedTo ?? []).some(
+      (c.notLinkedTo ?? []).some(
         (p) => p.bookId === v.bookId && p.characterId === v.characterId,
       );
-      if (blocked) continue;
-      const cand = scoreOne(input, v);
-      if (!cand) continue;
-      if (!best || cand.score > best.score) best = { voice: v, score: cand.score };
+
+    /* Stable-key pass FIRST: a character that kept its deterministic write key
+       (`voiceId ?? id`) across books IS the same voice, even when the analyzer
+       renamed it to something with no name-token overlap — the Unraveled
+       narrator ("Narrator" → "Author"). The name scorer's 0.34 floor can't see
+       this, so match on the key directly and prefer the most-recent earlier
+       book. Confidence is 1: an identical write key is definitive, not fuzzy. */
+    const myKey = c.voiceId ?? c.id;
+    let best: { voice: LibraryVoice; score: number } | null = null;
+    let stableBest: { voice: LibraryVoice; pos: number } | null = null;
+    for (const { voice: v, pos } of priorVoices) {
+      if (v.voiceId !== myKey || notLinkedToPrior(v)) continue;
+      if (!stableBest || pos > stableBest.pos) stableBest = { voice: v, pos };
+    }
+    if (stableBest) {
+      best = { voice: stableBest.voice, score: 1 };
+    } else {
+      for (const { voice: v } of priorVoices) {
+        if (notLinkedToPrior(v)) continue;
+        const cand = scoreOne(input, v);
+        if (!cand) continue;
+        if (!best || cand.score > best.score) best = { voice: v, score: cand.score };
+      }
     }
     if (!best) continue;
 
