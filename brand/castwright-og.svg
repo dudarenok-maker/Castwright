@@ -12,13 +12,13 @@
   <rect width="1200" height="630" fill="url(#sig)"/>
 
   <!-- top-left lockup: mark + wordmark -->
-  <g transform="translate(64,52) scale(0.18)" fill="#FFFDFB">
-    <rect x="104" y="210" width="30" height="92"  rx="15"/>
-    <rect x="158" y="116" width="30" height="256" rx="15"/>
-    <rect x="212" y="160" width="30" height="160" rx="15" fill="#F79A83"/>
-    <rect x="266" y="92"  width="30" height="284" rx="15" fill="#F79A83"/>
-    <rect x="320" y="146" width="30" height="202" rx="15"/>
-    <rect x="374" y="200" width="30" height="108" rx="15"/>
+  <g transform="translate(64,52) scale(0.18)">
+    <rect x="104" y="210" width="30" height="92"  rx="15" fill="#F79A83"/>
+    <rect x="158" y="116" width="30" height="256" rx="15" fill="#F79A83"/>
+    <rect x="212" y="160" width="30" height="160" rx="15" fill="#A43C6C"/>
+    <rect x="266" y="92"  width="30" height="284" rx="15" fill="#A43C6C"/>
+    <rect x="320" y="146" width="30" height="202" rx="15" fill="#FFFDFB"/>
+    <rect x="374" y="200" width="30" height="108" rx="15" fill="#FFFDFB"/>
     <path d="M110 416 C 170 392, 226 392, 256 412 C 286 392, 342 392, 402 416"
           fill="none" stroke="#FFFDFB" stroke-width="15" stroke-linecap="round"/>
   </g>
