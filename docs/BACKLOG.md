@@ -36,6 +36,12 @@ listener wins interleaved near the top, big multi-week bets grouped lower in Cou
 - _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved. **Promoted to Must on 2026-06-02:** dropped chapters on long books actively hurt existing users.
 _Full detail + acceptance:_ [#399](https://github.com/dudarenok-maker/AudioBook-Generator/issues/399).
 
+### `ops-12` — Trademark clearance for Castwright + defensive domains ([#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626))
+
+- _What:_ Before launch, run a real trademark clearance for **Castwright** on TMview / USPTO / EUIPO / IP Australia in classes 9 (software), 41 (entertainment/audio), 42 (SaaS) — the 2026-06-07 automated sweep found no software/audio mark (only an unrelated US construction LLC) but that is **not** legal clearance. Register defensive domains (`castwright.io`, typo redirects `castwrite.ai` / `castright.ai`). `castwright.ai` is owned. _(Owner: user / business.)_
+- _Benefit (business):_ protects the brand a real business is being built on; avoids a forced rename after launch.
+_Full detail + acceptance:_ [#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626).
+
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
 [plan 162](features/162-fs2-multilanguage.md); the library/cast language UX
