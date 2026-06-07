@@ -9,10 +9,16 @@
  * "already linked" suppression never fire.
  *
  * For each series, this links every character in book N (N>1) that recurs by
- * name/alias to its EARLIEST-book counterpart: stamps `matchedFrom` + unifies
- * `voiceId` (+ `voiceState:'reused'` unless tuned/locked), via PUT /state
- * (slice `cast`) — the same durable end-state a manual link / auto-reuse
- * produces. Read-only unless `--apply` is passed.
+ * name/alias OR by its stable write key (`voiceId ?? id`) to its EARLIEST-book
+ * counterpart: stamps `matchedFrom` + unifies `voiceId` (+ `voiceState:'reused'`
+ * unless tuned/locked), via PUT /state (slice `cast`) — the same durable
+ * end-state a manual link / auto-reuse produces. Read-only unless `--apply`.
+ *
+ * The stable-key arm mirrors the analysis-time linker's stable-key pass
+ * (server/src/workspace/series-reuse-link.ts): a character that keeps its
+ * deterministic key across books IS the same voice even when the analyzer
+ * renamed it to a label with zero name-token overlap (the narrator
+ * "Narrator" -> "Author" case the name/alias arm can't see).
  *
  * Skips: characters that already have `matchedFrom`; pairs the user marked
  * `notLinkedTo`; the unknown-male / unknown-female buckets (per-book, never
@@ -31,6 +37,10 @@ const APPLY = process.argv.includes('--apply');
 const norm = (s) => (s ?? '').trim().toLowerCase();
 const SKIP_IDS = new Set(['unknown-male', 'unknown-female']);
 const surfaceForms = (c) => [c.name, ...(c.aliases ?? [])].map(norm).filter(Boolean);
+/* Stable cross-book write key — the same `voiceId ?? id` the TTS pipeline and
+   the server's applyOverrideToCastFiles key on. An exact match is definitive
+   (same voice), independent of how the analyzer named the character. */
+const keyOf = (c) => c.voiceId ?? c.id;
 
 const lib = await (await fetch(`${BASE}/api/library`)).json();
 
@@ -66,7 +76,9 @@ for (const author of lib.authors) {
               (p) => p.bookId === ob.bookId && p.characterId === oc.id,
             );
             if (notLinked) continue;
-            if (surfaceForms(oc).some((f) => forms.has(f))) {
+            /* Name/alias overlap, or an exact stable-key match (catches a
+               recurring character the analyzer renamed past name recognition). */
+            if (surfaceForms(oc).some((f) => forms.has(f)) || keyOf(oc) === keyOf(c)) {
               origin = { book: ob, char: oc };
               break;
             }
