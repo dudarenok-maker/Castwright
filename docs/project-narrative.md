@@ -39,7 +39,7 @@ A _cast-wright_ is the one who builds the cast — and that is the whole job. Th
 
 You drop in a book. EPUB, PDF, MOBI, plain text, paste. Castwright reads it, identifies the twenty or thirty main characters, and builds a voice profile for each — age, gender, accent if the text implies one, personality, the vocal qualities the writer keeps gesturing at. The narrator gets a profile too. Those profiles are unique to _this book_ and they travel with it.
 
-Then, chapter by chapter, the system renders the audio. Every line of dialogue lands in the right voice. Every paragraph of narration is delivered by the narrator the book has earned. Tone is read from the surrounding prose — fear sounds like fear, dry humour lands dry. When the apprentice speaks, you hear a thirteen-year-old. When the swordsmith answers, you hear seventy years and a forge.
+Then, chapter by chapter, the system renders the audio. Every line of dialogue lands in the right voice. Every paragraph of narration is delivered by the narrator the book has earned. Tone is read from the surrounding prose — fear sounds like fear, dry humour lands dry. When the apprentice speaks, you hear a thirteen-year-old. When the swordsmith answers, you hear seventy years and a forge. And it isn't English-only — Castwright performs in **English and Russian today, with more languages to come**, and it never lets a cast cross languages within a book.
 
 Voices are reusable across books in a series. The narrator who carried Book 1 keeps carrying Book 2. A recurring character keeps their voice from one book to the next — and if the writer renamed them, the cast merge writes the old name into the new one's aliases, so the matcher in Book N+1 still recognises them. Your library learns who you've cast and offers them back, with provenance, every time you start a new manuscript.
 
@@ -59,9 +59,9 @@ It's a bet on the edge: that the most interesting things AI will do over the nex
 
 The first time I wrote this note, I called it _planning, paper, and a couple of small spikes_. That description is two months out of date in the way _small spike_ turns into _the thing that runs the house_ if you keep going.
 
-The honest summary, as of v1.5.0: the engine runs end-to-end on the machine it's supposed to run on, against the book it's supposed to run on, and **the install can now go straight into someone else's hands.** Everything beyond that is calibration.
+The honest summary, as of v1.6.0 and the fortnight since: the engine runs end-to-end on the machine it's supposed to run on, against the book it's supposed to run on; **the install goes straight into someone else's hands and upgrades itself in place**; there's a companion app to listen on; the performance is expressive and gated for quality; and the rough edges that only show up on real, multi-book series are getting filed down one at a time. Everything beyond that is calibration.
 
-What "runs" actually covers, in six plot points.
+What "runs" actually covers, in nine plot points.
 
 ### The engine runs end-to-end
 
@@ -115,15 +115,27 @@ The matcher scores name plus alias plus token overlap on the descriptors. Return
 
 Cross-book continuity is now a workflow, not an aspiration.
 
+### The performance got expressive
+
+Designing a distinct voice per character solved _who_ is speaking. The next question was _how_ — a line is furious here, broken there, deadpan a page later. Castwright now reads emotion per quote and renders the line in a matching expressive variant, with a detect-emotions pass that backfills tone across a chapter and a per-quote control so you can overrule it by hand. A flat read was the easy thing to ship; an expressive one is the reason it's worth listening to.
+
+### Quality became a gate, not a hope
+
+The honest worry with any AI voice is the line that comes out fluent but _wrong_ — a dropped clause, a hallucinated word, a clip of dead air — and you only catch it three chapters later. So generation grew a gate. Before a chapter is assembled, every sentence is checked acoustically — dead air, silence runs, duration drift — and re-recorded automatically if it fails; an optional speech-to-text pass transcribes the render and flags lines whose words don't match the script. A committed golden-audio harness guards the render path itself against regressions. And once a chapter is rendered, a drift detector compares it against each character's established voice profile and flags the ones that have wandered — severity-tiered, with a one-click route back into regeneration, and the rendered engine stamped per character so the comparison is honest. The _taste_ judgement still needs ears; the plainly broken lines no longer reach them.
+
+### A companion app, not just a converter
+
+The bet was always that the magic is in the conversion, not the playback — but "sideload an M4B" is a clumsy last mile. So there's now a **Castwright companion app** — Android today, iOS as we get moving. Pair it to your library with a QR code over your home network and it syncs chapters as they render, downloads books for offline listening, and plays them in a real native player: resume across devices, lock-screen and Android-Auto / CarPlay controls, a sleep timer, per-chapter waveforms. The conversion is still the product; the app just makes the last mile feel like the rest of it. (It ships to an alpha channel as a signed build; the server pairs over LAN with per-device tokens you can revoke.)
+
 ### What's not good enough yet to put in front of someone else
 
 With Qwen3-TTS designing a bespoke voice per character, a twenty-plus-character book no longer collapses onto a handful of catalogue voices. Every character gets its own designed voice. Differentiation is handled by construction rather than rationed from a fixed pool.
 
 What I still can't judge from inside the application is the _taste_ layer above that: whether those designed voices are perceptually distinct and well-matched enough, across a whole cast, to carry a long listen. That needs ears, not metrics, and probably not mine alone.
 
-Drift-detection cutoffs are still placeholders pending a labelled set. I haven't measured the analyzer's malformed-JSON rate cleanly — it's acceptable in practice after the schema-format and divergent-retry repair passes, but a parked experiment to swap to a heavier local model once the memory math says it fits hasn't run yet. F5-TTS and OpenVoice v2 haven't been evaluated head-to-head on this manuscript against the three engines I'm using.
+Drift detection now ships and runs on every rendered chapter; what's left there is tightening its severity cutoffs against a larger labelled set. I haven't measured the analyzer's malformed-JSON rate cleanly — it's acceptable in practice after the schema-format and divergent-retry repair passes, but a parked experiment to swap to a heavier local model once the memory math says it fits hasn't run yet. F5-TTS and OpenVoice v2 haven't been evaluated head-to-head on this manuscript against the engines I'm using.
 
-And multi-language is half-built. The engine plumbing is in via Qwen3-TTS; the language-detection-and-filtering half — auto-detecting a non-English manuscript, filtering the voice library by language, never letting a cast cross languages — is the next big piece, and the most-requested one.
+Multi-language is real now — English and Russian render end to end, with the hard rule that a cast never crosses languages. More languages are the obvious next step, along with the polish around them: auto-detecting a manuscript's language and filtering the voice library by it. It's among the most-requested directions.
 
 That list is honest, not alarming. The engine runs. The install travels. The next round is calibration on top of a foundation that holds.
 
