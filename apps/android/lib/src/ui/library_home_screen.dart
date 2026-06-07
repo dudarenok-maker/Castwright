@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
 import '../domain/library_tree.dart';
+import '../domain/listen_progress.dart';
 import 'player_screen.dart';
 
 /// Post-pairing home: a cover-art library grouped into author → series
@@ -29,6 +30,8 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
   List<LibraryBook> _books = [];
   final Map<String, String> _covers = {}; // bookId -> thumb path
   final Map<String, String> _progress = {}; // bookId -> "done/total"
+  final Map<String, double> _totalSec = {}; // bookId -> total duration (s)
+  final Map<String, double> _listened = {}; // bookId -> listened fraction (0..1)
   final Set<String> _collapsed = {}; // collapsed author/series section keys
   String _query = '';
   bool _loading = true;
@@ -53,6 +56,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
         _loading = false;
       });
       _loadCovers(books);
+      _loadDurations(books);
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -71,6 +75,42 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
         if (mounted) setState(() => _covers[b.bookId] = path);
       } catch (_) {
         /* no cover — show a placeholder */
+      }
+    }
+  }
+
+  /// Fetch each book's detail (cheap JSON, like covers) to show total
+  /// duration; for downloaded books, compute the listener-progress fraction
+  /// from the stored resume point.
+  Future<void> _loadDurations(List<LibraryBook> books) async {
+    for (final b in books) {
+      try {
+        await widget.runtime.sync.ensureDetail(b.bookId);
+        final chs = widget.runtime.sync.chaptersOf(b.bookId);
+        final durations = [for (final c in chs) c.durationSec];
+        final total = durations.fold<double>(0, (s, d) => s + (d ?? 0));
+        if (total <= 0) continue;
+        double? fraction;
+        if (b.downloadState == BookDownloadState.downloaded ||
+            b.downloadState == BookDownloadState.updateAvailable) {
+          final pb = await widget.runtime.library.loadPlayback(b.bookId);
+          if (pb != null) {
+            final idx = chs.indexWhere((c) => c.uuid == pb.chapterUuid);
+            fraction = listenedFraction(
+              durations: durations,
+              resumeIndex: idx < 0 ? 0 : idx,
+              resumePositionSec: pb.positionMs / 1000.0,
+            );
+          }
+        }
+        if (mounted) {
+          setState(() {
+            _totalSec[b.bookId] = total;
+            if (fraction != null) _listened[b.bookId] = fraction;
+          });
+        }
+      } catch (_) {
+        /* detail unavailable (older server without durationSec, or offline) */
       }
     }
   }
@@ -239,8 +279,8 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
       key: Key('book-${book.bookId}'),
       leading: _cover(book.bookId),
       title: Text(book.title),
-      subtitle: Text(_subtitle(book)),
-      isThreeLine: book.series.isNotEmpty,
+      subtitle: _subtitleWidget(book),
+      isThreeLine: true,
       onTap: (book.downloadState == BookDownloadState.downloaded ||
               book.downloadState == BookDownloadState.updateAvailable)
           ? () => _open(book)
@@ -302,12 +342,31 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     ]);
   }
 
-  String _subtitle(LibraryBook book) {
+  Widget _subtitleWidget(LibraryBook book) {
     final pos = formatSeriesPosition(book.seriesPosition);
-    final series = book.series.isEmpty
-        ? ''
-        : '${book.series}${pos.isNotEmpty ? ' #$pos' : ''}\n';
-    return '$series${_statusLabel(book.downloadState)}';
+    final seriesLine = book.series.isEmpty
+        ? null
+        : '${book.series}${pos.isNotEmpty ? ' #$pos' : ''}';
+    final total = _totalSec[book.bookId];
+    final status = _statusLabel(book.downloadState) +
+        (total != null ? ' · ${formatDuration(total)}' : '');
+    final listened = _listened[book.bookId];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (seriesLine != null) Text(seriesLine),
+        Text(status),
+        if (listened != null && listened > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 4, right: 12),
+            child: LinearProgressIndicator(
+              value: listened,
+              minHeight: 4,
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+            ),
+          ),
+      ],
+    );
   }
 
   String _statusLabel(BookDownloadState s) {
