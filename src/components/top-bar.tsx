@@ -60,6 +60,8 @@ export interface DesignPillData {
   failureCount: number;
   /** Character currently being designed (running subtitle). */
   currentName?: string | null;
+  /** Phase of the current single-character design job (absent for bulk). */
+  phase?: 'designing' | 'rendering';
   onClick: () => void;
 }
 
@@ -646,7 +648,7 @@ export function GenerationPill({ data }: { data: GenerationPillData }) {
 /* The third status pill — "Design full cast" bulk-job progress. Exported for
    reuse inside the Status popover (onClick overridden to navigate-and-close). */
 export function DesignPill({ data }: { data: DesignPillData }) {
-  const { state, done, total, percent, skipped, failureCount, onClick } = data;
+  const { state, done, total, percent, skipped, failureCount, currentName, phase, onClick } = data;
   const variants: Record<
     DesignPillState,
     { className: string; icon: React.ReactNode; label: string }
@@ -692,7 +694,9 @@ export function DesignPill({ data }: { data: DesignPillData }) {
     >
       {v.icon}
       <span className="tabular-nums">
-        {v.label} · {summary}
+        {phase && currentName
+          ? `${v.label} ${currentName} · ${phase === 'rendering' ? 'rendering audition' : 'designing'}`
+          : `${v.label} · ${summary}`}
       </span>
     </button>
   );
