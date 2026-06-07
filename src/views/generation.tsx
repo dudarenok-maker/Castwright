@@ -1398,6 +1398,7 @@ function ChapterRow({
             state={chapter.state}
             paused={paused}
             assembling={assembling}
+            verifying={verifying}
           />
         </span>
         <span className="hidden sm:block text-sm tabular-nums text-ink/60 text-right">
@@ -1694,6 +1695,7 @@ function ChapterRow({
           )}
           {chapter.state === 'in_progress' &&
             !assembling &&
+            !verifying &&
             chapter.currentLine != null &&
             chapter.currentLine > 0 && (
               <div className="mt-4 ml-[60px] flex items-center gap-3 text-xs text-ink/60">
@@ -1842,11 +1844,13 @@ function ChapterProgressBar({
   state,
   paused,
   assembling,
+  verifying,
 }: {
   progress: number;
   state: Chapter['state'];
   paused: boolean;
   assembling: boolean;
+  verifying: boolean;
 }) {
   if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/6" />;
   if (state === 'done')
@@ -1861,10 +1865,11 @@ function ChapterProgressBar({
         <div className="h-full rounded-full bg-rose-500" style={{ width: `${progress * 100}%` }} />
       </div>
     );
-  if (assembling)
+  if (assembling || verifying)
     return (
-      /* Disk-write phase — neutral ink-tone bar with stripe motion to read as
-       "near done, busy" rather than the magenta synthesis gradient. */
+      /* Disk-write phase (assembling) or the srv-31 ASR content-QA pass
+         (verifying) — neutral ink-tone bar with stripe motion to read as
+         "near done, busy" rather than the magenta synthesis gradient. */
       <div className="relative h-1.5 rounded-full bg-ink/6 overflow-hidden">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-ink/40"
