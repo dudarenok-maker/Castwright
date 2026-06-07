@@ -29,13 +29,15 @@ import { notificationsActions } from './notifications-slice';
 
 const REQUESTED_TYPE = castDesignActions.designAllRequested.type;
 const RESUBSCRIBE_TYPE = castDesignActions.resubscribe.type;
+const SINGLE_REQUESTED_TYPE = castDesignActions.designSingleRequested.type;
+const RESUBSCRIBE_SINGLE_TYPE = castDesignActions.resubscribeSingle.type;
 const CLEAR_TYPE = castDesignActions.clear.type;
 
 /** ms the terminal "Designed N…" summary lingers before the pill clears. */
 const SUMMARY_LINGER_MS = 5000;
 
 interface CastDesignRootState {
-  castDesign: { active: { bookId: string; state: string } | null };
+  castDesign: { active: { bookId: string; state: string; kind?: string } | null };
 }
 
 export function createCastDesignMiddleware(): Middleware {
@@ -47,6 +49,17 @@ export function createCastDesignMiddleware(): Middleware {
       if (!handle) return;
       handle.controller.abort();
       handle = null;
+    };
+
+    /* Display name for a designed character — read from the active single
+       snapshot when it's the one being designed, else fall back to 'Voice'. */
+    const currentNameFor = (s: typeof store, cid: string): string | null => {
+      const snap = (
+        s.getState() as {
+          castDesign: { active: { characterId?: string; currentName: string | null } | null };
+        }
+      ).castDesign.active;
+      return snap && snap.characterId === cid ? snap.currentName : null;
     };
 
     const buildCallbacks = (bookId: string, controller: AbortController): CastDesignCallbacks => ({
@@ -118,14 +131,107 @@ export function createCastDesignMiddleware(): Middleware {
       },
     });
 
+    /* Single-character design callbacks. CRITICAL: each handler reads the
+       characterId FROM THE EVENT (not a bound argument) — the reload re-subscribe
+       path doesn't know which character is in flight until `resume_from` lands. */
+    const buildSingleCallbacks = (
+      bookId: string,
+      controller: AbortController,
+    ): CastDesignCallbacks => ({
+      signal: controller.signal,
+      /* Reload re-attach: open the single snapshot from the server replay. */
+      onResumeSingle: ({ characterId: cid, name, mode, phase }) => {
+        dispatch(
+          castDesignActions.beginSingle({
+            bookId,
+            characterId: cid,
+            name,
+            mode,
+            lastTickAt: Date.now(),
+          }),
+        );
+        dispatch(
+          castDesignActions.setPhase({ bookId, characterId: cid, phase, lastTickAt: Date.now() }),
+        );
+      },
+      onPhase: ({ characterId: cid, phase }) =>
+        dispatch(
+          castDesignActions.setPhase({ bookId, characterId: cid, phase, lastTickAt: Date.now() }),
+        ),
+      onHeartbeat: () =>
+        dispatch(castDesignActions.heartbeat({ bookId, lastTickAt: Date.now() })),
+      onCharacterDesigned: ({ characterId: cid, voiceId }) => {
+        /* Mirror the persisted override into the cast slice so the row flips
+           "Needs voice" → "Designed" live. (The `designed` event may carry an
+           extra `url` now — ignored; we don't auto-play on first design in v1.) */
+        dispatch(castActions.setQwenOverrideName({ characterId: cid, voiceId }));
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'info',
+            message: `${currentNameFor(store, cid) ?? 'Voice'} is ready.`,
+            dedupeKey: `single-design-done:${bookId}:${cid}`,
+          }),
+        );
+      },
+      onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona }) => {
+        dispatch(
+          castDesignActions.previewReady({
+            bookId,
+            characterId: cid,
+            previewVoiceId,
+            previewUrl,
+            persona,
+            lastTickAt: Date.now(),
+          }),
+        );
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'info',
+            message: `${name}'s new voice is ready to compare.`,
+            dedupeKey: `single-design-compare:${bookId}:${cid}`,
+          }),
+        );
+      },
+      onIdle: () => {
+        /* For a FIRST design, the slice is cleared shortly after the designed
+           toast; for a re-design the snapshot stays in 'ready-to-compare' until
+           the drawer resolves it, so only clear when NOT awaiting compare. */
+        setTimeout(() => {
+          const snap = (store.getState() as CastDesignRootState).castDesign.active;
+          if (
+            snap &&
+            snap.bookId === bookId &&
+            snap.kind === 'single' &&
+            snap.state !== 'ready-to-compare'
+          ) {
+            dispatch(castDesignActions.clear());
+          }
+        }, SUMMARY_LINGER_MS);
+      },
+      onError: ({ message }) => {
+        dispatch(castDesignActions.halt({ bookId, lastTickAt: Date.now() }));
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message,
+            dedupeKey: `single-design:${bookId}`,
+          }),
+        );
+      },
+    });
+
     const runStream = (
       bookId: string,
       controller: AbortController,
       open: (cb: CastDesignCallbacks) => Promise<void>,
+      makeCallbacks: (
+        bookId: string,
+        controller: AbortController,
+      ) => CastDesignCallbacks = buildCallbacks,
     ): void => {
       const localHandle = { bookId, controller };
       handle = localHandle;
-      const callbacks = buildCallbacks(bookId, controller);
+      const callbacks = makeCallbacks(bookId, controller);
       void (async () => {
         try {
           await open(callbacks);
@@ -177,6 +283,63 @@ export function createCastDesignMiddleware(): Middleware {
         const controller = new AbortController();
         /* No upfront begin — the server replays `resume_from` to seed the slice. */
         runStream(bookId, controller, (cb) => api.subscribeCastDesign(bookId, cb));
+        return result;
+      }
+
+      if (a.type === SINGLE_REQUESTED_TYPE) {
+        const p = a.payload as {
+          bookId: string;
+          characterId: string;
+          name: string;
+          persona: string;
+          sampleVoiceId: string;
+          modelKey: string;
+          mode: 'first' | 'redesign';
+        };
+        if (handle) return result; // one design op per book
+        const controller = new AbortController();
+        /* Seed the single snapshot instantly (before the first SSE event). */
+        dispatch(
+          castDesignActions.beginSingle({
+            bookId: p.bookId,
+            characterId: p.characterId,
+            name: p.name,
+            mode: p.mode,
+            lastTickAt: Date.now(),
+          }),
+        );
+        runStream(
+          p.bookId,
+          controller,
+          (cb) =>
+            api.startSingleDesign(
+              p.bookId,
+              {
+                characterId: p.characterId,
+                persona: p.persona,
+                sampleVoiceId: p.sampleVoiceId,
+                modelKey: p.modelKey,
+                preview: p.mode === 'redesign',
+              },
+              cb,
+            ),
+          buildSingleCallbacks,
+        );
+        return result;
+      }
+
+      if (a.type === RESUBSCRIBE_SINGLE_TYPE) {
+        const { bookId } = a.payload as { bookId: string };
+        if (handle || !bookId) return result; // already streaming, or nothing to do
+        const controller = new AbortController();
+        /* No upfront beginSingle — the server replays `resume_from` with the
+           characterId/mode/phase, which onResumeSingle turns into a snapshot. */
+        runStream(
+          bookId,
+          controller,
+          (cb) => api.subscribeSingleDesign(bookId, cb),
+          buildSingleCallbacks,
+        );
         return result;
       }
 
