@@ -78,7 +78,11 @@ Each step mirrors the existing assembling path.
 ## Scope guards
 
 - Global top-bar `GenerationPill` unchanged.
-- Inert unless `SEG_ASR_ENABLED` — no behaviour change for the default config.
+- The code path is gated on the existing `asr` options, so it is a strict no-op
+  when ASR is disabled. **In the current production deployment ASR is ON**
+  (`server/.env`: `SEG_ASR_ENABLED=1`, `SEG_ASR_SAMPLE_EVERY=1`, `ASR_DEVICE=cuda`,
+  `ASR_MODEL=base`), so the verifying phase shows on **every chapter of every
+  run** — this is the live symptom being fixed, not an edge case.
 - Multi-worker overlap is fine: chapter N can read "Verifying speech…" while
   N+1 reads "Synthesising…" — per-chapter rows carry independent phase.
 
