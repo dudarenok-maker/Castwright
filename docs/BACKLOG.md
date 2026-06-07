@@ -90,6 +90,12 @@ _`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026
 majors (`checkout@v6`, `setup-node@v6`, `cache@v5`, `upload-artifact@v7`). Acceptance is the
 PR's own annotation-free CI run._
 
+### `fs-39` — Rebrand the server + web app to Castwright ([#631](https://github.com/dudarenok-maker/AudioBook-Generator/issues/631))
+
+- _What:_ the companion app is now **Castwright** (plan 188 / PR #629), but the server product + web app are still "Audiobook Generator". Bring the whole product onto the brand (`/brand/brand-guidelines.md`) — web title/wordmark, favicon, theme tokens, `/api/info` name, the release-zip name, README/INSTALL, `package.json` names. Larger than the app rename, so deliberately separate.
+- _Benefit (brand):_ one coherent brand across the generator + the listening app; needed before any public launch / store listing.
+_Full detail + acceptance:_ [#631](https://github.com/dudarenok-maker/AudioBook-Generator/issues/631).
+
 ---
 
 ## Could — nice to have, low-cost wins
@@ -469,6 +475,7 @@ Specific items someone might reasonably re-propose. Each carries a _Why parked_ 
 - `srv-5` — Tune per-engine VRAM cost map against real hardware ([#447](https://github.com/dudarenok-maker/AudioBook-Generator/issues/447)). _Why parked:_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost … _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. …
 
 - `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555), [plan 188](features/188-android-companion-app.md)). _Why parked:_ "Android **initially**" — v1 ships Android only; the codebase stays iOS-ready by construction (app-managed TLS trust, dual-platform Flutter plugins, an unsigned iOS CI compile from `app-1`), so this is incremental, not a rewrite. _Codec caveat (5th review):_ iOS `AVPlayer` can't play `.ogg` — for iOS, the server must render MP3/M4A (OGG is Android-only); the app reads the format from the manifest and surfaces it. _Wake when:_ the Android v1 MVP is stable on real devices AND there's listener demand for iOS.
+- `app-15` — legacy (pre-API-26) launcher icon PNGs + iOS app-icon set ([#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632), [plan 188](features/188-android-companion-app.md)). The Castwright adaptive icon (PR #629) covers **API 26+** (all modern devices + the emulator); the pre-26 PNG fallback + the iOS `AppIcon.appiconset` are still the Flutter default (no SVG rasterizer was on the build box). Generate them from `brand/castwright-icon.svg` (e.g. `flutter_launcher_icons` with a rasterized PNG source). _Low priority_ — adaptive covers the vast majority of devices.
 
 ---
 
