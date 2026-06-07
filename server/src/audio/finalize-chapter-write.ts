@@ -31,6 +31,11 @@ import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
 import type { ChapterSegment, CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine, TtsModelKey } from '../tts/index.js';
 import { buildCharacterSnapshots } from './character-snapshots.js';
+import {
+  engineBreakdownFromSnapshots,
+  effectiveAudioModelKey,
+  type AudioEngineBreakdown,
+} from './engine-breakdown.js';
 import type { CharacterSnapshot } from './segments-io.js';
 
 /** Strict on-disk shape of `<slug>.segments.json` (the write view; the loose
@@ -77,6 +82,13 @@ export interface FinalizeChapterAudioResult {
   durationSec: number;
   audioQa: ChapterQaVerdict;
   segmentCount: number;
+  /** Chapter-wide drift stamp: the engine the audio ACTUALLY rendered in
+      (per-character routing aware), not necessarily the request `modelKey`.
+      The generation route puts this on the `chapter_complete` SSE tick. */
+  audioModelKey: TtsModelKey;
+  /** Distinct speaking characters per engine they rendered in. Drives the
+      mixed-engine "Kokoro (1), Qwen (6)" caption. */
+  audioEngines: AudioEngineBreakdown;
 }
 
 export async function finalizeChapterAudioWrite(
@@ -155,6 +167,15 @@ export async function finalizeChapterAudioWrite(
   }
   const characterSnapshots = buildCharacterSnapshots(cast, speakingIds, defaultEngine, fallbackByChar);
 
+  /* Drift stamp from the ACTUAL render, not the request default (false-drift
+     fix, 2026-06-07). The breakdown counts the speaking characters per engine
+     they rendered in; the stamp collapses to the single engine's canonical key
+     when uniform (so a narrator-on-Qwen chapter regenerated under a Kokoro
+     default stamps Qwen, clearing the false badge), else keeps the request key
+     and lets the breakdown carry the mixed-engine detail. */
+  const audioEngines = engineBreakdownFromSnapshots(characterSnapshots);
+  const effectiveModelKey = effectiveAudioModelKey(audioEngines, modelKey);
+
   const segmentsFile: ChapterSegmentsFile = {
     bookId,
     chapterId: chapter.id,
@@ -195,7 +216,8 @@ export async function finalizeChapterAudioWrite(
           ? {
               ...c,
               duration: formatted,
-              audioModelKey: modelKey,
+              audioModelKey: effectiveModelKey,
+              audioEngines,
               audioRenderedAt: segmentsFile.synthesizedAt,
               audioQa,
               generationState: undefined,
@@ -210,5 +232,11 @@ export async function finalizeChapterAudioWrite(
     await writeJsonAtomic(statePath, stampStateSchema(next));
   }
 
-  return { durationSec, audioQa, segmentCount: segments.length };
+  return {
+    durationSec,
+    audioQa,
+    segmentCount: segments.length,
+    audioModelKey: effectiveModelKey,
+    audioEngines,
+  };
 }
