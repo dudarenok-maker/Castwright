@@ -22,6 +22,10 @@ abstract class AudioEngine {
   /// Position ticks (drive the autosave throttle).
   Stream<Duration> get positionStream;
 
+  /// Whether playback is currently active (drives the media-session state).
+  bool get playing;
+  Stream<bool> get playingStream;
+
   /// Loaded media duration (null until known).
   Duration? get duration;
   Stream<Duration?> get durationStream;
