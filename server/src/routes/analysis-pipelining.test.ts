@@ -570,22 +570,21 @@ describe('runMainAnalyzerJob — back-pressure under stall', () => {
 });
 
 /* ───────────────────────────────────────────────────────────────────
-   Case 4 — Manual handoff regression.
-   ANALYZER=manual collapses to sequential — Phase 1 NEVER dispatches
-   while any Phase 0 chapter is pending. The watermark factory short-
-   circuits to the sequential stub in manual mode.
+   Case 4 — Sequential mode (per-phase selection inactive).
+   When no per-phase model is configured the pipeline collapses to the
+   sequential phase gate — Phase 1 NEVER dispatches while any Phase 0
+   chapter is pending. The watermark factory returns the sequential stub.
    ─────────────────────────────────────────────────────────────────── */
-describe('runMainAnalyzerJob — manual handoff collapses to sequential', () => {
-  it('ANALYZER=manual — Phase 1 never dispatches while any Phase 0 chapter is pending', async () => {
-    const manuscriptId = `test-manual-sequential-${Date.now()}`;
+describe('runMainAnalyzerJob — non-pipelined mode collapses to sequential', () => {
+  it('sequential mode — Phase 1 never dispatches while any Phase 0 chapter is pending', async () => {
+    const manuscriptId = `test-sequential-${Date.now()}`;
     registerStubManuscript(manuscriptId, 6);
-    process.env.ANALYZER = 'manual';
     process.env.STAGE2_CONCURRENCY = '2';
 
     const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
     const phase0Selection = buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it');
     const phase1Selection = buildSpyAnalyzerSelection(phase1Analyzer, 'gemma-4-31b-it');
-    /* In sequential / manual mode the route still calls
+    /* In sequential mode the route still calls
        `selectAnalyzerForPhase('phase1')`, but the watermark is the
        sequential stub — Phase 1 only starts after Phase 0b finalises.
        We inject the spy for Phase 1 so it doesn't fall through to the
