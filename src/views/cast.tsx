@@ -38,6 +38,7 @@ import type {
 } from '../lib/types';
 import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
+import { castDesignActions } from '../store/cast-design-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -182,6 +183,9 @@ export function CastView({
   const [compareIds, setCompareIds] = useState<[string, string] | null>(null);
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const ttsEngine = engineForModelKey(ttsModelKey);
+  /* "Design full cast" — the open book + the in-flight bulk-design snapshot. */
+  const bookId = useAppSelector((s) => (s.ui.stage.kind === 'ready' ? s.ui.stage.bookId : null));
+  const designActive = useAppSelector((s) => s.castDesign.active);
   /* fe-16 — per-character render-time fallback engine (Qwen → Kokoro), hydrated
      from book-state. Threaded into resolveVoiceStatus so a character that
      actually rendered in Kokoro shows "Fallback (Kokoro)" instead of its
@@ -228,6 +232,46 @@ export function CastView({
      so the chips and the rows can't disagree. */
   const statusKeysFor = (c: Character): string[] =>
     statusFilterKeys(c, findVoiceForCharacter(c, library), effectiveEngineFor(c));
+
+  /* "Design full cast" — every character whose lifecycle is "Needs voice" (a
+     Qwen-effective character with no designed voice), most-spoken first. Built
+     off the WHOLE cast (not the filtered copy) so the bulk run covers everyone
+     regardless of the active status filter. */
+  const needsVoiceIds = useMemo(
+    () =>
+      characters
+        .filter(
+          (c) =>
+            resolveVoiceStatus(c, findVoiceForCharacter(c, library), effectiveEngineFor(c))
+              .lifecycle?.label === 'Needs voice',
+        )
+        .slice()
+        .sort(compareCastRows)
+        .map((c) => c.id),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [characters, library, ttsEngine],
+  );
+  const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
+  const designRunningElsewhere =
+    designActive?.state === 'running' && designActive.bookId !== bookId;
+  /* Show the button on a Qwen project with ≥1 undesigned character, OR while a
+     run for this book is active (so the Cancel control stays reachable even
+     after the last row flips and the needs-voice count hits 0). */
+  const showDesignFullCast = (ttsEngine === 'qwen' && needsVoiceIds.length > 0) || designRunningHere;
+  const onDesignFullCast = () => {
+    if (designRunningHere) {
+      if (bookId) void api.pauseCastDesign(bookId);
+      return;
+    }
+    if (!bookId || needsVoiceIds.length === 0 || designRunningElsewhere) return;
+    dispatch(
+      castDesignActions.designAllRequested({
+        bookId,
+        characterIds: needsVoiceIds,
+        modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+      }),
+    );
+  };
 
   /* Chip buckets: one per status actually present in the cast, with its live
      count and pill color, ordered canonically. Built off the same resolver as
@@ -454,16 +498,53 @@ export function CastView({
               series.
             </p>
           </div>
-          <button
-            onClick={() => setShowLibrary(!showLibrary)}
-            className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
-            aria-label={showLibrary ? 'Hide voice library' : 'Show voice library'}
-            aria-expanded={showLibrary}
-          >
-            <IconLink className="w-4 h-4" />
-            <span className="hidden sm:inline">{showLibrary ? 'Hide' : 'Show'} library</span>
-            <span className="sm:hidden">Library</span>
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            {(showDesignFullCast || designRunningElsewhere) && (
+              <button
+                onClick={onDesignFullCast}
+                disabled={designRunningElsewhere}
+                data-testid="design-full-cast"
+                className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
+                  designRunningElsewhere
+                    ? 'bg-ink/5 text-ink/40 cursor-not-allowed'
+                    : designRunningHere
+                      ? 'bg-ink/6 text-ink/70 hover:bg-ink/10'
+                      : 'bg-magenta text-white hover:bg-magenta/90'
+                }`}
+                title={
+                  designRunningElsewhere
+                    ? 'A design run is already in progress for another book.'
+                    : undefined
+                }
+              >
+                {designRunningHere ? (
+                  <>
+                    <IconClose className="w-4 h-4" />
+                    <span>
+                      Cancel design · {designActive?.done ?? 0}/{designActive?.total ?? 0}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <IconSpinner className="w-4 h-4" />
+                    <span>
+                      Design full cast{needsVoiceIds.length > 0 ? ` (${needsVoiceIds.length})` : ''}
+                    </span>
+                  </>
+                )}
+              </button>
+            )}
+            <button
+              onClick={() => setShowLibrary(!showLibrary)}
+              className="min-h-[44px] px-4 py-2.5 rounded-full border border-ink/10 bg-white text-sm font-medium text-ink/70 hover:text-ink inline-flex items-center gap-2"
+              aria-label={showLibrary ? 'Hide voice library' : 'Show voice library'}
+              aria-expanded={showLibrary}
+            >
+              <IconLink className="w-4 h-4" />
+              <span className="hidden sm:inline">{showLibrary ? 'Hide' : 'Show'} library</span>
+              <span className="sm:hidden">Library</span>
+            </button>
+          </div>
         </div>
 
         {evictionBanner && (

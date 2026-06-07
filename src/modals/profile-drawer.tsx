@@ -229,6 +229,11 @@ export function ProfileDrawer({
   );
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
   const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
+  /* "Design full cast" — lock the single-design button while a bulk run owns
+     this book's designs (the server also 409s; this stops a doomed click). */
+  const bulkDesignActive = useAppSelector(
+    (s) => s.castDesign.active?.state === 'running' && s.castDesign.active.bookId === bookId,
+  );
   const [overrideError, setOverrideError] = useState<string | null>(null);
   const [sampleStatus, setSampleStatus] = useState<SampleStatus | 'idle'>('idle');
   const [sampleError, setSampleError] = useState<string | null>(null);
@@ -975,7 +980,7 @@ export function ProfileDrawer({
               onRegeneratePersona={() => void generatePersona()}
               personaBusy={personaBusy}
               onDesignVoice={() => void designVoice()}
-              designBusy={designBusy}
+              designBusy={designBusy || bulkDesignActive}
               designPlaying={designPlaying}
               designedVoiceId={designedVoiceId}
               error={engineError}

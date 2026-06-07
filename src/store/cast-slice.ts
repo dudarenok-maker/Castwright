@@ -99,6 +99,19 @@ export const castSlice = createSlice({
       const qwen = (otv.qwen ??= { name: '' });
       qwen.variants = { ...(qwen.variants ?? {}), [emotion]: { name: voiceId } };
     },
+    /* "Design full cast" — mirror a freshly-designed bespoke Qwen voice into
+       redux so the cast row flips "Needs voice" → "Designed" live as the bulk
+       job streams each `character_designed` event (the server already persisted
+       it to cast.json). No-op for an unknown character; preserves any existing
+       variants under the qwen slot. */
+    setQwenOverrideName: (s, a: PayloadAction<{ characterId: string; voiceId: string }>) => {
+      const { characterId, voiceId } = a.payload;
+      const c = s.characters.find((x) => x.id === characterId);
+      if (!c) return;
+      const otv = (c.overrideTtsVoices ??= {});
+      const qwen = (otv.qwen ??= { name: '' });
+      qwen.name = voiceId;
+    },
     /* fs-34 — drop a designed Qwen emotion variant from redux so the Variants
        badge + count update live (the DELETE route already removed it from
        cast.json + disk — this is local-only, no persist rule, mirroring
