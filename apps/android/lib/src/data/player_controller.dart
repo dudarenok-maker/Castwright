@@ -4,11 +4,39 @@ import '../domain/skip_behavior.dart';
 import 'audio_engine.dart';
 import 'playback_store.dart';
 
-/// One chapter the player can load: its stable `uuid` and local file path.
+/// One chapter the player can load: its stable `uuid` and local file path,
+/// plus display metadata (title/duration) for the media-session notification.
 class PlayableChapter {
-  const PlayableChapter({required this.uuid, required this.path});
+  const PlayableChapter({
+    required this.uuid,
+    required this.path,
+    this.title = '',
+    this.durationSec,
+  });
   final String uuid;
   final String path;
+  final String title;
+  final double? durationSec;
+}
+
+/// Pure now-playing snapshot; the audio-service handler maps it to a MediaItem
+/// for the lock-screen / notification / car display. No audio_service import
+/// here keeps [PlayerController] unit-testable.
+class NowPlaying {
+  const NowPlaying({
+    required this.id,
+    required this.bookId,
+    required this.title,
+    required this.album,
+    this.artPath,
+    this.duration,
+  });
+  final String id; // chapter uuid
+  final String bookId;
+  final String title; // chapter title
+  final String album; // book title
+  final String? artPath; // cover thumbnail file path
+  final Duration? duration;
 }
 
 /// Resolves a book's ordered, locally-available chapters (built from the
@@ -48,8 +76,12 @@ class PlayerController {
 
   StreamSubscription<Duration>? _sub;
   StreamSubscription<void>? _completionSub;
+  final StreamController<NowPlaying?> _nowPlaying =
+      StreamController<NowPlaying?>.broadcast();
   List<PlayableChapter> _playlist = const [];
   String? _bookId;
+  String _bookTitle = '';
+  String? _artPath;
   int _index = -1;
   double _speed = 1.0;
   double _boostDb = 0;
@@ -58,6 +90,14 @@ class PlayerController {
   /// Live playback duration of the loaded chapter (null until known).
   Stream<Duration?> get durationStream => _engine.durationStream;
   Duration? get duration => _engine.duration;
+
+  /// Playing/paused for the media session.
+  Stream<bool> get playingStream => _engine.playingStream;
+  bool get playing => _engine.playing;
+
+  /// Emits on every chapter load (incl. auto-advance) so the media session
+  /// updates the lock-screen / car title + artwork.
+  Stream<NowPlaying?> get nowPlayingStream => _nowPlaying.stream;
 
   double get speed => _speed;
   Future<void> setSpeed(double speed) {
@@ -101,8 +141,11 @@ class PlayerController {
 
   /// Prepare a book for playback: load its playlist, restore the saved resume
   /// point (or start at the first chapter), and seek there.
-  Future<void> openBook(String bookId) async {
+  Future<void> openBook(String bookId,
+      {String bookTitle = '', String? artPath}) async {
     _bookId = bookId;
+    _bookTitle = bookTitle;
+    _artPath = artPath;
     _playlist = await _loadPlaylist(bookId);
     final saved = await _store.loadPlayback(bookId);
     var index = 0;
@@ -116,7 +159,18 @@ class PlayerController {
   Future<void> _loadIndex(int index, {int seekMs = 0}) async {
     if (index < 0 || index >= _playlist.length) return;
     _index = index;
-    await _engine.setFilePath(_playlist[index].path);
+    final c = _playlist[index];
+    _nowPlaying.add(NowPlaying(
+      id: c.uuid,
+      bookId: _bookId ?? '',
+      title: c.title.isEmpty ? 'Chapter ${index + 1}' : c.title,
+      album: _bookTitle,
+      artPath: _artPath,
+      duration: c.durationSec != null
+          ? Duration(milliseconds: (c.durationSec! * 1000).round())
+          : null,
+    ));
+    await _engine.setFilePath(c.path);
     if (_speed != 1.0) await _engine.setSpeed(_speed); // persist speed across chapters
     if (_boostDb > 0) await _engine.setVolumeBoost(_boostDb); // persist boost too
     if (seekMs > 0) await _engine.seek(Duration(milliseconds: seekMs));
@@ -186,6 +240,7 @@ class PlayerController {
   Future<void> dispose() async {
     await _sub?.cancel();
     await _completionSub?.cancel();
+    await _nowPlaying.close();
     await _engine.dispose();
   }
 }

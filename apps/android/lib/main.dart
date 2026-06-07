@@ -1,5 +1,7 @@
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 
+import 'src/data/companion_audio_handler.dart';
 import 'src/data/companion_runtime.dart';
 import 'src/data/pairing_service.dart';
 import 'src/data/pairing_store.dart';
@@ -11,17 +13,28 @@ import 'src/ui/pairing_screen.dart';
 /// app-2 pairing + the app-3..14 library / sync / player wired on top, with
 /// OFFLINE launch (the runtime is rebuilt from the stored cert — no network
 /// needed to open the downloaded library).
-void main() {
-  runApp(AudiobookCompanionApp(store: SecurePairingStore()));
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // app-5/app-9: the media session must exist before the UI (lock-screen /
+  // Bluetooth / Android Auto). The runtime attaches the live player once paired.
+  final handler = await AudioService.init(
+    builder: () => CompanionAudioHandler(),
+    config: companionAudioServiceConfig,
+  );
+  runApp(AudiobookCompanionApp(store: SecurePairingStore(), audioHandler: handler));
 }
 
 class AudiobookCompanionApp extends StatelessWidget {
-  const AudiobookCompanionApp({super.key, required this.store, this.service});
+  const AudiobookCompanionApp(
+      {super.key, required this.store, this.service, this.audioHandler});
 
   final PairingStore store;
 
   /// Injectable so widget tests can drive pairing without real network/TLS.
   final PairingService? service;
+
+  /// The media-session handler (null in widget tests).
+  final CompanionAudioHandler? audioHandler;
 
   @override
   Widget build(BuildContext context) {
@@ -32,16 +45,24 @@ class AudiobookCompanionApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF8A2BE2)),
         useMaterial3: true,
       ),
-      home: HomePage(store: store, service: service ?? PairingService()),
+      home: HomePage(
+          store: store,
+          service: service ?? PairingService(),
+          audioHandler: audioHandler),
     );
   }
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, required this.store, required this.service});
+  const HomePage(
+      {super.key,
+      required this.store,
+      required this.service,
+      this.audioHandler});
 
   final PairingStore store;
   final PairingService service;
+  final CompanionAudioHandler? audioHandler;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -79,7 +100,8 @@ class _HomePageState extends State<HomePage> {
     // Offline-capable: rebuild the pinned runtime from stored creds, no network.
     try {
       final runtime = await CompanionRuntime.forConnection(
-          Connection(server: server, caPem: caPem));
+          Connection(server: server, caPem: caPem),
+          handler: widget.audioHandler);
       if (mounted) {
         setState(() {
           _runtime = runtime;
@@ -106,7 +128,8 @@ class _HomePageState extends State<HomePage> {
     try {
       final conn = await widget.service.pair(_paired!);
       await widget.store.saveCaPem(conn.caPem);
-      final runtime = await CompanionRuntime.forConnection(conn);
+      final runtime =
+          await CompanionRuntime.forConnection(conn, handler: widget.audioHandler);
       if (mounted) {
         setState(() {
           _runtime = runtime;
