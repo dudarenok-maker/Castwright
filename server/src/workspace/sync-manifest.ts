@@ -28,6 +28,10 @@ export const SYNC_MANIFEST_SCHEMA = 1;
 export interface ChapterAudioFact {
   fileSize: number;
   urlSuffix: 'audio.mp3' | 'audio.m4a' | 'audio.ogg';
+  /** Real PCM-measured length from the chapter's `<slug>.segments.json`
+   *  (the authoritative source the library scan uses). Preferred over the
+   *  QA verdict's `durationSec`, which is often absent on older books. */
+  durationSec?: number;
 }
 
 export interface SyncManifestIndexBook {
@@ -135,6 +139,7 @@ export function buildSyncManifestBookDetail(
     if (c.excluded) continue;
     const audio = audioByChapterId.get(c.id);
     const lufs = c.audioQa?.measuredLufs;
+    const durationSec = audio?.durationSec ?? c.audioQa?.durationSec;
     chapters.push({
       // The route guarantees a uuid via ensureChapterUuids before building.
       uuid: c.uuid ?? '',
@@ -147,7 +152,7 @@ export function buildSyncManifestBookDetail(
             audioUrl: `/api/books/${bookId}/chapters/${c.id}/${audio.urlSuffix}`,
           }
         : {}),
-      ...(c.audioQa?.durationSec !== undefined ? { durationSec: c.audioQa.durationSec } : {}),
+      ...(durationSec !== undefined ? { durationSec } : {}),
       ...(lufs !== undefined && lufs !== null ? { lufs } : {}),
     });
   }
