@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:just_audio/just_audio.dart';
 
 import 'audio_engine.dart';
@@ -14,6 +16,16 @@ class JustAudioEngine implements AudioEngine {
   Stream<Duration> get positionStream => _player.positionStream;
 
   @override
+  Duration? get duration => _player.duration;
+
+  @override
+  Stream<Duration?> get durationStream => _player.durationStream;
+
+  @override
+  Stream<void> get completionStream => _player.processingStateStream
+      .where((s) => s == ProcessingState.completed);
+
+  @override
   Future<void> setFilePath(String path) async {
     await _player.setFilePath(path);
   }
@@ -26,7 +38,11 @@ class JustAudioEngine implements AudioEngine {
   }
 
   @override
-  Future<void> play() => _player.play();
+  Future<void> play() async {
+    // just_audio's play() Future resolves only when playback ENDS; we only want
+    // to START playback and return, so fire-and-forget it.
+    unawaited(_player.play());
+  }
 
   @override
   Future<void> pause() => _player.pause();

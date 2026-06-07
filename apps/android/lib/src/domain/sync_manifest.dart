@@ -27,7 +27,7 @@ class SyncManifestIndexBook {
   final String title;
   final String author;
   final String series;
-  final int? seriesPosition;
+  final double? seriesPosition;
 
   /// Active (non-excluded) chapter count.
   final int chapterCount;
@@ -40,7 +40,7 @@ class SyncManifestIndexBook {
       title: json['title'] as String? ?? '',
       author: json['author'] as String? ?? '',
       series: json['series'] as String? ?? '',
-      seriesPosition: (json['seriesPosition'] as num?)?.toInt(),
+      seriesPosition: (json['seriesPosition'] as num?)?.toDouble(),
       chapterCount: (json['chapterCount'] as num?)?.toInt() ?? 0,
       coverUrl: json['coverUrl'] as String?,
     );
