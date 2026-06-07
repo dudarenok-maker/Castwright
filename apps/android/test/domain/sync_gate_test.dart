@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/sync_gate.dart';
+import 'package:castwright/src/domain/sync_gate.dart';
 
 void main() {
   group('shouldAutoSync', () {

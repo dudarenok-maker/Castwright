@@ -1,4 +1,4 @@
-name: audiobook_companion
+name: castwright
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -16,7 +16,9 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+# Kept in lockstep with the root/server version by scripts/bump-version.mjs
+# (build number = M*10000 + m*100 + p, monotonic). Plan 188.
+version: 1.6.0+10600
 
 environment:
   sdk: ^3.12.1

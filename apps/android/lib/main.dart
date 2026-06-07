@@ -9,7 +9,7 @@ import 'src/domain/paired_server.dart';
 import 'src/ui/library_home_screen.dart';
 import 'src/ui/pairing_screen.dart';
 
-/// Audiobook Companion — the native listening client (plan 188). app-1 shell +
+/// Castwright — the native listening client (plan 188). app-1 shell +
 /// app-2 pairing + the app-3..14 library / sync / player wired on top, with
 /// OFFLINE launch (the runtime is rebuilt from the stored cert — no network
 /// needed to open the downloaded library).
@@ -39,10 +39,10 @@ class AudiobookCompanionApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Audiobook Companion',
+      title: 'Castwright',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF8A2BE2)),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFA43C6C)),
         useMaterial3: true,
       ),
       home: HomePage(
@@ -177,7 +177,7 @@ class _HomePageState extends State<HomePage> {
     }
     if (_paired == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Audiobook Companion')),
+        appBar: AppBar(title: const Text('Castwright')),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -194,7 +194,7 @@ class _HomePageState extends State<HomePage> {
     if (_runtime == null) {
       // Legacy pairing, currently offline → can't open until we capture the cert.
       return Scaffold(
-        appBar: AppBar(title: const Text('Audiobook Companion')),
+        appBar: AppBar(title: const Text('Castwright')),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,

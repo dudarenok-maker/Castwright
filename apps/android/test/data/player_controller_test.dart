@@ -1,10 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/audio_engine.dart';
-import 'package:audiobook_companion/src/data/player_controller.dart';
-import 'package:audiobook_companion/src/data/playback_store.dart';
-import 'package:audiobook_companion/src/domain/skip_behavior.dart';
+import 'package:castwright/src/data/audio_engine.dart';
+import 'package:castwright/src/data/player_controller.dart';
+import 'package:castwright/src/data/playback_store.dart';
+import 'package:castwright/src/domain/skip_behavior.dart';
 
 class FakeAudioEngine implements AudioEngine {
   final List<String> calls = [];

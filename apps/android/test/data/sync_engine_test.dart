@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/chapter_downloader.dart';
-import 'package:audiobook_companion/src/data/file_store.dart';
-import 'package:audiobook_companion/src/data/local_library.dart';
-import 'package:audiobook_companion/src/data/sync_engine.dart';
-import 'package:audiobook_companion/src/domain/sync_manifest.dart';
+import 'package:castwright/src/data/chapter_downloader.dart';
+import 'package:castwright/src/data/file_store.dart';
+import 'package:castwright/src/data/local_library.dart';
+import 'package:castwright/src/data/sync_engine.dart';
+import 'package:castwright/src/domain/sync_manifest.dart';
 
 /// Fake manifest API: canned index + per-book detail, with a per-book throw to
 /// exercise failure isolation.

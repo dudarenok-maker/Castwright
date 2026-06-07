@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/media_browse_tree.dart';
+import 'package:castwright/src/domain/media_browse_tree.dart';
 
 void main() {
   final lib = [

@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/api_client.dart';
-import 'package:audiobook_companion/src/data/pairing_service.dart';
-import 'package:audiobook_companion/src/domain/paired_server.dart';
+import 'package:castwright/src/data/api_client.dart';
+import 'package:castwright/src/data/pairing_service.dart';
+import 'package:castwright/src/domain/paired_server.dart';
 
 Connection conn() => const Connection(
       server: PairedServer(url: 'https://10.0.0.5:8443', token: 'tok', caFingerprint: 'f'),

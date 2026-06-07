@@ -158,3 +158,78 @@ jobs:
             "release/audiobook-generator-${{ github.ref_name }}.zip.sha256" \
             --title "Audiobook generator ${{ github.ref_name }}" \
             --notes-file release/tag-notes.md
+
+  # plan 188 — build the installable companion APK (versioned in lockstep via
+  # bump-version.mjs → pubspec) and attach it to the release as a downloadable
+  # asset alongside the server zip.
+  companion-apk:
+    name: Companion APK
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - name: Rename + checksum
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "castwright-${{ github.ref_name }}.apk"
+          shasum -a 256 "castwright-${{ github.ref_name }}.apk" \
+            > "castwright-${{ github.ref_name }}.apk.sha256"
+          cat "castwright-${{ github.ref_name }}.apk.sha256"
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            "castwright-${{ github.ref_name }}.apk" \
+            "castwright-${{ github.ref_name }}.apk.sha256" --clobber
+
+  # plan 188 / app-12 prep — build the companion for iOS UNSIGNED so the release
+  # pathway exists + the iOS build is gated each release. An installable .ipa
+  # needs Apple signing certs (app-12); until then we attach the unsigned
+  # archive so it can be signed + exported later.
+  companion-ios:
+    name: Companion iOS (unsigned, app-12 prep)
+    needs: publish
+    runs-on: macos-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter build ipa --no-codesign
+      - name: Package unsigned artifact
+        run: |
+          set -e
+          out="castwright-${{ github.ref_name }}-ios-unsigned"
+          if ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
+            cp build/ios/ipa/*.ipa "$out.ipa"
+            echo "ASSET=apps/android/$out.ipa" >> "$GITHUB_ENV"
+          else
+            # --no-codesign can't export a distributable .ipa; ship the archive.
+            ditto -c -k --sequesterRsrc --keepParent \
+              build/ios/archive/Runner.xcarchive "$out.xcarchive.zip"
+            echo "ASSET=apps/android/$out.xcarchive.zip" >> "$GITHUB_ENV"
+          fi
+      - name: Attach to release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "$ASSET" --clobber
