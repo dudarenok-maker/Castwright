@@ -251,12 +251,6 @@ _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
 
-#### `fs-37` — Detect-emotions support for `ANALYZER=manual` (file-drop) mode (fs-33 follow-up) ([#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594))
-
-- _What:_ The emotion-only pass uses `selectAnalyzerForPhase` (Gemini/Ollama); the `ANALYZER=manual` file-drop cowork flow has no emotion-annotation path. Add a manual-handoff branch (inbox prompt → outbox JSON) for the annotate-emotion route.
-- _Benefit (user/dev):_ dev/cowork users on manual mode can backfill emotions too.
-_Full detail + acceptance:_ [#594](https://github.com/dudarenok-maker/AudioBook-Generator/issues/594).
-
 #### `fe-34` — Voices view: "Has emotion variants" filter (fs-34 follow-up) ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595))
 
 - _What:_ The cross-book Voices view renders the `VariantsBadge` on Qwen designed-voice cards (shipped), but has no status-filter like the cast view's chips. Add a filter toggle to narrow the view to voices whose character has ≥1 designed emotion variant.

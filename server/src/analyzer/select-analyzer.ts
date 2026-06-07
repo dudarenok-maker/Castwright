@@ -23,7 +23,7 @@
    Fall-through invariant: when NEITHER env var nor user-settings is
    set, the selector returns today's single-model `selectAnalyzer`
    result for both phases — same instance — so legacy
-   `ANALYZER=local|gemini|manual` behaviour is preserved verbatim. */
+   `ANALYZER=local|gemini` behaviour is preserved verbatim. */
 
 import {
   selectAnalyzer,
@@ -49,9 +49,8 @@ export interface PerPhaseAnalyzerOptions extends SelectAnalyzerOptions {
 }
 
 /** True when at least one signal — env or user-settings — engages the
-    pipelined watermark seam. The route layer also short-circuits to
-    sequential when `ANALYZER=manual` regardless of these signals
-    (manual cowork loop can't pipeline). */
+    pipelined watermark seam. When no signal is set the route layer
+    runs the non-pipelined sequential phase gate. */
 export function isPerPhaseModelSelectionActive(userSettings?: UserSettings): boolean {
   if (process.env.ANALYZER_PHASE0_MODEL || process.env.ANALYZER_PHASE1_MODEL) return true;
   const s = userSettings ?? getCachedUserSettings();
