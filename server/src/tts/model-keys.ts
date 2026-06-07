@@ -69,6 +69,30 @@ export function engineForModelKey(key: TtsModelKey): TtsEngine {
   return 'gemini';
 }
 
+/* The canonical model key for an engine — the inverse of `engineForModelKey`.
+   Gemini has two UI-stable variants, so its canonical key is whichever Gemini
+   key the run requested (falling back to 2.5 when the request wasn't Gemini).
+   Used to stamp a chapter's `audioModelKey` with the engine the audio ACTUALLY
+   rendered in (per-character routing, plan 108) rather than the request default
+   (the false-drift fix, 2026-06-07). */
+export function canonicalModelKeyForEngine(
+  engine: TtsEngine,
+  requestModelKey: TtsModelKey,
+): TtsModelKey {
+  switch (engine) {
+    case 'kokoro':
+      return 'kokoro-v1';
+    case 'qwen':
+      return 'qwen3-tts-0.6b';
+    case 'coqui':
+      return 'coqui-xtts-v2';
+    case 'piper':
+      return 'piper-en-us-medium';
+    case 'gemini':
+      return requestModelKey.startsWith('gemini-') ? requestModelKey : 'gemini-2.5-flash';
+  }
+}
+
 /* For sidecar requests, derive the engine-side model id from the namespaced
    key. `coqui-xtts-v2` → `xtts_v2`, `piper-en-us-medium` → `en-us-medium`. */
 export function sidecarModelId(key: TtsModelKey): string {

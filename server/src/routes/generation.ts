@@ -45,6 +45,7 @@ import { chapterAudioExists } from '../workspace/chapter-audio-file.js';
 import { loadAnalysisCache } from '../store/analysis-cache.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import {
+  canonicalModelKeyForEngine,
   engineForModelKey,
   isTtsModelKey,
   selectTtsProvider,
@@ -548,27 +549,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      bespoke character on Qwen, …). Build a per-engine provider cache — the
      default engine reuses the request's provider/modelKey — so
      `synthesiseChapter` routes each character to its own engine's provider
-     without reconstructing it per group. */
-  const canonicalModelKeyForEngine = (e: TtsEngine): TtsModelKey => {
-    switch (e) {
-      case 'kokoro':
-        return 'kokoro-v1';
-      case 'qwen':
-        return 'qwen3-tts-0.6b';
-      case 'coqui':
-        return 'coqui-xtts-v2';
-      case 'piper':
-        return 'piper-en-us-medium';
-      case 'gemini':
-        return modelKey.startsWith('gemini-') ? modelKey : 'gemini-2.5-flash';
-    }
-  };
+     without reconstructing it per group. Canonical engine→key mapping is the
+     shared `canonicalModelKeyForEngine` (also drives the drift stamp). */
   const providerCache = new Map<TtsEngine, { provider: TtsProvider; modelKey: TtsModelKey }>();
   providerCache.set(engine, { provider, modelKey });
   const resolveForEngine = (e: TtsEngine): { provider: TtsProvider; modelKey: TtsModelKey } => {
     const cached = providerCache.get(e);
     if (cached) return cached;
-    const mk = canonicalModelKeyForEngine(e);
+    const mk = canonicalModelKeyForEngine(e, modelKey);
     const built = { provider: selectTtsProvider(mk), modelKey: mk };
     providerCache.set(e, built);
     return built;
@@ -1340,7 +1328,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          no-progress watchdog bump right after the long encode step, exactly
          where the inlined `bumpProgress()` used to sit. expectedSec carries the
          same char-derived QA estimate as before (srv-27). */
-      const { audioQa } = await finalizeChapterAudioWrite({
+      const {
+        audioQa,
+        audioModelKey: renderedModelKey,
+        audioEngines,
+      } = await finalizeChapterAudioWrite({
         bookId,
         bookDir,
         chapter: { id: chapter.id, slug: chapter.slug, title: chapter.title },
@@ -1452,7 +1444,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         progress: 1,
         currentLine: totalLines,
         totalLines,
-        audioModelKey: modelKey,
+        /* The engine the audio ACTUALLY rendered in (per-character routing,
+           plan 108), not the request default — so a narrator-on-Qwen chapter
+           regenerated under a Kokoro default doesn't flash a false Kokoro
+           drift badge (false-drift fix, 2026-06-07). */
+        audioModelKey: renderedModelKey,
+        audioEngines,
         /* Belt-and-suspenders with the assembling tick (see line 616).
            The assembling tick is the primary carrier, but it can be missed
            when the page is hidden / the cross-book guard drops it / a

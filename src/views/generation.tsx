@@ -54,7 +54,7 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { MODEL_OPTIONS } from '../lib/models';
-import { ttsModelLabel } from '../lib/tts-models';
+import { ttsModelLabel, formatEngineBreakdown } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
@@ -84,6 +84,14 @@ const ACTIVITY_FEED_TYPES: ChangeLogEvent['type'][] = [
   'chapter_failed',
   'generation_started',
 ];
+
+/* A chapter whose voices span more than one TTS engine (e.g. narrator on
+   Kokoro + dialogue on Qwen, per-character routing plan 108). Such a chapter
+   can't be reduced to a single drift comparison, so the row shows a per-engine
+   voice-count breakdown instead of a drift warning (false-drift fix). */
+function isMixedEngineChapter(chapter: Chapter): boolean {
+  return Object.keys(chapter.audioEngines ?? {}).length > 1;
+}
 
 /* Transient per-chapter state for an in-flight "Include in book" subset
    analysis. Lives only while the SSE is streaming — drops on success,
@@ -610,7 +618,15 @@ export function GenerationView({
   const driftedChapters = useMemo(
     () =>
       activeChapters.filter(
-        (c) => c.state === 'done' && c.audioModelKey != null && c.audioModelKey !== modelKey,
+        (c) =>
+          c.state === 'done' &&
+          c.audioModelKey != null &&
+          c.audioModelKey !== modelKey &&
+          /* A genuinely mixed-engine chapter (narrator on Kokoro + dialogue on
+             Qwen) is intentional, not drift — it shows a per-engine breakdown
+             caption instead, and must not inflate the drift banner/bulk-regen
+             (false-drift fix, 2026-06-07). */
+          !isMixedEngineChapter(c),
       ),
     [activeChapters, modelKey],
   );
@@ -1319,6 +1335,17 @@ function ChapterRow({
             <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
               {liveSpeaker ? `Synthesising ${liveSpeaker.name} · ` : ''}
               line {liveCurrent.toLocaleString()} of {liveTotal.toLocaleString()}
+            </span>
+          ) : chapter.state === 'done' && isMixedEngineChapter(chapter) ? (
+            /* Mixed-engine breakdown caption (false-drift fix, 2026-06-07).
+               A chapter whose voices span engines (narrator on Kokoro +
+               dialogue on Qwen) is intentional, not drift — show the per-engine
+               voice count instead of an amber warning. */
+            <span
+              className="block text-[11px] text-ink/50 tabular-nums mt-0.5 truncate"
+              title={`Voices rendered across ${formatEngineBreakdown(chapter.audioEngines)}.`}
+            >
+              Voices: {formatEngineBreakdown(chapter.audioEngines)}
             </span>
           ) : chapter.state === 'done' &&
             chapter.audioModelKey &&
