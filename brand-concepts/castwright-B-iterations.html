@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Castwright — B iterations (wave from book)</title>
+<style>
+  :root{--canvas:#fffdfb;--ink:#0f0e0d;--peach:#f79a83;--magenta:#a43c6c;--deep:#7a1b49}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--canvas);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,"Segoe UI",sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:48px 32px 90px}
+  h1{font-family:Georgia,serif;font-size:36px;margin:0 0 2px}
+  .tag{font-family:Georgia,serif;font-style:italic;color:var(--magenta);margin:0 0 6px;font-size:16px}
+  .note{color:#6b6460;font-size:13px;margin:0 0 34px;line-height:1.5}
+  .grid{display:flex;gap:24px;flex-wrap:wrap}
+  .card{border:1px solid #eee2da;border-radius:16px;padding:22px;background:#fff;width:250px}
+  .card h3{font-size:16px;margin:0 0 4px}
+  .card p{font-size:12.5px;color:#5a534e;margin:6px 0 16px;line-height:1.45;min-height:60px}
+  .sizes{display:flex;align-items:flex-end;gap:16px}
+  .sz{display:flex;flex-direction:column;align-items:center;gap:6px}
+  .sz small{font-size:10px;color:#b3aaa3}
+  .dark{background:var(--ink);border-radius:12px;padding:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Castwright — wave from book, reworked</h1>
+  <p class="tag">Any book, performed by a full cast — effortlessly. Even in your own voice.</p>
+  <p class="note">Notes applied: bars spread out (no clustering), heights clearly varied (a real wave contour, like A), book stays at the base so voices “rise off the page.” Each shown at 120 / 40 / 16&nbsp;px.</p>
+
+  <div class="grid">
+
+    <!-- B1 : 5 bars, smooth symmetric wave, generous spacing -->
+    <div class="card">
+      <h3>B1 · Crested wave</h3>
+      <p>Five well-spaced bars cresting in the centre — a calm, balanced waveform. Peak in brand magenta.</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="120" y="214" width="32" height="158" rx="16" fill="#f79a83"/>
+            <rect x="184" y="158" width="32" height="214" rx="16" fill="#f79a83"/>
+            <rect x="240" y="104" width="32" height="268" rx="16" fill="#a43c6c"/>
+            <rect x="296" y="158" width="32" height="214" rx="16" fill="#fffdfb"/>
+            <rect x="360" y="214" width="32" height="158" rx="16" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="40" height="40" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="120" y="214" width="32" height="158" rx="16" fill="#f79a83"/>
+            <rect x="184" y="158" width="32" height="214" rx="16" fill="#f79a83"/>
+            <rect x="240" y="104" width="32" height="268" rx="16" fill="#a43c6c"/>
+            <rect x="296" y="158" width="32" height="214" rx="16" fill="#fffdfb"/>
+            <rect x="360" y="214" width="32" height="158" rx="16" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>40</small>
+        </div>
+        <div class="sz">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="120" y="214" width="32" height="158" rx="16" fill="#f79a83"/>
+            <rect x="184" y="158" width="32" height="214" rx="16" fill="#f79a83"/>
+            <rect x="240" y="104" width="32" height="268" rx="16" fill="#a43c6c"/>
+            <rect x="296" y="158" width="32" height="214" rx="16" fill="#fffdfb"/>
+            <rect x="360" y="214" width="32" height="158" rx="16" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+          </svg><small>16</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- B2 : 6 bars, irregular real-waveform heights -->
+    <div class="card">
+      <h3>B2 · Real waveform ★</h3>
+      <p>Six bars, irregular heights like an actual audio recording — the strongest “these are <i>different</i> voices” read. Spread edge to edge.</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="104" y="206" width="30" height="166" rx="15" fill="#f79a83"/>
+            <rect x="158" y="120" width="30" height="252" rx="15" fill="#f79a83"/>
+            <rect x="212" y="170" width="30" height="202" rx="15" fill="#a43c6c"/>
+            <rect x="266" y="92"  width="30" height="280" rx="15" fill="#a43c6c"/>
+            <rect x="320" y="150" width="30" height="222" rx="15" fill="#fffdfb"/>
+            <rect x="374" y="216" width="30" height="156" rx="15" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="40" height="40" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="104" y="206" width="30" height="166" rx="15" fill="#f79a83"/>
+            <rect x="158" y="120" width="30" height="252" rx="15" fill="#f79a83"/>
+            <rect x="212" y="170" width="30" height="202" rx="15" fill="#a43c6c"/>
+            <rect x="266" y="92"  width="30" height="280" rx="15" fill="#a43c6c"/>
+            <rect x="320" y="150" width="30" height="222" rx="15" fill="#fffdfb"/>
+            <rect x="374" y="216" width="30" height="156" rx="15" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>40</small>
+        </div>
+        <div class="sz">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="104" y="206" width="30" height="166" rx="15" fill="#f79a83"/>
+            <rect x="158" y="120" width="30" height="252" rx="15" fill="#f79a83"/>
+            <rect x="212" y="170" width="30" height="202" rx="15" fill="#a43c6c"/>
+            <rect x="266" y="92"  width="30" height="280" rx="15" fill="#a43c6c"/>
+            <rect x="320" y="150" width="30" height="222" rx="15" fill="#fffdfb"/>
+            <rect x="374" y="216" width="30" height="156" rx="15" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+          </svg><small>16</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- B3 : 4 sparse bold bars, 4 colours -->
+    <div class="card">
+      <h3>B3 · Four voices</h3>
+      <p>Four bold, airy bars — four distinct heights, four distinct colours (incl. deep plum). Most legible at tiny sizes; literally “a cast of four.”</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="118" y="196" width="44" height="176" rx="22" fill="#f79a83"/>
+            <rect x="194" y="110" width="44" height="262" rx="22" fill="#a43c6c"/>
+            <rect x="274" y="160" width="44" height="212" rx="22" fill="#7a1b49"/>
+            <rect x="350" y="232" width="44" height="140" rx="22" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="40" height="40" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="118" y="196" width="44" height="176" rx="22" fill="#f79a83"/>
+            <rect x="194" y="110" width="44" height="262" rx="22" fill="#a43c6c"/>
+            <rect x="274" y="160" width="44" height="212" rx="22" fill="#7a1b49"/>
+            <rect x="350" y="232" width="44" height="140" rx="22" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>40</small>
+        </div>
+        <div class="sz">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="118" y="196" width="44" height="176" rx="22" fill="#f79a83"/>
+            <rect x="194" y="110" width="44" height="262" rx="22" fill="#a43c6c"/>
+            <rect x="274" y="160" width="44" height="212" rx="22" fill="#7a1b49"/>
+            <rect x="350" y="232" width="44" height="140" rx="22" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+          </svg><small>16</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- B4 : 7 thin airy bars, gentle rolling wave -->
+    <div class="card">
+      <h3>B4 · Rolling wave</h3>
+      <p>Seven thin bars rolling up and down — the most “waveform-like,” elegant and dynamic. Busiest when tiny, so pair with a simplified favicon.</p>
+      <div class="sizes">
+        <div class="sz">
+          <svg width="120" height="120" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="110" y="220" width="20" height="152" rx="10" fill="#f79a83"/>
+            <rect x="152" y="168" width="20" height="204" rx="10" fill="#f79a83"/>
+            <rect x="194" y="118" width="20" height="254" rx="10" fill="#a43c6c"/>
+            <rect x="236" y="150" width="20" height="222" rx="10" fill="#a43c6c"/>
+            <rect x="278" y="100" width="20" height="272" rx="10" fill="#a43c6c"/>
+            <rect x="320" y="156" width="20" height="216" rx="10" fill="#fffdfb"/>
+            <rect x="362" y="210" width="20" height="162" rx="10" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>120</small>
+        </div>
+        <div class="sz">
+          <svg width="40" height="40" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="110" y="220" width="20" height="152" rx="10" fill="#f79a83"/>
+            <rect x="152" y="168" width="20" height="204" rx="10" fill="#f79a83"/>
+            <rect x="194" y="118" width="20" height="254" rx="10" fill="#a43c6c"/>
+            <rect x="236" y="150" width="20" height="222" rx="10" fill="#a43c6c"/>
+            <rect x="278" y="100" width="20" height="272" rx="10" fill="#a43c6c"/>
+            <rect x="320" y="156" width="20" height="216" rx="10" fill="#fffdfb"/>
+            <rect x="362" y="210" width="20" height="162" rx="10" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+            <rect x="252" y="330" width="8" height="78" rx="4" fill="#0f0e0d"/>
+          </svg><small>40</small>
+        </div>
+        <div class="sz">
+          <svg width="16" height="16" viewBox="0 0 512 512">
+            <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+            <rect x="110" y="220" width="20" height="152" rx="10" fill="#f79a83"/>
+            <rect x="152" y="168" width="20" height="204" rx="10" fill="#f79a83"/>
+            <rect x="194" y="118" width="20" height="254" rx="10" fill="#a43c6c"/>
+            <rect x="236" y="150" width="20" height="222" rx="10" fill="#a43c6c"/>
+            <rect x="278" y="100" width="20" height="272" rx="10" fill="#a43c6c"/>
+            <rect x="320" y="156" width="20" height="216" rx="10" fill="#fffdfb"/>
+            <rect x="362" y="210" width="20" height="162" rx="10" fill="#fffdfb"/>
+            <g fill="#fffdfb">
+              <path d="M256 408 C 208 380, 150 380, 108 396 L108 320 C150 304, 208 304, 256 332 Z"/>
+              <path d="M256 408 C 304 380, 362 380, 404 396 L404 320 C362 304, 304 304, 256 332 Z"/>
+            </g>
+          </svg><small>16</small>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="note" style="margin-top:34px">All four: bars spread across the full width, heights clearly varied, still reading as a wave, rising off an open book. Tell me the winner (B1 / B2 / B3 / B4) + any height/colour tweak, and I’ll lock the reversible set + export assets.</p>
+</div>
+</body>
+</html>

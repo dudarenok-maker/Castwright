@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 320" width="1180" height="320" role="img" aria-label="Castwright">
+  <title>Castwright — horizontal lockup (positive, for light backgrounds)</title>
+  <!-- NOTE: text uses Georgia for preview; outline to paths for production use. -->
+  <!-- icon (primary tile), scaled 0.5625 -> 288px, padded 16 -->
+  <g transform="translate(16,16) scale(0.5625)">
+    <rect width="512" height="512" rx="118" fill="#0f0e0d"/>
+    <rect x="104" y="210" width="30" height="92"  rx="15" fill="#f79a83"/>
+    <rect x="158" y="116" width="30" height="256" rx="15" fill="#f79a83"/>
+    <rect x="212" y="160" width="30" height="160" rx="15" fill="#a43c6c"/>
+    <rect x="266" y="92"  width="30" height="284" rx="15" fill="#a43c6c"/>
+    <rect x="320" y="146" width="30" height="202" rx="15" fill="#fffdfb"/>
+    <rect x="374" y="200" width="30" height="108" rx="15" fill="#fffdfb"/>
+    <path d="M110 416 C 170 392, 226 392, 256 412 C 286 392, 342 392, 402 416"
+          fill="none" stroke="#fffdfb" stroke-width="15" stroke-linecap="round"/>
+  </g>
+  <text x="338" y="212" font-family="Georgia, 'Times New Roman', serif" font-size="150" letter-spacing="-2" fill="#0f0e0d">Castwright<tspan font-size="70" fill="#a43c6c" dx="8">.ai</tspan></text>
+</svg>
