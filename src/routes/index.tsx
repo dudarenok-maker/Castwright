@@ -603,6 +603,7 @@ function ReadyViewSwitch({
           characters={characters}
           setCharacters={setCharacters}
           library={voices}
+          sentences={manuscript.sentences}
           title={projectTitle}
           bookLanguage={activeBook?.language ?? 'en'}
           onOpenProfile={(id) => dispatch(uiActions.setOpenProfileId(id))}

@@ -9,7 +9,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { FallbackAnalyzer } from './index.js';
 import { LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
 import type { Analyzer, StageCall } from './index.js';
-import type { Stage1Output, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
+import type {
+  Stage1Output,
+  Stage1ChapterOutput,
+  Stage2ChapterOutput,
+  EmotionAnnotationOutput,
+} from '../handoff/schemas.js';
 
 const STAGE1_RESULT: Stage1Output = {
   characters: [{ id: 'n', name: 'Narrator', role: 'narrator', color: 'narrator' }],
@@ -21,11 +26,15 @@ const STAGE1_CHAPTER_RESULT: Stage1ChapterOutput = {
 const STAGE2_RESULT: Stage2ChapterOutput = {
   sentences: [{ id: 1, chapterId: 1, characterId: 'n', text: 'Once upon a time.' }],
 };
+const EMOTION_RESULT: EmotionAnnotationOutput = {
+  annotations: [{ sentenceId: 1, emotion: 'angry' }],
+};
 
 function makeAnalyzer(impl: Partial<Analyzer>): Analyzer & {
   runStage1: ReturnType<typeof vi.fn>;
   runStage1Chapter: ReturnType<typeof vi.fn>;
   runStage2Chapter: ReturnType<typeof vi.fn>;
+  runEmotionChapter: ReturnType<typeof vi.fn>;
 } {
   return {
     runStage1: vi.fn(impl.runStage1 ?? (() => Promise.resolve(STAGE1_RESULT))),
@@ -33,6 +42,7 @@ function makeAnalyzer(impl: Partial<Analyzer>): Analyzer & {
       impl.runStage1Chapter ?? (() => Promise.resolve(STAGE1_CHAPTER_RESULT)),
     ),
     runStage2Chapter: vi.fn(impl.runStage2Chapter ?? (() => Promise.resolve(STAGE2_RESULT))),
+    runEmotionChapter: vi.fn(impl.runEmotionChapter ?? (() => Promise.resolve(EMOTION_RESULT))),
   };
 }
 
@@ -143,5 +153,39 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
     const f = new FallbackAnalyzer(primary, fallback);
     await f.runStage2Chapter('m', 1, '# p', CALL);
     expect(fallback.runStage2Chapter).toHaveBeenCalledTimes(1);
+  });
+
+  it('runEmotionChapter (fs-33) follows the same fallback rule', async () => {
+    const primary = makeAnalyzer({
+      runEmotionChapter: () => Promise.reject(new LocalUnreachableError('down')),
+    });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+    const result = await f.runEmotionChapter('m', 1, '# p', CALL);
+    expect(result).toBe(EMOTION_RESULT);
+    expect(primary.runEmotionChapter).toHaveBeenCalledTimes(1);
+    expect(fallback.runEmotionChapter).toHaveBeenCalledTimes(1);
+  });
+
+  it('runEmotionChapter does NOT fall back on a plain Error', async () => {
+    const primary = makeAnalyzer({
+      runEmotionChapter: () => Promise.reject(new Error('validation failed')),
+    });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+    await expect(f.runEmotionChapter('m', 1, '# p', CALL)).rejects.toThrow(/validation failed/);
+    expect(fallback.runEmotionChapter).not.toHaveBeenCalled();
+  });
+
+  it('runEmotionChapter does NOT fall back on AnalysisAbortedError', async () => {
+    const primary = makeAnalyzer({
+      runEmotionChapter: () => Promise.reject(new AnalysisAbortedError('client gone')),
+    });
+    const fallback = makeAnalyzer({});
+    const f = new FallbackAnalyzer(primary, fallback);
+    await expect(f.runEmotionChapter('m', 1, '# p', CALL)).rejects.toBeInstanceOf(
+      AnalysisAbortedError,
+    );
+    expect(fallback.runEmotionChapter).not.toHaveBeenCalled();
   });
 });

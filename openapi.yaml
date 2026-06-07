@@ -2227,6 +2227,78 @@ paths:
         '409':
           description: Source or other book has no cast on disk yet
 
+  /api/books/{bookId}/annotate-emotion:
+    post:
+      summary: Emotion-only backfill pass (fs-33)
+      operationId: annotateEmotion
+      description: |
+        Runs a lightweight LLM pass over the book's already-attributed sentences
+        and streams a per-sentence delivery `emotion` over Server-Sent Events. It
+        does NOT re-attribute — `characterId` is never changed. The client applies
+        the streamed annotations to the manuscript store (fill-only-empty, so a
+        hand-set emotion always wins) and persists them to manuscript-edits.json,
+        which is the same path synth reads via rebuildCacheFromEdits. SSE event
+        kinds: `phase`, `throttle`, `heartbeat`, `annotation`
+        (`{ chapterId, annotations: [{ sentenceId, emotion }] }`), `chapter-failed`,
+        `error` (`code: no_attribution | quota_exhausted`), and a terminal
+        `result` (`{ done, annotatedChapters, totalAnnotations }`).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model:
+                  {
+                    type: string,
+                    description: 'Optional analyzer model id override (matches the analysis endpoints).',
+                  }
+      responses:
+        '200':
+          description: SSE stream of annotation/phase/result events.
+          content:
+            text/event-stream:
+              schema: { type: object }
+        '404':
+          description: Book not found
+        '409':
+          description: Book has not been analysed yet
+
+  /api/books/{bookId}/cast/{characterId}/emotion-variant/{emotion}:
+    delete:
+      summary: Remove a designed emotion variant (fs-34)
+      operationId: deleteCharacterEmotionVariant
+      description: |
+        Drops `overrideTtsVoices.qwen.variants[emotion]` from cast.json and
+        deletes the variant's `.pt` + `.json` on disk, leaving the base voice and
+        every sibling variant intact. An empty `variants` map is cleaned up so the
+        Variants badge clears. Idempotent — removing an absent variant still 200s.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: characterId, required: true, schema: { type: string } }
+        - in: path
+          name: emotion
+          required: true
+          schema: { type: string, enum: [whisper, angry, excited, sad] }
+      responses:
+        '200':
+          description: Variant removed (or was already absent)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, removed]
+                properties:
+                  ok: { type: boolean }
+                  removed: { type: string, enum: [whisper, angry, excited, sad] }
+        '400':
+          description: emotion is not one of whisper/angry/excited/sad
+        '404':
+          description: Book or character not found
+
 # ---------------------------------------------------------------------
 # Schemas
 # ---------------------------------------------------------------------

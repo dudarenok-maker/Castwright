@@ -8,7 +8,12 @@
    propagates and hard-fails — the rule, per plan 29: a misbehaving local
    model must not silently burn Gemini quota. */
 
-import type { Stage1Output, Stage1ChapterOutput, Stage2ChapterOutput } from '../handoff/schemas.js';
+import type {
+  Stage1Output,
+  Stage1ChapterOutput,
+  Stage2ChapterOutput,
+  EmotionAnnotationOutput,
+} from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
 import {
@@ -76,6 +81,16 @@ export interface Analyzer {
     promptMd: string,
     call: StageCall,
   ): Promise<Stage2ChapterOutput>;
+  /* fs-33 — emotion-only backfill. Reads a chapter's already-attributed
+     sentences and returns ONLY {sentenceId, emotion} for the sentences it
+     assigns a delivery emotion. Never re-attributes (no characterId/text in
+     the output schema), so existing cast/manual reassignments are untouched. */
+  runEmotionChapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<EmotionAnnotationOutput>;
 }
 
 export interface SelectAnalyzerOptions {
@@ -210,6 +225,23 @@ export class FallbackAnalyzer implements Analyzer {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof LocalUnreachableError) {
         return await this.fallback.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
+      }
+      throw err;
+    }
+  }
+
+  async runEmotionChapter(
+    manuscriptId: string,
+    chapterId: number,
+    promptMd: string,
+    call: StageCall,
+  ): Promise<EmotionAnnotationOutput> {
+    try {
+      return await this.primary.runEmotionChapter(manuscriptId, chapterId, promptMd, call);
+    } catch (err) {
+      if (err instanceof AnalysisAbortedError) throw err;
+      if (err instanceof LocalUnreachableError) {
+        return await this.fallback.runEmotionChapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
     }

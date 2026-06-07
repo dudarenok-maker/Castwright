@@ -2211,6 +2211,153 @@ async function realAnalyseManuscript(
   return result;
 }
 
+/* fs-33 — emotion-only backfill stream. Mirrors realAnalyseManuscript's SSE
+   reader. Emits per-chapter progress + annotation batches; the caller applies
+   them to the manuscript store (fill-only-empty) and persists them. */
+export interface DetectEmotionsOpts {
+  signal?: AbortSignal;
+  model?: string;
+  onPhase?: (e: { progress: number; label?: string; chapterId?: number }) => void;
+  onThrottle?: (e: { chapterId: number; waitMs: number; reason: string }) => void;
+  onAnnotation?: (e: {
+    chapterId: number;
+    annotations: Array<{ sentenceId: number; emotion: string }>;
+  }) => void;
+}
+export interface DetectEmotionsResult {
+  annotatedChapters: number;
+  totalAnnotations: number;
+}
+export class DetectEmotionsError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = 'DetectEmotionsError';
+  }
+}
+
+async function realDetectEmotions(
+  bookId: string,
+  { signal, model, onPhase, onThrottle, onAnnotation }: DetectEmotionsOpts = {},
+): Promise<DetectEmotionsResult> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/annotate-emotion`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(model !== undefined ? { model } : {}),
+    signal,
+  });
+  if (res.status === 404) throw new DetectEmotionsError('Book not found.', 'not_found');
+  if (!res.ok || !res.body) throw new Error(`Detect-emotions stream failed (${res.status}).`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result: DetectEmotionsResult | null = null;
+
+  const handle = (p: Record<string, unknown>) => {
+    switch (p.kind) {
+      case 'phase':
+        if (typeof p.progress === 'number') {
+          onPhase?.({
+            progress: p.progress,
+            label: typeof p.label === 'string' ? p.label : undefined,
+            chapterId: typeof p.chapterId === 'number' ? p.chapterId : undefined,
+          });
+        }
+        break;
+      case 'throttle':
+        if (typeof p.chapterIndex === 'number' && typeof p.waitMs === 'number') {
+          onThrottle?.({
+            chapterId: p.chapterIndex,
+            waitMs: p.waitMs,
+            reason: String(p.reason ?? ''),
+          });
+        }
+        break;
+      case 'annotation':
+        if (typeof p.chapterId === 'number' && Array.isArray(p.annotations)) {
+          onAnnotation?.({
+            chapterId: p.chapterId,
+            annotations: p.annotations as Array<{ sentenceId: number; emotion: string }>,
+          });
+        }
+        break;
+      case 'result':
+        result = {
+          annotatedChapters: typeof p.annotatedChapters === 'number' ? p.annotatedChapters : 0,
+          totalAnnotations: typeof p.totalAnnotations === 'number' ? p.totalAnnotations : 0,
+        };
+        break;
+      case 'error':
+        throw new DetectEmotionsError(
+          typeof p.message === 'string' ? p.message : 'Emotion detection failed.',
+          typeof p.code === 'string' ? p.code : 'unknown',
+        );
+      /* heartbeat / chapter-failed are advisory — ignored by the client. */
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const dataLines = raw
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
+      if (!dataLines.length) continue;
+      handle(JSON.parse(dataLines.join('\n')) as Record<string, unknown>);
+    }
+  }
+
+  if (!result) throw new Error('Detect-emotions stream ended without a result event.');
+  return result;
+}
+
+async function mockDetectEmotions(
+  _bookId: string,
+  { onPhase, onAnnotation }: DetectEmotionsOpts = {},
+): Promise<DetectEmotionsResult> {
+  await wait(60);
+  onPhase?.({ progress: 0.5, label: 'Detecting emotions — chapter 1', chapterId: 1 });
+  onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'excited' }] });
+  onPhase?.({ progress: 1, label: 'Done' });
+  return { annotatedChapters: 1, totalAnnotations: 1 };
+}
+
+/* fs-34 — drop a designed Qwen emotion variant (route deletes the slot + .pt). */
+async function realRemoveQwenVariant(
+  bookId: string,
+  characterId: string,
+  emotion: string,
+): Promise<void> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(
+      characterId,
+    )}/emotion-variant/${encodeURIComponent(emotion)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Remove-variant failed (${res.status}).`);
+  }
+}
+
+async function mockRemoveQwenVariant(): Promise<void> {
+  await wait(50);
+}
+
 async function realMatchVoices({ bookId, characters }: MatchArgs): Promise<VoiceMatchResponse> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/voice-match`, {
     method: 'POST',
@@ -4821,6 +4968,8 @@ const real = {
   generateAllVoiceStyles: realGenerateAllVoiceStyles,
   fetchDesignedPersona: realFetchDesignedPersona,
   designQwenVoice: realDesignQwenVoice,
+  detectEmotions: realDetectEmotions,
+  removeQwenVariant: realRemoveQwenVariant,
   promoteQwenVoice: realPromoteQwenVoice,
   discardQwenPreview: realDiscardQwenPreview,
   overrideLibraryCast: realOverrideLibraryCast,
@@ -5046,6 +5195,8 @@ const mock = {
   generateAllVoiceStyles: mockGenerateAllVoiceStyles,
   fetchDesignedPersona: mockFetchDesignedPersona,
   designQwenVoice: mockDesignQwenVoice,
+  detectEmotions: mockDetectEmotions,
+  removeQwenVariant: mockRemoveQwenVariant,
   promoteQwenVoice: mockPromoteQwenVoice,
   discardQwenPreview: mockDiscardQwenPreview,
   overrideLibraryCast: mockOverrideLibraryCast,
