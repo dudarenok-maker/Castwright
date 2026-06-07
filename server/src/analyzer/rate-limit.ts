@@ -35,6 +35,7 @@ const FALLBACK_LIMITS: ModelLimits = { rpm: 5, tpm: 100_000, rpd: 50 };
    change. */
 const BUILTIN_LIMITS: Record<string, ModelLimits> = {
   'gemini-3.1-flash-lite': { rpm: 15, tpm: 250_000, rpd: 500 },
+  'gemini-3.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-3-flash-preview': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemini-2.5-flash': { rpm: 5, tpm: 250_000, rpd: 20 },
   'gemma-4-31b-it': { rpm: 15, tpm: Infinity, rpd: 1500 },
