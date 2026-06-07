@@ -359,6 +359,33 @@ describe('chaptersSlice — applyGenerationTick', () => {
     });
   });
 
+  describe('chapter_verifying', () => {
+    it('sets phase=verifying, keeps the row in_progress, and carries progress', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', progress: 0.9 })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_verifying', chapterId: 3, progress: 0.99 }),
+        ),
+      );
+      expect(next.chapters[0].phase).toBe('verifying');
+      expect(next.chapters[0].state).toBe('in_progress');
+      expect(next.chapters[0].progress).toBeCloseTo(0.99);
+    });
+
+    it('is cleared by a subsequent chapter_complete', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', phase: 'verifying' })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_complete', chapterId: 3, totalLines: 10 }),
+        ),
+      );
+      expect(next.chapters[0].phase).toBe(null);
+      expect(next.chapters[0].state).toBe('done');
+    });
+  });
+
   describe('chapter_complete', () => {
     it('flips state to done, progress to 1, and all non-skipped characters to done', () => {
       const start = baseState([
