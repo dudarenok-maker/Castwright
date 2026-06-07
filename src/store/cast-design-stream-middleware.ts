@@ -172,6 +172,13 @@ export function createCastDesignMiddleware(): Middleware {
             dedupeKey: `single-design-done:${bookId}:${cid}`,
           }),
         );
+        /* Flip the snapshot to 'done' immediately so the Profile Drawer's
+           sliceDesigning check (state === 'running') becomes false right away
+           and the "Voice designed" confirmation (qwen-designed-confirm) is
+           shown without waiting for onIdle. The onIdle setTimeout still clears
+           the snapshot after SUMMARY_LINGER_MS — its guard (state !== 'ready-to-compare')
+           is satisfied by 'done', so it will dispatch clear() as before. */
+        dispatch(castDesignActions.settle({ bookId, lastTickAt: Date.now() }));
       },
       onPreviewReady: ({ characterId: cid, name, previewVoiceId, previewUrl, persona }) => {
         dispatch(
