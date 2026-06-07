@@ -13,16 +13,18 @@ import { Provider } from 'react-redux';
 import { act, render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import { uiSlice } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
+import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { CastView, compareCastRows } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { api } from '../lib/api';
-import type { Character, Voice } from '../lib/types';
+import type { Character, Voice, TtsModelKey } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
     /* fe-16 — the cast view auto-loads Qwen on entry for non-English books. */
     loadSidecar: vi.fn().mockResolvedValue({}),
+    pauseCastDesign: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -111,7 +113,9 @@ function renderView(opts: { onOpenProfile?: (id: string | null) => void } = {}) 
   /* StaleAudioBanner (mounted inside CastView) reads s.cast.characters,
      so the test store needs the cast slice even though the cast list is
      passed as a prop. */
-  const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+  const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
   return render(
     <Provider store={store}>
       <CastView
@@ -285,7 +289,9 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
      The sample must route to the Qwen model key and carry the designed
      voiceId, and gate cleanly when no voice has been designed. */
   function renderChars(characters: Character[]) {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     return {
       store,
       ...render(
@@ -372,7 +378,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
      otherwise show a false green pill for an undesigned Qwen character).
      Preset rows keep their `voiceState` pills. */
   function renderWithLibrary(characters: Character[], lib: Voice[]) {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     return render(
       <Provider store={store}>
         <CastView
@@ -432,7 +440,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
        render time. The cast slice's renderedFallbackByCharacter map carries
        `'kokoro'` for its id; the Status pill reads it via the 4th arg. */
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
       preloadedState: {
         cast: {
           ...castSlice.getInitialState(),
@@ -465,7 +473,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
        with no renderedFallbackEngine → the map no longer carries the id, so
        the design lifecycle pill ("Designed") shows again. */
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer },
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
       preloadedState: {
         cast: { ...castSlice.getInitialState(), renderedFallbackByCharacter: {} },
       },
@@ -496,7 +504,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
        reads the static `library` prop in this harness). */
     vi.mocked(playSampleWithAutoLoad).mockClear();
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, voices: voicesSlice.reducer },
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        voices: voicesSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
       preloadedState: {
         voices: { ...voicesSlice.getInitialState(), loaded: true, voices: library },
       },
@@ -579,7 +592,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
        would otherwise produce. The Status column resolves the effective engine
        (c.ttsEngine ?? project engine), so flipping the project to Qwen flips
        the pill. */
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
     /* Marrow: voiceState 'generated', no ttsEngine, no qwen override; empty
        library ⇒ no matched voice. */
@@ -705,7 +720,9 @@ describe('CastView desktop drag-drop is intact', () => {
      path was not removed in the responsive refactor. */
 
   it('a voice drag-and-drop onto a character row still rewrites the cast', () => {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     let castRef: Character[] = [narrator, Marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
@@ -773,7 +790,9 @@ describe('CastView wave-4 tap-to-assign', () => {
   });
 
   it('tapping a character row in assignment mode applies the voice', () => {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     let castRef: Character[] = [narrator, Marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
@@ -806,7 +825,9 @@ describe('CastView wave-4 tap-to-assign', () => {
 
   it('Cancel button on the banner exits assignment mode without applying', () => {
     const setCharacters = vi.fn();
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     render(
       <Provider store={store}>
         <CastView
@@ -847,7 +868,9 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
      onShowDrift with no argument — that one stays unscoped. */
   it('per-row drift pill click dispatches onShowDrift(characterId)', () => {
     const onShowDrift = vi.fn();
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     const driftedNarrator: Character = {
       ...narrator,
       id: 'narrator',
@@ -941,7 +964,9 @@ describe('compareCastRows — cast table ordering', () => {
 
 describe('CastView row ordering — wired into render', () => {
   function renderCast(chars: Character[]) {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     return render(
       <Provider store={store}>
         <CastView
@@ -1012,7 +1037,9 @@ describe('CastView status filter', () => {
   };
 
   function renderFilterView() {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     return render(
       <Provider store={store}>
         <CastView
@@ -1092,7 +1119,9 @@ describe('CastView status filter', () => {
 
 describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
   function renderWithLanguage(bookLanguage: string) {
-    const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer } });
+    const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+  });
     return render(
       <Provider store={store}>
         <CastView
@@ -1149,5 +1178,115 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
     expect(screen.getByTestId('cast-qwen-language-banner')).toBeInTheDocument();
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     expect(api.loadSidecar).not.toHaveBeenCalled();
+  });
+});
+
+describe('CastView — Design full cast button', () => {
+  const qwenNeedsVoice: Character = {
+    ...Marrow,
+    ttsEngine: 'qwen',
+    overrideTtsVoices: undefined,
+  };
+  const qwenDesigned: Character = {
+    ...Marrow,
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-v_Marrow' } },
+  };
+
+  type DesignActive = {
+    bookId: string;
+    total: number;
+    done: number;
+    skipped: number;
+    currentName: string | null;
+    state: 'running' | 'done' | 'halted';
+    lastTickAt: number;
+    failures: Array<{ characterId: string; name: string; error: string }>;
+  };
+
+  function setup(
+    opts: {
+      chars?: Character[];
+      modelKey?: TtsModelKey;
+      ready?: boolean;
+      designActive?: DesignActive;
+    } = {},
+  ) {
+    const actions: Array<{ type: string; payload?: unknown }> = [];
+    const recorder =
+      () => (next: (a: unknown) => unknown) => (action: unknown) => {
+        actions.push(action as { type: string; payload?: unknown });
+        return next(action);
+      };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        castDesign: castDesignSlice.reducer,
+      },
+      preloadedState: opts.designActive ? { castDesign: { active: opts.designActive } } : undefined,
+      middleware: (g) => g().concat(recorder),
+    });
+    if (opts.modelKey) store.dispatch(uiSlice.actions.setTtsModelKey(opts.modelKey));
+    if (opts.ready) store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'complete' }));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={opts.chars ?? [qwenNeedsVoice]}
+          setCharacters={() => {}}
+          library={library}
+          title="X"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    return { store, actions };
+  }
+
+  it('shows on a Qwen project with ≥1 needs-voice character', () => {
+    setup({ modelKey: 'qwen3-tts-0.6b' });
+    expect(screen.getByTestId('design-full-cast')).toBeInTheDocument();
+  });
+
+  it('is hidden on a Kokoro project (default engine)', () => {
+    setup({});
+    expect(screen.queryByTestId('design-full-cast')).toBeNull();
+  });
+
+  it('is hidden when every character already has a voice', () => {
+    setup({ modelKey: 'qwen3-tts-0.6b', chars: [qwenDesigned] });
+    expect(screen.queryByTestId('design-full-cast')).toBeNull();
+  });
+
+  it('click dispatches designAllRequested with the needs-voice ids + a Qwen modelKey', () => {
+    const { actions } = setup({ modelKey: 'qwen3-tts-0.6b', ready: true });
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    const a = actions.find((x) => x.type === castDesignActions.designAllRequested.type) as
+      | { payload: { bookId: string; characterIds: string[]; modelKey: string } }
+      | undefined;
+    expect(a?.payload.bookId).toBe('b1');
+    expect(a?.payload.characterIds).toEqual(['Marrow']);
+    expect(a?.payload.modelKey).toMatch(/qwen/);
+  });
+
+  it('shows a Cancel control while a run for this book is active', () => {
+    setup({
+      modelKey: 'qwen3-tts-0.6b',
+      ready: true,
+      designActive: {
+        bookId: 'b1',
+        total: 3,
+        done: 1,
+        skipped: 0,
+        currentName: 'Mr. Marrow',
+        state: 'running',
+        lastTickAt: 1,
+        failures: [],
+      },
+    });
+    expect(screen.getByTestId('design-full-cast')).toHaveTextContent('Cancel design · 1/3');
   });
 });

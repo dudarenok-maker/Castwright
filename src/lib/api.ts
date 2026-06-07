@@ -3740,6 +3740,229 @@ async function realPauseAnalysis({ manuscriptId }: { manuscriptId: string }): Pr
   });
 }
 
+/* ── "Design full cast" bulk-design job (server-owned SSE) ──────────────────
+   A single per-book server job designs a Qwen voice for every "Needs voice"
+   character, streaming progress over SSE. `startCastDesign` opens the job
+   (POST with the id list); `subscribeCastDesign` re-attaches to an in-flight
+   one after a browser reload (bare POST, no list). Both share one SSE reader.
+   The stream parser mirrors `realAnalyseManuscript`'s `data: <json>` framing. */
+
+export interface CastDesignCallbacks {
+  signal?: AbortSignal;
+  /** Replayed once on (re)subscribe to a live job so the pill can seed counters. */
+  onResumeFrom?: (e: { total: number; done: number; currentName: string | null }) => void;
+  /** A character's design is starting. */
+  onProgress?: (e: { characterId: string; name: string; done: number; total: number }) => void;
+  /** Throttled (~6s) liveness tick during a long single design. */
+  onHeartbeat?: (e: { characterId: string }) => void;
+  /** A character was designed + persisted; `voiceId` is the bespoke qwen name. */
+  onCharacterDesigned?: (e: { characterId: string; voiceId: string }) => void;
+  /** A character was skipped (already had a Qwen voice when its turn came). */
+  onCharacterSkipped?: (e: { characterId: string }) => void;
+  /** A character's design failed; the run continues past it. */
+  onCharacterFailed?: (e: { characterId: string; name: string; errorReason: string }) => void;
+  /** Terminal: the run finished (or there was nothing to do). */
+  onIdle?: (e: {
+    done: number;
+    total: number;
+    skipped: number;
+    failures: Array<{ characterId: string; name: string; error: string }>;
+  }) => void;
+  /** Catastrophic abort (NOT a per-character failure). */
+  onError?: (e: { code: string; message: string }) => void;
+}
+
+interface CastDesignStreamEvent {
+  type: string;
+  total?: number;
+  done?: number;
+  skipped?: number;
+  currentName?: string | null;
+  characterId?: string;
+  name?: string;
+  voiceId?: string;
+  errorReason?: string;
+  failures?: Array<{ characterId: string; name: string; error: string }>;
+  code?: string;
+  message?: string;
+}
+
+/** Status of a possibly-live design job (the layout cold-boot probe reads this
+    to decide whether to re-subscribe after a reload). */
+export interface CastDesignStatus {
+  active: boolean;
+  total?: number;
+  done?: number;
+  skipped?: number;
+  currentName?: string | null;
+  state?: 'running' | 'done' | 'halted';
+  failures?: Array<{ characterId: string; name: string; error: string }>;
+}
+
+async function readCastDesignStream(
+  res: Response,
+  cb: CastDesignCallbacks,
+): Promise<void> {
+  if (!res.ok || !res.body) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Cast-design stream failed (${res.status}).`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const handle = (e: CastDesignStreamEvent) => {
+    switch (e.type) {
+      case 'resume_from':
+        cb.onResumeFrom?.({
+          total: e.total ?? 0,
+          done: e.done ?? 0,
+          currentName: e.currentName ?? null,
+        });
+        break;
+      case 'progress':
+        if (typeof e.characterId === 'string')
+          cb.onProgress?.({
+            characterId: e.characterId,
+            name: e.name ?? e.characterId,
+            done: e.done ?? 0,
+            total: e.total ?? 0,
+          });
+        break;
+      case 'heartbeat':
+        if (typeof e.characterId === 'string') cb.onHeartbeat?.({ characterId: e.characterId });
+        break;
+      case 'character_designed':
+        if (typeof e.characterId === 'string' && typeof e.voiceId === 'string')
+          cb.onCharacterDesigned?.({ characterId: e.characterId, voiceId: e.voiceId });
+        break;
+      case 'character_skipped':
+        if (typeof e.characterId === 'string')
+          cb.onCharacterSkipped?.({ characterId: e.characterId });
+        break;
+      case 'character_failed':
+        if (typeof e.characterId === 'string')
+          cb.onCharacterFailed?.({
+            characterId: e.characterId,
+            name: e.name ?? e.characterId,
+            errorReason: e.errorReason ?? 'Voice design failed.',
+          });
+        break;
+      case 'idle':
+        cb.onIdle?.({
+          done: e.done ?? 0,
+          total: e.total ?? 0,
+          skipped: e.skipped ?? 0,
+          failures: e.failures ?? [],
+        });
+        break;
+      case 'error':
+        cb.onError?.({ code: e.code ?? 'unknown', message: e.message ?? 'Cast design failed.' });
+        break;
+      default:
+        break;
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep;
+    while ((sep = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      const dataLines = raw
+        .split('\n')
+        .filter((l) => l.startsWith('data: '))
+        .map((l) => l.slice(6));
+      if (!dataLines.length) continue;
+      handle(JSON.parse(dataLines.join('\n')) as CastDesignStreamEvent);
+    }
+  }
+}
+
+async function realStartCastDesign(
+  bookId: string,
+  { characterIds, modelKey }: { characterIds: string[]; modelKey: string },
+  cb: CastDesignCallbacks,
+): Promise<void> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ characterIds, modelKey }),
+    signal: cb.signal,
+  });
+  await readCastDesignStream(res, cb);
+}
+
+async function realSubscribeCastDesign(bookId: string, cb: CastDesignCallbacks): Promise<void> {
+  /* Bare POST (no characterIds) — the server re-subscribes to the in-flight
+     job and replays `resume_from`, or idles immediately if none is live. */
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    signal: cb.signal,
+  });
+  await readCastDesignStream(res, cb);
+}
+
+async function realGetCastDesignStatus(bookId: string): Promise<CastDesignStatus> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design/status`);
+  if (!res.ok) return { active: false };
+  return (await res.json()) as CastDesignStatus;
+}
+
+async function realPauseCastDesign(bookId: string): Promise<void> {
+  await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design/pause`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  }).catch((err) => {
+    console.warn('[api] pauseCastDesign failed:', err);
+  });
+}
+
+/* Mock bulk-design — emits a short deterministic sequence (one designed voice
+   per character id) with small delays so the e2e can observe the pill ticking
+   and the rows flipping to "Designed". */
+async function mockStartCastDesign(
+  _bookId: string,
+  { characterIds }: { characterIds: string[]; modelKey: string },
+  cb: CastDesignCallbacks,
+): Promise<void> {
+  const total = characterIds.length;
+  let done = 0;
+  for (const characterId of characterIds) {
+    if (cb.signal?.aborted) return;
+    cb.onProgress?.({ characterId, name: characterId, done, total });
+    await wait(120);
+    if (cb.signal?.aborted) return;
+    cb.onCharacterDesigned?.({ characterId, voiceId: `qwen-${characterId}` });
+    done += 1;
+  }
+  cb.onIdle?.({ done, total, skipped: 0, failures: [] });
+}
+
+async function mockSubscribeCastDesign(_bookId: string, cb: CastDesignCallbacks): Promise<void> {
+  /* No live job to re-attach to under mocks — idle immediately. */
+  cb.onIdle?.({ done: 0, total: 0, skipped: 0, failures: [] });
+}
+
+async function mockGetCastDesignStatus(_bookId: string): Promise<CastDesignStatus> {
+  return { active: false };
+}
+
+async function mockPauseCastDesign(_bookId: string): Promise<void> {
+  return Promise.resolve();
+}
+
 async function mockPauseAnalysis(_: { manuscriptId: string }): Promise<void> {
   return Promise.resolve();
 }
@@ -4994,6 +5217,10 @@ const real = {
   streamSplice: realStreamSplice,
   pauseGeneration: realPauseGeneration,
   pauseAnalysis: realPauseAnalysis,
+  startCastDesign: realStartCastDesign,
+  subscribeCastDesign: realSubscribeCastDesign,
+  getCastDesignStatus: realGetCastDesignStatus,
+  pauseCastDesign: realPauseCastDesign,
   getSidecarHealth: realGetSidecarHealth,
   getModelInventory: realGetModelInventory,
   removeModel: realRemoveModel,
@@ -5221,6 +5448,10 @@ const mock = {
   streamSplice: mockStreamSplice,
   pauseGeneration: mockPauseGeneration,
   pauseAnalysis: mockPauseAnalysis,
+  startCastDesign: mockStartCastDesign,
+  subscribeCastDesign: mockSubscribeCastDesign,
+  getCastDesignStatus: mockGetCastDesignStatus,
+  pauseCastDesign: mockPauseCastDesign,
   getSidecarHealth: mockGetSidecarHealth,
   getModelInventory: mockGetModelInventory,
   removeModel: mockRemoveModel,
