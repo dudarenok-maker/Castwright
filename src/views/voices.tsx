@@ -1021,7 +1021,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
           onPlay={playBaseVoice}
           status={familyStatus}
         />
-      ) : families.length === 0 && qwenGroups.length === 0 ? (
+      ) : families.length === 0 && qwenGroups.length === 0 && variantFilter === 'all' ? (
         <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
           <p className="text-sm font-bold text-ink">No voices yet</p>
           <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
@@ -1148,6 +1148,16 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               {variantFilter !== 'all' && (
                 <span className="text-[11px] text-ink/45">Counts fill in as other books load.</span>
               )}
+            </div>
+          )}
+          {variantFilter !== 'all' && qwenGroups.length === 0 && (
+            <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
+              <p className="text-sm font-bold text-ink">No voices match this filter</p>
+              <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
+                {variantFilter === 'has'
+                  ? 'No designed voices have emotion variants in the current view.'
+                  : 'No designed voices still need emotion variants in the current view.'}
+              </p>
             </div>
           )}
           {showFamilies && families.map((f) => (

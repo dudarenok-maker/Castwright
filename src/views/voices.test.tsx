@@ -1930,18 +1930,56 @@ describe('fe-34 — variant filter toggle', () => {
     );
   }
 
-  it('narrows the designed voices to needs-variants when "Needs variants" is selected', () => {
+  it('narrows the designed voices to needs-variants when "Needs variants" is selected', async () => {
     renderToggleView();
+    await act(async () => {}); // flush the getBaseVoices mount effect
     expect(screen.getByText('Calm')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^Needs variants/ }));
     expect(screen.getByText('Fury')).toBeInTheDocument();
     expect(screen.queryByText('Calm')).toBeNull();
   });
 
-  it('narrows to has-variants when "Has variants" is selected', () => {
+  it('narrows to has-variants when "Has variants" is selected', async () => {
     renderToggleView();
+    await act(async () => {}); // flush the getBaseVoices mount effect
     fireEvent.click(screen.getByRole('button', { name: /^Has variants/ }));
     expect(screen.getByText('Calm')).toBeInTheDocument();
     expect(screen.queryByText('Fury')).toBeNull();
+  });
+
+  it('shows "No voices match this filter" (not the global empty state) when a filter excludes all', async () => {
+    // Library with ONLY a fully-covered voice → "Needs variants" matches nothing.
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    store.dispatch(castSlice.actions.setCharacters([designedHas]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        chapters: [],
+        characters: [designedHas],
+        sentences: [{ id: 2, chapterId: 1, text: 'Peace.', characterId: 'calm', emotion: 'angry' }],
+      } as never),
+    );
+    render(
+      <Provider store={store}>
+        <LibraryView library={[qwenLib[1]]} />
+      </Provider>,
+    );
+    await act(async () => {}); // flush the getBaseVoices mount effect
+    fireEvent.click(screen.getByRole('button', { name: /^Needs variants/ }));
+    expect(screen.getByText('No voices match this filter')).toBeInTheDocument();
+    expect(screen.queryByText('No voices yet')).toBeNull();
+    // The toggle stays reachable so the user can switch back (exact name avoids
+    // matching the "All (N)" tab button).
+    const variantGroup = screen.getByRole('group', { name: 'Filter by emotion variants' });
+    expect(within(variantGroup).getByRole('button', { name: 'All' })).toBeInTheDocument();
   });
 });
