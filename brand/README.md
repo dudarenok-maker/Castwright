@@ -28,6 +28,17 @@ The uneven bottom edge of the wave "reaches" toward the page, tying voice to boo
 | `castwright-wordmark.svg` | Horizontal lockup (icon + "Castwright.ai"), positive / light bg. |
 | `castwright-wordmark-reversed.svg` | Horizontal lockup, reversed / dark bg. |
 
+### Theme-responsive logo (swaps with app light/dark mode)
+
+| File | Use |
+|---|---|
+| `castwright-logo-light.svg` | In-app logo on the **natural/light** surface (3rd voice + book = ink). Transparent. |
+| `castwright-logo-dark.svg` | In-app logo on the **dark** surface (3rd voice + book = canvas/white). Transparent. |
+| `castwright-logo-auto.svg` | Single self-adapting file — flips via `prefers-color-scheme` for OS-theme contexts. |
+
+The app swaps `-light` / `-dark` when the user toggles theme (peach + magenta stay constant;
+only the third voice + book flip). Preview: open `castwright-theme-pair.html`.
+
 ## Exporting PNGs / favicons
 
 No design tool needed — open **`export-png.html`** in any browser, choose a variant and size
