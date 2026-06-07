@@ -95,7 +95,15 @@ class SyncController {
         finalPath: _library.audioPath(bookId, c.uuid, c.urlSuffix!),
         expectedSize: c.expectedSize,
       );
-      await _library.recordChapter(bookId, c.uuid, c.fingerprint!, c.urlSuffix!);
+      await _library.recordChapterMeta(
+        bookId: bookId,
+        uuid: c.uuid,
+        chapterId: c.id,
+        title: c.title,
+        fingerprint: c.fingerprint!,
+        urlSuffix: c.urlSuffix!,
+        durationSec: c.durationSec,
+      );
       done++;
       onProgress?.call(done, total);
     }
@@ -103,10 +111,53 @@ class SyncController {
   }
 
   /// Ensure the book's detail (chapter order/paths) is loaded in-session so
-  /// [playlistFor] works even when we didn't just download it.
+  /// [playlistFor]/[chaptersOf] work. Falls back to a detail SYNTHESIZED from
+  /// the local drift store when the server is unreachable (OFFLINE playback).
   Future<void> ensureDetail(String bookId) async {
     if (_details.containsKey(bookId)) return;
-    _details[bookId] = await _api.bookDetail(bookId);
+    try {
+      _details[bookId] = await _api.bookDetail(bookId);
+    } catch (_) {
+      final local = await _library.chaptersForBook(bookId);
+      if (local.isEmpty) rethrow; // nothing local AND offline → real failure
+      _details[bookId] = SyncManifestBookDetail(
+        schemaVersion: 1,
+        bookId: bookId,
+        updatedAt: '',
+        chapters: [
+          for (final c in local)
+            SyncManifestChapter(
+              uuid: c.uuid,
+              id: c.chapterId,
+              title: c.title,
+              fingerprint: 'local', // non-null → hasAudio true
+              urlSuffix: c.urlSuffix,
+              durationSec: c.durationSec,
+              audioUrl: c.urlSuffix != null
+                  ? '/api/books/$bookId/chapters/${c.chapterId}/${c.urlSuffix}'
+                  : null,
+            ),
+        ],
+        activeChapterUuids: [for (final c in local) c.uuid],
+      );
+    }
+  }
+
+  /// Build the library from the LOCAL drift store only (offline) — all books
+  /// present on disk, marked downloaded.
+  Future<List<LibraryBook>> loadLocalLibrary() async {
+    final books = await _library.listBooks();
+    return [
+      for (final b in books)
+        LibraryBook(
+          bookId: b.bookId,
+          title: b.title,
+          author: b.author,
+          series: b.series,
+          seriesPosition: b.seriesPosition?.toDouble(),
+          downloadState: BookDownloadState.downloaded,
+        ),
+    ];
   }
 
   /// True once the book has at least one downloaded chapter on disk.

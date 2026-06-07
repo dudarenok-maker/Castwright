@@ -25,6 +25,42 @@ void main() {
       await lib.close();
     });
 
+    test('recordChapterMeta persists id/title/duration for offline + orders by id', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u2/audio.mp3', [1, 2]);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [3, 4]);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u2', chapterId: 2, title: 'Two',
+          fingerprint: 'fp2', urlSuffix: 'audio.mp3', durationSec: 120.5);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 60.0);
+
+      final chs = await lib.chaptersForBook('b1');
+      expect(chs.map((c) => c.uuid), ['u1', 'u2']); // ordered by chapterId
+      expect(chs.first.title, 'One');
+      expect(chs.last.durationSec, 120.5);
+      await lib.close();
+    });
+
+    test('recordChapterMeta preserves the finished flag on re-download', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1]);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+      await lib.setChapterFinished('u1', true);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1b', urlSuffix: 'audio.mp3', durationSec: 11);
+
+      final usage = await lib.bookUsages();
+      expect(usage.single.chapters.single.finished, isTrue);
+      await lib.close();
+    });
+
     test('recordChapter stats the on-disk file for byte accounting', () async {
       final fs = InMemoryFileStore();
       final lib = makeLib(fs);
