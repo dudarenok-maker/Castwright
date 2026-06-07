@@ -48,6 +48,7 @@ import { changeLogSlice } from './change-log-slice';
 import { bookMetaSlice } from './book-meta-slice';
 import { exportsSlice } from './exports-slice';
 import { analysisSlice } from './analysis-slice';
+import { castDesignSlice } from './cast-design-slice';
 import { notificationsSlice } from './notifications-slice';
 import { listenProgressSlice } from './listen-progress-slice';
 import { queueSlice } from './queue-slice';
@@ -57,6 +58,7 @@ import { spliceSlice } from './splice-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
+import { castDesignMiddleware } from './cast-design-stream-middleware';
 import { broadcastMiddleware } from './broadcast-middleware';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
@@ -162,6 +164,7 @@ export const store = configureStore({
     bookMeta: bookMetaSlice.reducer,
     exports: exportsSlice.reducer,
     analysis: analysisSlice.reducer,
+    castDesign: castDesignSlice.reducer,
     notifications: notificationsSlice.reducer,
     listenProgress: listenProgressSlice.reducer,
     queue: queueSlice.reducer,
@@ -183,6 +186,7 @@ export const store = configureStore({
       persistenceMiddleware,
       generationStreamMiddleware(getStreamRunner),
       analysisStreamMiddleware,
+      castDesignMiddleware,
       broadcastMiddleware,
       queueDispatcherMiddleware(getStreamRunner),
       spliceRunnerMiddleware(),

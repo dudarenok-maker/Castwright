@@ -15,6 +15,7 @@ import {
 } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions } from '../store/analysis-slice';
+import { castDesignActions } from '../store/cast-design-slice';
 import { revisionsActions, selectDriftGroupsByBook } from '../store/revisions-slice';
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -42,6 +43,7 @@ import {
   summarizeStatus,
   type GenerationPillData,
   type AnalysisPillData,
+  type DesignPillData,
   type StatusDetail,
 } from './top-bar';
 import { ModelControlPill } from './ModelControlPill';
@@ -152,6 +154,7 @@ export function Layout() {
   const chapters = useAppSelectorShallow((s) => s.chapters.chapters);
   const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
+  const designSnapshot = useAppSelector((s) => s.castDesign.active);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
   const pending = useAppSelector((s) => s.revisions.pending);
@@ -552,6 +555,31 @@ export function Layout() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* Cold-boot re-subscribe to an in-flight "Design full cast" job (the
+     resilience the third status pill promises — analysis only rehydrates a
+     frozen disk snapshot, so the design pill needs an actual re-attach). When
+     a book is open, probe its design status; if a job is live, dispatch
+     `resubscribe`, which the cast-design middleware turns into a bare SSE that
+     replays `resume_from` and keeps ticking. Re-fires when the open book
+     changes. No-op (in-memory only) on a server with no live job; the mock
+     status always returns inactive. */
+  const openBookId = stage.kind === 'ready' ? stage.bookId : null;
+  useEffect(() => {
+    if (!openBookId) return;
+    let cancelled = false;
+    void Promise.resolve(api.getCastDesignStatus?.(openBookId))
+      .then((res) => {
+        if (cancelled || !res?.active) return;
+        dispatch(castDesignActions.resubscribe({ bookId: openBookId }));
+      })
+      .catch((err) => {
+        console.warn('[cast-design] cold-boot probe failed', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [openBookId, dispatch]);
 
   /* Voice library hydration — derived from every confirmed cast on disk.
      Re-fires when the active book or selected TTS engine changes so
@@ -1158,6 +1186,37 @@ export function Layout() {
     };
   })();
 
+  /* Third status pill — the in-flight "Design full cast" bulk job. Mirrors the
+     analysis/generation pill IIFEs: anchored to the cross-book `castDesign`
+     snapshot, recomputed inline so the per-second forceClockTick refreshes the
+     stalled check, surviving navigation; clicking routes to the book's Cast
+     view. The terminal 'done' summary lingers briefly (the middleware clears
+     it) so the user sees "Designed N · M failed". */
+  const designPill: DesignPillData | null = (() => {
+    if (!designSnapshot) return null;
+    const { bookId: dBookId, total, done, skipped, failures, currentName, state } = designSnapshot;
+    const completed = done + skipped + failures.length;
+    const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+    const stalled =
+      state === 'running' &&
+      designSnapshot.lastTickAt > 0 &&
+      Date.now() - designSnapshot.lastTickAt > STALL_THRESHOLD_MS;
+    const pillState: DesignPillData['state'] =
+      state === 'halted' ? 'halted' : state === 'done' ? 'done' : stalled ? 'stalled' : 'running';
+    return {
+      state: pillState,
+      done,
+      total,
+      percent,
+      skipped,
+      failureCount: failures.length,
+      currentName,
+      onClick: () => {
+        if (dBookId) navigate(`/books/${dBookId}/cast`);
+      },
+    };
+  })();
+
   /* Plan 120 — collapse the live state into the single dominant summary the
      compact Status pill renders. Computed inline (not memoised) so the
      per-second forceClockTick above keeps the "stalled" rung fresh against
@@ -1175,11 +1234,13 @@ export function Layout() {
     showTtsControls ||
     analysisPill !== null ||
     generationPill !== null ||
+    designPill !== null ||
     pending.length > 0;
   const statusSummary = showStatus
     ? summarizeStatus({
         analysis: analysisPill,
         generation: generationPill,
+        design: designPill,
         pendingRevisionsCount: pending.length,
         anyModelLoading,
       })
@@ -1192,10 +1253,12 @@ export function Layout() {
     ttsControls: ttsPillElement,
     analysis: analysisPill,
     generation: generationPill,
+    design: designPill,
     pendingRevisionsCount: pending.length,
     onOpenRevisions: () => dispatch(uiActions.setShowRevisionPlayer(true)),
     onGoToAnalysing: () => analysisPill?.onClick(),
     onGoToGeneration: () => generationPill?.onClick(),
+    onGoToDesign: () => designPill?.onClick(),
   };
 
   return (

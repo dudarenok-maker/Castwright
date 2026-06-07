@@ -45,6 +45,24 @@ export interface AnalysisPillData {
   onClick: () => void;
 }
 
+/* Sibling of GenerationPillData for the in-flight "Design full cast" bulk job
+   (the third status pill). Surfaces designed/total progress + a brief terminal
+   "done" summary; clicking routes to the Cast view of the book being designed. */
+export type DesignPillState = 'running' | 'stalled' | 'halted' | 'done';
+export interface DesignPillData {
+  state: DesignPillState;
+  done: number;
+  total: number;
+  percent: number;
+  /** Characters skipped (already had a voice) — shown in the terminal summary. */
+  skipped: number;
+  /** Number of per-character failures (shown in the terminal summary). */
+  failureCount: number;
+  /** Character currently being designed (running subtitle). */
+  currentName?: string | null;
+  onClick: () => void;
+}
+
 /* The top bar no longer renders the TTS / analysis / generation / revisions
    pills inline; they live behind a single compact Status pill that reveals a
    hover/tap popover. `summarizeStatus` collapses the live state into ONE
@@ -63,6 +81,7 @@ export interface StatusSummary {
 export interface StatusInput {
   analysis: AnalysisPillData | null;
   generation: GenerationPillData | null;
+  design: DesignPillData | null;
   pendingRevisionsCount: number;
   /** True when any in-use TTS engine pill is mid-load (Layout derives this
       from the per-engine ttsLifecycle state). */
@@ -70,20 +89,27 @@ export interface StatusInput {
 }
 
 /* Priority ladder (highest wins → the dominant state shown on the pill):
-   halted > stalled > generation-running > analysis-running > model-loading >
-   analysis-paused > revisions-pending > idle. Generation outranks analysis
-   when both run because generation is the user's terminal goal; analysis is
-   upstream. Halted / stalled stay on top because they're attention states the
-   user must see without opening the modal. Pure + exported for unit testing. */
+   halted > stalled > generation-running > analysis-running > design-running >
+   model-loading > analysis-paused > revisions-pending > idle. Generation
+   outranks analysis which outranks design because generation is the user's
+   terminal goal and design is the furthest-upstream prep step. Halted / stalled
+   stay on top because they're attention states the user must see without
+   opening the modal. The terminal design 'done' summary has no dominant rung —
+   it surfaces in the popover only. Pure + exported for unit testing. */
 export function summarizeStatus({
   analysis,
   generation,
+  design,
   pendingRevisionsCount,
   anyModelLoading,
 }: StatusInput): StatusSummary {
-  if (analysis?.state === 'halted' || generation?.state === 'halted')
+  if (analysis?.state === 'halted' || generation?.state === 'halted' || design?.state === 'halted')
     return { label: 'Halted', tone: 'rose', icon: 'warning' };
-  if (analysis?.state === 'stalled' || generation?.state === 'stalled')
+  if (
+    analysis?.state === 'stalled' ||
+    generation?.state === 'stalled' ||
+    design?.state === 'stalled'
+  )
     return { label: 'Stalled', tone: 'amber', icon: 'clock' };
   if (generation?.state === 'running')
     return { label: 'Generating', tone: 'peach', icon: 'spinner', detail: `${generation.percent}%` };
@@ -94,6 +120,8 @@ export function summarizeStatus({
       icon: 'spinner',
       detail: `${analysis.percent}%`,
     };
+  if (design?.state === 'running')
+    return { label: 'Designing', tone: 'peach', icon: 'spinner', detail: `${design.percent}%` };
   if (anyModelLoading) return { label: 'Loading model', tone: 'amber', icon: 'spinner' };
   if (analysis?.state === 'paused') return { label: 'Paused', tone: 'neutral', icon: 'clock' };
   if (pendingRevisionsCount > 0)
@@ -113,10 +141,12 @@ export interface StatusDetail {
   ttsControls: ReactNode;
   analysis: AnalysisPillData | null;
   generation: GenerationPillData | null;
+  design: DesignPillData | null;
   pendingRevisionsCount: number;
   onOpenRevisions: () => void;
   onGoToAnalysing: () => void;
   onGoToGeneration: () => void;
+  onGoToDesign: () => void;
 }
 
 interface TopBarProps {
@@ -485,6 +515,7 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         ttsControls={detail.ttsControls}
         analysis={detail.analysis}
         generation={detail.generation}
+        design={detail.design}
         pendingRevisionsCount={detail.pendingRevisionsCount}
         onOpenRevisions={() => {
           detail.onOpenRevisions();
@@ -496,6 +527,10 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         }}
         onGoToGeneration={() => {
           detail.onGoToGeneration();
+          closeAll();
+        }}
+        onGoToDesign={() => {
+          detail.onGoToDesign();
           closeAll();
         }}
       />
@@ -603,6 +638,61 @@ export function GenerationPill({ data }: { data: GenerationPillData }) {
       <span className="tabular-nums">
         {v.label} · {done}/{total}
         {state === 'running' && total > 0 && ` · ${percent}%`}
+      </span>
+    </button>
+  );
+}
+
+/* The third status pill — "Design full cast" bulk-job progress. Exported for
+   reuse inside the Status popover (onClick overridden to navigate-and-close). */
+export function DesignPill({ data }: { data: DesignPillData }) {
+  const { state, done, total, percent, skipped, failureCount, onClick } = data;
+  const variants: Record<
+    DesignPillState,
+    { className: string; icon: React.ReactNode; label: string }
+  > = {
+    running: {
+      className: 'bg-peach/15 hover:bg-peach/25 text-magenta',
+      icon: <IconSpinner className="w-3.5 h-3.5" />,
+      label: 'Designing',
+    },
+    stalled: {
+      className: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
+      icon: <IconClock className="w-3.5 h-3.5" />,
+      label: 'Stalled',
+    },
+    halted: {
+      className: 'bg-rose-100 hover:bg-rose-200 text-rose-800',
+      icon: <IconWarning className="w-3.5 h-3.5" />,
+      label: 'Halted',
+    },
+    done: {
+      className: 'bg-ink/6 hover:bg-ink/10 text-ink/70',
+      icon: <IconClock className="w-3.5 h-3.5" />,
+      label: 'Designed',
+    },
+  };
+  const v = variants[state];
+  /* Terminal summary: "Designed 6 · 1 failed · 2 skipped". Running: "Designing · 3/8 · 38%". */
+  const summary =
+    state === 'done'
+      ? [
+          `${done}`,
+          failureCount > 0 ? `${failureCount} failed` : null,
+          skipped > 0 ? `${skipped} skipped` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : `${done}/${total}${total > 0 ? ` · ${percent}%` : ''}`;
+  return (
+    <button
+      onClick={onClick}
+      data-testid="design-pill"
+      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${v.className}`}
+    >
+      {v.icon}
+      <span className="tabular-nums">
+        {v.label} · {summary}
       </span>
     </button>
   );

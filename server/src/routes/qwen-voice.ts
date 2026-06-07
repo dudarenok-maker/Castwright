@@ -35,8 +35,11 @@ import { castJsonPath, qwenVoiceSidecarPath, qwenVoicesDir } from '../workspace/
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { EMOTIONS, type Emotion } from '../handoff/schemas.js';
 import { getResolvedSidecarUrl } from '../workspace/user-settings.js';
-import { isTtsModelKey, TTS_MODEL_LABELS } from '../tts/index.js';
+import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
+import { gpuSemaphore } from '../gpu/semaphore.js';
+import { costForEngine } from '../tts/engine-vram-cost.js';
+import { withDesignLock, isDesignBusy } from '../tts/design-lock.js';
 import {
   buildHintFromCast,
   toVoiceLike,
@@ -157,6 +160,128 @@ qwenVoiceRouter.get(
   },
 );
 
+/* Shared design core — the sidecar `/qwen/design-voice` call + audition-cache
+   write, extracted so BOTH the single-design route below and the bulk
+   "Design full cast" job (server/src/routes/cast-design.ts) run the exact same
+   path in-process (no HTTP-to-self). Serialized per book (`withDesignLock`) and
+   GPU-fair (`gpuSemaphore`) so two designs for one book can't corrupt the
+   shared `.pt`/audition-cache, and a bulk run can't oversubscribe the card
+   against a concurrent generation/analysis. Throws on sidecar/encode failure
+   with a user-facing message; the caller maps it (502 for the route, a
+   per-character failure for the bulk job). Does NOT persist the per-character
+   override or the emotion variant — that stays with the callers. */
+export interface DesignQwenVoiceParams {
+  bookDir: string;
+  character: CastCharacter;
+  characterId: string;
+  /** Resolved, non-empty persona (the caller applies its own precedence). */
+  persona: string;
+  sampleVoiceId: string;
+  modelKey: TtsModelKey;
+  /** Sidecar language name (e.g. 'english') — baked into the cached voice. */
+  language: string;
+  /** When set, designs an emotion VARIANT under `<baseVoiceId>__<emotion>`. */
+  emotion?: Exclude<Emotion, 'neutral'>;
+  /** Stage under a `-preview` sibling id (A/B compare) instead of in place. */
+  preview?: boolean;
+  /** External cancel — aborts the in-flight sidecar call (e.g. the bulk job's
+      controller on a Cancel) in addition to the internal timeout. */
+  signal?: AbortSignal;
+}
+
+export async function designQwenVoiceForCharacter(
+  p: DesignQwenVoiceParams,
+): Promise<{ voiceId: string; url: string }> {
+  const baseVoiceId = deriveQwenVoiceId(p.character, p.characterId);
+  const designedId = p.emotion ? `${baseVoiceId}__${p.emotion}` : baseVoiceId;
+  const voiceId = p.preview ? previewVoiceIdFor(designedId) : designedId;
+  const instructForDesign = p.emotion
+    ? buildVariantInstruct(p.persona, p.emotion)
+    : p.persona;
+  const calibrationText = buildSampleText(toVoiceLike(p.character), buildHintFromCast(p.character));
+
+  return withDesignLock(p.bookDir, async () => {
+    const releaseGpu = await gpuSemaphore.acquire(costForEngine('qwen'));
+    const sidecarUrl = getResolvedSidecarUrl();
+    const target = `${sidecarUrl}/qwen/design-voice`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DESIGN_TIMEOUT_MS);
+    const onExternalAbort = () => controller.abort();
+    if (p.signal) {
+      if (p.signal.aborted) controller.abort();
+      else p.signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+    try {
+      let upstream: Awaited<ReturnType<typeof fetch>>;
+      try {
+        upstream = await fetch(target, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            voiceId,
+            instruct: instructForDesign,
+            language: p.language,
+            calibrationText,
+          }),
+        });
+      } catch (e) {
+        const err = e as { name?: string; message?: string };
+        if (err.name === 'AbortError') {
+          throw new Error(
+            `Sidecar /qwen/design-voice did not complete within ${DESIGN_TIMEOUT_MS}ms — voice design is unusually slow or the process is stuck.`,
+          );
+        }
+        throw new Error(
+          `TTS sidecar (${sidecarUrl}) is unreachable — ${err.message || 'request failed'}.`,
+        );
+      }
+      if (!upstream.ok) {
+        let detail = '';
+        try {
+          const body = (await upstream.json()) as { detail?: string; error?: string };
+          detail = body.detail ?? body.error ?? '';
+        } catch {
+          /* not json */
+        }
+        throw new Error(
+          detail ||
+            `Sidecar /qwen/design-voice returned ${upstream.status} ${upstream.statusText}.`,
+        );
+      }
+      const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
+      const pcm = Buffer.from(await upstream.arrayBuffer());
+
+      const fileName = voiceSampleFileName({
+        cacheScope: p.sampleVoiceId,
+        modelKey: p.modelKey,
+        text: calibrationText,
+        voiceName: voiceId,
+      });
+      const filePath = voiceSampleFilePath(fileName);
+      const url = voiceSamplePublicUrl(fileName);
+      try {
+        await mkdir(voiceSampleAudioDir(), { recursive: true });
+        const mp3 = await encodePcmToAudio(pcm, sampleRate);
+        await writeFile(filePath, mp3);
+      } catch (encErr) {
+        throw new Error(
+          `Designed the voice but failed to cache its preview: ${(encErr as Error).message}`,
+        );
+      }
+      console.log(
+        `[qwen-voice] book=${p.bookDir} character=${p.characterId} voiceId=${voiceId} ` +
+          `→ cached ${fileName} (${pcm.length} bytes @ ${sampleRate}Hz)`,
+      );
+      return { voiceId, url };
+    } finally {
+      clearTimeout(timer);
+      if (p.signal) p.signal.removeEventListener('abort', onExternalAbort);
+      releaseGpu();
+    }
+  });
+}
+
 qwenVoiceRouter.post(
   '/:bookId/cast/:characterId/design-voice',
   async (req: Request, res: Response) => {
@@ -190,6 +315,15 @@ qwenVoiceRouter.post(
     const located = await findBookByBookId(bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir } = located;
+    /* Mutual exclusion: a bulk "Design full cast" run owns the book's designs
+       (serializing via the per-book lock). Refuse a competing single design so
+       a drawer click can't fight the bulk run for the same voiceId. */
+    if (isDesignBusy(bookDir)) {
+      return res.status(409).json({
+        error:
+          'A "Design full cast" run is in progress for this book. Wait for it to finish (or cancel it) before designing a single voice.',
+      });
+    }
     /* fs-2 — design the voice in the BOOK's language. The sidecar bakes this
        into the cached voice manifest, so every later /synthesize of this
        voice speaks the right language (synth itself carries no language).
@@ -240,85 +374,18 @@ qwenVoiceRouter.post(
        so the live voice isn't overwritten during an A/B comparison; the drawer
        promotes it on approve. Default false keeps the original in-place design. */
     const baseVoiceId = deriveQwenVoiceId(character, characterId);
-    /* A variant is designed under a distinct, stable id so it doesn't overwrite
-       the base embedding; re-designing the same emotion overwrites the variant. */
-    const designedId = emotion ? `${baseVoiceId}__${emotion}` : baseVoiceId;
-    const voiceId = body.preview === true ? previewVoiceIdFor(designedId) : designedId;
-    /* For a variant, bake the delivery clause into the persona the heavy
-       VoiceDesign model sees. */
-    const instructForDesign = emotion ? buildVariantInstruct(persona, emotion) : persona;
-    /* The audition speaks the character's own line — the longest evidence
-       quote, picked exactly as voice-sample.ts's buildSampleText does, so the
-       text component of the cache key matches the player's by construction. */
-    const calibrationText = buildSampleText(toVoiceLike(character), buildHintFromCast(character));
-
-    const sidecarUrl = getResolvedSidecarUrl();
-    const target = `${sidecarUrl}/qwen/design-voice`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DESIGN_TIMEOUT_MS);
     try {
-      const upstream = await fetch(target, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          voiceId,
-          instruct: instructForDesign,
-          language: designLanguage,
-          calibrationText,
-        }),
-      });
-      clearTimeout(timer);
-      if (!upstream.ok) {
-        let detail = '';
-        try {
-          /* The sidecar reports failures as FastAPI's `{ detail }` (both its
-             HTTPException 4xx and its 500 catch-all), NOT `{ error }`. Reading
-             only `.error` here silently dropped the real reason — e.g. a CUDA
-             "Cannot copy out of meta tensor" load failure surfaced to the user
-             as a bare "returned 500" with no cause. Prefer `detail`, fall back
-             to `error` for any endpoint that uses that shape. */
-          const body = (await upstream.json()) as { detail?: string; error?: string };
-          detail = body.detail ?? body.error ?? '';
-        } catch {
-          /* not json */
-        }
-        return res.status(502).json({
-          error:
-            detail ||
-            `Sidecar /qwen/design-voice returned ${upstream.status} ${upstream.statusText}.`,
-        });
-      }
-      const sampleRate = Number(upstream.headers.get('X-Sample-Rate') ?? '24000') || 24000;
-      const pcm = Buffer.from(await upstream.arrayBuffer());
-
-      /* Pre-populate the voice-sample cache so the subsequent "Play 12s"
-         (and the drawer's own "Play sample") is a hit — no second synth.
-         voiceName = the designed voiceId, matching pickVoiceForEngine('qwen',…). */
-      const fileName = voiceSampleFileName({
-        cacheScope: sampleVoiceId,
+      const { voiceId, url } = await designQwenVoiceForCharacter({
+        bookDir,
+        character,
+        characterId,
+        persona,
+        sampleVoiceId,
         modelKey,
-        text: calibrationText,
-        voiceName: voiceId,
+        language: designLanguage,
+        emotion,
+        preview: body.preview === true,
       });
-      const filePath = voiceSampleFilePath(fileName);
-      const url = voiceSamplePublicUrl(fileName);
-      try {
-        /* Always (over)write. Designing is an explicit (re)generate: the
-           audition we just synthesised IS the fresh voice. The cache key
-           (text + voiceId) is unchanged across re-designs of the same
-           character, so a stale file from a prior design must be replaced —
-           otherwise "Play 12s" (and the drawer's own post-design playback,
-           which reads this same URL) would serve the previous voice and the
-           re-design would look like it did nothing. */
-        await mkdir(voiceSampleAudioDir(), { recursive: true });
-        const mp3 = await encodePcmToAudio(pcm, sampleRate);
-        await writeFile(filePath, mp3);
-      } catch (encErr) {
-        return res.status(502).json({
-          error: `Designed the voice but failed to cache its preview: ${(encErr as Error).message}`,
-        });
-      }
       /* fs-25 — record a (non-preview) emotion variant onto the character's
          qwen slot so generation can resolve it (Wave 2) and the cast UI can show
          the Variants badge. Preserves any existing base `name`; defaults it to
@@ -331,20 +398,11 @@ qwenVoiceRouter.post(
         character.overrideTtsVoices.qwen = qwenSlot;
         await writeJsonAtomic(castJsonPath(bookDir), cast);
       }
-      console.log(
-        `[qwen-voice] book=${bookId} character=${characterId} voiceId=${voiceId} ` +
-          `→ cached ${fileName} (${pcm.length} bytes @ ${sampleRate}Hz)`,
-      );
       return res.status(200).json({ voiceId, url });
     } catch (e) {
-      clearTimeout(timer);
-      const err = e as { name?: string; message?: string };
-      const isTimeout = err.name === 'AbortError';
-      return res.status(502).json({
-        error: isTimeout
-          ? `Sidecar /qwen/design-voice did not complete within ${DESIGN_TIMEOUT_MS}ms — voice design is unusually slow or the process is stuck.`
-          : `TTS sidecar (${sidecarUrl}) is unreachable — ${err.message || 'request failed'}.`,
-      });
+      /* The core throws a user-facing message for sidecar/encode/timeout
+         failures — surface it as a 502 (the sidecar boundary). */
+      return res.status(502).json({ error: (e as Error).message || 'Voice design failed.' });
     }
   },
 );

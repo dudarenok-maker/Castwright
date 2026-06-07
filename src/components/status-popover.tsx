@@ -25,8 +25,10 @@ import { createPortal } from 'react-dom';
 import {
   AnalysisPill,
   GenerationPill,
+  DesignPill,
   type AnalysisPillData,
   type GenerationPillData,
+  type DesignPillData,
 } from './top-bar';
 
 const PANEL_WIDTH = 340;
@@ -51,12 +53,14 @@ interface StatusPopoverProps {
   ttsControls: ReactNode;
   analysis: AnalysisPillData | null;
   generation: GenerationPillData | null;
+  design: DesignPillData | null;
   pendingRevisionsCount: number;
   /** Navigate handlers (wired in Layout via the pills' existing onClick); the
       StatusPill clears its sticky-open after these fire so the panel closes. */
   onOpenRevisions: () => void;
   onGoToAnalysing: () => void;
   onGoToGeneration: () => void;
+  onGoToDesign: () => void;
 }
 
 function Section({
@@ -87,10 +91,12 @@ export function StatusPopover({
   ttsControls,
   analysis,
   generation,
+  design,
   pendingRevisionsCount,
   onOpenRevisions,
   onGoToAnalysing,
   onGoToGeneration,
+  onGoToDesign,
 }: StatusPopoverProps) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -156,6 +162,13 @@ export function StatusPopover({
           <AnalysisPill data={{ ...analysis, onClick: onGoToAnalysing }} />
         ) : (
           <p className="text-sm text-ink/60">No analysis running.</p>
+        )}
+      </Section>
+      <Section title="Design" testid="status-popover-design">
+        {design ? (
+          <DesignPill data={{ ...design, onClick: onGoToDesign }} />
+        ) : (
+          <p className="text-sm text-ink/60">No voice design running.</p>
         )}
       </Section>
       <Section title="Generation" testid="status-popover-generation">

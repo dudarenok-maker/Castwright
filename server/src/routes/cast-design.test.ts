@@ -1,0 +1,285 @@
+/* Integration tests for the "Design full cast" bulk-design route.
+
+   Seeds one confirmed book with several speaking characters and drives the
+   server-owned SSE job end to end (real ffmpeg encodes the audition; `global.fetch`
+   mocks the sidecar; `generateVoiceStylePersona` is mocked so the persona-fallback
+   path doesn't need a Gemini key). Asserts:
+     - the serial loop emits progress → character_designed → idle in order, and
+       persists `overrideTtsVoices.qwen.name` per character (series scope)
+     - a persona-less character triggers the Gemini fallback + persists voiceStyle
+     - FRESHNESS-SKIP: a character that already has a Qwen voice is skipped
+       (no sidecar call) and counted as skipped
+     - a single-character failure is recorded and the loop CONTINUES
+     - MUTUAL EXCLUSION: starting a design while analysis is busy → 409; the
+       single-design route 409s while a design job is busy
+     - status + pause + bare-resubscribe(idle) endpoints. */
+
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import express, { type Express } from 'express';
+import request from 'supertest';
+
+const AUTHOR = 'Shannon Messenger';
+const SERIES = 'Keeper of the Lost Cities';
+const BOOK = 'Keeper of the Lost Cities';
+const QWEN_KEY = 'qwen3-tts-0.6b';
+
+let workspaceRoot: string;
+let audioDir: string;
+let bookDir: string;
+let app: Express;
+let bookId: string;
+
+const fetchMock = vi.fn();
+const { personaMock } = vi.hoisted(() => ({ personaMock: vi.fn() }));
+
+vi.mock('../analyzer/voice-style.js', () => ({
+  generateVoiceStylePersona: personaMock,
+}));
+
+const characters = [
+  { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+  {
+    id: 'aria',
+    name: 'Aria',
+    role: 'supporting',
+    color: 'lilac',
+    voiceId: 'v_aria',
+    voiceStyle: 'a poised, confident teenage girl, clear and warm',
+    evidence: [{ quote: '“We have to tell the Council before the others wake.”' }],
+  },
+  {
+    id: 'fitz',
+    name: 'Fitz',
+    role: 'supporting',
+    color: 'teal',
+    voiceId: 'v_fitz',
+    voiceStyle: 'a calm, assured young man, steady and warm',
+    evidence: [{ quote: '“Trust me — we can do this together.”' }],
+  },
+  /* No persona → exercises the Gemini fallback. */
+  {
+    id: 'dex',
+    name: 'Dex',
+    role: 'supporting',
+    color: 'amber',
+    evidence: [{ quote: '“I built it myself, you know.”' }],
+  },
+  /* Already designed → freshness-skip. */
+  {
+    id: 'sophie',
+    name: 'Sophie',
+    role: 'lead',
+    color: 'rose',
+    voiceId: 'v_sophie',
+    voiceStyle: 'a determined, earnest teenage girl',
+    overrideTtsVoices: { qwen: { name: 'qwen-v_sophie' } },
+  },
+];
+
+function writeBookOnDisk(chars: object[]) {
+  mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+  writeFileSync(
+    join(bookDir, '.audiobook', 'state.json'),
+    JSON.stringify({
+      bookId,
+      manuscriptId: `m_${bookId}`,
+      title: BOOK,
+      author: AUTHOR,
+      series: SERIES,
+      seriesPosition: 1,
+      isStandalone: false,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  );
+  writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: chars }));
+}
+
+function readCast(): { characters: Array<Record<string, any>> } {
+  return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+}
+function charById(id: string) {
+  return readCast().characters.find((c) => c.id === id);
+}
+
+function okSidecarResponse(pcm = new Uint8Array(24_000 * 2 * 0.3)) {
+  return {
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    headers: new Headers({ 'Content-Type': 'audio/L16', 'X-Sample-Rate': '24000' }),
+    arrayBuffer: async () => pcm.buffer,
+    json: async () => ({}),
+  };
+}
+function badSidecarResponse() {
+  return {
+    ok: false,
+    status: 500,
+    statusText: 'Internal Server Error',
+    headers: new Headers(),
+    arrayBuffer: async () => new ArrayBuffer(0),
+    json: async () => ({ detail: 'model exploded' }),
+  };
+}
+
+/** Parse an SSE response body into the list of JSON `data:` events. */
+function parseSse(text: string): Array<Record<string, any>> {
+  return text
+    .split('\n')
+    .filter((l) => l.startsWith('data: '))
+    .map((l) => JSON.parse(l.slice(6)));
+}
+
+let designLock: typeof import('../tts/design-lock.js');
+
+beforeAll(async () => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-design-test-'));
+  audioDir = mkdtempSync(join(tmpdir(), 'audiobook-cast-design-audio-'));
+  process.env.WORKSPACE_DIR = workspaceRoot;
+  process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
+  vi.stubGlobal('fetch', fetchMock);
+
+  const [{ castDesignRouter }, { qwenVoiceRouter }, { makeBookId }, lock] = await Promise.all([
+    import('./cast-design.js'),
+    import('./qwen-voice.js'),
+    import('../workspace/paths.js'),
+    import('../tts/design-lock.js'),
+  ]);
+  designLock = lock;
+  bookId = makeBookId(AUTHOR, SERIES, BOOK);
+  bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
+
+  app = express();
+  app.use(express.json());
+  app.use('/api/books', castDesignRouter);
+  app.use('/api/books', qwenVoiceRouter);
+});
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  fetchMock.mockResolvedValue(okSidecarResponse());
+  personaMock.mockReset();
+  personaMock.mockResolvedValue('a bright, quick-witted teenage boy');
+  for (const f of readdirSync(audioDir)) rmSync(join(audioDir, f), { force: true });
+  rmSync(join(workspaceRoot, 'voices'), { recursive: true, force: true });
+  writeBookOnDisk(characters);
+});
+
+afterEach(() => {
+  /* Defensive — clear any manually-set busy flags so tests stay isolated. */
+  designLock.clearDesignBusy(bookDir);
+  designLock.clearAnalysisBusy(bookDir);
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
+  if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
+  if (audioDir) rmSync(audioDir, { recursive: true, force: true });
+  delete process.env.WORKSPACE_DIR;
+  delete process.env.VOICE_SAMPLE_AUDIO_DIR;
+});
+
+describe('POST /api/books/:bookId/cast/design', () => {
+  it('designs each character in order and persists the qwen override (series scope)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria', 'fitz'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const designed = events.filter((e) => e.type === 'character_designed').map((e) => e.characterId);
+    expect(designed).toEqual(['aria', 'fitz']);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toMatchObject({ done: 2, total: 2, skipped: 0 });
+    expect(idle?.failures).toEqual([]);
+
+    expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
+    expect(charById('fitz')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_fitz');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('persona fallback: a persona-less character gets a Gemini persona persisted + designed', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['dex'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    expect(personaMock).toHaveBeenCalledTimes(1);
+    expect(charById('dex')?.voiceStyle).toBe('a bright, quick-witted teenage boy');
+    expect(charById('dex')?.overrideTtsVoices?.qwen?.name).toBe('qwen-dex');
+  });
+
+  it('freshness-skip: an already-designed character is skipped (no sidecar call)', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['sophie'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'sophie')).toBe(true);
+    expect(events.some((e) => e.type === 'character_designed')).toBe(false);
+    expect(events.find((e) => e.type === 'idle')).toMatchObject({ done: 0, skipped: 1 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('a per-character failure is recorded and the loop continues', async () => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValueOnce(badSidecarResponse()); // aria fails
+    fetchMock.mockResolvedValue(okSidecarResponse()); // fitz ok
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria', 'fitz'], modelKey: QWEN_KEY });
+
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_failed' && e.characterId === 'aria')).toBe(true);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'fitz')).toBe(true);
+    const idle = events.find((e) => e.type === 'idle');
+    expect(idle).toMatchObject({ done: 1, total: 2 });
+    expect(idle?.failures).toHaveLength(1);
+    expect(charById('fitz')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_fitz');
+  });
+
+  it('mutual exclusion: refuses to start while analysis is busy (409)', async () => {
+    designLock.markAnalysisBusy(bookDir);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+    expect(res.status).toBe(409);
+    designLock.clearAnalysisBusy(bookDir);
+  });
+
+  it('bare POST with no live job replays idle and ends', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/cast/design`).send({});
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).find((e) => e.type === 'idle')).toBeTruthy();
+  });
+});
+
+describe('GET /status + POST /pause', () => {
+  it('status is inactive when no job is running; pause is a no-op', async () => {
+    const status = await request(app).get(`/api/books/${bookId}/cast/design/status`);
+    expect(status.body).toEqual({ active: false });
+    const pause = await request(app).post(`/api/books/${bookId}/cast/design/pause`).send({});
+    expect(pause.body).toMatchObject({ ok: true, cancelled: false });
+  });
+});
+
+describe('single-design mutual exclusion', () => {
+  it('the single design-voice route 409s while a bulk design is busy', async () => {
+    designLock.markDesignBusy(bookDir);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/aria/design-voice`)
+      .send({ sampleVoiceId: 'v_aria', modelKey: QWEN_KEY });
+    expect(res.status).toBe(409);
+    designLock.clearDesignBusy(bookDir);
+  });
+});
