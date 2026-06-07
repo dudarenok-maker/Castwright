@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../data/companion_runtime.dart';
 import '../data/player_controller.dart';
 import '../domain/listen_progress.dart';
+import '../domain/resume_reconcile.dart';
 import '../domain/sync_manifest.dart';
 import 'waveform_bar.dart';
 
@@ -55,6 +56,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _prepare() async {
     try {
       await widget.runtime.sync.ensureDetail(widget.bookId);
+      // app-6: pull a newer server position before restoring (offline-safe).
+      try {
+        await widget.runtime.resumeSync.syncBook(widget.bookId);
+      } catch (_) {/* offline / no server record */}
       final art = await widget.runtime.library.coverThumbPath(widget.bookId);
       await widget.runtime.player.openBook(widget.bookId,
           bookTitle: widget.title, artPath: art); // loads + restores resume
@@ -73,7 +78,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
-    widget.runtime.player.pause();
+    // Save locally, then push the latest position to the server (app-6),
+    // best-effort + offline-safe.
+    widget.runtime.player
+        .pause()
+        .then((_) => widget.runtime.resumeSync.syncBook(widget.bookId))
+        .catchError((_) => ResumeAction.noop);
     super.dispose();
   }
 
