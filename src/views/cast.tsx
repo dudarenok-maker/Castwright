@@ -112,9 +112,18 @@ const CHIP_ORDER = [
   'Locked',
   'Unset',
   'Reused',
-  /* fs-25 — "Has emotion variants" provenance/capability chip, last. */
+  /* fs-25 / fs-34 — variant capability chips, last. */
   'Variants',
+  'Needs variants',
 ];
+
+/* Display labels for chips whose internal key differs from the chip text.
+   The key stays stable (it flows through statusFilters + statusFilterKeys);
+   only the displayed text changes. */
+const CHIP_LABELS: Record<string, string> = {
+  Variants: 'Has variants',
+  'Needs variants': 'Needs variants',
+};
 
 export function CastView({
   characters,
@@ -231,7 +240,7 @@ export function CastView({
      StatusPill resolves its labels (matched library voice + effective engine)
      so the chips and the rows can't disagree. */
   const statusKeysFor = (c: Character): string[] =>
-    statusFilterKeys(c, findVoiceForCharacter(c, library), effectiveEngineFor(c));
+    statusFilterKeys(c, findVoiceForCharacter(c, library), effectiveEngineFor(c), usedEmotions.get(c.id));
 
   /* "Design full cast" — every character whose lifecycle is "Needs voice" (a
      Qwen-effective character with no designed voice), most-spoken first. Built
@@ -279,11 +288,9 @@ export function CastView({
   const statusBuckets = useMemo(() => {
     const tally = new Map<string, { color: StatusPillColor; count: number }>();
     for (const c of characters) {
-      const { lifecycle, reused } = resolveVoiceStatus(
-        c,
-        findVoiceForCharacter(c, library),
-        c.ttsEngine ?? ttsEngine,
-      );
+      const effectiveEngine = c.ttsEngine ?? ttsEngine;
+      const voice = findVoiceForCharacter(c, library);
+      const { lifecycle, reused, hasEmotionVariants } = resolveVoiceStatus(c, voice, effectiveEngine);
       const lifecycleKey = lifecycle?.label ?? 'Unset';
       const lifecycleColor: StatusPillColor = lifecycle?.color ?? 'neutral';
       tally.set(lifecycleKey, {
@@ -293,13 +300,23 @@ export function CastView({
       if (reused) {
         tally.set('Reused', { color: 'library', count: (tally.get('Reused')?.count ?? 0) + 1 });
       }
+      if (hasEmotionVariants) {
+        tally.set('Variants', { color: 'library', count: (tally.get('Variants')?.count ?? 0) + 1 });
+      }
+      const isQwen = effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen';
+      if (isQwen && countMissingVariants(c, usedEmotions.get(c.id)) > 0) {
+        tally.set('Needs variants', {
+          color: 'warning',
+          count: (tally.get('Needs variants')?.count ?? 0) + 1,
+        });
+      }
     }
     return CHIP_ORDER.filter((key) => tally.has(key)).map((key) => ({
       key,
       color: tally.get(key)!.color,
       count: tally.get(key)!.count,
     }));
-  }, [characters, library, ttsEngine]);
+  }, [characters, library, ttsEngine, usedEmotions]);
 
   const toggleStatusFilter = (key: string) =>
     setStatusFilters((prev) =>
@@ -646,7 +663,7 @@ export function CastView({
                       : 'border border-ink/10 bg-white text-ink/70 hover:text-ink hover:bg-ink/4'
                   }`}
                 >
-                  <span>{b.key}</span>
+                  <span>{CHIP_LABELS[b.key] ?? b.key}</span>
                   <span className={`tabular-nums ${active ? 'text-canvas/70' : 'text-ink/40'}`}>
                     {b.count}
                   </span>
