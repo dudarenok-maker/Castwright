@@ -31,8 +31,9 @@ foreach ($name in $names) {
     }
 }
 
-# Belt-and-braces: kill any orphaned listeners on our ports.
-$ports = @(5173, 8080, 9000)
+# Belt-and-braces: kill any orphaned listeners on our ports. :8443 is the LAN
+# HTTPS port (LAN_HTTPS=1 in server/.env or npm run dev:lan) — sweep it too.
+$ports = @(5173, 8080, 8443, 9000)
 $conns = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue
 if ($conns) {
     foreach ($c in $conns) {

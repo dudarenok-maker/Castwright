@@ -34,18 +34,40 @@ function Fail($msg) {
     exit 1
 }
 
+# --- LAN mode (companion app, plan 188) -----------------------------------
+# server/.env LAN_HTTPS=1 makes the Node server bind HTTPS on :8443 / 0.0.0.0
+# (see server/src/index.ts + bind-host.ts). Mirror that here so `npm start`
+# brings up the matching LAN dev stack instead of false-failing the health-wait
+# on :8080: the server moves to :8443 and Vite runs HTTPS (vite-plugin-mkcert)
+# bound to all interfaces — exactly what `npm run dev:lan` does explicitly. The
+# proxy target follows in vite.config.ts (https://localhost:8443 when LAN).
+$serverEnvPath = Join-Path $repoRoot "server\.env"
+$lanHttps = $false
+if (Test-Path $serverEnvPath) {
+    if (Select-String -Path $serverEnvPath -Pattern '^\s*LAN_HTTPS\s*=\s*1\s*$' -Quiet) {
+        $lanHttps = $true
+    }
+}
+$serverPort = if ($lanHttps) { 8443 } else { 8080 }
+$frontendArgs = if ($lanHttps) { @("run", "dev:frontend", "--", "--host", "0.0.0.0") } else { @("run", "dev:frontend") }
+if ($lanHttps) {
+    # Read by vite.config.ts (useHttps) — inherited by the Start-Process children.
+    $env:VITE_HTTPS = "1"
+    Write-Status "[LAN] LAN_HTTPS=1 in server/.env — LAN dev stack: server HTTPS :8443, Vite HTTPS all-interface :5173"
+}
+
 # --- Service definitions --------------------------------------------------
 $services = @(
     @{
         Name      = "frontend"
         Port      = 5173
         FilePath  = "npm.cmd"
-        ArgList   = @("run", "dev:frontend")
+        ArgList   = $frontendArgs
         WorkDir   = $repoRoot
     },
     @{
         Name      = "server"
-        Port      = 8080
+        Port      = $serverPort
         FilePath  = "npm.cmd"
         ArgList   = @("run", "dev:server")
         WorkDir   = $repoRoot
@@ -177,7 +199,8 @@ if ($pending.Count -gt 0) {
 # at http://localhost:5173/ the moment dev:frontend is listening. We used to
 # *also* call Start-Process URL here, which surfaced as two Chrome tabs on
 # every start. The script-side launcher is gone; Vite is the single opener.
-Write-Status "[READY] http://localhost:5173/ (stop with stop-app.bat)"
+$readyProto = if ($lanHttps) { "https" } else { "http" }
+Write-Status "[READY] ${readyProto}://localhost:5173/ (stop with stop-app.bat)"
 
 # Best-effort cleanup of stale rotated logs from past locked-start cycles.
 # Canonical `<name>.log` / `<name>.err.log` are preserved; only timestamped
