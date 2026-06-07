@@ -144,11 +144,22 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
 
   Future<void> _download(LibraryBook book) async {
     setState(() => _progress[book.bookId] = '…');
+    // app-3: run under a foreground service so the OS doesn't kill a long
+    // download when the app is backgrounded.
+    await widget.runtime.foreground
+        .start('Downloading', book.title)
+        .catchError((_) {});
     try {
       await widget.runtime.sync.downloadBook(
         book.bookId,
-        onProgress: (d, t) =>
-            setState(() => _progress[book.bookId] = t > 0 ? '$d/$t' : '…'),
+        onProgress: (d, t) {
+          setState(() => _progress[book.bookId] = t > 0 ? '$d/$t' : '…');
+          if (t > 0) {
+            widget.runtime.foreground
+                .update('${book.title} — $d/$t')
+                .catchError((_) {});
+          }
+        },
       );
       if (mounted) setState(() => _progress.remove(book.bookId));
       await widget.runtime.enforceStorageCap(); // app-4: keep under the cap
@@ -159,6 +170,8 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('Download failed: $e')));
       }
+    } finally {
+      await widget.runtime.foreground.stop().catchError((_) {});
     }
   }
 
