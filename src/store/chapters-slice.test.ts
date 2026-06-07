@@ -373,6 +373,15 @@ describe('chaptersSlice — applyGenerationTick', () => {
       expect(next.chapters[0].progress).toBeCloseTo(0.99);
     });
 
+    it('defaults progress to 0.99 when the tick omits it', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', progress: 0.5 })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(tick({ type: 'chapter_verifying', chapterId: 3 })),
+      );
+      expect(next.chapters[0].progress).toBeCloseTo(0.99);
+    });
+
     it('is cleared by a subsequent chapter_complete', () => {
       const start = baseState([makeChapter(3, { state: 'in_progress', phase: 'verifying' })]);
       const next = chaptersSlice.reducer(
