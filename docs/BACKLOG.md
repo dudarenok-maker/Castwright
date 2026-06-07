@@ -227,6 +227,12 @@ _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-
 
 ### Net-new capabilities
 
+#### `fs-38` — Voice cloning (your own / family voice) + cloned-vs-designed library split ([#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
+
+- _What:_ Clone a real person's voice from a short in-app sample (XTTS reference first, then Qwen design-to-target) and cast it like any other voice — held consistent across a book/series. Explicit consent on the record; cloned voices get their own `#/voices` section and are excluded from the cross-book reuse matcher; local-only. The **next big release** — pays off the _"even in your own voice"_ promise.
+- _Benefit (user):_ the most personal, gift-able feature — a bedtime story in your own voice, or your kid as the hero.
+_Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-cloning.md) · [#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624).
+
 #### `fs-27` — Chapter recaps / "previously…" summaries ([#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481))
 
 - _What:_ LLM-generated short recap per chapter (the analyzer already does LLM work), shown — and optionally synthesized as a spoken "previously…" intro — when the user resumes a book after a gap. Opt-in per book; cost surfaced up front.
