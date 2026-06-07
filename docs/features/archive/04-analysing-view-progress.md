@@ -49,7 +49,7 @@ Server-sent-events stream rendering for the two-stage analysis pipeline. Phase t
 
 ## Acceptance walkthrough
 
-Run with `VITE_USE_MOCKS=false` (server on `:8080`, `ANALYZER=manual` or `ANALYZER=gemini`).
+Run with `VITE_USE_MOCKS=false` (server on `:8080`, `ANALYZER=local` or `ANALYZER=gemini`).
 
 1. **Land on `#/books/:bookId/analysing` after upload** → stream opens; phase 1 progress bar starts ticking. Log lines appear under the active phase (e.g. "Detected 23 characters across 14 chapters").
 2. **Live ETA** — during stage-2 chapter processing, the `live` block shows one row per in-flight chapter, e.g. `"Chapter 2/7 · DAY ONE · 4:15 of ~0:21 over budget"` on top of `"Chapter 7/7 · DAY SIX · 0:08 of ~2:03"`. Rows are sorted by chapter order so a slow chapter cannot hide concurrent progress.
