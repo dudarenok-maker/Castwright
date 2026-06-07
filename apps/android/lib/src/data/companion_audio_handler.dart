@@ -120,7 +120,7 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
 
 /// Standard audio_service config for the companion's media session.
 const companionAudioServiceConfig = AudioServiceConfig(
-  androidNotificationChannelId: 'com.audiobookgenerator.audiobook_companion.audio',
+  androidNotificationChannelId: 'ai.castwright.audio',
   androidNotificationChannelName: 'Playback',
   androidNotificationOngoing: true,
 );

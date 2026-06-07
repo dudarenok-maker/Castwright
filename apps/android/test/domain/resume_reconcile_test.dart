@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/resume_reconcile.dart';
+import 'package:castwright/src/domain/resume_reconcile.dart';
 
 void main() {
   group('reconcileResume', () {

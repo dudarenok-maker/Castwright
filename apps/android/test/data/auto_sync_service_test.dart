@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/data/auto_sync_service.dart';
-import 'package:audiobook_companion/src/domain/app_settings.dart';
-import 'package:audiobook_companion/src/domain/sync_gate.dart';
+import 'package:castwright/src/data/auto_sync_service.dart';
+import 'package:castwright/src/domain/app_settings.dart';
+import 'package:castwright/src/domain/sync_gate.dart';
 
 void main() {
   group('AutoSyncService.maybeSync', () {

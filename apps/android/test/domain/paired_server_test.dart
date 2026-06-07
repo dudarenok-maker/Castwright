@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:audiobook_companion/src/domain/paired_server.dart';
+import 'package:castwright/src/domain/paired_server.dart';
 
 void main() {
   group('PairedServer', () {

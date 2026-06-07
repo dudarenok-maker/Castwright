@@ -3,11 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:audiobook_companion/src/data/cert_pinning.dart';
-import 'package:audiobook_companion/src/data/pairing_service.dart';
-import 'package:audiobook_companion/src/data/pairing_store.dart';
-import 'package:audiobook_companion/src/domain/paired_server.dart';
-import 'package:audiobook_companion/src/ui/pairing_screen.dart';
+import 'package:castwright/src/data/cert_pinning.dart';
+import 'package:castwright/src/data/pairing_service.dart';
+import 'package:castwright/src/data/pairing_store.dart';
+import 'package:castwright/src/domain/paired_server.dart';
+import 'package:castwright/src/ui/pairing_screen.dart';
 
 class FakeStore implements PairingStore {
   PairedServer? saved;
