@@ -18,7 +18,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // Pure helper from the script (import is inert — the script's procedure is
 // behind an import.meta-main guard, so loading it here doesn't run a release).
-import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath } from '../bump-version.mjs';
+import { pickWorkflowRun, readSidecarVersion, writeSidecarVersion, sidecarVersionPath, readPubspecVersion, writePubspecVersion, pubspecPath, pubspecBuildNumber } from '../bump-version.mjs';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -460,6 +460,35 @@ test('readSidecarVersion returns null when version.py is absent', () => {
   const dir = mkdtempSync(join(tmpdir(), 'bump-sidecar-none-'));
   try {
     assert.equal(readSidecarVersion(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// plan 188 — companion pubspec lockstep helpers.
+test('pubspec version helpers round-trip with a monotonic build number', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bump-pubspec-'));
+  try {
+    const p = pubspecPath(dir);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'name: x\nversion: 1.0.0+1\nenvironment:\n  sdk: ^3.0.0\n');
+    assert.equal(readPubspecVersion(dir), '1.0.0'); // drops the +build
+    assert.equal(pubspecBuildNumber('1.6.0'), 10600);
+    assert.equal(pubspecBuildNumber('2.13.4'), 21304);
+
+    writePubspecVersion(dir, '1.6.0');
+    assert.equal(readPubspecVersion(dir), '1.6.0');
+    assert.match(readFileSync(p, 'utf8'), /^version: 1\.6\.0\+10600$/m);
+    assert.match(readFileSync(p, 'utf8'), /sdk: \^3\.0\.0/); // other lines survive
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('readPubspecVersion returns null when pubspec is absent', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bump-pubspec-none-'));
+  try {
+    assert.equal(readPubspecVersion(dir), null);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
