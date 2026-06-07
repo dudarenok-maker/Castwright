@@ -1,6 +1,10 @@
-# Audiobook Generator
+# Castwright
 
-Turn a manuscript into a finished audiobook on your own machine.
+> _Any book, performed by a full cast — effortlessly. Even in your own voice._
+> (The internal package / repo name stays `audiobook-generator`.)
+
+Turn a manuscript into a finished, **full-cast** audiobook on your own machine — every
+character in their own voice, consistent across a whole series.
 
 Upload `.md` / `.txt` / `.epub` / `.pdf` → an analyzer extracts characters,
 chapters, and per-sentence speaker tags → assign a TTS voice to each
