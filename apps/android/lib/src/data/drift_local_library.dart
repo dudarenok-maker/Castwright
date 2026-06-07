@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:drift/drift.dart';
 
 import '../domain/storage_policy.dart';
+import 'cover_thumbnails.dart' show ThumbnailStore;
 import 'file_store.dart';
 import 'library_database.dart';
 import 'local_library.dart';
@@ -35,7 +36,7 @@ class BookSummary {
 ///
 /// Per-chapter audio lives at `<root>/books/<bookId>/<uuid>/<urlSuffix>` — the
 /// same scheme as the `app-3` [FileLocalLibrary] it supersedes.
-class DriftLocalLibrary implements LocalLibrary, PlaybackStore {
+class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
   DriftLocalLibrary(this._db, this._fs, {required String root}) : _rootPath = root;
 
   final LibraryDatabase _db;
@@ -213,6 +214,7 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore {
     ];
   }
 
+  @override
   Future<String?> coverThumbPath(String bookId) async {
     final row = await (_db.select(_db.books)
           ..where((b) => b.bookId.equals(bookId)))
@@ -220,6 +222,7 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore {
     return row?.coverThumbPath;
   }
 
+  @override
   Future<void> setCoverThumbPath(String bookId, String path) async {
     await _ensureBook(bookId);
     await (_db.update(_db.books)..where((b) => b.bookId.equals(bookId)))

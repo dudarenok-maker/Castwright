@@ -19,8 +19,17 @@ class LibraryBook {
   final String title;
   final String author;
   final String series;
-  final int? seriesPosition;
+
+  /// Decimal so novellas (e.g. 8.5) sort between whole-numbered entries.
+  final double? seriesPosition;
   final BookDownloadState downloadState;
+}
+
+/// Render a series position for display: whole numbers without a decimal
+/// (`1`, `9`), fractional ones with it (`8.5`); null → empty string.
+String formatSeriesPosition(double? pos) {
+  if (pos == null) return '';
+  return pos == pos.roundToDouble() ? pos.toInt().toString() : '$pos';
 }
 
 class SeriesGroup {
@@ -71,13 +80,16 @@ int _byPositionThenTitle(LibraryBook a, LibraryBook b) {
   return a.title.toLowerCase().compareTo(b.title.toLowerCase());
 }
 
-/// Case-insensitive filter on title or author; empty query returns all.
+/// Case-insensitive filter on title, author, OR series; empty query returns
+/// all. (Series matters: filtering "Keeper" should keep every book in the
+/// "Keeper of the Lost Cities" series, not just the one titled that.)
 List<LibraryBook> filterBooks(List<LibraryBook> books, String query) {
   final q = query.trim().toLowerCase();
   if (q.isEmpty) return books;
   return books
       .where((b) =>
           b.title.toLowerCase().contains(q) ||
-          b.author.toLowerCase().contains(q))
+          b.author.toLowerCase().contains(q) ||
+          b.series.toLowerCase().contains(q))
       .toList();
 }
