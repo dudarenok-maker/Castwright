@@ -4,6 +4,14 @@ Frontend for an audiobook-generation tool. Vite + React 18 + TypeScript +
 Redux Toolkit. Mocked API surface today; designed to swap to a real backend
 without changing component code.
 
+**Brand:** the product is **Castwright** (`castwright.ai`) — _any book, performed by a full
+cast — effortlessly. Even in your own voice._ Brand assets + guidelines live in `brand/`; the
+design spec is `docs/superpowers/specs/2026-06-07-castwright-brand-design.md`; the brand story
+is `docs/project-narrative.md`. The **internal package name and repo dir stay
+`audiobook-generator`** (it's the release-zip / upgrade-flow artifact) — only user-facing
+surfaces say "Castwright". App fonts: **General Sans** (sans) + **Lora** (serif). Next big
+release = voice cloning (`fs-38`, plan `docs/features/194-voice-cloning.md`).
+
 ## Working principles
 
 General working style layered on top of the project-specific rules below.
