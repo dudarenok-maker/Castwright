@@ -779,3 +779,22 @@ samp {
 .scrollbar-thin::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* Single voice design — branded waveform + soft-fill progress (plan: single
+   voice design background). Motion conveys "a voice is being shaped"; the fill
+   eases toward a typical ~15s and HOLDS near 92% so a slow design never lies. */
+.design-wave { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 32px; }
+.design-wave i { width: 3px; border-radius: 2px; background: var(--magenta); animation: design-wave 1s ease-in-out infinite; }
+.design-wave i:nth-child(1) { animation-delay: 0s } .design-wave i:nth-child(2) { animation-delay: .08s }
+.design-wave i:nth-child(3) { animation-delay: .16s } .design-wave i:nth-child(4) { animation-delay: .24s }
+.design-wave i:nth-child(5) { animation-delay: .32s } .design-wave i:nth-child(6) { animation-delay: .4s }
+.design-wave i:nth-child(7) { animation-delay: .48s } .design-wave i:nth-child(8) { animation-delay: .56s }
+.design-wave i:nth-child(9) { animation-delay: .64s } .design-wave i:nth-child(10) { animation-delay: .72s }
+.design-wave i:nth-child(11) { animation-delay: .8s } .design-wave i:nth-child(12) { animation-delay: .88s }
+@keyframes design-wave { 0%,100% { height: 7px; opacity: .45 } 50% { height: 30px; opacity: 1 } }
+.design-fill { height: 6px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--magenta) 18%, transparent); }
+.design-fill i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--magenta); animation: design-fill 15s cubic-bezier(.15,.75,.2,1) forwards; }
+@keyframes design-fill { 0% { width: 4% } 65% { width: 78% } 100% { width: 92% } }
+@media (prefers-reduced-motion: reduce) {
+  .design-wave i, .design-fill i { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}
