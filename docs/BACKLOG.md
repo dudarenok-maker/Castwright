@@ -239,11 +239,23 @@ _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ design expressive variants for a recurring cast across a whole series in one flow. _Re-homed from `fs-25` on archive._
 _Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512).
 
-#### fs-33/fs-34 follow-ups (per-quote emotion, shipped 2026-06-07)
+#### `fs-35` — per-chapter Detect-emotions trigger (fs-33 follow-up) ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592))
 
-- Per-chapter Detect-emotions trigger ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592)) — _scope the backfill pass to one chapter; v1 shipped whole-book only._
-- "Manual clear sticks" sentinel ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593)) — _a manually-cleared emotion currently gets re-filled on re-detect._
-- Voices view "Has emotion variants" filter ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595)) — _the badge shipped; the standalone filter is deferred._
+- _What:_ Add a per-chapter "Detect emotions" option (the emotion-only backfill pass scoped to the current chapter) alongside the whole-book trigger. The fs-33 v1 shipped whole-book only.
+- _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
+_Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
+
+#### `fs-36` — per-quote emotion: "manual clear sticks" sentinel (fs-33 follow-up) ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593))
+
+- _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.
+- _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
+_Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
+
+#### `fe-34` — Voices view: "Has emotion variants" filter (fs-34 follow-up) ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595))
+
+- _What:_ The cross-book Voices view renders the `VariantsBadge` on Qwen designed-voice cards (shipped), but has no status-filter like the cast view's chips. Add a filter toggle to narrow the view to voices whose character has ≥1 designed emotion variant.
+- _Benefit (user):_ quickly find which cross-book voices already have expressive variants.
+_Full detail + acceptance:_ [#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595).
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 
@@ -413,7 +425,7 @@ hash matches — no OS cert install, no manual hex compare).
 
 11. ✅ **SHIPPED** `srv-33` ([#551](https://github.com/dudarenok-maker/AudioBook-Generator/issues/551)) — Per-device tokens + revoke (server, layered on `srv-20`): `device-tokens.ts` store (sha-256 at rest, cache-backed) + `GET/POST/DELETE /api/devices` behind the LAN guard + `lan-auth` accepts shared secret OR a non-revoked device token. Backward-compatible. 18 server tests + openapi. App-side adoption is an optional follow-up. _Benefit:_ revocable per-device access.
 12. ✅ **SHIPPED** `app-9` ([#552](https://github.com/dudarenok-maker/AudioBook-Generator/issues/552)) — In-car (**Android Auto + CarPlay**): pure `media_browse_tree` (root→books→chapters + mediaId codec) wired into `CompanionAudioHandler` MediaBrowser callbacks + Android Auto descriptor. 6 paired Dart tests; head-unit acceptance owed (batched). _Benefit:_ first-class in-car beyond the Bluetooth path.
-13. ✅ **SHIPPED** `app-10` ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553)) — Stream-over-LAN instant play: pure `resolvePlaybackSource` (offline-first; stream only when on-LAN + opted in) + `AppSettings.streamOverLan` + `AudioEngine.setStreamUrl`. 4 paired Dart tests; live device acceptance owed (batched). _Benefit:_ zero-wait preview before a download.
+13. ⛔ **BLOCKED (reopened)** `app-10` ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553)) — Stream-over-LAN instant play. The pure pieces shipped (`resolvePlaybackSource` + `AppSettings.streamOverLan` + `AudioEngine.setStreamUrl`, 4 tests) but **cannot be wired**: `just_audio` streams via the platform player (ExoPlayer/AVPlayer) over the **OS** network stack, which can't trust the **app-pinned mkcert CA** (the TLS model deliberately avoids an OS cert install) → streaming `https://<lan>:8443` fails TLS. No `streamOverLan` toggle was wired (no dead control). _Unblock (later):_ a local loopback proxy that re-serves chapter bytes (fetched via the pinned `ApiClient`) to just_audio over `127.0.0.1`. Low priority — offline-first download/play is unaffected. _Benefit when unblocked:_ zero-wait preview before a download.
 14. ✅ **SHIPPED** `app-11` ([#554](https://github.com/dudarenok-maker/AudioBook-Generator/issues/554)) — Distribution: Gradle release signing via git-ignored `key.properties` (real upload keystore) with a debug-signed fallback so `flutter build apk --release` always sideloads; `key.properties.example` + CI `companion-release-apk` artifact. Release APK verified (65.6 MB). _Benefit:_ testers can install it.
 
 ---

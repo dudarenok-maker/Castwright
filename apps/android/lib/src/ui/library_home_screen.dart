@@ -175,12 +175,17 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     }
   }
 
-  void _open(LibraryBook book) {
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => PlayerScreen(
-          runtime: widget.runtime, bookId: book.bookId, title: book.title),
+  Future<void> _openBook(String bookId, String title) async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) =>
+          PlayerScreen(runtime: widget.runtime, bookId: bookId, title: title),
     ));
+    // Returning from the player: the book was just played (markPlayed), so
+    // refresh to surface it in the "Continue listening" rail + update progress.
+    if (mounted) await _refresh();
   }
+
+  void _open(LibraryBook book) => _openBook(book.bookId, book.title);
 
   Widget _continueRail() {
     return Column(
@@ -211,10 +216,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     final path = _covers[b.bookId];
     return InkWell(
       key: Key('continue-${b.bookId}'),
-      onTap: () => Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) =>
-            PlayerScreen(runtime: widget.runtime, bookId: b.bookId, title: b.title),
-      )),
+      onTap: () => _openBook(b.bookId, b.title),
       child: SizedBox(
         width: 100,
         child: Padding(
