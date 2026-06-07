@@ -143,6 +143,8 @@ That list is honest, not alarming. The engine runs. The install travels. The nex
 
 The tagline makes a promise the engine doesn't fully keep yet — _even in your own voice._ Cloning a specific person from a short sample is the **next big release**: a parent reading a bedtime story in their own voice even when they're away; a kid hearing themselves as the hero. The pieces are within reach — XTTS already clones zero-shot from a reference clip, and Qwen can design toward a target — so the real work is the experience around them: capturing a clean sample, getting consent on the record, holding that voice consistent across a whole book and series the way designed voices already are, and keeping every byte of it on the machine it was recorded on. It's the most personal thing Castwright could do, which is exactly why it's next.
 
+It also reshapes the voice library. A cloned voice — tied to a real, consenting person — can't sit in the same drawer as a voice _designed_ from a fictional persona. The library will split the two: cloned voices get their own section, their own provenance and consent trail, and their own reuse rules, so a family member's voice is never quietly offered back to a stranger's book the way a designed cast member's is.
+
 ## Hear it for yourself
 
 There's only one test that matters, and it takes ten minutes.
