@@ -3770,6 +3770,24 @@ export interface CastDesignCallbacks {
   }) => void;
   /** Catastrophic abort (NOT a per-character failure). */
   onError?: (e: { code: string; message: string }) => void;
+  /** Single-design sub-phase tick (honest progress). */
+  onPhase?: (e: { characterId: string; phase: 'designing' | 'rendering' }) => void;
+  /** Single re-design finished — preview staged, awaiting A/B compare. */
+  onPreviewReady?: (e: {
+    characterId: string;
+    name: string;
+    previewVoiceId: string;
+    previewUrl: string;
+    persona: string;
+  }) => void;
+  /** Single-design (re)subscribe seed — replayed once on reload re-attach so the
+      slice can open a single snapshot at the right character + phase. */
+  onResumeSingle?: (e: {
+    characterId: string;
+    name: string;
+    mode: 'first' | 'redesign';
+    phase: 'designing' | 'rendering';
+  }) => void;
 }
 
 interface CastDesignStreamEvent {
@@ -3785,6 +3803,12 @@ interface CastDesignStreamEvent {
   failures?: Array<{ characterId: string; name: string; error: string }>;
   code?: string;
   message?: string;
+  phase?: 'designing' | 'rendering';
+  previewVoiceId?: string;
+  previewUrl?: string;
+  persona?: string;
+  mode?: 'first' | 'redesign';
+  url?: string;
 }
 
 /** Status of a possibly-live design job (the layout cold-boot probe reads this
@@ -3819,11 +3843,39 @@ async function readCastDesignStream(
   const handle = (e: CastDesignStreamEvent) => {
     switch (e.type) {
       case 'resume_from':
-        cb.onResumeFrom?.({
-          total: e.total ?? 0,
-          done: e.done ?? 0,
-          currentName: e.currentName ?? null,
-        });
+        if (e.mode === 'first' || e.mode === 'redesign') {
+          // single-design reload re-attach
+          cb.onResumeSingle?.({
+            characterId: e.characterId ?? '',
+            name: e.name ?? e.characterId ?? '',
+            mode: e.mode,
+            phase: e.phase === 'rendering' ? 'rendering' : 'designing',
+          });
+        } else {
+          cb.onResumeFrom?.({ total: e.total ?? 0, done: e.done ?? 0, currentName: e.currentName ?? null });
+        }
+        break;
+      case 'phase':
+        if (typeof e.characterId === 'string' && (e.phase === 'designing' || e.phase === 'rendering'))
+          cb.onPhase?.({ characterId: e.characterId, phase: e.phase });
+        break;
+      case 'designed':
+        if (typeof e.characterId === 'string' && typeof e.voiceId === 'string')
+          cb.onCharacterDesigned?.({ characterId: e.characterId, voiceId: e.voiceId });
+        break;
+      case 'preview_ready':
+        if (
+          typeof e.characterId === 'string' &&
+          typeof e.previewVoiceId === 'string' &&
+          typeof e.previewUrl === 'string'
+        )
+          cb.onPreviewReady?.({
+            characterId: e.characterId,
+            name: e.name ?? e.characterId,
+            previewVoiceId: e.previewVoiceId,
+            previewUrl: e.previewUrl,
+            persona: e.persona ?? '',
+          });
         break;
       case 'progress':
         if (typeof e.characterId === 'string')
@@ -3917,6 +3969,89 @@ async function realGetCastDesignStatus(bookId: string): Promise<CastDesignStatus
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design/status`);
   if (!res.ok) return { active: false };
   return (await res.json()) as CastDesignStatus;
+}
+
+export interface SingleDesignArgs {
+  characterId: string;
+  persona: string;
+  sampleVoiceId: string;
+  modelKey: string;
+  preview: boolean;
+}
+
+async function realStartSingleDesign(
+  bookId: string,
+  args: SingleDesignArgs,
+  cb: CastDesignCallbacks,
+): Promise<void> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/${encodeURIComponent(args.characterId)}/design-voice/stream`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        persona: args.persona,
+        sampleVoiceId: args.sampleVoiceId,
+        modelKey: args.modelKey,
+        preview: args.preview,
+      }),
+      signal: cb.signal,
+    },
+  );
+  await readCastDesignStream(res, cb);
+}
+
+async function realSubscribeSingleDesign(bookId: string, cb: CastDesignCallbacks): Promise<void> {
+  const res = await fetch(
+    `/api/books/${encodeURIComponent(bookId)}/cast/design-single/subscribe`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}', signal: cb.signal },
+  );
+  await readCastDesignStream(res, cb);
+}
+
+export interface SingleDesignStatus {
+  active: boolean;
+  characterId?: string;
+  name?: string;
+  mode?: 'first' | 'redesign';
+  phase?: 'designing' | 'rendering';
+}
+
+async function realGetSingleDesignStatus(bookId: string): Promise<SingleDesignStatus> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design-single/status`);
+  if (!res.ok) return { active: false };
+  return (await res.json()) as SingleDesignStatus;
+}
+
+async function mockStartSingleDesign(
+  _bookId: string,
+  args: SingleDesignArgs,
+  cb: CastDesignCallbacks,
+): Promise<void> {
+  cb.onPhase?.({ characterId: args.characterId, phase: 'designing' });
+  await wait(120);
+  cb.onPhase?.({ characterId: args.characterId, phase: 'rendering' });
+  await wait(80);
+  if (args.preview) {
+    cb.onPreviewReady?.({
+      characterId: args.characterId,
+      name: args.characterId,
+      previewVoiceId: `qwen-${args.characterId}-preview`,
+      previewUrl: `/mock/${args.characterId}-preview.mp3`,
+      persona: args.persona,
+    });
+  } else {
+    cb.onCharacterDesigned?.({ characterId: args.characterId, voiceId: `qwen-${args.characterId}` });
+  }
+  cb.onIdle?.({ done: args.preview ? 0 : 1, total: 1, skipped: 0, failures: [] });
+}
+
+async function mockSubscribeSingleDesign(_bookId: string, cb: CastDesignCallbacks): Promise<void> {
+  cb.onIdle?.({ done: 0, total: 0, skipped: 0, failures: [] });
+}
+
+async function mockGetSingleDesignStatus(_bookId: string): Promise<SingleDesignStatus> {
+  return { active: false };
 }
 
 async function realPauseCastDesign(bookId: string): Promise<void> {
@@ -5221,6 +5356,9 @@ const real = {
   subscribeCastDesign: realSubscribeCastDesign,
   getCastDesignStatus: realGetCastDesignStatus,
   pauseCastDesign: realPauseCastDesign,
+  startSingleDesign: realStartSingleDesign,
+  subscribeSingleDesign: realSubscribeSingleDesign,
+  getSingleDesignStatus: realGetSingleDesignStatus,
   getSidecarHealth: realGetSidecarHealth,
   getModelInventory: realGetModelInventory,
   removeModel: realRemoveModel,
@@ -5452,6 +5590,9 @@ const mock = {
   subscribeCastDesign: mockSubscribeCastDesign,
   getCastDesignStatus: mockGetCastDesignStatus,
   pauseCastDesign: mockPauseCastDesign,
+  startSingleDesign: mockStartSingleDesign,
+  subscribeSingleDesign: mockSubscribeSingleDesign,
+  getSingleDesignStatus: mockGetSingleDesignStatus,
   getSidecarHealth: mockGetSidecarHealth,
   getModelInventory: mockGetModelInventory,
   removeModel: mockRemoveModel,
