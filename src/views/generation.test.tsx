@@ -364,9 +364,58 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
       </Provider>,
     );
     // Rendered in BOTH the row pill and the live caption.
-    expect(screen.getAllByText('Verifying speech…').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('Verifying speech…')).toHaveLength(2);
     // The frozen synthesising caption must NOT show for the verifying row.
     expect(screen.queryByText(/Synthesising/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses the stale "Active:" line when a chapter is in the verifying phase', () => {
+    const verifying: Chapter = {
+      ...chapter1,
+      state: 'in_progress',
+      phase: 'verifying',
+      progress: 0.99,
+    };
+    const ch2Queued: Chapter = { ...chapter2 };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([verifying, ch2Queued]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [verifying, ch2Queued],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[verifying, ch2Queued]}
+          characters={characters}
+          paused
+          title="Bonus Keefe Story"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    // Expand the verifying chapter row (its title is "Chapter 1").
+    fireEvent.click(screen.getByText('Chapter 1'));
+    expect(screen.queryByText(/Active:/)).not.toBeInTheDocument();
   });
 });
 
