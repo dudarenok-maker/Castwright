@@ -2495,11 +2495,22 @@ export interface components {
              *     this chapter's audio. Carries the engine forward so the
              *     frontend can update `chapter.audioModelKey` without waiting
              *     for a state.json reload (which would otherwise let an
-             *     engine-drift badge appear only after page navigation). See
-             *     `docs/features/archive/35-engine-drift-detection.md`.
+             *     engine-drift badge appear only after page navigation). With
+             *     per-character engine routing (plan 108) this is the engine the
+             *     audio ACTUALLY rendered in, not necessarily the request default.
+             *     See `docs/features/archive/35-engine-drift-detection.md`.
              * @enum {string}
              */
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * @description Only on `chapter_complete` — distinct speaking characters per TTS
+             *     engine they actually rendered in (e.g. `{ "kokoro": 1, "qwen": 6 }`).
+             *     Carries the mixed-engine breakdown forward so the frontend can show
+             *     the per-engine voice-count caption without a state.json reload.
+             */
+            audioEngines?: {
+                [key: string]: number;
+            };
             /**
              * @description srv-27 — Only on `chapter_complete` — the advisory post-synthesis
              *     QA verdict, so the frontend can stamp a "Suspect" badge the moment
@@ -3238,10 +3249,25 @@ export interface components {
              *     segments file for legacy chapters. Absent on never-rendered
              *     chapters. The frontend compares against the project's
              *     current `ui.ttsModelKey` to surface engine-drift badges (see
-             *     `docs/features/archive/35-engine-drift-detection.md`).
+             *     `docs/features/archive/35-engine-drift-detection.md`). With
+             *     per-character engine routing (plan 108) this reflects the engine
+             *     the audio actually rendered in (a uniform chapter), not the
+             *     request default.
              * @enum {string}
              */
             audioModelKey?: "kokoro-v1" | "qwen3-tts-0.6b" | "coqui-xtts-v2" | "gemini-2.5-flash" | "gemini-3.1-flash";
+            /**
+             * @description Distinct speaking characters per TTS engine they actually rendered
+             *     in, e.g. `{ "kokoro": 1, "qwen": 6 }`. For a uniform chapter it has
+             *     one key matching `audioModelKey`'s engine; a chapter that mixes
+             *     engines (narrator on Kokoro + dialogue on Qwen) carries the full
+             *     breakdown, which the Generation view shows as a per-engine
+             *     voice-count caption instead of a drift badge. Stamped at render
+             *     time, backfilled from the segments file for legacy chapters.
+             */
+            audioEngines?: {
+                [key: string]: number;
+            };
             /**
              * Format: date-time
              * @description ISO timestamp from when the audio was synthesised. Mirrors

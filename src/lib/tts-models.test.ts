@@ -5,7 +5,23 @@ import {
   ttsModelLabel,
   engineForModelKey,
   engineGroupForModelKey,
+  formatEngineBreakdown,
 } from './tts-models';
+
+describe('formatEngineBreakdown (mixed-engine chapter caption)', () => {
+  it('renders one engine with its voice count', () => {
+    expect(formatEngineBreakdown({ qwen: 1 })).toBe('Qwen (1)');
+  });
+
+  it('renders a mixed breakdown alphabetically by engine label', () => {
+    expect(formatEngineBreakdown({ qwen: 6, kokoro: 1 })).toBe('Kokoro (1), Qwen (6)');
+  });
+
+  it('returns an empty string for an empty or missing breakdown', () => {
+    expect(formatEngineBreakdown({})).toBe('');
+    expect(formatEngineBreakdown(undefined)).toBe('');
+  });
+});
 
 describe('tts-models catalog includes Qwen3-TTS (plan 108)', () => {
   it('lists qwen3-tts-0.6b under the Local engine group (so it shows in the model dropdowns)', () => {
