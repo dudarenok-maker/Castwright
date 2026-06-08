@@ -34,6 +34,8 @@ export function stageToHash(stage: Stage | null | undefined): string {
       return '#/admin';
     case 'model-manager':
       return '#/models';
+    case 'about':
+      return '#/about';
     case 'analysing':
       return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
     case 'confirm': {

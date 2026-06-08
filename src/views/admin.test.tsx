@@ -154,6 +154,15 @@ describe('AdminView — model manager link (fs-23)', () => {
   });
 });
 
+describe('AdminView — about link', () => {
+  it('opens the About page when the link is clicked', async () => {
+    const { store } = renderAdmin();
+    const link = await screen.findByTestId('admin-open-about');
+    link.click();
+    expect(store.getState().ui.stage.kind).toBe('about');
+  });
+});
+
 describe('AdminView — dev-only worktrees gating', () => {
   it('renders the worktrees section in dev (import.meta.env.DEV true)', async () => {
     // vitest runs with DEV === true by default.
