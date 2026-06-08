@@ -726,7 +726,6 @@ function ListenRoute({ bookId }: { bookId: string }) {
       library={voices}
       currentTrack={currentTrack}
       setCurrentTrack={(t) => dispatch(uiActions.setCurrentTrack(t))}
-      onSendApp={(app) => dispatch(uiActions.setHandoffApp(app))}
       onRegenerate={(ch) => dispatch(uiActions.setRegenChapter(ch))}
       onEnterPreview={() => dispatch(uiActions.setPreviewMode(true))}
       onFixLine={async (marker) => {

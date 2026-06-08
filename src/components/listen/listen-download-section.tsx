@@ -22,7 +22,6 @@ import type { ListenerApp, ExportQueueItem } from '../../lib/types';
 
 interface ListenDownloadSectionProps {
   queueItems: ExportQueueItem[];
-  onSendApp: (app: ListenerApp) => void;
   onOpenPocketBookExport: () => void;
   onOpenVoiceExport: () => void;
   onOpenSmartAudiobookExport: () => void;
@@ -54,7 +53,6 @@ interface ListenDownloadSectionProps {
 
 export function ListenDownloadSection({
   queueItems,
-  onSendApp,
   onOpenPocketBookExport,
   onOpenVoiceExport,
   onOpenSmartAudiobookExport,
@@ -74,7 +72,6 @@ export function ListenDownloadSection({
     <>
       <CompanionAppBanner />
       <ListenerApps
-        onSend={onSendApp}
         onOpenPocketBookExport={onOpenPocketBookExport}
         onOpenVoiceExport={onOpenVoiceExport}
         onOpenSmartAudiobookExport={onOpenSmartAudiobookExport}
@@ -186,7 +183,6 @@ function DownloadCard({
 }
 
 interface ListenerAppsProps {
-  onSend: (app: ListenerApp) => void;
   /** PocketBook is live: clicking its tile opens the export modal on the
       Download-to-phone tab. */
   onOpenPocketBookExport: () => void;
@@ -209,7 +205,6 @@ interface ListenerAppsProps {
   onOpenAppleBooksExport: () => void;
 }
 function ListenerApps({
-  onSend,
   onOpenPocketBookExport,
   onOpenVoiceExport,
   onOpenSmartAudiobookExport,
@@ -240,7 +235,6 @@ function ListenerApps({
           <ListenerAppCard
             key={a.id}
             app={a}
-            onSend={onSend}
             onOpenLiveExport={liveHandlers[a.id]}
           />
         ))}
@@ -255,18 +249,13 @@ function ListenerApps({
 
 interface ListenerAppCardProps {
   app: ListenerApp;
-  onSend: (a: ListenerApp) => void;
   /** Present only for live tiles (PocketBook, Voice, Smart AudioBook
       Player). When set, turns the
       disabled-placeholder pill into a real button. */
   onOpenLiveExport?: () => void;
 }
-function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerAppCardProps) {
+function ListenerAppCard({ app, onOpenLiveExport }: ListenerAppCardProps) {
   const [from, to] = app.gradient;
-  /* onSend is intentionally not wired while non-live integrations are
-     mocked. Keep the prop for forward-compat so flipping each card to live
-     only touches the tile, not the route. */
-  void _onSend;
   const isLive = onOpenLiveExport != null;
   return (
     <article

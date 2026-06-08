@@ -66,7 +66,6 @@ const baseMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
 
 const baseHandlers = () => ({
   setCurrentTrack: vi.fn(),
-  onSendApp: vi.fn(),
   onRegenerate: vi.fn(),
   onEnterPreview: vi.fn(),
   onFixLine: vi.fn(),

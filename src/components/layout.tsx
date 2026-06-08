@@ -62,7 +62,6 @@ import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyze
 import { MiniPlayer } from './mini-player';
 import { PreviewListenerView } from '../views/preview-listener';
 import { MatchDetailDrawer } from '../modals/match-detail';
-import { AppHandoffModal } from '../modals/app-handoff';
 import { RegenerateModal } from '../modals/regenerate';
 import { CharacterRegenerateModal } from '../modals/character-regenerate';
 import { DriftReportModal } from '../modals/drift-report';
@@ -1353,13 +1352,6 @@ export function Layout() {
             if (ui.matchDetailFor) dispatch(castActions.declineMatch(ui.matchDetailFor));
             dispatch(uiActions.setMatchDetailFor(null));
           }}
-        />
-      )}
-      {ui.handoffApp && (
-        <AppHandoffModal
-          app={ui.handoffApp}
-          onClose={() => dispatch(uiActions.setHandoffApp(null))}
-          onComplete={() => dispatch(uiActions.setHandoffApp(null))}
         />
       )}
       {ui.regenChapter && (

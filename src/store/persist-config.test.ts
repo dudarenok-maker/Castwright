@@ -38,7 +38,6 @@ describe('UI_PERSIST_WHITELIST', () => {
     const transientKeys: Array<keyof typeof _initial> = [
       'currentTrack',
       'matchDetailFor',
-      'handoffApp',
       'regenChapter',
       'regenInitialScope',
       'regenCharacterCtx',

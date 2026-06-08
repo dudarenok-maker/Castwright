@@ -10,7 +10,6 @@ import { ListenDownloadSection } from './listen-download-section';
 function renderSection(overrides: Partial<Parameters<typeof ListenDownloadSection>[0]> = {}) {
   const defaultProps: Parameters<typeof ListenDownloadSection>[0] = {
     queueItems: [],
-    onSendApp: vi.fn(),
     onOpenPocketBookExport: vi.fn(),
     onOpenVoiceExport: vi.fn(),
     onOpenSmartAudiobookExport: vi.fn(),

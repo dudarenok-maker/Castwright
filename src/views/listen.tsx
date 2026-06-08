@@ -16,7 +16,7 @@ import { notificationsActions } from '../store/notifications-slice';
 import { ListenHeader, ListenMetadataEditor } from '../components/listen/listen-header';
 import { ListenPlayerRegion } from '../components/listen/listen-player-region';
 import { ListenDownloadSection } from '../components/listen/listen-download-section';
-import type { Chapter, Character, Voice, ListenerApp, ExportQueueItem } from '../lib/types';
+import type { Chapter, Character, Voice, ExportQueueItem } from '../lib/types';
 import {
   DEFAULT_NARRATOR_CREDIT,
   type EditableBookMeta,
@@ -32,7 +32,6 @@ interface Props {
   library: Voice[];
   currentTrack: number | null;
   setCurrentTrack: (t: number | null) => void;
-  onSendApp: (app: ListenerApp) => void;
   onRegenerate: (ch: Chapter) => void;
   onEnterPreview: () => void;
   /** fs-26 — open the per-line re-record fix for a re-record marker. Resolves
@@ -64,7 +63,6 @@ export function ListenView({
   characters,
   currentTrack,
   setCurrentTrack,
-  onSendApp,
   onRegenerate,
   onEnterPreview,
   onFixLine,
@@ -249,7 +247,6 @@ export function ListenView({
 
       <ListenDownloadSection
         queueItems={queueItems}
-        onSendApp={onSendApp}
         onOpenPocketBookExport={() => setExportModal({ tab: 'download' })}
         onOpenVoiceExport={() => setExportModal({ tab: 'sync-folder', appHint: 'voice' })}
         onOpenSmartAudiobookExport={() =>
