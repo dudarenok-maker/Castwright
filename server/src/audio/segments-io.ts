@@ -41,6 +41,13 @@ export interface SegmentsFile {
   chapterTitle?: string;
   synthesizedAt?: string;
   characterSnapshots?: Record<string, CharacterSnapshot>;
+  /** Per-character speaking segments captured at render time. Each segment
+      records which sentence ids that character spoke, so the render-time
+      sentence→speaker mapping is recoverable. Used to detect a chapter whose
+      sentences were reassigned AFTER it rendered (precise, net-diff staleness).
+      Absent on pre-108 / title-only files; a `kind: 'title'` segment carries an
+      empty `sentenceIds`. */
+  segments?: Array<{ characterId?: string; sentenceIds?: number[] }>;
 }
 
 /* Load every rendered chapter's segments file for a book, in chapter order.
@@ -89,6 +96,38 @@ export async function collectRenderedQwenVoiceNames(
     }
   }
   return names;
+}
+
+/* The render-time sentence→speaker map per rendered chapter, recovered from each
+   `<slug>.segments.json`'s per-character `segments[]`. Shape:
+   `{ [chapterId]: { [sentenceId]: characterId } }`. Only chapters with a segments
+   file on disk appear (i.e. rendered ones). Title/silence segments (empty
+   `sentenceIds`) and malformed entries are skipped.
+
+   The frontend diffs this against the LIVE manuscript sentence→speaker mapping to
+   flag a `done` chapter whose sentences were reassigned after it rendered — a
+   precise, net-diff signal (reassign-then-undo reads not-stale) that supersedes the
+   time-based change-log heuristic. */
+export async function collectRenderedSpeakerMaps(
+  bookDir: string,
+  chapters: Array<{ id: number; slug: string }>,
+): Promise<Record<number, Record<number, string>>> {
+  const out: Record<number, Record<number, string>> = {};
+  const segs = await loadSegmentsFiles(bookDir, chapters);
+  for (const seg of segs) {
+    const map: Record<number, string> = {};
+    for (const s of seg.segments ?? []) {
+      if (!s.characterId || !Array.isArray(s.sentenceIds)) continue;
+      for (const sid of s.sentenceIds) {
+        if (typeof sid === 'number') map[sid] = s.characterId;
+      }
+    }
+    /* Only surface chapters that actually carried per-sentence segments — an
+       empty map (legacy file without `segments`) would otherwise read as "every
+       sentence reassigned" on the client. */
+    if (Object.keys(map).length > 0) out[seg.chapterId] = map;
+  }
+  return out;
 }
 
 /* fe-16 — per-character fallback engine aggregated across a book's rendered

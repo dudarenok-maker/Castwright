@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import {
   collectRenderedFallbackEngines,
   collectRenderedQwenVoiceNames,
+  collectRenderedSpeakerMaps,
 } from './segments-io.js';
 
 let bookDir: string;
@@ -77,5 +78,47 @@ describe('collectRenderedFallbackEngines (fe-16)', () => {
     await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
       new Set(['qwen-Marlow']),
     );
+  });
+});
+
+describe('collectRenderedSpeakerMaps (#650)', () => {
+  function writeSegmentsWithBody(
+    slug: string,
+    segments: Array<{ characterId?: string; sentenceIds?: number[]; kind?: string }>,
+  ) {
+    writeFileSync(
+      join(bookDir, 'audio', `${slug}.segments.json`),
+      JSON.stringify({ chapterId: Number(slug.slice(0, 2)), segments }),
+    );
+  }
+
+  it('inverts per-character segments into a sentenceId→characterId map per chapter', async () => {
+    writeSegmentsWithBody('01-one', [
+      { characterId: 'narrator', sentenceIds: [1, 3] },
+      { characterId: 'Marlow', sentenceIds: [2] },
+    ]);
+    writeSegmentsWithBody('02-two', [{ characterId: 'Wren', sentenceIds: [4, 5] }]);
+    await expect(collectRenderedSpeakerMaps(bookDir, chapters)).resolves.toEqual({
+      1: { 1: 'narrator', 2: 'Marlow', 3: 'narrator' },
+      2: { 4: 'Wren', 5: 'Wren' },
+    });
+  });
+
+  it('skips title/empty segments and omits a chapter with no per-sentence data', async () => {
+    writeSegmentsWithBody('01-one', [
+      { characterId: 'narrator', sentenceIds: [], kind: 'title' },
+      { characterId: 'narrator', sentenceIds: [1] },
+    ]);
+    /* Legacy file with no `segments` array at all → omitted entirely (so the
+       client doesn't read it as "every sentence reassigned"). */
+    writeSegments('02-two', { Wren: { voiceEngine: 'kokoro' } });
+    await expect(collectRenderedSpeakerMaps(bookDir, chapters)).resolves.toEqual({
+      1: { 1: 'narrator' },
+    });
+  });
+
+  it('returns an empty map when no audio dir exists', async () => {
+    rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
+    await expect(collectRenderedSpeakerMaps(bookDir, chapters)).resolves.toEqual({});
   });
 });

@@ -1214,6 +1214,80 @@ describe('GenerationView — reassignment staleness caption (Bug 2)', () => {
   });
 });
 
+describe('GenerationView — precise reassignment staleness via render map (#650)', () => {
+  /* When the server ships a per-chapter render-time sentence→speaker map, the
+     Generate view diffs it against the LIVE manuscript instead of using the
+     time-based change-log heuristic — precise (a reassign-then-undo reads
+     not-stale) and immediate. Chapter 1's fixture sentences are
+     {1:narrator, 2:Marlow, 3:Marlow}. */
+  function renderWithRenderMap(
+    renderedSpeakersByChapter: Record<number, Record<number, string>>,
+  ): void {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    /* hydrateFromBookState is the only setter for renderedSpeakersByChapter. */
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-a' },
+          { id: 2, title: 'Chapter 2', slug: '02-b' },
+        ],
+        completedSlugs: ['01-a'],
+        characters,
+        renderedSpeakersByChapter,
+      } as any),
+    );
+    store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [chapter1, chapter2],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[chapter1, chapter2]}
+          characters={characters}
+          paused
+          title="Render Map Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('shows the caption when the live mapping differs from the render map', () => {
+    /* Render had sentence 2 on narrator; the manuscript now has it on Marlow. */
+    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'narrator', 3: 'Marlow' } });
+    expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
+  });
+
+  it('does NOT show the caption when the live mapping matches the render map (no false positive)', () => {
+    /* Identical to the fixture sentences → not stale, even if the time-based
+       heuristic would have flagged it. */
+    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'Marlow', 3: 'Marlow' } });
+    expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
+  });
+});
+
 describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', () => {
   /* The banner now carries a "Regenerate all" affordance that confirms
      once and dispatches regenerateChapterIds for every drifted chapter

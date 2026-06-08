@@ -3,6 +3,7 @@ import {
   renderedChaptersForCharacter,
   latestReassignAt,
   isChapterStaleFromReassign,
+  isChapterReassignedSinceRender,
 } from './stale-chapters';
 import type { Chapter, ChangeLogEvent } from './types';
 
@@ -82,5 +83,63 @@ describe('isChapterStaleFromReassign (Bug 2)', () => {
 
   it('is NOT stale when the chapter has no reassignment at all', () => {
     expect(isChapterStaleFromReassign(doneCh(1, '2026-06-08T10:00:00Z'), [])).toBe(false);
+  });
+});
+
+describe('isChapterReassignedSinceRender (#650 precise diff)', () => {
+  const rendered = { 1: 'narrator', 2: 'Wren', 3: 'Marlow' };
+
+  it('not reassigned when the live mapping matches the render-time mapping', () => {
+    const current = [
+      { id: 1, characterId: 'narrator' },
+      { id: 2, characterId: 'Wren' },
+      { id: 3, characterId: 'Marlow' },
+    ];
+    expect(isChapterReassignedSinceRender(rendered, current)).toBe(false);
+  });
+
+  it('reassigned when a rendered sentence now has a different speaker', () => {
+    const current = [
+      { id: 1, characterId: 'narrator' },
+      { id: 2, characterId: 'Marlow' }, // was Wren
+      { id: 3, characterId: 'Marlow' },
+    ];
+    expect(isChapterReassignedSinceRender(rendered, current)).toBe(true);
+  });
+
+  it('reassigned when a rendered sentence is gone (split/merge/delete)', () => {
+    const current = [
+      { id: 1, characterId: 'narrator' },
+      { id: 3, characterId: 'Marlow' }, // id 2 removed
+    ];
+    expect(isChapterReassignedSinceRender(rendered, current)).toBe(true);
+  });
+
+  it('NO false positive on reassign-then-undo (the whole point vs the time-based heuristic)', () => {
+    /* Same mapping as render after an undo → not stale, even though the
+       time-based heuristic would still read stale from the logged edits. */
+    const current = [
+      { id: 1, characterId: 'narrator' },
+      { id: 2, characterId: 'Wren' },
+      { id: 3, characterId: 'Marlow' },
+    ];
+    expect(isChapterReassignedSinceRender(rendered, current)).toBe(false);
+  });
+
+  it('does not false-positive on a current sentence that was never in the render map', () => {
+    /* A structural/empty line absent from segments isn't a rendered key, so an
+       extra current sentence can't trip staleness on its own. */
+    const current = [
+      { id: 1, characterId: 'narrator' },
+      { id: 2, characterId: 'Wren' },
+      { id: 3, characterId: 'Marlow' },
+      { id: 99, characterId: 'narrator' }, // never rendered
+    ];
+    expect(isChapterReassignedSinceRender(rendered, current)).toBe(false);
+  });
+
+  it('returns false when there is no render map for the chapter (fall back to heuristic)', () => {
+    expect(isChapterReassignedSinceRender(undefined, [{ id: 1, characterId: 'x' }])).toBe(false);
+    expect(isChapterReassignedSinceRender({}, [{ id: 1, characterId: 'x' }])).toBe(false);
   });
 });
