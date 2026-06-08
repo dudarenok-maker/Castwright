@@ -129,6 +129,11 @@ adoption-policy decision:
 
 ## Delivery (3 waves, each independently valuable)
 
+> **Wave 1 landed 2026-06-08** on `feat/server-generation-stall-protection`
+> (PR #673, draft): A1 `55e25d8b`, A2 `d92c84a7`, prod-fresh `906cafa0`,
+> A4 `43e86162`. Typecheck + frontend + server (2362 tests) green. Plan:
+> `docs/superpowers/plans/2026-06-08-generation-stall-protection-wave1.md`.
+
 1. **Wave 1 — config safety (ships first; prevents *this* incident):** A1, A2,
    A4 + prod-fresh-sidecar policy.
 2. **Wave 2 — safe recycles:** A3, B1, B2.
