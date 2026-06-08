@@ -3248,6 +3248,8 @@ export interface components {
             audioQa?: components["schemas"]["ChapterQaVerdict"] | null;
             /** @description When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author. */
             excluded?: boolean;
+            /** @description When true, the user explicitly removed this un-rendered chapter from the generation queue ("Not queued"). Unlike `excluded`, a held chapter stays part of the book and keeps any audio — it is simply not on the work queue and the auto-work resume must not re-enqueue it. Cleared when the user re-queues the chapter. Persisted so the choice survives reload. */
+            held?: boolean;
             /**
              * @description TTS model key that produced this chapter's existing audio
              *     file. Stamped at render time and backfilled from the

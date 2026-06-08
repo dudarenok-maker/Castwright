@@ -865,6 +865,29 @@ describe('chaptersSlice — hydrateFromBookState', () => {
     expect(next.chapters[1].characters).toEqual({ narrator: 'queued', eliza: 'queued' });
   });
 
+  it('carries the per-chapter `held` ("Not queued") flag through hydrate', () => {
+    /* Bug-1 regression: the user removed an un-rendered chapter from the queue;
+       state.json persists `held`, and the row must re-hydrate as "Not queued"
+       (held=true) rather than the misleading "Queued". */
+    const start = baseState([]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.hydrateFromBookState({
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-a' },
+          { id: 2, title: 'Chapter 2', slug: '02-b', held: true },
+        ],
+        completedSlugs: [],
+        characters: cast,
+      }),
+    );
+    expect(next.chapters[0].held).toBeUndefined();
+    expect(next.chapters[1].held).toBe(true);
+    /* `held` rides ON TOP of the underlying state — a held chapter is still
+       `queued` underneath (the badge override + count filters read `held`). */
+    expect(next.chapters[1].state).toBe('queued');
+  });
+
   it('clears lastError + generationStartedAt on hydrate (fresh frame for the opened book)', () => {
     /* Plan 102 Should #5 removed `chapters.paused` — hydrate no longer has a
        pause flag to inadvertently flip, so the old "auto-start regression"
@@ -1025,6 +1048,50 @@ describe('chaptersSlice — misc reducers', () => {
      lives in middleware-local state (generation-stream-middleware's
      `pendingSpec`) and is drained the instant the runner opens — covered by
      generation-stream-middleware.test.ts's open-side assertions. */
+});
+
+describe('chaptersSlice — setChapterHeld ("Not queued", Bug 1)', () => {
+  it('sets held=true and resets transient generation state', () => {
+    const start = baseState([
+      makeChapter(1, {
+        state: 'queued',
+        progress: 0.4,
+        currentLine: 12,
+        totalLines: 30,
+        errorReason: 'stale',
+      }),
+    ]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.setChapterHeld({ chapterId: 1, held: true }),
+    );
+    expect(next.chapters[0].held).toBe(true);
+    expect(next.chapters[0].state).toBe('queued');
+    expect(next.chapters[0].progress).toBe(0);
+    expect(next.chapters[0].currentLine).toBeUndefined();
+    expect(next.chapters[0].totalLines).toBeUndefined();
+    expect(next.chapters[0].errorReason).toBeUndefined();
+  });
+
+  it('held=false clears the flag (re-add path) without disturbing other rows', () => {
+    const start = baseState([makeChapter(1, { state: 'queued', held: true }), makeChapter(2)]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.setChapterHeld({ chapterId: 1, held: false }),
+    );
+    expect(next.chapters[0].held).toBeUndefined();
+    expect(next.chapters[0].state).toBe('queued');
+    expect(next.chapters[1]).toEqual(start.chapters[1]);
+  });
+
+  it('is a no-op for an unknown chapter id', () => {
+    const start = baseState([makeChapter(1)]);
+    const next = chaptersSlice.reducer(
+      start,
+      chaptersActions.setChapterHeld({ chapterId: 99, held: true }),
+    );
+    expect(next.chapters).toEqual(start.chapters);
+  });
 });
 
 describe('chaptersSlice — initial state (mock-leak regression)', () => {
