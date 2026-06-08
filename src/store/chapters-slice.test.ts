@@ -30,6 +30,7 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   lastTickAt: null,
   currentBookId: null,
   activeStreams: {},
+  renderedSpeakersByChapter: {},
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>

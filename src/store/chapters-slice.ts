@@ -89,6 +89,13 @@ export interface ChaptersState {
       same book coexist as separate entries; the layout pill selectors
       aggregate across `Object.values`. */
   activeStreams: Record<string, ActiveStreamSnapshot>;
+  /** #650 — render-time sentence→speaker map per rendered chapter
+      (`{ [chapterId]: { [sentenceId]: characterId } }`), hydrated from the
+      book-state GET. The Generate view diffs it against the live manuscript to
+      flag a `done` chapter whose sentences were reassigned after it rendered.
+      Empty for older servers / before the first hydrate; the view then falls
+      back to the time-based change-log heuristic. */
+  renderedSpeakersByChapter: Record<number, Record<number, string>>;
 }
 
 const initialState: ChaptersState = {
@@ -98,6 +105,7 @@ const initialState: ChaptersState = {
   lastTickAt: null,
   currentBookId: null,
   activeStreams: {},
+  renderedSpeakersByChapter: {},
 };
 
 export const chaptersSlice = createSlice({
@@ -238,11 +246,22 @@ export const chaptersSlice = createSlice({
           present with a `null` entry → fetched-but-no-data, render
           neutral. */
         chapterLufs?: Record<number, ChapterLoudness | null>;
+        /** #650 — render-time sentence→speaker map per chapter. Absent on older
+          servers → left empty, view falls back to the change-log heuristic. */
+        renderedSpeakersByChapter?: Record<number, Record<number, string>>;
       }>,
     ) => {
-      const { bookId, chapters, completedSlugs, characters, chapterCharacters, chapterLufs } =
-        a.payload;
+      const {
+        bookId,
+        chapters,
+        completedSlugs,
+        characters,
+        chapterCharacters,
+        chapterLufs,
+        renderedSpeakersByChapter,
+      } = a.payload;
       if (bookId) s.currentBookId = bookId;
+      s.renderedSpeakersByChapter = renderedSpeakersByChapter ?? {};
       const done = new Set(completedSlugs);
       const allCastQueued: Record<string, 'queued'> = {};
       for (const c of characters) allCastQueued[c.id] = 'queued';
