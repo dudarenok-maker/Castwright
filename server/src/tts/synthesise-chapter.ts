@@ -26,7 +26,7 @@ import {
 } from './segment-asr-qa.js';
 import type { TranscribeResult } from './transcribe-client.js';
 import { resamplePcm16 } from './resample-pcm16.js';
-import { withTtsRetry } from './retry.js';
+import { withTtsRetry, isTransient } from './retry.js';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 
 /* How many Qwen sentences to pack into one batched `generate_voice_clone`
@@ -123,6 +123,28 @@ export class ChapterStallError extends Error {
         `Check the TTS sidecar (it may be wedged or memory-saturated).`,
     );
     this.name = 'ChapterStallError';
+  }
+}
+
+/** Thrown by synthesiseChapter when the in-loop recycle-recovery budget
+    (`maxRecycleRecoveries`) is exhausted on a single chapter — i.e. the sidecar
+    recycled/respawned more times than allowed while this one chapter rendered.
+    A NAMED signal (C3) so generation.ts can surface "the sidecar is thrashing —
+    likely the host-memory leak (side-11) or insufficient headroom" instead of a
+    generic mid-synth failure. Carries the recovery count + the last underlying
+    error for the log. */
+export class RecycleStormError extends Error {
+  readonly recoveries: number;
+  readonly lastError: unknown;
+  constructor(recoveries: number, lastError: unknown) {
+    super(
+      `The TTS sidecar recycled ${recoveries}× while rendering this single chapter ` +
+        `— it is likely thrashing (host-memory leak or insufficient VRAM/RAM headroom). ` +
+        `Stopping so the run doesn't grind. Restart the sidecar / lower concurrency, then Retry.`,
+    );
+    this.name = 'RecycleStormError';
+    this.recoveries = recoveries;
+    this.lastError = lastError;
   }
 }
 
@@ -499,6 +521,22 @@ export interface SynthesiseChapterOpts {
       inline here, but the multi-worker queue overlaps chapter N's (CPU) ASR with
       chapter N+1's (GPU) synth, so it doesn't serialise the run. */
   asr?: AsrPassOptions;
+  /** C1 (Wave 3) — recover from a transient sidecar-down WITHOUT discarding
+      completed groups. When a synth site throws a recoverable error
+      (`isTransient` OR a `ChapterSynthTimeoutError`), the site calls this hook
+      to wait out the respawn, then re-attempts the SAME work item; every
+      already-completed `results[]` slot is preserved. Wired by generation.ts to
+      `ensureSidecarEngineReady(engine, signal)` (+ the C2 recovering tick).
+      `engine` is the failed item's resolved engine (a chapter can be mixed-
+      engine); `attempt` is the 1-indexed shared recovery count. ABSENT → no
+      in-loop recovery: a transient bubbles out unchanged (pre-C1 behaviour, the
+      passthrough every existing caller/test relies on). */
+  onRecoverRecycle?: (e: { engine: TtsEngine; attempt: number }) => Promise<void>;
+  /** Max in-loop recycle recoveries SHARED across all groups/workers of this
+      chapter. Mirrors generation.ts `MAX_RECYCLE_RECOVERIES` (2). Exceeding it
+      throws `RecycleStormError` so the chapter fails fast (no infinite grind).
+      Only consulted when `onRecoverRecycle` is provided. Default 2. */
+  maxRecycleRecoveries?: number;
 }
 
 /** Options for the per-sentence ASR content-QA pass (srv-31). */
@@ -643,6 +681,8 @@ export async function synthesiseChapter(
     segmentQaThresholds,
     onSegmentRerecord,
     asr,
+    onRecoverRecycle,
+    maxRecycleRecoveries = 2,
   } = opts;
 
   /* Per-character engine resolver (plan 108). Returns the engine + its
@@ -717,6 +757,39 @@ export async function synthesiseChapter(
      padding is deliberately NOT recorded as segments (it's not narration,
      it's structural padding, and the listen view's timeline shouldn't show
      dead-air rows). */
+  let recycleRecoveries = 0;
+  /* C1 in-loop recovery. Re-attempt `fn` after waiting out a sidecar respawn,
+     WITHOUT discarding completed groups (the function never restarts, so every
+     filled `results[]` slot survives). The shared `recycleRecoveries` counter
+     bounds total recoveries per chapter; exhaustion throws RecycleStormError
+     (C3). Recoverable = isTransient OR ChapterSynthTimeoutError; an abort or a
+     non-recoverable error re-throws. No-op passthrough when `onRecoverRecycle`
+     is absent (pre-C1). Wraps EVERY synth site (title, anchor, pool item,
+     QA/ASR re-record) so recovery coverage matches the old whole-chapter loop. */
+  async function withRecycleRecovery<T>(
+    engineForItem: TtsEngine,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    for (;;) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (!onRecoverRecycle) throw err;
+        const name = (err as { name?: string })?.name;
+        if (name === 'AbortError' || signal?.aborted) throw err;
+        const isRecycleTimeout = name === 'ChapterSynthTimeoutError';
+        if (!isTransient(err) && !isRecycleTimeout) throw err;
+        if (recycleRecoveries >= maxRecycleRecoveries) {
+          throw new RecycleStormError(recycleRecoveries, err);
+        }
+        recycleRecoveries += 1;
+        /* May throw AbortError (run paused mid-wait) → propagates out as a clean
+           stop, exactly like the old generation.ts recovery loop. */
+        await onRecoverRecycle({ engine: engineForItem, attempt: recycleRecoveries });
+      }
+    }
+  }
+
   const titleText = chapterTitleNarration?.trim();
   if (titleText) {
     if (signal?.aborted) {
@@ -745,15 +818,17 @@ export async function synthesiseChapter(
 
     onTitleStart?.();
 
-    const titleResult = await withTtsRetry(
-      () =>
-        titleRoute.provider.synthesize({
-          text: normaliseForTts(titleText),
-          voiceName: narratorVoice,
-          modelKey: titleRoute.modelKey,
-          signal,
-        }),
-      { signal },
+    const titleResult = await withRecycleRecovery(titleRoute.engine, () =>
+      withTtsRetry(
+        () =>
+          titleRoute.provider.synthesize({
+            text: normaliseForTts(titleText),
+            voiceName: narratorVoice,
+            modelKey: titleRoute.modelKey,
+            signal,
+          }),
+        { signal },
+      ),
     );
 
     sampleRate = titleResult.sampleRate;
@@ -1041,7 +1116,9 @@ export async function synthesiseChapter(
       throw new DOMException('synthesiseChapter aborted', 'AbortError');
     }
     const anchorGroup = groups[0];
-    const result = await synthGroup(anchorGroup);
+    const result = await withRecycleRecovery(resolveGroup(anchorGroup).route.engine, () =>
+      synthGroup(anchorGroup),
+    );
     results[anchorGroup.index] = result;
     sampleRate = result.sampleRate;
     fireComplete(anchorGroup);
@@ -1150,10 +1227,16 @@ export async function synthesiseChapter(
           if (i >= workItems.length) return;
           const item = workItems[i];
           if (item.kind === 'single') {
-            results[item.group.index] = await synthGroup(item.group);
+            results[item.group.index] = await withRecycleRecovery(
+              resolveGroup(item.group).route.engine,
+              () => synthGroup(item.group),
+            );
             fireComplete(item.group);
           } else {
-            const out = await synthBatch(item.groups);
+            const out = await withRecycleRecovery(
+              resolveGroup(item.groups[0]).route.engine,
+              () => synthBatch(item.groups),
+            );
             /* Scatter each batched chunk back to ITS OWN group index — this is
                what keeps the index-order concat below identical to the per-call
                path. */
@@ -1201,7 +1284,9 @@ export async function synthesiseChapter(
           maxRerecords: maxSegmentRerecords,
           reasons: bestVerdict.reasons,
         });
-        const fresh = await synthGroup(group);
+        const fresh = await withRecycleRecovery(resolveGroup(group).route.engine, () =>
+          synthGroup(group),
+        );
         const freshVerdict = evaluateSegmentPcm(
           fresh.pcm,
           fresh.sampleRate,
@@ -1271,7 +1356,9 @@ export async function synthesiseChapter(
           wer: bestClass.wer,
           reasons: bestClass.reasons,
         });
-        const fresh = await synthGroup(group);
+        const fresh = await withRecycleRecovery(resolveGroup(group).route.engine, () =>
+          synthGroup(group),
+        );
         const freshClass = await verify(fresh.pcm, fresh.sampleRate, group.text);
         if (asrBetter(freshClass, bestClass)) {
           best = fresh;
