@@ -191,6 +191,14 @@ describe('UploadView — first-time upload (existing path unchanged)', () => {
   });
 });
 
+describe('UploadView — Wave 2 brand (on-ramp tagline)', () => {
+  it('shows "Any book, fully cast." on the new-project branch', () => {
+    const store = makeStore();
+    renderUpload(store);
+    expect(screen.getByText('Any book, fully cast.')).toBeInTheDocument();
+  });
+});
+
 describe('UploadView — re-upload mode (plan 74)', () => {
   it('renders the re-upload banner and the book title when reuploadingBookId is set', () => {
     const store = makeStore({
@@ -304,6 +312,15 @@ describe('UploadView — re-upload mode (plan 74)', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('listen-stub')).toBeInTheDocument();
     });
+  });
+
+  it('"Any book, fully cast." tagline absent on re-upload branch (Wave 2 brand)', () => {
+    const store = makeStore({
+      reuploadingBookId: 'bk_a',
+      libraryBooks: [reuploadBook],
+    });
+    renderUpload(store);
+    expect(screen.queryByText('Any book, fully cast.')).not.toBeInTheDocument();
   });
 
   it('Cancel re-upload returns to the book without showing the diff modal', async () => {

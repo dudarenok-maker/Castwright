@@ -1516,3 +1516,10 @@ describe('AnalysingView — request-model gating (plan 118)', () => {
     expect(capturedOpts?.model).toBe('gemini-2.5-flash');
   });
 });
+
+describe('AnalysingView — Wave 2 brand manifesto', () => {
+  it('renders "Many voices, one machine." on the analysing screen', () => {
+    renderView();
+    expect(screen.getByText('Many voices, one machine.')).toBeInTheDocument();
+  });
+});

@@ -799,6 +799,7 @@ export function GenerationView({
             {completed} of {activeChapters.length} chapters complete
             {etaSec != null && <> · approx. {formatTime(etaSec)} remaining</>}
           </p>
+          <p className="mt-1 text-sm text-ink/50">Many voices, one machine.</p>
           {linesCounter.total > 0 && (
             <p className="mt-1 text-xs text-ink/55 tabular-nums">
               <span className="font-semibold text-ink/75">

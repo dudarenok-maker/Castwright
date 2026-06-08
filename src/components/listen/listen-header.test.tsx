@@ -27,6 +27,13 @@ const baseProps = {
   notes: null,
 };
 
+describe('ListenHeader — Wave 2 brand attribution', () => {
+  it('renders "Full-cast audiobook · made with Castwright" below the credit line', () => {
+    render(<ListenHeader {...baseProps} />);
+    expect(screen.getByText('Full-cast audiobook · made with Castwright')).toBeInTheDocument();
+  });
+});
+
 describe('ListenHeader — fs-2 language badge', () => {
   it('renders a Russian badge for a ru book', () => {
     render(<ListenHeader {...baseProps} language="ru" />);

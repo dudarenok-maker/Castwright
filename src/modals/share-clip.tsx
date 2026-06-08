@@ -336,23 +336,26 @@ export function ShareClipModal({
             )}
           </div>
 
-          <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-end gap-3">
-            <button
-              onClick={onClose}
-              className="text-sm font-medium text-ink/60 hover:text-ink"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleConfirm}
-              data-testid="share-clip-confirm"
-              disabled={invalid}
-              className={`inline-flex items-center gap-2 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft ${
-                invalid ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-            >
-              Download clip
-            </button>
+          <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
+            <span className="text-[11px] text-ink/40">Made with Castwright · castwright.ai</span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={onClose}
+                className="text-sm font-medium text-ink/60 hover:text-ink"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirm}
+                data-testid="share-clip-confirm"
+                disabled={invalid}
+                className={`inline-flex items-center gap-2 px-4 py-2 rounded-full bg-ink text-canvas text-sm font-semibold hover:bg-ink-soft ${
+                  invalid ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+              >
+                Download clip
+              </button>
+            </div>
           </div>
         </div>
       </div>

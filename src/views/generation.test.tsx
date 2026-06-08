@@ -2202,3 +2202,10 @@ describe('GenerationView — srv-27 advisory QA badge', () => {
     expect(screen.queryByText('Suspect')).toBeNull();
   });
 });
+
+describe('GenerationView — Wave 2 brand manifesto', () => {
+  it('renders "Many voices, one machine." on the generation screen', () => {
+    renderView();
+    expect(screen.getByText('Many voices, one machine.')).toBeInTheDocument();
+  });
+});

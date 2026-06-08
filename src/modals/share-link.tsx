@@ -168,10 +168,13 @@ export function ShareLinkModal({ open, url, onClose, onCopyFailed }: ShareLinkMo
             </p>
           </div>
 
-          <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-end gap-3">
-            <PrimaryButton variant="dark" onClick={onClose}>
-              Done
-            </PrimaryButton>
+          <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
+            <span className="text-[11px] text-ink/40">Made with Castwright · castwright.ai</span>
+            <div className="flex items-center gap-3">
+              <PrimaryButton variant="dark" onClick={onClose}>
+                Done
+              </PrimaryButton>
+            </div>
           </div>
         </div>
       </div>
