@@ -57,7 +57,11 @@ test.describe('listen finalize — export bar completes after modal close', () =
     // that the modal is gone. Submitting a live export replaces the demo
     // fixture rows, so the rail holds exactly this one row — its filename
     // and "Done" status pin completion.
-    await expect(page.getByText('Mock audiobook.m4b')).toBeVisible();
-    await expect(page.getByText('Done', { exact: true })).toBeVisible({ timeout: 10_000 });
+    // Scoped to the queue-rail section (data-testid="export-queue-rail") so
+    // a "Done" inside the now-hidden modal's export-active-job row cannot
+    // satisfy this assertion.
+    const rail = page.getByTestId('export-queue-rail');
+    await expect(rail.getByText('Mock audiobook.m4b')).toBeVisible({ timeout: 10_000 });
+    await expect(rail.getByText('Done', { exact: true })).toBeVisible({ timeout: 10_000 });
   });
 });
