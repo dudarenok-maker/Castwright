@@ -1303,6 +1303,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/companion/apk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download the packaged Castwright Companion Android APK (interim)
+         * @description Interim "third distribution method" for the companion app, alongside the
+         *     (not-yet-live) Play Store / App Store buttons. Streams the packaged APK
+         *     as an attachment (`application/vnd.android.package-archive`,
+         *     `Content-Disposition: attachment`) when one has been dropped at the
+         *     server's resolved location (the release zip bundles it at
+         *     `<release>/companion/castwright-companion.apk`; override with
+         *     `COMPANION_APK_PATH`). The Listen-tab "Download .apk" button HEAD-probes
+         *     this route and renders only when it returns 200.
+         */
+        get: operations["downloadCompanionApk"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/export/portable": {
         parameters: {
             query?: never;
@@ -5625,6 +5652,33 @@ export interface operations {
                 content?: never;
             };
             /** @description Job id unknown or staging file missing */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    downloadCompanionApk: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description APK bytes */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/vnd.android.package-archive": string;
+                };
+            };
+            /** @description No APK present at the resolved location */
             404: {
                 headers: {
                     [name: string]: unknown;

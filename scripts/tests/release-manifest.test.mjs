@@ -8,7 +8,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MANIFEST, matchesManifest, releaseZipName, releaseInternalPrefix } from '../build-release-zip.mjs';
+import {
+  MANIFEST,
+  matchesManifest,
+  releaseZipName,
+  releaseInternalPrefix,
+  companionApkSrc,
+  companionApkZipEntry,
+} from '../build-release-zip.mjs';
 
 const INCLUDED = [
   'package.json',
@@ -150,4 +157,27 @@ test('releaseZipName returns castwright- prefixed zip filename', () => {
 
 test('releaseInternalPrefix returns castwright- prefixed top dir', () => {
   assert.equal(releaseInternalPrefix('v1.7.0'), 'castwright-v1.7.0');
+});
+
+test('companionApkZipEntry nests the APK under the release prefix at companion/', () => {
+  assert.equal(
+    companionApkZipEntry('v1.7.0'),
+    'castwright-v1.7.0/companion/castwright-companion.apk',
+  );
+});
+
+test('companionApkSrc honours COMPANION_APK_SRC, else defaults to the Flutter output', () => {
+  const prev = process.env.COMPANION_APK_SRC;
+  try {
+    delete process.env.COMPANION_APK_SRC;
+    assert.match(
+      companionApkSrc().replace(/\\/g, '/'),
+      /apps\/android\/build\/app\/outputs\/flutter-apk\/app-release\.apk$/,
+    );
+    process.env.COMPANION_APK_SRC = 'some/custom-build.apk';
+    assert.match(companionApkSrc().replace(/\\/g, '/'), /custom-build\.apk$/);
+  } finally {
+    if (prev === undefined) delete process.env.COMPANION_APK_SRC;
+    else process.env.COMPANION_APK_SRC = prev;
+  }
 });

@@ -5,6 +5,11 @@ dist/
 *.tsbuildinfo
 # fs-1 — generated at release time by build-release-zip.mjs (from the tag body)
 RELEASE_NOTES.md
+# Interim companion-app distribution — the server's default APK drop location
+# (GET /api/companion/apk). Bundled into the release zip at build time; a
+# locally-dropped APK for testing must never be committed (it's a ~tens-of-MB
+# binary, regenerated per app build). Override the path with COMPANION_APK_PATH.
+/companion/
 
 # Env
 .env
