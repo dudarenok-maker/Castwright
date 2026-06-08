@@ -392,6 +392,22 @@ describe('ModelManagerView — per-row install (fs-23 follow-up)', () => {
   });
 });
 
+describe('ModelManagerView — back-to-Admin breadcrumb', () => {
+  it('renders the back-to-Admin button', async () => {
+    renderManager();
+    const btn = screen.getByTestId('model-manager-back-to-admin');
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent('← Admin');
+  });
+
+  it('dispatches openAdmin when the back button is clicked', async () => {
+    const { store } = renderManager();
+    const btn = screen.getByTestId('model-manager-back-to-admin');
+    fireEvent.click(btn);
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'admin' });
+  });
+});
+
 describe('ModelManagerView — settings form accordion shell', () => {
   it('renders settings as named accordion sections and Save still dispatches the patch', async () => {
     putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
