@@ -135,9 +135,9 @@ jobs:
       - name: SHA-256
         run: |
           cd release
-          shasum -a 256 "audiobook-generator-${{ github.ref_name }}.zip" \
-            > "audiobook-generator-${{ github.ref_name }}.zip.sha256"
-          cat "audiobook-generator-${{ github.ref_name }}.zip.sha256"
+          shasum -a 256 "castwright-${{ github.ref_name }}.zip" \
+            > "castwright-${{ github.ref_name }}.zip.sha256"
+          cat "castwright-${{ github.ref_name }}.zip.sha256"
 
       - name: Read tag annotation for release body
         # `--format='%(contents)'` returns the annotated tag message verbatim.
@@ -154,9 +154,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            "release/audiobook-generator-${{ github.ref_name }}.zip" \
-            "release/audiobook-generator-${{ github.ref_name }}.zip.sha256" \
-            --title "Audiobook generator ${{ github.ref_name }}" \
+            "release/castwright-${{ github.ref_name }}.zip" \
+            "release/castwright-${{ github.ref_name }}.zip.sha256" \
+            --title "Castwright ${{ github.ref_name }}" \
             --notes-file release/tag-notes.md
 
   # plan 188 — build the installable companion APK (versioned in lockstep via
