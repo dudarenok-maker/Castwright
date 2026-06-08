@@ -183,6 +183,14 @@ export interface AppInfo {
   releaseNotes: string;
 }
 
+/* Interim companion-app distribution — availability of the packaged Android
+   APK served by GET /api/companion/apk. The Listen-tab banner probes this
+   (HEAD) and shows a "Download .apk" button only when `available`. */
+export interface CompanionApkAvailability {
+  available: boolean;
+  sizeBytes: number | null;
+}
+
 /* fs-1 — POST /api/upgrade/stage result. */
 export interface UpgradeStageResult {
   candidateVersion: string;

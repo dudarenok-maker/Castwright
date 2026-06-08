@@ -69,12 +69,51 @@ jobs:
       - name: Build
         run: npm run build
 
+  # Build the installable companion APK ONCE (versioned in lockstep via
+  # bump-version.mjs → pubspec) and hand it to `publish` as a workflow artifact.
+  # `publish` both bundles it INTO the server zip (so the in-app "Download .apk"
+  # button works straight from the install) and attaches it as a standalone
+  # release asset. Building here (not inside publish) keeps the Flutter toolchain
+  # off the zip job and lets the APK build run in parallel with verify.
+  companion-apk-build:
+    name: Build companion APK
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+          cache: true
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - name: Stage + checksum
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+            "castwright-${{ github.ref_name }}.apk"
+          shasum -a 256 "castwright-${{ github.ref_name }}.apk" \
+            > "castwright-${{ github.ref_name }}.apk.sha256"
+          cat "castwright-${{ github.ref_name }}.apk.sha256"
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: companion-apk
+          path: |
+            apps/android/castwright-${{ github.ref_name }}.apk
+            apps/android/castwright-${{ github.ref_name }}.apk.sha256
+          retention-days: 1
+
   # Publish: builds the zip + SHA-256 on Ubuntu (the zip is platform-
   # independent, no need to build it three times) and uploads them to the
-  # GitHub Release. Gated on every verify matrix leg passing.
+  # GitHub Release. Gated on verify AND the APK build so the zip can bundle it.
   publish:
     name: Publish release zip
-    needs: verify
+    needs: [verify, companion-apk-build]
     runs-on: ubuntu-latest
     # Explicit cap (default is 360 min). (CI cost round 2.)
     timeout-minutes: 15
@@ -129,7 +168,18 @@ jobs:
       - name: Build (frontend + server)
         run: npm run build
 
+      - name: Download companion APK
+        uses: actions/download-artifact@v4
+        with:
+          name: companion-apk
+          path: companion-apk
+
       - name: Build release zip
+        # COMPANION_APK_SRC points the zip builder at the APK we just downloaded,
+        # so it lands at <release>/companion/castwright-companion.apk where the
+        # server's GET /api/companion/apk serves it from.
+        env:
+          COMPANION_APK_SRC: companion-apk/castwright-${{ github.ref_name }}.apk
         run: node scripts/build-release-zip.mjs --version "${{ github.ref_name }}"
 
       - name: SHA-256
@@ -159,40 +209,15 @@ jobs:
             --title "Castwright ${{ github.ref_name }}" \
             --notes-file release/tag-notes.md
 
-  # plan 188 — build the installable companion APK (versioned in lockstep via
-  # bump-version.mjs → pubspec) and attach it to the release as a downloadable
-  # asset alongside the server zip.
-  companion-apk:
-    name: Companion APK
-    needs: publish
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: apps/android
-    steps:
-      - uses: actions/checkout@v6
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.1
-          cache: true
-      - run: flutter pub get
-      - run: flutter build apk --release
-      - name: Rename + checksum
-        run: |
-          cp build/app/outputs/flutter-apk/app-release.apk \
-            "castwright-${{ github.ref_name }}.apk"
-          shasum -a 256 "castwright-${{ github.ref_name }}.apk" \
-            > "castwright-${{ github.ref_name }}.apk.sha256"
-          cat "castwright-${{ github.ref_name }}.apk.sha256"
-      - name: Attach to release
+      - name: Attach companion APK to release
+        # Same APK that's bundled inside the zip, also offered as a standalone
+        # download asset (with its checksum) for manual sideloads.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ github.ref_name }}" \
-            "castwright-${{ github.ref_name }}.apk" \
-            "castwright-${{ github.ref_name }}.apk.sha256" --clobber
+            "companion-apk/castwright-${{ github.ref_name }}.apk" \
+            "companion-apk/castwright-${{ github.ref_name }}.apk.sha256" --clobber
 
   # plan 188 / app-12 prep — build the companion for iOS UNSIGNED so the release
   # pathway exists + the iOS build is gated each release. An installable .ipa

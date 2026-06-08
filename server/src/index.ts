@@ -183,6 +183,8 @@ import { upgradeRouter } from './routes/upgrade.js';
 app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
 import { infoRouter } from './routes/info.js';
 app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new state
+import { companionRouter } from './routes/companion.js';
+app.use('/api/companion', companionRouter); // interim — GET/HEAD /apk: download the packaged Android APK
 app.use('/api', devicesRouter); // srv-33 — companion per-device tokens: GET/POST /devices, DELETE /devices/:id
 app.use('/api/library', libraryRouter);
 app.use('/api/library', syncManifestRouter); // srv-32 — GET /api/library/sync-manifest

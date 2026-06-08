@@ -6,6 +6,7 @@
 
 import type {
   AppInfo,
+  CompanionApkAvailability,
   Emotion,
   UpgradeStageResult,
   UpgradeStatePayload,
@@ -4470,6 +4471,20 @@ async function realGetAppInfo(): Promise<AppInfo> {
     throw new Error(`App info fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
+/* Interim — HEAD-probe GET /api/companion/apk to learn whether a packaged
+   Android APK has been dropped at the server's resolved location. A 404 (or any
+   network error) means "no APK"; a 200 carries the byte size via Content-Length.
+   Never throws — the banner just hides its download button when unavailable. */
+async function realCheckCompanionApk(): Promise<CompanionApkAvailability> {
+  try {
+    const res = await fetch('/api/companion/apk', { method: 'HEAD' });
+    if (!res.ok) return { available: false, sizeBytes: null };
+    const len = res.headers.get('Content-Length');
+    return { available: true, sizeBytes: len ? Number(len) : null };
+  } catch {
+    return { available: false, sizeBytes: null };
+  }
+}
 async function realDismissWhatsNew(): Promise<void> {
   const res = await fetch('/api/info/dismiss-whats-new', { method: 'POST' });
   if (!res.ok)
@@ -4514,6 +4529,12 @@ let mockAppInfo: AppInfo = {
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
   return { ...mockAppInfo };
+}
+/* Mock has no real server to host an APK, so the companion download is always
+   "unavailable" in mock/dev — the banner stays in its store-only state. */
+async function mockCheckCompanionApk(): Promise<CompanionApkAvailability> {
+  await wait(20);
+  return { available: false, sizeBytes: null };
 }
 async function mockDismissWhatsNew(): Promise<void> {
   await wait(20);
@@ -5350,6 +5371,7 @@ const real = {
   putUserSettings: realPutUserSettings,
   putGeminiKey: realPutGeminiKey,
   getAppInfo: realGetAppInfo,
+  checkCompanionApk: realCheckCompanionApk,
   dismissWhatsNew: realDismissWhatsNew,
   upgradeStage: realUpgradeStage,
   upgradeApply: realUpgradeApply,
@@ -5585,6 +5607,7 @@ const mock = {
   putUserSettings: mockPutUserSettings,
   putGeminiKey: mockPutGeminiKey,
   getAppInfo: mockGetAppInfo,
+  checkCompanionApk: mockCheckCompanionApk,
   dismissWhatsNew: mockDismissWhatsNew,
   upgradeStage: mockUpgradeStage,
   upgradeApply: mockUpgradeApply,
