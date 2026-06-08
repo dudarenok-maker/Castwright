@@ -268,7 +268,7 @@ export function AdvancedView() {
             </button>
           </div>
 
-          <SettingsAccordion>
+          <SettingsAccordion sections={groups.map((g) => ({ id: g.id, label: g.label, risk: g.risk }))}>
             {groups.map((group) => {
               const groupDescriptors = descriptors.filter((d) => d.group === group.id);
               const overriddenCount = groupDescriptors.filter(
