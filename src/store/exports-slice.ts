@@ -3,9 +3,10 @@
 
    Shape:
    - `byBookId[bookId]` — newest-first list of jobs for that book. The
-     modal pushes a job on `createBookExport`, polls `getBookExport` and
-     dispatches `exportProgressed` / `exportSucceeded` / `exportFailed`
-     as the server reports back.
+     modal pushes a job on `createBookExport` (`exportStarted`); the
+     store-level `exportPollMiddleware` then polls `getBookExport` and
+     dispatches `exportUpdated` as the server reports back, until the
+     job reaches a terminal state.
    - `lanUrls` — non-loopback IPv4 URLs the server is reachable on.
      Hydrated once when the modal opens so the user can scan the QR to
      download the audiobook to their Android phone over Wi-Fi. */
