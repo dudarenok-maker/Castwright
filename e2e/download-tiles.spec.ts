@@ -72,4 +72,18 @@ test.describe('plan 57 — download tiles', () => {
     const copyButton = page.getByTestId('share-link-copy');
     await expect(copyButton).toBeEnabled();
   });
+
+  test('Castwright Companion banner sits above the grid, which no longer lists Plex', async ({
+    page,
+  }) => {
+    const banner = page.getByTestId('companion-app-banner');
+    await expect(banner).toBeVisible();
+    await expect(banner.getByRole('heading', { name: /Castwright Companion/i })).toBeVisible();
+    // Mocked store buttons render but stay disabled while unpublished.
+    await expect(page.getByTestId('companion-store-google-play')).toBeDisabled();
+    await expect(page.getByTestId('companion-store-app-store')).toBeDisabled();
+    // Plex was retired in favour of the first-party companion app.
+    await expect(page.getByTestId('listener-app-plex')).toHaveCount(0);
+    await expect(page.getByTestId('listener-app-apple_books')).toBeVisible();
+  });
 });

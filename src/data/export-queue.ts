@@ -55,7 +55,7 @@ export const EXPORT_QUEUE: ExportQueueItem[] = [
     size: 'Hosted',
     status: 'failed',
     timestamp: 'Yesterday',
-    destination: 'Plex',
-    errorReason: 'Server unreachable — check Plex Media Server connection',
+    destination: 'Audiobookshelf',
+    errorReason: 'Server unreachable — check your Audiobookshelf server connection',
   },
 ];
