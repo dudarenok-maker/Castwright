@@ -75,12 +75,18 @@ describe('GET /api/diagnostics', () => {
     expect(res.body.checks.map((c: Check) => c.id)).toEqual([
       'gpu',
       'sidecar',
+      'asr',
       'analyzer',
       'gemini',
       'ffmpeg',
       'disk',
     ]);
     expect(byId(res.body.checks, 'sidecar').detail).toContain('qwen');
+    /* The sidecar row is labelled "Voice engine" for users (not "TTS sidecar"). */
+    expect(
+      (res.body.checks as Array<{ id: string; label: string }>).find((c) => c.id === 'sidecar')!
+        .label,
+    ).toBe('Voice engine');
   });
 
   it('fails the gpu + sidecar rows when the sidecar is unreachable', async () => {
@@ -203,5 +209,58 @@ describe('GET /api/diagnostics', () => {
     expect(byId(res.body.checks, 'disk').detail).toContain('statfs blew up');
     // The other checks are unaffected.
     expect(byId(res.body.checks, 'sidecar').status).toBe('ok');
+  });
+
+  describe('ASR (Whisper) row (srv-31)', () => {
+    it('reports off when content-QA ASR is disabled (the default)', async () => {
+      /* Default mock omits asrEnabled → ASR is off; never a failure. */
+      const res = await request(makeApp()).get('/api/diagnostics');
+      const asr = byId(res.body.checks, 'asr');
+      expect(asr.status).toBe('ok');
+      expect(asr.detail).toMatch(/off/i);
+    });
+
+    it('reports enabled · idle · device when ASR is on but not yet resident', async () => {
+      probeSidecarHealth.mockResolvedValue({
+        status: 'reachable',
+        url: '',
+        proxy: 'sidecar',
+        qwenLoaded: true,
+        asrEnabled: true,
+        asrLoaded: false,
+        asrDevice: 'cpu',
+      });
+      const res = await request(makeApp()).get('/api/diagnostics');
+      const asr = byId(res.body.checks, 'asr');
+      expect(asr.status).toBe('ok');
+      expect(asr.detail).toBe('enabled · idle · cpu');
+    });
+
+    it('reports enabled · resident · device when the Whisper model is loaded', async () => {
+      probeSidecarHealth.mockResolvedValue({
+        status: 'reachable',
+        url: '',
+        proxy: 'sidecar',
+        qwenLoaded: true,
+        asrEnabled: true,
+        asrLoaded: true,
+        asrDevice: 'cuda',
+      });
+      const res = await request(makeApp()).get('/api/diagnostics');
+      const asr = byId(res.body.checks, 'asr');
+      expect(asr.status).toBe('ok');
+      expect(asr.detail).toBe('enabled · resident · cuda');
+    });
+
+    it('fails the ASR row when the voice engine is unreachable', async () => {
+      probeSidecarHealth.mockResolvedValue({
+        status: 'unreachable',
+        url: '',
+        proxy: 'sidecar',
+        error: 'connection refused',
+      });
+      const res = await request(makeApp()).get('/api/diagnostics');
+      expect(byId(res.body.checks, 'asr').status).toBe('fail');
+    });
   });
 });

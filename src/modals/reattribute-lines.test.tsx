@@ -6,6 +6,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { chaptersSlice, chaptersActions } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { changeLogSlice } from '../store/change-log-slice';
 import { ReattributeLinesModal } from './reattribute-lines';
 import type { Chapter, Sentence } from '../lib/types';
 
@@ -24,6 +25,7 @@ function makeStore({
     reducer: {
       chapters: chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      changeLog: changeLogSlice.reducer,
     },
     preloadedState: {
       manuscript: {
@@ -108,6 +110,14 @@ describe('ReattributeLinesModal', () => {
       .getState()
       .manuscript.sentences.find((s) => s.chapterId === 1 && s.id === 1)!;
     expect(reassigned.characterId).toBe('sandor');
+  });
+
+  it('logs a boundary_move so the chapter is flagged stale (Bug 2 staleness precondition)', () => {
+    const { store } = renderModal({});
+    const row = screen.getByText('The shopkeeper laughed.').closest('li')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Sandor' }));
+    const events = store.getState().changeLog.events;
+    expect(events.some((e) => e.type === 'boundary_move' && e.chapterId === 1)).toBe(true);
   });
 
   it('clicking the source chip on a reassigned row reverts the attribution', () => {

@@ -22,9 +22,9 @@ describe('AsrStatusBadge', () => {
     expect(screen.getByText('Whisper ASR idle')).toBeInTheDocument();
   });
 
-  it('shows the sidecar-down label when unreachable', () => {
+  it('shows the voice-engine-down label when unreachable', () => {
     render(<AsrStatusBadge state="unreachable" device={null} />);
-    expect(screen.getByText('Sidecar process not running')).toBeInTheDocument();
+    expect(screen.getByText('Voice engine not running')).toBeInTheDocument();
   });
 
   it('collapses an unexpected state to idle (no Load/Stop button ever renders)', () => {

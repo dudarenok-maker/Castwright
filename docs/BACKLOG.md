@@ -107,6 +107,12 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
 
+#### `fs-40` — Surface the ASR "Verifying speech" phase in the Generate view ([#640](https://github.com/dudarenok-maker/AudioBook-Generator/issues/640))
+
+- _What:_ During the ASR content-QA pass (srv-31, `SEG_ASR_ENABLED`) the per-chapter row freezes on "Synthesising … · 99%" because the only tick is `onRerecord` re-broadcasting the last synthesis `progress`. Add a `verifying` chapter phase (mirrors the existing `assembling` phase) so the row reads **"Verifying speech…"**. A new per-sampled-group `onProgress` tick also feeds the no-progress watchdog through an all-`ok` ASR pass (closes a latent false-stall).
+- _Benefit (user / technical):_ the ASR quality-check reads as deliberate, not a stall; removes a latent false-stall on long drift-free chapters.
+_Full detail + acceptance:_ [#640](https://github.com/dudarenok-maker/AudioBook-Generator/issues/640) · plan `docs/features/197-asr-verifying-phase.md`.
+
 ### Listener experience & playback
 
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461))
@@ -263,11 +269,11 @@ _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ an intentional "no emotion here" survives a later Detect-emotions run.
 _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593).
 
-#### `fe-34` — Voices view: "Has emotion variants" filter (fs-34 follow-up) ([#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595))
+#### `fe-35` — Voices variant-filter toggle persists across tab switches (fe-34 follow-up) ([#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644))
 
-- _What:_ The cross-book Voices view renders the `VariantsBadge` on Qwen designed-voice cards (shipped), but has no status-filter like the cast view's chips. Add a filter toggle to narrow the view to voices whose character has ≥1 designed emotion variant.
-- _Benefit (user):_ quickly find which cross-book voices already have expressive variants.
-_Full detail + acceptance:_ [#595](https://github.com/dudarenok-maker/AudioBook-Generator/issues/595).
+- _What:_ The Voices view All/Has/Needs variants toggle keeps its active state across tab switches, and its visibility guard uses the unfiltered `qwenLibrary`, so a tab whose filtered Qwen set is empty can show an active filter with no cards. Reset `variantFilter` on tab change and/or guard visibility on the tab-filtered count.
+- _Benefit (user):_ the variant filter never silently carries over to a tab where it shows nothing.
+_Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644).
 
 #### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
 

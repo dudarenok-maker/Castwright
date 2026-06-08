@@ -298,6 +298,11 @@ export const chaptersSlice = createSlice({
            the Generate view greys excluded chapters out without waiting
            on a separate fetch. */
             excluded: c.excluded || undefined,
+            /* "Not queued" hold — the user removed this un-rendered chapter
+           from the queue. Re-hydrated from state.json so the row keeps
+           reading "Not queued" (not "Queued") and the auto-work resume
+           leaves it alone across a reload. */
+            held: c.held || undefined,
             /* Engine-drift tracking (plan 35). Carry the TTS model key that
            rendered this chapter's existing audio so the chapter row can
            render a drift badge when it differs from the project's
@@ -418,6 +423,19 @@ export const chaptersSlice = createSlice({
            dropped (cross-book guard, parallel-chapter coalesce, hidden
            tab). */
         if (ev.durationSec != null) ch.duration = formatDuration(ev.durationSec);
+        return;
+      }
+
+      if (ev.type === 'chapter_verifying') {
+        /* srv-31 ASR content-QA pass runs after synthesis, before assembly.
+           Mirror chapter_assembling: hold the row in_progress with a distinct
+           phase so the Generate view shows "Verifying speech…" instead of a
+           frozen "Synthesising …" caption. */
+        ch.phase = 'verifying';
+        ch.state = 'in_progress';
+        ch.progress = ev.progress ?? 0.99;
+        if (ev.currentLine != null) ch.currentLine = ev.currentLine;
+        if (ev.totalLines != null) ch.totalLines = ev.totalLines;
         return;
       }
 
@@ -626,6 +644,31 @@ export const chaptersSlice = createSlice({
          row doesn't leave behind a half-progress bar or in_progress
          spinner from before the exclude was applied. */
       if (excluded) {
+        ch.state = 'queued';
+        ch.progress = 0;
+        ch.phase = null;
+        ch.currentLine = undefined;
+        ch.totalLines = undefined;
+        ch.errorReason = undefined;
+        ch.generationErrorCode = undefined;
+        ch.generationRemediation = undefined;
+      }
+    },
+
+    /* "Not queued" hold toggle (mirrors setChapterExcluded, server is the
+       source of truth via api.setChapterHeld). Set when the user deletes an
+       un-rendered chapter's entry from the generation queue; cleared when they
+       re-queue it. The flag OVERRIDES the row's "Queued" badge to "Not queued"
+       and gates the auto-work resume + queued/completion counts (callers add
+       `&& !c.held`), so a held chapter is no longer silently re-enqueued.
+       Never set on a `done` chapter (the queue-delete wiring guards that), so
+       the transient-state reset below can safely baseline it to `queued`. */
+    setChapterHeld: (s, a: PayloadAction<{ chapterId: number; held: boolean }>) => {
+      const { chapterId, held } = a.payload;
+      const ch = s.chapters.find((c) => c.id === chapterId);
+      if (!ch) return;
+      ch.held = held ? true : undefined;
+      if (held) {
         ch.state = 'queued';
         ch.progress = 0;
         ch.phase = null;

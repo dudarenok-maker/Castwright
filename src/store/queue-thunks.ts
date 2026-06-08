@@ -14,11 +14,12 @@
  * have error-handling wrappers — they'll route their existing flows into
  * `enqueueQueueEntries` in Wave 4). */
 
-import type { AppDispatch } from './index';
+import type { AppDispatch, RootState } from './index';
 import { queueActions, type QueueEntry, type QueueScope } from './queue-slice';
 import { notificationsActions } from './notifications-slice';
 import { chaptersActions } from './chapters-slice';
 import { mockQueueRequest } from '../mocks/mock-queue';
+import { api } from '../lib/api';
 
 /* Plan 111 — the persisted queue drives generation, so mock mode (dev app +
    e2e) needs a working queue with no backend. Route through the in-memory
@@ -268,7 +269,11 @@ export function skipFallbackEntry(entryId: string) {
     uses it to clear an orphaned in_progress entry that Pause-then-cancel
     can't reach. */
 export function cancelQueueEntry(entryId: string, opts?: { force?: boolean }) {
-  return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
+  return async (dispatch: AppDispatch, getState: () => RootState): Promise<QueueSnapshotResponse> => {
+    /* Capture the entry BEFORE the delete removes it — needed to decide whether
+       this cancel should also mark its chapter "Not queued" (held) below. */
+    const entry = getState().queue.entries.find((e) => e.id === entryId);
+
     const qs = opts?.force ? '?force=true' : '';
     const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}${qs}`, {
       method: 'DELETE',
@@ -286,6 +291,34 @@ export function cancelQueueEntry(entryId: string, opts?: { force?: boolean }) {
     }
     const snapshot = await readSnapshot(res);
     dispatch(queueActions.setSnapshot(snapshot));
+
+    /* Record the user's intent: deleting a chapter-scope entry for a chapter
+       that is currently a genuinely-queued, un-rendered row means "don't
+       generate this" — flip it to the "Not queued" hold so the row stops
+       reading "Queued" and the auto-work resume stops re-enqueuing it (the bug
+       this fixes). Guards:
+       - `scope === 'this'` only — a `character`-scope splice entry doesn't map
+         to a whole-chapter hold.
+       - chapter must be `state === 'queued'` in the loaded book — so a
+         regenerate ticket on a `done` chapter (or an `in_progress` row) is left
+         alone; their audio stays and they must not flip to "Not queued".
+       Cross-book entries (not the loaded book) are skipped: their rows aren't
+       on screen, and we can't read their chapter state here. */
+    if (entry && entry.scope === 'this' && entry.chapterId != null) {
+      const chaptersState = getState().chapters;
+      const ch =
+        chaptersState.currentBookId === entry.bookId
+          ? chaptersState.chapters.find((c) => c.id === entry.chapterId)
+          : undefined;
+      if (ch && ch.state === 'queued' && !ch.held) {
+        dispatch(chaptersActions.setChapterHeld({ chapterId: entry.chapterId, held: true }));
+        void api.setChapterHeld(entry.bookId, entry.chapterId, true).catch(() => {
+          /* best-effort persist; the slice already reflects the hold and the
+             next hydrate reconciles if this failed. */
+        });
+      }
+    }
+
     return snapshot;
   };
 }

@@ -251,6 +251,23 @@ export function VariantsBadge({ count }: { count: number }) {
   );
 }
 
+/* fe-34 — warning sibling of VariantsBadge: shown on a designed Qwen voice card
+   when the character speaks in-use emotions that have no designed variant yet
+   (count from `missingVariantCountByVoiceId`). Mirrors the cast view's amber
+   "N tags need a variant" row badge so both surfaces signal the same gap. */
+export function NeedsVariantsBadge({ count }: { count: number }) {
+  return (
+    <span
+      data-testid="needs-variants-badge"
+      title={`${count} in-use ${count === 1 ? 'emotion' : 'emotions'} still ${count === 1 ? 'needs' : 'need'} a designed variant`}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium text-amber-700 bg-amber-500/10"
+    >
+      <IconSparkle className="w-2.5 h-2.5" />
+      Needs · {count}
+    </span>
+  );
+}
+
 /* Coming-soon affordance for still-mocked sections (listener-app cards,
    download tiles, export-queue rows). Sits in the title row of each card
    and pairs with disabled action buttons so smoke passes can't mistake demo

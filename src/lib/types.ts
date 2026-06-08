@@ -21,7 +21,7 @@ export type Character = components['schemas']['Character'] & {
    / disabled / silent-source). `null` distinguishes "fetched but no data"
    from "not fetched yet". See plan 77 for the report-card consumer. */
 export type Chapter = components['schemas']['Chapter'] & {
-  phase?: 'assembling' | null;
+  phase?: 'assembling' | 'verifying' | null;
   lufs?: components['schemas']['ChapterLoudness'] | null;
   /* fs-13 — accumulated SET (as a Redux-serialisable array) of manuscript
      sentence ids whose same-speaker group has COMPLETED during the live run.
@@ -246,6 +246,11 @@ export interface BookStateJson {
     slug: string;
     duration?: string;
     excluded?: boolean;
+    /** "Not queued" hold — the user removed this un-rendered chapter from the
+        generation queue. Mirror of the server's BookStateJson type
+        (`server/src/workspace/scan.ts`). Re-hydrated so the row keeps reading
+        "Not queued" and the auto-work resume leaves it alone across a reload. */
+    held?: boolean;
     /** TTS model key that produced this chapter's existing audio.
         Stamped at render time and lazy-backfilled from the segments
         file for legacy chapters. Mirror of the server's BookStateJson
