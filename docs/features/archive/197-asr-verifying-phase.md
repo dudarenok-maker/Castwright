@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-08
 owner: null
 ---
 
@@ -94,4 +94,4 @@ Requires the real backend + sidecar with `SEG_ASR_ENABLED=1`.
 
 ## Ship notes
 
-(Filled in when status flips to `stable`.)
+Shipped **2026-06-08** via PR [#646](https://github.com/dudarenok-maker/AudioBook-Generator/issues/646) (merge `1aa130cd`), closing `fs-40` (#640). Landed the `chapter_verifying` SSE tick + a UI-only `'verifying'` member of `Chapter.phase` (mirrors `chapter_assembling`/`'assembling'`) so the per-chapter Generate row reads **"Verifying speech…"** during the ASR content-QA pass, plus a per-sampled-group `asr.onProgress` callback that fires the tick even for `ok` verdicts (also feeding the no-progress watchdog through a drift-free pass, closing the latent false-stall). Per-chapter row only; global pill unchanged; inert unless `SEG_ASR_ENABLED`. Frontend slice + e2e coverage green.
