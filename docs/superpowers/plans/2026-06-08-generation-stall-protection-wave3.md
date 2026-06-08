@@ -502,8 +502,19 @@ handled (`isStall` branch, generation.ts ≈1527).
 - [ ] **Step 3: Run, confirm FAIL:**
 `cd server && npx vitest run src/routes/failure-taxonomy.test.ts -t "recycle-storm"`
 
+> **⚠️ Ordering hazard (found in the C1 code-quality review).** `RecycleStormError`'s
+> message contains the literal `"VRAM/RAM headroom"`, which matches the existing
+> `vram-spill` signature's `/CUDA out of memory|VRAM/i` regex. Since the table is
+> first-match-wins, the new `recycle-storm` signature MUST be placed **before** the
+> `vram-spill` entry, and SHOULD match on `ctx.name === 'RecycleStormError'` (type-driven,
+> not substring) so a future message reword can't silently mis-classify it. Independently,
+> the `generation.ts` `isRecycleStorm` outer-catch branch (below) short-circuits BEFORE
+> `describeSynthesisError` is ever called for this error — so the taxonomy entry is the
+> defense-in-depth path for any other caller that classifies a `RecycleStormError`, and
+> the outer-catch branch is the primary path generation uses. Implement BOTH.
+
 - [ ] **Step 4: Implement.**
-  - `failure-taxonomy.ts`: add `| 'recycle-storm'` to `FailureCode`; add a signature (place it beside the `synth-timeout` entry, matching on `ctx.name === 'RecycleStormError'` OR `/recycled \d+× while rendering/` on the raw message):
+  - `failure-taxonomy.ts`: add `| 'recycle-storm'` to `FailureCode`; add a signature **placed BEFORE the `vram-spill` entry** (see the ordering hazard above), matching on `ctx.name === 'RecycleStormError'` first (type-driven) — the raw-message regex is only a fallback:
 ```ts
   {
     code: 'recycle-storm',
