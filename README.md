@@ -18,8 +18,8 @@ or MP3.
   flat narrator.
 - **Series memory** — a character keeps the same voice across every book in a
   series.
-- **Your own voice** — clone a voice from a short sample (optional, on-device).
-- **Private by default** — analysis and speech run on your machine; cloud is
+- **Designed voices** — every character gets a unique voice designed from its persona, kept consistent across the series. (Cloning a voice from your own sample is the next major release.)
+- **On-device by default** — analysis and speech run on your machine; cloud is
   opt-in.
 - **You own the files** — export standard M4B / MP3 / AAC / Opus and keep them.
   No lock-in.
