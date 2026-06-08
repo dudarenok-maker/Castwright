@@ -207,6 +207,178 @@ describe('sidecar supervisor (srv-15)', () => {
     expect(sup.current()).toBe(handles[0]);
   });
 
+  /* Graceful drain before fitness-triggered replace (B1).
+     When the supervisor detects a fitness violation on an alive adopted sidecar
+     it must POST /recycle first so in-flight synth drains cleanly, wait for the
+     port to free, and only then bring up the replacement.  The hard-kill path is
+     unchanged for the disappearance branch and as a fallback when drain fails. */
+
+  it('on a fitness trigger, calls recycleSidecarFn BEFORE spawning the replacement', async () => {
+    const callOrder: string[] = [];
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      callOrder.push('spawn');
+      const h = makeHandle();
+      return h as SidecarHandle;
+    });
+    const recycleSidecarFn = vi.fn(async (_host: string, _port: number) => {
+      callOrder.push('recycle');
+      return true; // graceful recycle succeeded
+    });
+    // Port stays up for one tick after recycle (draining), then frees.
+    const probes = [true, true, true, false];
+    let pi = 0;
+    const probeFn = vi.fn(async () => probes[Math.min(pi++, probes.length - 1)]);
+    const healths = [
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 9000, recyclePending: false },
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 26000, recyclePending: false },
+    ];
+    let hi = 0;
+    const healthProbeFn = vi.fn(async () => healths[Math.min(hi++, healths.length - 1)]);
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn,
+      healthProbeFn,
+      recycleSidecarFn,
+      delayFn: async () => {},
+      adoptedPollMs: 1,
+      adoptedHealthPollMs: 1,
+      drainWaitMs: 50,
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    expect(spawnFn).toHaveBeenCalledTimes(1); // adopted
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+    // recycleSidecarFn must have been called exactly once.
+    expect(recycleSidecarFn).toHaveBeenCalledTimes(1);
+    expect(recycleSidecarFn).toHaveBeenCalledWith('127.0.0.1', 9000);
+    // recycle must appear before spawn in the call order.
+    expect(callOrder.indexOf('recycle')).toBeLessThan(callOrder.indexOf('spawn'));
+  });
+
+  it('falls back to hard replace when graceful recycle fails', async () => {
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      return makeHandle() as SidecarHandle;
+    });
+    // recycleSidecarFn always fails (network error / non-2xx).
+    const recycleSidecarFn = vi.fn(async () => false);
+    // Port never frees on its own (recycle was rejected by the sidecar).
+    const probeFn = vi.fn(async () => true);
+    const healths = [
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 9000, recyclePending: false },
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 26000, recyclePending: false },
+    ];
+    let hi = 0;
+    const healthProbeFn = vi.fn(async () => healths[Math.min(hi++, healths.length - 1)]);
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn,
+      healthProbeFn,
+      recycleSidecarFn,
+      delayFn: async () => {},
+      adoptedPollMs: 1,
+      adoptedHealthPollMs: 1,
+      drainWaitMs: 50, // short so the test does not hang
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    expect(spawnFn).toHaveBeenCalledTimes(1); // adopted
+    // Even though recycle failed, the hard-kill path still brings up a replacement.
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+    expect(recycleSidecarFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to hard replace when the graceful recycle THROWS', async () => {
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      return makeHandle() as SidecarHandle;
+    });
+    // recycleSidecarFn throws instead of resolving false.
+    const recycleSidecarFn = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    // Port stays up (recycle threw, sidecar didn't self-exit).
+    const probeFn = vi.fn(async () => true);
+    const healths = [
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 9000, recyclePending: false },
+      { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 26000, recyclePending: false },
+    ];
+    let hi = 0;
+    const healthProbeFn = vi.fn(async () => healths[Math.min(hi++, healths.length - 1)]);
+    const warn = vi.fn();
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn,
+      healthProbeFn,
+      recycleSidecarFn,
+      delayFn: async () => {},
+      adoptedPollMs: 1,
+      adoptedHealthPollMs: 1,
+      drainWaitMs: 50,
+      warn,
+      log: vi.fn(),
+    });
+    await sup.start();
+    expect(spawnFn).toHaveBeenCalledTimes(1); // adopted
+    // The throw must NOT escape as an unhandledRejection — spawnFn still reached.
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+    expect(recycleSidecarFn).toHaveBeenCalledTimes(1);
+    // The warn about the throw must appear.
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
+  });
+
+  it('does NOT call recycleSidecarFn on the disappearance trigger', async () => {
+    let calls = 0;
+    const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+      calls += 1;
+      if (calls === 1) {
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      }
+      return makeHandle() as SidecarHandle;
+    });
+    const recycleSidecarFn = vi.fn(async () => true);
+    // Port answers one probe (so start() returns at count=1), then goes silent.
+    const probes = [true, false];
+    let pi = 0;
+    const probeFn = vi.fn(async () => probes[Math.min(pi++, probes.length - 1)]);
+    const sup = createSidecarSupervisor({
+      buildOpts: async () => BASE_OPTS,
+      spawnFn,
+      probeFn,
+      recycleSidecarFn,
+      delayFn: async () => {},
+      adoptedPollMs: 1,
+      warn: vi.fn(),
+      log: vi.fn(),
+    });
+    await sup.start();
+    // Disappearance detected → respawn without calling recycle.
+    await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+    expect(recycleSidecarFn).not.toHaveBeenCalled();
+  });
+
   it('stops watching an adopted sidecar after stop() (no respawn)', async () => {
     let calls = 0;
     const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
