@@ -3,20 +3,21 @@
    pre-refactor JSX so existing `book-library.test.tsx` assertions
    keep resolving. */
 
-import { IconPlus } from '../../lib/icons';
+import { CastwaveMark, IconPlus } from '../../lib/icons';
 import { PrimaryButton } from '../primitives';
 
 export function EmptyLibrary({ onStartNew }: { onStartNew: () => void }) {
   return (
     <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center">
-      <span className="w-16 h-16 mx-auto rounded-full bg-peach/10 grid place-items-center text-peach">
-        <IconPlus className="w-7 h-7" />
+      <span className="w-16 h-16 mx-auto rounded-full bg-magenta/10 grid place-items-center text-magenta">
+        <CastwaveMark className="w-8 h-8" aria-hidden="true" />
       </span>
       <h3 className="mt-5 font-serif text-2xl font-bold text-ink">Your library is empty</h3>
+      <p className="mt-2 text-sm text-ink/60">Any book, fully cast.</p>
       <p className="mt-2 text-sm text-ink/60 max-w-md mx-auto leading-relaxed">
         Books live on disk under{' '}
         <code className="px-1.5 py-0.5 rounded bg-ink/5 text-[12px]">
-          audiobook-workspace/books/&lt;Author&gt;/&lt;Series&gt;/&lt;Title&gt;/
+          castwright-workspace/books/&lt;Author&gt;/&lt;Series&gt;/&lt;Title&gt;/
         </code>
         . Import a manuscript and we'll lay it out for you.
       </p>
