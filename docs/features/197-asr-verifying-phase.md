@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # ASR "Verifying speech" phase in the Generate view
 
-> Status: draft
+> Status: active
 > Key files: `openapi.yaml`, `server/src/tts/synthesise-chapter.ts`, `server/src/routes/generation.ts`, `src/lib/types.ts`, `src/store/chapters-slice.ts`, `src/views/generation.tsx`
 > URL surface: `#/books/<id>/generate` (per-chapter row)
 > OpenAPI ops: `POST /api/books/{bookId}/generation` (SSE — new `GenerationTick.type` value `chapter_verifying`)
