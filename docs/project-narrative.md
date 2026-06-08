@@ -2,7 +2,7 @@
 
 **Many voices, one machine.**
 
-_A project narrative — named & updated 7 June 2026_
+_A project narrative — named 7 June, updated 8 June 2026_
 
 **Estimated read time:** 6 minutes for the narrative; 7 more for the functional and technical sections below.
 **What this is:** The story behind **Castwright** — _any book, performed by a full cast; effortlessly, even in your own voice._ Why fiction listening is broken, what fixes it, and where the product stands today. A functional section and a technical section sit below the narrative for design and engineering conversations. I refresh this every couple of days, so the dates and the state are honest at the top.
@@ -29,7 +29,9 @@ Nothing on that list does what fiction actually demands.
 
 Fiction has a cast. Fiction has tone — a character is angry in this paragraph, broken in the next, deadpan three pages later. Fiction has narration that should _recede_ when dialogue is happening and step forward when describing a sunset. Reading aloud is a performance, and what we have is dictation.
 
-The reason nobody's built it isn't that the technology is missing. It's that the conventional path costs too much. Render every audiobook in the cloud, with frontier-model orchestration on every chapter, and you've priced out anyone who isn't a streaming service. The interesting question isn't _can it be done_ — it's _can it be done on a machine someone already owns_.
+This past year the gap started to close — from the other side, and it's worth being honest about. Full-cast AI narration exists now: author-side studios sell it by the word in the cloud, and a handful of open-source projects do it locally for anyone comfortable with a Python install. The wave proves the appetite. But every one of them either sells to the rights-holder rather than the reader, meters the render through someone else's server, or forgets the cast the moment the book ends. Nobody builds the performance for the _reader_ — for the book you already own, on the machine already under your desk, with a cast that's still the same people in book five.
+
+The reason it hasn't reached readers isn't that the technology is missing. It's that the conventional path costs too much. Render every audiobook in the cloud, with frontier-model orchestration on every chapter, and you've priced out anyone who isn't a streaming service. The interesting question isn't _can it be done_ — it's _can it be done on a machine someone already owns_.
 
 That's the bet I'm taking.
 
