@@ -38,9 +38,9 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="max-w-lg w-full bg-white rounded-3xl border border-ink/10 p-8 space-y-5">
           <div className="space-y-1.5">
             <p className="text-xs uppercase tracking-wider text-ink/50 font-semibold">
-              Something broke
+              Something went sideways
             </p>
-            <h1 className="text-2xl font-bold text-ink">The Generate screen hit a render error.</h1>
+            <h1 className="text-2xl font-bold text-ink">Castwright hit a snag rendering this screen.</h1>
             <p className="text-sm text-ink/70">
               Your work is still safe on disk. Click below to re-render the page without losing your
               session. If the error keeps coming back, copy the message and check the dev console
