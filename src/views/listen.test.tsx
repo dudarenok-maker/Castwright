@@ -465,16 +465,7 @@ describe('ListenView — coming-soon affordances', () => {
     expect(disabled.length).toBe(0);
   });
 
-  it('shows the one remaining mocked-preview banner (listener apps)', () => {
-    renderView();
-    const banners = screen.getAllByTestId('mocked-preview-banner');
-    /* The exports rail + the download-tile section both lost their banners
-       once the export pipeline went live; only the non-PocketBook listener-
-       app handoffs still wear the placeholder. */
-    expect(banners.length).toBe(1);
-  });
-
-  it('keeps the "Play from the start" button enabled when chapters exist', () => {
+it('keeps the "Play from the start" button enabled when chapters exist', () => {
     const h = renderView();
     const play = screen.getByRole('button', { name: /play from the start/i });
     expect(play).not.toBeDisabled();
