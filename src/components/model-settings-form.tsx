@@ -333,12 +333,12 @@ export function ModelSettingsForm() {
       </FormCard>
 
       <FormCard
-        title="TTS sidecar"
-        hint="The Python sidecar process that runs Qwen3-TTS / Kokoro / Coqui XTTS locally. The Node server can launch it for you automatically."
+        title="Voice engine"
+        hint="The local voice engine (a Python process) that runs Qwen3-TTS / Kokoro / Coqui XTTS. The Node server can launch it for you automatically."
       >
         <FieldRow
           label="Auto-start with server"
-          sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python TTS sidecar as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart."
+          sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python voice engine as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart."
         >
           <label className="inline-flex items-center gap-3 cursor-pointer select-none">
             <input
@@ -382,7 +382,7 @@ export function ModelSettingsForm() {
         {eagerEngineIsQwen ? (
           <FieldRow
             label="Eager-load Qwen at startup"
-            sublabel="On by default while Qwen is your default engine — the sidecar preloads Qwen's synth model at boot so the first chapter doesn't wait on a cold load. Turn off to warm it lazily on first synth and keep that VRAM free until generation starts. Kokoro stays the on-demand fallback either way. Takes effect on the next sidecar restart."
+            sublabel="On by default while Qwen is your default engine — the voice engine preloads Qwen's synth model at boot so the first chapter doesn't wait on a cold load. Turn off to warm it lazily on first synth and keep that VRAM free until generation starts. Kokoro stays the on-demand fallback either way. Takes effect on the next voice-engine restart."
           >
             <label className="inline-flex items-center gap-3 cursor-pointer select-none">
               <input
@@ -394,20 +394,20 @@ export function ModelSettingsForm() {
               />
               <span className="text-sm text-ink">
                 {eagerLoadQwen
-                  ? 'Enabled — the sidecar preloads Qwen at startup.'
+                  ? 'Enabled — the voice engine preloads Qwen at startup.'
                   : 'Disabled — Qwen warms on demand on first synth.'}
               </span>
             </label>
             {eagerLoadQwenDirty && (
               <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                Restart the sidecar to apply this change.
+                Restart the voice engine to apply this change.
               </p>
             )}
           </FieldRow>
         ) : (
           <FieldRow
             label="Eager-load Kokoro at startup"
-            sublabel="On by default. Turn off if Qwen is your main engine — Kokoro then loads only when a Kokoro voice (e.g. the narrator) is synthesized, freeing ~1 GB VRAM. Takes effect on the next sidecar restart."
+            sublabel="On by default. Turn off if Qwen is your main engine — Kokoro then loads only when a Kokoro voice (e.g. the narrator) is synthesized, freeing ~1 GB VRAM. Takes effect on the next voice-engine restart."
           >
             <label className="inline-flex items-center gap-3 cursor-pointer select-none">
               <input
@@ -419,13 +419,13 @@ export function ModelSettingsForm() {
               />
               <span className="text-sm text-ink">
                 {eagerLoadKokoro
-                  ? 'Enabled — the sidecar preloads Kokoro at startup.'
+                  ? 'Enabled — the voice engine preloads Kokoro at startup.'
                   : 'Disabled — Kokoro warms on demand on first synth.'}
               </span>
             </label>
             {eagerLoadKokoroDirty && (
               <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                Restart the sidecar to apply this change.
+                Restart the voice engine to apply this change.
               </p>
             )}
           </FieldRow>
@@ -454,9 +454,9 @@ export function ModelSettingsForm() {
 
       <FormCard
         title="Server configuration"
-        hint="Non-secret overrides for what's in server/.env. Sidecar URL and Ollama settings take effect on the next request."
+        hint="Non-secret overrides for what's in server/.env. Voice engine URL and Ollama settings take effect on the next request."
       >
-        <FieldRow label="Sidecar URL" sublabel="Local TTS sidecar endpoint. Default: http://localhost:9000">
+        <FieldRow label="Voice engine URL" sublabel="Local voice engine endpoint. Default: http://localhost:9000">
           <input
             type="text"
             value={sidecarUrl}

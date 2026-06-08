@@ -47,7 +47,8 @@ const healthyBoard: DiagnosticsResponse = {
   overall: 'ok',
   checks: [
     { id: 'gpu', label: 'GPU / VRAM', status: 'ok', detail: 'cuda · 1.2 / 8.0 GB reserved' },
-    { id: 'sidecar', label: 'TTS sidecar', status: 'ok', detail: 'reachable · qwen' },
+    { id: 'sidecar', label: 'Voice engine', status: 'ok', detail: 'reachable · qwen' },
+    { id: 'asr', label: 'ASR (Whisper)', status: 'ok', detail: 'off — content-QA disabled' },
     { id: 'analyzer', label: 'Analyzer (Ollama)', status: 'warn', detail: 'reachable · model not pulled' },
     { id: 'gemini', label: 'Analyzer (Gemini)', status: 'ok', detail: 'not in use' },
     { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'fail', detail: 'ffprobe not found on PATH' },
@@ -120,11 +121,14 @@ describe('AdminView — health board', () => {
     expect(ids).toEqual([
       'health-row-gpu',
       'health-row-sidecar',
+      'health-row-asr',
       'health-row-analyzer',
       'health-row-gemini',
       'health-row-ffmpeg',
       'health-row-disk',
     ]);
+    /* The ASR row sits directly below the Voice engine row (srv-31 watch). */
+    expect(ids[ids.indexOf('health-row-sidecar') + 1]).toBe('health-row-asr');
     expect(screen.getByTestId('health-row-ffmpeg')).toHaveAttribute('data-status', 'fail');
     expect(screen.getByTestId('health-row-analyzer')).toHaveAttribute('data-status', 'warn');
     expect(within(screen.getByTestId('health-row-gpu')).getByText(/8\.0 GB/)).toBeInTheDocument();
@@ -331,5 +335,59 @@ describe('AdminView — fs-20 resource trends panel', () => {
     await waitFor(() => expect(mockTelemetry).toHaveBeenCalled());
     expect(screen.queryByTestId('resource-trends')).toBeNull();
     expect(screen.getByText(/No telemetry recorded yet/i)).toBeInTheDocument();
+  });
+});
+
+describe('AdminView — table scroll regions + header alignment', () => {
+  /* Both Admin tables scroll inside the inset thin-scrollbar utility (matching
+     every other in-card scroll region), and pin their column header INSIDE the
+     scroller with ONE shared column template so the header tracks line up with
+     the data rows instead of drifting on the scrollbar gutter + independent
+     `auto` columns. */
+  const THROUGHPUT_COLS = 'md:grid-cols-[1fr_7rem_3.5rem_3.5rem_auto]';
+  const TRENDS_COLS = 'sm:grid-cols-[1fr_3rem_3.5rem_auto]';
+
+  it('scrolls the generation-throughput rows in the inset thin-scrollbar region', async () => {
+    mockStats.mockResolvedValue({
+      ...idleStats,
+      recentChapters: [chapter({ chapterId: 1, rtf: 1.0 })],
+    });
+    renderAdmin();
+    const scroll = await screen.findByTestId('generation-throughput-scroll');
+    expect(scroll.className).toMatch(/overflow-y-auto/);
+    expect(scroll.className).toMatch(/scrollbar-thin/);
+  });
+
+  it('scrolls the resource-trends rows in the inset thin-scrollbar region', async () => {
+    mockTelemetry.mockResolvedValue({ records: [telemetry({ chapterId: 1 })] });
+    renderAdmin();
+    const scroll = await screen.findByTestId('resource-trends-scroll');
+    expect(scroll.className).toMatch(/overflow-y-auto/);
+    expect(scroll.className).toMatch(/scrollbar-thin/);
+  });
+
+  it('throughput header is sticky inside the scroller and shares the row column template', async () => {
+    mockStats.mockResolvedValue({
+      ...idleStats,
+      recentChapters: [chapter({ chapterId: 1, rtf: 1.0 })],
+    });
+    renderAdmin();
+    const scroll = await screen.findByTestId('generation-throughput-scroll');
+    const header = scroll.firstElementChild as HTMLElement;
+    expect(header.className).toMatch(/sticky/);
+    expect(header.className).toContain(THROUGHPUT_COLS);
+    const row = within(scroll).getByTestId('throughput-row-1');
+    expect(row.className).toContain(THROUGHPUT_COLS);
+  });
+
+  it('resource-trends header is sticky inside the scroller and shares the row column template', async () => {
+    mockTelemetry.mockResolvedValue({ records: [telemetry({ chapterId: 1 })] });
+    renderAdmin();
+    const scroll = await screen.findByTestId('resource-trends-scroll');
+    const header = scroll.firstElementChild as HTMLElement;
+    expect(header.className).toMatch(/sticky/);
+    expect(header.className).toContain(TRENDS_COLS);
+    const row = within(scroll).getByTestId('resource-row-1');
+    expect(row.className).toContain(TRENDS_COLS);
   });
 });

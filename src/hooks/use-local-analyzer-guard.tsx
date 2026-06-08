@@ -102,7 +102,7 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
       body={
         <>
           <p>
-            Local analysis needs the same GPU as the TTS sidecar, so audio generation for{' '}
+            Local analysis needs the same GPU as the Voice engine, so audio generation for{' '}
             <b>{resolvedTitle}</b> will pause while this manuscript is analysed.
           </p>
           <p className="mt-3 text-ink/60">

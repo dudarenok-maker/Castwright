@@ -1907,7 +1907,7 @@ function BaseVoiceCatalogPanel({
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
         <p className="text-sm font-bold text-ink">Loading base voices…</p>
         <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
-          If this stays empty, load the TTS sidecar from the model pill — the Coqui catalog is
+          If this stays empty, load the Voice engine from the model pill — the Coqui catalog is
           fetched live from the loaded model.
         </p>
       </div>
@@ -1918,7 +1918,7 @@ function BaseVoiceCatalogPanel({
       <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-10 text-center">
         <p className="text-sm font-bold text-ink">No base voices available</p>
         <p className="mt-2 text-xs text-ink/60 max-w-md mx-auto">
-          The TTS sidecar isn't reachable, or the loaded model has no published speakers. Load a
+          The Voice engine isn't reachable, or the loaded model has no published speakers. Load a
           model to populate this list.
         </p>
       </div>
