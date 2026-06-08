@@ -463,3 +463,30 @@ export const IconMonitor = (p: IconProps) =>
     </>,
     p,
   );
+export const IconApple = (p: IconProps) => (
+  <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
+    <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01M12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25" />
+  </svg>
+);
+
+/* Castwright brand mark — ragged-waveform-over-book glyph. Single source
+   of truth for the wordmark glyph (top bar + companion-app banner). The
+   peach/magenta hex fills are the brand palette; the last two bars + the
+   book stroke take `currentColor` so the caller tints them. */
+export const CastwaveMark = (p: IconProps) => (
+  <svg viewBox="0 0 512 512" {...p}>
+    <rect x="104" y="210" width="30" height="92" rx="15" fill="#f79a83" />
+    <rect x="158" y="116" width="30" height="256" rx="15" fill="#f79a83" />
+    <rect x="212" y="160" width="30" height="160" rx="15" fill="#a43c6c" />
+    <rect x="266" y="92" width="30" height="284" rx="15" fill="#a43c6c" />
+    <rect x="320" y="146" width="30" height="202" rx="15" fill="currentColor" />
+    <rect x="374" y="200" width="30" height="108" rx="15" fill="currentColor" />
+    <path
+      d="M110 416 C 170 392, 226 392, 256 412 C 286 392, 342 392, 402 416"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="15"
+      strokeLinecap="round"
+    />
+  </svg>
+);

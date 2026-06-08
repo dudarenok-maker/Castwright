@@ -329,15 +329,39 @@ describe('ListenView — coming-soon affordances', () => {
 
   it('disables non-live listener-app cards while five tiles are live', () => {
     renderView();
-    /* After plan 34 B4, Audiobookshelf joins the live set, leaving two
-       mocked-handoff tiles (Apple Books, Plex). */
-    const stillDeferred = ['apple_books', 'plex'];
+    /* After plan 34 B4, Audiobookshelf joins the live set; with Plex
+       removed in favour of the Castwright Companion banner, Apple Books
+       is the lone mocked-handoff tile. */
+    const stillDeferred = ['apple_books'];
     for (const id of stillDeferred) {
       expect(screen.getByTestId(`listener-app-action-${id}`)).toBeDisabled();
     }
     for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer', 'audiobookshelf']) {
       expect(screen.getByTestId(`listener-app-action-${id}`)).not.toBeDisabled();
     }
+  });
+
+  it('drops the Plex tile, leaving six listener-app cards', () => {
+    renderView();
+    expect(screen.queryByTestId('listener-app-plex')).toBeNull();
+    const liveAndDeferred = [
+      'pocketbook',
+      'voice',
+      'smart_audiobook',
+      'bookplayer',
+      'audiobookshelf',
+      'apple_books',
+    ];
+    for (const id of liveAndDeferred) {
+      expect(screen.getByTestId(`listener-app-${id}`)).toBeInTheDocument();
+    }
+  });
+
+  it('surfaces the Castwright Companion banner above the third-party grid', () => {
+    renderView();
+    expect(screen.getByTestId('companion-app-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('companion-store-google-play')).toBeInTheDocument();
+    expect(screen.getByTestId('companion-store-app-store')).toBeInTheDocument();
   });
 
   it('opens the export modal in Smart AudioBook Player mode when its tile is clicked (plan 34 B2)', () => {
@@ -405,8 +429,8 @@ describe('ListenView — coming-soon affordances', () => {
 
   it('marks deferred listener-app cards with a Soon badge but omits it on live tiles', () => {
     renderView();
-    /* All five live tiles drop the badge; the remaining two
-       (apple_books, plex) still wear it. */
+    /* All five live tiles drop the badge; the lone remaining
+       deferred tile (apple_books) still wears it. */
     for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer', 'audiobookshelf']) {
       const card = screen.getByTestId(`listener-app-${id}`);
       expect(within(card).queryByTestId('coming-soon-badge')).toBeNull();
