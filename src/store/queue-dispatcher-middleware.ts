@@ -188,9 +188,10 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
         }
       }
 
-      /* Queue-global pause stops NEW fills at the next boundary (in-flight
-         streams finish via their own idle teardown). */
-      if (queue.paused) return;
+      /* Queue-global pause or sidecar-recycling stops NEW fills at the next
+         boundary (in-flight streams finish via their own idle teardown /
+         server readiness gate). */
+      if (queue.paused || queue.recycling) return;
 
       /* STEP 2 — fill up to N workers (chapters). Flat per-entry claim: one
          stream per claimed entry, one chapter each. Skip chapters already

@@ -2661,6 +2661,8 @@ export interface components {
             entries: components["schemas"]["QueueEntry"][];
             /** @description Queue-global pause flag. When true, the dispatcher waits at the next chapter boundary. */
             paused: boolean;
+            /** @description True when the active sidecar supervisor has no live child process (the sidecar is dead or respawning). The dispatcher holds new claims while this is true; in-flight streams run to completion via the server-side readiness gate. False when there is no managed sidecar (autoStart off). */
+            recycling: boolean;
         };
         QueueEnqueueRequest: {
             bookId: string;
