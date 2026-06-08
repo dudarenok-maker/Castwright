@@ -37,8 +37,11 @@ test.describe('Advanced Settings — plan 199 golden path', () => {
     await waitForRouteReady(page);
 
     /* The "Text-to-speech" accordion section starts open
-       (collapsedByDefault: false on the mock tts group). */
-    const ttsButton = page.getByRole('button', { name: 'Text-to-speech' });
+       (collapsedByDefault: false on the mock tts group). Target the SECTION
+       HEADER button specifically (it carries aria-label + aria-expanded) — the
+       label also appears as a jump-link in the nav rail, so a plain
+       getByRole('button', { name }) is now ambiguous. */
+    const ttsButton = page.locator('button[aria-label="Text-to-speech"]');
     await expect(ttsButton).toBeVisible({ timeout: 10_000 });
     await expect(ttsButton).toHaveAttribute('aria-expanded', 'true');
 
