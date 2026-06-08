@@ -160,6 +160,10 @@ export const uiSlice = createSlice({
     openModelManager: (s) => {
       s.stage = { kind: 'model-manager' };
     },
+    /* Wave 3 — /about brand page, reached from the Admin view. */
+    openAbout: (s) => {
+      s.stage = { kind: 'about' };
+    },
     startNewBook: (s) => {
       s.stage = { kind: 'upload' };
     },

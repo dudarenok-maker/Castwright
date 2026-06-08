@@ -116,6 +116,7 @@ export function AdminView() {
         no logs required.
       </p>
 
+      <AboutLink />
       <ModelManagerLink />
       <HealthBoard />
       <GenerationThroughput stats={stats} />
@@ -146,6 +147,29 @@ function ModelManagerLink() {
         className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
       >
         Open Model Manager →
+      </button>
+    </section>
+  );
+}
+
+/* Wave 3 — entry point to the /about brand page. */
+function AboutLink() {
+  const dispatch = useAppDispatch();
+  return (
+    <section className="mb-6 rounded-2xl border border-ink/10 bg-white p-5 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h3 className="text-base font-semibold text-ink">About Castwright</h3>
+        <p className="mt-1 text-xs text-ink/55 max-w-prose">
+          Brand story, tagline, and app version.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => dispatch(uiActions.openAbout())}
+        data-testid="admin-open-about"
+        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+      >
+        About Castwright →
       </button>
     </section>
   );
