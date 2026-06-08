@@ -161,7 +161,7 @@ The install bundle ships Kokoro weights for TTS only — the analyzer needs eith
 
 Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Account tab.
 
-**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.audiobook-generator/user-settings.json` (plaintext, same trust model as `server/.env`).
+**Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.castwright/user-settings.json` (plaintext, same trust model as `server/.env`).
 
 **Option C — Pipelined two-model split (v1.4.0).** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
 
@@ -205,7 +205,7 @@ The same Gemini key configured for the analyzer (see Option B above) doubles as 
 2. **Account → Defaults for new books → TTS engine** → "Gemini (cloud)".
 3. **TTS model** → pick `gemini-3.1-flash-preview-tts` or `gemini-2.5-flash-preview-tts`. Save.
 
-The key is stored plaintext in `~/.audiobook-generator/user-settings.json` (per-user, same trust model as `server/.env` for a single-user workspace). The env var `GEMINI_API_KEY` in `server/.env` still wins if both are set — useful for CI / scripted setups.
+The key is stored plaintext in `~/.castwright/user-settings.json` (per-user, same trust model as `server/.env` for a single-user workspace). The env var `GEMINI_API_KEY` in `server/.env` still wins if both are set — useful for CI / scripted setups.
 
 ---
 
@@ -284,7 +284,7 @@ A v1.5.x install is a single flat checkout with none of this machinery, so the *
 4. Re-run with `--apply` to execute. It creates `<new-install-dir>/releases/v1.6.0/`, writes the pointer, places `launch.mjs` at the root, and **moves** (not re-downloads) your `audiobook-workspace`, the sidecar `.venv`, and the Kokoro weights into the shared siblings.
 5. Start the app: `node <new-install-dir>/launch.mjs`.
 
-Your account settings live in `~/.audiobook-generator/user-settings.json` (outside any install folder) and carry over automatically; copy your old `server/.env` into `releases/v1.6.0/server/.env` if you had custom keys.
+Your account settings live in `~/.castwright/user-settings.json` (outside any install folder) and carry over automatically; copy your old `server/.env` into `releases/v1.6.0/server/.env` if you had custom keys.
 
 **After this one-time step, every later upgrade is the one-click Account flow above** — the first self-upgrade you'll experience is 1.6.0 → 1.7.0. (1.6.0 ships the mechanism; it can't upgrade *into* itself.)
 
