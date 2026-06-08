@@ -306,9 +306,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEN_WORKERS',
     group: 'tts-batching',
     label: 'Generation workers',
-    help: 'Number of chapters the generation queue synthesises concurrently. Queue/synthesis concurrency only — the GPU semaphore is the VRAM guard. Set to 1 for a Qwen-heavy book (the Qwen forward is serialised, so a 2nd same-book worker just contends on the lock and doubles per-chapter RTF).',
+    help: 'Number of chapters the generation queue synthesises concurrently. Queue/synthesis concurrency only — the GPU semaphore is the VRAM guard. Default 1: the Qwen forward is serialised, so a 2nd same-book worker just contends on the lock, doubles per-chapter RTF, and accelerates the host-memory leak toward a recycle. Raise only on a multi-GPU / non-Qwen setup.',
     type: 'integer', min: 1, max: 4,
-    default: 2, // ← getResolvedGenerationWorkers() default in workspace/user-settings.ts (line 446)
+    default: 1, // ← getResolvedGenerationWorkers() default in workspace/user-settings.ts
     apply: 'restart-server', risk: 'medium', // GEN_WORKERS is a Node-server knob, not sidecar — needs an app restart
   },
 

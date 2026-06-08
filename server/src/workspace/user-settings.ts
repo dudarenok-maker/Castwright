@@ -281,10 +281,11 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      warm lazily turn this off. No effect under a Kokoro/Coqui default. Flip
      in lockstep with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
   eagerLoadQwen: true,
-  /* Plan 111 — 2 concurrent generation workers by default (within-book
-     fan-out today; cross-book once the worker pool lands). Flip in lockstep
-     with src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
-  generationWorkers: 2,
+  /* Plan 111 — 1 concurrent generation worker by default (safe-by-default:
+     the Qwen forward is serialised, so a 2nd worker just contends on the lock
+     and accelerates the host-memory leak). Flip in lockstep with
+     src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
+  generationWorkers: 1,
   /* Plan 49 — null = no UI-saved key. Resolver falls through to env
      (process.env.GEMINI_API_KEY) and then null. */
   geminiApiKey: null,
@@ -443,7 +444,7 @@ export function getResolvedAutoStartSidecar(): boolean {
          plan-87 GEN_CHAPTER_CONCURRENCY, which is retired as of plan 111
          wave 4.)
       2. cached user-settings generationWorkers (if defined).
-      3. DEFAULT_USER_SETTINGS.generationWorkers (2).
+      3. DEFAULT_USER_SETTINGS.generationWorkers (1).
     Returns an integer ≥ 1; never undefined. Queue/synthesis concurrency only
     — the GPU semaphore is the separate VRAM guard. */
 export function getResolvedGenerationWorkers(): number {
@@ -463,7 +464,7 @@ export function getResolvedGenerationWorkers(): number {
   if (typeof fromSettings === 'number' && Number.isFinite(fromSettings) && fromSettings >= 1) {
     return fromSettings;
   }
-  return DEFAULT_USER_SETTINGS.generationWorkers ?? 2;
+  return DEFAULT_USER_SETTINGS.generationWorkers ?? 1;
 }
 
 export interface ResolvedBackupConfig {

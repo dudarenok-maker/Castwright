@@ -89,7 +89,7 @@ export function ModelSettingsForm() {
   const [dualModelEnabled, setDualModelEnabled] = useState<boolean>(account.dualModelEnabled ?? false);
   const [eagerLoadKokoro, setEagerLoadKokoro] = useState<boolean>(account.eagerLoadKokoro ?? true);
   const [eagerLoadQwen, setEagerLoadQwen] = useState<boolean>(account.eagerLoadQwen ?? true);
-  const [generationWorkers, setGenerationWorkers] = useState<number>(account.generationWorkers ?? 2);
+  const [generationWorkers, setGenerationWorkers] = useState<number>(account.generationWorkers ?? 1);
   const [showSaved, setShowSaved] = useState(false);
 
   useEffect(() => {
@@ -106,7 +106,7 @@ export function ModelSettingsForm() {
     setDualModelEnabled(account.dualModelEnabled ?? false);
     setEagerLoadKokoro(account.eagerLoadKokoro ?? true);
     setEagerLoadQwen(account.eagerLoadQwen ?? true);
-    setGenerationWorkers(account.generationWorkers ?? 2);
+    setGenerationWorkers(account.generationWorkers ?? 1);
   }, [
     account.hydrated,
     account.defaultAnalysisModel,
@@ -161,7 +161,7 @@ export function ModelSettingsForm() {
       analyzerPhase1Model !== (account.analyzerPhase1Model ?? null) ||
       analyzerPhase1MinLagChapters !== (account.analyzerPhase1MinLagChapters ?? null) ||
       dualModelEnabled !== (account.dualModelEnabled ?? false) ||
-      generationWorkers !== (account.generationWorkers ?? 2) ||
+      generationWorkers !== (account.generationWorkers ?? 1) ||
       autoStartDirty ||
       eagerLoadKokoroDirty ||
       eagerLoadQwenDirty
