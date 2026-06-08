@@ -13,6 +13,26 @@ soft convention.
 - Long-running parallel work goes in a `git worktree`, not a second clone. Reconcile multiple agent branches via an `integration/<date>` branch with `npm run verify` between merges.
 - `main` is always shippable. `npm run verify` is the pre-push gate.
 
+## Contributing & licensing
+
+Castwright is **source-available under the Functional Source License**
+(FSL-1.1-ALv2, a.k.a. FSL-1.1-Apache-2.0) — not OSI open source. See
+[`LICENSE`](LICENSE); the [README license section](README.md#license) explains
+the model in one paragraph. The `brand/` assets are **not** covered by the code
+licence — all rights reserved ([`brand/LICENSE`](brand/LICENSE)).
+
+**Posture today: issues welcome, PRs by invitation.** Until the CLA tooling is in
+place, please open an issue to discuss a change before sending a PR.
+
+**When external PRs open up,** two things will be required on every contribution:
+
+- **DCO sign-off** — add `Signed-off-by: Your Name <you@example.com>` to each
+  commit (`git commit -s`), certifying you wrote the change and may submit it
+  under the project licence.
+- **A lightweight CLA** — so the maintainer retains the right to relicense (the
+  FSL future-grant and any relicensing depend on owning the copyright). This will
+  be collected by a CLA bot; see [`docs/licensing.md`](docs/licensing.md).
+
 ## Branching model
 
 Trunk-based with short-lived feature branches, isolated per agent via worktrees.
@@ -434,9 +454,8 @@ title check.
 
 A PR whose changed-file set lives entirely under `docs/**`, root-level
 `*.md` (`README.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `CHANGELOG.md`), or
-`.github/*.md` (e.g. `.github/pull_request_template.md`) skips both
-[`verify.yml`](.github/workflows/verify.yml) and
-[`e2e-mobile.yml`](.github/workflows/e2e-mobile.yml) via `paths-ignore`.
+`.github/*.md` (e.g. `.github/pull_request_template.md`) skips
+[`verify.yml`](.github/workflows/verify.yml) via `paths-ignore`.
 The PR still requires a valid title (`pr-title-lint.yml` runs on every
 PR) and GitHub's native `mergeable` status still surfaces conflicts —
 the gate stays "PR required + title valid + no conflicts", just without

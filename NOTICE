@@ -1,0 +1,59 @@
+Castwright
+Copyright © 2026 Mikhail Dudarenok
+
+This product is licensed under the Functional Source License, Version 1.1,
+ALv2 Future License (FSL-1.1-ALv2). See the LICENSE file at the repository root.
+
+Castwright incorporates and/or works with third-party components, each governed
+by its own licence. Model weights are bundled in the release only when their
+upstream licence permits commercial redistribution; non-commercial weights are
+downloaded on demand from their official source and are never bundled.
+
+Rule of thumb: the installer may fetch weights from their official home; the
+release archive bundles nothing whose licence is unverified.
+
+============================================================
+Bundled model weights
+============================================================
+
+Kokoro v1 (text-to-speech)
+  Upstream: hexgrad/Kokoro-82M; ONNX build via thewh1teagle/kokoro-onnx
+  Licence:  Apache License 2.0
+  Source:   https://huggingface.co/hexgrad/Kokoro-82M
+            https://github.com/thewh1teagle/kokoro-onnx
+  Verified: 8 June 2026
+
+============================================================
+Optional model weights (downloaded on demand, NOT bundled)
+============================================================
+
+Qwen3-TTS (text-to-speech; per-character designed voices)
+  Models:   Qwen/Qwen3-TTS-12Hz-0.6B-Base
+            Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  Licence:  Apache License 2.0
+  Source:   https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-Base
+            https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign
+  Verified: 8 June 2026
+
+Coqui XTTS v2 (text-to-speech; zero-shot voice cloning)
+  Model:    coqui/XTTS-v2
+  Licence:  Coqui Public Model License 1.0.0 (CPML) — NON-COMMERCIAL
+  Status:   NOT bundled. Fetched on demand from the original source; its licence
+            is shown at install time and it is offered as a user-supplied,
+            optional engine.
+  Source:   https://huggingface.co/coqui/XTTS-v2
+  Verified: 8 June 2026
+
+Whisper / faster-whisper (optional speech-to-text quality check)
+  Licence:  MIT (OpenAI Whisper models) — downloaded on demand under their
+            upstream licence.
+  Status:   Download-on-demand; not bundled.
+  Source:   https://github.com/SYSTRAN/faster-whisper
+
+============================================================
+Application dependencies
+============================================================
+
+The frontend, server, and TTS sidecar depend on third-party npm and PyPI
+packages, each retaining its own open-source licence. See each package's
+distribution (node_modules, the Python environment) for the full texts.
