@@ -306,3 +306,11 @@ describe('uiSlice — regenerate-modal scope override', () => {
     expect(s.regenInitialScope).toBeNull();
   });
 });
+
+
+describe('uiSlice — openAbout', () => {
+  it('openAbout sets stage.kind to about', () => {
+    const s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.openAbout());
+    expect(s.stage.kind).toBe('about');
+  });
+});
