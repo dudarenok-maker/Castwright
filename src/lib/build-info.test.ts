@@ -15,23 +15,25 @@ const base: BuildInfo = {
 
 describe('formatBuildStamp', () => {
   it('dev: verbose version · sha · branch · time when the tree is clean', () => {
-    expect(formatBuildStamp(base, { dev: true })).toBe('v1.4.0 · a1b2c3d · fix/foo · 14:32');
+    expect(formatBuildStamp(base, { dev: true })).toBe(
+      'Made with Castwright · v1.4.0 · a1b2c3d · fix/foo · 14:32',
+    );
   });
 
   it('dev: appends a "*" dirty marker to the sha when the working tree is dirty', () => {
     expect(formatBuildStamp({ ...base, dirty: true }, { dev: true })).toBe(
-      'v1.4.0 · a1b2c3d* · fix/foo · 14:32',
+      'Made with Castwright · v1.4.0 · a1b2c3d* · fix/foo · 14:32',
     );
   });
 
   it('dev: omits the trailing segment when buildTime is empty (no dangling separator)', () => {
     expect(formatBuildStamp({ ...base, buildTime: '' }, { dev: true })).toBe(
-      'v1.4.0 · a1b2c3d · fix/foo',
+      'Made with Castwright · v1.4.0 · a1b2c3d · fix/foo',
     );
   });
 
   it('prod: minimal version + short sha only', () => {
-    expect(formatBuildStamp(base, { dev: false })).toBe('v1.4.0 (a1b2c3d)');
+    expect(formatBuildStamp(base, { dev: false })).toBe('Made with Castwright · v1.4.0 (a1b2c3d)');
   });
 });
 
