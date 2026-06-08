@@ -1,6 +1,6 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-06-06
 owner: null
 ---
 
@@ -124,5 +124,4 @@ Paired automated tests land with the change:
 
 ## Ship notes
 
-(Filled on ship: date + commit SHA; flip `status:` to `stable` and `git mv` to
-`archive/` once the manual walkthrough passes.)
+Shipped **2026-06-06** via PR [#569](https://github.com/dudarenok-maker/AudioBook-Generator/issues/569), closing `srv-35` (#540). Immutable optional chapter `uuid` minted lazily by `ensureChapterUuids` at the persisting read seams, carried through restructure by identity, protected from wholesale-state strip by `reconcileChapterUuids`; listen-progress gained an optional `chapterUuid` so resume follows a chapter across a restructure (also repairs the latent web-player resume bug). First MVP server prereq for the Android companion (plan 188); `srv-32` (plan 191) keys off it.
