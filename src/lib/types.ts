@@ -246,6 +246,11 @@ export interface BookStateJson {
     slug: string;
     duration?: string;
     excluded?: boolean;
+    /** "Not queued" hold — the user removed this un-rendered chapter from the
+        generation queue. Mirror of the server's BookStateJson type
+        (`server/src/workspace/scan.ts`). Re-hydrated so the row keeps reading
+        "Not queued" and the auto-work resume leaves it alone across a reload. */
+    held?: boolean;
     /** TTS model key that produced this chapter's existing audio.
         Stamped at render time and lazy-backfilled from the segments
         file for legacy chapters. Mirror of the server's BookStateJson

@@ -116,6 +116,9 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
         .filter(
           (c) =>
             !c.excluded &&
+            /* "Not queued" hold — the user removed this chapter from the queue;
+               the auto-work resume must not silently re-enqueue it. */
+            !c.held &&
             (c.state === 'in_progress' || c.state === 'queued') &&
             !queuedChapterIds.has(c.id),
         )
