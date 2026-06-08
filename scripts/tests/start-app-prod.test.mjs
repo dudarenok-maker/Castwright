@@ -61,3 +61,12 @@ test('defaults to process.env when called with no argument', () => {
     else process.env.PORT = saved.PORT;
   }
 });
+
+import { bannerLine } from '../start-app-prod.mjs';
+
+test('bannerLine renders the Castwright banner with the version', () => {
+  assert.equal(
+    bannerLine('1.6.0'),
+    'Castwright v1.6.0 — Any book, performed by a full cast.',
+  );
+});
