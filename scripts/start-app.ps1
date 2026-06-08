@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 # Start the audiobook app: frontend (Vite :5173) and server (Express :8080)
 # — both backgrounded, logs in logs\*.log, PIDs tracked in .run\*.pid.
 # Idempotent: re-running while alive just re-opens the browser.
@@ -113,10 +113,31 @@ function Test-PortListening($port) {
     $null -ne (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
 }
 
+# Probe /api/health on a listening server and return the parsed JSON object,
+# or $null if the request fails or returns no body. Uses curl.exe (-sk) so it
+# works on PS 5.1 and handles the self-signed LAN HTTPS cert (-k).
+function Get-ServedHealth($port, $useHttps) {
+    $scheme = if ($useHttps) { 'https' } else { 'http' }
+    try {
+        $json = & curl.exe -sk --max-time 4 "${scheme}://localhost:$port/api/health"
+        if ([string]::IsNullOrWhiteSpace($json)) { return $null }
+        return $json | ConvertFrom-Json
+    } catch { return $null }
+}
+
 $toStart = @()
 foreach ($svc in $services) {
     $pidPath = Join-Path $runDir "$($svc.Name).pid"
     if (Test-PortListening $svc.Port) {
+        if ($svc.Name -eq 'server') {
+            $h = Get-ServedHealth $svc.Port $lanHttps
+            if ($null -eq $h) {
+                Fail "Port :$($svc.Port) is occupied by a process that does not answer /api/health — likely a stale or foreign server. Stop it (npm run stop) and retry."
+            }
+            if ($h.configLoad -and -not $h.configLoad.envLoaded) {
+                Write-Status "[WARN] server on :$($svc.Port) is running WITHOUT server/.env (cwd=$($h.configLoad.cwd)) — it is on DEFAULTS. Stop it and relaunch so server/.env loads."
+            }
+        }
         Write-Status "[SKIP] $($svc.Name) already listening on :$($svc.Port)"
     } else {
         if (Test-Path $pidPath) { Remove-Item $pidPath -Force }

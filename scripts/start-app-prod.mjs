@@ -109,6 +109,28 @@ async function waitForListen(port, timeoutMs) {
   return false;
 }
 
+// Probe /api/health on an already-listening server and return the parsed JSON,
+// or null if the request fails. Temporarily disables TLS verification so the
+// self-signed LAN HTTPS cert doesn't abort the probe.
+async function probeServed(port, https) {
+  const scheme = https ? 'https' : 'http';
+  const prev = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  if (https) process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+  try {
+    const res = await fetch(`${scheme}://localhost:${port}/api/health`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    if (https) {
+      if (prev === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      else process.env.NODE_TLS_REJECT_UNAUTHORIZED = prev;
+    }
+  }
+}
+
 async function main() {
   mkdirSync(runDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
@@ -132,7 +154,20 @@ async function main() {
 
   const alreadyUp = await probePort(port);
   if (alreadyUp) {
-    info(`[SKIP] something already listening on :${port} — leaving it alone`);
+    const served = await probeServed(port, lanHttps);
+    if (!served) {
+      fail(
+        `Port :${port} is occupied by a process that does not answer /api/health — ` +
+          `likely a stale or foreign server. Run "npm run stop" and retry.`,
+      );
+    }
+    if (served.configLoad && served.configLoad.envLoaded === false) {
+      info(
+        `[WARN] server on :${port} is running WITHOUT server/.env ` +
+          `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
+      );
+    }
+    info(`[SKIP] server already listening on :${port} — leaving it alone`);
     info(`[READY] ${url}`);
     process.exit(0);
   }
