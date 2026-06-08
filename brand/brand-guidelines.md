@@ -23,6 +23,12 @@ observer. Castwright gives the story back its voices — on hardware you already
 **Personality:** a thoughtful craftsperson, not a hype machine. Literary, candid, quietly
 confident. Loves the *listener's* experience and says the honest version of everything.
 
+**Positioning statement** *(the anchor every surface paraphrases; see
+`competitive-brief-2026-06-08.md` for the landscape it answers):*
+> For readers who love stories — especially series — Castwright is the only tool that turns
+> any book into a full-cast performance on a machine they already own: every character in
+> their own voice, consistent from book one to the last, with nothing leaving home.
+
 ---
 
 ## 2. Tagline & messaging hierarchy
@@ -72,6 +78,13 @@ unhurried, dry-witted, never breathless.
   consumer copy; "render" is fine in technical/dev contexts.
 - The people in a book: the **cast**; the lead reader is the **narrator**.
 - The personal-voice feature: **your voice** / **family voices** (with consent) — never "deepfake."
+- The output is a **performance**, never "AI narration" — catalogue-flooding (Audible Virtual
+  Voice et al.) has made "AI narration" mean *robotic and flat* to readers.
+- Where it runs: **your machine** / **at home** — never "on-prem," "edge," or "local-first"
+  in consumer copy; those are infrastructure words, not reader words.
+- Cloning, in one breath: **your voice, with consent, kept at home.**
+- Don't claim "open-source-powered" as a value in itself — **credit the engines by name**
+  (Kokoro, XTTS, Qwen) and let the specificity do the work.
 
 ### Sample copy (use as the reference register)
 
@@ -81,16 +94,48 @@ unhurried, dry-witted, never breathless.
 - **Primary CTA:** *Cast your first book* · **Secondary:** *Hear a sample*
 - **Pillar 1 (full cast):** *No more one bored narrator. The apprentice sounds thirteen; the
   swordsmith sounds seventy and a forge.*
-- **Pillar 2 (series-consistent):** *Book two should sound like book one. Castwright remembers
-  your cast — even when an author renames someone mid-series.*
+- **Pillar 2 (series-consistent — the spearhead claim):** *Book two should sound like book one.
+  Castwright remembers your cast — even when an author renames someone mid-series.* **No one
+  else does this for readers** — full-cast generation is no longer unique (see the competitive
+  brief), series memory is. Lead with it everywhere right after the full cast.
 - **Pillar 3 (your voice):** *Read a bedtime story in your own voice, even when you're away —
   or let your kid be the hero. Your voices, with your permission, stay on your machine.*
+- **Pillar 4 (ownership):** *Rendered once, on hardware you own. No meter, no monthly fee, no
+  server that can take your library away. The frontier never sees a chapter.*
 - **Empty state (library):** *No books yet. Drop in an EPUB, PDF, or paste a chapter — we'll
   find the cast.*
 - **Error (analysis hiccup):** *That chapter didn't parse cleanly. We kept the rest; retry just
   this one.* (Honest, scoped, no blame, no jargon.)
 - **App Store short:** *Turn any novel into a full-cast audiobook. Every character gets their
   own voice, consistent across a whole series — rendered on your own device, even in your voice.*
+
+### Proof, not promises
+
+"Say the honest version" needs receipts. When copy makes a claim, reach for these — stated
+plainly, never gloating:
+
+- **Quality:** every line is acoustically checked and transcript-verified before a chapter is
+  assembled; the plainly broken lines never reach your ears.
+- **Economics:** a heavy reader pays the electricity, once per book — against $11/month clouds
+  that won't let you export the audio, and cloud creation that runs to ~$200 per book by the
+  vendors' own tables.
+- **Permanence:** when a cloud voice product was acquired in 2025, its users' libraries and
+  voice clones were deleted at sunset (Play.ht). Your renders are files on your disk; nobody
+  can take them away. Reference this factually, never gleefully.
+
+### Competitive register — how we speak about others
+
+Three rules, all downstream of the craftsperson persona:
+
+- **Clouds: name tradeoffs factually, never mock.** Both clauses true, no sneer: *"ElevenLabs
+  makes stunning voices. It also meters them by the hour and keeps your audio."* If a
+  comparison needs adjectives to land, it isn't ready.
+- **Open source is kin, not competition.** The local-audiobook community is our earliest
+  audience and our engine suppliers. Credit Kokoro, XTTS, and Qwen visibly; never punch down
+  at a hobby project's rough edges.
+- **Never punch at human narrators.** The villain is the *economics that force one bored
+  narrator to play everyone* — not the person. Audible's human full-cast productions are the
+  benchmark we honour, not deride.
 
 ---
 
@@ -154,3 +199,8 @@ to ~16px; outline wordmark type for production.
 - Reframe `../docs/project-narrative.md` into the Castwright brand once this is signed off
   (retitle, weave the name + pillars in — keep the candid first-person voice intact).
 - Optional later: sonic identity / audio logo + a "house narrator" voice persona.
+- **Quarterly competitive refresh** against the `competitive-brief-2026-06-08.md` baseline —
+  watch Spoken releases (series continuity, author→reader pivot), ElevenLabs Reader features
+  (auto-casting risk), and the OSS wave (Alexandria, abogen, ebook2audiobook/E2A-SML). The
+  series-consistency claim and the QA-gate claim must be re-verified as *still unique* before
+  each external use.
