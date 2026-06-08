@@ -82,13 +82,34 @@ inherent redux behavior. Follow-up: add the e2e once a done+manuscript fixture e
    render stamp).
 5. Regenerate the chapter → a fresh `audioRenderedAt` clears the caption.
 
+## Precise per-sentence diff (#650 — supersedes the time-based v1)
+
+The time-based heuristic above has one false positive: a reassign-then-undo still
+reads stale until regenerated. The precise follow-up (#650) removes it without losing
+immediacy:
+
+- **Server** (`segments-io.ts` `collectRenderedSpeakerMaps` → book-state GET
+  `renderedSpeakersByChapter`): recovers the render-time `sentenceId → characterId`
+  map per rendered chapter from each chapter's `segments.json` (`segments[].sentenceIds`
+  + `characterId` — already persisted, no new render-time snapshot needed).
+- **Frontend** (`isChapterReassignedSinceRender`): the Generate view diffs that map
+  against the **live** manuscript. The diff is asymmetric (iterate the rendered ids):
+  a rendered sentence whose current speaker differs (reassign) or that's now gone
+  (split/merge/delete) ⇒ stale; a current sentence never in the render map can't trip
+  a false positive. **Immediate** (recomputed from the live manuscript slice, no
+  refetch — important because navigating manuscript→generate does NOT re-GET, see
+  `layout.tsx:671`) AND **precise** (reassign-then-undo ⇒ maps match ⇒ not stale).
+- **Fallback:** the row uses the precise diff when the server shipped a render map for
+  the chapter, else the time-based heuristic — so older servers / mocks still flag
+  staleness with no regression.
+
 ## Out of scope
 
-- **Precise per-sentence net-diff.** This v1 is time-based/optimistic: reassign-then-
-  undo still reads stale until regenerated. The precise version (snapshot the
-  per-sentence speaker map at render time, compare net mapping) is a filed follow-up.
+- n/a — the precise diff (#650) closed the only remaining gap.
 
 ## Ship notes
 
-(Filled when merged to main.) Lands on `fix/frontend-stale-chapter-reassign-indicator`.
-Frontend-only; no live-GPU acceptance required.
+Bug-2 time-based indicator shipped on `fix/frontend-stale-chapter-reassign-indicator`
+(PR #651, merged 2026-06-08). The precise per-sentence diff (#650) shipped on
+`feat/server-precise-reassign-stale` (2026-06-08). Frontend + a GET-only server field;
+no live-GPU acceptance required.
