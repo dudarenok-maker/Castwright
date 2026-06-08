@@ -1,7 +1,7 @@
 /* Workspace path resolution and slug helpers.
 
    Workspace root resolves from WORKSPACE_DIR (env), defaulting to
-   ../audiobook-workspace relative to the server folder. The books/ tree is
+   ../castwright-workspace relative to the server folder. The books/ tree is
    always three levels deep: <Author>/<Series>/<Book>. Standalone titles use
    a synthetic series named 'Standalones'. */
 
@@ -13,21 +13,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
 
 /* WORKSPACE_DIR resolves relative to server/ (where .env lives). The default
-   lands inside the repo at <repo>/audiobook-workspace/, so opening the
+   lands inside the repo at <repo>/castwright-workspace/, so opening the
    project in a file browser surfaces the library too. Override to put it
    anywhere — absolute paths are honoured as-is.
 
    Resolution precedence (boot-time only — restart required to change):
      1. user-settings.json `workspaceDirOverride` (synchronous best-effort read)
      2. WORKSPACE_DIR env var
-     3. built-in `../audiobook-workspace` default
+     3. built-in `../castwright-workspace` default
    This is read once at module load — `WORKSPACE_ROOT` is a const export
    the rest of the server caches via destructuring, so mutating it mid-process
    would corrupt path resolution. The UI flags edits as "restart required". */
 const ENV_DIR = process.env.WORKSPACE_DIR?.trim();
 const OVERRIDE_DIR = readBootOverride();
 const RESOLVED_DIR =
-  OVERRIDE_DIR ?? (ENV_DIR && ENV_DIR.length > 0 ? ENV_DIR : '../audiobook-workspace');
+  OVERRIDE_DIR ?? (ENV_DIR && ENV_DIR.length > 0 ? ENV_DIR : '../castwright-workspace');
 export const WORKSPACE_ROOT = resolve(SERVER_ROOT, RESOLVED_DIR);
 export const BOOKS_ROOT = join(WORKSPACE_ROOT, 'books');
 export const WORKSPACE_SOURCE: 'env' | 'default' | 'override' = OVERRIDE_DIR
