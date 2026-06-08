@@ -3025,6 +3025,60 @@ async function mockSetChapterExcluded(
   };
 }
 
+/* "Not queued" hold toggle — set when the user deletes an un-rendered
+   chapter's entry from the generation queue, cleared when they re-queue it.
+   Mirrors setChapterExcluded but hits the held endpoint (no audio cleanup
+   server-side). See server/src/routes/book-state.ts held handler. */
+export interface SetChapterHeldResponse {
+  id: number;
+  title: string;
+  slug: string;
+  held: boolean;
+}
+async function realSetChapterHeld(
+  bookId: string,
+  chapterId: number,
+  held: boolean,
+): Promise<SetChapterHeldResponse> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/held`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ held }),
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Held toggle failed (${res.status}).`);
+  }
+  return res.json();
+}
+
+async function mockSetChapterHeld(
+  bookId: string,
+  chapterId: number,
+  held: boolean,
+): Promise<SetChapterHeldResponse> {
+  await wait(60);
+  /* Persist into the mock book-state like the real server does, so a later
+     getBookState re-hydrate keeps the hold (a no-op mock would let the next
+     hydrate clobber the optimistic slice flag). */
+  const prev = MOCK_BOOK_STATES.get(bookId);
+  const ch = prev?.state.chapters.find((c) => c.id === chapterId);
+  if (prev && ch) {
+    ch.held = held ? true : undefined;
+  }
+  return {
+    id: chapterId,
+    title: ch?.title ?? `Chapter ${chapterId}`,
+    slug: ch?.slug ?? `${String(chapterId).padStart(2, '0')}-mock`,
+    held,
+  };
+}
+
 /* Plan 78 — user-supplied chapter rename. Server updates state.json
    atomically (trimming whitespace, rejecting empty / >200-char), flips
    `titleOverridden` to true so subsequent heuristic refresh-titles
@@ -4878,7 +4932,14 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
    DiagnosticsResponse schema in openapi.yaml; see server/src/routes/diagnostics.ts.
    Polled by the Admin view + the top-bar status dot (~30 s cadence). */
 export type DiagnosticsStatus = 'ok' | 'warn' | 'fail';
-export type DiagnosticsCheckId = 'gpu' | 'sidecar' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
+export type DiagnosticsCheckId =
+  | 'gpu'
+  | 'sidecar'
+  | 'asr'
+  | 'analyzer'
+  | 'gemini'
+  | 'ffmpeg'
+  | 'disk';
 
 export interface DiagnosticsCheck {
   id: DiagnosticsCheckId;
@@ -4912,7 +4973,8 @@ async function mockGetDiagnostics(): Promise<DiagnosticsResponse> {
     overall: 'ok',
     checks: [
       { id: 'gpu', label: 'GPU / VRAM', status: 'ok', detail: 'cuda · 1.2 / 8.0 GB reserved', value: '1.2/8.0 GB' },
-      { id: 'sidecar', label: 'TTS sidecar', status: 'ok', detail: 'reachable · kokoro, qwen', value: 'kokoro, qwen' },
+      { id: 'sidecar', label: 'Voice engine', status: 'ok', detail: 'reachable · kokoro, qwen', value: 'kokoro, qwen' },
+      { id: 'asr', label: 'ASR (Whisper)', status: 'ok', detail: 'off — content-QA disabled' },
       { id: 'analyzer', label: 'Analyzer (Ollama)', status: 'ok', detail: 'reachable · model resident' },
       { id: 'gemini', label: 'Analyzer (Gemini)', status: 'ok', detail: 'not in use' },
       { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'ok', detail: 'both present' },
@@ -5339,6 +5401,7 @@ const real = {
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
   setChapterExcluded: realSetChapterExcluded,
+  setChapterHeld: realSetChapterHeld,
   renameChapter: realRenameChapter,
   mergeChapters: realMergeChapters,
   splitChapter: realSplitChapter,
@@ -5573,6 +5636,7 @@ const mock = {
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
   setChapterExcluded: mockSetChapterExcluded,
+  setChapterHeld: mockSetChapterHeld,
   renameChapter: mockRenameChapter,
   mergeChapters: mockMergeChapters,
   splitChapter: mockSplitChapter,

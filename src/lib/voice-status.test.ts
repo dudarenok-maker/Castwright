@@ -239,6 +239,52 @@ describe('statusFilterKeys — cast-view filter keys', () => {
       'Reused',
     ]);
   });
+
+  it('keys a designed Qwen character with an unmet in-use emotion as "Needs variants"', () => {
+    const c = char({ overrideTtsVoices: { qwen: { name: 'qwen-x', variants: {} } } });
+    const used = new Set(['angry']);
+    expect(statusFilterKeys(c, voice({ generated: true }), QWEN, used)).toEqual([
+      'Generated',
+      'Needs variants',
+    ]);
+  });
+
+  it('omits "Needs variants" when every in-use emotion has a designed variant', () => {
+    const c = char({
+      overrideTtsVoices: { qwen: { name: 'qwen-x', variants: { angry: { name: 'qwen-x-angry' } } } },
+    });
+    // character has 1 designed variant (→ 'Variants' key) but all in-use emotions are covered
+    // (→ no 'Needs variants' key)
+    expect(statusFilterKeys(c, voice({ generated: true }), QWEN, new Set(['angry']))).toEqual([
+      'Generated',
+      'Variants',
+    ]);
+  });
+
+  it('keys both "Variants" and "Needs variants" for a partially-designed character', () => {
+    // Realistic mid-design state: angry/sad designed, surprised still in use but unmet.
+    const c = char({
+      overrideTtsVoices: {
+        qwen: {
+          name: 'qwen-x',
+          variants: { angry: { name: 'qwen-x-angry' }, sad: { name: 'qwen-x-sad' } },
+        },
+      },
+    });
+    expect(
+      statusFilterKeys(c, voice({ generated: true }), QWEN, new Set(['angry', 'sad', 'surprised'])),
+    ).toEqual(['Generated', 'Variants', 'Needs variants']);
+  });
+
+  it('omits "Needs variants" when usedEmotions is undefined', () => {
+    const c = char({ overrideTtsVoices: { qwen: { name: 'qwen-x', variants: {} } } });
+    expect(statusFilterKeys(c, voice({ generated: true }), QWEN)).toEqual(['Generated']);
+  });
+
+  it('never keys "Needs variants" for a non-Qwen character', () => {
+    const c = char({ voiceState: 'generated' });
+    expect(statusFilterKeys(c, undefined, KOKORO, new Set(['angry']))).toEqual(['Matched']);
+  });
 });
 
 describe('fs-25 — hasEmotionVariants (additive Variants badge + filter)', () => {

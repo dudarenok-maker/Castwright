@@ -544,6 +544,83 @@ describe('book-state router — POST /chapters/:chapterId/exclude', () => {
   });
 });
 
+describe('book-state router — POST /chapters/:chapterId/held (Bug 1: "Not queued")', () => {
+  function seedTwoChapters(): void {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.chapters = [
+      { id: 1, title: 'Dedication', slug: '01-dedication' },
+      { id: 2, title: 'Chapter One', slug: '02-chapter-one' },
+    ];
+    writeFileSync(statePath, JSON.stringify(cur));
+  }
+
+  it('flips held=true and persists it to state.json', async () => {
+    seedTwoChapters();
+    const res = await request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ id: 1, title: 'Dedication', slug: '01-dedication', held: true });
+
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.chapters.find((c: { id: number }) => c.id === 1).held).toBe(true);
+    expect(onDisk.chapters.find((c: { id: number }) => c.id === 2).held).toBeFalsy();
+  });
+
+  it('flips held=false (re-add) and persists it', async () => {
+    seedTwoChapters();
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const cur = JSON.parse(readFileSync(statePath, 'utf8'));
+    cur.chapters[0].held = true;
+    writeFileSync(statePath, JSON.stringify(cur));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/held`)
+      .send({ held: false });
+    expect(res.status).toBe(200);
+    expect(res.body.held).toBe(false);
+
+    const onDisk = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(onDisk.chapters[0].held).toBeFalsy();
+  });
+
+  it('does NOT delete chapter audio (the key difference from exclude — held keeps content)', async () => {
+    seedTwoChapters();
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    writeFileSync(join(audioRoot, '01-dedication.mp3'), Buffer.from([0, 0]));
+    writeFileSync(join(audioRoot, '01-dedication.segments.json'), '{"durationSec":1}');
+
+    const res = await request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(audioRoot, '01-dedication.mp3'))).toBe(true);
+    expect(existsSync(join(audioRoot, '01-dedication.segments.json'))).toBe(true);
+  });
+
+  it('GET /state round-trips the held flag to the frontend', async () => {
+    seedTwoChapters();
+    await request(app).post(`/api/books/${bookId}/chapters/2/held`).send({ held: true });
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    const ch2 = res.body.state.chapters.find((c: { id: number }) => c.id === 2);
+    expect(ch2.held).toBe(true);
+  });
+
+  it('400s on a non-boolean held payload', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/held`)
+      .send({ held: 'yes' });
+    expect(res.status).toBe(400);
+  });
+
+  it('404s when the chapter id does not exist on this book', async () => {
+    seedTwoChapters();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/999/held`)
+      .send({ held: true });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('book-state router — rehydrate on GET populates real chapter bodies', () => {
   /* Regression: an earlier "lightweight" rehydrate path inserted a
      ManuscriptRecord with chapterHints[].body='' and sourceText=raw

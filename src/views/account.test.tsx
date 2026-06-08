@@ -84,6 +84,17 @@ describe('AccountView â€” rendering', () => {
     expect(screen.getByText('/foo/bar')).toBeInTheDocument();
     expect(screen.getByText(/source: override/i)).toBeInTheDocument();
   });
+
+  it('paints the Open Model Manager button with the theme-safe ink/canvas token', () => {
+    /* Regression: the button shipped `bg-ink text-white`, which renders
+       white-on-near-white once --ink inverts in dark mode (the fs-23 dark-CTA
+       fix idiom is `bg-ink text-canvas`, as on the Admin sibling button). */
+    renderView();
+    const button = screen.getByTestId('account-model-manager-pointer');
+    expect(button.className).toContain('bg-ink');
+    expect(button.className).toContain('text-canvas');
+    expect(button.className).not.toContain('text-white');
+  });
 });
 
 describe('AccountView â€” save flow', () => {

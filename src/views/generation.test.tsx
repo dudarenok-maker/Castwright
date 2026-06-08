@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/16-generation-stream.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Outlet, Routes, Route } from 'react-router-dom';
@@ -317,6 +317,105 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
        inspect the paragraph for the complete readout. */
     const linesNode = screen.getByText(/of 4 lines synthesised/);
     expect(linesNode.textContent).toMatch(/3\s+of 4 lines synthesised/);
+  });
+
+  it('shows "Verifying speech…" on a chapter in the ASR verifying phase', () => {
+    const verifying: Chapter = {
+      ...chapter1,
+      state: 'in_progress',
+      phase: 'verifying',
+      progress: 0.99,
+    };
+    const ch2Queued: Chapter = { ...chapter2 };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([verifying, ch2Queued]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [verifying, ch2Queued],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[verifying, ch2Queued]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    // Rendered in BOTH the row pill and the live caption.
+    expect(screen.getAllByText('Verifying speech…')).toHaveLength(2);
+    // The frozen synthesising caption must NOT show for the verifying row.
+    expect(screen.queryByText(/Synthesising/)).not.toBeInTheDocument();
+  });
+
+  it('suppresses the stale "Active:" line when a chapter is in the verifying phase', () => {
+    const verifying: Chapter = {
+      ...chapter1,
+      state: 'in_progress',
+      phase: 'verifying',
+      progress: 0.99,
+    };
+    const ch2Queued: Chapter = { ...chapter2 };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([verifying, ch2Queued]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [verifying, ch2Queued],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[verifying, ch2Queued]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    // Expand the verifying chapter row (its title is "Chapter 1").
+    fireEvent.click(screen.getByText('Chapter 1'));
+    expect(screen.queryByText(/Active:/)).not.toBeInTheDocument();
   });
 });
 
@@ -1040,6 +1139,78 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
     };
     renderWithChapters([excludedDrifted, chapter2], 'kokoro-v1');
     expect(screen.queryByText(/generated with a different engine/i)).toBeNull();
+  });
+});
+
+describe('GenerationView — reassignment staleness caption (Bug 2)', () => {
+  /* A done chapter whose sentence→speaker assignments were changed after it was
+     rendered shows an amber "Sentences reassigned · regenerate to refresh"
+     caption, derived from the change-log boundary_move time vs audioRenderedAt. */
+  function renderWithReassign(chapters: Chapter[], reassignedChapterIds: number[]): void {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters,
+        sentences,
+      } as any),
+    );
+    /* bumpBoundaryMove stamps `at` to "now", which is after the fixed past
+       render time below — so these chapters read stale deterministically. */
+    for (const id of reassignedChapterIds) {
+      store.dispatch(changeLogSlice.actions.bumpBoundaryMove({ chapterId: id, count: 1 }));
+    }
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={chapters}
+          characters={characters}
+          paused
+          title="Reassign Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  const RENDERED_PAST = '2020-01-01T00:00:00Z';
+  const doneStampable: Chapter = {
+    ...chapter1,
+    audioModelKey: 'kokoro-v1',
+    audioRenderedAt: RENDERED_PAST,
+  };
+
+  it('shows the caption on a done chapter reassigned after it was rendered', () => {
+    renderWithReassign([doneStampable, chapter2], [1]);
+    expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
+  });
+
+  it('does NOT show the caption when the chapter was never reassigned', () => {
+    renderWithReassign([doneStampable, chapter2], []);
+    expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
+  });
+
+  it('does NOT show the caption for a queued (un-rendered) chapter even if reassigned', () => {
+    /* chapter2 is queued — a reassignment there has nothing rendered to stale. */
+    renderWithReassign([doneStampable, chapter2], [2]);
+    expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
   });
 });
 
@@ -1859,6 +2030,30 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
 
   it('is hidden when every chapter is done (no queued work)', () => {
     renderResume([chapter1, { ...chapter2, state: 'done', progress: 1 }]);
+    expect(screen.queryByTestId('generation-view-resume')).toBeNull();
+  });
+
+  /* Bug 1 — a "Not queued" (held) chapter is queued under the hood but the user
+     removed it from the queue. It must read "Not queued" (not "Queued"), and it
+     must NOT count as queued work — so Resume stays hidden rather than offering
+     to silently re-enqueue the chapter the user just deleted. */
+  const heldChapter2: Chapter = { ...chapter2, held: true };
+
+  it('renders a held chapter as "Not queued" rather than a "Queued" badge', () => {
+    renderResume([chapter1, heldChapter2]);
+    /* The held row shows the neutral "Not queued" pill. (A "Queued" summary
+       stat still renders at the top — its value is now 0 because held chapters
+       are excluded from the queued count — so we assert against the row's badge
+       Pill specifically, not the stat label.) */
+    const notQueued = screen.getByText('Not queued');
+    expect(notQueued).toBeInTheDocument();
+    const heldRow = notQueued.closest('.rounded-3xl');
+    expect(heldRow).not.toBeNull();
+    expect(within(heldRow as HTMLElement).queryByText('Queued')).toBeNull();
+  });
+
+  it('hides Resume generation when the only remaining work is held (not re-added)', () => {
+    renderResume([chapter1, heldChapter2]);
     expect(screen.queryByTestId('generation-view-resume')).toBeNull();
   });
 });

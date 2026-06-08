@@ -68,6 +68,20 @@ const TREND_STYLE: Record<Trend, { cls: string; glyph: string; label: string }> 
   none: { cls: 'text-ink/70', glyph: '', label: '' },
 };
 
+/* Shared column templates so each table's sticky header and its body rows are
+   ONE grid definition, not two independent grids whose `auto` tracks size to
+   different content (header text vs. data) and drift out of alignment. Explicit
+   rem widths on the fixed columns guarantee the tracks line up; the responsive
+   variants drop tracks in lockstep with the cells' `hidden sm:/md:block` so the
+   collapse stays aligned at every breakpoint. The header lives INSIDE the
+   scroll container (sticky) so it shares the scrollbar gutter the rows reserve
+   (scrollbar-gutter: stable from .scrollbar-thin) — otherwise the header would
+   run a gutter-width past the rows. */
+const THROUGHPUT_COLS =
+  'grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_7rem_auto] md:grid-cols-[1fr_7rem_3.5rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
+const TRENDS_COLS =
+  'grid grid-cols-[1fr_3rem_auto] sm:grid-cols-[1fr_3rem_3.5rem_auto] gap-x-3 sm:gap-x-6';
+
 export function AdminView() {
   const [stats, setStats] = useState<GenerationStatsResponse | null>(null);
 
@@ -186,7 +200,7 @@ function HealthBoard() {
     <section className="mb-10">
       <h3 className="text-lg font-medium tracking-tight text-ink mb-1">Health</h3>
       <p className="text-sm text-ink/60 mb-4">
-        GPU &amp; VRAM, TTS sidecar, analyzer, ffmpeg and free disk. Re-checked every 30 s.
+        GPU &amp; VRAM, Voice engine, analyzer, ASR, ffmpeg and free disk. Re-checked every 30 s.
       </p>
 
       {!loaded && <p className="text-sm text-ink/50">Running diagnostics…</p>}
@@ -350,17 +364,28 @@ function GenerationThroughput({ stats }: { stats: GenerationStatsResponse | null
           className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden"
           data-testid="generation-throughput-table"
         >
-          <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 sm:gap-x-6 px-4 py-2 text-[11px] uppercase tracking-wide text-ink/40 border-b border-ink/5">
-            <span>Chapter</span>
-            <span className="text-right hidden sm:block">Engine</span>
-            <span className="text-right hidden md:block">Audio</span>
-            <span className="text-right hidden md:block">Synth</span>
-            <span className="text-right">RTF</span>
-          </div>
-          <div className="divide-y divide-ink/5">
-            {recent.map((c, i) => (
-              <ThroughputRow key={`${c.bookId ?? ''}:${c.chapterId}:${c.at}`} chapter={c} olderRtf={recent[i + 1]?.rtf} />
-            ))}
+          {/* Cap the rows and scroll inside with the inset thin scrollbar — a
+              long run records far more chapters than fit on the page. The
+              column header is sticky INSIDE the scroller so it shares the
+              reserved gutter and stays put while rows scroll. */}
+          <div
+            className="max-h-[60vh] overflow-y-auto scrollbar-thin"
+            data-testid="generation-throughput-scroll"
+          >
+            <div
+              className={`sticky top-0 z-10 bg-white ${THROUGHPUT_COLS} px-4 py-2 text-[11px] uppercase tracking-wide text-ink/40 border-b border-ink/5`}
+            >
+              <span>Chapter</span>
+              <span className="text-right hidden sm:block">Engine</span>
+              <span className="text-right hidden md:block">Audio</span>
+              <span className="text-right hidden md:block">Synth</span>
+              <span className="text-right">RTF</span>
+            </div>
+            <div className="divide-y divide-ink/5">
+              {recent.map((c, i) => (
+                <ThroughputRow key={`${c.bookId ?? ''}:${c.chapterId}:${c.at}`} chapter={c} olderRtf={recent[i + 1]?.rtf} />
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -442,21 +467,28 @@ function ResourceTrends() {
           <div className="px-4 py-3 border-b border-ink/5">
             <RtfSparkline records={records} />
           </div>
-          <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 px-4 py-2 text-[11px] uppercase tracking-wide text-ink/40 border-b border-ink/5">
-            <span>Chapter</span>
-            <span className="text-right">RTF</span>
-            <span className="text-right hidden sm:block">Wall</span>
-            <span className="text-right">VRAM</span>
-          </div>
-          {/* Cap the rows at ~60% of the viewport and scroll inside — a long run
-              records hundreds of chapters that would otherwise run off the page.
-              Each book's chapters sit under a sticky header so you can tell which
-              book a row belongs to once you've scrolled past the top group. */}
-          <div className="max-h-[60vh] overflow-y-auto" data-testid="resource-trends-scroll">
+          {/* Cap the rows at ~60% of the viewport and scroll inside with the
+              inset thin scrollbar — a long run records hundreds of chapters that
+              would otherwise run off the page. The column header is sticky at the
+              top of the scroller (so it shares the reserved gutter and aligns
+              with the rows); each book's chapters sit under a sub-header that
+              sticks just BELOW the column header. */}
+          <div
+            className="max-h-[60vh] overflow-y-auto scrollbar-thin"
+            data-testid="resource-trends-scroll"
+          >
+            <div
+              className={`sticky top-0 z-20 bg-white ${TRENDS_COLS} px-4 py-2 text-[11px] uppercase tracking-wide text-ink/40 border-b border-ink/5`}
+            >
+              <span>Chapter</span>
+              <span className="text-right">RTF</span>
+              <span className="text-right hidden sm:block">Wall</span>
+              <span className="text-right">VRAM</span>
+            </div>
             {groupTelemetryByBook(records).map((group, gi) => (
               <div key={`${group.key}:${gi}`} data-testid="resource-book-group">
                 <div
-                  className="sticky top-0 z-10 bg-white px-4 py-1.5 text-xs font-medium text-ink/70 border-b border-ink/5 truncate"
+                  className="sticky top-8 z-10 bg-white px-4 py-1.5 text-xs font-medium text-ink/70 border-b border-ink/5 truncate"
                   data-testid="resource-book-header"
                   title={group.label}
                 >
@@ -466,7 +498,7 @@ function ResourceTrends() {
                   {group.rows.map((r) => (
                     <div
                       key={`${r.bookId ?? ''}:${r.chapterId}:${r.at}`}
-                      className="grid grid-cols-[1fr_auto_auto_auto] gap-x-3 sm:gap-x-6 items-center px-4 py-2.5 text-sm"
+                      className={`${TRENDS_COLS} items-center px-4 py-2.5 text-sm`}
                       data-testid={`resource-row-${r.chapterId}`}
                     >
                       <span className="min-w-0 truncate text-ink">
@@ -558,7 +590,7 @@ function ThroughputRow({ chapter, olderRtf }: { chapter: RecentChapter; olderRtf
   const style = TREND_STYLE[trend];
   return (
     <div
-      className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 sm:gap-x-6 items-center px-4 py-2.5 text-sm"
+      className={`${THROUGHPUT_COLS} items-center px-4 py-2.5 text-sm`}
       data-testid={`throughput-row-${chapter.chapterId}`}
     >
       <span className="min-w-0 truncate text-ink">

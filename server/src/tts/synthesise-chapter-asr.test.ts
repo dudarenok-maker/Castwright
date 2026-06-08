@@ -134,6 +134,47 @@ describe('synthesiseChapter ASR content-QA pass', () => {
     expect(state.calls).toBe(2);
   });
 
+  it('fires onProgress once per sampled group, including ok verdicts', async () => {
+    const provider = makeProvider();
+    const { fn } = makeTranscriber([TEXT]); // always clean → all ok, no re-record
+    const calls: Array<{ verified: number; total: number }> = [];
+    const res = await synthesiseChapter({
+      sentences: [sentence(1), sentence(2), sentence(3)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      asr: { maxRerecords: 0, transcribeFn: fn, onProgress: (e) => calls.push(e) },
+    });
+    expect(calls).toHaveLength(3);
+    expect(calls[0]).toEqual({ verified: 0, total: 3 });
+    expect(calls[2]).toEqual({ verified: 2, total: 3 });
+    // All clean → no re-records → one pool synth per sentence.
+    expect(provider.calls).toHaveLength(3);
+    // Sanity: every body segment verified ok.
+    for (const seg of res.segments.filter((s) => s.kind !== 'title')) {
+      expect(seg.asr?.verdict).toBe('ok');
+    }
+  });
+
+  it('strides onProgress with sampleEvery', async () => {
+    const provider = makeProvider();
+    const { fn } = makeTranscriber([TEXT]);
+    const calls: Array<{ verified: number; total: number }> = [];
+    await synthesiseChapter({
+      sentences: [sentence(1), sentence(2), sentence(3), sentence(4)],
+      cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'gemini',
+      asr: { maxRerecords: 0, sampleEvery: 2, transcribeFn: fn, onProgress: (e) => calls.push(e) },
+    });
+    // 4 groups, stride 2 → groups 0 and 2 sampled → 2 onProgress calls.
+    expect(calls).toHaveLength(2);
+    expect(calls.map((c) => c.total)).toEqual([2, 2]);
+    expect(calls.map((c) => c.verified)).toEqual([0, 1]);
+  });
+
   it('is a no-op when asr is absent (byte-identical to today)', async () => {
     const provider = makeProvider();
     const res = await synthesiseChapter({
