@@ -30,6 +30,10 @@ describe('stageToHash', () => {
     expect(stageToHash({ kind: 'model-manager' })).toBe('#/models');
   });
 
+  it('about → #/about', () => {
+    expect(stageToHash({ kind: 'about' })).toBe('#/about');
+  });
+
   it('analysing with bookId → #/books/:id/analysing', () => {
     expect(stageToHash({ kind: 'analysing', bookId: 'ns', manuscriptId: null })).toBe(
       '#/books/ns/analysing',
