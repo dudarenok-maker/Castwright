@@ -183,6 +183,51 @@ describeIf('applyId3v24Tags', () => {
     expect(true).toBe(true);
   });
 
+  it('writes the comment tag when tags.comment is set', async () => {
+    const destPath = join(tmpDir, 'with-comment.mp3');
+    await applyId3v24Tags(srcPath, destPath, {
+      title: 'Chapter 1',
+      album: 'The Northern Star',
+      artist: 'Jane Narrator',
+      albumArtist: 'Some Author',
+      track: 1,
+      trackTotal: 3,
+      comment: 'Rendered with Castwright · castwright.ai',
+    });
+    const { tags } = await probe(destPath);
+    /* ffprobe surfaces the ID3 COMM frame as 'comment' in format_tags. */
+    expect(tags.comment).toBe('Rendered with Castwright · castwright.ai');
+  });
+
+  it('omits the comment tag when tags.comment is absent', async () => {
+    const destPath = join(tmpDir, 'no-comment.mp3');
+    await applyId3v24Tags(srcPath, destPath, {
+      title: 'Chapter 1',
+      album: 'The Northern Star',
+      artist: 'Jane Narrator',
+      albumArtist: 'Some Author',
+      track: 1,
+      trackTotal: 3,
+    });
+    const { tags } = await probe(destPath);
+    expect(tags.comment).toBeUndefined();
+  });
+
+  it('omits the comment tag when tags.comment is null', async () => {
+    const destPath = join(tmpDir, 'null-comment.mp3');
+    await applyId3v24Tags(srcPath, destPath, {
+      title: 'Chapter 1',
+      album: 'The Northern Star',
+      artist: 'Jane Narrator',
+      albumArtist: 'Some Author',
+      track: 1,
+      trackTotal: 3,
+      comment: null,
+    });
+    const { tags } = await probe(destPath);
+    expect(tags.comment).toBeUndefined();
+  });
+
   /* Plan 36 A3: APIC embedding for MP3.ZIP exports. The cover-art
      pipeline writes <bookDir>/.audiobook/cover.jpg; build-mp3-zip.ts
      probes that file once per export and threads it as the optional
