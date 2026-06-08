@@ -13,16 +13,8 @@
    modal handlers thread through props from listen.tsx. */
 
 import { useState } from 'react';
-import {
-  IconDownload,
-  IconExternal,
-  IconShield,
-} from '../../lib/icons';
-import {
-  SectionLabel,
-  Pill,
-  ComingSoonBadge,
-} from '../primitives';
+import { IconDownload, IconExternal, IconShield } from '../../lib/icons';
+import { SectionLabel, Pill, ComingSoonBadge } from '../primitives';
 import { ExportQueueRow } from '../export-queue-row';
 import { CompanionAppBanner } from './companion-app-banner';
 import { SUPPORTED_APPS } from '../../data/listener-apps';
@@ -243,7 +235,7 @@ function ListenerApps({
           <IconShield className="w-3.5 h-3.5" /> Open-format export · DRM-free
         </span>
       </div>
-<div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         {SUPPORTED_APPS.map((a) => (
           <ListenerAppCard
             key={a.id}

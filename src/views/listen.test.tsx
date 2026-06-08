@@ -317,9 +317,7 @@ describe('ListenView — collapsible Notes card (plan 67)', () => {
     expect(para).not.toBeNull();
     expect(para!.textContent).toBe(notesText);
     expect(para!.className).toContain('whitespace-pre-wrap');
-    expect(screen.getByTestId('listen-notes-toggle').getAttribute('aria-expanded')).toBe(
-      'true',
-    );
+    expect(screen.getByTestId('listen-notes-toggle').getAttribute('aria-expanded')).toBe('true');
   });
 });
 
@@ -465,7 +463,7 @@ describe('ListenView — coming-soon affordances', () => {
     expect(disabled.length).toBe(0);
   });
 
-it('keeps the "Play from the start" button enabled when chapters exist', () => {
+  it('keeps the "Play from the start" button enabled when chapters exist', () => {
     const h = renderView();
     const play = screen.getByRole('button', { name: /play from the start/i });
     expect(play).not.toBeDisabled();
