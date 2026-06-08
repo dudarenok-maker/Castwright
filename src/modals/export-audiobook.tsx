@@ -12,13 +12,14 @@
      field is bound to userSettings.exportSyncFolder.
 
    Phase A ships `mp3-zip` only. The submit button kicks off
-   `createBookExport`; the modal then polls `getBookExport` every 800ms
-   and renders progress via the shared `ExportQueueRow`. On 409
-   `export_incomplete` we surface the missing-chapter slug list with a
-   "Re-open Generate view" CTA. */
+   `createBookExport` and dispatches `exportStarted`; the store-level
+   `exportPollMiddleware` then drives the job to completion. The modal is
+   a pure view of the `exports` slice, rendering progress via the shared
+   `ExportQueueRow`. On 409 `export_incomplete` we surface the
+   missing-chapter slug list with a "Re-open Generate view" CTA. */
 
 import QRCode from 'qrcode';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconClose, IconDownload, IconExternal } from '../lib/icons';
 import { ExportQueueRow } from '../components/export-queue-row';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
@@ -225,30 +226,6 @@ export function ExportAudiobookModal({
       cancelled = true;
     };
   }, [open, tab, lanUrls]);
-
-  /* Poll the active job until terminal. */
-  const pollHandle = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (!activeJobId) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const job = await api.getBookExport(bookId, activeJobId);
-        if (cancelled) return;
-        dispatch(exportsActions.exportUpdated(job));
-        if (job.status === 'in_progress' || job.status === 'queued') {
-          pollHandle.current = setTimeout(tick, 800);
-        }
-      } catch {
-        /* keep modal open; user can dismiss manually */
-      }
-    };
-    pollHandle.current = setTimeout(tick, 400);
-    return () => {
-      cancelled = true;
-      if (pollHandle.current) clearTimeout(pollHandle.current);
-    };
-  }, [activeJobId, bookId, dispatch]);
 
   /* Hook must run on every render — keep it above the early return. */
   const activeJob: BookExportJob | undefined = useAppSelector((s) =>
