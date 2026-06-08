@@ -1,7 +1,7 @@
 # Castwright
 
 > _Any book, performed by a full cast — effortlessly. Even in your own voice._
-> (The internal package / repo name stays `audiobook-generator`.)
+> npm packages: `castwright` / `castwright-server`. Repo: `Castwright`. Release artifact: `castwright-vX.Y.Z.zip`. Note: v1.6.0 cannot self-upgrade across the rename — alpha installs reinstall fresh.
 
 Turn a manuscript into a finished, **full-cast** audiobook on your own machine — every
 character in their own voice, consistent across a whole series.
@@ -30,8 +30,8 @@ voice cloning.
 **Install**
 
 ```powershell
-git clone https://github.com/dudarenok-maker/Audiobook-Generator.git
-cd Audiobook-Generator
+git clone https://github.com/dudarenok-maker/Castwright.git
+cd Castwright
 npm install
 cd server && npm install && cd ..
 ```
@@ -301,10 +301,10 @@ for the full workflow.
 ## Releases
 
 Packaged downloads of tagged releases are published to
-[GitHub Releases](https://github.com/dudarenok-maker/Audiobook-Generator/releases).
+[GitHub Releases](https://github.com/dudarenok-maker/Castwright/releases).
 Each release attaches (all with `.sha256` checksums):
 
-- `audiobook-generator-vX.Y.Z.zip` — the platform-independent **server** bundle
+- `castwright-vX.Y.Z.zip` — the platform-independent **server** bundle
   (Windows / macOS / Linux); follow [`INSTALL.md`](INSTALL.md).
 - `castwright-vX.Y.Z.apk` — the installable **Android companion** app
   (plan 188), versioned in lockstep via `scripts/bump-version.mjs` (which now
