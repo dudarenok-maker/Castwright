@@ -1045,6 +1045,62 @@ bookStateRouter.post(
   },
 );
 
+/* POST /api/books/:bookId/chapters/:chapterId/held — toggle the "Not queued"
+   hold on an un-rendered chapter (see scan.ts chapter `held`).
+
+   Mirrors the exclude handler above, minus the audio cleanup: held is a
+   queue-membership choice, not a content removal, so a held chapter keeps any
+   audio it has (typically none — the hold is set when the user deletes its
+   queue entry before it renders). Unlike `excluded` it is NOT propagated to
+   the in-memory ManuscriptRecord chapterHints: analysis still processes a held
+   chapter (it's part of the book), so nothing on the analysis path reads it.
+
+   Idempotent — same value twice is a no-op (still 200 with the chapter entry). */
+bookStateRouter.post(
+  '/:bookId/chapters/:chapterId/held',
+  async (req: Request, res: Response) => {
+    try {
+      const chapterId = Number(req.params.chapterId);
+      if (!Number.isInteger(chapterId)) {
+        return res.status(400).json({ error: 'chapterId must be an integer.' });
+      }
+      const rawHeld = (req.body as { held?: unknown })?.held;
+      if (typeof rawHeld !== 'boolean') {
+        return res.status(400).json({ error: '`held` is required and must be a boolean.' });
+      }
+      const held: boolean = rawHeld;
+
+      const located = await findBookByBookId(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      const { bookDir, state } = located;
+
+      const idx = state.chapters.findIndex((c) => c.id === chapterId);
+      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+
+      const current = state.chapters[idx];
+      const updated = { ...current, held: held ? true : undefined };
+      const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+
+      const nextState: BookStateJson = {
+        ...state,
+        chapters: nextChapters,
+        updatedAt: new Date().toISOString(),
+      };
+      await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+
+      res.json({
+        id: updated.id,
+        title: updated.title,
+        slug: updated.slug,
+        held: !!updated.held,
+      });
+    } catch (e) {
+      console.error('[book-state] held toggle failed', e);
+      res.status(500).json({ error: (e as Error).message || 'Failed to toggle held.' });
+    }
+  },
+);
+
 /* DELETE /api/books/:bookId — removes the book directory (Author/Series/Title/)
    and its analysis cache. Destructive; the frontend confirms with the user
    before calling. Idempotent: 204 even if the book isn't found, so a

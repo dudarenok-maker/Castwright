@@ -4343,6 +4343,11 @@ components:
             type: boolean,
             description: 'When true, this chapter is skipped by both analysis (Phase 0a + Phase 1) and audio generation. Typically front- or back-matter like Dedication, Copyright, About the Author.',
           }
+        held:
+          {
+            type: boolean,
+            description: 'When true, the user explicitly removed this un-rendered chapter from the generation queue ("Not queued"). Unlike `excluded`, a held chapter stays part of the book and keeps any audio — it is simply not on the work queue and the auto-work resume must not re-enqueue it. Cleared when the user re-queues the chapter. Persisted so the choice survives reload.',
+          }
         audioModelKey:
           type: string
           enum: [kokoro-v1, qwen3-tts-0.6b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
