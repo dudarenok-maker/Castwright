@@ -92,6 +92,17 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByTestId('library-skeleton')).not.toBeInTheDocument();
   });
 
+  it('empty state shows "Any book, fully cast." tagline (Wave 2 brand)', () => {
+    renderView({ loaded: true, authors: [] });
+    expect(screen.getByText('Any book, fully cast.')).toBeInTheDocument();
+  });
+
+  it('empty state workspace path reads castwright-workspace (not audiobook-workspace)', () => {
+    renderView({ loaded: true, authors: [] });
+    expect(screen.getByText(/castwright-workspace/)).toBeInTheDocument();
+    expect(screen.queryByText(/audiobook-workspace/)).not.toBeInTheDocument();
+  });
+
   it('renders the populated grid once loaded with authors', () => {
     renderView({ loaded: true, authors: [oneAuthor] });
     /* Author name only appears as the h2 above the series row — unique
