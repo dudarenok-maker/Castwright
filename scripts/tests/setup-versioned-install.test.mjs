@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { computeSetupPlan } from '../setup-versioned-install.mjs';
 
 test('lays out releases/<v>, the pointer, the stable launcher, and shared-data moves', () => {
-  const source = join('/tmp', 'extracted', 'audiobook-generator-v1.6.0');
+  const source = join('/tmp', 'extracted', 'castwright-v1.6.0');
   const install = join('/opt', 'audiobook');
   const from = join('/opt', 'old-checkout');
   const plan = computeSetupPlan({ version: '1.6.0', source, install, from });

@@ -102,7 +102,7 @@ describe('POST /api/upgrade/stage', () => {
   });
 
   it('stages a valid candidate and records it', async () => {
-    h.validate = async () => ({ ok: true, code: 'ok', candidateVersion: '1.6.0', reqHash: 'new-hash', topDir: 'audiobook-generator-v1.6.0', isDowngrade: false });
+    h.validate = async () => ({ ok: true, code: 'ok', candidateVersion: '1.6.0', reqHash: 'new-hash', topDir: 'castwright-v1.6.0', isDowngrade: false });
     const res = await request(app).post('/api/upgrade/stage').attach('zip', Buffer.from('PK'), 'x.zip');
     expect(res.status).toBe(200);
     expect(res.body.candidateVersion).toBe('1.6.0');
@@ -137,7 +137,7 @@ describe('POST /api/upgrade/apply', () => {
   it('accepts a staged candidate with 202 and dispatches applyUpgrade', async () => {
     writeFileSync(
       join(stagingDir, 'state.json'),
-      JSON.stringify({ phase: 'staged', candidateVersion: '1.6.0', topDir: 'audiobook-generator-v1.6.0', reqHash: 'h' }),
+      JSON.stringify({ phase: 'staged', candidateVersion: '1.6.0', topDir: 'castwright-v1.6.0', reqHash: 'h' }),
     );
     const res = await request(app).post('/api/upgrade/apply');
     expect(res.status).toBe(202);
