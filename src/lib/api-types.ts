@@ -1967,12 +1967,12 @@ export interface components {
             eagerLoadQwen?: boolean;
             /**
              * @description Number of chapters the generation queue synthesises concurrently
-             *     (queue-worker concurrency). Default 2. Pulled from the flat queue
+             *     (queue-worker concurrency). Default 1. Pulled from the flat queue
              *     across books; same-book chapters fan out within one stream via the
              *     server's bounded pool. This is queue/synthesis concurrency only —
              *     the process-global GPU semaphore (`GPU_CONCURRENCY`) remains the
              *     VRAM guard, so raising this never risks an out-of-memory. Resolved
-             *     as `GEN_WORKERS` env > this setting > 2.
+             *     as `GEN_WORKERS` env > this setting > 1.
              */
             generationWorkers?: number;
             /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
