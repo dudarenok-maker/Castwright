@@ -307,6 +307,99 @@ describe('spawnSidecar', () => {
     }
   });
 
+  it('in prod (NODE_ENV=production), REPLACES a healthy pre-existing sidecar instead of adopting it', async () => {
+    /* prod-fresh policy: at server boot there is no in-flight synthesis, so a
+       clean owned process is strictly safer than inheriting an orphan of unknown
+       leak/build state. The graceful soft/hard recycle path then governs it. */
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      /* Healthy sidecar: proto fresh, memory fine, not recycling. */
+      probeFn.mockResolvedValueOnce(true).mockResolvedValue(false);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1,
+        committedMb: 9000,
+        recyclePending: false,
+      }));
+      const findPidFn = vi.fn(async () => 5555);
+      const onAdoptExisting = vi.fn();
+      const calls: Array<{ cmd: string; args: string[] }> = [];
+      const trackingSpawn = vi.fn((cmd: string, args: string[]) => {
+        calls.push({ cmd, args });
+        const child = makeFakeChild();
+        if (cmd === 'taskkill') setImmediate(() => child.emit('exit', 0, null));
+        return child;
+      });
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+        onAdoptExisting,
+      });
+
+      expect(onAdoptExisting).not.toHaveBeenCalled(); // did NOT adopt
+      expect(calls[0]).toEqual({ cmd: 'taskkill', args: ['/PID', '5555', '/T', '/F'] });
+      expect(calls[1].cmd).toBe('powershell.exe'); // fresh spawn happened
+      expect(handle).not.toBeNull();
+    } finally {
+      process.env.NODE_ENV = prev;
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it('in dev, still ADOPTS a healthy same-build sidecar (HMR fast-path preserved)', async () => {
+    /* dev adopt path must be unchanged — tsx watch HMR must not reload the
+       model on every code save. */
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    try {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1,
+        committedMb: 9000,
+        recyclePending: false,
+      }));
+      const onAdoptExisting = vi.fn();
+
+      const res = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        port: 9000,
+        host: '127.0.0.1',
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        log,
+        warn,
+        onAdoptExisting,
+      });
+
+      expect(onAdoptExisting).toHaveBeenCalledTimes(1);
+      expect(spawnFn).not.toHaveBeenCalled();
+      expect(res).toBeNull(); // adopt path returns null (no owned child)
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
   it('replaces an adopt target that reports recycle_pending', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });

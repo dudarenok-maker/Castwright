@@ -109,6 +109,18 @@ export function adoptCommittedCeilingMb(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 20_000;
 }
 
+/* Prod never adopts a pre-existing sidecar: at boot there is no in-flight synth,
+   so a clean owned process (governed by the graceful soft/hard recycle path) is
+   strictly safer than bolting onto an orphan of unknown leak/build. Dev keeps
+   adopt-if-healthy so `tsx watch` HMR doesn't reload the model every save.
+   Override with SIDECAR_NEVER_ADOPT=1/0. */
+export function neverAdoptSidecar(): boolean {
+  const raw = process.env.SIDECAR_NEVER_ADOPT;
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  return process.env.NODE_ENV === 'production';
+}
+
 export interface SidecarHealthProbe {
   /** TCP-reachable AND returned an HTTP 2xx. */
   reachable: boolean;
@@ -438,7 +450,8 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
         : adoptCeiling > 0 && health.committedMb !== null && health.committedMb >= adoptCeiling
           ? `committed ${Math.round(health.committedMb)}MB ≥ the ${adoptCeiling}MB adopt ceiling (leak-saturated)`
           : null;
-    const fresh = freshProtocol && unfitReason === null;
+    const policyReplace = neverAdoptSidecar() && freshProtocol && unfitReason === null;
+    const fresh = freshProtocol && unfitReason === null && !policyReplace;
     if (fresh) {
       log(
         `[sidecar] already listening on :${port} (protocol v${health.protocolVersion}), skipping spawn (current sidecar honoured)`,
@@ -455,10 +468,12 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
       return null;
     }
     /* It IS our sidecar, but unfit to adopt — stale protocol OR leak-saturated /
-       recycle-pending. Replace it with a fresh process. */
-    const reason = !freshProtocol
-      ? `protocol ${health.protocolVersion === null ? 'missing' : `v${health.protocolVersion}`} < v${EXPECTED_PROTOCOL_VERSION}`
-      : (unfitReason ?? 'unfit');
+       recycle-pending OR prod policy. Replace it with a fresh process. */
+    const reason = policyReplace
+      ? 'prod policy: spawning a fresh owned sidecar instead of adopting a pre-existing one'
+      : !freshProtocol
+        ? `protocol ${health.protocolVersion === null ? 'missing' : `v${health.protocolVersion}`} < v${EXPECTED_PROTOCOL_VERSION}`
+        : (unfitReason ?? 'unfit');
     warn(
       `[sidecar] UNFIT sidecar on :${port} (${reason}) — replacing it with a fresh process to avoid inheriting a stale build or a leak-saturated/recycling one.`,
     );
