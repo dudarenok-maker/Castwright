@@ -1788,6 +1788,28 @@ paths:
         '404':
           description: Job id unknown or staging file missing
 
+  /api/companion/apk:
+    get:
+      summary: Download the packaged Castwright Companion Android APK (interim)
+      operationId: downloadCompanionApk
+      description: |
+        Interim "third distribution method" for the companion app, alongside the
+        (not-yet-live) Play Store / App Store buttons. Streams the packaged APK
+        as an attachment (`application/vnd.android.package-archive`,
+        `Content-Disposition: attachment`) when one has been dropped at the
+        server's resolved location (the release zip bundles it at
+        `<release>/companion/castwright-companion.apk`; override with
+        `COMPANION_APK_PATH`). The Listen-tab "Download .apk" button HEAD-probes
+        this route and renders only when it returns 200.
+      responses:
+        '200':
+          description: APK bytes
+          content:
+            application/vnd.android.package-archive:
+              schema: { type: string, format: binary }
+        '404':
+          description: No APK present at the resolved location
+
   /api/books/{bookId}/export/portable:
     get:
       summary: Stream the portable book bundle (plan 75)

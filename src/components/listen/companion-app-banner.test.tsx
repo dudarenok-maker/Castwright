@@ -1,41 +1,87 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 
+/* The banner probes GET /api/companion/apk (HEAD) on mount via
+   api.checkCompanionApk. Mock it so each test drives availability. */
+vi.mock('../../lib/api', () => ({
+  api: { checkCompanionApk: vi.fn(async () => ({ available: false, sizeBytes: null })) },
+}));
+
 import { CompanionAppBanner } from './companion-app-banner';
+import { api } from '../../lib/api';
+
+const mockedCheck = vi.mocked(api.checkCompanionApk);
+
+beforeEach(() => {
+  mockedCheck.mockReset();
+  mockedCheck.mockResolvedValue({ available: false, sizeBytes: null });
+});
 
 describe('CompanionAppBanner', () => {
-  it('renders the Castwright Companion heading', () => {
+  it('renders the Castwright Companion heading', async () => {
     render(<CompanionAppBanner />);
     expect(
-      screen.getByRole('heading', { name: /castwright companion/i }),
+      await screen.findByRole('heading', { name: /castwright companion/i }),
     ).toBeInTheDocument();
   });
 
-  it('marks the companion app as coming soon', () => {
+  it('marks the companion app as coming soon', async () => {
     render(<CompanionAppBanner />);
-    const banner = screen.getByTestId('companion-app-banner');
+    const banner = await screen.findByTestId('companion-app-banner');
     expect(within(banner).getByTestId('coming-soon-badge')).toBeInTheDocument();
   });
 
-  it('shows Google Play and App Store install buttons', () => {
+  it('shows Google Play and App Store install buttons', async () => {
     render(<CompanionAppBanner />);
-    expect(screen.getByTestId('companion-store-google-play')).toBeInTheDocument();
+    expect(await screen.findByTestId('companion-store-google-play')).toBeInTheDocument();
     expect(screen.getByTestId('companion-store-app-store')).toBeInTheDocument();
   });
 
-  it('keeps both store buttons non-functional while mocked', () => {
+  it('keeps both store buttons non-functional', async () => {
     render(<CompanionAppBanner />);
-    expect(screen.getByTestId('companion-store-google-play')).toBeDisabled();
+    expect(await screen.findByTestId('companion-store-google-play')).toBeDisabled();
     expect(screen.getByTestId('companion-store-app-store')).toBeDisabled();
   });
 
-  it('gives each store button an explicit accessible label', () => {
+  it('gives each store button an explicit accessible label', async () => {
     render(<CompanionAppBanner />);
     expect(
-      screen.getByLabelText(/castwright companion on google play/i),
+      await screen.findByLabelText(/castwright companion on google play/i),
     ).toBeInTheDocument();
     expect(
       screen.getByLabelText(/castwright companion on the app store/i),
     ).toBeInTheDocument();
+  });
+
+  it('hides the Download .apk button when no APK is available', async () => {
+    render(<CompanionAppBanner />);
+    await screen.findByTestId('companion-app-banner');
+    expect(screen.queryByTestId('companion-store-apk')).toBeNull();
+  });
+
+  it('shows a Download .apk download link once an APK is available', async () => {
+    mockedCheck.mockResolvedValue({ available: true, sizeBytes: 14_680_064 });
+    render(<CompanionAppBanner />);
+    const apk = await screen.findByTestId('companion-store-apk');
+    expect(apk).toHaveAttribute('href', '/api/companion/apk');
+    expect(apk).toHaveAttribute('download');
+    expect(apk).toHaveTextContent(/download \.apk/i);
+    // It's a real link, not a disabled control.
+    expect(apk.tagName).toBe('A');
+  });
+
+  it('surfaces the APK size hint when known', async () => {
+    mockedCheck.mockResolvedValue({ available: true, sizeBytes: 14_680_064 });
+    render(<CompanionAppBanner />);
+    const apk = await screen.findByTestId('companion-store-apk');
+    expect(apk).toHaveTextContent(/14 MB/);
+  });
+
+  it('leaves the store buttons disabled even when the APK is available', async () => {
+    mockedCheck.mockResolvedValue({ available: true, sizeBytes: 1024 });
+    render(<CompanionAppBanner />);
+    await screen.findByTestId('companion-store-apk');
+    expect(screen.getByTestId('companion-store-google-play')).toBeDisabled();
+    expect(screen.getByTestId('companion-store-app-store')).toBeDisabled();
   });
 });
