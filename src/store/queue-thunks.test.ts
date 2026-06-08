@@ -9,6 +9,8 @@ import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { notificationsSlice } from './notifications-slice';
 import { chaptersSlice } from './chapters-slice';
+import { api } from '../lib/api';
+import type { Chapter } from '../lib/types';
 import {
   cancelQueueEntry,
   completeQueueEntry,
@@ -241,6 +243,95 @@ describe('cancelQueueEntry', () => {
     const store = makeStore();
     await store.dispatch(cancelQueueEntry('stuck', { force: true }));
     expect(fetchMock).toHaveBeenCalledWith('/api/queue/stuck?force=true', { method: 'DELETE' });
+  });
+});
+
+/* Bug 1 — deleting a chapter-scope entry for a genuinely-queued, un-rendered
+   chapter records the user's intent by flipping that chapter to "Not queued"
+   (held), so the row stops reading "Queued" and auto-work stops re-adding it.
+   Guards: this-scope only, loaded book only, only when the chapter is `queued`
+   (a `done` regenerate ticket or an `in_progress` row is left alone). */
+describe('cancelQueueEntry — "Not queued" (held) wiring (Bug 1)', () => {
+  function makeHeldStore(chapter: Partial<Chapter> & { id: number }, entry: QueueEntry) {
+    const store = configureStore({
+      reducer: {
+        queue: queueSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        chapters: chaptersSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    store.dispatch(
+      chaptersSlice.actions.setChapters([
+        {
+          title: `Chapter ${chapter.id}`,
+          duration: '00:00',
+          state: 'queued',
+          progress: 0,
+          characters: {},
+          ...chapter,
+        } as Chapter,
+      ]),
+    );
+    store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry], paused: false }));
+    return store as unknown as { getState: typeof store.getState; dispatch: TestDispatch };
+  }
+
+  it('flips a queued chapter to held on a this-scope cancel + persists via api', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const persist = vi.spyOn(api, 'setChapterHeld').mockResolvedValue({
+      id: 1,
+      title: 'Chapter 1',
+      slug: '01',
+      held: true,
+    });
+    const store = makeHeldStore(
+      { id: 1, state: 'queued' },
+      sampleEntry({ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }),
+    );
+    await store.dispatch(cancelQueueEntry('e1'));
+    expect(store.getState().chapters.chapters[0].held).toBe(true);
+    expect(persist).toHaveBeenCalledWith('book-A', 1, true);
+    persist.mockRestore();
+  });
+
+  it('does NOT hold a done chapter (a regenerate ticket — its audio stays)', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const persist = vi.spyOn(api, 'setChapterHeld');
+    const store = makeHeldStore(
+      { id: 1, state: 'done', progress: 1 },
+      sampleEntry({ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }),
+    );
+    await store.dispatch(cancelQueueEntry('e1'));
+    expect(store.getState().chapters.chapters[0].held).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+    persist.mockRestore();
+  });
+
+  it('does NOT hold on a character-scope cancel (per-character splice, not a whole chapter)', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const persist = vi.spyOn(api, 'setChapterHeld');
+    const store = makeHeldStore(
+      { id: 1, state: 'queued' },
+      sampleEntry({ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'character' }),
+    );
+    await store.dispatch(cancelQueueEntry('e1'));
+    expect(store.getState().chapters.chapters[0].held).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+    persist.mockRestore();
+  });
+
+  it('does NOT hold a cross-book entry (chapter state not on screen)', async () => {
+    fetchMock.mockResolvedValue(mockJsonResponse({ entries: [], paused: false }));
+    const persist = vi.spyOn(api, 'setChapterHeld');
+    const store = makeHeldStore(
+      { id: 1, state: 'queued' },
+      sampleEntry({ id: 'e1', bookId: 'book-OTHER', chapterId: 1, scope: 'this' }),
+    );
+    await store.dispatch(cancelQueueEntry('e1'));
+    expect(store.getState().chapters.chapters[0].held).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+    persist.mockRestore();
   });
 });
 
