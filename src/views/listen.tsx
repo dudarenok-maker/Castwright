@@ -17,7 +17,11 @@ import { ListenHeader, ListenMetadataEditor } from '../components/listen/listen-
 import { ListenPlayerRegion } from '../components/listen/listen-player-region';
 import { ListenDownloadSection } from '../components/listen/listen-download-section';
 import type { Chapter, Character, Voice, ListenerApp, ExportQueueItem } from '../lib/types';
-import type { EditableBookMeta, EditableBookMetaField } from '../store/book-meta-slice';
+import {
+  DEFAULT_NARRATOR_CREDIT,
+  type EditableBookMeta,
+  type EditableBookMetaField,
+} from '../store/book-meta-slice';
 
 interface Props {
   /** Required so the Export modal can target the right book on POST.
@@ -141,13 +145,10 @@ export function ListenView({
   const listenable = chapters.filter((c) => !c.excluded);
   const completed = listenable.filter((c) => c.state === 'done').length;
   const totalSec = listenable.reduce((s, c) => s + parseDuration(c.duration), 0);
-  /* Narrator credit precedence: explicit override from bookMeta (or '' if the
-     user cleared it) → the cast's narrator character → null. The header
-     suppresses the "narrated by …" phrase when none of those resolve. */
+  /* Narrator credit precedence: explicit override from bookMeta → DEFAULT_NARRATOR_CREDIT.
+     Explicit user credits always win; when none is set the brand default is shown. */
   const narratorName =
-    (bookMeta?.narratorCredit && bookMeta.narratorCredit.trim()) ||
-    characters.find((c) => c.id === 'narrator')?.name ||
-    null;
+    (bookMeta?.narratorCredit && bookMeta.narratorCredit.trim()) || DEFAULT_NARRATOR_CREDIT;
   /* `voiceCount` counts only the speaking cast (not the narrator) — matches the
      library card's "cast of N voices" copy and degrades gracefully when only
      the narrator is present. */

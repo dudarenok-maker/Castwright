@@ -22,6 +22,7 @@ import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
 import { ExportIncompleteError, pad2, sanitiseForZip } from './build-mp3-zip.js';
+import { artistForExport } from './narrator-credit.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 export interface BuildMp3FolderOptions {
@@ -68,7 +69,7 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
 
   const total = resolved.length;
   const albumArtist = state.author;
-  const artist = (state.narratorCredit && state.narratorCredit.trim()) || state.author;
+  const artist = artistForExport(state);
   const album = state.title;
 
   /* Plan 36 A3: thread the cached cover into every chapter's APIC
@@ -101,6 +102,7 @@ export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<Build
       trackTotal: total,
       genre: state.genre ?? null,
       date: state.publicationDate ?? null,
+      comment: 'Rendered with Castwright · castwright.ai',
     };
     await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
     const taggedStat = await stat(taggedPath);

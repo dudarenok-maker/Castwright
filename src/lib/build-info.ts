@@ -32,9 +32,10 @@ export const buildInfo: BuildInfo = {
  * Prod (minimal): `v1.4.0 (a1b2c3d)` — version + short SHA only.
  */
 export function formatBuildStamp(info: BuildInfo, opts: { dev: boolean }): string {
-  if (!opts.dev) return `v${info.version} (${info.sha})`;
+  const prefix = 'Made with Castwright';
+  if (!opts.dev) return `${prefix} · v${info.version} (${info.sha})`;
   const sha = info.dirty ? `${info.sha}*` : info.sha;
-  const parts = [`v${info.version}`, sha, info.branch];
+  const parts = [prefix, `v${info.version}`, sha, info.branch];
   if (info.buildTime) parts.push(info.buildTime);
   return parts.join(' · ');
 }
