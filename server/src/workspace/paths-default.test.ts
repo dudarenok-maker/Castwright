@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { resolve } from 'node:path';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from './paths.js';
 
 describe('default workspace dir', () => {
