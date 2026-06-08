@@ -72,6 +72,9 @@ const ModelManagerView = lazy(() =>
 const AboutView = lazy(() =>
   import('../views/about').then((m) => ({ default: m.AboutView })),
 );
+const AdvancedView = lazy(() =>
+  import('../views/advanced').then((m) => ({ default: m.AdvancedView })),
+);
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
@@ -335,6 +338,12 @@ function ModelManagerRoute() {
 function AboutRoute() {
   useHydrateStage({ kind: 'about' }, []);
   return <AboutView />;
+}
+
+/* Advanced configuration — reached from Admin and Account views. */
+function AdvancedRoute() {
+  useHydrateStage({ kind: 'advanced' }, []);
+  return <AdvancedView />;
 }
 
 export function ChangelogRoute() {
@@ -930,6 +939,7 @@ export const router = createHashRouter([
       { path: 'worktrees', element: <AdminRoute /> },
       { path: 'models', element: <ModelManagerRoute /> },
       { path: 'about', element: <AboutRoute /> },
+      { path: 'advanced', element: <AdvancedRoute /> },
       { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },
       { path: 'books/:bookId/confirm', element: <ConfirmRoute /> },
       { path: 'books/:bookId/:view', element: <ReadyRoute /> },

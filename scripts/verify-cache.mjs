@@ -46,6 +46,17 @@ export const STEPS = [
     },
   },
   {
+    /* Drift guard: fails if server/.env.example is out of sync with the
+       config registry. Cheap — just renders the block and diffs. Placed
+       before tests so a divergent registry is caught early. */
+    name: 'config:check',
+    inputs: {
+      globs: ['server/src/config/*.ts'],
+      extraFiles: ['server/.env.example', 'server/scripts/sync-env-example.ts'],
+      includeLockfiles: [],
+    },
+  },
+  {
     name: 'test:hooks',
     inputs: {
       globs: ['scripts/tests/*.test.mjs'],

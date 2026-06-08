@@ -424,3 +424,27 @@ describe('AccountView â€” Advanced (power-user) card (fe-2)', () => {
   });
 });
 
+describe('AccountView — settings-accordion shell', () => {
+  it('renders server-persisted sections as collapsible accordion sections and Save still dispatches', async () => {
+    (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(SERVER_FIXTURE);
+    const user = userEvent.setup();
+    renderView();
+
+    /* Each server-persisted section header is an aria-expanded button (SettingsSection).
+       Spot-check a few to confirm accordion structure is in place. */
+    expect(screen.getByRole('button', { name: /^profile$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^cast analysis$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^workspace$/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^device-local/i })).toBeInTheDocument();
+
+    /* All sections default OPEN so controls are immediately accessible. */
+    expect(screen.getByLabelText('Display name')).toBeInTheDocument();
+
+    /* Save still dispatches through the existing thunk path. */
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(api.putUserSettings).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+

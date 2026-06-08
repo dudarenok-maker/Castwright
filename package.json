@@ -53,6 +53,8 @@
     "repair:missing-speakers": "npx tsx scripts/repair-missing-speakers.mts",
     "diff:analysis-ab": "npx tsx scripts/diff-analysis-ab.mjs",
     "reconcile-cast": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/reconcile-broken-cast.ps1",
+    "config:sync": "npx tsx server/scripts/sync-env-example.ts",
+    "config:check": "npx tsx server/scripts/sync-env-example.ts --check",
     "prepare": "husky"
   },
   "dependencies": {

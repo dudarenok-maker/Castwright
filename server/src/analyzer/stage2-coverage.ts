@@ -63,20 +63,15 @@ export interface Stage2CoverageVerdict {
   issues: string[];
 }
 
-function envNum(key: string, fallback: number): number {
-  const raw = process.env[key];
-  if (raw == null || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
+import { configValue } from '../config/resolver.js';
 
 function resolveThresholds(override?: Stage2CoverageThresholds): Stage2CoverageThresholds {
   if (override) return override;
   return {
-    minCoverageRatio: envNum('STAGE2_MIN_COVERAGE', DEFAULT_STAGE2_COVERAGE_THRESHOLDS.minCoverageRatio),
-    maxCoverageRatio: envNum('STAGE2_MAX_COVERAGE', DEFAULT_STAGE2_COVERAGE_THRESHOLDS.maxCoverageRatio),
-    endingTailWords: envNum('STAGE2_ENDING_TAIL_WORDS', DEFAULT_STAGE2_COVERAGE_THRESHOLDS.endingTailWords),
-    minDupRun: envNum('STAGE2_MIN_DUP_RUN', DEFAULT_STAGE2_COVERAGE_THRESHOLDS.minDupRun),
+    minCoverageRatio: configValue<number>('analyzer.stage2.minCoverage'),
+    maxCoverageRatio: configValue<number>('analyzer.stage2.maxCoverage'),
+    endingTailWords: configValue<number>('analyzer.stage2.endingTailWords'),
+    minDupRun: configValue<number>('analyzer.stage2.minDupRun'),
   };
 }
 

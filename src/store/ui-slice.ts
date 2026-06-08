@@ -164,6 +164,10 @@ export const uiSlice = createSlice({
     openAbout: (s) => {
       s.stage = { kind: 'about' };
     },
+    /* Advanced configuration — tune model, generation, and QA knobs. */
+    openAdvanced: (s) => {
+      s.stage = { kind: 'advanced' };
+    },
     startNewBook: (s) => {
       s.stage = { kind: 'upload' };
     },

@@ -27,6 +27,7 @@ vi.mock('../diagnostics/disk.js', () => ({
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedAnalysisEngine: () => getResolvedAnalysisEngine(),
   getResolvedGeminiApiKey: () => getResolvedGeminiApiKey(),
+  readConfigOverrides: () => ({}),
 }));
 vi.mock('../workspace/paths.js', () => ({ WORKSPACE_ROOT: '/workspace' }));
 

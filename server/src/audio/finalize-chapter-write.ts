@@ -26,7 +26,8 @@ import {
   writeChapterPeaksFile,
   type EncodePcmAudioFormat,
 } from '../tts/mp3.js';
-import { DEFAULT_LOUDNORM_OPTIONS, type LoudnormSidecarJson } from '../tts/loudnorm.js';
+import { resolveLoudnormOptions, type LoudnormSidecarJson } from '../tts/loudnorm.js';
+import { configValue } from '../config/resolver.js';
 import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
 import type { ChapterSegment, CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine, TtsModelKey } from '../tts/index.js';
@@ -107,7 +108,7 @@ export async function finalizeChapterAudioWrite(
   /* EBU R128 loudness normalisation (plan 71). Default ON; opt out with
      AUDIO_LOUDNORM_ENABLED=false. Two-pass measure-then-apply runs inside
      encodePcmToAudio; the callback persists the sidecar. */
-  const loudnorm = process.env.AUDIO_LOUDNORM_ENABLED === 'false' ? undefined : DEFAULT_LOUDNORM_OPTIONS;
+  const loudnorm = configValue<boolean>('audio.loudnorm.enabled') ? resolveLoudnormOptions() : undefined;
   let loudnormStats: LoudnormSidecarJson | null = null;
   const audioBuffer = await encodePcmToAudio(pcm, sampleRate, {
     format: audioFormat,
