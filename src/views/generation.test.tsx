@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/16-generation-stream.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { MemoryRouter, Outlet, Routes, Route } from 'react-router-dom';
@@ -1859,6 +1859,30 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
 
   it('is hidden when every chapter is done (no queued work)', () => {
     renderResume([chapter1, { ...chapter2, state: 'done', progress: 1 }]);
+    expect(screen.queryByTestId('generation-view-resume')).toBeNull();
+  });
+
+  /* Bug 1 — a "Not queued" (held) chapter is queued under the hood but the user
+     removed it from the queue. It must read "Not queued" (not "Queued"), and it
+     must NOT count as queued work — so Resume stays hidden rather than offering
+     to silently re-enqueue the chapter the user just deleted. */
+  const heldChapter2: Chapter = { ...chapter2, held: true };
+
+  it('renders a held chapter as "Not queued" rather than a "Queued" badge', () => {
+    renderResume([chapter1, heldChapter2]);
+    /* The held row shows the neutral "Not queued" pill. (A "Queued" summary
+       stat still renders at the top — its value is now 0 because held chapters
+       are excluded from the queued count — so we assert against the row's badge
+       Pill specifically, not the stat label.) */
+    const notQueued = screen.getByText('Not queued');
+    expect(notQueued).toBeInTheDocument();
+    const heldRow = notQueued.closest('.rounded-3xl');
+    expect(heldRow).not.toBeNull();
+    expect(within(heldRow as HTMLElement).queryByText('Queued')).toBeNull();
+  });
+
+  it('hides Resume generation when the only remaining work is held (not re-added)', () => {
+    renderResume([chapter1, heldChapter2]);
     expect(screen.queryByTestId('generation-view-resume')).toBeNull();
   });
 });
