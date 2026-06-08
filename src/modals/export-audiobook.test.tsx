@@ -26,7 +26,6 @@ vi.mock('../lib/api', async () => {
     ...actual,
     api: {
       createBookExport: vi.fn(),
-      getBookExport: vi.fn(),
       cancelBookExport: vi.fn(async () => undefined),
       getExportLanUrls: vi.fn(async () => ({ urls: ['http://192.168.1.42:8080'], port: 8080 })),
       getUserSettings: vi.fn(async () => ({}) as unknown),
@@ -44,7 +43,6 @@ import { api, ExportIncompleteError } from '../lib/api';
 
 const mockedApi = api as unknown as {
   createBookExport: ReturnType<typeof vi.fn>;
-  getBookExport: ReturnType<typeof vi.fn>;
   cancelBookExport: ReturnType<typeof vi.fn>;
   getExportLanUrls: ReturnType<typeof vi.fn>;
   putUserSettings: ReturnType<typeof vi.fn>;
@@ -165,9 +163,6 @@ describe('ExportAudiobookModal', () => {
 
   it('switches the export format to MP3.ZIP and submits with that format', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
-    );
 
     renderModal();
     /* Default should be M4B — verify the toggle reflects that before clicking. */
@@ -210,10 +205,6 @@ describe('ExportAudiobookModal', () => {
   it('cancels a running export and returns the modal to the picker', async () => {
     mockedApi.createBookExport.mockResolvedValue(
       makeJob({ id: 'exp_run', status: 'in_progress', progress: 0 }),
-    );
-    /* Poll keeps returning in_progress so Cancel is the only way out. */
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ id: 'exp_run', status: 'in_progress', progress: 0.3 }),
     );
 
     renderModal();
@@ -336,9 +327,6 @@ describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', ()
 
   it('submits with { format: "m4b", destination: "sync-folder" } regardless of any prior state', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 4096, downloadUrl: 'blob:demo' }),
-    );
 
     render(
       <Provider store={makeStoreWithSyncFolder('C:\\Users\\me\\OneDrive\\Audiobooks')}>
@@ -505,9 +493,6 @@ describe('ExportAudiobookModal — AAC/Opus format picker (plan 72)', () => {
 
   it('submits with format=aac-m4a-zip when the AAC toggle is selected', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
-    );
 
     renderModal();
     fireEvent.click(screen.getByTestId('export-format-aac-m4a-zip'));
@@ -528,9 +513,6 @@ describe('ExportAudiobookModal — AAC/Opus format picker (plan 72)', () => {
 
   it('submits with format=opus-ogg-zip when the Opus toggle is selected', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
-    );
 
     renderModal();
     fireEvent.click(screen.getByTestId('export-format-opus-ogg-zip'));
