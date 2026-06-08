@@ -15,6 +15,7 @@ import { useMemo } from 'react';
 import { IconClose } from '../lib/icons';
 import { useAppDispatch, useAppSelector } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { changeLogActions } from '../store/change-log-slice';
 import type { UnlinkAliasImpactedChapter } from '../lib/api';
 
 interface Props {
@@ -93,6 +94,10 @@ export function ReattributeLinesModal({
 
   function reassign(chapterId: number, sentenceId: number, characterId: string) {
     dispatch(manuscriptActions.setSentenceCharacter({ chapterId, sentenceId, characterId }));
+    /* Log the reassignment so a rendered chapter is flagged stale (Bug 2's
+       "needs regeneration" indicator derives from the latest boundary_move vs
+       the chapter's render time). Every reassignment path must emit this. */
+    dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 }));
   }
 
   const totalCandidates = cards.reduce((n, c) => n + c.rows.length, 0);
