@@ -259,6 +259,7 @@ export function ListenView({
         onOpenAudiobookshelfExport={() =>
           setExportModal({ tab: 'sync-folder', appHint: 'audiobookshelf' })
         }
+        onOpenAppleBooksExport={() => setExportModal({ tab: 'download', format: 'm4b' })}
         onOpenM4bExport={() => setExportModal({ tab: 'download', format: 'm4b' })}
         onOpenMp3ZipExport={() => setExportModal({ tab: 'download', format: 'mp3-zip' })}
         onOpenStreamingLink={() => {

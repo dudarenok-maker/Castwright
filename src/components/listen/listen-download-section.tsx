@@ -1,8 +1,8 @@
 /* Listen-view download + handoff region — pure presentational lift
    from listen.tsx. Owns: the Castwright Companion app banner (mocked
    store links), the "Listen on your favourite app" cards
-   (PocketBook / Voice / Smart AudioBook / BookPlayer / Audiobookshelf
-   tiles + the deferred Apple Books one), the Export queue rail with per-row
+   (PocketBook / Voice / Smart AudioBook / BookPlayer / Audiobookshelf /
+   Apple Books tiles — all six live), the Export queue rail with per-row
    actions, and the three "Or download a file" tiles (M4B chaptered,
    MP3 ZIP, streaming link — plan 57).
 
@@ -37,6 +37,7 @@ interface ListenDownloadSectionProps {
   onOpenSmartAudiobookExport: () => void;
   onOpenBookplayerExport: () => void;
   onOpenAudiobookshelfExport: () => void;
+  onOpenAppleBooksExport: () => void;
   onOpenM4bExport: () => void;
   onOpenMp3ZipExport: () => void;
   /** Plan 67 — streaming-link tile handler. Called when the user clicks
@@ -68,6 +69,7 @@ export function ListenDownloadSection({
   onOpenSmartAudiobookExport,
   onOpenBookplayerExport,
   onOpenAudiobookshelfExport,
+  onOpenAppleBooksExport,
   onOpenM4bExport,
   onOpenMp3ZipExport,
   onOpenStreamingLink,
@@ -87,6 +89,7 @@ export function ListenDownloadSection({
         onOpenSmartAudiobookExport={onOpenSmartAudiobookExport}
         onOpenBookplayerExport={onOpenBookplayerExport}
         onOpenAudiobookshelfExport={onOpenAudiobookshelfExport}
+        onOpenAppleBooksExport={onOpenAppleBooksExport}
       />
       <ExportQueue
         items={queueItems}
@@ -210,6 +213,9 @@ interface ListenerAppsProps {
       appHint='audiobookshelf'. Self-hosted server scans the library
       root for folders. */
   onOpenAudiobookshelfExport: () => void;
+  /** Apple Books is live: imports a chaptered M4B on macOS/iOS, same
+      download-tab + M4B-format prefill as PocketBook. */
+  onOpenAppleBooksExport: () => void;
 }
 function ListenerApps({
   onSend,
@@ -218,6 +224,7 @@ function ListenerApps({
   onOpenSmartAudiobookExport,
   onOpenBookplayerExport,
   onOpenAudiobookshelfExport,
+  onOpenAppleBooksExport,
 }: ListenerAppsProps) {
   /* Per-app live handlers. Tiles not in this map render as disabled
      coming-soon placeholders. */
@@ -227,6 +234,7 @@ function ListenerApps({
     smart_audiobook: onOpenSmartAudiobookExport,
     bookplayer: onOpenBookplayerExport,
     audiobookshelf: onOpenAudiobookshelfExport,
+    apple_books: onOpenAppleBooksExport,
   };
   return (
     <section className="mb-8 md:mb-12">
@@ -238,7 +246,7 @@ function ListenerApps({
       </div>
       <MockedPreviewBanner>
         direct handoff to other apps is coming soon. PocketBook, Voice, Smart AudioBook Player,
-        BookPlayer, and Audiobookshelf are live — click any to sideload.
+        BookPlayer, Audiobookshelf, and Apple Books are live — click any to sideload.
       </MockedPreviewBanner>
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         {SUPPORTED_APPS.map((a) => (
