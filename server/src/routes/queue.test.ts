@@ -115,12 +115,13 @@ describe('GET /api/queue', () => {
       expect(res.body.recycling).toBe(false);
     });
 
-    it('returns recycling:true when the active supervisor has no current handle (child dead/respawning)', async () => {
+    it('returns recycling:true when the active supervisor reports recycling:true (child dead/respawning)', async () => {
       const supervisor = await import('../tts/sidecar-supervisor.js');
       vi.spyOn(supervisor, 'getActiveSupervisor').mockReturnValue({
         start: async () => {},
         stop: async () => {},
         current: () => null,
+        recycling: () => true,
       });
 
       const res = await request(app).get('/api/queue');
@@ -128,12 +129,13 @@ describe('GET /api/queue', () => {
       expect(res.body.recycling).toBe(true);
     });
 
-    it('returns recycling:false when the active supervisor has a live handle', async () => {
+    it('returns recycling:false when the active supervisor reports recycling:false (sidecar ready, even if adopted)', async () => {
       const supervisor = await import('../tts/sidecar-supervisor.js');
       vi.spyOn(supervisor, 'getActiveSupervisor').mockReturnValue({
         start: async () => {},
         stop: async () => {},
-        current: () => ({ kill: async () => {} }) as never,
+        current: () => null, // null handle = adopted sidecar, but still ready
+        recycling: () => false,
       });
 
       const res = await request(app).get('/api/queue');

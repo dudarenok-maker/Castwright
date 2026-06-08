@@ -409,4 +409,141 @@ describe('sidecar supervisor (srv-15)', () => {
     expect(probeFn).not.toHaveBeenCalled();
     expect(spawnFn).toHaveBeenCalledTimes(1); // no respawn after stop
   });
+
+  /* ── recycling() accessor (B2 integration bug fix) ──────────────────────────
+   *
+   * B2 sourced `recycling` from `current() == null`, which is permanently true
+   * for an ADOPTED sidecar (handle is null for its whole lifetime — it's not our
+   * child).  The fix adds an explicit `recycling` boolean that is true only while
+   * a respawn/drain-wait is actually in progress. */
+  describe('recycling() accessor', () => {
+    it('is false after a successful owned-child spawn', async () => {
+      const { sup } = build();
+      await sup.start();
+      expect(sup.recycling()).toBe(false);
+    });
+
+    it('is true before the first spawn completes (not-ready-until-first-spawn)', async () => {
+      // Use a gated spawnFn so we can observe the state mid-start.
+      let releaseSpawn!: (h: SidecarHandle) => void;
+      const pendingSpawn = new Promise<SidecarHandle>((r) => (releaseSpawn = r));
+      const spawnFn = vi.fn(async (_opts: SpawnSidecarOpts) => pendingSpawn);
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        delayFn: async () => {},
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      const startPromise = sup.start();
+      // Spawn has not resolved yet → sidecar not ready → recycling must be true.
+      expect(sup.recycling()).toBe(true);
+      // Now let the spawn complete.
+      releaseSpawn(makeHandle());
+      await startPromise;
+      expect(sup.recycling()).toBe(false);
+    });
+
+    it('is false after a successful ADOPT of a healthy sidecar (THE BUG: current() is null but sidecar is ready)', async () => {
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        // Announce the adopt, return null (not our child).
+        opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+        return null;
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        probeFn: vi.fn(async () => true), // keep the watchdog alive but not polling
+        delayFn: async () => new Promise(() => {}), // gate the watchdog so it never polls
+        adoptedPollMs: 100_000,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      // After a healthy adopt, handle is null but the sidecar IS ready.
+      expect(sup.current()).toBeNull(); // confirm the original bug premise
+      expect(sup.recycling()).toBe(false); // this is what the fix must guarantee
+    });
+
+    it('is true while a respawn is in progress (during backoff after child exit)', async () => {
+      let releaseDelay!: () => void;
+      const delayFn = vi.fn(async () => new Promise<void>((r) => (releaseDelay = r)));
+      const handles: ReturnType<typeof makeHandle>[] = [];
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        if (spawnFn.mock.calls.length === 1) return makeHandle() as SidecarHandle; // initial spawn
+        // Capture the exit handler for the first spawn so we can trigger it.
+        opts.onExit;
+        const h = makeHandle();
+        handles.push(h);
+        return h as SidecarHandle;
+      });
+      // Capture onExit from the initial spawn.
+      let capturedExit!: SpawnSidecarOpts['onExit'];
+      const realSpawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        capturedExit = opts.onExit;
+        const h = makeHandle();
+        handles.push(h);
+        return h as SidecarHandle;
+      });
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn: realSpawnFn,
+        delayFn,
+        nowFn: () => 0, // all deaths are "quick" → consecutive counter accumulates
+        backoffsMs: [50],
+        maxConsecutiveFailures: 5,
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start(); // spawns once → handles[0], capturedExit set
+      expect(sup.recycling()).toBe(false);
+      // Kill the child.
+      capturedExit?.(1, null); // triggers onChildExit → sets recycling=true, awaits delayFn
+      // recycling must be true immediately after the exit (during backoff).
+      expect(sup.recycling()).toBe(true);
+      // Let the backoff complete and the respawn finish.
+      releaseDelay();
+      await vi.waitFor(() => expect(realSpawnFn).toHaveBeenCalledTimes(2));
+      expect(sup.recycling()).toBe(false);
+    });
+
+    it('drain-timeout fallback: when probeFn never frees the port within drainWaitMs, spawnFn is still called (drain budget exhausted → hard replace)', async () => {
+      let calls = 0;
+      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
+        calls += 1;
+        if (calls === 1) {
+          opts.onAdoptExisting?.({ host: '127.0.0.1', port: 9000 });
+          return null;
+        }
+        return makeHandle() as SidecarHandle;
+      });
+      const recycleSidecarFn = vi.fn(async () => true); // recycle accepted
+      // probeFn always returns true — port NEVER frees → drain-wait budget exhausted.
+      const probeFn = vi.fn(async () => true);
+      const healths = [
+        { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 9000, recyclePending: false },
+        { reachable: true, looksLikeSidecar: true, protocolVersion: 1, committedMb: 26000, recyclePending: false },
+      ];
+      let hi = 0;
+      const healthProbeFn = vi.fn(async () => healths[Math.min(hi++, healths.length - 1)]);
+      const sup = createSidecarSupervisor({
+        buildOpts: async () => BASE_OPTS,
+        spawnFn,
+        probeFn,
+        healthProbeFn,
+        recycleSidecarFn,
+        delayFn: async () => {},
+        adoptedPollMs: 1,
+        adoptedHealthPollMs: 1,
+        drainWaitMs: 3, // very short budget — will be exceeded immediately since probeFn always returns true
+        warn: vi.fn(),
+        log: vi.fn(),
+      });
+      await sup.start();
+      expect(spawnFn).toHaveBeenCalledTimes(1); // adopted
+      // Even though the port never frees, the supervisor must eventually call spawnFn.
+      await vi.waitFor(() => expect(spawnFn).toHaveBeenCalledTimes(2));
+      expect(recycleSidecarFn).toHaveBeenCalledTimes(1); // graceful attempt was made
+    });
+  });
 });

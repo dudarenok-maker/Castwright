@@ -91,6 +91,12 @@ export interface SidecarSupervisor {
   /** The current live handle, or null before first spawn / between respawns /
       when no spawn was needed (autoStart off, reuse). */
   current: () => SidecarHandle | null;
+  /** True while a respawn or drain-wait is in progress (i.e. no sidecar is
+      currently ready to accept requests). False once the initial spawn
+      completes successfully — whether via an owned child or a healthy adopt.
+      Use this to gate the queue dispatcher; do NOT use `current() == null`
+      which is permanently true for adopted sidecars. */
+  recycling: () => boolean;
 }
 
 /* Module-level registry so the POST /api/sidecar/restart route can reach the
@@ -136,6 +142,13 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
      against starting a second loop if the adopt callback fires again before
      the first loop has released. */
   let adoptedWatching = false;
+  /* True until the first successful spawn/adopt completes, and again whenever
+     a child exits or a drain-wait begins.  Set false once a sidecar is
+     confirmed ready (owned child spawned OR healthy sidecar adopted).
+     This is the authoritative "not ready" signal for the queue dispatcher —
+     do NOT derive it from `handle == null` which is permanently true for
+     adopted sidecars throughout their lifetime. */
+  let isRecycling = true;
 
   async function spawnOnce(): Promise<void> {
     if (stopped) return;
@@ -148,6 +161,13 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
        callback and leave supervision dormant — matching the pre-supervisor
        contract (don't resurrect a disabled or deliberately-untouched sidecar). */
     handle = await spawnFn({ ...base, onExit: onChildExit, onAdoptExisting: onAdopt });
+    /* A sidecar is now ready: either an owned child (handle non-null) or a
+       healthy adopt (handle null, onAdoptExisting fired).  Either way the
+       queue can dispatch.  The autoStart-off / spawn-error null paths also
+       land here but those supervisors are never registered via
+       registerActiveSupervisor, so getActiveSupervisor() returns null and
+       queue.ts short-circuits to recycling:false independently. */
+    isRecycling = false;
   }
 
   /* Watch an adopted (already-listening, not-owned) sidecar on two axes:
@@ -170,6 +190,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     );
     void (async () => {
       const respawn = async (why: string): Promise<void> => {
+        isRecycling = true; // adopted sidecar gone — hold dispatch until replacement is ready.
         /* Release the flag BEFORE respawning so a re-adopt inside spawnOnce can
            arm a fresh watch. */
         adoptedWatching = false;
@@ -185,6 +206,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
          replacement.  If drain fails or the port never frees within drainWaitMs,
          fall through to the hard-kill respawn so we never stall indefinitely. */
       const drainThenRespawn = async (why: string): Promise<void> => {
+        isRecycling = true; // draining in-flight synth — hold dispatch until replacement is ready.
         warn(`[sidecar] supervisor: adopted sidecar on :${info.port} ${why} — requesting graceful drain before replacing.`);
         let drained = false;
         try {
@@ -236,6 +258,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   function onChildExit(code: number | null, signal: NodeJS.Signals | null): void {
     if (stopped) return; // we killed it on purpose (shutdown) — don't resurrect.
     handle = null;
+    isRecycling = true; // sidecar gone — hold dispatch until the respawn completes.
     const lived = nowFn() - lastSpawnAt;
     if (lived >= QUICK_DEATH_MS) consecutiveFailures = 0; // ran a while → fresh incident.
     consecutiveFailures += 1;
@@ -277,6 +300,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     },
     current() {
       return handle;
+    },
+    recycling() {
+      return isRecycling;
     },
   };
 }
