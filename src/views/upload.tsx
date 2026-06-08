@@ -217,6 +217,9 @@ export function UploadView() {
               <MixedHeading level="h1" regular="Drop your manuscript to" bold="meet the cast" />
             )}
           </div>
+          {!isReuploading && (
+            <p className="mt-3 text-sm text-ink/60">Any book, fully cast.</p>
+          )}
           <p className="mt-4 text-lg text-ink/70">
             {isReuploading ? (
               <>
