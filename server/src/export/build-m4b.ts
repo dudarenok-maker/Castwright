@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
+import { artistForExport } from './narrator-credit.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 export { ExportIncompleteError } from './build-mp3-zip.js';
@@ -151,7 +152,7 @@ function buildFfmetadata(
 ): string {
   const lines: string[] = [';FFMETADATA1'];
 
-  const artist = (state.narratorCredit && state.narratorCredit.trim()) || state.author;
+  const artist = artistForExport(state);
   lines.push(`title=${escapeFfmetadata(state.title)}`);
   lines.push(`artist=${escapeFfmetadata(artist)}`);
   lines.push(`album=${escapeFfmetadata(state.title)}`);
@@ -169,6 +170,10 @@ function buildFfmetadata(
     lines.push(`description=${escapeFfmetadata(desc)}`);
     lines.push(`synopsis=${escapeFfmetadata(desc)}`);
   }
+  /* Castwright brand stamp — the `comment` / `©cmt` atom surfaces in
+     Apple Books / Plex / Voice-Android "info" panels. The comment stamp
+     always carries the brand regardless of the artist/narrator setting. */
+  lines.push(`comment=${escapeFfmetadata('Rendered with Castwright · castwright.ai')}`);
   /* iTunes audiobook media kind — flips Apple/QuickTime players from
      'Music' to 'Audiobook'. Harmless on players that ignore it. */
   lines.push(`media_type=2`);

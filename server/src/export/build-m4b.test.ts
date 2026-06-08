@@ -338,6 +338,22 @@ describeIfTools('buildM4b', () => {
     expect(descValue).toBe(longDesc);
   }, 30_000);
 
+  it('embeds the "Rendered with Castwright · castwright.ai" comment atom', async () => {
+    /* The FFMETADATA `comment` key maps to the M4B `©cmt` atom.
+       ffprobe surfaces it as `comment` in format_tags. This stamp is
+       unconditional — it does not depend on the narratorCredit value. */
+    const commentPath = join(tmpRoot, 'with-castwright-comment.m4b');
+    await buildM4b({ bookDir, state: makeState(), outPath: commentPath });
+    const probe = ffprobeJson(commentPath);
+    const tags = probe.format.tags ?? {};
+    const commentKey = Object.keys(tags).find((k) => k.toLowerCase() === 'comment');
+    expect(
+      commentKey,
+      `expected a comment tag; got keys: ${Object.keys(tags).join(', ')}`,
+    ).toBeDefined();
+    expect(tags[commentKey as string]).toBe('Rendered with Castwright · castwright.ai');
+  }, 30_000);
+
   it('omits desc / ldes atoms when state.description is null or blank (plan 33)', async () => {
     const blankPath = join(tmpRoot, 'no-desc.m4b');
     await buildM4b({
