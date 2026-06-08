@@ -104,7 +104,7 @@ export function useReverseLocalAnalyzerGuard({
       body={
         <>
           <p>
-            Local analysis needs the same GPU as the TTS sidecar, so analysis for{' '}
+            Local analysis needs the same GPU as the Voice engine, so analysis for{' '}
             <b>{resolvedTitle}</b> will pause while audio is generated.
           </p>
           <p className="mt-3 text-ink/60">
