@@ -80,6 +80,16 @@ export const THEME_PREFERENCE_VALUES = ['light', 'dark', 'system'] as const;
 export const BACKUP_CADENCE_VALUES = ['daily', 'weekly'] as const;
 
 export const userSettingsSchema = z.object({
+  /* config-override store — sparse key→value map for the advanced-settings
+     knob resolver. Keys are dotted ConfigKnob keys (e.g.
+     'analyzer.stage2.minCoverage'); values are number | boolean | string.
+     Written only by writeConfigOverride / clearConfigOverride /
+     clearAllConfigOverrides — never touched by the general Account-view PUT
+     (that path is restricted to the fields it already knows about and this
+     record is NOT in FORBIDDEN_KEYS, so partial patches that include it
+     will pass through — intentional: the dedicated helpers are the
+     sanctioned write path but we don't need to block the field entirely). */
+  configOverrides: z.record(z.string(), z.union([z.number(), z.boolean(), z.string()])).default({}),
   displayName: z.string().max(120),
   defaultAnalysisModel: z.string().min(1).max(120),
   defaultTtsEngine: z.enum(TTS_ENGINE_VALUES),
@@ -278,6 +288,8 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   /* Plan 49 — null = no UI-saved key. Resolver falls through to env
      (process.env.GEMINI_API_KEY) and then null. */
   geminiApiKey: null,
+  /* config-override store — empty by default; populated by writeConfigOverride. */
+  configOverrides: {},
   /* srv-2 — auto-backup ON by default (disaster recovery without manual
      intervention), daily, keep the last 14 snapshots. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
@@ -435,9 +447,17 @@ export function getResolvedAutoStartSidecar(): boolean {
     Returns an integer ≥ 1; never undefined. Queue/synthesis concurrency only
     — the GPU semaphore is the separate VRAM guard. */
 export function getResolvedGenerationWorkers(): number {
+  // Precedence: env GEN_WORKERS → Advanced-Settings config override
+  // (tts.gen.workers) → legacy generationWorkers user-setting → default.
+  // Reads configOverrides directly (same module) to avoid a cycle with
+  // config/resolver.ts, which imports readConfigOverrides from here.
   const envRaw = process.env.GEN_WORKERS;
   const envN = envRaw ? Number.parseInt(envRaw, 10) : NaN;
   if (Number.isFinite(envN) && envN >= 1) return envN;
+  const override = readConfigOverrides()['tts.gen.workers'];
+  if (typeof override === 'number' && Number.isFinite(override) && override >= 1) {
+    return Math.floor(override);
+  }
   const c = cached;
   const fromSettings = c?.generationWorkers;
   if (typeof fromSettings === 'number' && Number.isFinite(fromSettings) && fromSettings >= 1) {
@@ -594,6 +614,32 @@ export async function writeUpgradeMeta(patch: {
   });
   writeChain = next.catch(() => undefined);
   return next;
+}
+
+/** Synchronous read of the configOverrides map from the in-process cache.
+    Returns the in-memory copy (or empty object on a cold cache). */
+export function readConfigOverrides(): Record<string, number | boolean | string> {
+  return getCachedUserSettings().configOverrides ?? {};
+}
+
+/** Upserts a single key→value pair into the persisted configOverrides map. */
+export async function writeConfigOverride(key: string, value: number | boolean | string): Promise<void> {
+  const current = await readUserSettings();
+  const next = { ...(current.configOverrides ?? {}), [key]: value };
+  await writeUserSettings({ configOverrides: next });
+}
+
+/** Removes a single key from the persisted configOverrides map. */
+export async function clearConfigOverride(key: string): Promise<void> {
+  const current = await readUserSettings();
+  const next = { ...(current.configOverrides ?? {}) };
+  delete next[key];
+  await writeUserSettings({ configOverrides: next });
+}
+
+/** Clears all config overrides, resetting every knob to env/default resolution. */
+export async function clearAllConfigOverrides(): Promise<void> {
+  await writeUserSettings({ configOverrides: {} });
 }
 
 /** Test-only: drop the in-process cache so the next read re-parses disk. */

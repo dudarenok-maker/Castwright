@@ -9,12 +9,18 @@
    to the tag/quote/split-normalization noise that broke the prompt-based
    forensic sweeps. */
 
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
+
+vi.mock('../workspace/user-settings.js', () => ({
+  readConfigOverrides: vi.fn(() => ({})),
+}));
+
 import {
   validateStage2Coverage,
   runStage2WithCoverageGuard,
   DEFAULT_STAGE2_COVERAGE_THRESHOLDS,
 } from './stage2-coverage.js';
+import * as us from '../workspace/user-settings.js';
 
 const sent = (text: string) => ({ text });
 /** Build a body of N simple sentences and the matching faithful attribution. */
@@ -22,6 +28,10 @@ function bodyOf(n: number): { body: string; sentences: Array<{ text: string }> }
   const arr = Array.from({ length: n }, (_, i) => `This is sentence number ${i + 1} of the chapter.`);
   return { body: arr.join(' '), sentences: arr.map(sent) };
 }
+
+beforeEach(() => {
+  (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({});
+});
 
 afterEach(() => {
   delete process.env.STAGE2_MIN_COVERAGE;
@@ -178,5 +188,21 @@ describe('runStage2WithCoverageGuard', () => {
     const out = await runStage2WithCoverageGuard({ body, maxRetries: 0, call });
     expect(call).toHaveBeenCalledTimes(1);
     expect(out.coverage.ok).toBe(false);
+  });
+});
+
+describe('config resolver wiring — analyzer-chunking', () => {
+  it('app override of analyzer.stage2.minCoverage changes resolveThresholds().minCoverageRatio', () => {
+    (us.readConfigOverrides as ReturnType<typeof vi.fn>).mockReturnValue({
+      'analyzer.stage2.minCoverage': 0.75,
+    });
+    // Use a body that would pass with default 0.6 floor but fail with 0.75
+    // Body: 100 words; sentences: 70 words (ratio 0.70, passes 0.6, fails 0.75)
+    const bodyWords = Array.from({ length: 100 }, (_, i) => `word${i}`).join(' ');
+    const sentWords = Array.from({ length: 70 }, (_, i) => `word${i}`).join(' ');
+    const v = validateStage2Coverage(bodyWords, [{ text: sentWords }]);
+    // With override 0.75, ratio 0.70 should be flagged as truncated
+    expect(v.ok).toBe(false);
+    expect(v.issues.some((s) => s.includes('truncated') || s.includes('dropped'))).toBe(true);
   });
 });

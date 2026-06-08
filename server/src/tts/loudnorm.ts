@@ -24,6 +24,7 @@
    `buildSecondPassFilterString` and passes it as `-af` to the encode step. */
 
 import { spawn } from 'node:child_process';
+import { configValue } from '../config/resolver.js';
 
 export interface LoudnormOptions {
   /** Target integrated loudness in LUFS. EBU R128 broadcast = -23; audiobook
@@ -359,11 +360,24 @@ export function buildSinglePassFilterString(opts: LoudnormOptions): string {
 }
 
 /** Audiobook-friendly defaults: -16 LUFS / 11 LU range / -1.5 dBTP / two-pass.
- *  Matches the Audible / ACX submission target. Exported so the call site
- *  in generation.ts and the regression tests share one source. */
+ *  Matches the Audible / ACX submission target. Kept as a const for existing
+ *  importers that pass it directly to functions; call sites that need the
+ *  effective (potentially overridden) value should use resolveLoudnormOptions(). */
 export const DEFAULT_LOUDNORM_OPTIONS: LoudnormOptions = {
   target: -16,
   lra: 11,
   tp: -1.5,
   twoPass: true,
 };
+
+/** Returns the effective loudnorm options (registry knob wins over the
+ *  built-in default when an env var or app override is set). `twoPass` is
+ *  always true — it is not a user-facing knob. */
+export function resolveLoudnormOptions(): LoudnormOptions {
+  return {
+    target: configValue<number>('audio.loudnorm.targetLufs'),
+    lra: configValue<number>('audio.loudnorm.lra'),
+    tp: configValue<number>('audio.loudnorm.truePeak'),
+    twoPass: true,
+  };
+}

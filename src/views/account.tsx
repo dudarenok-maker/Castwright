@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import type {
   BackupSnapshot,
+  ConfigGroup,
   UserSettings,
   UserSettingsPatch,
 } from '../lib/types';
@@ -29,7 +30,17 @@ import {
   SKIP_SEC_MAX,
 } from '../store/settings-slice';
 import { formatKeyLabel, normalizeKeyEvent } from '../lib/keybindings';
-import { FormCard, FieldRow, ReadOnlyRow } from '../components/account-forms';
+import { FieldRow, ReadOnlyRow } from '../components/account-forms';
+import {
+  SettingsAccordion,
+  SettingsSection,
+} from '../components/settings/settings-accordion';
+
+/* Synthetic ConfigGroup descriptors for account sections — these are not
+   registry knobs, so overriddenCount is always 0 and there's no reset. */
+function acctGroup(id: string, label: string, help: string): ConfigGroup {
+  return { id, label, help, risk: 'low', collapsedByDefault: false };
+}
 
 export function AccountView() {
   const dispatch = useAppDispatch();
@@ -194,194 +205,222 @@ export function AccountView() {
 
       <div className="space-y-6">
         <UpgradeCard />
-        <FormCard title="Profile" hint="How you appear in the top bar and the change log.">
-          <FieldRow label="Display name">
-            <input
-              type="text"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="Your name"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-          </FieldRow>
-        </FormCard>
 
-        <FormCard
-          title="Cast analysis"
-          hint="How the analyzer decides which characters earn a dedicated voice profile vs. get folded into the generic Unknown male / Unknown female buckets."
-        >
-          <FieldRow
-            label="Minor-cast threshold (sentences)"
-            sublabel={
-              'Characters with fewer than this many attributed sentences (each individual sentence the model assigns to that speaker counts as one — the same number shown as "Lines" on the cast roster, not word count) get folded into Unknown male / Unknown female at analysis time. Characters whose name begins with "Unknown" always fold regardless of this number. Set to 0 to disable the line-count trigger entirely. Default 3.'
-            }
+        <SettingsAccordion>
+          <SettingsSection
+            group={acctGroup('acct-profile', 'Profile', 'How you appear in the top bar and the change log.')}
+            overriddenCount={0}
           >
-            <input
-              type="number"
-              min={0}
-              max={50}
-              step={1}
-              value={Number.isFinite(minorCastMinLines) ? minorCastMinLines : 3}
-              onChange={(e) => {
-                const parsed = parseInt(e.target.value, 10);
-                /* Clamp to schema [0, 50] so the Save round-trip never
-                   tips into a 400 on a user fat-finger. */
-                if (Number.isFinite(parsed)) {
-                  setMinorCastMinLines(Math.max(0, Math.min(50, parsed)));
-                }
-              }}
-              className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-          </FieldRow>
-        </FormCard>
-
-        <FormCard
-          title="Covers"
-          hint="How the cover picker opens for new books. Plan 40 added local-disk upload alongside the OpenLibrary search."
-        >
-          <FieldRow
-            label="Default cover picker tab"
-            sublabel="Which tab opens first when you click 'Cover image' on a book. Search (the default) shows OpenLibrary candidates; Upload jumps straight to the file picker for users who routinely bring their own art."
-          >
-            <select
-              value={coverPickerDefaultTab}
-              onChange={(e) => setCoverPickerDefaultTab(e.target.value as 'search' | 'upload')}
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              <option value="search">Search OpenLibrary (default)</option>
-              <option value="upload">Upload local</option>
-            </select>
-          </FieldRow>
-        </FormCard>
-
-        <FormCard
-          title="Appearance"
-          hint="How the app looks. The sun/moon toggle in the top bar is a device-only override; this picker sets the default that any new device or fresh session inherits."
-        >
-          <FieldRow
-            label="Default theme"
-            sublabel="System follows your OS's dark/light setting at runtime and auto-flips at sundown. Light or Dark pins one regardless of OS. Changes here are server-persisted; the top-bar toggle's per-device override always wins until you clear it below."
-          >
-            <select
-              value={defaultThemePreference}
-              onChange={(e) => setDefaultThemePreference(e.target.value as ThemePreference)}
-              data-testid="account-default-theme"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              <option value="system">System (follows OS — default)</option>
-              <option value="light">Light</option>
-              <option value="dark">Dark</option>
-            </select>
-          </FieldRow>
-          {themeOverride !== null && (
-            <div
-              data-testid="theme-override-pill"
-              className="flex items-center justify-between gap-3 rounded-xl border border-magenta/30 bg-magenta/10 px-4 py-3"
-            >
-              <div className="text-xs text-ink/75">
-                <span className="font-semibold text-magenta">This device is overridden</span> — the
-                top-bar toggle is set to <span className="font-mono text-ink">{themeOverride}</span>
-                . Clear the override to follow the account default again.
-              </div>
-              <PrimaryButton
-                variant="ghost"
-                icon={false}
-                onClick={() => dispatch(uiActions.clearThemeOverride())}
-              >
-                Use account default
-              </PrimaryButton>
-            </div>
-          )}
-        </FormCard>
-
-        <FormCard
-          title="Backups"
-          hint="Automatic snapshots of each book's state.json (cast, chapters, metadata) so an accidental edit or corrupt write can be rolled back. Snapshots live alongside the book in its workspace folder."
-        >
-          <FieldRow
-            label="Automatic backups"
-            sublabel="When on, the server snapshots a book's state.json on the cadence below, pruning to the retention count. Turn off to manage backups manually with 'Back up now'."
-          >
-            <label className="inline-flex items-center gap-3 cursor-pointer select-none min-h-[44px] sm:min-h-0">
+            <FieldRow label="Display name">
               <input
-                type="checkbox"
-                checked={backupEnabled}
-                onChange={(e) => setBackupEnabled(e.target.checked)}
-                data-testid="account-backup-enabled"
-                className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+                type="text"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Your name"
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
               />
-              <span className="text-sm text-ink">
-                {backupEnabled
-                  ? 'Enabled — the server snapshots state.json automatically.'
-                  : 'Disabled — snapshots only when you click "Back up now".'}
-              </span>
-            </label>
-          </FieldRow>
-          <FieldRow
-            label="Cadence"
-            sublabel="How often an automatic snapshot is taken when a book's state changes."
-          >
-            <select
-              value={backupCadence}
-              onChange={(e) => setBackupCadence(e.target.value as 'daily' | 'weekly')}
-              data-testid="account-backup-cadence"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            >
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-            </select>
-          </FieldRow>
-          <FieldRow
-            label="Retention (snapshots to keep)"
-            sublabel="Older snapshots beyond this count are pruned. 1–365."
-          >
-            <input
-              type="number"
-              min={1}
-              max={365}
-              step={1}
-              value={backupRetention}
-              onChange={(e) => {
-                const parsed = parseInt(e.target.value, 10);
-                if (Number.isFinite(parsed)) {
-                  /* Clamp to schema [1, 365] so Save can't 400 on a fat-finger. */
-                  setBackupRetention(Math.max(1, Math.min(365, parsed)));
-                }
-              }}
-              data-testid="account-backup-retention"
-              className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-          </FieldRow>
-          <BackupRestoreSection />
-        </FormCard>
+            </FieldRow>
+          </SettingsSection>
 
-        <FormCard
-          title="Workspace"
-          hint="Where this machine keeps your library on disk. Changing it needs a server restart."
-        >
-          <FieldRow
-            label="Workspace directory override"
-            sublabel="Absolute or relative-to-server/ path. Leave empty to use WORKSPACE_DIR from server/.env."
-          >
-            <input
-              type="text"
-              value={workspaceDirOverride}
-              onChange={(e) => setWorkspaceDirOverride(e.target.value)}
-              placeholder="(leave empty to use server/.env)"
-              className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
-            />
-            {workspaceDirty && (
-              <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
-                Restart the server to apply this change.
-              </p>
+          <SettingsSection
+            group={acctGroup(
+              'acct-cast-analysis',
+              'Cast analysis',
+              'How the analyzer decides which characters earn a dedicated voice profile vs. get folded into the generic Unknown male / Unknown female buckets.',
             )}
-          </FieldRow>
-          <ReadOnlyRow
-            label="Active workspace root"
-            value={account.workspaceRoot || '(unknown)'}
-            sublabel={`Source: ${account.workspaceSource}`}
-          />
-        </FormCard>
+            overriddenCount={0}
+          >
+            <FieldRow
+              label="Minor-cast threshold (sentences)"
+              sublabel={
+                'Characters with fewer than this many attributed sentences (each individual sentence the model assigns to that speaker counts as one — the same number shown as "Lines" on the cast roster, not word count) get folded into Unknown male / Unknown female at analysis time. Characters whose name begins with "Unknown" always fold regardless of this number. Set to 0 to disable the line-count trigger entirely. Default 3.'
+              }
+            >
+              <input
+                type="number"
+                min={0}
+                max={50}
+                step={1}
+                value={Number.isFinite(minorCastMinLines) ? minorCastMinLines : 3}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  /* Clamp to schema [0, 50] so the Save round-trip never
+                     tips into a 400 on a user fat-finger. */
+                  if (Number.isFinite(parsed)) {
+                    setMinorCastMinLines(Math.max(0, Math.min(50, parsed)));
+                  }
+                }}
+                className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+              />
+            </FieldRow>
+          </SettingsSection>
+
+          <SettingsSection
+            group={acctGroup(
+              'acct-covers',
+              'Covers',
+              'How the cover picker opens for new books. Plan 40 added local-disk upload alongside the OpenLibrary search.',
+            )}
+            overriddenCount={0}
+          >
+            <FieldRow
+              label="Default cover picker tab"
+              sublabel="Which tab opens first when you click 'Cover image' on a book. Search (the default) shows OpenLibrary candidates; Upload jumps straight to the file picker for users who routinely bring their own art."
+            >
+              <select
+                value={coverPickerDefaultTab}
+                onChange={(e) => setCoverPickerDefaultTab(e.target.value as 'search' | 'upload')}
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+              >
+                <option value="search">Search OpenLibrary (default)</option>
+                <option value="upload">Upload local</option>
+              </select>
+            </FieldRow>
+          </SettingsSection>
+
+          <SettingsSection
+            group={acctGroup(
+              'acct-appearance',
+              'Appearance',
+              "How the app looks. The sun/moon toggle in the top bar is a device-only override; this picker sets the default that any new device or fresh session inherits.",
+            )}
+            overriddenCount={0}
+          >
+            <FieldRow
+              label="Default theme"
+              sublabel="System follows your OS's dark/light setting at runtime and auto-flips at sundown. Light or Dark pins one regardless of OS. Changes here are server-persisted; the top-bar toggle's per-device override always wins until you clear it below."
+            >
+              <select
+                value={defaultThemePreference}
+                onChange={(e) => setDefaultThemePreference(e.target.value as ThemePreference)}
+                data-testid="account-default-theme"
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+              >
+                <option value="system">System (follows OS — default)</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </FieldRow>
+            {themeOverride !== null && (
+              <div
+                data-testid="theme-override-pill"
+                className="flex items-center justify-between gap-3 rounded-xl border border-magenta/30 bg-magenta/10 px-4 py-3"
+              >
+                <div className="text-xs text-ink/75">
+                  <span className="font-semibold text-magenta">This device is overridden</span> — the
+                  top-bar toggle is set to <span className="font-mono text-ink">{themeOverride}</span>
+                  . Clear the override to follow the account default again.
+                </div>
+                <PrimaryButton
+                  variant="ghost"
+                  icon={false}
+                  onClick={() => dispatch(uiActions.clearThemeOverride())}
+                >
+                  Use account default
+                </PrimaryButton>
+              </div>
+            )}
+          </SettingsSection>
+
+          <SettingsSection
+            group={acctGroup(
+              'acct-backups',
+              'Backups',
+              "Automatic snapshots of each book's state.json (cast, chapters, metadata) so an accidental edit or corrupt write can be rolled back. Snapshots live alongside the book in its workspace folder.",
+            )}
+            overriddenCount={0}
+          >
+            <FieldRow
+              label="Automatic backups"
+              sublabel="When on, the server snapshots a book's state.json on the cadence below, pruning to the retention count. Turn off to manage backups manually with 'Back up now'."
+            >
+              <label className="inline-flex items-center gap-3 cursor-pointer select-none min-h-[44px] sm:min-h-0">
+                <input
+                  type="checkbox"
+                  checked={backupEnabled}
+                  onChange={(e) => setBackupEnabled(e.target.checked)}
+                  data-testid="account-backup-enabled"
+                  className="h-4 w-4 rounded border-ink/30 text-magenta focus:ring-2 focus:ring-magenta/30"
+                />
+                <span className="text-sm text-ink">
+                  {backupEnabled
+                    ? 'Enabled — the server snapshots state.json automatically.'
+                    : 'Disabled — snapshots only when you click "Back up now".'}
+                </span>
+              </label>
+            </FieldRow>
+            <FieldRow
+              label="Cadence"
+              sublabel="How often an automatic snapshot is taken when a book's state changes."
+            >
+              <select
+                value={backupCadence}
+                onChange={(e) => setBackupCadence(e.target.value as 'daily' | 'weekly')}
+                data-testid="account-backup-cadence"
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+              >
+                <option value="daily">Daily</option>
+                <option value="weekly">Weekly</option>
+              </select>
+            </FieldRow>
+            <FieldRow
+              label="Retention (snapshots to keep)"
+              sublabel="Older snapshots beyond this count are pruned. 1–365."
+            >
+              <input
+                type="number"
+                min={1}
+                max={365}
+                step={1}
+                value={backupRetention}
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value, 10);
+                  if (Number.isFinite(parsed)) {
+                    /* Clamp to schema [1, 365] so Save can't 400 on a fat-finger. */
+                    setBackupRetention(Math.max(1, Math.min(365, parsed)));
+                  }
+                }}
+                data-testid="account-backup-retention"
+                className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+              />
+            </FieldRow>
+            <BackupRestoreSection />
+          </SettingsSection>
+
+          <SettingsSection
+            group={acctGroup(
+              'acct-workspace',
+              'Workspace',
+              'Where this machine keeps your library on disk. Changing it needs a server restart.',
+            )}
+            overriddenCount={0}
+          >
+            <FieldRow
+              label="Workspace directory override"
+              sublabel="Absolute or relative-to-server/ path. Leave empty to use WORKSPACE_DIR from server/.env."
+            >
+              <input
+                type="text"
+                value={workspaceDirOverride}
+                onChange={(e) => setWorkspaceDirOverride(e.target.value)}
+                placeholder="(leave empty to use server/.env)"
+                className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
+              />
+              {workspaceDirty && (
+                <p className="mt-2 text-xs text-amber-800 bg-amber-100 rounded-full px-3 py-1 inline-block">
+                  Restart the server to apply this change.
+                </p>
+              )}
+            </FieldRow>
+            <ReadOnlyRow
+              label="Active workspace root"
+              value={account.workspaceRoot || '(unknown)'}
+              sublabel={`Source: ${account.workspaceSource}`}
+            />
+          </SettingsSection>
+
+          <AdvancedCard />
+        </SettingsAccordion>
 
         {/* fs-23 — model setup (engines, installers, sidecar, analyzer split,
             server config) now lives in the Model Manager, reached from Admin. */}
@@ -403,7 +442,22 @@ export function AccountView() {
           </button>
         </section>
 
-        <AdvancedCard />
+        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Advanced configuration</h2>
+            <p className="mt-1 text-xs text-ink/55 max-w-prose">
+              Tune model, generation, and QA settings at your own risk.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => dispatch(uiActions.openAdvanced())}
+            data-testid="account-advanced-pointer"
+            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+          >
+            Open Advanced settings →
+          </button>
+        </section>
 
         <div className="flex items-center gap-4">
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
@@ -643,16 +697,18 @@ function AdvancedCard() {
   };
 
   return (
-    <section
-      data-testid="account-advanced-card"
-      className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card"
+    <SettingsSection
+      group={acctGroup(
+        'acct-device-local',
+        'Device-local (this browser only)',
+        'Device-local tuning — applies to this browser only and saves instantly (no Save needed).',
+      )}
+      overriddenCount={0}
     >
-      <h2 className="text-base font-semibold text-ink">Advanced (power-user)</h2>
-      <p className="mt-1 text-xs text-ink/55">
-        Device-local tuning — applies to this browser only and saves instantly (no Save needed).
-      </p>
-
-      <div className="mt-4 space-y-6">
+      <div
+        data-testid="account-advanced-card"
+        className="space-y-6"
+      >
         {/* Keyboard shortcut — play/pause */}
         <div>
           <span className="block text-sm font-medium text-ink">Keyboard shortcut — play / pause</span>
@@ -903,6 +959,6 @@ function AdvancedCard() {
           />
         </div>
       </div>
-    </section>
+    </SettingsSection>
   );
 }
