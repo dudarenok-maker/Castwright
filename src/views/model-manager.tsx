@@ -8,7 +8,9 @@
    The moved form sections land in step A7 (alongside the Account surgery). */
 
 import { useCallback, useEffect, useState, type ComponentType } from 'react';
-import { SectionLabel, MixedHeading } from '../components/primitives';
+import { MixedHeading } from '../components/primitives';
+import { useAppDispatch } from '../store';
+import { uiActions } from '../store/ui-slice';
 import {
   ModelControlPill,
   type ModelControlState,
@@ -41,10 +43,18 @@ const INSTALLER_BY_ID: Partial<Record<string, ComponentType<{ onInstalled?: () =
 };
 
 export function ModelManagerView() {
+  const dispatch = useAppDispatch();
   return (
     <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
-        <SectionLabel>Admin</SectionLabel>
+        <button
+          type="button"
+          data-testid="model-manager-back-to-admin"
+          onClick={() => dispatch(uiActions.openAdmin())}
+          className="text-xs font-medium text-ink/60 hover:text-ink"
+        >
+          ← Admin
+        </button>
         <div className="mt-4">
           <MixedHeading regular="Model" bold="Manager" level="h1" />
         </div>
