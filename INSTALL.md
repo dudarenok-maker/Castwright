@@ -148,6 +148,45 @@ Sidecar will fall back to CPU and log it. Verify `nvidia-smi` works at the OS le
 
 ---
 
+## Configuration
+
+The server reads `server/.env` (copied from `server/.env.example` in the install
+steps above). All knobs have safe defaults — set only what you need.
+
+**Analyzer**
+
+- `ANALYZER` — `local` (default, Ollama) or `gemini`.
+- `GEMINI_API_KEY` — required when `ANALYZER=gemini` (or as the automatic
+  fallback when Ollama is unreachable).
+- `GEMINI_MODEL` — the Gemini model id; plus per-model `GEMINI_RPM_*` /
+  `GEMINI_TPM_*` / `GEMINI_RPD_*` rate caps (see `server/.env.example`).
+- `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` /
+  `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` — optional two-model analyzer (cast
+  detection + sentence attribution in parallel). Set both phase vars to enable.
+
+**Generation & TTS**
+
+- `WORKSPACE_DIR` — where your per-book library lives (set this to a writable
+  folder).
+- `GEN_WORKERS` — how many chapters synthesise at once (default `2`).
+- `GPU_VRAM_BUDGET` — VRAM-weighted GPU budget in GiB (default `8`). Drop to `6`
+  on a 6 GB card.
+- `PRELOAD_COQUI` — `0` (default; Coqui loads on demand) or `1`.
+- `QWEN_BATCH_SIZE` (default `8`) and `QWEN_ATTN_IMPL` (default `sdpa`) — Qwen
+  tuning knobs.
+- `AUDIO_LOUDNORM_ENABLED` — `true` (default; two-pass EBU R128 at
+  -16 LUFS / 11 LU / -1.5 dBTP) or `false` to opt out.
+
+**LAN / companion access**
+
+- `LAN_HTTPS` — `1` serves over mkcert-backed HTTPS on `:8443`, bound on all
+  interfaces (phone/tablet web + the Android companion). Off by default;
+  `npm run start:lan` sets it. Requires the LAN cert
+  (`npm run install:cert-mobile`); with `LAN_HTTPS=1` the server refuses to start
+  if the cert is missing.
+- `LAN_AUTH_TOKEN` — the shared pairing secret for the companion (and the LAN
+  access guard on `/api` + `/workspace`). Required for the companion app.
+
 ## Setting up the analyzer
 
 The install bundle ships Kokoro weights for TTS only — the analyzer needs either a local Ollama daemon or a Gemini API key. The server-side default is `ANALYZER=local` (Ollama); if no Ollama daemon is reachable, the analyzer auto-falls back to the Gemini free tier when a key is configured.
@@ -163,7 +202,7 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 
 **Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.castwright/user-settings.json` (plaintext, same trust model as `server/.env`).
 
-**Option C — Pipelined two-model split (v1.4.0).** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
+**Option C — Pipelined two-model split.** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
 
 ## Switching TTS to Coqui XTTS v2 (alternate, on-device)
 
@@ -171,7 +210,7 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 2. **TTS model** → "Coqui XTTS v2".
 3. Save. The first chapter generation triggers a one-time ~2 GB model download.
 
-## Switching TTS to Qwen3-TTS (v1.5.0, bespoke per-character voices)
+## Switching TTS to Qwen3-TTS
 
 Qwen3-TTS designs a unique voice per character from the cast persona instead of picking from a preset catalogue — only two English Qwen speakers exist upstream, so the app caches each designed voice's embedding and reuses it across the book and series for vocal consistency. This is the v1.5.0 headline TTS engine and **becomes the default for new books once it's installed** (until then, and on any box without it, books render in Kokoro). It is **NOT** auto-downloaded with the Kokoro / Coqui paths — it needs a one-time install of the Python package + model weights (~5 GB).
 
@@ -209,7 +248,7 @@ The key is stored plaintext in `~/.castwright/user-settings.json` (per-user, sam
 
 ---
 
-## Picking a chapter audio format (v1.4.0)
+## Picking a chapter audio format
 
 Chapter audio defaults to MP3 VBR V2. Two newer codecs are available per-book under **Listen view → metadata editor → Audio format** or in the export modal:
 
@@ -223,7 +262,7 @@ Loudness normalization (EBU R128, two-pass, targeting -16 LUFS / 11 LU / -1.5 dB
 
 ---
 
-## Mobile + tablet access over LAN HTTPS (v1.4.0)
+## Mobile + tablet access over LAN HTTPS
 
 The app drives on phone + tablet via LAN HTTPS using `mkcert` so iOS / Android trust the cert without browser warnings. One-time setup per dev box:
 
@@ -257,56 +296,34 @@ Build/sideload instructions for the app live in [`apps/android/README.md`](apps/
 
 ## Updating
 
-From **v1.6.0 onward, upgrading is one click in the Account tab** — open **Account → Application updates**, pick the new `castwright-vX.Y.Z.zip`, confirm the version delta, and the app stages, validates, swaps, reinstalls deps, migrates your book data (with an automatic backup first), and restarts itself. No terminal commands.
+Upgrading is one click in the app: open **Account → Application updates**, pick
+the new `castwright-vX.Y.Z.zip`, confirm the version delta, and the app stages,
+validates, swaps, reinstalls dependencies, migrates your book data (with an
+automatic backup first), and restarts itself. No terminal commands.
 
-This works because 1.6.0 introduces a **versioned-directory layout**: each release lives in its own `releases/vX.Y.Z/` folder, a stable `launch.mjs` at the install root always runs the current one, and your data lives in shared siblings outside the release folders. An upgrade extracts the new release into a *fresh* folder and only flips a pointer once it's ready — the running version is never touched, so a failed upgrade just keeps running the old one.
+This works because Castwright uses a **versioned-directory layout**: each release
+lives in its own `releases/vX.Y.Z/` folder, a stable `launch.mjs` at the install
+root always runs the current one, and your data lives in shared siblings outside
+the release folders. An upgrade extracts the new release into a *fresh* folder and
+only flips a pointer once it's ready — the running version is never touched, so a
+failed upgrade just keeps running the previous one. A fresh install already ships
+this machinery, so there is nothing to convert.
 
 ```
 <install>/
   launch.mjs            <- start the app from here (shortcut / start-app.bat points at it)
-  .current-version      <- "1.6.0"
-  releases/v1.6.0/      <- the code (one extracted zip)
+  .current-version      <- e.g. "1.7.0"
+  releases/v1.7.0/      <- the code (one extracted zip)
   workspace/            <- your library (books, voices)
-  venv/  models/kokoro/ <- shared python venv + ~330 MB Kokoro weights
+  venv/  models/kokoro/ <- shared Python venv + Kokoro weights
   logs/  .run/
 ```
 
-### One-time conversion when you adopt v1.6.0 (from v1.5.x)
-
-A v1.5.x install is a single flat checkout with none of this machinery, so the **jump into 1.6.0 is still manual** — run the bundled converter once:
-
-1. `npm run stop:prod` in your existing v1.5.x folder.
-2. Download and extract `castwright-v1.6.0.zip` to a temporary folder.
-3. From the extracted folder, dry-run the converter (prints exactly what it will move):
-   ```
-   node scripts/setup-versioned-install.mjs --install <new-install-dir> --from <old-v1.5.x-dir>
-   ```
-4. Re-run with `--apply` to execute. It creates `<new-install-dir>/releases/v1.6.0/`, writes the pointer, places `launch.mjs` at the root, and **moves** (not re-downloads) your `audiobook-workspace`, the sidecar `.venv`, and the Kokoro weights into the shared siblings.
-5. Start the app: `node <new-install-dir>/launch.mjs`.
-
-Your account settings live in `~/.castwright/user-settings.json` (outside any install folder) and carry over automatically; copy your old `server/.env` into `releases/v1.6.0/server/.env` if you had custom keys.
-
-**After this one-time step, every later upgrade is the one-click Account flow above** — the first self-upgrade you'll experience is 1.6.0 → 1.7.0. (1.6.0 ships the mechanism; it can't upgrade *into* itself.)
+Your account settings live in `~/.castwright/user-settings.json` (outside any
+install folder) and carry over automatically; copy your old `server/.env` into
+`releases/vX.Y.Z/server/.env` if you set custom keys.
 
 ### Manual fallback (any version)
 
 The in-app flow is just orchestration — you can always swap by hand: `npm run stop:prod`, extract the new release into a new `releases/vX.Y.Z/`, set `.current-version`, `npm ci && npm --prefix server ci`, then `node launch.mjs`. Your `workspace/`, `venv/`, and `models/` are untouched.
 
-### v1.4.0 → v1.5.0 notes
-
-- **Qwen3-TTS is the new headline TTS engine and becomes the DEFAULT for new books once it's installed** (resolved live — a box without Qwen keeps defaulting to Kokoro, and an explicit engine pick in Account is always honoured). It is NOT auto-installed by the per-OS steps above; install it in one click from **Account → Models** (or via `node server/tts-sidecar/scripts/install-qwen3.mjs`). Existing books continue to render through their current engine unchanged. **Graceful fallback:** a Qwen book whose character has no designed voice — or any Qwen render when the engine isn't installed/loaded — renders that character in Kokoro instead of failing, shown as a "Fallback (Kokoro)" status.
-- **Per-character TTS engine.** Cast members now carry a per-engine `overrideTtsVoices: { coqui?, kokoro?, gemini?, qwen? }` map; legacy single-field `overrideTtsVoice` rows migrate lazily on read, so books from v1.4.0 keep their voice assignments when you flip a project's engine — no re-cast required.
-- **Persisted generation queue** at `<workspace>/.queue.json`. No migration: the file is created on first enqueue post-upgrade; in-progress generations pre-1.5.0 just finish.
-- **New optional env knobs** in `server/.env` (all have safe defaults — leave unset to keep the v1.4.0 behaviour):
-  - `GPU_VRAM_BUDGET` — VRAM-weighted GPU semaphore budget in GiB (default `8`). Drop to `6` on a 6 GB card to keep analyzer + Qwen Base co-resident.
-  - `QWEN_BATCH_SIZE` — Qwen sentences-per-batched-forward cap (default `8`). Set `=1` as a per-call kill-switch to fall back to one-sentence-per-call.
-  - `QWEN_ATTN_IMPL` — attention impl for Qwen (default `sdpa`). Flip to `flash_attention_2` after running `install-qwen3.mjs --flash-attn`.
-- **Build-version footer.** Every view now stamps the running build at the bottom (`v1.5.0 (a1b2c3d)` in production). If you upgraded but the footer still reads `v1.4.0`, the new bundle didn't extract over — re-run the unpack.
-- **No `BookStateJson` schema change.** Books from v1.4.0 hydrate as-is.
-
-### v1.3.x → v1.4.0 notes
-
-- `BookStateJson` gained an optional `audioFormat` field (`'mp3' | 'aac-m4a' | 'opus'`). Existing books default to `'mp3'`; no migration required.
-- Finished exports moved from the hidden `.audiobook/exports/<id>/` jail to a visible `<bookDir>/exports/<slug>.<ext>` sibling to `audio/`. Old exports stay where they were — only new exports land in the new location.
-- Audio loudness normalization is on by default in v1.4.0. Set `AUDIO_LOUDNORM_ENABLED=false` in `server/.env` if you need bit-exact match with previously-rendered chapters; otherwise regenerate to bring older chapters into the loudness target.
-- New optional env knobs: `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` (pipelined two-model analyzer), `GEN_WORKERS` (renamed from `GEN_CHAPTER_CONCURRENCY`; how many chapters the generation queue synthesises at once, default 2). All have safe defaults — leave unset to keep the v1.3.1 behaviour.
