@@ -60,6 +60,14 @@ export const exportsSlice = createSlice({
       s.byBookId[a.payload.bookId] = list.filter((j) => j.id !== a.payload.exportId);
     },
 
+    /* Replace a book's job list from a server snapshot (Listen-mount
+       rehydrate). On a fresh mount the slice is empty so this seeds it;
+       on a revisit it reconciles to the server's authoritative set. The
+       poll middleware picks up any non-terminal jobs from here. */
+    exportsHydrated: (s, a: PayloadAction<{ bookId: string; jobs: BookExportJob[] }>) => {
+      s.byBookId[a.payload.bookId] = a.payload.jobs;
+    },
+
     lanUrlsHydrated: (s, a: PayloadAction<{ urls: string[]; port: number }>) => {
       s.lanUrls = a.payload.urls;
       s.lanPort = a.payload.port;

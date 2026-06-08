@@ -68,4 +68,18 @@ describe('exportsSlice', () => {
     expect(s.lanUrls).toEqual(['http://192.168.1.42:8080']);
     expect(s.lanPort).toBe(8080);
   });
+
+  describe('exportsHydrated', () => {
+    it("sets the book's job list from a server payload", () => {
+      const s0 = exportsSlice.getInitialState();
+      const s1 = exportsSlice.reducer(
+        s0,
+        exportsActions.exportsHydrated({
+          bookId: 'b1',
+          jobs: [makeJob({ id: 'exp_2', bookId: 'b1' }), makeJob({ id: 'exp_1', bookId: 'b1' })],
+        }),
+      );
+      expect(s1.byBookId['b1'].map((j) => j.id)).toEqual(['exp_2', 'exp_1']);
+    });
+  });
 });
