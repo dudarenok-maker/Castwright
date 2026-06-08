@@ -710,6 +710,11 @@ export function Layout() {
                `lufs` field undefined (no-data state in the report
                card). */
             chapterLufs: res.chapterLufs,
+            /* #650 — render-time sentence→speaker map per chapter so the
+               Generate view can flag chapters reassigned since they rendered.
+               Older servers omit it; the slice leaves the map empty and the
+               view falls back to the time-based heuristic. */
+            renderedSpeakersByChapter: res.renderedSpeakersByChapter,
           }),
         );
         dispatch(
