@@ -7,7 +7,13 @@ without changing component code.
 **Brand:** the product is **Castwright** (`castwright.ai`) — _any book, performed by a full
 cast — effortlessly. Even in your own voice._ Brand assets + guidelines live in `brand/`; the
 design spec is `docs/superpowers/specs/2026-06-07-castwright-brand-design.md`; the brand story
-is `docs/project-narrative.md`. npm packages: `castwright` (frontend) / `castwright-server`
+is `docs/project-narrative.md`. **`brand/` and `mockups/` are local-only (git-ignored)** —
+the brand identity is "all rights reserved" and these are working/scratch artifacts. The app
+ships the _generated_ assets in `public/` (PNGs rendered from `brand/*.svg` via
+`scripts/render-brand-pngs.mjs`), which ARE committed, so the build never depends on the
+sources. **`mockups/` is the home for all brand / style / UI exploration work** — put any
+future visual concepts or HTML mockups there, not in a new tracked directory.
+npm packages: `castwright` (frontend) / `castwright-server`
 (backend). GitHub repo: `Castwright`. Release artifact: `castwright-vX.Y.Z.zip`.
 **Note: v1.6.0 cannot self-upgrade across the rename — alpha installs reinstall fresh.**
 App fonts: **General Sans** (sans) + **Lora** (serif). Next big
