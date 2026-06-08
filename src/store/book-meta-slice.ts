@@ -16,8 +16,12 @@
    `state` slice patch containing all six fields. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { BookStateJson, Character } from '../lib/types';
+import type { BookStateJson } from '../lib/types';
 import type { RootState } from './index';
+
+/** Default narrator credit shown when no explicit credit has been saved.
+    Duplicated on the server in server/src/export/narrator-credit.ts (no shared module). */
+export const DEFAULT_NARRATOR_CREDIT = 'Castwright';
 
 export interface EditableBookMeta {
   title: string;
@@ -60,8 +64,6 @@ interface HydratePayload {
     description?: string | null;
     notes?: string | null;
   };
-  /** Used as the narratorCredit fallback when state.narratorCredit is missing. */
-  narratorFallback?: string | null;
 }
 
 export const bookMetaSlice = createSlice({
@@ -71,12 +73,12 @@ export const bookMetaSlice = createSlice({
     /* Seed `saved[bookId]` from the BookStateJson the server returned on book
        open. Wipes any stale draft from a previous book. */
     hydrateFromBookState: (s, a: PayloadAction<HydratePayload>) => {
-      const { bookId, state, narratorFallback } = a.payload;
+      const { bookId, state } = a.payload;
       s.saved[bookId] = {
         title: state.title,
         author: state.author,
         series: state.series,
-        narratorCredit: state.narratorCredit ?? narratorFallback ?? null,
+        narratorCredit: state.narratorCredit ?? DEFAULT_NARRATOR_CREDIT,
         genre: state.genre ?? null,
         publicationDate: state.publicationDate ?? null,
         description: state.description ?? null,
@@ -142,13 +144,3 @@ export const selectEffectiveMeta =
 export const selectIsDirty = (s: RootState): boolean =>
   s.bookMeta.draft != null && Object.keys(s.bookMeta.draft).length > 0;
 
-/* ── Helpers ────────────────────────────────────────────────────────────── */
-
-/** Pick the narrator's display name from the cast for use as a default
-    `narratorCredit`. Convention: the character with id === 'narrator' is the
-    designated narrator; fall back to the first character otherwise. */
-export function narratorNameFromCast(characters: Character[]): string | null {
-  if (characters.length === 0) return null;
-  const explicit = characters.find((c) => c.id === 'narrator');
-  return (explicit ?? characters[0]).name;
-}

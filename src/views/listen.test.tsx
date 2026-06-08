@@ -133,10 +133,12 @@ describe('ListenView — top section reads from bookMeta', () => {
     expect(screen.getByText('Sam Voice')).toBeInTheDocument();
   });
 
-  it('falls back to the cast narrator when narratorCredit is blank', () => {
+  it('defaults to Castwright when no explicit credit', () => {
     renderView({ meta: baseMeta({ narratorCredit: null }) });
-    /* Anders Vale comes from the cast (id === "narrator"). */
-    expect(screen.getByText('Anders Vale')).toBeInTheDocument();
+    /* When no explicit narratorCredit, the brand default "Castwright" is shown
+       rather than the cast narrator character's name. */
+    expect(screen.getByText('Castwright')).toBeInTheDocument();
+    expect(screen.queryByText('Anders Vale')).not.toBeInTheDocument();
   });
 
   it('paints the cover with the book gradient passed in props', () => {
