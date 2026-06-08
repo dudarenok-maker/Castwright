@@ -1,5 +1,7 @@
 # Castwright
 
+![Castwright — any book, performed by a full cast, effortlessly](public/og.png)
+
 > _Any book, performed by a full cast — effortlessly. Even in your own voice._
 
 Turn a manuscript into a finished, **full-cast** audiobook on your own machine —
@@ -132,8 +134,8 @@ or service; two years after each release, that release's code becomes Apache-2.0
 Leading with this plainly is deliberate — it bars a competing fork from day one
 while keeping the source fully readable.
 
-- **Brand assets** in [`brand/`](brand/) are **not** covered by the code licence —
-  all rights reserved ([`brand/LICENSE`](brand/LICENSE)).
+- **Name & brand** — the Castwright name and identity are all rights reserved and
+  not part of this repository; see [`docs/legal/brand-and-trademarks.md`](docs/legal/brand-and-trademarks.md).
 - **Model weights** carry their own upstream licences ([NOTICE](NOTICE)). Coqui
   XTTS v2 is non-commercial (CPML) and is therefore download-on-demand, never
   bundled.

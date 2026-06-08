@@ -295,7 +295,7 @@ async function runCrossOsGate({ ref, headSha }) {
   info(`[GATE] cross-OS verify passed (run ${runId}).`);
 }
 
-// Best-effort: refresh the code-stats block in docs/project-narrative.md so
+// Best-effort: refresh the code-stats block in brand/project-narrative.md so
 // every release carries fresh SLOC numbers. Deliberately NON-fatal — a release
 // must never hard-fail on a docs-cosmetic tool. Skips cleanly when
 // scripts/code-stats.mjs is absent (e.g. the throwaway test fixture repo) or
@@ -307,7 +307,7 @@ function refreshCodeStats() {
     return;
   }
   try {
-    info('[STEP] refreshing code stats (docs/project-narrative.md) ...');
+    info('[STEP] refreshing code stats (brand/project-narrative.md) ...');
     execFileSync('node', [codeStats, '--write'], { cwd: repoRoot, stdio: 'inherit' });
   } catch {
     info(
@@ -392,7 +392,7 @@ async function main() {
   info(
     `[PLAN] refresh code stats: ${
       existsSync(resolve(repoRoot, 'scripts', 'code-stats.mjs'))
-        ? 'docs/project-narrative.md via code-stats.mjs --write (best-effort)'
+        ? 'brand/project-narrative.md via code-stats.mjs --write (best-effort)'
         : 'skipped (scripts/code-stats.mjs absent)'
     }`,
   );
@@ -468,9 +468,8 @@ async function main() {
   if (existsSync(pubspecPath(repoRoot))) {
     addPaths.push('apps/android/pubspec.yaml');
   }
-  if (existsSync(resolve(repoRoot, 'docs', 'project-narrative.md'))) {
-    addPaths.push('docs/project-narrative.md');
-  }
+  // project-narrative.md is local-only (under the git-ignored brand/) — the
+  // code-stats refresh updates it in place but it is never staged/committed.
   git(['add', ...addPaths]);
   git(['commit', '-m', `chore: bump version to ${newVersion}`]);
 

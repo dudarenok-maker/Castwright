@@ -18,8 +18,9 @@ soft convention.
 Castwright is **source-available under the Functional Source License**
 (FSL-1.1-ALv2, a.k.a. FSL-1.1-Apache-2.0) — not OSI open source. See
 [`LICENSE`](LICENSE); the [README license section](README.md#license) explains
-the model in one paragraph. The `brand/` assets are **not** covered by the code
-licence — all rights reserved ([`brand/LICENSE`](brand/LICENSE)).
+the model in one paragraph. The Castwright name and brand assets are **not**
+covered by the code licence and are not part of this repository — see
+[`docs/legal/brand-and-trademarks.md`](docs/legal/brand-and-trademarks.md).
 
 **Posture today: issues welcome, PRs by invitation.** Until the CLA tooling is in
 place, please open an issue to discuss a change before sending a PR.
@@ -31,7 +32,7 @@ place, please open an issue to discuss a change before sending a PR.
   under the project licence.
 - **A lightweight CLA** — so the maintainer retains the right to relicense (the
   FSL future-grant and any relicensing depend on owning the copyright). This will
-  be collected by a CLA bot; see [`docs/licensing.md`](docs/licensing.md).
+  be collected by a CLA bot; see [`docs/legal/licensing.md`](docs/legal/licensing.md).
 
 ## Branching model
 

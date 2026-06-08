@@ -7,7 +7,7 @@ without changing component code.
 **Brand:** the product is **Castwright** (`castwright.ai`) — _any book, performed by a full
 cast — effortlessly. Even in your own voice._ Brand assets + guidelines live in `brand/`; the
 design spec is `docs/superpowers/specs/2026-06-07-castwright-brand-design.md`; the brand story
-is `docs/project-narrative.md`. **`brand/` and `mockups/` are local-only (git-ignored)** —
+is `brand/project-narrative.md`. **`brand/` and `mockups/` are local-only (git-ignored)** —
 the brand identity is "all rights reserved" and these are working/scratch artifacts. The app
 ships the _generated_ assets in `public/` (PNGs rendered from `brand/*.svg` via
 `scripts/render-brand-pngs.mjs`), which ARE committed, so the build never depends on the

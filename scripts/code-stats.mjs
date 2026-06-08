@@ -4,7 +4,7 @@
 //
 //   node scripts/code-stats.mjs            # print the table to stdout (preview)
 //   node scripts/code-stats.mjs --write    # rewrite the CODE-STATS block in
-//                                           # docs/project-narrative.md in place
+//                                           # brand/project-narrative.md in place
 //   node scripts/code-stats.mjs --help
 //
 // `npm run stats` is the no-flag preview; `npm run stats -- --write` writes.
@@ -28,7 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
-const NARRATIVE = resolve(repoRoot, 'docs', 'project-narrative.md');
+const NARRATIVE = resolve(repoRoot, 'brand', 'project-narrative.md');
 
 export const START_MARKER = '<!-- CODE-STATS:START -->';
 export const END_MARKER = '<!-- CODE-STATS:END -->';
@@ -183,7 +183,7 @@ function parseArgs(argv) {
       process.stdout.write(
         'Usage: node scripts/code-stats.mjs [--write]\n' +
           '  (no flag)  print the stats table to stdout\n' +
-          '  --write    rewrite the CODE-STATS block in docs/project-narrative.md\n',
+          '  --write    rewrite the CODE-STATS block in brand/project-narrative.md\n',
       );
       process.exit(0);
     } else {
