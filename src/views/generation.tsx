@@ -58,6 +58,7 @@ import { ttsModelLabel, formatEngineBreakdown } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
+import { isChapterStaleFromReassign } from '../lib/stale-chapters';
 import {
   characterLinePositionsByChapter,
   characterRowProgress,
@@ -1050,6 +1051,7 @@ export function GenerationView({
               onIncludeClick={handleIncludeClick}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
+              stale={isChapterStaleFromReassign(ch, activityEvents)}
               subsetProgress={subsetByChapter[ch.id] ?? null}
               activeModelKey={modelKey}
             />
@@ -1169,6 +1171,10 @@ interface ChapterRowProps {
   onIncludeClick: (chapterId: number) => void;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
+  /** Bug 2 — true when this `done` chapter's sentence→speaker assignments were
+      reassigned after its audio was rendered (derived from the change-log vs
+      `audioRenderedAt`). Drives the "Sentences reassigned · regenerate" caption. */
+  stale: boolean;
   /** In-flight subset analysis state for this chapter, or null when
       the row is idle. Drives the inline progress / throttle / error
       block on the excluded-chapter variant. */
@@ -1202,6 +1208,7 @@ function ChapterRow({
   onIncludeClick,
   onCancelSubset,
   onRetrySubset,
+  stale,
   subsetProgress,
   activeModelKey,
 }: ChapterRowProps) {
@@ -1345,6 +1352,18 @@ function ChapterRow({
             <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
               {liveSpeaker ? `Synthesising ${liveSpeaker.name} · ` : ''}
               line {liveCurrent.toLocaleString()} of {liveTotal.toLocaleString()}
+            </span>
+          ) : chapter.state === 'done' && stale ? (
+            /* Bug 2 — sentence→speaker assignments changed after this chapter
+               was rendered, so its audio is out of date. Most actionable of the
+               "done" captions (the user's own edit invalidated it), so it wins
+               over the informational mixed-engine / engine-drift lines. The
+               Regenerate-this-chapter control sits eye-level below. */
+            <span
+              className="block text-[11px] text-amber-700 tabular-nums mt-0.5 truncate"
+              title="You reassigned sentences in this chapter after it was generated. Regenerate to refresh the audio."
+            >
+              ⚠ Sentences reassigned · regenerate to refresh
             </span>
           ) : chapter.state === 'done' && isMixedEngineChapter(chapter) ? (
             /* Mixed-engine breakdown caption (false-drift fix, 2026-06-07).

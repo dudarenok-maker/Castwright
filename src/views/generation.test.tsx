@@ -1142,6 +1142,78 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
   });
 });
 
+describe('GenerationView — reassignment staleness caption (Bug 2)', () => {
+  /* A done chapter whose sentence→speaker assignments were changed after it was
+     rendered shows an amber "Sentences reassigned · regenerate to refresh"
+     caption, derived from the change-log boundary_move time vs audioRenderedAt. */
+  function renderWithReassign(chapters: Chapter[], reassignedChapterIds: number[]): void {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters,
+        sentences,
+      } as any),
+    );
+    /* bumpBoundaryMove stamps `at` to "now", which is after the fixed past
+       render time below — so these chapters read stale deterministically. */
+    for (const id of reassignedChapterIds) {
+      store.dispatch(changeLogSlice.actions.bumpBoundaryMove({ chapterId: id, count: 1 }));
+    }
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={chapters}
+          characters={characters}
+          paused
+          title="Reassign Fixture"
+          bookId="b1"
+          modelKey="kokoro-v1"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  const RENDERED_PAST = '2020-01-01T00:00:00Z';
+  const doneStampable: Chapter = {
+    ...chapter1,
+    audioModelKey: 'kokoro-v1',
+    audioRenderedAt: RENDERED_PAST,
+  };
+
+  it('shows the caption on a done chapter reassigned after it was rendered', () => {
+    renderWithReassign([doneStampable, chapter2], [1]);
+    expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
+  });
+
+  it('does NOT show the caption when the chapter was never reassigned', () => {
+    renderWithReassign([doneStampable, chapter2], []);
+    expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
+  });
+
+  it('does NOT show the caption for a queued (un-rendered) chapter even if reassigned', () => {
+    /* chapter2 is queued — a reassignment there has nothing rendered to stale. */
+    renderWithReassign([doneStampable, chapter2], [2]);
+    expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
+  });
+});
+
 describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', () => {
   /* The banner now carries a "Regenerate all" affordance that confirms
      once and dispatches regenerateChapterIds for every drifted chapter
