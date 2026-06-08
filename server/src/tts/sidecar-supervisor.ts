@@ -74,6 +74,23 @@ export interface SidecarSupervisor {
   current: () => SidecarHandle | null;
 }
 
+/* Module-level registry so the POST /api/sidecar/restart route can reach the
+   live supervisor without importing index.ts. Set once at boot via
+   registerActiveSupervisor; cleared on stop. */
+let _activeSupervisor: SidecarSupervisor | null = null;
+
+/** Register (or clear) the active supervisor. Called by index.ts after
+    createSidecarSupervisor + .start(). */
+export function registerActiveSupervisor(s: SidecarSupervisor | null): void {
+  _activeSupervisor = s;
+}
+
+/** Returns the active supervisor, or null when no sidecar is supervised
+    (autoStart off, supervisor not yet started, or already stopped). */
+export function getActiveSupervisor(): SidecarSupervisor | null {
+  return _activeSupervisor;
+}
+
 export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSupervisor {
   const {
     buildOpts,

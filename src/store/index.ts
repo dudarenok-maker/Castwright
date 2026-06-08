@@ -55,6 +55,7 @@ import { queueSlice } from './queue-slice';
 import { rebaselineSlice } from './rebaseline-slice';
 import { upgradeSlice } from './upgrade-slice';
 import { spliceSlice } from './splice-slice';
+import { configSlice } from './config-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
@@ -171,6 +172,7 @@ export const store = configureStore({
     rebaseline: rebaselineSlice.reducer,
     upgrade: upgradeSlice.reducer,
     splice: spliceSlice.reducer,
+    config: configSlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({

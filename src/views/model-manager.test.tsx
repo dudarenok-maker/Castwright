@@ -391,3 +391,26 @@ describe('ModelManagerView — per-row install (fs-23 follow-up)', () => {
     expect(within(card).queryByRole('heading', { name: /Whisper ASR/i, level: 3 })).toBeNull();
   });
 });
+
+describe('ModelManagerView — settings form accordion shell', () => {
+  it('renders settings as named accordion sections and Save still dispatches the patch', async () => {
+    putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
+    const user = userEvent.setup();
+    renderManager();
+
+    /* All five accordion section headers are visible (defaultOpen=true). */
+    await screen.findByRole('button', { name: /defaults for new books/i });
+    expect(screen.getByRole('button', { name: /two-model analyzer split/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /voice engine/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /server configuration/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /install \/ update analyzer/i })).toBeInTheDocument();
+
+    /* Controls inside the sections are accessible (sections start open). */
+    expect(screen.getByTestId('account-auto-start-sidecar')).toBeInTheDocument();
+    expect(screen.getByTestId('account-sidecar-url')).toBeInTheDocument();
+
+    /* Save still dispatches the patch. */
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(putUserSettings).toHaveBeenCalledTimes(1));
+  });
+});

@@ -26,6 +26,7 @@
    transcribe call. Env-override pattern mirrors `segment-qa.ts`. */
 
 import { transcribeSegment, type TranscribeResult } from './transcribe-client.js';
+import { configValue } from '../config/resolver.js';
 
 export type AsrVerdict = 'ok' | 'drift' | 'inconclusive';
 
@@ -75,44 +76,34 @@ export const DEFAULT_ASR_THRESHOLDS: AsrThresholds = {
   maxNoSpeechProb: 0.6,
 };
 
-function envNum(key: string, fallback: number): number {
-  const raw = process.env[key];
-  if (raw == null || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
-
 export function resolveAsrThresholds(override?: Partial<AsrThresholds>): AsrThresholds {
   const base: AsrThresholds = {
-    maxWer: envNum('SEG_ASR_MAX_WER', DEFAULT_ASR_THRESHOLDS.maxWer),
-    maxDeletionRun: envNum('SEG_ASR_MAX_DELETION_RUN', DEFAULT_ASR_THRESHOLDS.maxDeletionRun),
-    minChars: envNum('SEG_ASR_MIN_CHARS', DEFAULT_ASR_THRESHOLDS.minChars),
-    maxCompressionRatio: envNum('SEG_ASR_MAX_COMPRESSION', DEFAULT_ASR_THRESHOLDS.maxCompressionRatio),
-    minAvgLogprob: envNum('SEG_ASR_MIN_AVG_LOGPROB', DEFAULT_ASR_THRESHOLDS.minAvgLogprob),
-    maxNoSpeechProb: envNum('SEG_ASR_MAX_NO_SPEECH', DEFAULT_ASR_THRESHOLDS.maxNoSpeechProb),
+    maxWer: configValue<number>('qa.asr.maxWer'),
+    maxDeletionRun: configValue<number>('qa.asr.maxDeletionRun'),
+    minChars: configValue<number>('qa.asr.minChars'),
+    maxCompressionRatio: configValue<number>('qa.asr.maxCompression'),
+    minAvgLogprob: configValue<number>('qa.asr.minAvgLogprob'),
+    maxNoSpeechProb: configValue<number>('qa.asr.maxNoSpeech'),
   };
   return { ...base, ...override };
 }
 
 /* --- Config resolvers (shared by generation.ts + the repair route) --- */
 
-/** ASR content-QA is OFF unless `SEG_ASR_ENABLED` ∈ {1,true,yes,on} — the
-    Whisper sidecar dep stays dormant until then. */
+/** ASR content-QA is OFF unless the qa.asr.enabled knob is true (env
+    SEG_ASR_ENABLED or an app override). */
 export function asrEnabled(): boolean {
-  const raw = (process.env.SEG_ASR_ENABLED ?? '').trim().toLowerCase();
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  return configValue<boolean>('qa.asr.enabled');
 }
 
 /** Drift re-record budget (best-of-N by WER). Default 2; 0 = detect + flag only. */
 export function resolveAsrRerecords(): number {
-  const raw = Number(process.env.SEG_ASR_MAX_RERECORDS);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+  return configValue<number>('qa.asr.maxRerecords');
 }
 
 /** Transcribe 1-in-N body groups. Default 1 = every sentence. */
 export function resolveAsrSampleEvery(): number {
-  const raw = Number(process.env.SEG_ASR_SAMPLE_EVERY);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+  return configValue<number>('qa.asr.sampleEvery');
 }
 
 /** Proper-noun allowlist from the cast's display names (+ aliases) so Whisper

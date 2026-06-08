@@ -30,6 +30,14 @@ import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter
 import { getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 import { geminiRateLimiter } from './rate-limit.js';
 import { stripCodeFences } from './gemini.js';
+import { readPrompt } from '../config/prompts.js';
+
+/** Load the voice-style system instruction, resolving through the prompt-fork
+    loader so a user-edited fork in ~/.castwright/prompts/prompt.voiceStyle.md
+    takes effect on the next call without a restart (apply:'live'). */
+export async function loadVoiceStyleSkill(): Promise<string> {
+  return (await readPrompt('prompt.voiceStyle')).text;
+}
 
 /** Pinned voice-style model. `gemini-3.1-flash-lite` per the locked
     decision; env-overridable for ops triage without a rebuild. */
@@ -72,8 +80,13 @@ function describeTone(tone: CastCharacter['tone']): string | null {
    descriptive sentence covering gender / age / pitch / pace / timbre / emotion
    that ENDS with a purpose clause ("…for audiobook narration"), and the five
    principles — specificity, multidimensionality, objectivity, originality,
-   conciseness. See docs/features/160-voicedesign-persona-format.md. */
-export function buildVoiceStylePrompt(character: CastCharacter): string {
+   conciseness. See docs/features/160-voicedesign-persona-format.md.
+
+   The static system instruction lives in skills/audiobook-voice-style.md;
+   this function reads it fresh each call (same pattern as loadSkill in
+   gemini.ts) so prompt iteration takes effect without a server restart. */
+export async function buildVoiceStylePrompt(character: CastCharacter): Promise<string> {
+  const systemInstruction = await loadVoiceStyleSkill();
   const hint = buildHintFromCast(character);
   const lines: string[] = [];
 
@@ -95,19 +108,7 @@ export function buildVoiceStylePrompt(character: CastCharacter): string {
     for (const q of quotes) lines.push(`- "${q}"`);
   }
 
-  return `You design voices for an audiobook. From the character profile below, write ONE voice-design persona that a text-to-speech model will use to synthesise this character's voice. Describe how the voice SOUNDS, then end with a short purpose clause.
-
-Cover these dimensions: gender, apparent age, pitch (high / medium / low), speaking pace, timbre (e.g. warm, crisp, rich, gravelly, bright), and the dominant emotional register. End with the use — "suitable for audiobook narration" for a narrator, otherwise "for expressive character dialogue".
-
-Rules:
-- Output ONLY the persona. No preamble, no quotes, no markdown, no name.
-- One to three sentences, roughly 15–40 words. Every word must add a voice quality — don't repeat synonyms.
-- Combine multiple dimensions and be specific ("deep", "crisp", "fast-paced"), never vague ("nice").
-- Describe physical, perceptual voice qualities — NOT the character's feelings, backstory, or plot.
-- Don't imitate a real or famous person.
-- English.
-
-Example output: A bright teenage girl's voice, medium-high pitch and mid-paced, warm and lightly playful with a faintly nervous edge, suited to expressive character dialogue.
+  return `${systemInstruction.trimEnd()}
 
 Character profile:
 ${lines.join('\n')}
@@ -146,7 +147,7 @@ export async function generateVoiceStylePersona(character: CastCharacter): Promi
   }
 
   const model = resolveVoiceStyleModel();
-  const prompt = buildVoiceStylePrompt(character);
+  const prompt = await buildVoiceStylePrompt(character);
   /* Token estimate for the limiter — ~chars/4 plus a flat ceiling margin,
      same heuristic as the analyzer's estimateInputTokens. */
   const estTokens = Math.ceil(prompt.length / 4) + 200;

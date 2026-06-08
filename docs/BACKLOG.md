@@ -321,6 +321,13 @@ _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-
 
 ### Net-new capabilities
 
+#### `fs-42` — Advanced Settings: export/import config as JSON + env-diff view ([#668](https://github.com/dudarenok-maker/Castwright/issues/668))
+
+- _What:_ Power-user follow-ups for the shipped `#/advanced` surface (plan 199): a "Download config.json" export of all active overrides, a complementary JSON import flow (validates keys against live descriptors), and an env-diff indicator showing when a `.env`-locked value differs from the configured default.
+- _Benefit (user / technical / architectural):_ snapshot and restore tuning profiles across machines without re-entering values; validates the descriptor schema round-trips; natural migration target for future config shape changes.
+_Full detail + acceptance:_ [#668](https://github.com/dudarenok-maker/Castwright/issues/668) · plan `docs/features/199-advanced-settings.md`.
+
+
 #### `fs-27` — Chapter recaps / "previously…" summaries ([#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481))
 
 - _What:_ LLM-generated short recap per chapter (the analyzer already does LLM work), shown — and optionally synthesized as a spoken "previously…" intro — when the user resumes a book after a gap. Opt-in per book; cost surfaced up front.

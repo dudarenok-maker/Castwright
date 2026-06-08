@@ -17,6 +17,7 @@ import type { TtsEngine, TtsModelKey, TtsProvider, SynthesizeBatchOutput } from 
 import { resolveCharacterEngine } from './per-character-engine.js';
 import { normaliseForTts } from './text-normalize.js';
 import { pcmDurationSec } from './pcm.js';
+import { configValue } from '../config/resolver.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict, type SegmentQaThresholds } from './segment-qa.js';
 import {
   verifySegmentTranscript,
@@ -36,10 +37,7 @@ import { gpuSemaphore } from '../gpu/semaphore.js';
    adopted 2026-05-30 after the plan-136 live A/B on the 8 GB box (cap 32 /
    budget 3600); lower it (or the budget) if a smaller card OOMs. Only Qwen
    batches; Coqui/Kokoro/Gemini sentences always synth one-per-call. */
-const QWEN_BATCH_SIZE = (() => {
-  const raw = Number(process.env.QWEN_BATCH_SIZE);
-  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 32;
-})();
+const QWEN_BATCH_SIZE = configValue<number>('tts.batch.size');
 
 /* Length-bucketing (plan 128). A batched Qwen forward decodes for as many
    steps as the LONGEST item in the batch, padding the shorter ones; so a
@@ -49,10 +47,7 @@ const QWEN_BATCH_SIZE = (() => {
    audio-produced-per-step. Output-preserving (per-sentence prompts + index
    scatter-back), so audio is byte-identical regardless of batch composition.
    Default ON; `QWEN_BATCH_BUCKET=0` (or `false`) reverts to index-order. */
-const QWEN_BATCH_BUCKET = (() => {
-  const raw = String(process.env.QWEN_BATCH_BUCKET ?? '').toLowerCase();
-  return raw !== '0' && raw !== 'false';
-})();
+const QWEN_BATCH_BUCKET = configValue<boolean>('tts.batch.bucket');
 
 /* Token-budget packing (plan 136). A batched Qwen forward decodes to its
    LONGEST item and pads the rest, so its VRAM/compute proxy is
@@ -71,16 +66,18 @@ const QWEN_BATCH_BUCKET = (() => {
    prompts + index scatter-back), same as plan 128. */
 export const DEFAULT_QWEN_BATCH_TOKEN_BUDGET = 3600;
 
-/** Resolve `QWEN_BATCH_TOKEN_BUDGET`. Unset / empty → the shipped default
-    (token-budget packing ON); an explicit `0` (or a non-positive / non-numeric
-    value) → `0` = OFF, the fixed-width kill-switch. Exported for unit coverage
-    so the unset-vs-0 distinction stays pinned. */
+/** Resolve `QWEN_BATCH_TOKEN_BUDGET` from a raw env string. Unset / empty →
+    the shipped default (token-budget packing ON); an explicit `0` (or a
+    non-positive / non-numeric value) → `0` = OFF, the fixed-width kill-switch.
+    Exported for unit coverage so the unset-vs-0 parsing contract stays pinned.
+    The module-level constant routes through the registry so env vars AND app
+    overrides take effect. */
 export function resolveQwenTokenBudget(raw: string | undefined): number {
   if (raw === undefined || raw.trim() === '') return DEFAULT_QWEN_BATCH_TOKEN_BUDGET;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
-const QWEN_BATCH_TOKEN_BUDGET = resolveQwenTokenBudget(process.env.QWEN_BATCH_TOKEN_BUDGET);
+const QWEN_BATCH_TOKEN_BUDGET = configValue<number>('tts.batch.tokenBudget');
 
 /* Defensive per-call ceiling (plan 148). A single provider call that never
    returns — e.g. Qwen's open-ended decode running away on degenerate, non-prose

@@ -83,6 +83,7 @@ import { gpuQueueRouter } from './routes/gpu-queue.js';
 import { diagnosticsRouter } from './routes/diagnostics.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
+import { configRouter } from './routes/config.js';
 import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
@@ -103,6 +104,7 @@ import {
 } from './workspace/user-settings.js';
 import {
   createSidecarSupervisor,
+  registerActiveSupervisor,
   type SidecarSupervisor,
 } from './tts/sidecar-supervisor.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
@@ -179,6 +181,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)
 app.use('/api/user/settings', userSettingsRouter); // GET + PUT — account defaults + non-secret env overrides
+app.use('/api/config', configRouter); // GET descriptors+values, PUT override, POST reset
 import { upgradeRouter } from './routes/upgrade.js';
 app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
 import { infoRouter } from './routes/info.js';
@@ -377,6 +380,7 @@ const listenerCallback = () => {
     },
   });
   void sidecarSupervisor.start();
+  registerActiveSupervisor(sidecarSupervisor);
 
   /* srv-2 — start the periodic per-book state.json backup sweep (no-op when
      disabled in user-settings). Timers are unref()'d so they never hold the

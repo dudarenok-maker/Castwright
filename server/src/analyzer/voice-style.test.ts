@@ -5,7 +5,12 @@
      - the call is pinned to gemini-3.1-flash-lite (env-overridable)
      - the model's output is cleaned (fences, label, wrapping quotes stripped)
      - a missing API key throws a clear message before any network call
-   No network — the SDK is stubbed. */
+   No network — the SDK is stubbed.
+
+   Task A: buildVoiceStylePrompt is now async (reads the skill .md). The
+   node:fs/promises readFile is mocked to return a canonical skill text so
+   the test never touches the real filesystem and verifies the static
+   instruction is sourced from the file. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { geminiRateLimiter } from './rate-limit.js';
@@ -22,7 +27,38 @@ vi.mock('@google/genai', () => ({
 let mockApiKey: string | null = 'test-key';
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedGeminiApiKey: () => mockApiKey,
+  readConfigOverrides: () => ({}),
 }));
+
+/* Canonical static instruction text — matches the content of
+   skills/audiobook-voice-style.md so the assertions below are stable
+   even if the real file path changes. Swap out readFile so the test
+   is filesystem-independent. */
+const SKILL_TEXT = `You design voices for an audiobook. From the character profile below, write ONE voice-design persona that a text-to-speech model will use to synthesise this character's voice. Describe how the voice SOUNDS, then end with a short purpose clause.
+
+Cover these dimensions: gender, apparent age, pitch (high / medium / low), speaking pace, timbre (e.g. warm, crisp, rich, gravelly, bright), and the dominant emotional register. End with the use — "suitable for audiobook narration" for a narrator, otherwise "for expressive character dialogue".
+
+Rules:
+- Output ONLY the persona. No preamble, no quotes, no markdown, no name.
+- One to three sentences, roughly 15–40 words. Every word must add a voice quality — don't repeat synonyms.
+- Combine multiple dimensions and be specific ("deep", "crisp", "fast-paced"), never vague ("nice").
+- Describe physical, perceptual voice qualities — NOT the character's feelings, backstory, or plot.
+- Don't imitate a real or famous person.
+- English.
+
+Example output: A bright teenage girl's voice, medium-high pitch and mid-paced, warm and lightly playful with a faintly nervous edge, suited to expressive character dialogue.`;
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: vi.fn((...args: Parameters<typeof actual.readFile>) => {
+      const p = String(args[0]);
+      if (p.endsWith('audiobook-voice-style.md')) return Promise.resolve(SKILL_TEXT);
+      return actual.readFile(...args);
+    }),
+  };
+});
 
 const Maerin: CastCharacter = {
   id: 'Maerin',
@@ -52,7 +88,7 @@ beforeEach(() => {
 describe('buildVoiceStylePrompt', () => {
   it('includes the profile fields and the dialogue evidence quotes', async () => {
     const { buildVoiceStylePrompt } = await import('./voice-style.js');
-    const prompt = buildVoiceStylePrompt(Maerin);
+    const prompt = await buildVoiceStylePrompt(Maerin);
     expect(prompt).toContain('Maerin');
     expect(prompt).toContain('protagonist');
     expect(prompt).toContain('female');
@@ -68,13 +104,23 @@ describe('buildVoiceStylePrompt', () => {
     expect(prompt).toMatch(/Output ONLY/i);
   });
 
+  it('sources the static instruction from the skill .md file', async () => {
+    /* Task A assertion: the known phrases from SKILL_TEXT are present,
+       confirming the prompt is built from the .md rather than inline code. */
+    const { buildVoiceStylePrompt } = await import('./voice-style.js');
+    const prompt = await buildVoiceStylePrompt(Maerin);
+    expect(prompt).toContain('You design voices for an audiobook');
+    expect(prompt).toContain('Character profile:');
+    expect(prompt).toContain('Voice-design persona:');
+  });
+
   it('requests the official Qwen VoiceDesign format (pitch, purpose clause, objectivity)', async () => {
     /* Plan 160: the persona must mirror Qwen3-TTS's VoiceDesign guidance —
        a 15–40-word descriptive sentence covering pitch + the other voice
        dimensions and ending with a purpose/scenario clause, written as
        objective voice qualities rather than the character's feelings/plot. */
     const { buildVoiceStylePrompt } = await import('./voice-style.js');
-    const prompt = buildVoiceStylePrompt(Maerin);
+    const prompt = await buildVoiceStylePrompt(Maerin);
     /* Pitch is the dimension the old prompt omitted. */
     expect(prompt).toMatch(/pitch/i);
     /* A purpose/scenario clause is requested + exemplified. */
@@ -92,7 +138,7 @@ describe('buildVoiceStylePrompt', () => {
       name: 'Chatty',
       evidence: Array.from({ length: 20 }, (_, i) => ({ quote: `line ${i}` })),
     };
-    const prompt = buildVoiceStylePrompt(chatty);
+    const prompt = await buildVoiceStylePrompt(chatty);
     expect(prompt).toContain('line 0');
     expect(prompt).toContain('line 5');
     /* Only the first 6 quotes are kept. */
@@ -106,7 +152,7 @@ describe('cleanPersona', () => {
     expect(cleanPersona('```\na warm voice\n```')).toBe('a warm voice');
     expect(cleanPersona('Persona: a warm voice')).toBe('a warm voice');
     expect(cleanPersona('"a warm voice"')).toBe('a warm voice');
-    expect(cleanPersona('Voice style: “a warm voice”')).toBe('a warm voice');
+    expect(cleanPersona('Voice style: "a warm voice"')).toBe('a warm voice');
   });
 
   it('collapses multi-line output into a single instruct line', async () => {

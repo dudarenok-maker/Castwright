@@ -190,6 +190,13 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('advanced configuration view', async ({ page }) => {
+    await page.goto('/#/advanced');
+    await expect(page.getByRole('heading', { name: /Advanced configuration/i })).toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
   test('status popover', async ({ page }) => {
     /* The Status pill is always present in a book context; clicking it pins
        the popover open (TTS controls + analysis/generation/revisions). The

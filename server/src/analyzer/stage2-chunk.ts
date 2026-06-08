@@ -25,6 +25,7 @@
 
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { AnalyzerTruncatedError } from './errors.js';
+import { configValue } from '../config/resolver.js';
 import {
   runStage2WithCoverageGuard,
   validateStage2Coverage,
@@ -39,10 +40,7 @@ import {
    default cap with headroom for the splitting overhead. Tunable via env. */
 export const DEFAULT_STAGE2_CHUNK_CHAR_BUDGET = 9000;
 export function resolveStage2ChunkCharBudget(): number {
-  const raw = process.env.STAGE2_CHUNK_CHAR_BUDGET;
-  if (!raw) return DEFAULT_STAGE2_CHUNK_CHAR_BUDGET;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_STAGE2_CHUNK_CHAR_BUDGET;
+  return configValue<number>('analyzer.stage2.chunkCharBudget');
 }
 
 /** Split `body` into chunks at blank-line (paragraph) boundaries, each ≤

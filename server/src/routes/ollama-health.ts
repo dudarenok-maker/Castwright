@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../workspace/user-settings.js';
-import { ANALYZER_NUM_CTX, ANALYZER_NUM_GPU } from '../analyzer/ollama.js';
+import { resolveAnalyzerNumCtx, resolveAnalyzerNumGpu } from '../analyzer/ollama.js';
 import {
   installBootstrap as defaultInstallBootstrap,
   type InstallBootstrap,
@@ -233,7 +233,7 @@ ollamaHealthRouter.post('/load', async (_req: Request, res: Response) => {
       prompt: '',
       keep_alive: '5m',
       stream: false,
-      options: { num_ctx: ANALYZER_NUM_CTX, num_gpu: ANALYZER_NUM_GPU },
+      options: { num_ctx: resolveAnalyzerNumCtx(), num_gpu: resolveAnalyzerNumGpu() },
     },
     LOAD_TIMEOUT_MS,
   );

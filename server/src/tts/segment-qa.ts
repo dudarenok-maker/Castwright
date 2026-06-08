@@ -21,6 +21,7 @@
    env-override pattern of `audio-qa.ts`. */
 
 import { pcmDurationSec } from './pcm.js';
+import { configValue } from '../config/resolver.js';
 
 const BYTES_PER_SAMPLE = 2;
 const INT16_FULL_SCALE = 32768;
@@ -66,26 +67,17 @@ export const DEFAULT_SEGMENT_QA_THRESHOLDS: SegmentQaThresholds = {
   maxDurationRatio: 2.5,
 };
 
-function envNum(key: string, fallback: number): number {
-  const raw = process.env[key];
-  if (raw == null || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-/* Resolve thresholds: explicit arg wins, else env overrides on top of the
-   defaults. Read lazily per call so an env change between runs is honoured. */
+/* Resolve thresholds: explicit arg wins, else registry (env var / app override /
+   default) on top of the shipped defaults. Read lazily per call so a live
+   override takes effect on the next synthesised sentence. */
 function resolveThresholds(override?: SegmentQaThresholds): SegmentQaThresholds {
   if (override) return override;
   return {
-    silenceRms: envNum('SEG_QA_SILENCE_RMS', DEFAULT_SEGMENT_QA_THRESHOLDS.silenceRms),
-    noiseFloor: envNum('SEG_QA_NOISE_FLOOR', DEFAULT_SEGMENT_QA_THRESHOLDS.noiseFloor),
-    maxInternalSilenceSec: envNum(
-      'SEG_QA_MAX_INTERNAL_SILENCE_SEC',
-      DEFAULT_SEGMENT_QA_THRESHOLDS.maxInternalSilenceSec,
-    ),
-    minDurationRatio: envNum('SEG_QA_MIN_RATIO', DEFAULT_SEGMENT_QA_THRESHOLDS.minDurationRatio),
-    maxDurationRatio: envNum('SEG_QA_MAX_RATIO', DEFAULT_SEGMENT_QA_THRESHOLDS.maxDurationRatio),
+    silenceRms: configValue<number>('qa.seg.silenceRms'),
+    noiseFloor: configValue<number>('qa.seg.noiseFloor'),
+    maxInternalSilenceSec: configValue<number>('qa.seg.maxInternalSilenceSec'),
+    minDurationRatio: configValue<number>('qa.seg.minRatio'),
+    maxDurationRatio: configValue<number>('qa.seg.maxRatio'),
   };
 }
 

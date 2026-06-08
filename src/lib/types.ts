@@ -695,6 +695,67 @@ export type ExportLanInfo = components['schemas']['ExportLanInfo'];
    modal with this URL. */
 export type BookShareLink = components['schemas']['BookShareLink'];
 
+/* ── Advanced config knob types ──────────────────────────────────────── */
+
+/** One configurable knob as described by the server. */
+export interface KnobDescriptor {
+  key: string;
+  group: string;
+  label: string;
+  help: string;
+  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum';
+  min?: number;
+  max?: number;
+  step?: number;
+  options?: string[];
+  /** When the knob takes effect: immediately, on sidecar restart, or on server restart. */
+  apply: 'live' | 'restart-sidecar' | 'restart-server';
+  risk: 'low' | 'medium' | 'high';
+  /** True when this knob is a prompt template (backed by /api/config/prompts/:key). */
+  isPrompt: boolean;
+  default: number | boolean | string;
+}
+
+/** A named group of knobs exposed by the server. */
+export interface ConfigGroup {
+  id: string;
+  label: string;
+  help: string;
+  risk: 'low' | 'medium' | 'high';
+  collapsedByDefault: boolean;
+}
+
+/** Per-knob runtime value as returned by GET /api/config. */
+export interface KnobValue {
+  key: string;
+  effective: number | boolean | string;
+  /** Where the effective value came from. */
+  source: 'default' | 'env' | 'override';
+  /** True when the server has locked this knob (env-pinned, not user-editable). */
+  locked: boolean;
+  /** True when the user has an active override for this knob. */
+  overridden: boolean;
+}
+
+/** Map of key → KnobValue returned by the config endpoints. */
+export type ConfigValues = Record<string, KnobValue>;
+
+/** Full response from GET /api/config. */
+export interface ConfigResponse {
+  groups: ConfigGroup[];
+  descriptors: KnobDescriptor[];
+  values: ConfigValues;
+  restartPending: boolean;
+}
+
+/** Prompt state from GET/PUT /api/config/prompts/:id. */
+export interface PromptState {
+  id: string;
+  text: string;
+  isForked: boolean;
+  defaultText: string;
+}
+
 /* ── UI stage discriminated union ─────────────────────────────────────── */
 
 export type View =
@@ -731,4 +792,7 @@ export type Stage =
      controls that used to live in the Account view. */
   | { kind: 'model-manager' }
   /* Wave 3 — /about brand page, reached from the Admin view. */
-  | { kind: 'about' };
+  | { kind: 'about' }
+  /* Advanced configuration — tune model, generation, and QA knobs. Reached
+     from the Admin view and Account view. */
+  | { kind: 'advanced' };

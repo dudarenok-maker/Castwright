@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedSidecarUrl: () => 'http://localhost:9000',
+  readConfigOverrides: () => ({}),
 }));
 
 import { ensureSidecarEngineReady } from './ensure-sidecar-loaded.js';

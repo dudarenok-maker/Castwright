@@ -118,6 +118,7 @@ export function AdminView() {
 
       <AboutLink />
       <ModelManagerLink />
+      <AdvancedConfigLink />
       <HealthBoard />
       <GenerationThroughput stats={stats} />
       <ResourceTrends />
@@ -170,6 +171,29 @@ function AboutLink() {
         className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
       >
         About Castwright →
+      </button>
+    </section>
+  );
+}
+
+/* Advanced configuration entry point — reached from Admin. */
+function AdvancedConfigLink() {
+  const dispatch = useAppDispatch();
+  return (
+    <section className="mb-6 rounded-2xl border border-ink/10 bg-white p-5 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        <h3 className="text-base font-semibold text-ink">Advanced configuration</h3>
+        <p className="mt-1 text-xs text-ink/55 max-w-prose">
+          Tune model, generation, and QA settings at your own risk.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => dispatch(uiActions.openAdvanced())}
+        data-testid="admin-open-advanced"
+        className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+      >
+        Open Advanced settings →
       </button>
     </section>
   );

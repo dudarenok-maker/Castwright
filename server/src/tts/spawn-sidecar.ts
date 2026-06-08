@@ -26,6 +26,8 @@ import type { UserSettings } from '../workspace/user-settings.js';
 import { WORKSPACE_ROOT } from '../workspace/paths.js';
 import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
+import { allKnobs } from '../config/registry.js';
+import { resolveKnob } from '../config/resolver.js';
 
 export type TtsModelKey = UserSettings['defaultTtsModelKey'];
 
@@ -303,6 +305,87 @@ function killTree(pid: number, spawnFn: typeof spawn): Promise<void> {
   });
 }
 
+/** Options for {@link buildSidecarEnv}. Mirrors the subset of
+    {@link SpawnSidecarOpts} that the env construction actually needs,
+    separated so callers and tests can invoke it without an `autoStart`
+    flag or async probe helpers. */
+export interface BuildSidecarEnvOpts {
+  modelKey: TtsModelKey;
+  eagerLoadKokoro: boolean;
+  eagerLoadQwen: boolean;
+  repoRoot: string;
+}
+
+/** Build the child-process env object for a sidecar spawn. Extracted as
+    a pure (synchronous) function so it can be unit-tested independently of
+    the async spawn logic and used by POST /api/sidecar/restart without
+    duplicating the env assembly.
+
+    Construction is two layers:
+      1. `...process.env` — parent env pass-through (fs-1 weight-path vars,
+         PYTORCH_CUDA_ALLOC_CONF default, etc.).
+      2. PRELOAD vars + QWEN_VOICES_DIR derived from modelKey + eager-load toggles.
+      3. Registry override loop — any restart-sidecar knob whose effective
+         source is NOT 'default' (i.e. an explicit env var or an app override)
+         is injected as a string. An explicit registry override for a PRELOAD_QWEN
+         or PRELOAD_KOKORO knob WINS over the modelKey/eagerLoad-derived value — that
+         is the intended precedence so advanced users can pin preloads via the config
+         UI without touching code. */
+export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
+  const { modelKey, eagerLoadKokoro, eagerLoadQwen, repoRoot: _repoRoot } = opts;
+
+  /* The default engine honours its own eager-load toggle; the non-default
+     engine always stays LAZY as the on-demand fallback.
+     Qwen default → PRELOAD_QWEN follows eagerLoadQwen, Kokoro forced off.
+     Kokoro/Coqui default → PRELOAD_QWEN off, Kokoro follows eagerLoadKokoro. */
+  const isQwenDefault = modelKey === 'qwen3-tts-0.6b';
+  /* The `...process.env` spread carries the parent's full environment —
+     including KOKORO_MODEL_PATH / KOKORO_VOICES_PATH for fs-1 shared weights.
+     Keep that spread: replacing it with an allowlist would orphan the weights
+     inside the per-release tree on every upgrade. */
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
+    PRELOAD_QWEN: isQwenDefault ? (eagerLoadQwen ? '1' : '0') : '0',
+    PRELOAD_KOKORO: isQwenDefault ? '0' : eagerLoadKokoro ? '1' : '0',
+    /* Park the Qwen designed-voice embedding cache in the per-workspace
+       tree (sibling to voices.json), not the sidecar's __file__-relative
+       dir. A sidecar restart / cwd change / workspace move can't orphan a
+       designed voice (a latent ENOENT on torch.load at synth time). */
+    QWEN_VOICES_DIR: join(WORKSPACE_ROOT, 'voices', 'qwen'),
+    /* Fight CUDA allocator fragmentation. PyTorch's default caching allocator
+       uses fixed cudaMalloc blocks; over a long run the variable-length Qwen
+       batches fragment VRAM until a wide (e.g. 32-item) batch can't find a
+       contiguous block and 500s with `CUDA error: out of memory` even though
+       total usage is modest — the 2026-05-30 mid-run sidecar OOM. */
+    PYTORCH_CUDA_ALLOC_CONF:
+      process.env.PYTORCH_CUDA_ALLOC_CONF ??
+      'expandable_segments:True,max_split_size_mb:256,garbage_collection_threshold:0.8',
+  };
+
+  /* Layer 2: inject any restart-sidecar knob whose value is NOT the registry
+     default (source==='env' or source==='override'). Knobs still at their
+     default are intentionally left unset — the sidecar applies its own Python
+     default, avoiding double-defaulting drift.
+
+     Precedence note: this loop runs AFTER the PRELOAD_* block above, so an
+     explicit registry override for tts.preload.coqui / .kokoro / .qwen WINS
+     over the modelKey/eagerLoad-derived '0'/'1'. That is the intended
+     behaviour: a user who pins PRELOAD_QWEN via the config UI should get their
+     override respected even when modelKey logic would say otherwise. */
+  for (const knob of allKnobs()) {
+    if (knob.apply !== 'restart-sidecar' || !knob.env) continue;
+    const st = resolveKnob(knob);
+    if (st.source === 'default') continue;
+    // Emit booleans as '1'/'0' — the canonical form every sidecar env reader
+    // accepts. Some main.py reads use a bare `== "1"` check that would reject
+    // the string 'true' (e.g. PRELOAD_COQUI), silently dropping the override.
+    env[knob.env] = knob.type === 'boolean' ? (st.effective ? '1' : '0') : String(st.effective);
+  }
+
+  return env;
+}
+
 /** Spawn the TTS sidecar if the user preference says so and nothing is
     already listening on its port. Returns a handle whose `kill()` reaps
     the whole process tree, or `null` when no spawn happened. Never
@@ -404,50 +487,11 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
   const logDir = resolveLogDir(repoRoot);
   const runDir = resolveRunDir(repoRoot);
 
-  /* The default engine honours its own eager-load toggle; the non-default
-     engine always stays LAZY as the on-demand fallback (it warms in ~1 s at
-     the first fallback render, so eager-loading it too would just hog VRAM).
-     Qwen default → PRELOAD_QWEN follows eagerLoadQwen, Kokoro forced off.
-     Kokoro/Coqui default → PRELOAD_QWEN off, Kokoro follows eagerLoadKokoro. */
-  const isQwenDefault = modelKey === 'qwen3-tts-0.6b';
-  /* The `...process.env` spread carries the parent's full environment to the
-     sidecar — including KOKORO_MODEL_PATH / KOKORO_VOICES_PATH when the
-     versioned-dir launcher (fs-1) points the ~330 MB Kokoro weights at a shared
-     `models/kokoro` sibling. Keep that spread: replacing it with an allowlist
-     would orphan the weights inside the per-release tree on every upgrade.
-     (spawn-sidecar.test.ts pins this pass-through.) */
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    PRELOAD_COQUI: modelKey === 'coqui-xtts-v2' ? '1' : '0',
-    PRELOAD_QWEN: isQwenDefault ? (eagerLoadQwen ? '1' : '0') : '0',
-    PRELOAD_KOKORO: isQwenDefault ? '0' : eagerLoadKokoro ? '1' : '0',
-    /* Park the Qwen designed-voice embedding cache in the per-workspace
-       tree (sibling to voices.json), not the sidecar's __file__-relative
-       dir. A sidecar restart / cwd change / workspace move can't orphan a
-       designed voice (a latent ENOENT on torch.load at synth time). */
-    QWEN_VOICES_DIR: join(WORKSPACE_ROOT, 'voices', 'qwen'),
-    /* Fight CUDA allocator fragmentation. PyTorch's default caching allocator
-       uses fixed cudaMalloc blocks; over a long run the variable-length Qwen
-       batches fragment VRAM until a wide (e.g. 32-item) batch can't find a
-       contiguous block and 500s with `CUDA error: out of memory` even though
-       total usage is modest — the 2026-05-30 mid-run sidecar OOM (recovered by
-       the srv-15 poison-respawn, but it failed 2 chapters). `expandable_segments`
-       (PyTorch ≥2.1) grows/shrinks virtual segments via CUDA VMM instead, so
-       fragmented free space is reusable.
-
-       NB (plan 161): `expandable_segments` is **unsupported on Windows** — torch
-       logs "expandable_segments not supported on this platform" and ignores it,
-       so plan 144's default was a silent no-op on this box while a reserved-pool
-       that crept past the card spilled into the NVIDIA sysmem fallback (RTF
-       collapse). So the default ALSO carries the cross-platform `max_split_size_mb`
-       + `garbage_collection_threshold` knobs, which DO apply on Windows and curb
-       the same fragmentation. Set via env because it must be in place BEFORE
-       torch initialises the CUDA context — a spawn-env default is guaranteed
-       pre-import. An explicit parent-env value (server/.env) wins outright. */
-    PYTORCH_CUDA_ALLOC_CONF:
-      process.env.PYTORCH_CUDA_ALLOC_CONF ??
-      'expandable_segments:True,max_split_size_mb:256,garbage_collection_threshold:0.8',
-  };
+  /* Build the child env via the shared pure function so registry overrides
+     for restart-sidecar knobs are injected here too (Task B). The spawn-sidecar
+     tests pin the produced env values; sidecar-env.test.ts pins the override-
+     injection contract. */
+  const env = buildSidecarEnv({ modelKey, eagerLoadKokoro, eagerLoadQwen, repoRoot });
 
   /* Open the sidecar's log files (tts.log / tts.err.log, the same convention
      start-app.ps1 uses) and hand the child their raw file descriptors as
