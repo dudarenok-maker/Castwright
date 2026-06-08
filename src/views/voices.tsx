@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { SectionLabel, MixedHeading, VoiceSwatch, Pill, VariantsBadge } from '../components/primitives';
+import {
+  SectionLabel,
+  MixedHeading,
+  VoiceSwatch,
+  Pill,
+  VariantsBadge,
+  NeedsVariantsBadge,
+} from '../components/primitives';
 import { StatTile } from '../components/stat-tiles';
 import { VoiceCard } from '../components/voice-library-panel';
 import { IconPlay, IconSparkle } from '../lib/icons';
@@ -1191,6 +1198,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               selectedVoiceIds={selectedVoiceIds}
               onToggleSelect={toggleSelect}
               variantCountByVoiceId={variantCountByVoiceId}
+              missingVariantCountByVoiceId={missingVariantCountByVoiceId}
               representativeBookIdBySeries={representativeBookIdBySeries}
               onRebaselineSeries={(bookId) =>
                 dispatch(uiActions.openRebaselineModal({ bookId }))
@@ -1756,6 +1764,9 @@ interface QwenSectionProps {
   /* fs-34 — designed emotion-variant count per Qwen voiceId (0/absent → no
      badge). Resolved in the parent where the cross-book cast cache lives. */
   variantCountByVoiceId: Map<string, number>;
+  /* fe-34 — in-use emotions still lacking a designed variant, per Qwen voiceId
+     (0/absent → no badge). Resolved in the parent alongside variantCountByVoiceId. */
+  missingVariantCountByVoiceId: Map<string, number>;
   /* Per-series Rebaseline (plan 108 follow-up) — reused verbatim from
      VoiceFamilySection. Rebaseline *creates* designed Qwen voices, so it
      sits naturally on the Qwen sections' series-group headers. */
@@ -1777,6 +1788,7 @@ function QwenStatusSection({
   selectedVoiceIds,
   onToggleSelect,
   variantCountByVoiceId,
+  missingVariantCountByVoiceId,
   representativeBookIdBySeries,
   onRebaselineSeries,
 }: QwenSectionProps) {
@@ -1851,6 +1863,11 @@ function QwenStatusSection({
                                 )}
                                 {(variantCountByVoiceId.get(v.id) ?? 0) > 0 && (
                                   <VariantsBadge count={variantCountByVoiceId.get(v.id)!} />
+                                )}
+                                {(missingVariantCountByVoiceId.get(v.id) ?? 0) > 0 && (
+                                  <NeedsVariantsBadge
+                                    count={missingVariantCountByVoiceId.get(v.id)!}
+                                  />
                                 )}
                               </span>
                             ) : undefined
