@@ -63,11 +63,12 @@ import { castDesignMiddleware } from './cast-design-stream-middleware';
 import { broadcastMiddleware } from './broadcast-middleware';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
+import { exportPollMiddleware } from './exports-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
 
 /** Persisted ui-slice keys. Stage so refresh restores the same view +
  *  chapter + drawer; model selectors so the user's per-session picks
- *  survive boot. Transient overlays (handoffApp, regenChapter,
+ *  survive boot. Transient overlays (regenChapter,
  *  matchDetailFor, staleAudio, previewRegen, previewMode, ...) are
  *  deliberately omitted — restoring them would re-open dismissed
  *  modals on every refresh. */
@@ -192,6 +193,7 @@ export const store = configureStore({
       broadcastMiddleware,
       queueDispatcherMiddleware(getStreamRunner),
       spliceRunnerMiddleware(),
+      exportPollMiddleware,
     ),
 });
 

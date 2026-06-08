@@ -27,7 +27,6 @@ function makeStore({
     stage: { kind: 'books' },
     currentTrack: null,
     matchDetailFor: null,
-    handoffApp: null,
     regenChapter: null,
     regenInitialScope: null,
     regenCharacterCtx: null,

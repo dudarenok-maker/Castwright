@@ -635,15 +635,6 @@ export interface ListenerApp {
   sendVerb: string;
 }
 
-export interface WalkthroughStep {
-  id: number;
-  title: string;
-  description: string;
-  illustration: string;
-  detail?: string;
-  input?: { type: string; placeholder: string; value: string };
-}
-
 export interface RegenReason {
   id: string;
   label: string;

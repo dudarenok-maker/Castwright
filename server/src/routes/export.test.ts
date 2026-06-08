@@ -414,6 +414,29 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
   });
 });
 
+describe('GET /api/books/:bookId/exports (list)', () => {
+  it('returns the book\'s jobs newest-first', async () => {
+    const first = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'mp3-zip', destination: 'download' })
+      .expect(201);
+    const second = await request(app)
+      .post(`/api/books/${bookId}/exports`)
+      .send({ format: 'm4b', destination: 'download' })
+      .expect(201);
+    const res = await request(app).get(`/api/books/${bookId}/exports`).expect(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    const ids = res.body.map((j: { id: string }) => j.id);
+    expect(ids).toContain(first.body.id);
+    expect(ids).toContain(second.body.id);
+    expect(ids.indexOf(second.body.id)).toBeLessThan(ids.indexOf(first.body.id)); // newest-first
+  });
+
+  it('404s for an unknown book', async () => {
+    await request(app).get('/api/books/does-not-exist/exports').expect(404);
+  });
+});
+
 describe('GET /api/export/lan', () => {
   it('returns the listening port and only non-loopback IPv4 URLs', async () => {
     const res = await request(app).get(`/api/export/lan`);

@@ -326,6 +326,16 @@ exportRouter.post('/:bookId/exports', async (req: Request, res: Response) => {
   return res.status(201).json(diskWarning ? { ...job, warning: diskWarning } : job);
 });
 
+exportRouter.get('/:bookId/exports', async (req: Request, res: Response) => {
+  const located = await findBookByBookId(req.params.bookId);
+  if (!located) return res.status(404).json({ error: 'book_not_found' });
+  await rehydrateBook(located.bookDir, located.state.bookId);
+  const list = [...jobs.values()]
+    .filter((j) => j.bookId === located.state.bookId)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  return res.json(list);
+});
+
 exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
   const located = await findBookByBookId(req.params.bookId);
   if (!located) return res.status(404).json({ error: 'book_not_found' });
