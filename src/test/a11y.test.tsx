@@ -41,6 +41,9 @@ vi.mock('../lib/api', () => ({
     getWorkspaceInfo: () => new Promise(() => {}),
     importManuscript: () => new Promise(() => {}),
     getChapterAudio: () => new Promise(() => {}),
+    // Listen-view companion banner probes this on mount; no APK in the a11y
+    // fixture, so the "Download .apk" button stays hidden.
+    checkCompanionApk: () => Promise.resolve({ available: false, sizeBytes: null }),
   },
 }));
 
