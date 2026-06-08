@@ -721,4 +721,6 @@ export type Stage =
   /* fs-23 — In-app Model Manager. Top-level view (like account/admin), reached
      from the Admin view. Consolidates all model install/inventory/residency
      controls that used to live in the Account view. */
-  | { kind: 'model-manager' };
+  | { kind: 'model-manager' }
+  /* Wave 3 — /about brand page, reached from the Admin view. */
+  | { kind: 'about' };
