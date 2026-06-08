@@ -47,6 +47,12 @@ export interface QueueState {
       too. Contract documented in docs/features/archive/102-global-queue-modal.md
       (invariant 8). */
   paused: boolean;
+  /** Sidecar-recycling gate — true when the server's active sidecar supervisor
+      has no live child (the process is dead/respawning). The dispatcher holds
+      NEW claims while this is true; in-flight streams run to completion via
+      the server's readiness gate. Avoids wasting worker slots into a dying
+      sidecar. Sourced from GET /api/queue `recycling` field; defaults false. */
+  recycling: boolean;
   /** First-load gate — true after the initial GET /api/queue completes. The
       modal renders empty-state UI vs spinner based on this. */
   loaded: boolean;
@@ -55,6 +61,7 @@ export interface QueueState {
 const initialState: QueueState = {
   entries: [],
   paused: false,
+  recycling: false,
   loaded: false,
 };
 
@@ -65,9 +72,13 @@ export const queueSlice = createSlice({
     /** Replace the whole snapshot — called by every queue-thunk after a
         successful round-trip. The server is authoritative; the slice is a
         mirror. */
-    setSnapshot: (s, a: PayloadAction<{ entries: QueueEntry[]; paused: boolean }>) => {
+    setSnapshot: (
+      s,
+      a: PayloadAction<{ entries: QueueEntry[]; paused: boolean; recycling?: boolean }>,
+    ) => {
       s.entries = a.payload.entries;
       s.paused = a.payload.paused;
+      s.recycling = a.payload.recycling ?? false;
       s.loaded = true;
     },
     /** Mark the queue as not-yet-loaded — used when the slice is reset
@@ -86,6 +97,7 @@ interface RootSliceShape {
 
 export const selectQueueEntries = (s: RootSliceShape): QueueEntry[] => s.queue.entries;
 export const selectQueuePaused = (s: RootSliceShape): boolean => s.queue.paused;
+export const selectQueueRecycling = (s: RootSliceShape): boolean => s.queue.recycling;
 export const selectQueueLoaded = (s: RootSliceShape): boolean => s.queue.loaded;
 export const selectQueueCount = (s: RootSliceShape): number => s.queue.entries.length;
 

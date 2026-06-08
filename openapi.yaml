@@ -3474,7 +3474,7 @@ components:
 
     QueueListResponse:
       type: object
-      required: [entries, paused]
+      required: [entries, paused, recycling]
       properties:
         entries:
           type: array
@@ -3483,6 +3483,13 @@ components:
         paused:
           type: boolean
           description: Queue-global pause flag. When true, the dispatcher waits at the next chapter boundary.
+        recycling:
+          type: boolean
+          description: >
+            True when the active sidecar supervisor has no live child process (the sidecar is dead
+            or respawning). The dispatcher holds new claims while this is true; in-flight streams
+            run to completion via the server-side readiness gate. False when there is no managed
+            sidecar (autoStart off).
 
     QueueEnqueueRequest:
       type: object

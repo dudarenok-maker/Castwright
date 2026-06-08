@@ -51,6 +51,7 @@ export interface EnqueueInput {
 interface QueueSnapshotResponse {
   entries: QueueEntry[];
   paused: boolean;
+  recycling?: boolean;
 }
 
 async function readSnapshot(res: Response): Promise<QueueSnapshotResponse> {

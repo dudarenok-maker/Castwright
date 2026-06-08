@@ -81,6 +81,20 @@ describe('queueSlice.setSnapshot', () => {
     );
     expect(s.entries.map((e) => e.id)).toEqual(['new']);
   });
+
+  it('setSnapshot ingests recycling (and defaults to false when omitted)', () => {
+    const withRecycling = queueSlice.reducer(
+      initial,
+      queueActions.setSnapshot({ entries: [], paused: false, recycling: true }),
+    );
+    expect(withRecycling.recycling).toBe(true);
+
+    const withoutRecycling = queueSlice.reducer(
+      initial,
+      queueActions.setSnapshot({ entries: [], paused: false }),
+    );
+    expect(withoutRecycling.recycling).toBe(false);
+  });
 });
 
 describe('queueSlice.reset', () => {
@@ -102,6 +116,7 @@ describe('selectors', () => {
         sampleEntry({ id: 'a2', bookId: 'book-A', chapterId: 2, order: 2 }),
       ],
       paused: false,
+      recycling: false,
       loaded: true,
     },
   };
@@ -137,7 +152,7 @@ describe('selectors', () => {
   it('selectInFlightEntry returns the FIRST in_progress entry or null', () => {
     expect(selectInFlightEntry(populated)?.id).toBe('a1');
     const empty: { queue: QueueState } = {
-      queue: { entries: [sampleEntry()], paused: false, loaded: true },
+      queue: { entries: [sampleEntry()], paused: false, recycling: false, loaded: true },
     };
     expect(selectInFlightEntry(empty)).toBeNull();
   });
@@ -154,6 +169,7 @@ describe('selectors', () => {
           sampleEntry({ id: 'b2', bookId: 'book-B', chapterId: 6, status: 'failed' }),
         ],
         paused: false,
+        recycling: false,
         loaded: true,
       },
     };
@@ -166,7 +182,7 @@ describe('selectors', () => {
 
   it('selectInFlightEntryIds is empty when nothing is in flight', () => {
     const none: { queue: QueueState } = {
-      queue: { entries: [sampleEntry()], paused: false, loaded: true },
+      queue: { entries: [sampleEntry()], paused: false, recycling: false, loaded: true },
     };
     expect(selectInFlightEntryIds(none).size).toBe(0);
   });
@@ -202,13 +218,14 @@ describe('active-generation selectors', () => {
       activeStreams: opts.activeStream ? { [opts.activeStream.bookId]: opts.activeStream } : {},
     }) as ChaptersState;
 
-  const emptyQueue: QueueState = { entries: [], paused: false, loaded: true };
+  const emptyQueue: QueueState = { entries: [], paused: false, recycling: false, loaded: true };
 
   it('returns null and the real count when there ARE real queue entries (real queue wins)', () => {
     const s = {
       queue: {
         entries: [sampleEntry({ id: 'r1' }), sampleEntry({ id: 'r2' })],
         paused: false,
+        recycling: false,
         loaded: true,
       },
       chapters: chaptersState({ activeStream: stream(), currentBookId: 'book-A' }),
