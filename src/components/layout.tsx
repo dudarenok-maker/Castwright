@@ -20,7 +20,7 @@ import { revisionsActions, selectDriftGroupsByBook } from '../store/revisions-sl
 import { libraryActions } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
 import { changeLogActions } from '../store/change-log-slice';
-import { bookMetaActions, narratorNameFromCast } from '../store/book-meta-slice';
+import { bookMetaActions } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { listenProgressActions } from '../store/listen-progress-slice';
 import {
@@ -724,8 +724,7 @@ export function Layout() {
         );
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
         /* Editable Listen-view metadata: seed from state.json's editorial
-           fields, falling back to the cast narrator's name when the book
-           predates the narratorCredit field. */
+           fields; when narratorCredit is absent the slice defaults to 'Castwright'. */
         dispatch(
           bookMetaActions.hydrateFromBookState({
             bookId,
@@ -739,7 +738,6 @@ export function Layout() {
               description: res.state.description ?? null,
               notes: res.state.notes ?? null,
             },
-            narratorFallback: narratorNameFromCast(res.cast?.characters ?? []),
           }),
         );
 
@@ -825,7 +823,6 @@ export function Layout() {
       bookMetaActions.hydrateFromBookState({
         bookId,
         state: { title: entry.title, author: entry.author, series: entry.series },
-        narratorFallback: narratorNameFromCast(characters),
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps

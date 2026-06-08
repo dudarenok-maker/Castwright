@@ -6,11 +6,10 @@ import {
   bookMetaActions,
   selectEffectiveMeta,
   selectIsDirty,
-  narratorNameFromCast,
+  DEFAULT_NARRATOR_CREDIT,
   type BookMetaState,
   type EditableBookMeta,
 } from './book-meta-slice';
-import type { Character } from '../lib/types';
 import type { RootState } from './index';
 
 const initial = (): BookMetaState => ({ draft: null, saved: {} });
@@ -59,21 +58,21 @@ describe('bookMetaSlice — hydrateFromBookState', () => {
     });
   });
 
-  it('falls back to narratorFallback when state.narratorCredit is missing', () => {
+  it('defaults to DEFAULT_NARRATOR_CREDIT when state.narratorCredit is missing', () => {
     const next = reducer(
       initial(),
       bookMetaActions.hydrateFromBookState({
         bookId: 'ns',
         state: { title: 'X', author: 'A', series: 'S' },
-        narratorFallback: 'Narrator',
       }),
     );
-    expect(next.saved.ns.narratorCredit).toBe('Narrator');
+    expect(next.saved.ns.narratorCredit).toBe('Castwright');
+    expect(next.saved.ns.narratorCredit).toBe(DEFAULT_NARRATOR_CREDIT);
     expect(next.saved.ns.genre).toBeNull();
     expect(next.saved.ns.publicationDate).toBeNull();
   });
 
-  it('uses null when both state.narratorCredit and fallback are missing', () => {
+  it('defaults to Castwright when both state.narratorCredit and any fallback are missing', () => {
     const next = reducer(
       initial(),
       bookMetaActions.hydrateFromBookState({
@@ -81,7 +80,7 @@ describe('bookMetaSlice — hydrateFromBookState', () => {
         state: { title: 'X', author: 'A', series: 'S' },
       }),
     );
-    expect(next.saved.ns.narratorCredit).toBeNull();
+    expect(next.saved.ns.narratorCredit).toBe('Castwright');
   });
 });
 
@@ -188,27 +187,3 @@ describe('selectors', () => {
   });
 });
 
-describe('narratorNameFromCast', () => {
-  const ch = (id: string, name: string): Character =>
-    ({ id, name, role: '', color: 'narrator' }) as Character;
-
-  it('returns null when the cast is empty', () => {
-    expect(narratorNameFromCast([])).toBeNull();
-  });
-
-  it("returns the explicit narrator character's name when present", () => {
-    expect(
-      narratorNameFromCast([
-        ch('halloran', 'Halloran'),
-        ch('narrator', 'Narrator'),
-        ch('eliza', 'Eliza'),
-      ]),
-    ).toBe('Narrator');
-  });
-
-  it('falls back to the first character when there is no narrator id', () => {
-    expect(
-      narratorNameFromCast([ch('halloran', 'Captain Halloran'), ch('eliza', 'Eliza Gray')]),
-    ).toBe('Captain Halloran');
-  });
-});
