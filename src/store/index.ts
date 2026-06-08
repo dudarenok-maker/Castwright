@@ -63,6 +63,7 @@ import { castDesignMiddleware } from './cast-design-stream-middleware';
 import { broadcastMiddleware } from './broadcast-middleware';
 import { queueDispatcherMiddleware } from './queue-dispatcher-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
+import { exportPollMiddleware } from './exports-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
 
 /** Persisted ui-slice keys. Stage so refresh restores the same view +
@@ -192,6 +193,7 @@ export const store = configureStore({
       broadcastMiddleware,
       queueDispatcherMiddleware(getStreamRunner),
       spliceRunnerMiddleware(),
+      exportPollMiddleware,
     ),
 });
 
