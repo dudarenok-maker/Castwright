@@ -48,14 +48,4 @@ export const EXPORT_QUEUE: ExportQueueItem[] = [
     timestamp: 'Yesterday',
     destination: 'Local download',
   },
-  {
-    id: 'ex6',
-    filename: 'Solway Bay — Streaming link',
-    format: 'link',
-    size: 'Hosted',
-    status: 'failed',
-    timestamp: 'Yesterday',
-    destination: 'Audiobookshelf',
-    errorReason: 'Server unreachable — check your Audiobookshelf server connection',
-  },
 ];
