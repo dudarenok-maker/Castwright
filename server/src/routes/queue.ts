@@ -56,7 +56,7 @@ queueRouter.get('/', async (_req: Request, res: Response) => {
   try {
     const file = await readQueueFile(queueJsonPath());
     const supervisor = getActiveSupervisor();
-    const recycling = supervisor != null && supervisor.current() == null;
+    const recycling = supervisor != null && supervisor.recycling() === true;
     res.json({ entries: file.entries, paused: file.paused, recycling });
   } catch (e) {
     console.error('[queue] GET failed', e);
