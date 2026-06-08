@@ -22,7 +22,6 @@ import {
   SectionLabel,
   Pill,
   ComingSoonBadge,
-  MockedPreviewBanner,
 } from '../primitives';
 import { ExportQueueRow } from '../export-queue-row';
 import { CompanionAppBanner } from './companion-app-banner';
@@ -244,11 +243,7 @@ function ListenerApps({
           <IconShield className="w-3.5 h-3.5" /> Open-format export · DRM-free
         </span>
       </div>
-      <MockedPreviewBanner>
-        direct handoff to other apps is coming soon. PocketBook, Voice, Smart AudioBook Player,
-        BookPlayer, Audiobookshelf, and Apple Books are live — click any to sideload.
-      </MockedPreviewBanner>
-      <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
+<div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         {SUPPORTED_APPS.map((a) => (
           <ListenerAppCard
             key={a.id}
