@@ -396,6 +396,43 @@ describe('chaptersSlice — applyGenerationTick', () => {
     });
   });
 
+  describe('chapter_recovering', () => {
+    it('holds the row in_progress with phase=recovering and carries progress', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', progress: 0.6 })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_recovering', chapterId: 3, progress: 0.9 }),
+        ),
+      );
+      expect(next.chapters[0].phase).toBe('recovering');
+      expect(next.chapters[0].state).toBe('in_progress');
+      expect(next.chapters[0].progress).toBeCloseTo(0.9);
+    });
+
+    it('keeps the existing progress when the tick omits it', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', progress: 0.42 })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(tick({ type: 'chapter_recovering', chapterId: 3 })),
+      );
+      expect(next.chapters[0].phase).toBe('recovering');
+      expect(next.chapters[0].progress).toBeCloseTo(0.42);
+    });
+
+    it('is cleared by a subsequent chapter_complete', () => {
+      const start = baseState([makeChapter(3, { state: 'in_progress', phase: 'recovering' })]);
+      const next = chaptersSlice.reducer(
+        start,
+        chaptersActions.applyGenerationTick(
+          tick({ type: 'chapter_complete', chapterId: 3, totalLines: 10 }),
+        ),
+      );
+      expect(next.chapters[0].phase).toBe(null);
+      expect(next.chapters[0].state).toBe('done');
+    });
+  });
+
   describe('chapter_complete', () => {
     it('flips state to done, progress to 1, and all non-skipped characters to done', () => {
       const start = baseState([

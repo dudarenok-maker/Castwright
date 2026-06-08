@@ -9,10 +9,14 @@ export type Character = components['schemas']['Character'] & {
   sourceBookId?: string;
   sourceBookTitle?: string;
 };
-/* `phase` is a UI-only sub-state set from the `chapter_assembling` SSE tick.
-   It lets the Generate view distinguish "synthesising sentences" from the
-   short disk-write phase between the last group and chapter_complete, so
-   the bar doesn't appear stuck at 99 %. Not part of the wire schema.
+/* `phase` is a UI-only sub-state set from the `chapter_assembling`,
+   `chapter_verifying`, and `chapter_recovering` SSE ticks. It lets the Generate
+   view distinguish "synthesising sentences" from the short disk-write phase
+   (`assembling`) between the last group and chapter_complete, the post-synthesis
+   ASR content-QA pass (`verifying`, srv-31), and a mid-render sidecar
+   recycle/respawn ride-out (`recovering`, Wave 3 C2) — so the bar doesn't appear
+   stuck at 99 % and a healthy respawn doesn't read as a silent stall. Not part
+   of the wire schema.
 
    `lufs` is a UI-only mirror of the chapter's EBU R128 sidecar payload
    (plan 71). Hydrated lazily from the book-state endpoint's per-chapter
@@ -21,7 +25,7 @@ export type Character = components['schemas']['Character'] & {
    / disabled / silent-source). `null` distinguishes "fetched but no data"
    from "not fetched yet". See plan 77 for the report-card consumer. */
 export type Chapter = components['schemas']['Chapter'] & {
-  phase?: 'assembling' | 'verifying' | null;
+  phase?: 'assembling' | 'verifying' | 'recovering' | null;
   lufs?: components['schemas']['ChapterLoudness'] | null;
   /* fs-13 — accumulated SET (as a Redux-serialisable array) of manuscript
      sentence ids whose same-speaker group has COMPLETED during the live run.

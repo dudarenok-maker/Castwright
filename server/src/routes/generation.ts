@@ -1288,11 +1288,37 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
               `mid-synth (recycle/respawn) — riding out the respawn, re-attempt ` +
               `${attempt}/${MAX_RECYCLE_RECOVERIES} (preserving completed groups).`,
           );
+          /* C2 (Wave 3) — the readiness wait below can take up to ~210 s
+             (READINESS_TIMEOUT_MS); without a tick the SSE goes silent and the
+             client's 30 s "Worker has gone quiet" stall banner fires for what is
+             actually a healthy respawn ride-out. Emit a chapter_recovering tick
+             immediately + on a 10 s heartbeat so BOTH watchdogs stay fed: the
+             server no-progress guard (bumpProgress) and the client stall detector
+             (< 30 s). 0.9 progress + the last currentLine keep the bar where
+             synthesis left it. Mirrors emitVerifying (srv-31). */
+          const emitRecovering = () => {
+            bumpProgress();
+            broadcast(job, {
+              type: 'chapter_recovering',
+              chapterId: chapter.id,
+              characterId: null,
+              progress: 0.9,
+              currentLine: job.lastProgressTick?.currentLine ?? 0,
+              totalLines,
+            });
+          };
+          emitRecovering();
+          const beat = setInterval(emitRecovering, 10_000);
+          beat.unref?.();
           /* Polls through the supervisor respawn (srv-17b, 120 s budget); throws
              AbortError if the run is paused/displaced mid-wait → propagates out
              of synthesiseChapter as a clean stop (the outer catch returns on
-             AbortError). Task 2 (C2) wraps this in a recovering tick + heartbeat. */
-          await ensureSidecarEngineReady(recEngine, chapterSignal);
+             AbortError). */
+          try {
+            await ensureSidecarEngineReady(recEngine, chapterSignal);
+          } finally {
+            clearInterval(beat);
+          }
         },
       });
 

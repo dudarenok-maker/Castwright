@@ -224,6 +224,8 @@ describe('srv-17c in-worker recovery after a mid-synth sidecar death', () => {
 
     expect(calls).toBe(1); // synthesiseChapter called ONCE (recovery is internal now)
     expect(ensureReadyCalls).toBeGreaterThanOrEqual(2); // preload gate + the hook's wait
+    // C2 — the hook emits a visible "recovering" tick while it rides out the respawn.
+    expect(body).toContain('"type":"chapter_recovering"');
     expect(body).toContain('"type":"chapter_complete"');
     expect(body).not.toContain('"type":"chapter_failed"');
     // srv-16 done-prune fired → the entry is gone (never left failed/in_progress).
