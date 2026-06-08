@@ -43,6 +43,32 @@ export function isChapterStaleFromReassign(chapter: Chapter, events: ChangeLogEv
   return reassignedAt != null && reassignedAt > chapter.audioRenderedAt;
 }
 
+/* #650 — PRECISE staleness: diff the render-time sentence→speaker map (from the
+   chapter's segments.json, shipped on the book-state GET as
+   `renderedSpeakersByChapter`) against the LIVE manuscript. Supersedes the
+   time-based heuristic above: it's precise (a reassign-then-undo reads
+   not-stale) AND immediate (recomputed from the live manuscript slice, no
+   refetch needed). The Generate view uses this when the render map is present
+   for a chapter and falls back to `isChapterStaleFromReassign` otherwise.
+
+   Asymmetric on purpose — iterate the RENDERED ids only. A rendered sentence
+   whose current speaker differs (reassign) or that's now gone (split/merge/
+   delete) ⇒ stale; a sentence that never made it into the segments map (e.g. a
+   structural/empty line) can't trip a false positive because it isn't a key. */
+export function isChapterReassignedSinceRender(
+  rendered: Record<number, string> | undefined,
+  currentSentences: Array<{ id: number; characterId: string }>,
+): boolean {
+  if (!rendered || Object.keys(rendered).length === 0) return false;
+  const current = new Map<number, string>();
+  for (const s of currentSentences) current.set(s.id, s.characterId);
+  for (const sidStr of Object.keys(rendered)) {
+    const sid = Number(sidStr);
+    if (current.get(sid) !== rendered[sid]) return true;
+  }
+  return false;
+}
+
 /** Returns a callback that marks a character's rendered audio stale (no-op when
     the character speaks in no `done` chapter). Reads chapters from the store. */
 export function useMarkCharacterStaleIfRendered(): (character: {

@@ -58,7 +58,10 @@ import { ttsModelLabel, formatEngineBreakdown } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
-import { isChapterStaleFromReassign } from '../lib/stale-chapters';
+import {
+  isChapterStaleFromReassign,
+  isChapterReassignedSinceRender,
+} from '../lib/stale-chapters';
 import {
   characterLinePositionsByChapter,
   characterRowProgress,
@@ -153,6 +156,11 @@ export function GenerationView({
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const activityEvents = useAppSelector((s) => s.changeLog.events);
+  /* #650 — render-time sentence→speaker map per chapter, for the PRECISE
+     reassignment-staleness diff (vs the time-based change-log fallback). */
+  const renderedSpeakersByChapter = useAppSelector(
+    (s) => s.chapters.renderedSpeakersByChapter,
+  );
   /* Drives the "View queue · N" pill in the header. Reflects real workspace
      queue entries when present, else the live generation run (the primary,
      reconcile-driven path never writes a queue entry) so the pill doesn't read
@@ -608,6 +616,29 @@ export function GenerationView({
      under out-of-order completion (the positions+currentLine map above is the
      fallback when the set is absent). */
   const characterSentenceIds = useMemo(() => characterSentenceIdsByChapter(sentences), [sentences]);
+  /* #650 — the set of chapters whose live sentence→speaker mapping differs from
+     what was rendered (precise reassignment staleness). Recomputed from the live
+     manuscript, so it reflects an edit immediately without a refetch; only
+     chapters the server shipped a render map for are considered here (others
+     fall back to the time-based heuristic at the row). */
+  const reassignedSinceRenderSet = useMemo(() => {
+    const renderedIds = Object.keys(renderedSpeakersByChapter);
+    if (renderedIds.length === 0) return new Set<number>();
+    const byChapter = new Map<number, Array<{ id: number; characterId: string }>>();
+    for (const s of sentences) {
+      let arr = byChapter.get(s.chapterId);
+      if (!arr) byChapter.set(s.chapterId, (arr = []));
+      arr.push({ id: s.id, characterId: s.characterId });
+    }
+    const set = new Set<number>();
+    for (const cidStr of renderedIds) {
+      const cid = Number(cidStr);
+      if (isChapterReassignedSinceRender(renderedSpeakersByChapter[cid], byChapter.get(cid) ?? [])) {
+        set.add(cid);
+      }
+    }
+    return set;
+  }, [renderedSpeakersByChapter, sentences]);
 
   /* SSE ownership lives in src/store/generation-stream-middleware.ts so the
      stream survives navigating away from this view. The view is a pure
@@ -1067,7 +1098,14 @@ export function GenerationView({
               onIncludeClick={handleIncludeClick}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
-              stale={isChapterStaleFromReassign(ch, activityEvents)}
+              stale={
+                /* Precise diff when the server shipped this chapter's render
+                   map (#650); otherwise the time-based change-log heuristic
+                   (Bug 2) so older servers / mocks still flag staleness. */
+                renderedSpeakersByChapter[ch.id]
+                  ? reassignedSinceRenderSet.has(ch.id)
+                  : isChapterStaleFromReassign(ch, activityEvents)
+              }
               subsetProgress={subsetByChapter[ch.id] ?? null}
               activeModelKey={modelKey}
             />
