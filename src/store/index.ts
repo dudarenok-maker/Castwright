@@ -68,7 +68,7 @@ import { createStreamRunner, type StreamRunner } from './generation-stream-runne
 
 /** Persisted ui-slice keys. Stage so refresh restores the same view +
  *  chapter + drawer; model selectors so the user's per-session picks
- *  survive boot. Transient overlays (handoffApp, regenChapter,
+ *  survive boot. Transient overlays (regenChapter,
  *  matchDetailFor, staleAudio, previewRegen, previewMode, ...) are
  *  deliberately omitted — restoring them would re-open dismissed
  *  modals on every refresh. */

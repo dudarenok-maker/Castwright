@@ -1,11 +1,11 @@
 /* UI slice — stage modeled as a discriminated union; transitions are guarded.
 
-   Transient overlays (handoffApp, regenChapter, currentTrack, etc.) stay flat
+   Transient overlays (regenChapter, currentTrack, etc.) stay flat
    at the slice top — they cut across stages and have their own lifecycles. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { Stage, View, TtsModelKey } from '../lib/types';
-import type { ListenerApp, Chapter } from '../lib/types';
+import type { Chapter } from '../lib/types';
 import type { RegenScope } from '../modals/regenerate';
 import { DEFAULT_MODEL } from '../lib/models';
 import { DEFAULT_TTS_MODEL, TTS_MODEL_OPTIONS } from '../lib/tts-models';
@@ -36,7 +36,6 @@ export interface UiState {
   stage: Stage;
   currentTrack: number | null;
   matchDetailFor: string | null;
-  handoffApp: ListenerApp | null;
   regenChapter: Chapter | null;
   /** Pre-selected scope for the chapter regenerate modal. Defaults to null so
       the modal falls back to its built-in default ('this'). Set to 'forward'
@@ -111,7 +110,6 @@ const initialState: UiState = {
   stage: { kind: 'books' },
   currentTrack: null,
   matchDetailFor: null,
-  handoffApp: null,
   regenChapter: null,
   regenInitialScope: null,
   regenCharacterCtx: null,
@@ -250,9 +248,6 @@ export const uiSlice = createSlice({
     },
     setMatchDetailFor: (s, a: PayloadAction<string | null>) => {
       s.matchDetailFor = a.payload;
-    },
-    setHandoffApp: (s, a: PayloadAction<ListenerApp | null>) => {
-      s.handoffApp = a.payload;
     },
     setRegenChapter: (s, a: PayloadAction<Chapter | null>) => {
       s.regenChapter = a.payload;

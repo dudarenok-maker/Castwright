@@ -12,7 +12,6 @@ const baseState = (stage: Stage): UiState => ({
   stage,
   currentTrack: null,
   matchDetailFor: null,
-  handoffApp: null,
   regenChapter: null,
   regenInitialScope: null,
   regenCharacterCtx: null,
