@@ -22,25 +22,71 @@ via `Closes #NN`) and remove its row here; update the source plan's `status:` /
 Ship notes and archive it if `stable`. When you discover a new item, file a
 Backlog-item issue AND add the thin row here linking it, in the same round.
 
-_Last reprioritised 2026-06-02 (whole-backlog pass that folded in the 29 brainstorm
-items #458–#486). Ranking lens: stability / data-safety anchors first, high-ROI quick
-listener wins interleaved near the top, big multi-week bets grouped lower in Could._
+_Last reprioritised 2026-06-08 (cleanup round: promoted the onboarding cluster, the
+voices-library/cloning item, and `srv-1` into Must; retired the delivered Android-companion,
+dependency-major, and ASR-verifying-phase rows; archived stale parked items; moved `side-11`
+to monitoring). Prior full pass 2026-06-02 folded in the 29 brainstorm items #458–#486._
 
 ---
 
 ## Must — blocks v1 ship or hurts existing users
-
-### `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed) ([#399](https://github.com/dudarenok-maker/AudioBook-Generator/issues/399))
-
-- _What:_ The Qwen generation forward leaks committed host RAM monotonically (a new never-freed native workspace per sentence length; ~1,150 MB/batch), forcing plan-143 process-recycles every ~10 chapters. Goal: a full book on one warm sidecar with no recycles and no dropped chapters, now that RTF is solved (~1.04). Open levers: fixed-shape batch padding, chapter-boundary recycle, torch/transformers version pin.
-- _Benefit (user / technical):_ removes mid-run recycle interruptions + dropped chapters (`srv-17c`) on long books — the cleanest end-to-end win now that RTF is solved. **Promoted to Must on 2026-06-02:** dropped chapters on long books actively hurt existing users.
-_Full detail + acceptance:_ [#399](https://github.com/dudarenok-maker/AudioBook-Generator/issues/399).
 
 ### `ops-12` — Trademark clearance for Castwright + defensive domains ([#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626))
 
 - _What:_ Before launch, run a real trademark clearance for **Castwright** on TMview / USPTO / EUIPO / IP Australia in classes 9 (software), 41 (entertainment/audio), 42 (SaaS) — the 2026-06-07 automated sweep found no software/audio mark (only an unrelated US construction LLC) but that is **not** legal clearance. Register defensive domains (`castwright.io`, typo redirects `castwrite.ai` / `castright.ai`). `castwright.ai` is owned. _(Owner: user / business.)_
 - _Benefit (business):_ protects the brand a real business is being built on; avoids a forced rename after launch.
 _Full detail + acceptance:_ [#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626).
+
+### `srv-1` — Merge journal for deterministic alias un-link ([#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397))
+
+- _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.
+- _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
+_Full detail + acceptance:_ [#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397).
+
+### `fs-38` — Voices library: standalone voice authoring + voice cloning (designed & cloned) ([#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
+
+- _What:_ A first-class `#/voices` library that authors **both designed and cloned** standalone voices, not tied to a single character — the **next big release**. Two axes share one library + tagging + pinning + assignment surface, kept distinct by a cloned-vs-designed provenance split: **(a) Standalone authoring** (folds in former `fs-12`, [#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419)) — design a voice from a persona or a reference clip on top of the per-character Qwen design flow (plan 108), name + tag + pin it, reuse it across books, with optional fine-tuning of an already-designed voice. **(b) Voice cloning** (former `fs-38`) — clone a real person's voice from a short in-app sample (XTTS reference first, then Qwen design-to-target) and cast it like any other voice, held consistent across a book/series; explicit consent on the record, cloned voices excluded from the cross-book reuse matcher, local-only.
+- _Benefit (user):_ build a personal stable of named narrators — designed _or_ in your own / a family voice — to cast across the whole catalogue. The most personal, gift-able feature (a bedtime story in your own voice, or your kid as the hero); pays off the _"even in your own voice"_ promise. Pairs with `fe-12` (bulk library ops).
+_Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-cloning.md) · [#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624) (folds in `fs-12` [#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419)).
+
+_The onboarding & first-run cluster below was promoted from Could to Must on 2026-06-08 —
+first-run friction is the biggest adoption blocker for non-technical deployers._
+
+### `fs-22` — Bundled demo book (real, generate-able) ([#475](https://github.com/dudarenok-maker/AudioBook-Generator/issues/475))
+
+- _What:_ Ship a tiny public-domain manuscript so a new user can analyze + generate + hear real output in ~30s without uploading anything. Distinct from the mock canned-data — this one runs the real pipeline and doubles as a smoke test.
+- _Benefit (user):_ instant "wow" + a built-in end-to-end smoke test.
+_Full detail + acceptance:_ [#475](https://github.com/dudarenok-maker/AudioBook-Generator/issues/475).
+
+### `fe-28` — Onboarding empty states + first-run checklist ([#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472))
+
+- _What:_ Make first-run guidance explicit: the books-library empty state walks a new user to their first upload, plus a small dismissible first-run checklist (upload → confirm cast → generate → listen). Pure frontend, driven off existing state.
+- _Benefit (user):_ reduces first-session bounce for non-technical deployers.
+_Full detail + acceptance:_ [#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472).
+
+### `fe-27` — In-app update notifier ([#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471))
+
+- _What:_ Check GitHub Releases (via a small server proxy) and surface "vX.Y.Z available" + a changelog link when the running version is behind. Complements `fs-1` (the upgrade *mechanism*) — this is the *prompt*.
+- _Benefit (user):_ closes the distribution loop so testers actually know to upgrade.
+_Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471).
+
+### `fe-29` — In-app help / troubleshooting panel ([#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473))
+
+- _What:_ A Help surface covering core workflows, keyboard shortcuts (from the keybindings registry), and the common-failure remediations (shares copy with `fs-19`). Works offline.
+- _Benefit (user):_ support deflection; the answers live where the user already is.
+_Full detail + acceptance:_ [#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473).
+
+### `fs-21` — First-run setup wizard ([#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474))
+
+- _What:_ A guided fresh-install flow: detect GPU, check/install the required models (Kokoro, Qwen, analyzer), pick defaults (engine, analysis model, theme), then run a one-sentence smoke synth to prove the whole stack end to end before the user uploads anything.
+- _Benefit (user):_ turns a multi-step manual bootstrap into one guided path — the biggest adoption lever for non-technical deployers. (Large; owes its own plan — pairs with `fs-1`/`ops-1`/`ops-2`.)
+_Full detail + acceptance:_ [#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474).
+
+### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
+
+- _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by the release-package pipeline (plan 49) into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
+- _Benefit (user):_ friction-free install for non-developers. Today's plan-49 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
+_Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432).
 
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
@@ -52,28 +98,41 @@ The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ## Should — important, not blocking ship
 
-Ranked top = highest priority. Reliability / data-safety anchors lead, with the two
-highest-ROI quick listener wins interleaved near the top, then medium user-value items,
-then the large-but-important localization item. (The dependency-major cluster that sat at
-the bottom of Should all shipped via plans 167 + 170 on 2026-06-02 — see the note below.)
+Ranked top = highest priority. The two highest-ROI quick listener wins lead, then medium
+user-value polish, then the large localization item, then dependency hygiene and the
+delivered-companion follow-ups. (The 2026-06-02 dependency-major cluster shipped via plans
+167 + 170; a fresh 2026-06-08 `npm outdated` surfaced a new wave of majors — see the note
+at the bottom of this bucket.)
 
-### `srv-1` — Merge journal for deterministic alias un-link ([#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397))
+### `fs-15` — Continue listening: cross-book listening history + progress sync ([#462](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462))
 
-- _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.
-- _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
-_Full detail + acceptance:_ [#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397).
-
-### `fs-15` — Continue listening: global cross-book resume ([#462](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462))
-
-- _What:_ Resume bookmarks are persisted per book on the server. Aggregate them into a "Continue listening" surface (books library and/or a landing rail) that jumps straight to the most-recently-played position across **any** book in one tap.
-- _Benefit (user):_ one-tap re-entry; rewards the multi-book workflow that's already a first-class invariant.
+- _What:_ Aggregate the per-book server-persisted resume positions into a **"Continue listening"** surface (books library and/or a landing rail) that jumps straight to the most-recently-played position across **any** book in one tap — a cross-book **listening history**. Builds on the now-shipped two-way progress sync (`srv-34` client-`listenedAt` compare-and-set + the companion app's `ResumeSyncService`), so the history and the resume point stay consistent whether the position was set in the web app **or** on the Android companion.
+- _Benefit (user):_ one-tap re-entry into whatever you were last listening to, the same on web and the companion app; rewards the multi-book workflow that's already a first-class invariant.
 _Full detail + acceptance:_ [#462](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462).
 
-### `fs-24` — Per-character pronunciation lexicon ([#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478))
+### `fs-16` — Listening-stats dashboard ([#463](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463))
 
-- _What:_ Per-book custom pronunciation overrides for invented names/places (term → phonetic/respelling), applied at synth time. Fiction — especially fantasy proper nouns — is where the TTS mangles the most. Net-new vs the existing chapter-title prosody handling.
-- _Benefit (user):_ fixes the #1 narration-quality complaint for fiction.
-_Full detail + acceptance:_ [#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478).
+- _What:_ Derive and display listening statistics from the existing per-book progress records: total hours listened, books finished, per-book completion %, a simple streak. Lightweight dashboard (own view or an Account/library card).
+- _Benefit (user):_ engagement + a sense of progress through long series.
+_Full detail + acceptance:_ [#463](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463).
+
+### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>` ([#416](https://github.com/dudarenok-maker/AudioBook-Generator/issues/416))
+
+- _What:_ Add a per-row Play button that routes through `playSampleWithAutoLoad` (same helper the existing "Preview voice" / cast-row swatch use). Hover/focus reveals the icon on pointer devices; `coarse-pointer:opacity-60` keeps it faintly visible on touch. Sample text comes from the same drawer-level `previewText` the candidate-preview block uses. Single-row in-flight gate (the helper already coalesces concurrent clicks).
+- _Benefit (user):_ shortens the "scrolled past 40 Kokoro voices, want to hear three before committing" flow from "pick → close → preview from drawer → pick another" to "▶ in-row, ▶ in-row, pick the one I like." Pairs with the autocomplete added in this bundle — search narrows the list, in-row preview judges the few remaining options.
+_Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-Generator/issues/416).
+
+### `fs-35` — per-chapter Detect-emotions trigger (fs-33 follow-up) ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592))
+
+- _What:_ Add a per-chapter "Detect emotions" option (the emotion-only backfill pass scoped to the current chapter) alongside the whole-book trigger. The fs-33 v1 shipped whole-book only.
+- _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
+_Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
+
+### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant ([#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402))
+
+- _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
+- _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances.
+_Full detail + acceptance:_ [#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402).
 
 ### `fs-14` — Russian UI localization (interface strings, react-i18next) ([#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396))
 
@@ -81,14 +140,43 @@ _Full detail + acceptance:_ [#478](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user / architectural):_ a fully Russian-speaking user gets a Russian app, not just Russian audio. The i18n framework makes every future language an incremental translation-file add rather than a code change. Pairs with fs-2 to make Russian a first-class end-to-end experience. (Large; ranked below the smaller wins.)
 _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-Generator/issues/396).
 
-### Dependency major upgrades — _all shipped (section empty)_
+### `srv-4` — Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai) ([#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431))
 
-Source: net-new (2026-06-01), from the [plan 164](features/164-deps-ci-hygiene.md) dependency audit, which filed every framework **major** then behind as a research-complete BACKLOG item. **All shipped — this section is now empty.** Round 1 (**2026-06-02**, [plan 167](features/archive/167-fe-react-cluster-upgrade.md)): the React cluster (`fe-19` Vite 8 + Vitest 4, `fe-18` React 19, `fe-21` react-router 7) + `ops-10` (TypeScript 6). Round 2 (**2026-06-02**, [plan 170](features/archive/170-deps-majors-zod-express-pdfjs-tailwind.md)): `srv-25` Zod 4 (deletes `zod-to-json-schema`), `srv-24` Express 5, `srv-26` pdfjs-dist 5, `fe-20` Tailwind 4 — closes #405/#406/#410/#409.
+- _What:_ Re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump the direct dep whose upstream drops the offending transitive. As of **2026-06-08** a fresh _root_ install is clean (ESLint 9 + jsdom + archiver all cleared), but the **server** tree still pulls **`node-domexception`** via `@google/genai` — bump `@google/genai` (2.8+) or wait for the upstream that drops it, then confirm zero `npm warn deprecated`. **Promoted Could → Should 2026-06-08** to actually clear the chain, not just track it; pairs with the dependency-major note below.
+- _Benefit (technical):_ keeps the `npm install` warning surface at zero so new deprecations stand out instead of getting lost in the noise.
+_Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431).
 
-_`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026-06-01** via
-[plan 164](features/164-deps-ci-hygiene.md) — all workflows now pin the latest Node-24 action
-majors (`checkout@v6`, `setup-node@v6`, `cache@v5`, `upload-artifact@v7`). Acceptance is the
-PR's own annotation-free CI run._
+_The three items below are the companion-app follow-ups left after the Android v1 shipped
+(2026-06-07). `app-10` is technically **blocked** — kept here at Should priority, but it
+can't ship until its loopback-proxy prerequisite is built._
+
+### `app-10` — Stream-over-LAN instant play (companion) — **blocked on a loopback proxy** ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553))
+
+- _What:_ The pure pieces shipped (`resolvePlaybackSource` + `AppSettings.streamOverLan` + `AudioEngine.setStreamUrl`, 4 tests) but **cannot be wired**: `just_audio` streams via the platform player (ExoPlayer/AVPlayer) over the **OS** network stack, which can't trust the **app-pinned mkcert CA** (the TLS model deliberately avoids an OS cert install) → streaming `https://<lan>:8443` fails TLS. No `streamOverLan` toggle was wired (no dead control). _Unblock:_ a local loopback proxy that re-serves chapter bytes (fetched via the pinned `ApiClient`) to `just_audio` over `127.0.0.1`.
+- _Benefit (user):_ zero-wait preview before a download. Low urgency — offline-first download/play is unaffected.
+_Full detail + acceptance:_ [#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553) · [plan 188](features/188-android-companion-app.md).
+
+### `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555))
+
+- _What:_ Build + release the Flutter companion on iOS. The codebase stays iOS-ready by construction (app-managed TLS trust, dual-platform Flutter plugins, an unsigned iOS CI compile from `app-1`), so this is incremental, not a rewrite. _Codec caveat:_ iOS `AVPlayer` can't play `.ogg` — for iOS the server must render MP3/M4A (OGG is Android-only); the app reads the format from the manifest and surfaces it.
+- _Benefit (user):_ brings the companion to iPhone/iPad listeners — the other half of the mobile audience.
+_Full detail + acceptance:_ [#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555) · [plan 188](features/188-android-companion-app.md).
+
+### `app-15` — legacy (pre-API-26) launcher icon PNGs + iOS app-icon set ([#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632))
+
+- _What:_ The Castwright adaptive icon (PR #629) covers **API 26+** (all modern devices + the emulator); the pre-26 PNG fallback + the iOS `AppIcon.appiconset` are still the Flutter default (no SVG rasterizer was on the build box). Generate them from `brand/castwright-icon.svg` (e.g. `flutter_launcher_icons` with a rasterized PNG source).
+- _Benefit (user):_ a branded icon on the few pre-API-26 Android devices and (with `app-12`) on iOS. Low priority — adaptive covers the vast majority of devices.
+_Full detail + acceptance:_ [#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632) · [plan 188](features/188-android-companion-app.md).
+
+### Dependency major upgrades — _outstanding (2026-06-08 audit)_
+
+The 2026-06-01 [plan 164](features/164-deps-ci-hygiene.md) wave shipped in full — round 1 ([plan 167](features/archive/167-fe-react-cluster-upgrade.md): React 19, Vite 8 + Vitest 4, react-router 7, TypeScript 6) and round 2 ([plan 170](features/archive/170-deps-majors-zod-express-pdfjs-tailwind.md): Zod 4, Express 5, pdfjs-dist 5, Tailwind 4), plus `ops-8` (Node-24 GitHub Actions runners). A fresh `npm outdated` on **2026-06-08** surfaces a new wave of majors now behind — tracked here (no separate issues yet; fold into the next deps round):
+
+- **Functional (server):** `pdfjs-dist` 5 → 6, `pdf-parse` 1 → 2 — both touch manuscript ingestion, so each needs a parse-regression check before bumping.
+- **Tooling (root):** `eslint` 9 → 10 (+ `@eslint/js`), `concurrently` 8 → 10, `jest-axe` 9 → 10.
+- **Types:** `@types/supertest` 6 → 7, `@types/yauzl` 2 → 3. (`@types/node` tracks the runtime's Node line, not a free bump.)
+
+Deprecation hygiene for the same trees is `srv-4` (above).
 
 ---
 
@@ -96,7 +184,7 @@ PR's own annotation-free CI run._
 
 Organised into thematic sub-groups (reliability & observability, listener experience &
 playback, cast & voice, revisions & regen, voice & cast sharing, net-new capabilities,
-onboarding & first-run, security & hardening, ops & distribution, listener-app handoffs).
+security & hardening, ops & distribution, listener-app handoffs).
 Sub-groups and the items within them are ranked top = highest priority.
 
 ### Reliability & observability
@@ -107,12 +195,6 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
 
-#### `fs-40` — Surface the ASR "Verifying speech" phase in the Generate view ([#640](https://github.com/dudarenok-maker/AudioBook-Generator/issues/640))
-
-- _What:_ During the ASR content-QA pass (srv-31, `SEG_ASR_ENABLED`) the per-chapter row freezes on "Synthesising … · 99%" because the only tick is `onRerecord` re-broadcasting the last synthesis `progress`. Add a `verifying` chapter phase (mirrors the existing `assembling` phase) so the row reads **"Verifying speech…"**. A new per-sampled-group `onProgress` tick also feeds the no-progress watchdog through an all-`ok` ASR pass (closes a latent false-stall).
-- _Benefit (user / technical):_ the ASR quality-check reads as deliberate, not a stall; removes a latent false-stall on long drift-free chapters.
-_Full detail + acceptance:_ [#640](https://github.com/dudarenok-maker/AudioBook-Generator/issues/640) · plan `docs/features/197-asr-verifying-phase.md`.
-
 ### Listener experience & playback
 
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461))
@@ -120,12 +202,6 @@ _Full detail + acceptance:_ [#640](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Export the per-book markers (note + re-record kinds already in the listen-progress slice) to a text/JSON file the user can save or share. Extends the existing markers panel.
 - _Benefit (user):_ makes re-record markers actionable outside the app (study / review / handoff to an editor).
 _Full detail + acceptance:_ [#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461).
-
-#### `fs-16` — Listening-stats dashboard ([#463](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463))
-
-- _What:_ Derive and display listening statistics from the existing per-book progress records: total hours listened, books finished, per-book completion %, a simple streak. Lightweight dashboard (own view or an Account/library card).
-- _Benefit (user):_ engagement + a sense of progress through long series.
-_Full detail + acceptance:_ [#463](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463).
 
 #### `fs-9` — Configurable chapter-title silence durations ([#411](https://github.com/dudarenok-maker/AudioBook-Generator/issues/411))
 
@@ -153,12 +229,6 @@ _Full detail + acceptance:_ [#464](https://github.com/dudarenok-maker/AudioBook-
 
 ### Cast, voice & duplicates
 
-#### `fe-7` — Per-voice row sample-preview button inside `<VoiceOverridePicker>` ([#416](https://github.com/dudarenok-maker/AudioBook-Generator/issues/416))
-
-- _What:_ Add a per-row Play button that routes through `playSampleWithAutoLoad` (same helper the existing "Preview voice" / cast-row swatch use). Hover/focus reveals the icon on pointer devices; `coarse-pointer:opacity-60` keeps it faintly visible on touch. Sample text comes from the same drawer-level `previewText` the candidate-preview block uses. Single-row in-flight gate (the helper already coalesces concurrent clicks).
-- _Benefit (user):_ shortens the "scrolled past 40 Kokoro voices, want to hear three before committing" flow from "pick → close → preview from drawer → pick another" to "▶ in-row, ▶ in-row, pick the one I like." Pairs with the autocomplete added in this bundle — search narrows the list, in-row preview judges the few remaining options.
-_Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-Generator/issues/416).
-
 #### `fe-12` — Bulk pin / bulk delete in voice library ([#420](https://github.com/dudarenok-maker/AudioBook-Generator/issues/420))
 
 - _What:_ Multi-select in the voice library with bulk actions — pin/unpin and delete across the selection (with a confirm + count). Deletion respects in-use voices (warn or block when a voice is assigned to a character in any book).
@@ -183,17 +253,17 @@ _Full detail + acceptance:_ [#417](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ recurring narrators / crossover characters stay consistent across an author's whole catalogue, not just within one series.
 _Full detail + acceptance:_ [#418](https://github.com/dudarenok-maker/AudioBook-Generator/issues/418).
 
-#### `fs-12` — Standalone library-voice authoring (a voice not tied to one character) ([#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419))
-
-- _What:_ A standalone library-voice authoring surface on top of the per-character Qwen design flow (plan 108, which already designs → clones → caches → reuses a bespoke voice scoped to a cast member). Add first-class library entries not tied to a single character: design a voice from a persona (or a reference clip), name + tag + pin it, reuse it across books, with optional fine-tuning of an already-designed voice.
-- _Benefit (user):_ build a personal stable of named narrators to assign across the catalogue, independent of any single character. Pairs with `fe-12` (bulk library ops): a from-scratch author flow is what grows the library big enough to need them.
-_Full detail + acceptance:_ [#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419).
-
 #### `srv-23` — Opt-in "refresh personas + re-design voices" sweep for existing books ([#423](https://github.com/dudarenok-maker/AudioBook-Generator/issues/423))
 
 - _What:_ a per-book opt-in action that re-runs `generate-all` voice-style then re-designs every Qwen voice from the refreshed personas, so an existing book can adopt the improved format in one click. Must NOT clobber hand-edited personas without confirmation, and must surface the Gemini-quota + GPU-time cost up front.
 - _Benefit (user):_ existing libraries can adopt the better voice-design format without re-casting by hand. Low urgency — costly (quota + GPU) and only matters for books a user wants to re-render.
 _Full detail + acceptance:_ [#423](https://github.com/dudarenok-maker/AudioBook-Generator/issues/423).
+
+#### `fs-24` — Per-character pronunciation lexicon ([#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478))
+
+- _What:_ Per-book custom pronunciation overrides for invented names/places (term → phonetic/respelling), applied at synth time. Fiction — especially fantasy proper nouns — is where the TTS mangles the most. Net-new vs the existing chapter-title prosody handling.
+- _Benefit (user):_ fixes the #1 narration-quality complaint for fiction. _(Demoted Should → Could 2026-06-08.)_
+_Full detail + acceptance:_ [#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478).
 
 ### Revisions & regen
 
@@ -239,12 +309,6 @@ _Full detail + acceptance:_ [#486](https://github.com/dudarenok-maker/AudioBook-
 
 ### Net-new capabilities
 
-#### `fs-38` — Voice cloning (your own / family voice) + cloned-vs-designed library split ([#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
-
-- _What:_ Clone a real person's voice from a short in-app sample (XTTS reference first, then Qwen design-to-target) and cast it like any other voice — held consistent across a book/series. Explicit consent on the record; cloned voices get their own `#/voices` section and are excluded from the cross-book reuse matcher; local-only. The **next big release** — pays off the _"even in your own voice"_ promise.
-- _Benefit (user):_ the most personal, gift-able feature — a bedtime story in your own voice, or your kid as the hero.
-_Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-cloning.md) · [#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624).
-
 #### `fs-27` — Chapter recaps / "previously…" summaries ([#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481))
 
 - _What:_ LLM-generated short recap per chapter (the analyzer already does LLM work), shown — and optionally synthesized as a spoken "previously…" intro — when the user resumes a book after a gap. Opt-in per book; cost surfaced up front.
@@ -256,12 +320,6 @@ _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Extend the plan-108 "Rebaseline the series" modal to also design chosen emotion variants for the principal cast across a series (gated on each base existing), reusing the Wave-5b per-emotion controls + variant-aware audition; the base-only path stays intact when no variants are selected.
 - _Benefit (user):_ design expressive variants for a recurring cast across a whole series in one flow. _Re-homed from `fs-25` on archive._
 _Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512).
-
-#### `fs-35` — per-chapter Detect-emotions trigger (fs-33 follow-up) ([#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592))
-
-- _What:_ Add a per-chapter "Detect emotions" option (the emotion-only backfill pass scoped to the current chapter) alongside the whole-book trigger. The fs-33 v1 shipped whole-book only.
-- _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
-_Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
 
 #### `fs-36` — per-quote emotion: "manual clear sticks" sentinel (fs-33 follow-up) ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593))
 
@@ -275,67 +333,9 @@ _Full detail + acceptance:_ [#593](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ the variant filter never silently carries over to a tab where it shows nothing.
 _Full detail + acceptance:_ [#644](https://github.com/dudarenok-maker/AudioBook-Generator/issues/644).
 
-#### `fe-4` — Single-poll TTS lifecycle for a third consumer (tracking) ([#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421))
-
-- _What:_ Tracking item. The consolidated `useTtsLifecycle()` hook (`src/lib/use-tts-lifecycle.ts`) drives today's pill surfaces — top-bar (`src/components/layout.tsx`) and Generation view (`src/views/generation.tsx`) — from one `setInterval` via `LayoutContext`. Per the 2026-05-21 Kokoro-Stop-pill change, the hook now fans out per engine: it returns `{ coqui, kokoro, evictionNotice, loadErrorNotice, dismissNotices }` from a single /health probe. **Wake this item when a JIT-warmed surface graduates to pill-driven UI.** Concrete triggers: Profile Drawer Play, Cast row Play, or the per-character "regenerate this voice across the book" button — whichever first stops using `playSampleWithAutoLoad` and starts wanting an always-on Load/Stop affordance.
-- _Benefit (architectural):_ prevents the duplicated-poll explosion that motivated plan 30 G1 in the first place.
-_Full detail + acceptance:_ [#421](https://github.com/dudarenok-maker/AudioBook-Generator/issues/421).
-
-### Onboarding & first-run
-
-#### `fs-22` — Bundled demo book (real, generate-able) ([#475](https://github.com/dudarenok-maker/AudioBook-Generator/issues/475))
-
-- _What:_ Ship a tiny public-domain manuscript so a new user can analyze + generate + hear real output in ~30s without uploading anything. Distinct from the mock canned-data — this one runs the real pipeline and doubles as a smoke test.
-- _Benefit (user):_ instant "wow" + a built-in end-to-end smoke test.
-_Full detail + acceptance:_ [#475](https://github.com/dudarenok-maker/AudioBook-Generator/issues/475).
-
-#### `fe-28` — Onboarding empty states + first-run checklist ([#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472))
-
-- _What:_ Make first-run guidance explicit: the books-library empty state walks a new user to their first upload, plus a small dismissible first-run checklist (upload → confirm cast → generate → listen). Pure frontend, driven off existing state.
-- _Benefit (user):_ reduces first-session bounce for non-technical deployers.
-_Full detail + acceptance:_ [#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472).
-
-#### `fe-27` — In-app update notifier ([#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471))
-
-- _What:_ Check GitHub Releases (via a small server proxy) and surface "vX.Y.Z available" + a changelog link when the running version is behind. Complements `fs-1` (the upgrade *mechanism*) — this is the *prompt*.
-- _Benefit (user):_ closes the distribution loop so testers actually know to upgrade.
-_Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471).
-
-#### `fe-29` — In-app help / troubleshooting panel ([#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473))
-
-- _What:_ A Help surface covering core workflows, keyboard shortcuts (from the keybindings registry), and the common-failure remediations (shares copy with `fs-19`). Works offline.
-- _Benefit (user):_ support deflection; the answers live where the user already is.
-_Full detail + acceptance:_ [#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473).
-
-#### `fs-21` — First-run setup wizard ([#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474))
-
-- _What:_ A guided fresh-install flow: detect GPU, check/install the required models (Kokoro, Qwen, analyzer), pick defaults (engine, analysis model, theme), then run a one-sentence smoke synth to prove the whole stack end to end before the user uploads anything.
-- _Benefit (user):_ turns a multi-step manual bootstrap into one guided path — the biggest adoption lever for non-technical deployers. (Large; owes its own plan — pairs with `fs-1`/`ops-1`/`ops-2`.)
-_Full detail + acceptance:_ [#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474).
-
-#### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401))
-
-- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments.
-- _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected). **Demoted from Should on 2026-06-02** — niche dev/LAN surfacing.
-- _Companion coherence (plan 188):_ shares the LAN-URL + cert plumbing, but the companion (`app-2`) needs its own **structured pairing QR** carrying `{ url, token, caFingerprint }` — do NOT make `fe-1`'s browser-open QR a JSON blob (a phone browser can't scan it). The pairing-QR surface reuses this machinery; whoever builds it (with `srv-20`) is the home for the companion QR.
-_Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401).
-
-#### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant ([#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402))
-
-- _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
-- _Benefit (user):_ touch users get every action that mouse users do, without needing to discover hidden affordances. **Demoted from Should on 2026-06-02** — touch-a11y polish sweep.
-_Full detail + acceptance:_ [#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402).
-
 ### Security & hardening
 
 Source for the whole sub-group: the [2026-05-31 security review](security/2026-05-31-security-review.md). All are scoped to the **opt-in LAN exposure surface** (`npm run start:lan`) or local-only defense-in-depth — the app is single-user/local-first by design, so these harden the hostile-LAN and local-write threat models rather than fixing an exploited-today hole. `srv-19` (draft plan 157) is the partner default-bind fix.
-
-#### ✅ `srv-20` — Optional shared-secret token for the LAN flow — **SHIPPED 2026-06-06** (PR #561 + #564, closed #425) ([#425](https://github.com/dudarenok-maker/AudioBook-Generator/issues/425))
-
-- _What:_ a single shared-secret token (env-configured, surfaced in the LAN URL / QR alongside the existing cert flow) checked by a small Express middleware on `/api/*` and the `/workspace` mount when LAN mode is on. Loopback requests bypass the check (so `npm start` is unaffected). Reuse the existing LAN-URL/QR plumbing (`GET /api/export/lan`, `npm run install:cert-mobile`) to carry the token.
-- _Benefit (user):_ the mobile flow stops being "open to everyone on the network" without re-introducing friction — the token rides the URL the user already scans.
-- _Companion dependency:_ the **Android companion app** (plan 188, `app-2`) depends on this token as its v1 auth primitive, and needs the QR/pairing payload to also carry the CA **SHA-256 fingerprint** so the app auto-verifies the pinned cert (no manual hex compare). Two acceptance constraints from the companion: **exempt `/cert/root.crt`** from the token check (public CA material the app fetches over the untrusted channel *before* it can present the token), and don't break the web app's existing LAN access. A kickoff-time reason to prioritise it. The multi-device / revocable evolution is `srv-33`.
-_Full detail + acceptance:_ [#425](https://github.com/dudarenok-maker/AudioBook-Generator/issues/425).
 
 #### `side-12` — Load Qwen voice `.pt` prompts with `weights_only=True` (or a safe format) ([#428](https://github.com/dudarenok-maker/AudioBook-Generator/issues/428))
 
@@ -351,24 +351,11 @@ _Full detail + acceptance:_ [#427](https://github.com/dudarenok-maker/AudioBook-
 
 ### Ops, CI & distribution
 
-
 #### `ops-9` — Enable server-side branch protection on `main` (when Pro/public) ([#429](https://github.com/dudarenok-maker/AudioBook-Generator/issues/429))
 
 - _What:_ create an active ruleset on the default branch blocking deletion + non-fast-forward (force) pushes. Ready command:
 - _Benefit (technical):_ server-side enforcement that no `--no-verify` local bypass or fresh clone can sidestep; the local guard (plan 163) becomes belt-and-suspenders. Required status checks deliberately excluded (would deadlock doc-only PRs that skip `verify.yml`).
 _Full detail + acceptance:_ [#429](https://github.com/dudarenok-maker/AudioBook-Generator/issues/429).
-
-#### `srv-4` — Track upstream-blocked deprecation chains (jsdom · archiver · @google/genai) ([#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431))
-
-- _What:_ Periodically re-run the deprecation audit (`npm install` at root + `npm install --prefix server` on a fresh clone, grep `npm warn deprecated`) and bump direct deps whose upstream majors drop one of these transitives. Status of the three tracked chains:
-- _Benefit (technical):_ keeps the `npm install` warning surface clean over time. Without explicit tracking, deprecation messages accumulate, new ones get lost in the noise, and the eventual audit becomes harder. This item is the watchdog. As of 2026-06-01 a fresh root `npm install` prints ZERO deprecation warnings (ESLint 9 + jsdom 29 + archiver 8 all cleared); the only remaining deprecation in the monorepo is the `@google/genai` `node-domexception` chain on the server side.
-_Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431).
-
-#### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
-
-- _What:_ Add an Inno Setup (or NSIS) script that wraps the `audiobook-generator-vX.Y.Z.zip` produced by the release-package pipeline (plan 49) into a signed `.exe` installer. Installer extracts to `%LocalAppData%\AudiobookGenerator`, drops a Start Menu entry, runs prerequisite checks (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, and offers to run `install-kokoro.ps1` post-install. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
-- _Benefit (user):_ friction-free install for non-developers. Today's plan-49 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
-_Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432).
 
 #### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
 
@@ -376,6 +363,12 @@ _Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
 - _Companion coherence (plan 188):_ if the companion is used against a Dockerised server, (a) **mount a persistent volume for the mkcert CA** (`mkcert -CAROOT` dir) so the pinned `caFingerprint` survives container rebuilds (else every update forces a re-pair), and (b) honour a **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads `os.networkInterfaces()` → container bridge IPs like `172.18.0.x`) so the pairing QR carries the host's real LAN IP.
 _Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
+
+#### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401))
+
+- _What:_ Account settings card showing the current LAN HTTPS URL (from `GET /api/export/lan` when LAN_HTTPS=1) with one-click "Copy URL" + "Install cert on phone" links. The latter opens a doc / route that shows the QR code that `npm run install:cert-mobile` prints to the terminal today. Dev-mode only — hidden in production single-user environments. _Not yet built — the LAN URL is surfaced in the export-to-phone modal, but the Account-card + cert-QR flow doesn't exist._
+- _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected). **Niche dev/LAN surfacing — kept at Could 2026-06-08.**
+_Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401).
 
 ### Listener-app handoffs
 
@@ -385,72 +378,19 @@ _Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ closes one more "Coming soon" tile.
 _Full detail + acceptance:_ [#434](https://github.com/dudarenok-maker/AudioBook-Generator/issues/434).
 
-#### `fs-7` — Plex (self-hosted media server) handoff modal ([#435](https://github.com/dudarenok-maker/AudioBook-Generator/issues/435))
-
-- _What:_ Wire Plex tile with two paths: (a) instructions for manual upload to a Plex server library, (b) optional direct upload via the Plex API if the user has provided a Plex token (settings field). Path (b) is the most-complex of the four — Plex auth + library scan trigger.
-- _Benefit (user):_ closes one more "Coming soon" tile; opens the door to direct upload integration.
-_Full detail + acceptance:_ [#435](https://github.com/dudarenok-maker/AudioBook-Generator/issues/435).
-
 #### `fs-8` — PocketBook Cloud direct upload OR `@pbsync.com` email gateway ([#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436))
 
 - _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
 _Full detail + acceptance:_ [#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436).
 
-### Android companion app (Flutter)
-
-A net-new, multi-week initiative: a native Android-first listening companion that
-**delta-syncs a constantly-regenerated library** (per-chapter `…/audio.mp3` pulls, not
-whole-book M4B re-exports) with **two-way resume sync**, offline playback, and
-Bluetooth/lock-screen controls — the differentiator vs. the export→sideload→third-party
-flow above (`fe-3`/`fs-7`/`fs-8`, which it complements, not obsoletes). Full spec, v1
-definition-of-done, and the 7-wave delivery roadmap live in **[plan
-188](features/188-android-companion-app.md)** — the canonical detail home for this
-group. Flutter (`just_audio`/`audio_service`) so iOS is an incremental follow-up; the
-load-bearing iOS-readiness move is **app-managed, auto-verified TLS trust** (the QR
-carries the CA fingerprint; the app pins the fetched `/cert/root.crt` after asserting its
-hash matches — no OS cert install, no manual hex compare).
-
-> _GitHub issues filed (#538–#555); each row links its issue. **[Plan 188](features/188-android-companion-app.md)
-> stays the canonical detail home** for this group — the issues are thin tracking hooks.
-> Five 2026-06-06 reviews are folded into the plan. IDs + positions are final._
->
-> _**Progress (2026-06-06):** ✅ shipped — `srv-34`, `srv-20`, `app-1`, `app-2` (the MVP
-> foundation; full toolchain installed + the app runs on a Pixel 10 Pro emulator — see
-> plan 188 → "Build progress & dev setup"). 🔄 in progress on a parallel agent — `srv-35`,
-> `srv-32`; the rest of the app track is gated on those. Rows below are prefixed ✅/🔄._
-
-**Server prereqs:**
-
-- 🔄 *(parallel agent)* `srv-32` ([#538](https://github.com/dudarenok-maker/AudioBook-Generator/issues/538)) — **Per-chapter sync-manifest endpoint** — **two-level** (book index + per-book detail), gzip'd; carries each chapter's stable `uuid`, fingerprint, **actual audio `urlSuffix`** (mp3/m4a/ogg), and active-ID sets; `?since` delta; fingerprint must bump on every audio-mutating path. _Benefit:_ delta sync that scales to big libraries + is multi-format-safe. Feeds `fs-15`.
-- ✅ **SHIPPED (PR #558)** `srv-34` ([#539](https://github.com/dudarenok-maker/AudioBook-Generator/issues/539)) — **Listen-progress PUT accepts client `listenedAt`** + **guarded compare-and-set** (commit only if strictly newer; return the stored record on a stale write). _Benefit:_ offline-correct conflict ordering AND safe concurrent web+companion writers (does not wake `srv-10`/`fe-11`); unblocks `app-6`.
-- 🔄 *(parallel agent)* `srv-35` ([#540](https://github.com/dudarenok-maker/AudioBook-Generator/issues/540)) — **Stable per-chapter identifier** (immutable `uuid` preserved through restructure/rename + lazy migration), keying the sync manifest + listen-progress. **MVP (user directive 2026-06-06).** Verified gap: chapter `id` is positional and `slug` embeds id+title, so neither survives reorder/rename. Also repairs the **existing web player**. Lands first in the server track.
-
-**MVP block (v1)** — ranked:
-
-1. ✅ **SHIPPED (PR #562)** `app-1` ([#541](https://github.com/dudarenok-maker/AudioBook-Generator/issues/541)) — Flutter scaffold (`apps/android/`) + test harness + CI lane (incl. unsigned iOS compile) + debug APK. _Benefit:_ the foundation everything builds on.
-2. ✅ **SHIPPED (PR #565/#566/#567)** `app-2` ([#542](https://github.com/dudarenok-maker/AudioBook-Generator/issues/542)) — Pairing + **auto-verified app-managed TLS trust** (QR fingerprint match; bad-cert-bypass bootstrap then pin) + a cert-pinned `ApiClient` + secure token. _Benefit:_ one-time, MitM-safe pairing that works on Android *and* iOS. _Depends:_ `srv-20`.
-3. ✅ **SHIPPED** `app-3` ([#543](https://github.com/dudarenok-maker/AudioBook-Generator/issues/543)) — Delta sync engine: per-book pull via the manifest's per-chapter `urlSuffix` (never hardcodes `.mp3`); range-resume from the partial `.tmp` (no restart at byte 0) + size integrity; atomic `.tmp`→rename swap, defers if playing; thin `flutter_foreground_task` keep-alive shim; evict via active-ID diff; keyed by the `srv-35` `uuid`. 41 paired Dart tests; live device acceptance owed (no sync-trigger UI until `app-7`/`app-14`). _Benefit:_ no full-book resync; downloads resume + finish in the background.
-4. ✅ **SHIPPED** `app-4` ([#544](https://github.com/dudarenok-maker/AudioBook-Generator/issues/544)) — Offline library store: **drift/SQLite** `DriftLocalLibrary` behind the app-3 `LocalLibrary` port (actual codec extension stored; accounting + auto-eviction — auto-delete-finished + LRU book eviction) + cover **thumbnails** (~250×250 client-downscaled, also for lock-screen) + one-time `sync-state.json`→drift import. On-device only (server `state.json` untouched). 25 paired Dart tests; live device acceptance owed. _Benefit:_ listen anywhere; cache never fills the phone; lists stay smooth.
-5. ✅ **SHIPPED** `app-5` ([#545](https://github.com/dudarenok-maker/AudioBook-Generator/issues/545)) — Native player: testable `PlayerController` over an injectable `AudioEngine` (per-book resume/switch, ~10 s autosave throttle survives OS kill, media keys default to **seek ±30/±15 s** not chapter-skip, `isInUse` for app-3 deferred swap) + drift Playback table; real `JustAudioEngine` + `CompanionAudioHandler` (audio_service lock-screen/Bluetooth/notification). 14 paired Dart tests; live device acceptance owed (batched at end). _Benefit:_ table-stakes UX that survives backgrounding + car controls.
-6. ✅ **SHIPPED** `app-6` ([#546](https://github.com/dudarenok-maker/AudioBook-Generator/issues/546)) — Two-way resume sync: pure `reconcileResume` (**last-write-wins by client `listenedAt`**, not network-receive time) + `ResumeSyncService` (push/pull/noop; local Playback row = offline queue) + `ApiClient.get/putListenProgress` (CA-pinned, srv-34). 12 paired Dart tests; live device acceptance owed (batched). _Benefit:_ in-car position flows back without clobbering a newer position set elsewhere.
-7. ✅ **SHIPPED** `app-7` ([#547](https://github.com/dudarenok-maker/AudioBook-Generator/issues/547)) — Hierarchical browse + management: pure `library_tree` (**author → series → book** grouping/sort + search) + `LibraryScreen` (collapsible groups, state pills, download/remove). 9 paired Dart tests; live device acceptance owed (batched). _Benefit:_ find any book fast in a big multi-series library.
-8. ✅ **SHIPPED** `app-14` ([#550](https://github.com/dudarenok-maker/AudioBook-Generator/issues/550)) — Home shelf + multi-book switching: pure `home_shelf` ("Continue listening" most-recently-played first + recently-updated rail) + `HomeScreen` (tap → player `switchBook` for seamless per-book resume). 6 paired Dart tests; live device acceptance owed (batched). _Benefit:_ the listen-to-several-books day-to-day surface.
-9. ✅ **SHIPPED** `app-8` ([#548](https://github.com/dudarenok-maker/AudioBook-Generator/issues/548)) — Auto-sync on reconnect: pure `shouldAutoSync` gate (**network-gated** — never mobile/offline, only when the paired server is reachable, **unmetered-only** unless opted in; token never leaves the home LAN) + `AutoSyncService` (pre-gates before probing) + `connectivity_plus` resolver. 17 paired Dart tests; live device acceptance owed (batched). _Benefit:_ fixes + new chapters appear with no manual action, safely off-network.
-10. ✅ **SHIPPED** `app-13` ([#549](https://github.com/dudarenok-maker/AudioBook-Generator/issues/549)) — Playback & download settings: pure `AppSettings` (**sleep timer**, skip-button toggle seek-vs-chapter, **unmetered-Wi-Fi-only**, auto-sync, **storage cap + auto-delete-finished + LRU keep-recent** — drives app-5/app-4/app-8) + `SettingsStore` (JSON, defaults-on-corrupt) + testable `SleepTimer` + `SettingsScreen`. 14 paired Dart tests; live device acceptance owed (batched). _Benefit:_ the settings a real listening app needs. _(Shake-to-extend sleep timer = follow-up nice-to-have.)_
-
-**Follow-ups (post-MVP)** — ranked:
-
-11. ✅ **SHIPPED** `srv-33` ([#551](https://github.com/dudarenok-maker/AudioBook-Generator/issues/551)) — Per-device tokens + revoke (server, layered on `srv-20`): `device-tokens.ts` store (sha-256 at rest, cache-backed) + `GET/POST/DELETE /api/devices` behind the LAN guard + `lan-auth` accepts shared secret OR a non-revoked device token. Backward-compatible. 18 server tests + openapi. App-side adoption is an optional follow-up. _Benefit:_ revocable per-device access.
-12. ✅ **SHIPPED** `app-9` ([#552](https://github.com/dudarenok-maker/AudioBook-Generator/issues/552)) — In-car (**Android Auto + CarPlay**): pure `media_browse_tree` (root→books→chapters + mediaId codec) wired into `CompanionAudioHandler` MediaBrowser callbacks + Android Auto descriptor. 6 paired Dart tests; head-unit acceptance owed (batched). _Benefit:_ first-class in-car beyond the Bluetooth path.
-13. ⛔ **BLOCKED (reopened)** `app-10` ([#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553)) — Stream-over-LAN instant play. The pure pieces shipped (`resolvePlaybackSource` + `AppSettings.streamOverLan` + `AudioEngine.setStreamUrl`, 4 tests) but **cannot be wired**: `just_audio` streams via the platform player (ExoPlayer/AVPlayer) over the **OS** network stack, which can't trust the **app-pinned mkcert CA** (the TLS model deliberately avoids an OS cert install) → streaming `https://<lan>:8443` fails TLS. No `streamOverLan` toggle was wired (no dead control). _Unblock (later):_ a local loopback proxy that re-serves chapter bytes (fetched via the pinned `ApiClient`) to just_audio over `127.0.0.1`. Low priority — offline-first download/play is unaffected. _Benefit when unblocked:_ zero-wait preview before a download.
-14. ✅ **SHIPPED** `app-11` ([#554](https://github.com/dudarenok-maker/AudioBook-Generator/issues/554)) — Distribution: Gradle release signing via git-ignored `key.properties` (real upload keystore) with a debug-signed fallback so `flutter build apk --release` always sideloads; `key.properties.example` + CI `companion-release-apk` artifact. Release APK verified (65.6 MB). _Benefit:_ testers can install it.
-
 ---
 
 ## Won't (this round) — explicitly parked
 
 Specific items someone might reasonably re-propose. Each carries a _Why parked_ (the v1 design or operational constraint) and a _Wake when_ (the trigger that makes us reopen). The broad "v1 scope freeze" and "no visual redesign" are covered by CLAUDE.md "Out of scope" and don't need restating here — this list is for tracked-specific decisions only.
+
+- `side-11` — Eliminate the variable-input-shape host-memory leak (so recycling isn't needed) ([#399](https://github.com/dudarenok-maker/AudioBook-Generator/issues/399)). _Why parked:_ RTF is solved (~1.04) and the plan-143 process-recycle every ~10 chapters keeps full-book runs reliable in practice — the leak is **worked around**, so this is now **monitoring** rather than active work (moved out of Must 2026-06-08). _Wake when:_ recycling proves insufficient on a real long book (dropped chapters return) OR a smaller/different GPU shifts the headroom math — then pursue fixed-shape batch padding, chapter-boundary recycle, or a torch/transformers version pin.
 
 - `ops-5` — Trim `build` / `e2e` out of the per-PR `verify.yml` ([#437](https://github.com/dudarenok-maker/AudioBook-Generator/issues/437)). _Why parked:_ would shave ~1–3 min off each frontend/server PR run, but the dev box is Windows (case-insensitive FS) and CI is Linux (case-sensitive) — a build break like a wrong-case import would slip past PR CI and only surface in ` … _Wake when:_ the safer round-2 levers prove insufficient AND a Linux-build / e2e signal moves earlier in the pipeline (e.g. …
 
@@ -460,8 +400,6 @@ Specific items someone might reasonably re-propose. Each carries a _Why parked_ 
 
 - `side-10` — Coalesce consecutive same-speaker short lines before batching ([#440](https://github.com/dudarenok-maker/AudioBook-Generator/issues/440)). _Why parked:_ two reasons. (1) **Perf goal met** — the 2026-05-31 overnight full-book run held aggregate RTF ~1.04 even on multi-voice/dialogue-dense chapters, so the dialogue floor isn't worth chasing. … _Wake when:_ Qwen synthesis becomes a real bottleneck again specifically on dialogue-dense books AND a captions/timing-preservation design + a quality A/B prove the merge doesn't hurt quote-audit fidelity.
 
-- `ops-4` — Auto-install Ollama / auto-pull models ([#441](https://github.com/dudarenok-maker/AudioBook-Generator/issues/441)). _Why parked:_ installer + `ollama pull` are platform-specific and fragile under the OneDrive workspace path; the README addendum + explicit user opt-in is the v1 contract. _Wake when:_ Ollama upstream ships a stable cross-platform headless installer, OR a CI / dev-container path needs one-command bring-up. Likely two separate items then.
-
 - `srv-8` — Multi-model fan-out for Gemini analyzer ([#442](https://github.com/dudarenok-maker/AudioBook-Generator/issues/442)). _Why parked:_ one model per run keeps cost predictable and the SSE stream simple; A/B comparison today is two sequential runs. _Wake when:_ a real product use case for "render the same chapter under two models side-by-side in one view" emerges. The audio-layer a/b audition (plan 20) covers the listening-side intent today.
 
 - `fe-11` — Multi-tab catch-up race resilience ([#443](https://github.com/dudarenok-maker/AudioBook-Generator/issues/443)). _Why parked:_ disk `state.json` is authoritative + single-user-per-workspace, so two tabs on the same book never compete on writes. Tab B catches up by re-reading state on focus. _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `srv-10` — both wake under the same trigger.
@@ -470,12 +408,7 @@ Specific items someone might reasonably re-propose. Each carries a _Why parked_ 
 
 - `srv-10` — Conflict resolution for two simultaneous `state.json` writers ([#445](https://github.com/dudarenok-maker/AudioBook-Generator/issues/445)). _Why parked:_ single-user-per-workspace assumption; file locking is advisory at best on Windows network shares. _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `fe-11` — both wake under the same trigger.
 
-- `srv-6` — Engine-drift factor polish + `resolvedVoiceName` backfill ([#446](https://github.com/dudarenok-maker/AudioBook-Generator/issues/446)). _Why parked:_ the user is regenerating the whole catalogue with Qwen, so every book will get a fresh post-plan-108 `resolvedVoiceName` snapshot at render time — there are no stranded legacy chapters left for the backfill to rescue. _Wake when:_ a corpus of pre-plan-108 chapters that will _not_ be regenerated needs drift detection after all (e.g. an imported back-catalogue from another deployer). Until then the regen sweep makes the backfill moot.
-
 - `srv-5` — Tune per-engine VRAM cost map against real hardware ([#447](https://github.com/dudarenok-maker/AudioBook-Generator/issues/447)). _Why parked:_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost … _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. …
-
-- `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555), [plan 188](features/188-android-companion-app.md)). _Why parked:_ "Android **initially**" — v1 ships Android only; the codebase stays iOS-ready by construction (app-managed TLS trust, dual-platform Flutter plugins, an unsigned iOS CI compile from `app-1`), so this is incremental, not a rewrite. _Codec caveat (5th review):_ iOS `AVPlayer` can't play `.ogg` — for iOS, the server must render MP3/M4A (OGG is Android-only); the app reads the format from the manifest and surfaces it. _Wake when:_ the Android v1 MVP is stable on real devices AND there's listener demand for iOS.
-- `app-15` — legacy (pre-API-26) launcher icon PNGs + iOS app-icon set ([#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632), [plan 188](features/188-android-companion-app.md)). The Castwright adaptive icon (PR #629) covers **API 26+** (all modern devices + the emulator); the pre-26 PNG fallback + the iOS `AppIcon.appiconset` are still the Flutter default (no SVG rasterizer was on the build box). Generate them from `brand/castwright-icon.svg` (e.g. `flutter_launcher_icons` with a rasterized PNG source). _Low priority_ — adaptive covers the vast majority of devices.
 
 ---
 
