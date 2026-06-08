@@ -469,14 +469,6 @@ describe('sidecar supervisor (srv-15)', () => {
       let releaseDelay!: () => void;
       const delayFn = vi.fn(async () => new Promise<void>((r) => (releaseDelay = r)));
       const handles: ReturnType<typeof makeHandle>[] = [];
-      const spawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
-        if (spawnFn.mock.calls.length === 1) return makeHandle() as SidecarHandle; // initial spawn
-        // Capture the exit handler for the first spawn so we can trigger it.
-        opts.onExit;
-        const h = makeHandle();
-        handles.push(h);
-        return h as SidecarHandle;
-      });
       // Capture onExit from the initial spawn.
       let capturedExit!: SpawnSidecarOpts['onExit'];
       const realSpawnFn = vi.fn(async (opts: SpawnSidecarOpts) => {
