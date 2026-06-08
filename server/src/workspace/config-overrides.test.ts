@@ -37,7 +37,7 @@ describe('configOverrides store', () => {
 
   it('getResolvedGenerationWorkers honours a tts.gen.workers override', async () => {
     const m = await import('./user-settings.js');
-    expect(m.getResolvedGenerationWorkers()).toBe(2); // shipped default
+    expect(m.getResolvedGenerationWorkers()).toBe(1); // shipped default
     await m.writeConfigOverride('tts.gen.workers', 3);
     expect(m.getResolvedGenerationWorkers()).toBe(3);
   });

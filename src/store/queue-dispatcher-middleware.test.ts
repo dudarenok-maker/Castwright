@@ -108,7 +108,7 @@ function jsonResp(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function makeStore(generationWorkers = 2) {
+function makeStore(generationWorkers = 1) {
   let runner: StreamRunner | null = null;
   const getRunner = (): StreamRunner => runner!;
   const store = configureStore({
