@@ -108,7 +108,7 @@ function jsonResp(body: unknown, status = 200): Response {
   } as Response;
 }
 
-function makeStore(generationWorkers = 2) {
+function makeStore(generationWorkers = 1) {
   let runner: StreamRunner | null = null;
   const getRunner = (): StreamRunner => runner!;
   const store = configureStore({
@@ -395,6 +395,17 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [entry()], paused: true }));
     await flushMicro();
     expect(streamGenerationMock).not.toHaveBeenCalled();
+  });
+
+  it('does not claim/open a new entry while the sidecar is recycling', async () => {
+    const store = makeStore(2);
+    store.dispatch(
+      queueSlice.actions.setSnapshot({ entries: [entry()], paused: false, recycling: true }),
+    );
+    await flushMicro();
+    expect(streamGenerationMock).not.toHaveBeenCalled();
+    /* inFlight stays empty — the entry was never claimed. */
+    expect(store.getState().queue.entries[0]?.status).toBe('queued');
   });
 
   it('waits for the cold-boot snapshot before opening anything', async () => {

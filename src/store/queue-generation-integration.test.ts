@@ -94,6 +94,9 @@ function makeStore() {
       account: accountSlice.reducer,
       notifications: notificationsSlice.reducer,
     },
+    preloadedState: {
+      account: { ...accountSlice.getInitialState(), generationWorkers: 2 },
+    },
     middleware: (gd) =>
       gd({ serializableCheck: false }).concat(
         generationStreamMiddleware(getRunner),
@@ -134,7 +137,7 @@ describe('queue-driven generation integration (plan 111)', () => {
     await flush();
 
     /* explicit-start enqueued chapters 2 + 3; under queue-sole concurrency
-       (N=2 default) the dispatcher opens ONE stream PER chapter. */
+       (N=2 preloaded) the dispatcher opens ONE stream PER chapter. */
     expect(streamGenerationMock).toHaveBeenCalledTimes(2);
     const calls = streamGenerationMock.mock.calls.map(
       (c) => c[0] as { bookId: string; chapterIds: number[] },
@@ -152,7 +155,7 @@ describe('queue-driven generation integration (plan 111)', () => {
     store.dispatch(chaptersSlice.actions.setChapters([ch(1), ch(2)]));
     store.dispatch(uiSlice.actions.requestStartGeneration());
     await flush();
-    /* One stream per chapter (N=2 default fills both). */
+    /* One stream per chapter (N=2 preloaded fills both). */
     expect(streamGenerationMock).toHaveBeenCalledTimes(2);
 
     /* Drive each chapter's own stream done + idle (per-stream onTick). */

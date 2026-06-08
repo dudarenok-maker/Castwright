@@ -84,7 +84,7 @@ function renderModal(
       chapters: chaptersSlice.reducer,
     },
     preloadedState: {
-      queue: { entries, paused: opts.paused ?? false, loaded: true },
+      queue: { entries, paused: opts.paused ?? false, recycling: false, loaded: true },
       library: {
         books: opts.books ?? [],
         pausedSnapshots: {},

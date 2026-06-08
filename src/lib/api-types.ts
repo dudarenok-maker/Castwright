@@ -1975,12 +1975,12 @@ export interface components {
             eagerLoadQwen?: boolean;
             /**
              * @description Number of chapters the generation queue synthesises concurrently
-             *     (queue-worker concurrency). Default 2. Pulled from the flat queue
+             *     (queue-worker concurrency). Default 1. Pulled from the flat queue
              *     across books; same-book chapters fan out within one stream via the
              *     server's bounded pool. This is queue/synthesis concurrency only —
              *     the process-global GPU semaphore (`GPU_CONCURRENCY`) remains the
              *     VRAM guard, so raising this never risks an out-of-memory. Resolved
-             *     as `GEN_WORKERS` env > this setting > 2.
+             *     as `GEN_WORKERS` env > this setting > 1.
              */
             generationWorkers?: number;
             /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
@@ -2669,6 +2669,8 @@ export interface components {
             entries: components["schemas"]["QueueEntry"][];
             /** @description Queue-global pause flag. When true, the dispatcher waits at the next chapter boundary. */
             paused: boolean;
+            /** @description True when the active sidecar supervisor has no live child process (the sidecar is dead or respawning). The dispatcher holds new claims while this is true; in-flight streams run to completion via the server-side readiness gate. False when there is no managed sidecar (autoStart off). */
+            recycling: boolean;
         };
         QueueEnqueueRequest: {
             bookId: string;
