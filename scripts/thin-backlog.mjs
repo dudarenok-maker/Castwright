@@ -35,7 +35,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 const BACKLOG_PATH = resolve(repoRoot, 'docs', 'BACKLOG.md');
 const MAP_PATH = resolve(repoRoot, 'docs', 'backlog-issue-map.json');
-const REPO = 'dudarenok-maker/AudioBook-Generator';
+const REPO = 'dudarenok-maker/Castwright';
 
 const LEADING_ID = /^`(fe|srv|side|ops|fs)-(\d+)`/;
 const TIER_FROM_SECTION = { Must: 'must', Should: 'should', Could: 'could', "Won't": 'wont' };
