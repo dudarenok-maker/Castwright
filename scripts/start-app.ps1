@@ -28,6 +28,11 @@ function Write-Status($msg) {
     try { Write-Host $msg } catch {}
 }
 
+# Brand banner (the npm package echo can't be suppressed from inside the script
+# on the `npm start` path, so lead with Castwright).
+$pkgVersion = (Get-Content (Join-Path $repoRoot "package.json") -Raw | ConvertFrom-Json).version
+Write-Status "`nCastwright v$pkgVersion — Any book, performed by a full cast.`n"
+
 function Fail($msg) {
     $msg | Out-File -FilePath $failMarker -Encoding utf8 -Append
     Write-Status "[FAIL] $msg"

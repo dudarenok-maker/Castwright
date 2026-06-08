@@ -1,7 +1,7 @@
 # Castwright — Android companion
 
 `castwright` — a native **Flutter** listening companion for the
-Audiobook Generator. It pairs to your server over the home LAN (HTTPS,
+Castwright server app. It pairs to your server over the home LAN (HTTPS,
 cert-pinned), **delta-syncs only the chapters that changed**, and plays them
 offline with background / lock-screen / Bluetooth controls. Android-first; the
 codebase is iOS-ready (one Flutter project, the iOS target lives here too).

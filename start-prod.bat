@@ -7,7 +7,7 @@ REM logs\server.log; stop it later with stop-prod.bat.
 REM ===========================================================================
 cd /d "%~dp0"
 
-call npm run start:prod
+call npm run --silent start:prod
 if errorlevel 1 (
   echo.
   echo [start-prod] Launch failed. If the bundle is missing, build it first:

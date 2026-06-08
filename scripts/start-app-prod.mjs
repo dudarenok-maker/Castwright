@@ -13,7 +13,7 @@
 // :8443. resolveLaunchTarget() mirrors the server's selection so the two agree.
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
@@ -31,6 +31,18 @@ const runDir = process.env.APP_RUN_DIR ? resolve(process.env.APP_RUN_DIR) : reso
 const logDir = process.env.APP_LOG_DIR ? resolve(process.env.APP_LOG_DIR) : resolve(repoRoot, 'logs');
 const distIndex = resolve(repoRoot, 'dist', 'index.html');
 const serverEntry = resolve(serverDir, 'dist', 'index.js');
+const pkgVersion = JSON.parse(
+  readFileSync(resolve(repoRoot, 'package.json'), 'utf8'),
+).version;
+
+/** The one-line Castwright startup banner. Exported for unit testing. */
+export function bannerLine(version) {
+  return `Castwright v${version} — Any book, performed by a full cast.`;
+}
+
+function printBanner() {
+  info(`\n${bannerLine(pkgVersion)}\n`);
+}
 
 const HEALTH_TIMEOUT_MS = 60_000;
 
@@ -115,6 +127,8 @@ async function main() {
       `Server bundle missing at server/dist/index.js. Run "npm run build" before "npm run start:prod".`,
     );
   }
+
+  printBanner();
 
   const alreadyUp = await probePort(port);
   if (alreadyUp) {

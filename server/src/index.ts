@@ -1,4 +1,4 @@
-/* Local development backend for the audiobook generator.
+/* Local development backend for Castwright.
    Implements the upload + analysis + voice-match slice of the OpenAPI spec.
    Frontend (Vite, :5173) proxies /api/* to this server (:8080) — see vite.config.ts. */
 

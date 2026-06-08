@@ -8,7 +8,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MANIFEST, matchesManifest } from '../build-release-zip.mjs';
+import { MANIFEST, matchesManifest, releaseZipName, releaseInternalPrefix } from '../build-release-zip.mjs';
 
 const INCLUDED = [
   'package.json',
@@ -142,4 +142,12 @@ test('MANIFEST exposes both include and exclude pattern lists', () => {
   assert.ok(MANIFEST.include.length > 5);
   assert.ok(MANIFEST.exclude.length > 5);
   assert.ok(MANIFEST.keepGitkeepIn.includes('server/tts-sidecar/voices/kokoro'));
+});
+
+test('releaseZipName returns castwright- prefixed zip filename', () => {
+  assert.equal(releaseZipName('v1.7.0'), 'release/castwright-v1.7.0.zip');
+});
+
+test('releaseInternalPrefix returns castwright- prefixed top dir', () => {
+  assert.equal(releaseInternalPrefix('v1.7.0'), 'castwright-v1.7.0');
 });

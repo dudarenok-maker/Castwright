@@ -165,6 +165,16 @@ function toPosix(rel) {
  * the release zip. Pure function — useful for unit testing the manifest
  * decisions in isolation.
  */
+/** Returns the default zip output path (relative to repo root) for a given version tag. */
+export function releaseZipName(version) {
+  return `release/castwright-${version}.zip`;
+}
+
+/** Returns the top-level directory prefix used inside the release zip. */
+export function releaseInternalPrefix(version) {
+  return `castwright-${version}`;
+}
+
 export function matchesManifest(relPath, manifest = MANIFEST) {
   const p = toPosix(relPath);
   // Exclude always wins (even if include also matches).
@@ -276,7 +286,7 @@ async function main() {
 
   const outPath = resolve(
     repoRoot,
-    args.out ?? `release/audiobook-generator-${args.version}.zip`,
+    args.out ?? releaseZipName(args.version),
   );
   mkdirSync(dirname(outPath), { recursive: true });
 
@@ -331,7 +341,7 @@ async function main() {
     archive.pipe(output);
     for (const { rel, abs } of matched) {
       // Use POSIX separators in the zip entries for cross-platform extract.
-      archive.file(abs, { name: posix.join(`audiobook-generator-${args.version}`, toPosix(rel)) });
+      archive.file(abs, { name: posix.join(releaseInternalPrefix(args.version), toPosix(rel)) });
     }
     archive.finalize();
   });
