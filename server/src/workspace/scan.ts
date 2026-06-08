@@ -64,6 +64,16 @@ export interface BookStateJson {
     uuid?: string;
     duration?: string;
     excluded?: boolean;
+    /** "Not queued" hold — the user explicitly removed this (un-rendered)
+        chapter from the generation queue (queue-modal delete of its
+        chapter-scope entry). Distinct from `excluded`: a held chapter stays
+        PART of the book (no audio cleanup, still counts toward the book being
+        "not fully generated"), it's just not on the work queue and the
+        auto-work resume must NOT re-enqueue it. Cleared when the user clicks
+        "Generate this chapter". Persisted so the choice survives reload —
+        without it, `chapter.state` re-hydrates to "queued" and the row lies.
+        Optional so legacy state.json files load cleanly. */
+    held?: boolean;
     /** TTS model key that produced this chapter's audio file. Stamped on
         successful render (server/src/routes/generation.ts post-render
         block) and backfilled lazily from audio/<slug>.segments.json on
