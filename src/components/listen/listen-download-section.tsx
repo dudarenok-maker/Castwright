@@ -1,4 +1,4 @@
-/* Listen-view download + handoff region — pure presentational lift
+/* Listen-view download region — pure presentational lift
    from listen.tsx. Owns: the Castwright Companion app banner (mocked
    store links), the "Listen on your favourite app" cards
    (PocketBook / Voice / Smart AudioBook / BookPlayer / Audiobookshelf /
