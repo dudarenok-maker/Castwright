@@ -29,6 +29,10 @@ export interface Id3Tags {
   trackTotal: number;
   genre?: string | null;
   date?: string | null;
+  /** Optional free-form comment written to the ID3v2 COMM frame.
+      When set, ffmpeg emits `-metadata comment=<value>`.
+      Intended for the "Rendered with Castwright · castwright.ai" stamp. */
+  comment?: string | null;
 }
 
 export interface ApplyId3Options {
@@ -74,6 +78,7 @@ export async function applyId3v24Tags(
   ];
   if (tags.genre) args.push('-metadata', `genre=${tags.genre}`);
   if (tags.date) args.push('-metadata', `date=${tags.date}`);
+  if (tags.comment) args.push('-metadata', `comment=${tags.comment}`);
   args.push('-f', 'mp3', destPath);
 
   await new Promise<void>((resolve, reject) => {
