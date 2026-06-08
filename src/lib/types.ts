@@ -353,6 +353,14 @@ export interface BookStateResponse {
       the cast Status pill reads "Fallback (Kokoro)". Empty / undefined when no
       audio has rendered or nothing fell back. */
   renderedFallbackByCharacter?: Record<string, string>;
+  /** #650 — render-time sentence→speaker map per rendered chapter
+      (`{ [chapterId]: { [sentenceId]: characterId } }`), recovered from each
+      chapter's `<slug>.segments.json`. The Generate view diffs it against the
+      live manuscript to flag a `done` chapter whose sentences were reassigned
+      after it rendered — precise (no reassign-then-undo false positive) and
+      immediate. Absent for legacy/unrendered chapters; the view falls back to
+      the time-based change-log heuristic when a chapter has no entry. */
+  renderedSpeakersByChapter?: Record<number, Record<number, string>>;
   /** Editorial activity trail (regenerate confirms, etc.). Null when no
       change-log.json has been written yet — the layout falls back to an
       empty list so the Activity view doesn't replay a stale demo seed for

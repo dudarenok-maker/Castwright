@@ -51,7 +51,10 @@ import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.j
 import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
 import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
 import { preserveDesignedVoicesOnCastWrite } from '../workspace/preserve-cast-voices.js';
-import { collectRenderedFallbackEngines } from '../audio/segments-io.js';
+import {
+  collectRenderedFallbackEngines,
+  collectRenderedSpeakerMaps,
+} from '../audio/segments-io.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 export const bookStateRouter = Router();
@@ -404,6 +407,16 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
+    /* Render-time sentence→speaker map per rendered chapter (#650). The frontend
+       diffs it against the live manuscript to flag a `done` chapter whose
+       sentences were reassigned after it rendered — precise (no false positives)
+       and immediate (recomputed from the live manuscript), superseding the
+       time-based change-log heuristic. Tolerant of a missing audio dir. */
+    const renderedSpeakersByChapter = await collectRenderedSpeakerMaps(
+      bookDir,
+      state.chapters,
+    ).catch(() => ({}));
+
     res.json({
       state,
       cast,
@@ -414,6 +427,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       chapterCharacters,
       chapterLufs,
       renderedFallbackByCharacter,
+      renderedSpeakersByChapter,
       changeLog: changeLog?.events ?? null,
       analysis: { failedChapterIds },
     });
