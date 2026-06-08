@@ -69,6 +69,9 @@ const AdminView = lazy(() =>
 const ModelManagerView = lazy(() =>
   import('../views/model-manager').then((m) => ({ default: m.ModelManagerView })),
 );
+const AboutView = lazy(() =>
+  import('../views/about').then((m) => ({ default: m.AboutView })),
+);
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
@@ -326,6 +329,12 @@ function AdminRoute() {
 function ModelManagerRoute() {
   useHydrateStage({ kind: 'model-manager' }, []);
   return <ModelManagerView />;
+}
+
+/* Wave 3 — /about brand page, reached from the Admin view. */
+function AboutRoute() {
+  useHydrateStage({ kind: 'about' }, []);
+  return <AboutView />;
 }
 
 export function ChangelogRoute() {
@@ -920,6 +929,7 @@ export const router = createHashRouter([
       /* Inbound alias for old dev bookmarks; stageToHash canonicalises to #/admin. */
       { path: 'worktrees', element: <AdminRoute /> },
       { path: 'models', element: <ModelManagerRoute /> },
+      { path: 'about', element: <AboutRoute /> },
       { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },
       { path: 'books/:bookId/confirm', element: <ConfirmRoute /> },
       { path: 'books/:bookId/:view', element: <ReadyRoute /> },
