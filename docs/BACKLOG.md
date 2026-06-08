@@ -195,6 +195,12 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
 
+#### `srv-36` — Calibrate voice-drift detection thresholds against a labelled dataset ([#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665))
+
+- _What:_ The per-chapter drift comparator surfaces Severe / Moderate / Mild tiers, but its metric set and severity cutoffs are **placeholder** — never calibrated against ground truth. Gather a labelled drifted-vs-not chapter-audio set and tune the metric weights + tier thresholds so severity tracks perceived drift, with a regression test pinning the calibrated cutoffs.
+- _Benefit (user / technical):_ drift _detection_ is a free-tier trust feature; the flags have to be right or "every line checked" rings hollow. Placeholder cutoffs mean false alarms and misses.
+_Full detail + acceptance:_ [#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665).
+
 ### Listener experience & playback
 
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461))
@@ -264,6 +270,12 @@ _Full detail + acceptance:_ [#423](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Per-book custom pronunciation overrides for invented names/places (term → phonetic/respelling), applied at synth time. Fiction — especially fantasy proper nouns — is where the TTS mangles the most. Net-new vs the existing chapter-title prosody handling.
 - _Benefit (user):_ fixes the #1 narration-quality complaint for fiction. _(Demoted Should → Could 2026-06-08.)_
 _Full detail + acceptance:_ [#478](https://github.com/dudarenok-maker/AudioBook-Generator/issues/478).
+
+#### `fs-41` — Auto-detect manuscript language on ingest (filter voice library + auto-load engine) ([#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666))
+
+- _What:_ Complete the multi-language "second half": on ingest, auto-detect the manuscript language, filter the voice library to it, and auto-load the right engine (Qwen3-TTS for Russian, Kokoro for English), preserving the never-cross-language-within-a-book invariant. Today the language path works end-to-end (`fs-2`) but the user drives engine/voice selection by hand.
+- _Benefit (user):_ removes the most error-prone manual step for non-English books; one of the most-requested multi-language directions. Pairs with `fs-2` (engine half, shipped) and `fs-14` (Russian UI).
+_Full detail + acceptance:_ [#666](https://github.com/dudarenok-maker/AudioBook-Generator/issues/666).
 
 ### Revisions & regen
 
