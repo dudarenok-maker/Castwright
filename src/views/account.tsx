@@ -428,7 +428,7 @@ export function AccountView() {
           <div>
             <h2 className="text-base font-semibold text-ink">Models &amp; engines</h2>
             <p className="mt-1 text-xs text-ink/55 max-w-prose">
-              Installing models, picking the default TTS / analyzer engine, the Voice engine /
+              Installing models, picking the default Voice / analyzer engine, the Voice engine /
               Ollama URLs, and the Gemini key now live in the Model Manager.
             </p>
           </div>
