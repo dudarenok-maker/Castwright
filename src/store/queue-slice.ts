@@ -192,7 +192,12 @@ export const selectActiveGenerationView = (
      with the pill's done/total. */
   const rows: ActiveGenerationChapterRow[] | null = sameBook
     ? chapters.chapters
-        .filter((c) => !c.excluded && (c.state === 'in_progress' || c.state === 'queued'))
+        .filter(
+          (c) =>
+            !c.excluded &&
+            !c.held &&
+            (c.state === 'in_progress' || c.state === 'queued'),
+        )
         .map((c) => ({ id: c.id, state: c.state as 'in_progress' | 'queued' }))
     : null;
   return {

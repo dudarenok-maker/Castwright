@@ -1874,3 +1874,124 @@ describe('LibraryView Base voices tab', () => {
     expect(screen.getByLabelText('Coqui')).toBeInTheDocument();
   });
 });
+
+describe('fe-34 — variant filter toggle', () => {
+  const designedNeeds: Character = {
+    id: 'fury', name: 'Fury', role: 'Rival', color: 'mentor', lines: 4, scenes: 1, attributes: [],
+    ttsEngine: 'qwen', voiceId: 'qwen-fury',
+    overrideTtsVoices: { qwen: { name: 'qwen-fury', variants: {} } },
+  };
+  const designedHas: Character = {
+    id: 'calm', name: 'Calm', role: 'Sage', color: 'mentor', lines: 4, scenes: 1, attributes: [],
+    ttsEngine: 'qwen', voiceId: 'qwen-calm',
+    overrideTtsVoices: { qwen: { name: 'qwen-calm', variants: { angry: { name: 'qwen-calm-angry' } } } },
+  };
+  const toggleSentences: Sentence[] = [
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'fury', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Peace.', characterId: 'calm', emotion: 'angry' },
+  ];
+  const qwenLib: Voice[] = [
+    { id: 'qwen-fury', character: 'Fury', bookId: 'b1', bookTitle: 'Book One', attributes: [],
+      usedIn: 1, source: 'current', gradient: ['#000', '#111'],
+      ttsVoice: { provider: 'qwen', name: 'qwen-fury', description: '' } },
+    { id: 'qwen-calm', character: 'Calm', bookId: 'b1', bookTitle: 'Book One', attributes: [],
+      usedIn: 1, source: 'current', gradient: ['#000', '#111'],
+      ttsVoice: { provider: 'qwen', name: 'qwen-calm', description: '' } },
+  ];
+
+  function renderToggleView() {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    /* Set ui.stage to ready with bookId='b1' so currentBookId resolves and the
+       voices view reads cast + sentences from redux (not foreign-cast cache). */
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    /* Hydrate cast with the two Qwen characters used by the qwenLib voices. */
+    store.dispatch(castSlice.actions.setCharacters([designedNeeds, designedHas]));
+    /* Hydrate manuscript sentences so usedEmotionsByCharacter has data. */
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        chapters: [],
+        characters: [designedNeeds, designedHas],
+        sentences: toggleSentences,
+      } as never),
+    );
+    return render(
+      <Provider store={store}>
+        <LibraryView library={qwenLib} />
+      </Provider>,
+    );
+  }
+
+  it('narrows the designed voices to needs-variants when "Needs variants" is selected', async () => {
+    renderToggleView();
+    await act(async () => {}); // flush the getBaseVoices mount effect
+    expect(screen.getByText('Calm')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^Needs variants/ }));
+    expect(screen.getByText('Fury')).toBeInTheDocument();
+    expect(screen.queryByText('Calm')).toBeNull();
+  });
+
+  it('narrows to has-variants when "Has variants" is selected', async () => {
+    renderToggleView();
+    await act(async () => {}); // flush the getBaseVoices mount effect
+    fireEvent.click(screen.getByRole('button', { name: /^Has variants/ }));
+    expect(screen.getByText('Calm')).toBeInTheDocument();
+    expect(screen.queryByText('Fury')).toBeNull();
+  });
+
+  it('shows "No voices match this filter" (not the global empty state) when a filter excludes all', async () => {
+    // Library with ONLY a fully-covered voice → "Needs variants" matches nothing.
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        voices: voicesSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'cast_pending' }));
+    store.dispatch(uiSlice.actions.confirmCast());
+    store.dispatch(castSlice.actions.setCharacters([designedHas]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        chapters: [],
+        characters: [designedHas],
+        sentences: [{ id: 2, chapterId: 1, text: 'Peace.', characterId: 'calm', emotion: 'angry' }],
+      } as never),
+    );
+    render(
+      <Provider store={store}>
+        <LibraryView library={[qwenLib[1]]} />
+      </Provider>,
+    );
+    await act(async () => {}); // flush the getBaseVoices mount effect
+    fireEvent.click(screen.getByRole('button', { name: /^Needs variants/ }));
+    expect(screen.getByText('No voices match this filter')).toBeInTheDocument();
+    expect(screen.queryByText('No voices yet')).toBeNull();
+    // The toggle stays reachable so the user can switch back (exact name avoids
+    // matching the "All (N)" tab button).
+    const variantGroup = screen.getByRole('group', { name: 'Filter by emotion variants' });
+    expect(within(variantGroup).getByRole('button', { name: 'All' })).toBeInTheDocument();
+  });
+
+  it('shows a per-card "Needs" badge on a designed voice missing a variant', async () => {
+    renderToggleView();
+    await act(async () => {}); // flush the getBaseVoices mount effect
+    // Default 'all' filter shows both designed cards. Only Fury (no variants,
+    // speaks an "angry" quote) is missing one → exactly one Needs badge.
+    const needs = screen.getAllByTestId('needs-variants-badge');
+    expect(needs).toHaveLength(1);
+    expect(needs[0]).toHaveTextContent('Needs · 1');
+    // Calm is fully covered → carries the Variants badge, never a Needs badge.
+    expect(screen.getByTestId('variants-badge')).toHaveTextContent('Variants');
+  });
+});

@@ -29,7 +29,7 @@ export function AsrStatusBadge({
         ? `Whisper ASR ready · ${device}`
         : 'Whisper ASR ready'
       : key === 'unreachable'
-        ? 'Sidecar process not running'
+        ? 'Voice engine not running'
         : 'Whisper ASR idle';
   return (
     <span

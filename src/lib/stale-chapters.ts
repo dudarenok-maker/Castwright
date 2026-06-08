@@ -7,12 +7,40 @@
 
 import { useAppDispatch, useAppSelectorShallow } from '../store';
 import { uiActions } from '../store/ui-slice';
-import type { Chapter } from './types';
+import type { Chapter, ChangeLogEvent } from './types';
 
 export function renderedChaptersForCharacter(characterId: string, chapters: Chapter[]): number[] {
   return chapters
     .filter((ch) => ch.state === 'done' && ch.characters && characterId in ch.characters)
     .map((ch) => ch.id);
+}
+
+/* Bug 2 — a rendered chapter whose sentence→speaker assignments were changed
+   AFTER it was generated is stale and needs regenerating. Derived (not a stored
+   flag) from two pieces of already-persisted state, so the indicator survives a
+   reload: the change-log `boundary_move` events (one is appended/bumped for every
+   sentence reassignment) and the chapter's `audioRenderedAt` render stamp.
+
+   This is the "optimistic now" half of the indicator: time-based, so a
+   reassign-then-undo still reads stale until regenerated. The precise per-sentence
+   net-diff is a filed follow-up. Correctness precondition: EVERY reassignment path
+   must emit a `boundary_move` (see manuscript.tsx). */
+
+/** The ISO time of the most recent sentence-reassignment logged for a chapter, or
+    undefined if none. `events` are newest-first (the change-log unshifts), so the
+    first match is the latest. */
+export function latestReassignAt(
+  chapterId: number,
+  events: ChangeLogEvent[],
+): string | undefined {
+  return events.find((e) => e.type === 'boundary_move' && e.chapterId === chapterId)?.at;
+}
+
+/** True when a `done` chapter's audio predates its latest sentence reassignment. */
+export function isChapterStaleFromReassign(chapter: Chapter, events: ChangeLogEvent[]): boolean {
+  if (chapter.state !== 'done' || !chapter.audioRenderedAt) return false;
+  const reassignedAt = latestReassignAt(chapter.id, events);
+  return reassignedAt != null && reassignedAt > chapter.audioRenderedAt;
 }
 
 /** Returns a callback that marks a character's rendered audio stale (no-op when

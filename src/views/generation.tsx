@@ -58,6 +58,7 @@ import { ttsModelLabel, formatEngineBreakdown } from '../lib/tts-models';
 import { parseDuration, formatTime } from '../lib/time';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
+import { isChapterStaleFromReassign } from '../lib/stale-chapters';
 import {
   characterLinePositionsByChapter,
   characterRowProgress,
@@ -573,6 +574,17 @@ export function GenerationView({
      skip the reason-prompt RegenerateModal that `onRegenerate` opens because a
      never-rendered chapter has no prior render to "regenerate". */
   function handleGenerateChapter(ch: Chapter): void {
+    /* Re-adding a "Not queued" (held) chapter clears the hold so the row leaves
+       the "Not queued" state and the auto-work resume stops skipping it. Clear
+       optimistically in the slice + persist; the enqueue below is what actually
+       starts it. No-op for a normal queued chapter (never held). */
+    if (ch.held) {
+      dispatch(chaptersActions.setChapterHeld({ chapterId: ch.id, held: false }));
+      void api.setChapterHeld(bookId, ch.id, false).catch(() => {
+        /* best-effort: the chapter still enqueues; the hold reconciles on the
+           next hydrate if the persist failed. */
+      });
+    }
     const rand = Math.random().toString(36).slice(2, 8);
     void dispatch(
       enqueueQueueEntries([
@@ -609,7 +621,12 @@ export function GenerationView({
   const completed = activeChapters.filter((c) => c.state === 'done').length;
   const failed = activeChapters.filter((c) => c.state === 'failed').length;
   const inProgressCnt = activeChapters.filter((c) => c.state === 'in_progress').length;
-  const queued = activeChapters.filter((c) => c.state === 'queued').length;
+  /* `held` chapters carry state==='queued' under the hood but the user removed
+     them from the queue ("Not queued"), so they must NOT count as queued work:
+     this gates the Resume-generation button (so it doesn't re-enqueue them) and
+     keeps the queued/“N pending” copy honest. They still sit in activeChapters,
+     so a book with held chapters is correctly never "all complete". */
+  const queued = activeChapters.filter((c) => c.state === 'queued' && !c.held).length;
   /* Engine drift (plan 35). A drifted chapter has audio recorded with a
      different TTS engine than the project's current selection — usually
      because the user changed the model picker after generation. The list
@@ -768,7 +785,7 @@ export function GenerationView({
                 kind="tts"
                 engineLabel="Kokoro"
                 state={ttsLifecycle.kokoro.state}
-                unreachableLabel="Sidecar process not running"
+                unreachableLabel="Voice engine not running"
                 onLoad={() => {
                   void ttsLifecycle.kokoro.onLoad();
                 }}
@@ -782,7 +799,7 @@ export function GenerationView({
                 kind="tts"
                 engineLabel="Coqui XTTS"
                 state={ttsLifecycle.coqui.state}
-                unreachableLabel="Sidecar process not running"
+                unreachableLabel="Voice engine not running"
                 onLoad={() => {
                   void ttsLifecycle.coqui.onLoad();
                 }}
@@ -1050,6 +1067,7 @@ export function GenerationView({
               onIncludeClick={handleIncludeClick}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
+              stale={isChapterStaleFromReassign(ch, activityEvents)}
               subsetProgress={subsetByChapter[ch.id] ?? null}
               activeModelKey={modelKey}
             />
@@ -1169,6 +1187,10 @@ interface ChapterRowProps {
   onIncludeClick: (chapterId: number) => void;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
+  /** Bug 2 — true when this `done` chapter's sentence→speaker assignments were
+      reassigned after its audio was rendered (derived from the change-log vs
+      `audioRenderedAt`). Drives the "Sentences reassigned · regenerate" caption. */
+  stale: boolean;
   /** In-flight subset analysis state for this chapter, or null when
       the row is idle. Drives the inline progress / throttle / error
       block on the excluded-chapter variant. */
@@ -1202,6 +1224,7 @@ function ChapterRow({
   onIncludeClick,
   onCancelSubset,
   onRetrySubset,
+  stale,
   subsetProgress,
   activeModelKey,
 }: ChapterRowProps) {
@@ -1238,14 +1261,17 @@ function ChapterRow({
   }
 
   const assembling = chapter.phase === 'assembling';
+  const verifying = chapter.phase === 'verifying';
   const rowStalled = stalled && chapter.state === 'in_progress';
   const inProgressLabel = rowStalled
     ? 'Stalled'
     : assembling
       ? 'Assembling…'
-      : paused
-        ? 'Paused'
-        : 'Generating';
+      : verifying
+        ? 'Verifying speech…'
+        : paused
+          ? 'Paused'
+          : 'Generating';
   const inProgressPill = rowStalled ? (
     <Pill color="warning">Stalled</Pill>
   ) : (
@@ -1281,6 +1307,19 @@ function ChapterRow({
       icon: <IconWarning className="w-4 h-4 text-rose-600" />,
     },
   }[chapter.state];
+
+  /* "Not queued" hold overrides the neutral Queued badge. The chapter is
+     un-rendered (state==='queued') but the user removed it from the queue, so
+     it must not read "Queued" (which implies pending work) — a dashed circle +
+     muted "Not queued" pill signals it's idle and re-addable via the expanded
+     "Generate this chapter" button. */
+  const heldNotQueued = !!chapter.held && chapter.state === 'queued';
+  if (heldNotQueued) {
+    stateConfig.badge = <Pill>Not queued</Pill>;
+    stateConfig.icon = (
+      <span className="w-4 h-4 rounded-full border border-dashed border-ink/30" />
+    );
+  }
 
   const findChar = (id: string): Character =>
     characters.find((c) => c.id === id) || { id, name: id, role: '', color: 'narrator' };
@@ -1328,13 +1367,32 @@ function ChapterRow({
           <span className="block font-semibold text-ink truncate">
             {stripChapterPrefix(chapter.title)}
           </span>
-          {chapter.state === 'in_progress' && liveTotal > 0 ? (
+          {chapter.state === 'in_progress' && verifying ? (
+            /* srv-31 ASR content-QA pass: the synthesis groups are done and
+               counters are frozen near 99 %, so show the QA step explicitly
+               instead of a stuck "Synthesising …" line. */
+            <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
+              Verifying speech…
+            </span>
+          ) : chapter.state === 'in_progress' && liveTotal > 0 ? (
             /* Live caption — swaps in once a tick has shipped totalLines so
                the user has a per-tick "moving" signal at eye level.
                Falls through to the static meta until then. */
             <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
               {liveSpeaker ? `Synthesising ${liveSpeaker.name} · ` : ''}
               line {liveCurrent.toLocaleString()} of {liveTotal.toLocaleString()}
+            </span>
+          ) : chapter.state === 'done' && stale ? (
+            /* Bug 2 — sentence→speaker assignments changed after this chapter
+               was rendered, so its audio is out of date. Most actionable of the
+               "done" captions (the user's own edit invalidated it), so it wins
+               over the informational mixed-engine / engine-drift lines. The
+               Regenerate-this-chapter control sits eye-level below. */
+            <span
+              className="block text-[11px] text-amber-700 tabular-nums mt-0.5 truncate"
+              title="You reassigned sentences in this chapter after it was generated. Regenerate to refresh the audio."
+            >
+              ⚠ Sentences reassigned · regenerate to refresh
             </span>
           ) : chapter.state === 'done' && isMixedEngineChapter(chapter) ? (
             /* Mixed-engine breakdown caption (false-drift fix, 2026-06-07).
@@ -1388,6 +1446,7 @@ function ChapterRow({
             state={chapter.state}
             paused={paused}
             assembling={assembling}
+            verifying={verifying}
           />
         </span>
         <span className="hidden sm:block text-sm tabular-nums text-ink/60 text-right">
@@ -1684,6 +1743,7 @@ function ChapterRow({
           )}
           {chapter.state === 'in_progress' &&
             !assembling &&
+            !verifying &&
             chapter.currentLine != null &&
             chapter.currentLine > 0 && (
               <div className="mt-4 ml-[60px] flex items-center gap-3 text-xs text-ink/60">
@@ -1832,11 +1892,13 @@ function ChapterProgressBar({
   state,
   paused,
   assembling,
+  verifying,
 }: {
   progress: number;
   state: Chapter['state'];
   paused: boolean;
   assembling: boolean;
+  verifying: boolean;
 }) {
   if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/6" />;
   if (state === 'done')
@@ -1851,10 +1913,11 @@ function ChapterProgressBar({
         <div className="h-full rounded-full bg-rose-500" style={{ width: `${progress * 100}%` }} />
       </div>
     );
-  if (assembling)
+  if (assembling || verifying)
     return (
-      /* Disk-write phase — neutral ink-tone bar with stripe motion to read as
-       "near done, busy" rather than the magenta synthesis gradient. */
+      /* Disk-write phase (assembling) or the srv-31 ASR content-QA pass
+         (verifying) — neutral ink-tone bar with stripe motion to read as
+         "near done, busy" rather than the magenta synthesis gradient. */
       <div className="relative h-1.5 rounded-full bg-ink/6 overflow-hidden">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-ink/40"

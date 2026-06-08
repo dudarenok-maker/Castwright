@@ -24,7 +24,7 @@ import {
 import { WORKSPACE_ROOT } from '../workspace/paths.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
-export type CheckId = 'gpu' | 'sidecar' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
+export type CheckId = 'gpu' | 'sidecar' | 'asr' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
 
 export interface DiagnosticsCheck {
   id: CheckId;
@@ -122,12 +122,12 @@ diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
       };
     }),
 
-    // TTS sidecar reachability + resident models.
-    runCheck('sidecar', 'TTS sidecar', () => {
+    // Voice engine (TTS sidecar) reachability + resident models.
+    runCheck('sidecar', 'Voice engine', () => {
       if (sidecar.status !== 'reachable') {
         return {
           id: 'sidecar',
-          label: 'TTS sidecar',
+          label: 'Voice engine',
           status: 'fail',
           detail: sidecar.error || 'unreachable',
         };
@@ -138,10 +138,43 @@ diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
       if (sidecar.qwenLoaded) resident.push('qwen');
       return {
         id: 'sidecar',
-        label: 'TTS sidecar',
+        label: 'Voice engine',
         status: 'ok',
         detail: resident.length ? `reachable · ${resident.join(', ')}` : 'reachable · no model resident',
         value: resident.join(', ') || null,
+      };
+    }),
+
+    // ASR (Whisper) content-QA engine (srv-31). Display-only — it loads lazily
+    // on /transcribe and idle-evicts, so there's no Load/Stop here. OFF unless
+    // SEG_ASR_ENABLED, in which case we surface whether it's resident + device.
+    // Never a `fail` row: an idle (not-yet-loaded) ASR is the normal state.
+    runCheck('asr', 'ASR (Whisper)', () => {
+      if (sidecar.status !== 'reachable') {
+        return {
+          id: 'asr',
+          label: 'ASR (Whisper)',
+          status: 'fail',
+          detail: 'voice engine unreachable — cannot read ASR state',
+        };
+      }
+      if (!sidecar.asrEnabled) {
+        return {
+          id: 'asr',
+          label: 'ASR (Whisper)',
+          status: 'ok',
+          detail: 'off — content-QA disabled',
+        };
+      }
+      const device = sidecar.asrDevice ?? 'cpu';
+      return {
+        id: 'asr',
+        label: 'ASR (Whisper)',
+        status: 'ok',
+        detail: sidecar.asrLoaded
+          ? `enabled · resident · ${device}`
+          : `enabled · idle · ${device}`,
+        value: sidecar.asrLoaded ? device : null,
       };
     }),
 
