@@ -1825,3 +1825,76 @@ describe('book-state router — srv-35 stable chapter uuid (plan 190)', () => {
     expect(get.body.chapterUuid).toBeUndefined();
   });
 });
+
+describe('book-state router — GET defaults narratorCredit to Castwright', () => {
+  /* TDD for Task 2: the GET handler must return DEFAULT_NARRATOR_CREDIT
+     ('Castwright') when the stored narratorCredit is null/empty/absent,
+     and must return the explicit value unchanged when set.
+
+     Uses the shared `bookId` + `app` from `beforeAll` at the top of this
+     file. The state-slice PUT tests above may have renamed the bookDir;
+     we re-seed it here so each case starts from a known state. */
+
+  function resetState(extra: Record<string, unknown> = {}) {
+    /* Ensure the directory exists (may have been renamed by prior tests). */
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: 'm_test',
+        title: 'Renamed Title',
+        author: 'Different Author',
+        series: 'Renamed Series',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...extra,
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    /* Reset state.json to a baseline without narratorCredit for each case. */
+    resetState(/* narratorCredit absent */);
+  });
+
+  it('returns narratorCredit: "Castwright" when stored value is absent', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state.narratorCredit).toBe('Castwright');
+  });
+
+  it('returns narratorCredit: "Castwright" when stored value is null', async () => {
+    resetState({ narratorCredit: null });
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state.narratorCredit).toBe('Castwright');
+  });
+
+  it('returns narratorCredit: "Castwright" when stored value is empty string', async () => {
+    resetState({ narratorCredit: '' });
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state.narratorCredit).toBe('Castwright');
+  });
+
+  it('returns narratorCredit: "Castwright" when stored value is whitespace-only', async () => {
+    resetState({ narratorCredit: '   ' });
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state.narratorCredit).toBe('Castwright');
+  });
+
+  it('returns the explicit credit unchanged when stored value is a real name', async () => {
+    resetState({ narratorCredit: 'Jane Narrator' });
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.state.narratorCredit).toBe('Jane Narrator');
+  });
+});

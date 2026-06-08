@@ -48,6 +48,7 @@ import { parseManuscript } from '../parsers/index.js';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
 import { snapshotInFlightAnalysis } from './analysis.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
+import { DEFAULT_NARRATOR_CREDIT } from '../export/narrator-credit.js';
 import type { ReuseHydratable } from '../tts/hydrate-reused-voice.js';
 import { PRESERVED_VOICE_FIELDS } from '../store/merge-analysis-cast.js';
 import { preserveDesignedVoicesOnCastWrite } from '../workspace/preserve-cast-voices.js';
@@ -417,8 +418,20 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
+    /* Apply the brand default for narratorCredit in the GET response so the
+       frontend always sees 'Castwright' when no explicit credit has been set.
+       The on-disk value is left untouched — the PATCH/write path persists the
+       explicit value on the next save. */
+    const stateView = {
+      ...state,
+      narratorCredit:
+        state.narratorCredit && state.narratorCredit.trim()
+          ? state.narratorCredit
+          : DEFAULT_NARRATOR_CREDIT,
+    };
+
     res.json({
-      state,
+      state: stateView,
       cast,
       manuscript,
       manuscriptEdits: edits,
