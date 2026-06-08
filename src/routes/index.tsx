@@ -19,6 +19,7 @@ import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
+import { hydrateBookExports } from '../store/exports-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
@@ -695,6 +696,12 @@ function ReadyViewSwitch({
    selectors instead of bloating the parent. */
 function ListenRoute({ bookId }: { bookId: string }) {
   const dispatch = useAppDispatch();
+  /* Repopulate the export queue rail from the server on mount / book
+     change so a reload mid-export resumes — the poll middleware then
+     advances any non-terminal rows to completion. */
+  useEffect(() => {
+    void dispatch(hydrateBookExports(bookId));
+  }, [dispatch, bookId]);
   const { openFixCharacterAudio, pushToast } = useOutletContext<LayoutContext>();
   const chapters = useAppSelector((s) => s.chapters.chapters);
   const characters = useAppSelector((s) => s.cast.characters);
