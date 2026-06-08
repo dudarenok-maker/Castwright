@@ -20,6 +20,19 @@ import {
   adoptCommittedCeilingMb,
 } from './spawn-sidecar.js';
 
+async function defaultRecycleSidecar(host: string, port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://${host}:${port}/recycle`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+const DEFAULT_DRAIN_WAIT_MS = 185_000;
+
 /* A child that dies faster than this counts toward the crash-loop cap; one
    that lived longer is treated as a fresh incident and resets the counter, so
    a sidecar that runs fine for an hour and then dies once still gets respawned
@@ -61,6 +74,12 @@ export interface SidecarSupervisorOpts {
   adoptedPollMs?: number;
   /* Poll interval for the adopted-sidecar fitness (/health) watchdog. */
   adoptedHealthPollMs?: number;
+  /** Graceful drain: POST /recycle so the sidecar drains in-flight synth and
+      self-exits, instead of a hard kill. Resolves true on a 2xx, false otherwise. */
+  recycleSidecarFn?: (host: string, port: number) => Promise<boolean>;
+  /** Max ms to wait for the port to free after a graceful recycle before
+      falling through to the hard-kill replace. Default 185_000 (180s drain + margin). */
+  drainWaitMs?: number;
 }
 
 export interface SidecarSupervisor {
@@ -105,6 +124,8 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     healthProbeFn = probeSidecarHealth,
     adoptedPollMs = DEFAULT_ADOPTED_POLL_MS,
     adoptedHealthPollMs = DEFAULT_ADOPTED_HEALTH_POLL_MS,
+    recycleSidecarFn = defaultRecycleSidecar,
+    drainWaitMs = DEFAULT_DRAIN_WAIT_MS,
   } = opts;
 
   let stopped = false;
@@ -159,6 +180,30 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
           warn(`[sidecar] supervisor: respawn after adopted ${why} failed (${(err as Error).message}).`);
         }
       };
+      /* Fitness-triggered replace: ask the sidecar to drain first via POST
+         /recycle, poll until the port frees (self-exit), then bring up a
+         replacement.  If drain fails or the port never frees within drainWaitMs,
+         fall through to the hard-kill respawn so we never stall indefinitely. */
+      const drainThenRespawn = async (why: string): Promise<void> => {
+        warn(`[sidecar] supervisor: adopted sidecar on :${info.port} ${why} — requesting graceful drain before replacing.`);
+        let drained = false;
+        try {
+          drained = await recycleSidecarFn(info.host, info.port);
+        } catch (err) {
+          warn(`[sidecar] graceful recycle threw (${(err as Error).message}) — hard-replacing.`);
+        }
+        if (drained) {
+          /* Poll until the port frees (sidecar self-exited after drain) or the
+             drain budget is exhausted. */
+          let waited = 0;
+          while (waited < drainWaitMs) {
+            await delayFn(adoptedPollMs);
+            waited += adoptedPollMs;
+            if (!(await probeFn(info.host, info.port))) break; // port freed
+          }
+        }
+        await respawn(why);
+      };
       let sinceHealthMs = 0;
       while (!stopped) {
         await delayFn(adoptedPollMs);
@@ -176,7 +221,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
         const overCeiling =
           ceiling > 0 && health.committedMb !== null && health.committedMb >= ceiling;
         if (health.recyclePending || overCeiling) {
-          await respawn(
+          await drainThenRespawn(
             health.recyclePending
               ? 'reports recycle_pending'
               : `is leak-saturated (committed ${Math.round(health.committedMb ?? 0)}MB ≥ ${ceiling}MB)`,
