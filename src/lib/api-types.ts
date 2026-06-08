@@ -2423,6 +2423,11 @@ export interface components {
              *     tick and `chapter_complete`, while the server concatenates the PCM,
              *     writes the MP3 + segments JSON, and updates state.json. Surfaces
              *     the disk-write phase so the UI doesn't look stalled at 99 %.
+             *     `chapter_verifying` is emitted while the ASR content-QA pass (srv-31)
+             *     transcribes a chapter's sentences after synthesis and before
+             *     assembly; it carries the same counters as `chapter_assembling` and
+             *     surfaces a "Verifying speech…" phase so the row doesn't look frozen
+             *     on "Synthesising …".
              *     `resume_from` is emitted as the FIRST event on every new subscriber
              *     (cold connect AND reconnect after `tsx watch` restart or server
              *     bounce) and carries a snapshot of completed chapter ids for the
@@ -2438,7 +2443,7 @@ export interface components {
              *     chapters keep flowing. See plan `docs/features/archive/102-global-queue-modal.md`.
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm";
+            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;

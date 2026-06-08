@@ -1124,6 +1124,22 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          call: on a transient sidecar-down (recycle/respawn/crash, or a drain-503)
          we wait out the respawn on the readiness gate and re-render. AbortError
          and non-transient / poison errors re-throw to the outer catch unchanged. */
+      /* srv-31 — surface the ASR content-QA pass as a "verifying" phase. Fired
+         per sampled group (onProgress) AND per drift re-record (onRerecord);
+         both bump the no-progress watchdog and broadcast a chapter_verifying
+         tick. Carrying counters at totalLines keeps the row near 99 % without
+         resetting ch.phase (a `progress` tick would flip it back to null). */
+      const emitVerifying = () => {
+        bumpProgress();
+        broadcast(job, {
+          type: 'chapter_verifying',
+          chapterId: chapter.id,
+          characterId: null,
+          progress: 0.99,
+          currentLine: totalLines,
+          totalLines,
+        });
+      };
       let result: Awaited<ReturnType<typeof synthesiseChapter>>;
       for (let recovery = 0; ; recovery += 1) {
         try {
@@ -1239,8 +1255,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* ASR content-QA pass (srv-31) — OFF unless SEG_ASR_ENABLED. Transcribes
            each sentence and re-records "fluent but wrong words" drift. The cast
            names form the proper-noun allowlist; the non-English language hint is
-           threaded so the WER is meaningful (Phase 6). Re-records feed the same
-           progress heartbeat as the signal gate above. */
+           threaded so the WER is meaningful (Phase 6). Both the per-group
+           progress and any drift re-record emit a `chapter_verifying` tick via
+           `emitVerifying` (a `progress` tick would reset the row's phase). */
         ...(asrEnabled()
           ? {
               asr: {
@@ -1248,11 +1265,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                 sampleEvery: resolveAsrSampleEvery(),
                 language: nonEnglishBook ? bookLanguage : undefined,
                 nameAllowlist: buildCastNameAllowlist(cast.characters),
-                onRerecord: () => {
-                  bumpProgress();
-                  if (job.lastProgressTick)
-                    broadcast(job, { type: 'progress', ...job.lastProgressTick });
-                },
+                onProgress: emitVerifying,
+                onRerecord: emitVerifying,
               },
             }
           : {}),

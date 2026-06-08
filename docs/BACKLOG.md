@@ -113,6 +113,12 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
 
+#### `fs-40` — Surface the ASR "Verifying speech" phase in the Generate view ([#640](https://github.com/dudarenok-maker/AudioBook-Generator/issues/640))
+
+- _What:_ During the ASR content-QA pass (srv-31, `SEG_ASR_ENABLED`) the per-chapter row freezes on "Synthesising … · 99%" because the only tick is `onRerecord` re-broadcasting the last synthesis `progress`. Add a `verifying` chapter phase (mirrors the existing `assembling` phase) so the row reads **"Verifying speech…"**. A new per-sampled-group `onProgress` tick also feeds the no-progress watchdog through an all-`ok` ASR pass (closes a latent false-stall).
+- _Benefit (user / technical):_ the ASR quality-check reads as deliberate, not a stall; removes a latent false-stall on long drift-free chapters.
+_Full detail + acceptance:_ [#640](https://github.com/dudarenok-maker/AudioBook-Generator/issues/640) · plan `docs/features/197-asr-verifying-phase.md`.
+
 ### Listener experience & playback
 
 #### `fe-26` — Marker export + shareable notes ([#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461))

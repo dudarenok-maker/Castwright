@@ -533,6 +533,12 @@ export interface AsrPassOptions {
     wer: number;
     reasons: string[];
   }) => void;
+  /** Fired at the START of each sampled group's ASR check — including `ok`
+      verdicts — so the SSE route can surface a "verifying" phase and keep the
+      no-progress watchdog fed through a drift-free pass (a clean chapter fires
+      no `onRerecord` at all). `verified` is the 0-based index of this group
+      among the sampled groups; `total` is how many groups will be checked. */
+  onProgress?: (e: { verified: number; total: number }) => void;
 }
 
 /** One group per sentence. Plan 70d — earlier code folded consecutive
@@ -1242,6 +1248,12 @@ export async function synthesiseChapter(
         sidecarUrl: asr.sidecarUrl,
         signal,
       });
+    /* Count the groups we will actually transcribe (have a result + pass the
+       stride) so onProgress can report verified/total. The stride below walks
+       groups-with-results in order, so total mirrors that ordering. */
+    const groupsWithResult = groups.filter((g) => results[g.index]);
+    const totalToVerify = groupsWithResult.filter((_, i) => i % sampleEvery === 0).length;
+    let verifiedCount = 0;
     let sampleCounter = 0;
     for (const group of groups) {
       const r = results[group.index];
@@ -1249,6 +1261,8 @@ export async function synthesiseChapter(
       /* Stride sampling — default every sentence (sampleEvery=1). */
       if (sampleEvery > 1 && sampleCounter++ % sampleEvery !== 0) continue;
       if (signal?.aborted) throw new DOMException('synthesiseChapter aborted', 'AbortError');
+      asr.onProgress?.({ verified: verifiedCount, total: totalToVerify });
+      verifiedCount += 1;
       let best = r;
       let bestClass = await verify(r.pcm, r.sampleRate, group.text);
       for (let attempt = 1; attempt <= maxAsrRerecords && bestClass.verdict === 'drift'; attempt++) {
