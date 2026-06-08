@@ -1302,7 +1302,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
               type: 'chapter_recovering',
               chapterId: chapter.id,
               characterId: null,
-              progress: 0.9,
+              /* Hold the bar where synthesis left it rather than snapping to a
+                 fixed 0.9 — a recycle can fire at any group position, so a hard
+                 0.9 would visibly REGRESS the bar (e.g. 0.95 → 0.9) for the
+                 ride-out, then jump forward. Reuse the last real tick's progress
+                 (same idiom as currentLine below); 0.9 is only the pre-first-tick
+                 seed. */
+              progress: job.lastProgressTick?.progress ?? 0.9,
               currentLine: job.lastProgressTick?.currentLine ?? 0,
               totalLines,
             });
