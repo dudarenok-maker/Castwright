@@ -133,6 +133,14 @@ adoption-policy decision:
 > (PR #673, draft): A1 `55e25d8b`, A2 `d92c84a7`, prod-fresh `906cafa0`,
 > A4 `43e86162`. Typecheck + frontend + server (2362 tests) green. Plan:
 > `docs/superpowers/plans/2026-06-08-generation-stall-protection-wave1.md`.
+>
+> **Wave 2 landed 2026-06-09** (same PR): B1 `d09cb0cb` (drain in-flight synth
+> via the sidecar's existing `POST /recycle` before any force-replace),
+> A3 `c8cfbff0` (per-engine `GpuSemaphore(1)` mirroring the sidecar lock),
+> B2 `411899c0` + fix `4c202265` (queue `recycling` flag from an explicit
+> supervisor respawn-state — NOT handle-ownership, which would have wedged the
+> dispatcher for adopted sidecars). Typecheck + server (2376 tests) green. Plan:
+> `docs/superpowers/plans/2026-06-08-generation-stall-protection-wave2.md`.
 
 1. **Wave 1 — config safety (ships first; prevents *this* incident):** A1, A2,
    A4 + prod-fresh-sidecar policy.
