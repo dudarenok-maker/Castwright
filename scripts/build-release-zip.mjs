@@ -175,6 +175,27 @@ export function releaseInternalPrefix(version) {
   return `castwright-${version}`;
 }
 
+/* Interim companion-app distribution — the release bundles the packaged Android
+   APK so the server's GET /api/companion/apk (server/src/companion/apk.ts) can
+   serve the in-app "Download .apk" button straight from the install. */
+
+/** Absolute path to the source APK to stage into the zip. CI sets
+    COMPANION_APK_SRC to the APK it built/downloaded; locally it defaults to the
+    Flutter release-build output. The path may not exist — the build skips the
+    APK (and logs it) rather than failing when absent. */
+export function companionApkSrc() {
+  const override = process.env.COMPANION_APK_SRC?.trim();
+  if (override) return resolve(repoRoot, override);
+  return resolve(repoRoot, 'apps/android/build/app/outputs/flutter-apk/app-release.apk');
+}
+
+/** In-zip path for the bundled APK. The server resolves it at
+    <release-root>/companion/castwright-companion.apk — three levels up from
+    server/dist/companion, i.e. the release prefix dir. */
+export function companionApkZipEntry(version) {
+  return posix.join(releaseInternalPrefix(version), 'companion', 'castwright-companion.apk');
+}
+
 export function matchesManifest(relPath, manifest = MANIFEST) {
   const p = toPosix(relPath);
   // Exclude always wins (even if include also matches).
@@ -313,9 +334,27 @@ async function main() {
 
   info(`[MANIFEST] ${matched.length} files, ${Math.round(totalBytes / 1024)} KB total`);
 
+  // Interim — stage the companion APK at companion/castwright-companion.apk if
+  // a source exists (CI: COMPANION_APK_SRC; local: Flutter output). Absent is
+  // fine: the release just ships without the in-app download.
+  const apkSrc = companionApkSrc();
+  const apkExists = existsSync(apkSrc);
+  if (apkExists) {
+    info(`[APK] bundling ${apkSrc} → ${companionApkZipEntry(args.version)}`);
+  } else {
+    info(
+      `[APK] SKIP — no companion APK at ${apkSrc} ` +
+        `(set COMPANION_APK_SRC or run \`flutter build apk --release\`); ` +
+        `release will ship without the in-app download`,
+    );
+  }
+
   if (args.dryRun) {
     for (const { rel, size } of matched) {
       info(`  ${rel}  (${size} bytes)`);
+    }
+    if (apkExists) {
+      info(`  ${companionApkZipEntry(args.version)}  (${statSync(apkSrc).size} bytes)`);
     }
     info('[DRY-RUN] No zip written.');
     process.exit(0);
@@ -342,6 +381,10 @@ async function main() {
     for (const { rel, abs } of matched) {
       // Use POSIX separators in the zip entries for cross-platform extract.
       archive.file(abs, { name: posix.join(releaseInternalPrefix(args.version), toPosix(rel)) });
+    }
+    // Interim companion-app distribution — bundle the APK at its served path.
+    if (apkExists) {
+      archive.file(apkSrc, { name: companionApkZipEntry(args.version) });
     }
     archive.finalize();
   });
