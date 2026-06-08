@@ -282,17 +282,3 @@ export function ComingSoonBadge({ label = 'Soon' }: { label?: string }) {
     </span>
   );
 }
-
-/* Section-level banner above any block whose cards/rows are visually present
-   but non-functional. One-liner so the section header still fits on a single
-   row at viewport widths the rest of the app supports. */
-export function MockedPreviewBanner({ children }: { children: ReactNode }) {
-  return (
-    <div
-      data-testid="mocked-preview-banner"
-      className="mb-3 px-4 py-2 rounded-xl bg-peach/10 border border-peach/30 text-[12px] text-ink/70 leading-relaxed"
-    >
-      <span className="font-semibold text-magenta">Mocked preview</span> — {children}
-    </div>
-  );
-}

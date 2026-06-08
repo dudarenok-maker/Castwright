@@ -226,12 +226,12 @@ describe('ListenDownloadSection — phone viewport render (plan 81 wave 3)', () 
     render(
       <ListenDownloadSection
         queueItems={[]}
-        onSendApp={vi.fn()}
         onOpenPocketBookExport={vi.fn()}
         onOpenVoiceExport={vi.fn()}
         onOpenSmartAudiobookExport={vi.fn()}
         onOpenBookplayerExport={vi.fn()}
         onOpenAudiobookshelfExport={vi.fn()}
+        onOpenAppleBooksExport={vi.fn()}
         onOpenM4bExport={vi.fn()}
         onOpenMp3ZipExport={vi.fn()}
         onOpenStreamingLink={vi.fn()}

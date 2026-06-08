@@ -1,10 +1,10 @@
 /* Plan 82 — coverage for the retryExport thunk that re-fires a failed
    export using the wire context carried on the ExportQueueItem. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
-import { exportsSlice, type ExportsState } from './exports-slice';
-import { retryExport } from './exports-middleware';
+import { exportsSlice, exportsActions, type ExportsState } from './exports-slice';
+import { retryExport, createExportPollMiddleware } from './exports-middleware';
 import type { BookExportJob } from '../lib/types';
 import { api } from '../lib/api';
 
@@ -90,5 +90,48 @@ describe('retryExport thunk', () => {
     })(store.dispatch);
 
     expect(returned).toEqual(fresh);
+  });
+});
+
+/* Poll middleware — reuses the `makeJob` factory above (defaults to bookId
+   'demo__sa__test'); these tests pin a fixed 'b1' bookId + 'exp_1' id so
+   they read straight from byBookId['b1'][0]. */
+function makePollStore(getExport: (b: string, e: string) => Promise<BookExportJob>) {
+  return configureStore({
+    reducer: { exports: exportsSlice.reducer },
+    middleware: (gd) => gd().concat(createExportPollMiddleware({ getExport, intervalMs: 100 })),
+  });
+}
+
+describe('export poll middleware', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('polls a started in_progress job until it reaches done', async () => {
+    const getExport = vi
+      .fn()
+      .mockResolvedValueOnce(makeJob({ id: 'exp_1', bookId: 'b1', status: 'in_progress', progress: 0.5 }))
+      .mockResolvedValueOnce(makeJob({ id: 'exp_1', bookId: 'b1', status: 'done', progress: 1 }));
+    const store = makePollStore(getExport);
+    store.dispatch(
+      exportsActions.exportStarted(makeJob({ id: 'exp_1', bookId: 'b1', status: 'in_progress', progress: 0 })),
+    );
+    await vi.advanceTimersByTimeAsync(120);
+    expect(store.getState().exports.byBookId['b1'][0].progress).toBe(0.5);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(store.getState().exports.byBookId['b1'][0].status).toBe('done');
+    await vi.advanceTimersByTimeAsync(300);
+    expect(getExport).toHaveBeenCalledTimes(2); // no polls after terminal
+  });
+
+  it('does not resurrect a job dismissed while a poll was in flight', async () => {
+    const getExport = vi
+      .fn()
+      .mockResolvedValue(makeJob({ id: 'exp_1', bookId: 'b1', status: 'in_progress', progress: 0.5 }));
+    const store = makePollStore(getExport);
+    store.dispatch(exportsActions.exportStarted(makeJob({ id: 'exp_1', bookId: 'b1', status: 'in_progress' })));
+    store.dispatch(exportsActions.exportDismissed({ bookId: 'b1', exportId: 'exp_1' }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(store.getState().exports.byBookId['b1'] ?? []).toHaveLength(0);
   });
 });
