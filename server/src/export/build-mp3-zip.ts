@@ -23,6 +23,7 @@ import { ZipFile } from 'yazl';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
+import { artistForExport } from './narrator-credit.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 export interface BuildMp3ZipOptions {
@@ -86,7 +87,7 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
 
   const total = resolved.length;
   const albumArtist = state.author;
-  const artist = (state.narratorCredit && state.narratorCredit.trim()) || state.author;
+  const artist = artistForExport(state);
   const album = state.title;
 
   /* Plan 36 A3: embed the cached OpenLibrary cover into each chapter's
@@ -134,6 +135,7 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
         trackTotal: total,
         genre: state.genre ?? null,
         date: state.publicationDate ?? null,
+        comment: 'Rendered with Castwright · castwright.ai',
       };
       await applyId3v24Tags(mp3Path, taggedPath, tags, { coverJpegPath });
       const taggedStat = await stat(taggedPath);
