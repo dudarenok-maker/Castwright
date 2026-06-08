@@ -484,7 +484,7 @@ async function main() {
   if (args.notesFile) {
     git(['tag', '--cleanup=verbatim', '-a', newTag, '-F', resolve(args.notesFile)]);
   } else {
-    git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Audiobook generator ${newTag}`]);
+    git(['tag', '--cleanup=verbatim', '-a', newTag, '-m', `Castwright ${newTag}`]);
   }
 
   info('');
