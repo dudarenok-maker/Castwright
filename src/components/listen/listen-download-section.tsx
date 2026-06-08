@@ -335,7 +335,7 @@ function ExportQueue({
     { id: 'failed', label: `Failed (${counts.failed})` },
   ];
   return (
-    <section className="mb-8 md:mb-12">
+    <section data-testid="export-queue-rail" className="mb-8 md:mb-12">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Export queue</SectionLabel>
         <div className="flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs flex-wrap">
