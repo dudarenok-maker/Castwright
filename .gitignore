@@ -27,6 +27,15 @@ RELEASE_NOTES.md
 # Superpowers brainstorming visual-companion mockups (local-only scratch)
 .superpowers/
 
+# Brand assets + identity exploration + UI mockups — local-only documents.
+# Not committed: the brand identity is "all rights reserved" and these are
+# working/scratch artifacts. The app ships GENERATED assets in public/ (PNGs
+# rendered from brand/*.svg via scripts/render-brand-pngs.mjs), which ARE
+# committed — so removing these sources never breaks the build.
+# `mockups/` is the home for any future brand/style/UI exploration work.
+brand/
+mockups/
+
 # Logs
 *.log
 npm-debug.log*
