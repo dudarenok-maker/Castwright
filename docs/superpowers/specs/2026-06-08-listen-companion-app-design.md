@@ -25,7 +25,7 @@ This change adds a first-party companion entry and trims the third-party grid.
 | Button behaviour | **No-op** (mocked); the banner's **"Coming soon"** badge carries the not-live message |
 | Plex vs Apple Books | **Remove Plex** (overlaps the companion app's stream-your-library role); **keep Apple Books** as the lone coming-soon tile |
 | Glyph reuse | **Extract** the inline Castwave SVG from `top-bar.tsx` into a shared component; banner + top bar both consume it (DOM-identical) |
-| Mock Plex failed-export fixture | **Re-point to Audiobookshelf** (keeps the failed-state demo without referencing a removed app) |
+| Mock Plex failed-export fixture | **Delete it** (it was an unused mock-only row; no test depends on it) |
 
 ## A. Companion banner (new)
 
@@ -58,8 +58,8 @@ top-bar visual/e2e snapshots stay green.
 
 - Remove the `plex` entry from `src/data/listener-apps.ts` (grid 7→6, clean 2×3).
 - Remove the orphaned `plex` walkthrough from `src/data/walkthroughs.ts`.
-- Re-point the mock **failed** export fixture in `src/data/export-queue.ts`
-  (`destination: 'Plex'`) to **Audiobookshelf** ("Server unreachable…").
+- Delete the mock **failed** export fixture in `src/data/export-queue.ts`
+  (`destination: 'Plex'`) — it was an unused mock-only row; no test depends on it.
 - **Apple Books stays** as the lone coming-soon tile.
 
 ## Testing
