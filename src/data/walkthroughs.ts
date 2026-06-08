@@ -130,41 +130,4 @@ export const WALKTHROUGH_STEPS: Record<string, WalkthroughStep[]> = {
       illustration: 'complete',
     },
   ],
-  plex: [
-    {
-      id: 1,
-      title: 'Connect to your Plex server',
-      description:
-        "We'll upload directly to your media server's audiobook library. Make sure your server is reachable.",
-      illustration: 'server',
-      input: {
-        type: 'url',
-        placeholder: 'http://plex.local:32400',
-        value: 'http://plex.dudarenok.lan:32400',
-      },
-    },
-    {
-      id: 2,
-      title: 'Pick the library',
-      description:
-        'Plex needs an Audiobooks library configured with the Plex Audiobook agent for chapter support.',
-      illustration: 'folder',
-      detail: 'Library: Audiobooks · Agent: Plex Audiobook · Scanner: Plex Music',
-    },
-    {
-      id: 3,
-      title: 'Trigger a scan',
-      description:
-        "We'll trigger Plex to scan the new file. Chapters appear in the player automatically.",
-      illustration: 'device-grid',
-      detail: 'Stream from any Plex client on or off your network.',
-    },
-    {
-      id: 4,
-      title: 'Listen anywhere',
-      description:
-        'Plex Audiobooks is supported in iOS, Android, and the web app. Position syncs across all of them.',
-      illustration: 'complete',
-    },
-  ],
 };
