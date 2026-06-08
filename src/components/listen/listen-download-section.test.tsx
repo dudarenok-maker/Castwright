@@ -4,6 +4,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { ListenDownloadSection } from './listen-download-section';
 
 function renderSection(overrides: Partial<Parameters<typeof ListenDownloadSection>[0]> = {}) {
@@ -15,6 +16,7 @@ function renderSection(overrides: Partial<Parameters<typeof ListenDownloadSectio
     onOpenSmartAudiobookExport: vi.fn(),
     onOpenBookplayerExport: vi.fn(),
     onOpenAudiobookshelfExport: vi.fn(),
+    onOpenAppleBooksExport: vi.fn(),
     onOpenM4bExport: vi.fn(),
     onOpenMp3ZipExport: vi.fn(),
     onOpenStreamingLink: vi.fn(),
@@ -52,5 +54,16 @@ describe('ListenDownloadSection — Portable bundle tile (plan 75)', () => {
     const tile = screen.getByTestId('download-tile-portable');
     const button = tile.querySelector('button') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+  });
+});
+
+describe('ListenDownloadSection — Apple Books tile (M4B)', () => {
+  it('renders Apple Books as a live tile that opens the export modal', async () => {
+    const onOpenAppleBooksExport = vi.fn();
+    renderSection({ onOpenAppleBooksExport });
+    const btn = screen.getByTestId('listener-app-action-apple_books');
+    expect(btn).toBeEnabled();
+    await userEvent.click(btn);
+    expect(onOpenAppleBooksExport).toHaveBeenCalledTimes(1);
   });
 });
