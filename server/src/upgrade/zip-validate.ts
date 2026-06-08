@@ -1,6 +1,6 @@
 /* fs-1 — validation for an uploaded release zip before it's allowed to apply.
 
-   A release zip is `audiobook-generator-vX.Y.Z/` with the repo tree under it.
+   A release zip is `castwright-vX.Y.Z/` with the repo tree under it.
    We refuse anything that doesn't look like our release (wrong top dir, missing
    required artefacts, unparseable version) and refuse a downgrade unless the
    caller explicitly forces it. The structural checks are a PURE function over
@@ -23,7 +23,7 @@ export const REQUIRED_ENTRIES = [
   'launch.mjs',
 ];
 
-const TOP_DIR_RE = /^audiobook-generator-v\d+\.\d+\.\d+$/;
+const TOP_DIR_RE = /^castwright-v\d+\.\d+\.\d+$/;
 
 export type ManifestCode = 'ok' | 'bad-structure' | 'missing-entry' | 'bad-version' | 'downgrade';
 
@@ -45,7 +45,7 @@ export function validateUpgradeManifest(input: {
 }): ManifestResult {
   const { entryNames, packageJsonVersion, runningVersion, allowDowngrade } = input;
 
-  // Exactly one top-level directory, named audiobook-generator-vX.Y.Z.
+  // Exactly one top-level directory, named castwright-vX.Y.Z.
   const topSegments = new Set(
     entryNames.map((n) => n.replace(/\\/g, '/').split('/')[0]).filter(Boolean),
   );
@@ -54,7 +54,7 @@ export function validateUpgradeManifest(input: {
   }
   const topDir = [...topSegments][0];
   if (!TOP_DIR_RE.test(topDir)) {
-    return { ok: false, code: 'bad-structure', reason: `top-level directory "${topDir}" is not audiobook-generator-vX.Y.Z` };
+    return { ok: false, code: 'bad-structure', reason: `top-level directory "${topDir}" is not castwright-vX.Y.Z` };
   }
 
   // Required artefacts present under the top dir.
