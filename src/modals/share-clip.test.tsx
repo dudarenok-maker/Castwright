@@ -145,4 +145,14 @@ describe('ShareClipModal', () => {
     const url: string = (props.onDownload as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(url).toContain('Author%20With%20Spaces__series__title');
   });
+
+  it('renders "Made with Castwright · castwright.ai" attribution in the footer (Wave 2 brand)', () => {
+    renderModal();
+    expect(screen.getByText('Made with Castwright · castwright.ai')).toBeInTheDocument();
+  });
+
+  it('keeps the share-clip-confirm testid intact after footer restructure', () => {
+    renderModal();
+    expect(screen.getByTestId('share-clip-confirm')).toBeInTheDocument();
+  });
 });

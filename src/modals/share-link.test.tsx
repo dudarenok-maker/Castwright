@@ -103,6 +103,17 @@ describe('share-link modal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('renders "Made with Castwright · castwright.ai" attribution in the footer (Wave 2 brand)', () => {
+    render(
+      <ShareLinkModal
+        open={true}
+        url="https://example.test/share/ABCDEFGHJKMN"
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText('Made with Castwright · castwright.ai')).toBeInTheDocument();
+  });
+
   it('clicking the backdrop closes the modal', () => {
     const onClose = vi.fn();
     const { container } = render(

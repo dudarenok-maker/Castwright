@@ -237,6 +237,7 @@ export function ListenHeader({
             </>
           ) : null}
         </p>
+        <p className="mt-2 text-xs text-ink/50">Full-cast audiobook · made with Castwright</p>
         <div className="mt-5 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-ink/60">
           <span>
             <span className="font-semibold text-ink tabular-nums">{formatTime(totalSec)}</span>{' '}
