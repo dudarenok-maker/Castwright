@@ -1,5 +1,5 @@
 {
-  "name": "audiobook-generator-server",
+  "name": "castwright-server",
   "version": "1.6.0",
   "private": true,
   "type": "module",
