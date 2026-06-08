@@ -1685,6 +1685,27 @@ paths:
               schema: { $ref: '#/components/schemas/RevisionsResponse' }
 
   /api/books/{bookId}/exports:
+    get:
+      summary: List all export jobs for a book (newest-first)
+      operationId: listBookExports
+      description: |
+        Returns every in-memory + rehydrated export job for the book,
+        newest-first. Used by the Listen view to repopulate the export
+        queue rail after a page reload so in-progress exports resume
+        polling. Jobs that were mid-build when the server itself
+        restarted have no manifest and are not returned.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Export jobs for this book
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/BookExportJob' }
+        '404':
+          description: Book not found
     post:
       summary: Build a sideloadable audiobook artifact (Phase A — MP3.ZIP)
       operationId: createBookExport

@@ -249,7 +249,6 @@ describe('a11y — listen view', () => {
           library={library}
           currentTrack={null}
           setCurrentTrack={vi.fn()}
-          onSendApp={vi.fn()}
           onRegenerate={vi.fn()}
           onEnterPreview={vi.fn()}
           onFixLine={vi.fn()}

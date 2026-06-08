@@ -4692,6 +4692,13 @@ async function realCreateBookExport(
   return res.json();
 }
 
+async function realListBookExports(bookId: string): Promise<BookExportJob[]> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/exports`);
+  if (!res.ok)
+    throw new Error(`List exports failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
 async function realGetBookExport(bookId: string, exportId: string): Promise<BookExportJob> {
   const res = await fetch(
     `/api/books/${encodeURIComponent(bookId)}/exports/${encodeURIComponent(exportId)}`,
@@ -4862,6 +4869,13 @@ async function mockCreateBookExport(
   );
   MOCK_EXPORT_TIMERS.set(id, timers);
   return job;
+}
+
+async function mockListBookExports(bookId: string): Promise<BookExportJob[]> {
+  await wait(40);
+  return [...MOCK_EXPORT_JOBS.values()]
+    .filter((j) => j.bookId === bookId)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
 async function mockGetBookExport(_bookId: string, exportId: string): Promise<BookExportJob> {
@@ -5728,6 +5742,7 @@ const real = {
   getWorkspaceChangelog: realGetWorkspaceChangelog,
   createBookExport: realCreateBookExport,
   getBookExport: realGetBookExport,
+  listBookExports: realListBookExports,
   cancelBookExport: realCancelBookExport,
   createBookShareLink: realCreateBookShareLink,
   exportPortable: realExportPortable,
@@ -5971,6 +5986,7 @@ const mock = {
   getWorkspaceChangelog: mockGetWorkspaceChangelog,
   createBookExport: mockCreateBookExport,
   getBookExport: mockGetBookExport,
+  listBookExports: mockListBookExports,
   cancelBookExport: mockCancelBookExport,
   createBookShareLink: mockCreateBookShareLink,
   exportPortable: mockExportPortable,
