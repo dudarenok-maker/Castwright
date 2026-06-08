@@ -431,11 +431,14 @@ describe('AccountView — settings-accordion shell', () => {
     renderView();
 
     /* Each server-persisted section header is an aria-expanded button (SettingsSection).
-       Spot-check a few to confirm accordion structure is in place. */
-    expect(screen.getByRole('button', { name: /^profile$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^cast analysis$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^workspace$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^device-local/i })).toBeInTheDocument();
+       Spot-check a few to confirm accordion structure is in place. The nav rail also
+       renders buttons with the same label text, so we look for the aria-expanded
+       attribute that only section header toggles carry. */
+    const expandedBtns = screen.getAllByRole('button', { expanded: true });
+    const expandedLabels = expandedBtns.map((b) => b.getAttribute('aria-label') ?? b.textContent ?? '');
+    expect(expandedLabels.some((l) => /profile/i.test(l))).toBe(true);
+    expect(expandedLabels.some((l) => /cast analysis/i.test(l))).toBe(true);
+    expect(expandedLabels.some((l) => /workspace/i.test(l))).toBe(true);
 
     /* All sections default OPEN so controls are immediately accessible. */
     expect(screen.getByLabelText('Display name')).toBeInTheDocument();

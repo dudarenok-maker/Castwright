@@ -220,7 +220,15 @@ export function ModelSettingsForm() {
   const analyzerSplitOn = !!(analyzerPhase0Model || analyzerPhase1Model);
 
   return (
-    <SettingsAccordion>
+    <SettingsAccordion
+      sections={[
+        { id: GROUP_DEFAULTS.id, label: GROUP_DEFAULTS.label, risk: GROUP_DEFAULTS.risk },
+        { id: GROUP_ANALYZER_SPLIT.id, label: GROUP_ANALYZER_SPLIT.label, risk: GROUP_ANALYZER_SPLIT.risk },
+        { id: GROUP_VOICE_ENGINE.id, label: GROUP_VOICE_ENGINE.label, risk: GROUP_VOICE_ENGINE.risk },
+        { id: GROUP_SERVER_CONFIG.id, label: GROUP_SERVER_CONFIG.label, risk: GROUP_SERVER_CONFIG.risk },
+        { id: GROUP_MODELS_INSTALL.id, label: GROUP_MODELS_INSTALL.label, risk: GROUP_MODELS_INSTALL.risk },
+      ]}
+    >
       <SettingsSection group={GROUP_DEFAULTS} overriddenCount={0}>
         <FieldRow label="Analysis model">
           <select
@@ -239,7 +247,7 @@ export function ModelSettingsForm() {
             ))}
           </select>
         </FieldRow>
-        <FieldRow label="TTS engine">
+        <FieldRow label="Voice engine">
           <select
             value={defaultTtsEngine}
             onChange={(e) => setDefaultTtsEngine(e.target.value as TtsEngineId)}
@@ -252,7 +260,7 @@ export function ModelSettingsForm() {
             ))}
           </select>
         </FieldRow>
-        <FieldRow label="TTS model">
+        <FieldRow label="Voice model">
           <select
             value={defaultTtsModelKey}
             onChange={(e) => setDefaultTtsModelKey(e.target.value as TtsModelKey)}
@@ -392,8 +400,8 @@ export function ModelSettingsForm() {
           )}
         </FieldRow>
         <FieldRow
-          label="Keep both TTS engines loaded (dual-model mode)"
-          sublabel="Loads two TTS engines into GPU memory at once so a book can mix engines (e.g. Kokoro + Qwen) without swap latency. Only enable if your GPU has headroom (~8 GB); the analyzer auto-evicts during generation. Off by default — when off, a mixed-engine book still generates but pays an engine-swap cost."
+          label="Keep both voice engines loaded (dual-model mode)"
+          sublabel="Loads two voice engines into GPU memory at once so a book can mix engines (e.g. Kokoro + Qwen) without swap latency. Only enable if your GPU has headroom (~8 GB); the analyzer auto-evicts during generation. Off by default — when off, a mixed-engine book still generates but pays an engine-swap cost."
         >
           <label className="inline-flex items-center gap-3 cursor-pointer select-none">
             <input

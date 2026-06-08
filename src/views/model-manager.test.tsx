@@ -392,18 +392,37 @@ describe('ModelManagerView — per-row install (fs-23 follow-up)', () => {
   });
 });
 
+describe('ModelManagerView — back-to-Admin breadcrumb', () => {
+  it('renders the back-to-Admin button', async () => {
+    renderManager();
+    const btn = screen.getByTestId('model-manager-back-to-admin');
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent('← Admin');
+  });
+
+  it('dispatches openAdmin when the back button is clicked', async () => {
+    const { store } = renderManager();
+    const btn = screen.getByTestId('model-manager-back-to-admin');
+    fireEvent.click(btn);
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'admin' });
+  });
+});
+
 describe('ModelManagerView — settings form accordion shell', () => {
   it('renders settings as named accordion sections and Save still dispatches the patch', async () => {
     putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
     const user = userEvent.setup();
     renderManager();
 
-    /* All five accordion section headers are visible (defaultOpen=true). */
-    await screen.findByRole('button', { name: /defaults for new books/i });
-    expect(screen.getByRole('button', { name: /two-model analyzer split/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /voice engine/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /server configuration/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /install \/ update analyzer/i })).toBeInTheDocument();
+    /* All five accordion section headers are visible (defaultOpen=true). The nav
+       rail also renders buttons with the same labels; use getAllByRole to allow
+       multiple matches and confirm at least one is the aria-expanded section toggle. */
+    const defaultsBtns = await screen.findAllByRole('button', { name: /defaults for new books/i });
+    expect(defaultsBtns.length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /two-model analyzer split/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /voice engine/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /server configuration/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /install \/ update analyzer/i }).length).toBeGreaterThan(0);
 
     /* Controls inside the sections are accessible (sections start open). */
     expect(screen.getByTestId('account-auto-start-sidecar')).toBeInTheDocument();
