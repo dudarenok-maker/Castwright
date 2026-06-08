@@ -99,10 +99,10 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
      off; no effect under a Kokoro/Coqui default. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
   eagerLoadQwen: true,
-  /* Plan 111 — 2 concurrent generation workers by default. Queue/synthesis
+  /* Plan 111 — 1 concurrent generation worker by default. Queue/synthesis
      concurrency only; the GPU semaphore stays the VRAM guard. Flip in lockstep
      with server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */
-  generationWorkers: 2,
+  generationWorkers: 1,
   /* srv-2 — per-book state.json auto-backup. On by default with a daily
      cadence and a 14-snapshot retention window. Flip in lockstep with
      server/src/workspace/user-settings.ts DEFAULT_USER_SETTINGS. */

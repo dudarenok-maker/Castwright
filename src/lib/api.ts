@@ -506,10 +506,10 @@ export interface StreamArgs {
   }>;
   onTick: (ev: GenerationTick & { type: GenerationTick['type'] }) => void;
   /** Mock-only: number of chapters to keep in-flight in parallel. Mirrors the
-      server's `GEN_WORKERS` (default 2 — see plan 87 archive). The
+      server's `GEN_WORKERS` (default 1 — see plan 87 archive). The
       real `streamGeneration` ignores this; the mock uses it to interleave SSE
       events across K chapters so browser-level specs can pin the parallel-SSE
-      contract. Defaults to 2 when unset, capped by the number of queued
+      contract. Defaults to 1 when unset, capped by the number of queued
       chapters at tick time. Vitest callers pass through the StreamArgs object;
       the e2e harness can additionally seed `window.__mockGenConcurrency` to
       override without touching the middleware. */
@@ -1225,7 +1225,7 @@ function mockStreamGeneration({
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
   /* Mock the real server's parallel-chapter SSE cadence (plan 87 archive,
-     `GEN_WORKERS`, default 2). The server keeps K chapters
+     `GEN_WORKERS`, default 1). The server keeps K chapters
      in-flight on a bounded worker pool, so progress / chapter_complete
      events for multiple chapters interleave on the wire — each keyed by
      `chapterId`. Three behaviours that matter:
@@ -1247,7 +1247,7 @@ function mockStreamGeneration({
         few ticks so the per-character `in_progress` pill walks through
         the cast and the active-speaker caption updates.
 
-     `mockGenConcurrency` (default 2) caps the in-flight set width and
+     `mockGenConcurrency` (default 1) caps the in-flight set width and
      mirrors `GEN_WORKERS` on the server. Browser-level e2e
      specs can seed `window.__mockGenConcurrency` to force the value
      deterministically without re-plumbing the middleware. */
@@ -1256,7 +1256,7 @@ function mockStreamGeneration({
     (typeof window !== 'undefined'
       ? (window as unknown as { __mockGenConcurrency?: number }).__mockGenConcurrency
       : undefined) ??
-    2;
+    1;
   const targetK = Math.max(1, Math.floor(requestedK));
 
   const tick = () => {

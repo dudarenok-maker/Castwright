@@ -4,7 +4,7 @@
  * (.queue.json) on disk via writeJsonAtomic. supertest drives the routes
  * the same way the chapter-audio / book-state test files do. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -98,7 +98,50 @@ describe('GET /api/queue', () => {
   it('returns an empty queue on first read', async () => {
     const res = await request(app).get('/api/queue');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ entries: [], paused: false });
+    expect(res.body).toEqual({ entries: [], paused: false, recycling: false });
+  });
+
+  describe('recycling flag', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('returns recycling:false when there is no active supervisor (autoStart off)', async () => {
+      const supervisor = await import('../tts/sidecar-supervisor.js');
+      vi.spyOn(supervisor, 'getActiveSupervisor').mockReturnValue(null);
+
+      const res = await request(app).get('/api/queue');
+      expect(res.status).toBe(200);
+      expect(res.body.recycling).toBe(false);
+    });
+
+    it('returns recycling:true when the active supervisor reports recycling:true (child dead/respawning)', async () => {
+      const supervisor = await import('../tts/sidecar-supervisor.js');
+      vi.spyOn(supervisor, 'getActiveSupervisor').mockReturnValue({
+        start: async () => {},
+        stop: async () => {},
+        current: () => null,
+        recycling: () => true,
+      });
+
+      const res = await request(app).get('/api/queue');
+      expect(res.status).toBe(200);
+      expect(res.body.recycling).toBe(true);
+    });
+
+    it('returns recycling:false when the active supervisor reports recycling:false (sidecar ready, even if adopted)', async () => {
+      const supervisor = await import('../tts/sidecar-supervisor.js');
+      vi.spyOn(supervisor, 'getActiveSupervisor').mockReturnValue({
+        start: async () => {},
+        stop: async () => {},
+        current: () => null, // null handle = adopted sidecar, but still ready
+        recycling: () => false,
+      });
+
+      const res = await request(app).get('/api/queue');
+      expect(res.status).toBe(200);
+      expect(res.body.recycling).toBe(false);
+    });
   });
 });
 

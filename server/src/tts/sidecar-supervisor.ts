@@ -20,6 +20,19 @@ import {
   adoptCommittedCeilingMb,
 } from './spawn-sidecar.js';
 
+async function defaultRecycleSidecar(host: string, port: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://${host}:${port}/recycle`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+const DEFAULT_DRAIN_WAIT_MS = 185_000;
+
 /* A child that dies faster than this counts toward the crash-loop cap; one
    that lived longer is treated as a fresh incident and resets the counter, so
    a sidecar that runs fine for an hour and then dies once still gets respawned
@@ -61,6 +74,12 @@ export interface SidecarSupervisorOpts {
   adoptedPollMs?: number;
   /* Poll interval for the adopted-sidecar fitness (/health) watchdog. */
   adoptedHealthPollMs?: number;
+  /** Graceful drain: POST /recycle so the sidecar drains in-flight synth and
+      self-exits, instead of a hard kill. Resolves true on a 2xx, false otherwise. */
+  recycleSidecarFn?: (host: string, port: number) => Promise<boolean>;
+  /** Max ms to wait for the port to free after a graceful recycle before
+      falling through to the hard-kill replace. Default 185_000 (180s drain + margin). */
+  drainWaitMs?: number;
 }
 
 export interface SidecarSupervisor {
@@ -72,6 +91,12 @@ export interface SidecarSupervisor {
   /** The current live handle, or null before first spawn / between respawns /
       when no spawn was needed (autoStart off, reuse). */
   current: () => SidecarHandle | null;
+  /** True while a respawn or drain-wait is in progress (i.e. no sidecar is
+      currently ready to accept requests). False once the initial spawn
+      completes successfully — whether via an owned child or a healthy adopt.
+      Use this to gate the queue dispatcher; do NOT use `current() == null`
+      which is permanently true for adopted sidecars. */
+  recycling: () => boolean;
 }
 
 /* Module-level registry so the POST /api/sidecar/restart route can reach the
@@ -105,6 +130,8 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     healthProbeFn = probeSidecarHealth,
     adoptedPollMs = DEFAULT_ADOPTED_POLL_MS,
     adoptedHealthPollMs = DEFAULT_ADOPTED_HEALTH_POLL_MS,
+    recycleSidecarFn = defaultRecycleSidecar,
+    drainWaitMs = DEFAULT_DRAIN_WAIT_MS,
   } = opts;
 
   let stopped = false;
@@ -115,6 +142,13 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
      against starting a second loop if the adopt callback fires again before
      the first loop has released. */
   let adoptedWatching = false;
+  /* True until the first successful spawn/adopt completes, and again whenever
+     a child exits or a drain-wait begins.  Set false once a sidecar is
+     confirmed ready (owned child spawned OR healthy sidecar adopted).
+     This is the authoritative "not ready" signal for the queue dispatcher —
+     do NOT derive it from `handle == null` which is permanently true for
+     adopted sidecars throughout their lifetime. */
+  let isRecycling = true;
 
   async function spawnOnce(): Promise<void> {
     if (stopped) return;
@@ -127,6 +161,13 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
        callback and leave supervision dormant — matching the pre-supervisor
        contract (don't resurrect a disabled or deliberately-untouched sidecar). */
     handle = await spawnFn({ ...base, onExit: onChildExit, onAdoptExisting: onAdopt });
+    /* A sidecar is now ready: either an owned child (handle non-null) or a
+       healthy adopt (handle null, onAdoptExisting fired).  Either way the
+       queue can dispatch.  The autoStart-off / spawn-error null paths also
+       land here but those supervisors are never registered via
+       registerActiveSupervisor, so getActiveSupervisor() returns null and
+       queue.ts short-circuits to recycling:false independently. */
+    isRecycling = false;
   }
 
   /* Watch an adopted (already-listening, not-owned) sidecar on two axes:
@@ -149,6 +190,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     );
     void (async () => {
       const respawn = async (why: string): Promise<void> => {
+        isRecycling = true; // adopted sidecar gone — hold dispatch until replacement is ready.
         /* Release the flag BEFORE respawning so a re-adopt inside spawnOnce can
            arm a fresh watch. */
         adoptedWatching = false;
@@ -158,6 +200,31 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
         } catch (err) {
           warn(`[sidecar] supervisor: respawn after adopted ${why} failed (${(err as Error).message}).`);
         }
+      };
+      /* Fitness-triggered replace: ask the sidecar to drain first via POST
+         /recycle, poll until the port frees (self-exit), then bring up a
+         replacement.  If drain fails or the port never frees within drainWaitMs,
+         fall through to the hard-kill respawn so we never stall indefinitely. */
+      const drainThenRespawn = async (why: string): Promise<void> => {
+        isRecycling = true; // draining in-flight synth — hold dispatch until replacement is ready.
+        warn(`[sidecar] supervisor: adopted sidecar on :${info.port} ${why} — requesting graceful drain before replacing.`);
+        let drained = false;
+        try {
+          drained = await recycleSidecarFn(info.host, info.port);
+        } catch (err) {
+          warn(`[sidecar] graceful recycle threw (${(err as Error).message}) — hard-replacing.`);
+        }
+        if (drained) {
+          /* Poll until the port frees (sidecar self-exited after drain) or the
+             drain budget is exhausted. */
+          let waited = 0;
+          while (waited < drainWaitMs) {
+            await delayFn(adoptedPollMs);
+            waited += adoptedPollMs;
+            if (!(await probeFn(info.host, info.port))) break; // port freed
+          }
+        }
+        await respawn(why);
       };
       let sinceHealthMs = 0;
       while (!stopped) {
@@ -176,7 +243,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
         const overCeiling =
           ceiling > 0 && health.committedMb !== null && health.committedMb >= ceiling;
         if (health.recyclePending || overCeiling) {
-          await respawn(
+          await drainThenRespawn(
             health.recyclePending
               ? 'reports recycle_pending'
               : `is leak-saturated (committed ${Math.round(health.committedMb ?? 0)}MB ≥ ${ceiling}MB)`,
@@ -191,6 +258,7 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
   function onChildExit(code: number | null, signal: NodeJS.Signals | null): void {
     if (stopped) return; // we killed it on purpose (shutdown) — don't resurrect.
     handle = null;
+    isRecycling = true; // sidecar gone — hold dispatch until the respawn completes.
     const lived = nowFn() - lastSpawnAt;
     if (lived >= QUICK_DEATH_MS) consecutiveFailures = 0; // ran a while → fresh incident.
     consecutiveFailures += 1;
@@ -232,6 +300,9 @@ export function createSidecarSupervisor(opts: SidecarSupervisorOpts): SidecarSup
     },
     current() {
       return handle;
+    },
+    recycling() {
+      return isRecycling;
     },
   };
 }

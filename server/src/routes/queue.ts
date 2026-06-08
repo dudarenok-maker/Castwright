@@ -29,6 +29,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { queueJsonPath } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
+import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 import {
   cancel,
   clearQueue,
@@ -54,7 +55,9 @@ const isScope = (v: unknown): v is QueueScope => v === 'this' || v === 'characte
 queueRouter.get('/', async (_req: Request, res: Response) => {
   try {
     const file = await readQueueFile(queueJsonPath());
-    res.json({ entries: file.entries, paused: file.paused });
+    const supervisor = getActiveSupervisor();
+    const recycling = supervisor != null && supervisor.recycling() === true;
+    res.json({ entries: file.entries, paused: file.paused, recycling });
   } catch (e) {
     console.error('[queue] GET failed', e);
     res.status(500).json({ error: (e as Error).message });

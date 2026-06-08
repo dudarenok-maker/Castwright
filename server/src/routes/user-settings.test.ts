@@ -91,7 +91,7 @@ describe('user-settings router', () => {
        response to cap concurrency. Without the env overlay the GEN_WORKERS
        deploy knob never reached it. */
     const def = await request(app).get('/api/user/settings');
-    expect(def.body.generationWorkers).toBe(2); // no env → on-disk/default
+    expect(def.body.generationWorkers).toBe(1); // no env → on-disk/default
 
     process.env.GEN_WORKERS = '1';
     resetCache();

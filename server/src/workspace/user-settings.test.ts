@@ -130,8 +130,8 @@ describe('userSettingsSchema — autoStartSidecar (plan 43)', () => {
 });
 
 describe('userSettingsSchema — generationWorkers (plan 111)', () => {
-  it('defaults to 2 on a fresh user-settings document', () => {
-    expect(DEFAULT_USER_SETTINGS.generationWorkers).toBe(2);
+  it('defaults to 1 on a fresh user-settings document', () => {
+    expect(DEFAULT_USER_SETTINGS.generationWorkers).toBe(1);
   });
 
   it('accepts integers in [1, 4]', () => {
@@ -170,8 +170,8 @@ describe('userSettingsSchema — generationWorkers (plan 111)', () => {
       _resetUserSettingsCache();
     });
 
-    it('returns the default (2) when nothing is cached and no env override', () => {
-      expect(getResolvedGenerationWorkers()).toBe(2);
+    it('returns the default (1) when nothing is cached and no env override', () => {
+      expect(getResolvedGenerationWorkers()).toBe(1);
     });
 
     it('honors GEN_WORKERS env', () => {
@@ -182,7 +182,7 @@ describe('userSettingsSchema — generationWorkers (plan 111)', () => {
     it('ignores the retired GEN_CHAPTER_CONCURRENCY env (plan 111 wave 4)', () => {
       process.env.GEN_CHAPTER_CONCURRENCY = '4';
       /* No longer read — falls through to the default. */
-      expect(getResolvedGenerationWorkers()).toBe(2);
+      expect(getResolvedGenerationWorkers()).toBe(1);
     });
 
     it('falls through to the cached user setting when no env is set', async () => {
@@ -193,14 +193,19 @@ describe('userSettingsSchema — generationWorkers (plan 111)', () => {
         await mod.writeUserSettings({ generationWorkers: 4 });
         expect(mod.getResolvedGenerationWorkers()).toBe(4);
       } finally {
-        await mod.writeUserSettings({ generationWorkers: before.generationWorkers ?? 2 });
+        await mod.writeUserSettings({ generationWorkers: before.generationWorkers ?? 1 });
         mod._resetUserSettingsCache();
       }
     });
 
     it('ignores a non-numeric env and falls back to the default', () => {
       process.env.GEN_WORKERS = 'lots';
-      expect(getResolvedGenerationWorkers()).toBe(2);
+      expect(getResolvedGenerationWorkers()).toBe(1);
+    });
+
+    it('defaults to 1 worker when no env, override, or setting is present', () => {
+      delete process.env.GEN_WORKERS;
+      expect(getResolvedGenerationWorkers()).toBe(1);
     });
   });
 });
