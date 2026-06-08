@@ -1571,6 +1571,16 @@ function ChapterRow({
           <button
             onClick={(e) => {
               e.stopPropagation();
+              onToggleExcluded(chapter.id, true);
+            }}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/45 hover:text-ink/70 transition-colors"
+            title="Skip this chapter — no audio will be generated for it."
+          >
+            <IconClose className="w-3.5 h-3.5" /> Exclude
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
               onRename(chapter);
             }}
             data-testid={`chapter-row-${chapter.id}-rename`}
@@ -1578,16 +1588,6 @@ function ChapterRow({
             className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
             <IconPencil className="w-3.5 h-3.5" /> Rename
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRegenerate(chapter);
-            }}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
-          >
-            <IconRefresh className="w-3.5 h-3.5" />{' '}
-            {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
           </button>
           <button
             onClick={(e) => {
@@ -1604,12 +1604,13 @@ function ChapterRow({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              onToggleExcluded(chapter.id, true);
+              onRegenerate(chapter);
             }}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/45 hover:text-ink/70 transition-colors"
-            title="Skip this chapter — no audio will be generated for it."
+            aria-label={chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
           >
-            <IconClose className="w-3.5 h-3.5" /> Exclude
+            <IconRefresh className="w-3.5 h-3.5" />{' '}
+            {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate'}
           </button>
         </div>
       )}
