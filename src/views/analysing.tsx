@@ -982,6 +982,7 @@ export function AnalysingView({
               ? describeRemaining(remainingMs, wordCount)
               : describeSize(wordCount)}
           </p>
+          <p className="mt-2 text-sm text-ink/50">Many voices, one machine.</p>
           {/* Analyzer Load/Stop control. Rendered even without a manuscript
               so the user can pre-warm Ollama from the Analysing screen (the
               page-refresh / deep-link case where manuscriptId is null lands
