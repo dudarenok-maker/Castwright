@@ -457,8 +457,12 @@ a plan does — when you act on a plan, step 1 is cutting the branch named after
 the plan number (e.g. `feat/frontend-plan-38`).
 
 Hooks activate automatically after `npm install` via the `prepare` script
-(husky v9 — sets `core.hooksPath` to `.husky/`). On a fresh clone, run
-`npm install` once and you're done.
+(husky v9.1 — sets `core.hooksPath` to `.husky/_`, the dir holding the
+shebang'd wrapper scripts that source `.husky/<hook>`). Do NOT set it to
+`.husky/` — those user hooks are shebang-less, so git can't spawn them
+directly (`cannot spawn .husky/pre-commit: Exec format error`). If hooks ever
+stop firing, run `npm install` (or `npx husky`) to reset the path. On a fresh
+clone, run `npm install` once and you're done.
 
 Additional one-time setup:
 
