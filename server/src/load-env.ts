@@ -14,9 +14,28 @@
    side-effect) before any later import statement is reached. Subsequent
    imports then read the freshly populated process.env. */
 
+/** Boot config-load state, surfaced on /api/health so a wrong-CWD launch
+    (server/.env not found → silent defaults) is visible, not buried. */
+export const envLoadState: { loaded: boolean; cwd: string } = {
+  loaded: false,
+  cwd: process.cwd(),
+};
+
+/** Pure, testable warning string for a missing .env. */
+export function formatMissingEnvWarning(cwd: string): string {
+  return (
+    `[server] WARNING: no .env found at ${cwd}\\.env — running on DEFAULTS. ` +
+    `GEN_WORKERS, GPU_VRAM_BUDGET, WORKSPACE_DIR and all other server/.env tuning ` +
+    `are NOT applied. Launch the server with its working directory at server/ ` +
+    `(the prod launcher does this) so server/.env loads.`
+  );
+}
+
 try {
   process.loadEnvFile('.env');
+  envLoadState.loaded = true;
 } catch {
-  // Missing .env is fine — shell env still applies.
-  console.info('[server] no .env file; using process env');
+  // Missing .env is non-fatal (shell env still applies) but must be LOUD —
+  // a silently-defaulted server is the 2026-06-08 stall incident.
+  console.warn(formatMissingEnvWarning(envLoadState.cwd));
 }

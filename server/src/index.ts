@@ -9,6 +9,7 @@
    even though `.env` sets it — yielding the silent "stale workspace root"
    bug that recreates `audiobook-workspace/` inside the repo. */
 import './load-env.js';
+import { buildHealthPayload } from './health-payload.js';
 
 /* Patch console.* to prefix every line with a YYYY-MM-DD HH:mm:ss.SSS
    stamp. Runtime logging (route handlers, app.listen callback, …) all
@@ -176,7 +177,7 @@ app.use(['/api', '/workspace'], requireLanToken);
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, ts: new Date().toISOString() });
+  res.json(buildHealthPayload());
 });
 
 app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)
