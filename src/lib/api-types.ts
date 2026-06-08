@@ -1228,7 +1228,15 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List all export jobs for a book (newest-first)
+         * @description Returns every in-memory + rehydrated export job for the book,
+         *     newest-first. Used by the Listen view to repopulate the export
+         *     queue rail after a page reload so in-progress exports resume
+         *     polling. Jobs that were mid-build when the server itself
+         *     restarted have no manifest and are not returned.
+         */
+        get: operations["listBookExports"];
         put?: never;
         /**
          * Build a sideloadable audiobook artifact (Phase A — MP3.ZIP)
@@ -5518,6 +5526,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RevisionsResponse"];
                 };
+            };
+        };
+    };
+    listBookExports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Export jobs for this book */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BookExportJob"][];
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

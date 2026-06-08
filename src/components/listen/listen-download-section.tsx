@@ -1,8 +1,8 @@
-/* Listen-view download + handoff region — pure presentational lift
+/* Listen-view download region — pure presentational lift
    from listen.tsx. Owns: the Castwright Companion app banner (mocked
    store links), the "Listen on your favourite app" cards
-   (PocketBook / Voice / Smart AudioBook / BookPlayer / Audiobookshelf
-   tiles + the deferred Apple Books one), the Export queue rail with per-row
+   (PocketBook / Voice / Smart AudioBook / BookPlayer / Audiobookshelf /
+   Apple Books tiles — all six live), the Export queue rail with per-row
    actions, and the three "Or download a file" tiles (M4B chaptered,
    MP3 ZIP, streaming link — plan 57).
 
@@ -13,17 +13,8 @@
    modal handlers thread through props from listen.tsx. */
 
 import { useState } from 'react';
-import {
-  IconDownload,
-  IconExternal,
-  IconShield,
-} from '../../lib/icons';
-import {
-  SectionLabel,
-  Pill,
-  ComingSoonBadge,
-  MockedPreviewBanner,
-} from '../primitives';
+import { IconDownload, IconExternal, IconShield } from '../../lib/icons';
+import { SectionLabel, Pill, ComingSoonBadge } from '../primitives';
 import { ExportQueueRow } from '../export-queue-row';
 import { CompanionAppBanner } from './companion-app-banner';
 import { SUPPORTED_APPS } from '../../data/listener-apps';
@@ -31,12 +22,12 @@ import type { ListenerApp, ExportQueueItem } from '../../lib/types';
 
 interface ListenDownloadSectionProps {
   queueItems: ExportQueueItem[];
-  onSendApp: (app: ListenerApp) => void;
   onOpenPocketBookExport: () => void;
   onOpenVoiceExport: () => void;
   onOpenSmartAudiobookExport: () => void;
   onOpenBookplayerExport: () => void;
   onOpenAudiobookshelfExport: () => void;
+  onOpenAppleBooksExport: () => void;
   onOpenM4bExport: () => void;
   onOpenMp3ZipExport: () => void;
   /** Plan 67 — streaming-link tile handler. Called when the user clicks
@@ -62,12 +53,12 @@ interface ListenDownloadSectionProps {
 
 export function ListenDownloadSection({
   queueItems,
-  onSendApp,
   onOpenPocketBookExport,
   onOpenVoiceExport,
   onOpenSmartAudiobookExport,
   onOpenBookplayerExport,
   onOpenAudiobookshelfExport,
+  onOpenAppleBooksExport,
   onOpenM4bExport,
   onOpenMp3ZipExport,
   onOpenStreamingLink,
@@ -81,12 +72,12 @@ export function ListenDownloadSection({
     <>
       <CompanionAppBanner />
       <ListenerApps
-        onSend={onSendApp}
         onOpenPocketBookExport={onOpenPocketBookExport}
         onOpenVoiceExport={onOpenVoiceExport}
         onOpenSmartAudiobookExport={onOpenSmartAudiobookExport}
         onOpenBookplayerExport={onOpenBookplayerExport}
         onOpenAudiobookshelfExport={onOpenAudiobookshelfExport}
+        onOpenAppleBooksExport={onOpenAppleBooksExport}
       />
       <ExportQueue
         items={queueItems}
@@ -192,7 +183,6 @@ function DownloadCard({
 }
 
 interface ListenerAppsProps {
-  onSend: (app: ListenerApp) => void;
   /** PocketBook is live: clicking its tile opens the export modal on the
       Download-to-phone tab. */
   onOpenPocketBookExport: () => void;
@@ -210,14 +200,17 @@ interface ListenerAppsProps {
       appHint='audiobookshelf'. Self-hosted server scans the library
       root for folders. */
   onOpenAudiobookshelfExport: () => void;
+  /** Apple Books is live: imports a chaptered M4B on macOS/iOS, same
+      download-tab + M4B-format prefill as PocketBook. */
+  onOpenAppleBooksExport: () => void;
 }
 function ListenerApps({
-  onSend,
   onOpenPocketBookExport,
   onOpenVoiceExport,
   onOpenSmartAudiobookExport,
   onOpenBookplayerExport,
   onOpenAudiobookshelfExport,
+  onOpenAppleBooksExport,
 }: ListenerAppsProps) {
   /* Per-app live handlers. Tiles not in this map render as disabled
      coming-soon placeholders. */
@@ -227,6 +220,7 @@ function ListenerApps({
     smart_audiobook: onOpenSmartAudiobookExport,
     bookplayer: onOpenBookplayerExport,
     audiobookshelf: onOpenAudiobookshelfExport,
+    apple_books: onOpenAppleBooksExport,
   };
   return (
     <section className="mb-8 md:mb-12">
@@ -236,16 +230,11 @@ function ListenerApps({
           <IconShield className="w-3.5 h-3.5" /> Open-format export · DRM-free
         </span>
       </div>
-      <MockedPreviewBanner>
-        direct handoff to other apps is coming soon. PocketBook, Voice, Smart AudioBook Player,
-        BookPlayer, and Audiobookshelf are live — click any to sideload.
-      </MockedPreviewBanner>
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-4">
         {SUPPORTED_APPS.map((a) => (
           <ListenerAppCard
             key={a.id}
             app={a}
-            onSend={onSend}
             onOpenLiveExport={liveHandlers[a.id]}
           />
         ))}
@@ -260,18 +249,13 @@ function ListenerApps({
 
 interface ListenerAppCardProps {
   app: ListenerApp;
-  onSend: (a: ListenerApp) => void;
   /** Present only for live tiles (PocketBook, Voice, Smart AudioBook
       Player). When set, turns the
       disabled-placeholder pill into a real button. */
   onOpenLiveExport?: () => void;
 }
-function ListenerAppCard({ app, onSend: _onSend, onOpenLiveExport }: ListenerAppCardProps) {
+function ListenerAppCard({ app, onOpenLiveExport }: ListenerAppCardProps) {
   const [from, to] = app.gradient;
-  /* onSend is intentionally not wired while non-live integrations are
-     mocked. Keep the prop for forward-compat so flipping each card to live
-     only touches the tile, not the route. */
-  void _onSend;
   const isLive = onOpenLiveExport != null;
   return (
     <article
@@ -351,7 +335,7 @@ function ExportQueue({
     { id: 'failed', label: `Failed (${counts.failed})` },
   ];
   return (
-    <section className="mb-8 md:mb-12">
+    <section data-testid="export-queue-rail" className="mb-8 md:mb-12">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
         <SectionLabel>Export queue</SectionLabel>
         <div className="flex items-center gap-1 bg-ink/4 rounded-full p-0.5 text-xs flex-wrap">

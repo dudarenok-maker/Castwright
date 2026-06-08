@@ -1,15 +1,18 @@
 /* Pairs with docs/features/archive/32-audiobook-export.md.
 
-   Covers the modal's job lifecycle: open, render both tabs, submit,
-   poll a job through in_progress → done, and surface a 409
-   export_incomplete with the missing-chapter list. The api module is
-   mocked at the test boundary so we can drive deterministic timings. */
+   Covers the modal's job lifecycle: open, render both tabs, submit, and
+   surface a 409 export_incomplete with the missing-chapter list. The
+   modal is a pure view of the exports slice — the store-level
+   exportPollMiddleware (not the modal) advances jobs — so progress
+   assertions drive the slice directly via exportsActions.exportUpdated
+   rather than polling a mocked api. The api module is still mocked at the
+   test boundary for createBookExport / cancelBookExport / LAN URLs. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { exportsSlice } from '../store/exports-slice';
+import { exportsSlice, exportsActions } from '../store/exports-slice';
 import { accountSlice } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
 import type { BookExportJob } from '../lib/types';
@@ -23,7 +26,6 @@ vi.mock('../lib/api', async () => {
     ...actual,
     api: {
       createBookExport: vi.fn(),
-      getBookExport: vi.fn(),
       cancelBookExport: vi.fn(async () => undefined),
       getExportLanUrls: vi.fn(async () => ({ urls: ['http://192.168.1.42:8080'], port: 8080 })),
       getUserSettings: vi.fn(async () => ({}) as unknown),
@@ -41,7 +43,6 @@ import { api, ExportIncompleteError } from '../lib/api';
 
 const mockedApi = api as unknown as {
   createBookExport: ReturnType<typeof vi.fn>;
-  getBookExport: ReturnType<typeof vi.fn>;
   cancelBookExport: ReturnType<typeof vi.fn>;
   getExportLanUrls: ReturnType<typeof vi.fn>;
   putUserSettings: ReturnType<typeof vi.fn>;
@@ -112,21 +113,20 @@ describe('ExportAudiobookModal', () => {
     expect(screen.getByTestId('sync-folder-input')).toBeInTheDocument();
   });
 
-  it('starts a job on submit and renders progress until done', async () => {
-    const ticks: BookExportJob[] = [
-      makeJob({ status: 'in_progress', progress: 0.25 }),
-      makeJob({ status: 'in_progress', progress: 0.7 }),
-      makeJob({ status: 'done', progress: 1, sizeBytes: 4096, downloadUrl: 'blob:demo' }),
-    ];
-    mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    let pollCount = 0;
-    mockedApi.getBookExport.mockImplementation(async () => {
-      const next = ticks[Math.min(pollCount, ticks.length - 1)];
-      pollCount += 1;
-      return next;
-    });
+  it('starts a job on submit and renders progress as the store advances', async () => {
+    /* The modal is a pure view of the exports slice — the store-level
+       exportPollMiddleware (not the modal) advances the job. This drives
+       that lifecycle by dispatching the updates the middleware would emit
+       and asserts the modal re-renders from the store each step. */
+    const started = makeJob({ id: 'exp_view', status: 'in_progress', progress: 0 });
+    mockedApi.createBookExport.mockResolvedValue(started);
 
-    renderModal();
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <ExportAudiobookModal open={true} bookId="demo__sa__test" onClose={vi.fn()} />
+      </Provider>,
+    );
     /* LAN URL hydrates async; the submit button only enables once it lands. */
     const submit = await waitFor(() => {
       const btn = screen.getByTestId('export-submit');
@@ -135,27 +135,34 @@ describe('ExportAudiobookModal', () => {
     });
     fireEvent.click(submit);
 
+    /* exportStarted seeded the active job — the card renders immediately. */
     await waitFor(() => {
       expect(screen.getByTestId('export-active-job')).toBeInTheDocument();
     });
-    /* Spin the poller until the final state surfaces. */
-    await waitFor(
-      () => {
-        expect(screen.getByText(/done/i)).toBeInTheDocument();
-      },
-      { timeout: 5000 },
-    );
     expect(mockedApi.createBookExport).toHaveBeenCalledWith(
       'demo__sa__test',
       expect.objectContaining({ format: 'm4b', destination: 'download' }),
     );
+
+    /* Simulate the middleware advancing the job to terminal. */
+    act(() => {
+      store.dispatch(
+        exportsActions.exportUpdated(
+          makeJob({
+            id: 'exp_view',
+            status: 'done',
+            progress: 1,
+            sizeBytes: 4096,
+            downloadUrl: 'blob:demo',
+          }),
+        ),
+      );
+    });
+    expect(screen.getByText(/done/i)).toBeInTheDocument();
   });
 
   it('switches the export format to MP3.ZIP and submits with that format', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
-    );
 
     renderModal();
     /* Default should be M4B — verify the toggle reflects that before clicking. */
@@ -199,10 +206,6 @@ describe('ExportAudiobookModal', () => {
     mockedApi.createBookExport.mockResolvedValue(
       makeJob({ id: 'exp_run', status: 'in_progress', progress: 0 }),
     );
-    /* Poll keeps returning in_progress so Cancel is the only way out. */
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ id: 'exp_run', status: 'in_progress', progress: 0.3 }),
-    );
 
     renderModal();
     const submit = await waitFor(() => {
@@ -227,18 +230,20 @@ describe('ExportAudiobookModal', () => {
   });
 
   it('retries from FAILED by re-POSTing the same format/destination', async () => {
-    /* First create resolves with a job that polls to failed; second
-       create (from Retry) resolves with a fresh in_progress job. */
+    /* First create resolves with a job the (now store-level) middleware
+       would drive to failed; second create (from Retry) resolves with a
+       fresh in_progress job. The modal only reads the slice, so we
+       simulate the middleware writing the failed status via exportUpdated. */
     mockedApi.createBookExport
       .mockResolvedValueOnce(makeJob({ id: 'exp_fail', status: 'in_progress', progress: 0 }))
       .mockResolvedValueOnce(makeJob({ id: 'exp_retry', status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport
-      .mockResolvedValueOnce(
-        makeJob({ id: 'exp_fail', status: 'failed', errorReason: 'ffmpeg crashed', progress: 0.4 }),
-      )
-      .mockResolvedValue(makeJob({ id: 'exp_retry', status: 'in_progress', progress: 0.2 }));
 
-    renderModal();
+    const store = makeStore();
+    render(
+      <Provider store={store}>
+        <ExportAudiobookModal open={true} bookId="demo__sa__test" onClose={vi.fn()} />
+      </Provider>,
+    );
     /* MP3.ZIP so the retried submit can be checked for format propagation. */
     fireEvent.click(screen.getByTestId('export-format-mp3-zip'));
     const submit = await waitFor(() => {
@@ -248,7 +253,18 @@ describe('ExportAudiobookModal', () => {
     });
     fireEvent.click(submit);
 
-    /* Wait for FAILED to surface the Retry button. */
+    /* Wait for the active-job card, then drive the job to FAILED through
+       the store as the middleware would. */
+    await screen.findByTestId('export-active-job');
+    act(() => {
+      store.dispatch(
+        exportsActions.exportUpdated(
+          makeJob({ id: 'exp_fail', status: 'failed', errorReason: 'ffmpeg crashed', progress: 0.4 }),
+        ),
+      );
+    });
+
+    /* FAILED surfaces the Retry button. */
     const retryBtn = await screen.findByTestId('export-retry');
     fireEvent.click(retryBtn);
 
@@ -311,9 +327,6 @@ describe('ExportAudiobookModal — Voice mode (prefill.appHint === "voice")', ()
 
   it('submits with { format: "m4b", destination: "sync-folder" } regardless of any prior state', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 4096, downloadUrl: 'blob:demo' }),
-    );
 
     render(
       <Provider store={makeStoreWithSyncFolder('C:\\Users\\me\\OneDrive\\Audiobooks')}>
@@ -480,9 +493,6 @@ describe('ExportAudiobookModal — AAC/Opus format picker (plan 72)', () => {
 
   it('submits with format=aac-m4a-zip when the AAC toggle is selected', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
-    );
 
     renderModal();
     fireEvent.click(screen.getByTestId('export-format-aac-m4a-zip'));
@@ -503,9 +513,6 @@ describe('ExportAudiobookModal — AAC/Opus format picker (plan 72)', () => {
 
   it('submits with format=opus-ogg-zip when the Opus toggle is selected', async () => {
     mockedApi.createBookExport.mockResolvedValue(makeJob({ status: 'in_progress', progress: 0 }));
-    mockedApi.getBookExport.mockResolvedValue(
-      makeJob({ status: 'done', progress: 1, sizeBytes: 1024, downloadUrl: 'blob:demo' }),
-    );
 
     renderModal();
     fireEvent.click(screen.getByTestId('export-format-opus-ogg-zip'));

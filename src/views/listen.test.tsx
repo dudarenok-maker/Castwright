@@ -66,7 +66,6 @@ const baseMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
 
 const baseHandlers = () => ({
   setCurrentTrack: vi.fn(),
-  onSendApp: vi.fn(),
   onRegenerate: vi.fn(),
   onEnterPreview: vi.fn(),
   onFixLine: vi.fn(),
@@ -317,9 +316,7 @@ describe('ListenView — collapsible Notes card (plan 67)', () => {
     expect(para).not.toBeNull();
     expect(para!.textContent).toBe(notesText);
     expect(para!.className).toContain('whitespace-pre-wrap');
-    expect(screen.getByTestId('listen-notes-toggle').getAttribute('aria-expanded')).toBe(
-      'true',
-    );
+    expect(screen.getByTestId('listen-notes-toggle').getAttribute('aria-expanded')).toBe('true');
   });
 });
 
@@ -329,16 +326,18 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.getByTestId('listener-app-pocketbook')).toBeInTheDocument();
   });
 
-  it('disables non-live listener-app cards while five tiles are live', () => {
+  it('all six listener-app tiles are now live (no deferred tiles remaining)', () => {
     renderView();
-    /* After plan 34 B4, Audiobookshelf joins the live set; with Plex
-       removed in favour of the Castwright Companion banner, Apple Books
-       is the lone mocked-handoff tile. */
-    const stillDeferred = ['apple_books'];
-    for (const id of stillDeferred) {
-      expect(screen.getByTestId(`listener-app-action-${id}`)).toBeDisabled();
-    }
-    for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer', 'audiobookshelf']) {
+    /* Apple Books joined the live set (wired to M4B download tab). All six
+       tiles now have an enabled action button. */
+    for (const id of [
+      'pocketbook',
+      'voice',
+      'smart_audiobook',
+      'bookplayer',
+      'audiobookshelf',
+      'apple_books',
+    ]) {
       expect(screen.getByTestId(`listener-app-action-${id}`)).not.toBeDisabled();
     }
   });
@@ -429,16 +428,21 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.getByTestId('export-audiobook-modal')).toBeInTheDocument();
   });
 
-  it('marks deferred listener-app cards with a Soon badge but omits it on live tiles', () => {
+  it('omits the Soon badge on all six live listener-app tiles', () => {
     renderView();
-    /* All five live tiles drop the badge; the lone remaining
-       deferred tile (apple_books) still wears it. */
-    for (const id of ['pocketbook', 'voice', 'smart_audiobook', 'bookplayer', 'audiobookshelf']) {
+    /* All six tiles are now live — apple_books joined the live set (M4B
+       download tab). No listener-app card should show a coming-soon badge. */
+    for (const id of [
+      'pocketbook',
+      'voice',
+      'smart_audiobook',
+      'bookplayer',
+      'audiobookshelf',
+      'apple_books',
+    ]) {
       const card = screen.getByTestId(`listener-app-${id}`);
       expect(within(card).queryByTestId('coming-soon-badge')).toBeNull();
     }
-    const appleBooksCard = screen.getByTestId('listener-app-apple_books');
-    expect(within(appleBooksCard).getByTestId('coming-soon-badge')).toBeInTheDocument();
   });
 
   it('enables all four download tiles after plan 75 wires the portable bundle tile', () => {
@@ -456,15 +460,6 @@ describe('ListenView — coming-soon affordances', () => {
     expect(screen.getByTestId('download-tile-portable').querySelector('button')).toBeEnabled();
     const disabled = downloads.filter((b) => b.hasAttribute('disabled'));
     expect(disabled.length).toBe(0);
-  });
-
-  it('shows the one remaining mocked-preview banner (listener apps)', () => {
-    renderView();
-    const banners = screen.getAllByTestId('mocked-preview-banner');
-    /* The exports rail + the download-tile section both lost their banners
-       once the export pipeline went live; only the non-PocketBook listener-
-       app handoffs still wear the placeholder. */
-    expect(banners.length).toBe(1);
   });
 
   it('keeps the "Play from the start" button enabled when chapters exist', () => {
