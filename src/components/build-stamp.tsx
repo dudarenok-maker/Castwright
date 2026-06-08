@@ -10,7 +10,7 @@ export function BuildStamp() {
   const stamp = formatBuildStamp(buildInfo, { dev: import.meta.env.DEV });
   return (
     <footer
-      aria-label="Build version"
+      aria-label={stamp}
       data-testid="build-stamp"
       className="px-4 py-3 text-center text-xs text-ink/55 select-text"
     >
