@@ -399,7 +399,7 @@ describe('userSettingsSchema — coverPickerDefaultTab (plan 40)', () => {
 
 describe('user-settings location (plan 122 — shared across checkouts)', () => {
   describe('resolveUserSettingsPath', () => {
-    const sharedDefault = join(homedir(), '.audiobook-generator', 'user-settings.json');
+    const sharedDefault = join(homedir(), '.castwright', 'user-settings.json');
 
     it('honours USER_SETTINGS_FILE when set', () => {
       expect(
@@ -407,7 +407,7 @@ describe('user-settings location (plan 122 — shared across checkouts)', () => 
       ).toBe('/custom/us.json');
     });
 
-    it('falls back to ~/.audiobook-generator/user-settings.json (NOT the checkout)', () => {
+    it('falls back to ~/.castwright/user-settings.json (NOT the checkout)', () => {
       expect(resolveUserSettingsPath({} as NodeJS.ProcessEnv)).toBe(sharedDefault);
     });
 

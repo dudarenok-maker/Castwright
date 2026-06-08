@@ -2,7 +2,7 @@
    imports — so it lands before user-settings.ts computes USER_SETTINGS_PATH
    at module-eval time.
 
-   Plan 122 moved user settings to a shared ~/.audiobook-generator file. We
+   Plan 122 moved user settings to a shared ~/.castwright file. We
    redirect that to a throwaway temp file for the whole test run so a suite
    never reads or MUTATES the developer's real settings — a round-trip test
    that crashes between its write and its restore must not be able to corrupt
