@@ -25,8 +25,25 @@ import type {
 } from './index.js';
 import { fetch as undiciFetch, Agent } from 'undici';
 import { sidecarModelId } from './model-keys.js';
-import { gpuSemaphore } from '../gpu/semaphore.js';
+import { gpuSemaphore, GpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from './engine-vram-cost.js';
+
+/* Per-engine serialisation: at most ONE synth call per engine in-flight at a
+   time, mirroring the sidecar's own _synth_lock.  With a VRAM budget > 1, two
+   same-engine calls can both pass the global semaphore and race to the sidecar
+   — where they serialize on _synth_lock but double transient memory (accelerating
+   the leak).  This gate prevents that while still letting DIFFERENT engines
+   (e.g. Kokoro narrator + Qwen dialogue) overlap freely. */
+const defaultEngineSynths = new Map<string, GpuSemaphore>();
+
+function engineSynthSem(map: Map<string, GpuSemaphore>, engine: string): GpuSemaphore {
+  let sem = map.get(engine);
+  if (!sem) {
+    sem = new GpuSemaphore(1);
+    map.set(engine, sem);
+  }
+  return sem;
+}
 
 /* TTS synth legitimately runs for minutes — a wide Qwen batch (plan 136) can
    exceed 5 minutes of GPU decode, and the sidecar is NON-streaming so it holds
@@ -50,15 +67,25 @@ const SIDECAR_DISPATCHER = new Agent({
 interface SidecarOptions {
   url: string;
   engine: TtsEngine;
+  /** Injected per-engine semaphore map — for testing only. Defaults to the
+      module-level `defaultEngineSynths` singleton. */
+  engineSynths?: Map<string, GpuSemaphore>;
+  /** Injected global VRAM semaphore — for testing only. Defaults to the
+      module-level `gpuSemaphore` singleton. */
+  gpuSem?: GpuSemaphore;
 }
 
 export class SidecarTtsProvider implements TtsProvider {
   private readonly url: string;
   private readonly engine: TtsEngine;
+  private readonly engineSynths: Map<string, GpuSemaphore>;
+  private readonly gpuSem: GpuSemaphore;
 
   constructor(opts: SidecarOptions) {
     this.url = opts.url.replace(/\/+$/, '');
     this.engine = opts.engine;
+    this.engineSynths = opts.engineSynths ?? defaultEngineSynths;
+    this.gpuSem = opts.gpuSem ?? gpuSemaphore;
   }
 
   async synthesize({
@@ -74,52 +101,62 @@ export class SidecarTtsProvider implements TtsProvider {
       text,
     });
 
-    /* GPU arbitration — acquire a slot before the fetch so the synth
-       doesn't race the analyzer (or another concurrent synth) for VRAM
-       on an 8 GB GPU. Held across the buffered arrayBuffer() read
-       below; the sidecar response is NOT streaming, so a single
-       release after the read covers the whole GPU op. Cost is the engine's
-       VRAM weight (engine-vram-cost.ts) so a heavy engine takes more of the
-       budget than a light one. See server/src/gpu/semaphore.ts. */
-    const releaseGpu = await gpuSemaphore.acquire(costForEngine(this.engine));
-
+    /* Per-engine serialisation — at most ONE synth call per engine in-flight.
+       Acquired BEFORE the global GPU semaphore (outer-before-inner) to avoid
+       priority inversion: if the per-engine gate were inner, a waiting
+       same-engine call could hold a global token while blocked, starving
+       unrelated engines. */
+    const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const response = await this.post('/synthesize', body, signal);
-      if (!response.ok) await throwForResponse(response);
+      /* GPU arbitration — acquire a slot before the fetch so the synth
+         doesn't race the analyzer (or another concurrent synth) for VRAM
+         on an 8 GB GPU. Held across the buffered arrayBuffer() read
+         below; the sidecar response is NOT streaming, so a single
+         release after the read covers the whole GPU op. Cost is the engine's
+         VRAM weight (engine-vram-cost.ts) so a heavy engine takes more of the
+         budget than a light one. See server/src/gpu/semaphore.ts. */
+      const releaseGpu = await this.gpuSem.acquire(costForEngine(this.engine));
 
-      const buf = Buffer.from(await response.arrayBuffer());
-      if (buf.length === 0) {
-        throw new Error('Local TTS sidecar returned an empty audio body.');
+      try {
+        const response = await this.post('/synthesize', body, signal);
+        if (!response.ok) await throwForResponse(response);
+
+        const buf = Buffer.from(await response.arrayBuffer());
+        if (buf.length === 0) {
+          throw new Error('Local TTS sidecar returned an empty audio body.');
+        }
+
+        const mimeType = response.headers.get('content-type') ?? 'audio/L16;codec=pcm;rate=24000';
+        const headerRate = response.headers.get('x-sample-rate');
+        const sampleRate = headerRate ? Number(headerRate) : parseRateFromMime(mimeType);
+
+        /* When the sidecar's speaker manifest doesn't contain the voice we
+           asked for, it substitutes a safe fallback and tells us via this
+           header. The synth still completed (so we don't fail the chapter),
+           but the user's chapter ends up speaking in a different voice than
+           the cast view shows. Log loudly so we can fix server/src/tts/
+           voice-mapping.ts when this happens — the catalog and the model's
+           actual speaker list have drifted. */
+        const substitutedFrom = response.headers.get('x-voice-substituted-from');
+        if (substitutedFrom) {
+          console.warn(
+            `[tts] Sidecar substituted voice: requested "${substitutedFrom}" not in XTTS v2 manifest. ` +
+              `Update server/src/tts/voice-mapping.ts to remove this name. ` +
+              `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
+          );
+        }
+
+        return {
+          pcm: buf,
+          sampleRate,
+          mimeType,
+          ...(substitutedFrom ? { voiceSubstitutedFrom: substitutedFrom } : {}),
+        };
+      } finally {
+        releaseGpu();
       }
-
-      const mimeType = response.headers.get('content-type') ?? 'audio/L16;codec=pcm;rate=24000';
-      const headerRate = response.headers.get('x-sample-rate');
-      const sampleRate = headerRate ? Number(headerRate) : parseRateFromMime(mimeType);
-
-      /* When the sidecar's speaker manifest doesn't contain the voice we
-         asked for, it substitutes a safe fallback and tells us via this
-         header. The synth still completed (so we don't fail the chapter),
-         but the user's chapter ends up speaking in a different voice than
-         the cast view shows. Log loudly so we can fix server/src/tts/
-         voice-mapping.ts when this happens — the catalog and the model's
-         actual speaker list have drifted. */
-      const substitutedFrom = response.headers.get('x-voice-substituted-from');
-      if (substitutedFrom) {
-        console.warn(
-          `[tts] Sidecar substituted voice: requested "${substitutedFrom}" not in XTTS v2 manifest. ` +
-            `Update server/src/tts/voice-mapping.ts to remove this name. ` +
-            `Run \`curl ${this.url}/speakers\` to see the model's actual speaker list.`,
-        );
-      }
-
-      return {
-        pcm: buf,
-        sampleRate,
-        mimeType,
-        ...(substitutedFrom ? { voiceSubstitutedFrom: substitutedFrom } : {}),
-      };
     } finally {
-      releaseGpu();
+      releaseEngine();
     }
   }
 
@@ -140,28 +177,34 @@ export class SidecarTtsProvider implements TtsProvider {
       items: items.map((it) => ({ voice: it.voiceName, text: it.text })),
     });
 
-    const releaseGpu = await gpuSemaphore.acquire(costForEngine(this.engine));
+    /* Per-engine serialisation — outer gate, same rationale as synthesize(). */
+    const releaseEngine = await engineSynthSem(this.engineSynths, this.engine).acquire();
     try {
-      const response = await this.post('/synthesize-batch', body, signal);
-      if (!response.ok) await throwForResponse(response);
+      const releaseGpu = await this.gpuSem.acquire(costForEngine(this.engine));
+      try {
+        const response = await this.post('/synthesize-batch', body, signal);
+        if (!response.ok) await throwForResponse(response);
 
-      const buf = Buffer.from(await response.arrayBuffer());
-      if (buf.length === 0) {
-        throw new Error('Local TTS sidecar returned an empty batch body.');
-      }
+        const buf = Buffer.from(await response.arrayBuffer());
+        if (buf.length === 0) {
+          throw new Error('Local TTS sidecar returned an empty batch body.');
+        }
 
-      const { sampleRate, pcms, genMs, audioMs } = parseBatchFrame(buf);
-      /* Hard invariant — one PCM chunk per requested item. A mismatch means the
-         sidecar demux drifted; fail loudly rather than scatter misaligned audio
-         back onto the wrong sentences. */
-      if (pcms.length !== items.length) {
-        throw new Error(
-          `Local TTS sidecar batch returned ${pcms.length} chunks for ${items.length} items.`,
-        );
+        const { sampleRate, pcms, genMs, audioMs } = parseBatchFrame(buf);
+        /* Hard invariant — one PCM chunk per requested item. A mismatch means the
+           sidecar demux drifted; fail loudly rather than scatter misaligned audio
+           back onto the wrong sentences. */
+        if (pcms.length !== items.length) {
+          throw new Error(
+            `Local TTS sidecar batch returned ${pcms.length} chunks for ${items.length} items.`,
+          );
+        }
+        return { pcms, sampleRate, genMs, audioMs };
+      } finally {
+        releaseGpu();
       }
-      return { pcms, sampleRate, genMs, audioMs };
     } finally {
-      releaseGpu();
+      releaseEngine();
     }
   }
 
