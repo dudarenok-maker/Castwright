@@ -26,7 +26,7 @@ const SERVER_ROOT = resolve(__dirname, '..', '..');
    at `<SERVER_ROOT>/user-settings.json`, which meant every git worktree
    carried its own copy: a save in one tree silently "reverted" when the app
    was next launched from another tree (or the same setting was changed in
-   N trees independently). Resolving to a shared `~/.audiobook-generator/`
+   N trees independently). Resolving to a shared `~/.castwright/`
    path makes main, every worktree, and the packaged app read ONE file.
 
    `USER_SETTINGS_FILE` overrides the location: the server test bootstrap
@@ -36,7 +36,7 @@ const SERVER_ROOT = resolve(__dirname, '..', '..');
 export function resolveUserSettingsPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.USER_SETTINGS_FILE?.trim();
   if (override) return override;
-  return join(homedir(), '.audiobook-generator', 'user-settings.json');
+  return join(homedir(), '.castwright', 'user-settings.json');
 }
 
 export const USER_SETTINGS_PATH = resolveUserSettingsPath();

@@ -220,10 +220,10 @@ test('parseArgs rejects unknown flags including typos like --noinstall', () => {
 
 function makeTmpWorktree(layout = 'with-server') {
   const dir = mkdtempSync(join(tmpdir(), 'wt-new-test-'));
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'audiobook-generator' }));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'castwright' }));
   if (layout === 'with-server') {
     mkdirSync(join(dir, 'server'));
-    writeFileSync(join(dir, 'server', 'package.json'), JSON.stringify({ name: 'audiobook-generator-server' }));
+    writeFileSync(join(dir, 'server', 'package.json'), JSON.stringify({ name: 'castwright-server' }));
   }
   return dir;
 }

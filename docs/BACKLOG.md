@@ -90,12 +90,6 @@ _`ops-8` (bump GitHub Actions off the deprecated Node-20 runtime) **shipped 2026
 majors (`checkout@v6`, `setup-node@v6`, `cache@v5`, `upload-artifact@v7`). Acceptance is the
 PR's own annotation-free CI run._
 
-### `fs-39` — Rebrand the server + web app to Castwright ([#631](https://github.com/dudarenok-maker/AudioBook-Generator/issues/631))
-
-- _What:_ the companion app is now **Castwright** (plan 188 / PR #629), but the server product + web app are still "Audiobook Generator". Bring the whole product onto the brand (`/brand/brand-guidelines.md`) — web title/wordmark, favicon, theme tokens, `/api/info` name, the release-zip name, README/INSTALL, `package.json` names. Larger than the app rename, so deliberately separate.
-- _Benefit (brand):_ one coherent brand across the generator + the listening app; needed before any public launch / store listing.
-_Full detail + acceptance:_ [#631](https://github.com/dudarenok-maker/AudioBook-Generator/issues/631).
-
 ---
 
 ## Could — nice to have, low-cost wins

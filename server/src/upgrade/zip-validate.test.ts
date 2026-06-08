@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import { validateUpgradeManifest, REQUIRED_ENTRIES } from './zip-validate.js';
 
-const TOP = 'audiobook-generator-v1.6.0';
+const TOP = 'castwright-v1.6.0';
 function goodEntries(top = TOP): string[] {
   return [`${top}/`, ...REQUIRED_ENTRIES.map((e) => `${top}/${e}`), `${top}/src/main.tsx`];
 }
@@ -49,7 +49,7 @@ describe('validateUpgradeManifest', () => {
 
   it('refuses a downgrade unless forced', () => {
     const down = validateUpgradeManifest({
-      entryNames: goodEntries('audiobook-generator-v1.4.0'),
+      entryNames: goodEntries('castwright-v1.4.0'),
       packageJsonVersion: '1.4.0',
       runningVersion: '1.6.0',
     });
@@ -58,7 +58,7 @@ describe('validateUpgradeManifest', () => {
     expect(down.isDowngrade).toBe(true);
 
     const forced = validateUpgradeManifest({
-      entryNames: goodEntries('audiobook-generator-v1.4.0'),
+      entryNames: goodEntries('castwright-v1.4.0'),
       packageJsonVersion: '1.4.0',
       runningVersion: '1.6.0',
       allowDowngrade: true,
@@ -71,5 +71,16 @@ describe('validateUpgradeManifest', () => {
     const r = validateUpgradeManifest({ entryNames: goodEntries(), packageJsonVersion: '1.6.0', runningVersion: '1.6.0' });
     expect(r.ok).toBe(true);
     expect(r.isDowngrade).toBe(false);
+  });
+
+  it('rejects a legacy audiobook-generator-* top dir as bad-structure', () => {
+    const res = validateUpgradeManifest({
+      entryNames: ['audiobook-generator-v1.6.0/package.json'],
+      packageJsonVersion: '1.7.0',
+      runningVersion: '1.6.0',
+      allowDowngrade: false,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe('bad-structure');
   });
 });

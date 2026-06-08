@@ -12,7 +12,7 @@ function ctx(over: Partial<ApplyContext> = {}): ApplyContext {
     installRoot: '/install',
     releasesDir: '/install/releases',
     stagedZipPath: '/install/.upgrade-staging/incoming.zip',
-    topDir: 'audiobook-generator-v1.6.0',
+    topDir: 'castwright-v1.6.0',
     candidateVersion: '1.6.0',
     reqHash: 'hash-new',
     oldPid: 4242,
