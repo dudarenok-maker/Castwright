@@ -104,7 +104,7 @@ function ModelInventory() {
         <h2 className="text-base font-semibold text-ink">Installed models</h2>
         {!inv.sidecarReachable && (
           <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
-            Sidecar unreachable — residency unknown
+            Voice engine unreachable — residency unknown
           </span>
         )}
       </div>

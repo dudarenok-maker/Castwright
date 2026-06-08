@@ -389,15 +389,15 @@ export function AccountView() {
           <div>
             <h2 className="text-base font-semibold text-ink">Models &amp; engines</h2>
             <p className="mt-1 text-xs text-ink/55 max-w-prose">
-              Installing models, picking the default TTS / analyzer engine, the sidecar / Ollama
-              URLs, and the Gemini key now live in the Model Manager.
+              Installing models, picking the default TTS / analyzer engine, the Voice engine /
+              Ollama URLs, and the Gemini key now live in the Model Manager.
             </p>
           </div>
           <button
             type="button"
             onClick={() => dispatch(uiActions.openModelManager())}
             data-testid="account-model-manager-pointer"
-            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-white text-sm font-medium hover:bg-ink/90"
+            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
           >
             Open Model Manager →
           </button>
