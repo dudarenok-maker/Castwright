@@ -6,7 +6,7 @@ REM leftover listeners on :8080 / :9000.
 REM ===========================================================================
 cd /d "%~dp0"
 
-call npm run stop:prod
+call npm run --silent stop:prod
 
 echo.
 pause

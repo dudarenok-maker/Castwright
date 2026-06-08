@@ -75,7 +75,7 @@ export async function searchCovers(title: string, author: string): Promise<Cover
       headers: {
         Accept: 'application/json',
         'User-Agent':
-          'audiobook-generator/1.0 (https://github.com/dudarenok-maker/audiobook-generator)',
+          'castwright/1.0 (https://github.com/dudarenok-maker/Castwright)',
       },
     });
   } catch (e) {
@@ -137,7 +137,7 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
       signal: ctrl.signal,
       headers: {
         'User-Agent':
-          'audiobook-generator/1.0 (https://github.com/dudarenok-maker/audiobook-generator)',
+          'castwright/1.0 (https://github.com/dudarenok-maker/Castwright)',
       },
     });
   } catch (e) {

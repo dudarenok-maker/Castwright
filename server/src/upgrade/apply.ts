@@ -18,7 +18,7 @@ export interface ApplyContext {
   installRoot: string;
   releasesDir: string;
   stagedZipPath: string;
-  topDir: string; // audiobook-generator-vX.Y.Z (zip prefix to strip)
+  topDir: string; // castwright-vX.Y.Z (zip prefix to strip)
   candidateVersion: string;
   reqHash: string | null;
   oldPid: number | null;
