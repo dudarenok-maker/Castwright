@@ -573,6 +573,17 @@ export function GenerationView({
      skip the reason-prompt RegenerateModal that `onRegenerate` opens because a
      never-rendered chapter has no prior render to "regenerate". */
   function handleGenerateChapter(ch: Chapter): void {
+    /* Re-adding a "Not queued" (held) chapter clears the hold so the row leaves
+       the "Not queued" state and the auto-work resume stops skipping it. Clear
+       optimistically in the slice + persist; the enqueue below is what actually
+       starts it. No-op for a normal queued chapter (never held). */
+    if (ch.held) {
+      dispatch(chaptersActions.setChapterHeld({ chapterId: ch.id, held: false }));
+      void api.setChapterHeld(bookId, ch.id, false).catch(() => {
+        /* best-effort: the chapter still enqueues; the hold reconciles on the
+           next hydrate if the persist failed. */
+      });
+    }
     const rand = Math.random().toString(36).slice(2, 8);
     void dispatch(
       enqueueQueueEntries([
@@ -609,7 +620,12 @@ export function GenerationView({
   const completed = activeChapters.filter((c) => c.state === 'done').length;
   const failed = activeChapters.filter((c) => c.state === 'failed').length;
   const inProgressCnt = activeChapters.filter((c) => c.state === 'in_progress').length;
-  const queued = activeChapters.filter((c) => c.state === 'queued').length;
+  /* `held` chapters carry state==='queued' under the hood but the user removed
+     them from the queue ("Not queued"), so they must NOT count as queued work:
+     this gates the Resume-generation button (so it doesn't re-enqueue them) and
+     keeps the queued/“N pending” copy honest. They still sit in activeChapters,
+     so a book with held chapters is correctly never "all complete". */
+  const queued = activeChapters.filter((c) => c.state === 'queued' && !c.held).length;
   /* Engine drift (plan 35). A drifted chapter has audio recorded with a
      different TTS engine than the project's current selection — usually
      because the user changed the model picker after generation. The list
@@ -1284,6 +1300,19 @@ function ChapterRow({
       icon: <IconWarning className="w-4 h-4 text-rose-600" />,
     },
   }[chapter.state];
+
+  /* "Not queued" hold overrides the neutral Queued badge. The chapter is
+     un-rendered (state==='queued') but the user removed it from the queue, so
+     it must not read "Queued" (which implies pending work) — a dashed circle +
+     muted "Not queued" pill signals it's idle and re-addable via the expanded
+     "Generate this chapter" button. */
+  const heldNotQueued = !!chapter.held && chapter.state === 'queued';
+  if (heldNotQueued) {
+    stateConfig.badge = <Pill>Not queued</Pill>;
+    stateConfig.icon = (
+      <span className="w-4 h-4 rounded-full border border-dashed border-ink/30" />
+    );
+  }
 
   const findChar = (id: string): Character =>
     characters.find((c) => c.id === id) || { id, name: id, role: '', color: 'narrator' };

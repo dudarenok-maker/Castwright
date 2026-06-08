@@ -127,6 +127,23 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
     expect(streamGenerationMock).not.toHaveBeenCalled();
   });
 
+  it('skips "Not queued" (held) chapters on requestStartGeneration (Bug 1: Resume must not re-add them)', async () => {
+    /* The user deleted ch3 from the queue → it's held. A later Resume /
+       auto-work trigger must leave it out, or the delete is futile. */
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [
+      ch(2, { state: 'queued' }),
+      ch(3, { state: 'queued', held: true }),
+    ]);
+    store.dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    const calls = enqueueCalls();
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(calls[calls.length - 1][1].body);
+    expect(body.entries.map((e: { chapterId: number }) => e.chapterId)).toEqual([2]);
+  });
+
   it('does NOT enqueue when the queue is globally paused (guard holds even on explicit start)', async () => {
     const { store } = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));

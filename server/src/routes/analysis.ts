@@ -3439,12 +3439,18 @@ export async function runMainAnalyzerJob(
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
-            /* Preserve the excluded flag — analysis owns chapter titles/
-               durations, the user owns excluded. Match on id so a re-run
-               after a re-parse picks up whichever ids the parser produced. */
+            /* Preserve the user-owned flags — analysis owns chapter titles/
+               durations, the user owns `excluded` and `held`. Match on id so a
+               re-run after a re-parse picks up whichever ids the parser
+               produced. `held` (the "Not queued" intent) can't be re-derived
+               from disk like the audio metadata can, so dropping it here would
+               silently lose the user's choice — see the chapter `held` doc in
+               workspace/scan.ts. */
             const prevExcludedById = new Map<number, boolean>();
+            const prevHeldById = new Map<number, boolean>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
+              if (c.held) prevHeldById.set(c.id, true);
             }
             const next: BookStateJson = {
               ...prev,
@@ -3454,6 +3460,7 @@ export async function runMainAnalyzerJob(
                 slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
                 duration: c.duration,
                 excluded: prevExcludedById.get(c.id) || undefined,
+                held: prevHeldById.get(c.id) || undefined,
               })),
               updatedAt: new Date().toISOString(),
             };
@@ -4309,9 +4316,14 @@ async function runSubsetAnalyzerJob(
           const statePath = stateJsonPath(record.bookDir);
           const prev = await readJson<BookStateJson>(statePath);
           if (prev) {
+            /* Preserve the user-owned `excluded` + `held` flags across the
+               subset re-attribution — `held` (the "Not queued" intent) isn't
+               re-derivable from disk, so it must ride through here. */
             const prevExcludedById = new Map<number, boolean>();
+            const prevHeldById = new Map<number, boolean>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
+              if (c.held) prevHeldById.set(c.id, true);
             }
             const next: BookStateJson = {
               ...prev,
@@ -4321,6 +4333,7 @@ async function runSubsetAnalyzerJob(
                 slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
                 duration: c.duration,
                 excluded: prevExcludedById.get(c.id) || undefined,
+                held: prevHeldById.get(c.id) || undefined,
               })),
               updatedAt: new Date().toISOString(),
             };
