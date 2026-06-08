@@ -46,6 +46,8 @@ describe('ErrorBoundary', () => {
         </ErrorBoundary>,
       );
       expect(screen.getByRole('alert')).toBeTruthy();
+      expect(screen.getByText(/Something went sideways/)).toBeTruthy();
+      expect(screen.getByText(/Castwright hit a snag rendering this screen\./)).toBeTruthy();
       expect(screen.getByText(/reducer crashed on a tick/)).toBeTruthy();
       expect(screen.getByRole('button', { name: /try again/i })).toBeTruthy();
     } finally {
