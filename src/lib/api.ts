@@ -4878,7 +4878,14 @@ async function mockGetGpuQueueState(): Promise<GpuQueueState> {
    DiagnosticsResponse schema in openapi.yaml; see server/src/routes/diagnostics.ts.
    Polled by the Admin view + the top-bar status dot (~30 s cadence). */
 export type DiagnosticsStatus = 'ok' | 'warn' | 'fail';
-export type DiagnosticsCheckId = 'gpu' | 'sidecar' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
+export type DiagnosticsCheckId =
+  | 'gpu'
+  | 'sidecar'
+  | 'asr'
+  | 'analyzer'
+  | 'gemini'
+  | 'ffmpeg'
+  | 'disk';
 
 export interface DiagnosticsCheck {
   id: DiagnosticsCheckId;
@@ -4912,7 +4919,8 @@ async function mockGetDiagnostics(): Promise<DiagnosticsResponse> {
     overall: 'ok',
     checks: [
       { id: 'gpu', label: 'GPU / VRAM', status: 'ok', detail: 'cuda · 1.2 / 8.0 GB reserved', value: '1.2/8.0 GB' },
-      { id: 'sidecar', label: 'TTS sidecar', status: 'ok', detail: 'reachable · kokoro, qwen', value: 'kokoro, qwen' },
+      { id: 'sidecar', label: 'Voice engine', status: 'ok', detail: 'reachable · kokoro, qwen', value: 'kokoro, qwen' },
+      { id: 'asr', label: 'ASR (Whisper)', status: 'ok', detail: 'off — content-QA disabled' },
       { id: 'analyzer', label: 'Analyzer (Ollama)', status: 'ok', detail: 'reachable · model resident' },
       { id: 'gemini', label: 'Analyzer (Gemini)', status: 'ok', detail: 'not in use' },
       { id: 'ffmpeg', label: 'ffmpeg / ffprobe', status: 'ok', detail: 'both present' },

@@ -3498,10 +3498,10 @@ export interface components {
         };
         DiagnosticsCheck: {
             /**
-             * @description Stable identifier for the check (drives the UI row key).
+             * @description Stable identifier for the check (drives the UI row key). `sidecar` is the Voice engine; `asr` is the Whisper content-QA engine.
              * @enum {string}
              */
-            id: "gpu" | "sidecar" | "analyzer" | "gemini" | "ffmpeg" | "disk";
+            id: "gpu" | "sidecar" | "asr" | "analyzer" | "gemini" | "ffmpeg" | "disk";
             /** @description Friendly display label, e.g. "GPU / VRAM". */
             label: string;
             /**

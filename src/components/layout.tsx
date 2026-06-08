@@ -1029,7 +1029,7 @@ export function Layout() {
           kind="tts"
           engineLabel="Kokoro"
           state={ttsLifecycle.kokoro.state}
-          unreachableLabel="Sidecar process not running"
+          unreachableLabel="Voice engine not running"
           onLoad={() => {
             void ttsLifecycle.kokoro.onLoad();
           }}
@@ -1043,7 +1043,7 @@ export function Layout() {
           kind="tts"
           engineLabel="Coqui XTTS"
           state={ttsLifecycle.coqui.state}
-          unreachableLabel="Sidecar process not running"
+          unreachableLabel="Voice engine not running"
           onLoad={() => {
             void ttsLifecycle.coqui.onLoad();
           }}
@@ -1057,7 +1057,7 @@ export function Layout() {
           kind="tts"
           engineLabel="Qwen"
           state={ttsLifecycle.qwen.state}
-          unreachableLabel="Sidecar process not running"
+          unreachableLabel="Voice engine not running"
           onLoad={() => {
             void ttsLifecycle.qwen.onLoad();
           }}

@@ -4665,8 +4665,8 @@ components:
       properties:
         id:
           type: string
-          enum: [gpu, sidecar, analyzer, gemini, ffmpeg, disk]
-          description: Stable identifier for the check (drives the UI row key).
+          enum: [gpu, sidecar, asr, analyzer, gemini, ffmpeg, disk]
+          description: Stable identifier for the check (drives the UI row key). `sidecar` is the Voice engine; `asr` is the Whisper content-QA engine.
         label:
           type: string
           description: Friendly display label, e.g. "GPU / VRAM".
