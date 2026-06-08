@@ -7,6 +7,7 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configSlice } from '../store/config-slice';
+import { uiSlice } from '../store/ui-slice';
 import { AdvancedView } from './advanced';
 import { api } from '../lib/api';
 import type { ConfigResponse } from '../lib/types';
@@ -109,9 +110,11 @@ const FIXTURE_CONFIG: ConfigResponse = {
   restartPending: false,
 };
 
-/* Build a minimal store with only the config slice. */
+/* Build a minimal store with config + ui slices. */
 function makeStore() {
-  return configureStore({ reducer: { config: configSlice.reducer } });
+  return configureStore({
+    reducer: { config: configSlice.reducer, ui: uiSlice.reducer },
+  });
 }
 
 function renderView() {
@@ -143,8 +146,10 @@ beforeEach(() => {
 describe('AdvancedView — group headers', () => {
   it('renders the group section headings after fetchConfig hydrates', async () => {
     renderView();
-    expect(await screen.findByText('Text-to-speech')).toBeInTheDocument();
-    expect(screen.getByText('Analyzer prompts')).toBeInTheDocument();
+    /* findAllByText — nav rail + section header both carry the label text;
+       at least one must be in the DOM. */
+    expect((await screen.findAllByText('Text-to-speech')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Analyzer prompts').length).toBeGreaterThan(0);
   });
 
   it('renders a knob label inside the tts section', async () => {
@@ -219,7 +224,26 @@ describe('AdvancedView — restart banner', () => {
 
   it('does NOT show the restart banner when no restart-sidecar knob is overridden', async () => {
     renderView();
-    await screen.findByText('Text-to-speech'); // hydration complete
+    /* Wait for hydration — findAllByText because nav rail also has the label. */
+    await screen.findAllByText('Text-to-speech');
     expect(screen.queryByText(/Voice-engine setting changed/i)).not.toBeInTheDocument();
+  });
+});
+
+/* ── Back-to-Admin breadcrumb ─────────────────────────────────────────────── */
+
+describe('AdvancedView — back-to-Admin breadcrumb', () => {
+  it('renders the back-to-Admin button', async () => {
+    renderView();
+    const btn = screen.getByTestId('advanced-back-to-admin');
+    expect(btn).toBeInTheDocument();
+    expect(btn).toHaveTextContent('← Admin');
+  });
+
+  it('dispatches openAdmin when the back button is clicked', async () => {
+    const { store } = renderView();
+    const btn = screen.getByTestId('advanced-back-to-admin');
+    fireEvent.click(btn);
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'admin' });
   });
 });

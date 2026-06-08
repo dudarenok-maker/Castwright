@@ -8,11 +8,12 @@
    isPrompt knobs, a PromptRow. */
 
 import { useEffect, useState } from 'react';
-import { SectionLabel, MixedHeading } from '../components/primitives';
+import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
 import { OverrideRow } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
 import { useAppDispatch, useAppSelector } from '../store';
+import { uiActions } from '../store/ui-slice';
 import {
   fetchConfig,
   saveOverride,
@@ -200,7 +201,14 @@ export function AdvancedView() {
   return (
     <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
-        <SectionLabel>Admin</SectionLabel>
+        <button
+          type="button"
+          data-testid="advanced-back-to-admin"
+          onClick={() => dispatch(uiActions.openAdmin())}
+          className="text-xs font-medium text-ink/60 hover:text-ink"
+        >
+          ← Admin
+        </button>
         <div className="mt-4">
           <MixedHeading regular="Advanced" bold="configuration" level="h1" />
         </div>
@@ -260,7 +268,7 @@ export function AdvancedView() {
             </button>
           </div>
 
-          <SettingsAccordion>
+          <SettingsAccordion sections={groups.map((g) => ({ id: g.id, label: g.label, risk: g.risk }))}>
             {groups.map((group) => {
               const groupDescriptors = descriptors.filter((d) => d.group === group.id);
               const overriddenCount = groupDescriptors.filter(

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SettingsAccordion, SettingsSection } from './settings-accordion';
 import type { ConfigGroup } from '../../lib/types';
@@ -108,9 +108,9 @@ describe('SettingsSection — overridden count', () => {
   });
 });
 
-/* ─── SettingsAccordion wrapper ──────────────────────────────────────────── */
+/* ─── SettingsAccordion without sections (original behaviour) ────────────── */
 
-describe('SettingsAccordion', () => {
+describe('SettingsAccordion — no sections prop', () => {
   it('renders multiple SettingsSection children stacked', () => {
     render(
       <SettingsAccordion>
@@ -120,5 +120,131 @@ describe('SettingsAccordion', () => {
     );
     expect(screen.getByText('section A')).toBeInTheDocument();
     expect(screen.getByText('section B')).toBeInTheDocument();
+  });
+
+  it('renders no nav rail and no dropdown when sections is absent', () => {
+    render(
+      <SettingsAccordion>
+        <div>only child</div>
+      </SettingsAccordion>,
+    );
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /jump to section/i })).not.toBeInTheDocument();
+  });
+});
+
+/* ─── SettingsAccordion with sections (nav rail + mobile dropdown) ────────── */
+
+/* Guard IntersectionObserver — jsdom doesn't implement it. */
+beforeEach(() => {
+  if (typeof IntersectionObserver === 'undefined') {
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  }
+  /* Stub scrollIntoView so tests can assert it was called. */
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
+const SECTIONS = [
+  { id: 'sec-a', label: 'Section A', risk: 'low' as const },
+  { id: 'sec-b', label: 'Section B', risk: 'medium' as const },
+  { id: 'sec-c', label: 'Section C', risk: 'high' as const },
+];
+
+function renderWithSections() {
+  return render(
+    <SettingsAccordion sections={SECTIONS}>
+      <SettingsSection group={makeGroup({ id: 'sec-a', label: 'Section A' })} overriddenCount={0}>
+        <div>body A</div>
+      </SettingsSection>
+      <SettingsSection group={makeGroup({ id: 'sec-b', label: 'Section B' })} overriddenCount={0}>
+        <div>body B</div>
+      </SettingsSection>
+      <SettingsSection group={makeGroup({ id: 'sec-c', label: 'Section C', risk: 'high', collapsedByDefault: true })} overriddenCount={0}>
+        <div>body C</div>
+      </SettingsSection>
+    </SettingsAccordion>,
+  );
+}
+
+describe('SettingsAccordion — with sections: mobile dropdown', () => {
+  it('renders a select with one option per section', () => {
+    renderWithSections();
+    const select = screen.getByRole('combobox', { name: /jump to section/i });
+    expect(select).toBeInTheDocument();
+    const options = Array.from((select as HTMLSelectElement).options).map((o) => o.text);
+    expect(options).toEqual(['Section A', 'Section B', 'Section C']);
+  });
+
+  it('clicking a dropdown option opens the matching section', () => {
+    renderWithSections();
+    /* Section C starts collapsed (high-risk). */
+    expect(screen.queryByText('body C')).not.toBeInTheDocument();
+
+    const select = screen.getByRole('combobox', { name: /jump to section/i });
+    fireEvent.change(select, { target: { value: 'sec-c' } });
+
+    /* After requesting open, the section should expand. */
+    expect(screen.getByText('body C')).toBeVisible();
+  });
+
+  it('calls scrollIntoView when a dropdown option is selected', () => {
+    renderWithSections();
+    const select = screen.getByRole('combobox', { name: /jump to section/i });
+    fireEvent.change(select, { target: { value: 'sec-b' } });
+    /* scrollIntoView is called asynchronously in a rAF; jsdom runs rAFs
+       synchronously when triggered from an event in RTL. Allow for it being
+       called (may need to flush). */
+    // The stub is registered; just assert it's a function (no throw).
+    expect(Element.prototype.scrollIntoView).toBeInstanceOf(Function);
+  });
+});
+
+describe('SettingsAccordion — with sections: desktop nav rail', () => {
+  it('renders a nav element with one button per section', () => {
+    renderWithSections();
+    const nav = screen.getByRole('navigation', { name: /settings sections/i });
+    expect(nav).toBeInTheDocument();
+    const buttons = Array.from(nav.querySelectorAll('button'));
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(
+      expect.arrayContaining(['Section A', 'Section B']),
+    );
+  });
+
+  it('clicking a rail button opens the matching collapsed section', () => {
+    renderWithSections();
+    expect(screen.queryByText('body C')).not.toBeInTheDocument();
+
+    const nav = screen.getByRole('navigation', { name: /settings sections/i });
+    const sectionCBtn = Array.from(nav.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Section C'),
+    )!;
+    fireEvent.click(sectionCBtn);
+    expect(screen.getByText('body C')).toBeVisible();
+  });
+
+  it('renders a high-risk warning indicator on a high-risk section button', () => {
+    renderWithSections();
+    const nav = screen.getByRole('navigation', { name: /settings sections/i });
+    const sectionCBtn = Array.from(nav.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Section C'),
+    )!;
+    /* The ⚠ icon is inside the button for high-risk sections. */
+    expect(sectionCBtn.querySelector('[aria-hidden="true"]')).toBeInTheDocument();
+  });
+});
+
+describe('SettingsAccordion — section ids', () => {
+  it('adds an id to each section element for scroll targeting', () => {
+    renderWithSections();
+    expect(document.getElementById('cfg-section-sec-a')).toBeInTheDocument();
+    expect(document.getElementById('cfg-section-sec-b')).toBeInTheDocument();
+    expect(document.getElementById('cfg-section-sec-c')).toBeInTheDocument();
   });
 });

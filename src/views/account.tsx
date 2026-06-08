@@ -206,7 +206,17 @@ export function AccountView() {
       <div className="space-y-6">
         <UpgradeCard />
 
-        <SettingsAccordion>
+        <SettingsAccordion
+          sections={[
+            { id: 'acct-profile', label: 'Profile', risk: 'low' },
+            { id: 'acct-cast-analysis', label: 'Cast analysis', risk: 'low' },
+            { id: 'acct-covers', label: 'Covers', risk: 'low' },
+            { id: 'acct-appearance', label: 'Appearance', risk: 'low' },
+            { id: 'acct-backups', label: 'Backups', risk: 'low' },
+            { id: 'acct-workspace', label: 'Workspace', risk: 'low' },
+            { id: 'acct-device-local', label: 'Device-local', risk: 'low' },
+          ]}
+        >
           <SettingsSection
             group={acctGroup('acct-profile', 'Profile', 'How you appear in the top bar and the change log.')}
             overriddenCount={0}
@@ -428,7 +438,7 @@ export function AccountView() {
           <div>
             <h2 className="text-base font-semibold text-ink">Models &amp; engines</h2>
             <p className="mt-1 text-xs text-ink/55 max-w-prose">
-              Installing models, picking the default TTS / analyzer engine, the Voice engine /
+              Installing models, picking the default Voice / analyzer engine, the Voice engine /
               Ollama URLs, and the Gemini key now live in the Model Manager.
             </p>
           </div>
