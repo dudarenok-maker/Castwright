@@ -61,17 +61,6 @@ export const SUPPORTED_APPS: ListenerApp[] = [
     sendVerb: 'Add to Books',
   },
   {
-    id: 'plex',
-    name: 'Plex',
-    glyph: 'PL',
-    gradient: ['#D4A04E', '#7B5A26'],
-    platforms: ['iOS', 'Android', 'Web'],
-    tagline: 'Stream from your media server.',
-    description:
-      'Embedded chapters display correctly. Stream to any device on your network or beyond.',
-    sendVerb: 'Send to library',
-  },
-  {
     /* First-class integration target — daily-driver reader on the user's
        Android device. Ships ahead of others when real handoff lands. */
     id: 'pocketbook',

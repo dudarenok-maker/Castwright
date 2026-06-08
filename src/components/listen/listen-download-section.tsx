@@ -1,7 +1,8 @@
 /* Listen-view download + handoff region — pure presentational lift
-   from listen.tsx. Owns: "Listen on your favourite app" cards
+   from listen.tsx. Owns: the Castwright Companion app banner (mocked
+   store links), the "Listen on your favourite app" cards
    (PocketBook / Voice / Smart AudioBook / BookPlayer / Audiobookshelf
-   tiles + the deferred ones), the Export queue rail with per-row
+   tiles + the deferred Apple Books one), the Export queue rail with per-row
    actions, and the three "Or download a file" tiles (M4B chaptered,
    MP3 ZIP, streaming link — plan 57).
 
@@ -24,6 +25,7 @@ import {
   MockedPreviewBanner,
 } from '../primitives';
 import { ExportQueueRow } from '../export-queue-row';
+import { CompanionAppBanner } from './companion-app-banner';
 import { SUPPORTED_APPS } from '../../data/listener-apps';
 import type { ListenerApp, ExportQueueItem } from '../../lib/types';
 
@@ -77,6 +79,7 @@ export function ListenDownloadSection({
 }: ListenDownloadSectionProps) {
   return (
     <>
+      <CompanionAppBanner />
       <ListenerApps
         onSend={onSendApp}
         onOpenPocketBookExport={onOpenPocketBookExport}
