@@ -95,6 +95,7 @@ import {
   type DroppedQuoteEntry,
   type DroppedQuotesBatch,
 } from '../store/dropped-quotes.js';
+import { configValue } from '../config/resolver.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -710,8 +711,7 @@ function readStage2Concurrency(): number {
    least-bad take is kept and the chapter is flagged for retry. `0` disables the
    guard (byte-identical to pre-guard). Default 2. */
 function resolveStage2CoverageRetries(): number {
-  const raw = Number(process.env.STAGE2_COVERAGE_RETRIES);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+  return configValue<number>('analyzer.stage2.coverageRetries');
 }
 
 function clampEst(ms: number): number {

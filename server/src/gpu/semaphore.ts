@@ -133,17 +133,20 @@ export class GpuSemaphore {
   }
 }
 
+import { configValue } from '../config/resolver.js';
+
 /* Singleton — both call sites (analyzer + sidecar) import this so a queue
    depth of 1 in the analyzer is visible to a sidecar caller and vice versa.
-   Budget comes from GPU_VRAM_BUDGET when set; otherwise it falls back to
-   GPU_CONCURRENCY (default 1) so single-engine boxes that never set the new
-   var keep the exact old behaviour. */
-const RAW_BUDGET = Number(process.env.GPU_VRAM_BUDGET);
-const RAW_CONCURRENCY = Number(process.env.GPU_CONCURRENCY ?? '1');
-const resolvedBudget =
-  Number.isFinite(RAW_BUDGET) && RAW_BUDGET > 0
-    ? RAW_BUDGET
-    : Number.isFinite(RAW_CONCURRENCY) && RAW_CONCURRENCY > 0
-      ? RAW_CONCURRENCY
-      : 1;
-export const gpuSemaphore = new GpuSemaphore(resolvedBudget);
+   Budget comes from gpu.vramBudget when set (non-zero); otherwise it falls
+   back to gpu.concurrency (default 1) so single-engine boxes that never set
+   the new var keep the exact old behaviour.
+   NOTE: resolved once at module-load. The semaphore is a stateful singleton;
+   re-creating it mid-run would drop the queue. Changing concurrency/budget
+   requires a server restart (apply: 'restart-server' in the registry). */
+function resolveGpuBudget(): number {
+  const budget = configValue<number>('gpu.vramBudget');
+  if (budget > 0) return budget;
+  const concurrency = configValue<number>('gpu.concurrency');
+  return concurrency > 0 ? concurrency : 1;
+}
+export const gpuSemaphore = new GpuSemaphore(resolveGpuBudget());

@@ -272,6 +272,7 @@ describe('user-settings router', () => {
       backupEnabled: false,
       backupCadence: 'weekly',
       backupRetention: 30,
+      configOverrides: { 'analyzer.stage2.minCoverage': 0.7 },
     };
 
     /* Guard: every writable schema field has a sample value here. A field

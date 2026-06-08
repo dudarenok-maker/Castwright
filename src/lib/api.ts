@@ -44,6 +44,9 @@ import type {
   TtsEngine,
   ChapterLoudness,
   ResourceTelemetryRecord,
+  ConfigResponse,
+  ConfigValues,
+  PromptState,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
@@ -5361,6 +5364,273 @@ async function mockRestoreBookBackup(_bookId: string, _backupFile: string): Prom
   await wait(60);
 }
 
+/* ── Advanced config (/api/config + /api/config/prompts) ──────────────── */
+
+/* Canned mock descriptors — four representative knobs across two groups that
+   give the UI tests something to render. Keep them small but cover the main
+   type variants (number, boolean, enum, string) and apply modes. */
+const MOCK_CONFIG_DESCRIPTORS: import('./types').KnobDescriptor[] = [
+  {
+    key: 'KOKORO_SAMPLE_RATE',
+    group: 'tts',
+    label: 'Kokoro sample rate',
+    help: 'Sample rate (Hz) for Kokoro synthesis output.',
+    type: 'integer',
+    min: 8000,
+    max: 48000,
+    step: 1000,
+    apply: 'restart-sidecar',
+    risk: 'low',
+    isPrompt: false,
+    default: 24000,
+  },
+  {
+    key: 'SEG_QA_MAX_RERECORDS',
+    group: 'tts',
+    label: 'Max re-records per segment',
+    help: 'How many times the QA gate may re-record a failing segment before giving up.',
+    type: 'integer',
+    min: 0,
+    max: 10,
+    step: 1,
+    apply: 'live',
+    risk: 'low',
+    isPrompt: false,
+    default: 2,
+  },
+  {
+    key: 'SEG_ASR_ENABLED',
+    group: 'tts',
+    label: 'ASR content QA',
+    help: 'Enable Whisper-based per-segment content QA gate.',
+    type: 'boolean',
+    apply: 'live',
+    risk: 'low',
+    isPrompt: false,
+    default: false,
+  },
+  {
+    key: 'ANALYZER_STAGE1_PROMPT',
+    group: 'analyzer',
+    label: 'Stage-1 attribution prompt',
+    help: 'System prompt template used for per-sentence speaker attribution.',
+    type: 'string',
+    apply: 'live',
+    risk: 'medium',
+    isPrompt: true,
+    default: 'Attribute each sentence to its speaker.',
+  },
+];
+
+const MOCK_CONFIG_GROUPS: import('./types').ConfigGroup[] = [
+  {
+    id: 'tts',
+    label: 'Text-to-speech',
+    help: 'Synthesis engine settings.',
+    risk: 'low',
+    collapsedByDefault: false,
+  },
+  {
+    id: 'analyzer',
+    label: 'Analyzer',
+    help: 'Analysis prompt templates and tuning.',
+    risk: 'medium',
+    collapsedByDefault: true,
+  },
+];
+
+/* In-memory mock config store. Starts with default values; PUT/reset mutate it. */
+const MOCK_CONFIG_VALUES: import('./types').ConfigValues = {
+  KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 24000, source: 'default', locked: false, overridden: false },
+  SEG_QA_MAX_RERECORDS: { key: 'SEG_QA_MAX_RERECORDS', effective: 2, source: 'default', locked: false, overridden: false },
+  SEG_ASR_ENABLED: { key: 'SEG_ASR_ENABLED', effective: false, source: 'default', locked: false, overridden: false },
+  ANALYZER_STAGE1_PROMPT: { key: 'ANALYZER_STAGE1_PROMPT', effective: 'Attribute each sentence to its speaker.', source: 'default', locked: false, overridden: false },
+};
+
+/* In-memory prompt store keyed by id. */
+const MOCK_PROMPTS = new Map<string, PromptState>([
+  [
+    'ANALYZER_STAGE1_PROMPT',
+    {
+      id: 'ANALYZER_STAGE1_PROMPT',
+      text: 'Attribute each sentence to its speaker.',
+      isForked: false,
+      defaultText: 'Attribute each sentence to its speaker.',
+    },
+  ],
+]);
+
+export async function mockGetConfig(): Promise<ConfigResponse> {
+  await wait(40);
+  return {
+    groups: MOCK_CONFIG_GROUPS,
+    descriptors: MOCK_CONFIG_DESCRIPTORS,
+    values: { ...MOCK_CONFIG_VALUES },
+    restartPending: false,
+  };
+}
+
+export async function mockPutConfig(
+  patch: Record<string, number | boolean | string>,
+): Promise<{ ok: boolean; applied: string[]; values: ConfigValues }> {
+  await wait(30);
+  const applied: string[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (key in MOCK_CONFIG_VALUES) {
+      MOCK_CONFIG_VALUES[key] = { ...MOCK_CONFIG_VALUES[key], effective: value, source: 'override', overridden: true };
+      applied.push(key);
+    }
+  }
+  return { ok: true, applied, values: { ...MOCK_CONFIG_VALUES } };
+}
+
+export async function mockResetConfig(
+  body: { keys?: string[]; group?: string; all?: boolean },
+): Promise<{ ok: boolean; values: ConfigValues }> {
+  await wait(30);
+  const keysToReset: string[] = body.all
+    ? Object.keys(MOCK_CONFIG_VALUES)
+    : body.keys
+      ? body.keys
+      : body.group
+        ? MOCK_CONFIG_DESCRIPTORS.filter((d) => d.group === body.group).map((d) => d.key)
+        : [];
+  for (const key of keysToReset) {
+    const descriptor = MOCK_CONFIG_DESCRIPTORS.find((d) => d.key === key);
+    if (descriptor && key in MOCK_CONFIG_VALUES) {
+      MOCK_CONFIG_VALUES[key] = { key, effective: descriptor.default, source: 'default', locked: false, overridden: false };
+    }
+  }
+  return { ok: true, values: { ...MOCK_CONFIG_VALUES } };
+}
+
+export async function mockGetPrompt(id: string): Promise<PromptState> {
+  await wait(30);
+  const existing = MOCK_PROMPTS.get(id);
+  if (existing) return { ...existing };
+  const defaultText = `Default prompt for ${id}`;
+  return { id, text: defaultText, isForked: false, defaultText };
+}
+
+export async function mockPutPrompt(id: string, text: string): Promise<PromptState> {
+  await wait(30);
+  const existing = MOCK_PROMPTS.get(id);
+  const defaultText = existing?.defaultText ?? `Default prompt for ${id}`;
+  const updated: PromptState = { id, text, isForked: text !== defaultText, defaultText };
+  MOCK_PROMPTS.set(id, updated);
+  return { ...updated };
+}
+
+export async function mockResetPrompt(id: string): Promise<PromptState> {
+  await wait(30);
+  const existing = MOCK_PROMPTS.get(id);
+  const defaultText = existing?.defaultText ?? `Default prompt for ${id}`;
+  const reset: PromptState = { id, text: defaultText, isForked: false, defaultText };
+  MOCK_PROMPTS.set(id, reset);
+  return { ...reset };
+}
+
+export async function mockRestartSidecar(): Promise<{ ok: boolean; error?: string }> {
+  await wait(60);
+  return { ok: true };
+}
+
+/* Test helper — reset the mock config store to its initial defaults. */
+export function _resetMockConfig(): void {
+  Object.assign(MOCK_CONFIG_VALUES, {
+    KOKORO_SAMPLE_RATE: { key: 'KOKORO_SAMPLE_RATE', effective: 24000, source: 'default', locked: false, overridden: false },
+    SEG_QA_MAX_RERECORDS: { key: 'SEG_QA_MAX_RERECORDS', effective: 2, source: 'default', locked: false, overridden: false },
+    SEG_ASR_ENABLED: { key: 'SEG_ASR_ENABLED', effective: false, source: 'default', locked: false, overridden: false },
+    ANALYZER_STAGE1_PROMPT: { key: 'ANALYZER_STAGE1_PROMPT', effective: 'Attribute each sentence to its speaker.', source: 'default', locked: false, overridden: false },
+  });
+  MOCK_PROMPTS.set('ANALYZER_STAGE1_PROMPT', {
+    id: 'ANALYZER_STAGE1_PROMPT',
+    text: 'Attribute each sentence to its speaker.',
+    isForked: false,
+    defaultText: 'Attribute each sentence to its speaker.',
+  });
+}
+
+/* Real implementations for /api/config and /api/config/prompts. */
+async function realGetConfig(): Promise<ConfigResponse> {
+  const res = await fetch('/api/config');
+  if (!res.ok)
+    throw new Error(`Config fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realPutConfig(
+  patch: Record<string, number | boolean | string>,
+): Promise<{ ok: boolean; applied: string[]; values: ConfigValues }> {
+  const res = await fetch('/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Config update failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realResetConfig(
+  body: { keys?: string[]; group?: string; all?: boolean },
+): Promise<{ ok: boolean; values: ConfigValues }> {
+  const res = await fetch('/api/config/reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Config reset failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realGetPrompt(id: string): Promise<PromptState> {
+  const res = await fetch(`/api/config/prompts/${encodeURIComponent(id)}`);
+  if (!res.ok)
+    throw new Error(
+      `Prompt fetch failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realPutPrompt(id: string, text: string): Promise<PromptState> {
+  const res = await fetch(`/api/config/prompts/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok)
+    throw new Error(
+      `Prompt update failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realResetPrompt(id: string): Promise<PromptState> {
+  const res = await fetch(`/api/config/prompts/${encodeURIComponent(id)}/reset`, {
+    method: 'POST',
+  });
+  if (!res.ok)
+    throw new Error(
+      `Prompt reset failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realRestartSidecar(): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch('/api/sidecar/restart', { method: 'POST' });
+  if (!res.ok)
+    throw new Error(
+      `Sidecar restart failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
 /* Chapter audio + revisions polling stay mocked for now — both belong to the
    playback slice that comes after this one. */
 const real = {
@@ -5597,6 +5867,13 @@ const real = {
     }
     return res.json();
   },
+  getConfig: realGetConfig,
+  putConfig: realPutConfig,
+  resetConfig: realResetConfig,
+  getPrompt: realGetPrompt,
+  putPrompt: realPutPrompt,
+  resetPrompt: realResetPrompt,
+  restartSidecar: realRestartSidecar,
 };
 
 const mock = {
@@ -5800,11 +6077,20 @@ const mock = {
     );
     return { records: limit != null ? records.slice(0, limit) : records };
   },
+  getConfig: mockGetConfig,
+  putConfig: mockPutConfig,
+  resetConfig: mockResetConfig,
+  getPrompt: mockGetPrompt,
+  putPrompt: mockPutPrompt,
+  resetPrompt: mockResetPrompt,
+  restartSidecar: mockRestartSidecar,
 };
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
    record type from the same `../lib/api` surface as the other admin types. */
 export type { ResourceTelemetryRecord } from './types';
+/* Re-export config types so the config slice + view import from a single source. */
+export type { ConfigResponse, ConfigValues, KnobDescriptor, ConfigGroup, PromptState } from './types';
 
 /** One finished chapter's own throughput, for the dev Worktrees throughput
     table. `rtf` is synth-wall ÷ audio (< 1 = faster than realtime) or null when

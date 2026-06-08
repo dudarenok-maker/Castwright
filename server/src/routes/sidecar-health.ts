@@ -13,6 +13,7 @@ import {
   type QwenInstallState,
 } from '../workspace/user-settings.js';
 import { asrEnabled } from '../tts/segment-asr-qa.js';
+import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -308,6 +309,66 @@ sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
         : err.message || 'Sidecar /unload request failed.',
     });
   }
+});
+
+/* POST /api/sidecar/restart — kill the running sidecar child and let the
+   supervisor respawn it. Because buildOpts() is re-evaluated on every spawn,
+   the fresh process picks up any restart-sidecar overrides that were saved
+   to the config store since the last spawn.
+
+   Strategy: kill the current child (which the supervisor does NOT own the
+   "stopped" flag for, so its onChildExit fires and triggers the normal respawn
+   path with backoff). Then poll /health until the new process responds, up to
+   RESTART_HEALTH_POLL_TIMEOUT_MS, and return { ok: true }. If no child is
+   currently supervised (autoStart off, or already stopped), the sidecar can't
+   be restarted via this route and we return 409. The SSRF guard is inherited
+   from getResolvedSidecarUrl (same as /health, /load, /unload). */
+const RESTART_HEALTH_POLL_MS = 500;
+const RESTART_HEALTH_POLL_TIMEOUT_MS = 60_000; // generous — a Kokoro boot is ~1s, Coqui ~60s
+
+sidecarHealthRouter.post('/restart', async (_req: Request, res: Response) => {
+  const supervisor = getActiveSupervisor();
+  if (!supervisor) {
+    return res.status(409).json({
+      ok: false,
+      error: 'No active supervisor — sidecar auto-start is disabled or the server is still booting.',
+    });
+  }
+  const handle = supervisor.current();
+  if (!handle) {
+    return res.status(409).json({
+      ok: false,
+      error: 'No sidecar child is currently running. If auto-start is on, the supervisor will spawn one shortly.',
+    });
+  }
+
+  /* Kill the child. The supervisor's onChildExit callback fires (since
+     stopped=false) and schedules a respawn with backoff. */
+  await handle.kill();
+
+  /* Poll /health until the fresh sidecar responds. getResolvedSidecarUrl()
+     carries the SSRF guard — a non-local URL falls back to localhost. */
+  const url = getResolvedSidecarUrl();
+  const target = `${url}/health`;
+  const deadline = Date.now() + RESTART_HEALTH_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, RESTART_HEALTH_POLL_MS));
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+      const r = await fetch(target, { signal: controller.signal }).finally(() =>
+        clearTimeout(timer),
+      );
+      if (r.ok) return res.json({ ok: true });
+    } catch {
+      /* sidecar still starting — keep polling */
+    }
+  }
+
+  return res.status(503).json({
+    ok: false,
+    error: `Sidecar did not become healthy within ${RESTART_HEALTH_POLL_TIMEOUT_MS / 1000}s after restart.`,
+  });
 });
 
 /* Catalog-audit endpoint. Returns the diff between voice-mapping.ts's

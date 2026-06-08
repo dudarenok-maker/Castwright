@@ -83,6 +83,7 @@ import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 import type { FailureCode } from './failure-taxonomy.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
+import { configValue } from '../config/resolver.js';
 
 export const generationRouter = Router();
 
@@ -121,8 +122,7 @@ function chapterNoProgressMs(): number {
    times a `suspect` sentence is re-recorded before keeping the best take.
    Default 2; `0` disables the gate (byte-identical to pre-gate). */
 function resolveSegmentQaRerecords(): number {
-  const raw = Number(process.env.SEG_QA_MAX_RERECORDS);
-  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 2;
+  return configValue<number>('qa.seg.maxRerecords');
 }
 
 /* ASR content-QA pass (srv-31) — resolvers shared with the repair route live in

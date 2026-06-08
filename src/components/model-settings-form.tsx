@@ -9,15 +9,55 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { PrimaryButton } from './primitives';
-import { FormCard, FieldRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
+import { FieldRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
+import { SettingsAccordion, SettingsSection } from './settings/settings-accordion';
 import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
-import type { TtsModelKey, UserSettingsPatch } from '../lib/types';
+import type { ConfigGroup, TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
 import { saveAccountSettings, saveGeminiApiKey } from '../store/account-slice';
 import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
 import { ModelPullStatus } from './model-pull-status';
+
+/* Synthetic ConfigGroup descriptors — these sections have no per-knob
+   override tracking, so overriddenCount is always 0 and risk is 'low'.
+   All sections default open (collapsedByDefault: false). */
+const GROUP_DEFAULTS: ConfigGroup = {
+  id: 'model-defaults',
+  label: 'Defaults for new books',
+  help: 'Used the first time you open a book that hasn\'t been touched yet. Per-book choices override these and persist.',
+  risk: 'low',
+  collapsedByDefault: false,
+};
+const GROUP_ANALYZER_SPLIT: ConfigGroup = {
+  id: 'model-analyzer-split',
+  label: 'Two-model analyzer split (advanced)',
+  help: 'Optional. By default both analysis passes run on your default analysis model. Pick a model for EACH phase to split the work: Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (1,500/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. Leave both blank for the single-model default. Server env vars (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still override for ops triage.',
+  risk: 'low',
+  collapsedByDefault: false,
+};
+const GROUP_VOICE_ENGINE: ConfigGroup = {
+  id: 'model-voice-engine',
+  label: 'Voice engine',
+  help: 'The local voice engine (a Python process) that runs Qwen3-TTS / Kokoro / Coqui XTTS. The Node server can launch it for you automatically.',
+  risk: 'low',
+  collapsedByDefault: false,
+};
+const GROUP_SERVER_CONFIG: ConfigGroup = {
+  id: 'model-server-config',
+  label: 'Server configuration',
+  help: 'Non-secret overrides for what\'s in server/.env. Voice engine URL and Ollama settings take effect on the next request.',
+  risk: 'low',
+  collapsedByDefault: false,
+};
+const GROUP_MODELS_INSTALL: ConfigGroup = {
+  id: 'model-install',
+  label: 'Install / update analyzer (Ollama)',
+  help: 'Install the Ollama daemon and pull analyzer model weights without dropping to a terminal. The TTS / ASR models (Kokoro, Qwen, Coqui, Whisper) install from their rows in the inventory above.',
+  risk: 'low',
+  collapsedByDefault: false,
+};
 
 /* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS
    (static per release; the card renders rows without re-fetching the allowlist). */
@@ -180,11 +220,8 @@ export function ModelSettingsForm() {
   const analyzerSplitOn = !!(analyzerPhase0Model || analyzerPhase1Model);
 
   return (
-    <>
-      <FormCard
-        title="Defaults for new books"
-        hint="Used the first time you open a book that hasn't been touched yet. Per-book choices override these and persist."
-      >
+    <SettingsAccordion>
+      <SettingsSection group={GROUP_DEFAULTS} overriddenCount={0}>
         <FieldRow label="Analysis model">
           <select
             value={defaultAnalysisModel}
@@ -228,12 +265,9 @@ export function ModelSettingsForm() {
             ))}
           </select>
         </FieldRow>
-      </FormCard>
+      </SettingsSection>
 
-      <FormCard
-        title="Two-model analyzer split (advanced)"
-        hint="Optional. By default both analysis passes run on your default analysis model. Pick a model for EACH phase to split the work: Phase 0 (cast detection) and Phase 1 (sentence attribution) then run on different models concurrently, with Phase 1 starting a few chapters behind Phase 0 (the minimum chapter lag below). This spreads load across two free-tier rate-limit buckets — e.g. Gemma 4 31B (1,500/day) for cast detection and Gemini 3.1 Flash Lite (500/day) for attribution — and finishes sooner. Leave both blank for the single-model default. Server env vars (ANALYZER_PHASE{0,1}_MODEL / ANALYZER_PHASE1_MIN_LAG_CHAPTERS) still override for ops triage."
-      >
+      <SettingsSection group={GROUP_ANALYZER_SPLIT} overriddenCount={0}>
         <p
           data-testid="analyzer-split-status"
           className="rounded-xl border border-ink/10 bg-ink/2 px-3 py-2 text-xs text-ink/70"
@@ -330,12 +364,9 @@ export function ModelSettingsForm() {
             className="w-32 px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           />
         </FieldRow>
-      </FormCard>
+      </SettingsSection>
 
-      <FormCard
-        title="Voice engine"
-        hint="The local voice engine (a Python process) that runs Qwen3-TTS / Kokoro / Coqui XTTS. The Node server can launch it for you automatically."
-      >
+      <SettingsSection group={GROUP_VOICE_ENGINE} overriddenCount={0}>
         <FieldRow
           label="Auto-start with server"
           sublabel="When the analysis server starts (start-app.bat or `cd server && npm run dev`), automatically spawn the Python voice engine as a child process. Disable to run `npm run tts:sidecar` yourself, e.g. for debugging or to swap engines per-session. Takes effect on the next server restart."
@@ -450,12 +481,9 @@ export function ModelSettingsForm() {
             className="w-24 rounded-xl border border-ink/15 bg-white px-3 py-2 text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           />
         </FieldRow>
-      </FormCard>
+      </SettingsSection>
 
-      <FormCard
-        title="Server configuration"
-        hint="Non-secret overrides for what's in server/.env. Voice engine URL and Ollama settings take effect on the next request."
-      >
+      <SettingsSection group={GROUP_SERVER_CONFIG} overriddenCount={0}>
         <FieldRow label="Voice engine URL" sublabel="Local voice engine endpoint. Default: http://localhost:9000">
           <input
             type="text"
@@ -505,11 +533,13 @@ export function ModelSettingsForm() {
           />
         </FieldRow>
         <GeminiKeyField status={account.apiKeyStatus} onSave={(key) => dispatch(saveGeminiApiKey(key))} />
-      </FormCard>
+      </SettingsSection>
 
-      <ModelsCard />
+      <SettingsSection group={GROUP_MODELS_INSTALL} overriddenCount={0}>
+        <ModelsCardBody />
+      </SettingsSection>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 px-1">
         <PrimaryButton
           variant={dirty && !sidecarUrlInvalid ? 'dark' : 'ghost'}
           onClick={onSave}
@@ -522,15 +552,15 @@ export function ModelSettingsForm() {
           <span className="text-xs text-rose-700">{account.error}</span>
         )}
       </div>
-    </>
+    </SettingsAccordion>
   );
 }
 
-/* Plan 61 — Models card. In-app installers (Ollama + analyzer pulls, Coqui,
-   Qwen, Whisper). Moved verbatim from the Account view (fs-23). Direct-fetches
+/* Plan 61 — Models card body. In-app installers (Ollama + analyzer pulls).
+   Rendered inside a SettingsSection shell (GROUP_MODELS_INSTALL). Direct-fetches
    /api/ollama/health (bypassing the mock layer) so ModelPullStatus reflects
-   real on-disk state. */
-function ModelsCard() {
+   real on-disk state. The data-testid is preserved for existing tests. */
+function ModelsCardBody() {
   const [health, setHealth] = useState<
     import('./model-pull-status').OllamaHealthEnvelope | null
   >(null);
@@ -554,35 +584,23 @@ function ModelsCard() {
   }, []);
 
   return (
-    <section
-      data-testid="account-models-card"
-      className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card"
-    >
-      <h2 className="text-base font-semibold text-ink">Install / update analyzer (Ollama)</h2>
-      <p className="mt-1 text-xs text-ink/55">
-        Install the Ollama daemon and pull analyzer model weights without dropping to a terminal.
-        The TTS / ASR models (Kokoro, Qwen, Coqui, Whisper) install from their rows in the inventory
-        above.
-      </p>
-
-      <div className="mt-4 space-y-6">
-        <div>
-          <h3 className="text-sm font-medium text-ink">Local analyzer (Ollama)</h3>
-          <p className="mt-1 mb-3 text-xs text-ink/55">
-            Required when "Analyzer engine" above is set to Local.
-          </p>
-          <OllamaInstall />
-        </div>
-
-        <div>
-          <h3 className="text-sm font-medium text-ink">Analyzer models</h3>
-          <p className="mt-1 mb-3 text-xs text-ink/55">
-            Pulled tags appear in the Analysis-model dropdown above. The configured default is
-            highlighted.
-          </p>
-          <ModelPullStatus health={health} pullableModels={PULLABLE_MODELS} />
-        </div>
+    <div data-testid="account-models-card" className="space-y-6">
+      <div>
+        <h3 className="text-sm font-medium text-ink">Local analyzer (Ollama)</h3>
+        <p className="mt-1 mb-3 text-xs text-ink/55">
+          Required when "Analyzer engine" above is set to Local.
+        </p>
+        <OllamaInstall />
       </div>
-    </section>
+
+      <div>
+        <h3 className="text-sm font-medium text-ink">Analyzer models</h3>
+        <p className="mt-1 mb-3 text-xs text-ink/55">
+          Pulled tags appear in the Analysis-model dropdown above. The configured default is
+          highlighted.
+        </p>
+        <ModelPullStatus health={health} pullableModels={PULLABLE_MODELS} />
+      </div>
+    </div>
   );
 }

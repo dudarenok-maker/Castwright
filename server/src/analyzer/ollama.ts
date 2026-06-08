@@ -14,6 +14,7 @@ import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { gpuSemaphore } from '../gpu/semaphore.js';
 import { costForEngine } from '../tts/engine-vram-cost.js';
+import { configValue } from '../config/resolver.js';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
@@ -86,15 +87,24 @@ const UNREACHABLE_CODES = new Set([
 /* Default sampling temperature for /api/chat. Low enough that the model
    sticks close to the schema and the system prompt's structural rules, but
    not zero — pure-greedy decoding makes the validation-retry loop a no-op
-   because attempt 2 is just attempt 1 again. */
+   because attempt 2 is just attempt 1 again.
+   Read through the registry so the operator can tune without a rebuild;
+   kept as an exported const for any importer that references the symbol
+   directly (the value is evaluated at module load — use configValue for
+   a live read). */
 export const DEFAULT_TEMPERATURE = 0.2;
-/* Retry temperature used exclusively when the first attempt failed with
-   `invalid-json` (vs. structural schema-validation). The replay-and-correct
-   pattern doesn't help there: at low temperature the model regenerates
-   near-identical bytes from the same prompt. Bumping to 0.6 + dropping the
-   broken assistant turn from the message list gives the sampler real room
-   to escape the failure path — see the kind-aware branch in runStage. */
+/* Retry temperature — kept for compat; use resolveOllamaTemperature() /
+   resolveOllamaRetryTemperature() for live values. */
 export const INVALID_JSON_RETRY_TEMPERATURE = 0.6;
+
+/** Live-read first-attempt temperature (registry wins over the const). */
+export function resolveOllamaTemperature(): number {
+  return configValue<number>('analyzer.ollama.temperature');
+}
+/** Live-read invalid-JSON retry temperature (registry wins over the const). */
+export function resolveOllamaRetryTemperature(): number {
+  return configValue<number>('analyzer.ollama.retryTemperature');
+}
 
 /* Models we want Ollama to hold in VRAM between back-to-back analysis
    calls. Stage 1 → Stage 2 → next chapter happens on a tight loop, and
@@ -126,7 +136,9 @@ export function keepAliveFor(model: string): string | number {
    (model, num_ctx) as the cache key, so warming with default 2048 and
    then running with 16384 triggers a full model reload mid-request,
    which surfaces to the UI as "stream ended without a result event"
-   while Ollama re-paged the model. */
+   while Ollama re-paged the model.
+   Kept as static export for compat; call-sites inside this module use
+   resolveAnalyzerNumCtx() / resolveAnalyzerNumGpu() for live values. */
 export const ANALYZER_NUM_CTX = 16384;
 
 /* Force Ollama to load every layer of the model onto the GPU. 999 is
@@ -149,6 +161,15 @@ export const ANALYZER_NUM_CTX = 16384;
    the first /api/chat call triggers a silent reload mid-stream). */
 export const ANALYZER_NUM_GPU = 999;
 
+/** Live-read num_ctx (registry wins over the const). */
+export function resolveAnalyzerNumCtx(): number {
+  return configValue<number>('analyzer.ollama.numCtx');
+}
+/** Live-read num_gpu (registry wins over the const). */
+export function resolveAnalyzerNumGpu(): number {
+  return configValue<number>('analyzer.ollama.numGpu');
+}
+
 /* Optional explicit output-token cap (`num_predict`). Unset → -1 (Ollama's
    "predict until the context window fills"), which on a huge stage-2 chapter
    silently truncates the JSON once input + output brush num_ctx. The
@@ -156,10 +177,10 @@ export const ANALYZER_NUM_GPU = 999;
    loud AnalyzerTruncatedError (#528); this knob lets an operator cap output
    sooner. Shares the env name with Gemini's maxOutputTokens knob's sibling. */
 export function resolveNumPredict(): number {
-  const raw = process.env.ANALYZER_NUM_PREDICT;
-  if (!raw) return -1;
-  const n = Number(raw);
-  return Number.isFinite(n) && n !== 0 ? Math.floor(n) : -1;
+  // 0 is pathological (a zero-token cap truncates all output); preserve the
+  // historical behaviour where 0 is treated as "no explicit cap" (-1).
+  const n = configValue<number>('analyzer.ollama.numPredict');
+  return n === 0 ? -1 : n;
 }
 
 export class OllamaAnalyzer implements Analyzer {
@@ -261,7 +282,7 @@ export class OllamaAnalyzer implements Analyzer {
           { role: 'user', content: promptMd },
         ],
         responseFormat,
-        DEFAULT_TEMPERATURE,
+        resolveOllamaTemperature(),
         call.onChunk,
         call.signal,
       );
@@ -313,7 +334,7 @@ export class OllamaAnalyzer implements Analyzer {
             { role: 'assistant' as const, content: firstText },
             { role: 'user' as const, content: buildRetryMessage(firstAttempt) },
           ];
-      const retryTemperature = isInvalidJson ? INVALID_JSON_RETRY_TEMPERATURE : DEFAULT_TEMPERATURE;
+      const retryTemperature = isInvalidJson ? resolveOllamaRetryTemperature() : resolveOllamaTemperature();
 
       const secondText = await this.chat(
         retryMessages,
@@ -405,11 +426,11 @@ export class OllamaAnalyzer implements Analyzer {
            structured-output path stalled with no first byte. The 4B
            weights (~3 GB) leave enough headroom on an 8 GB box for the
            larger KV cache. */
-        num_ctx: ANALYZER_NUM_CTX,
+        num_ctx: resolveAnalyzerNumCtx(),
         /* Pin every layer to GPU — see ANALYZER_NUM_GPU above for the
            full rationale (was: Ollama silently offloading ~8% of
            llama3.1:8b layers to CPU under 16K-context pressure). */
-        num_gpu: ANALYZER_NUM_GPU,
+        num_gpu: resolveAnalyzerNumGpu(),
         /* Output-token cap — see resolveNumPredict above. -1 by default
            (predict until context fills); truncation is caught loudly via
            done_reason below regardless. */

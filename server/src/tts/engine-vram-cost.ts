@@ -26,10 +26,30 @@ export const ENGINE_VRAM_COST: Record<string, number> = {
   asr: 1,
 };
 
-/** VRAM token cost for an engine name (or 'analyzer'). Unknown names cost 1
-    so a new engine never silently grabs the whole budget. */
+import { configValue } from '../config/resolver.js';
+
+/** VRAM token cost for an engine name (or 'analyzer'). For the five engines
+    with registered gpu.weight.* knobs (kokoro/qwen/coqui/analyzer/asr) the
+    value is read live through the registry so env vars and app overrides take
+    effect. Gemini has no VRAM cost and stays at 0. Unknown engines fall back
+    to cost 1 so a new engine never silently grabs the whole budget. */
 export function costForEngine(engine: string): number {
-  return ENGINE_VRAM_COST[engine] ?? 1;
+  switch (engine) {
+    case 'kokoro':
+      return configValue<number>('gpu.weight.kokoro');
+    case 'qwen':
+      return configValue<number>('gpu.weight.qwen');
+    case 'coqui':
+      return configValue<number>('gpu.weight.coqui');
+    case 'analyzer':
+      return configValue<number>('gpu.weight.analyzer');
+    case 'asr':
+      return configValue<number>('gpu.weight.asr');
+    case 'gemini':
+      return 0; // no VRAM: always free
+    default:
+      return 1; // safe fallback
+  }
 }
 
 /* Suggested GPU_VRAM_BUDGET for an 8 GB GPU. NOTE: this is only the value to

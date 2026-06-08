@@ -6,6 +6,8 @@
    via a setInterval ticking onWaiting while the API call is in flight. */
 
 import { readFile, writeFile } from 'node:fs/promises';
+import { configValue } from '../config/resolver.js';
+import { readPrompt } from '../config/prompts.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI } from '@google/genai';
@@ -55,10 +57,7 @@ export function resolveStreamIdleTimeoutMs(): number {
    output well under it. Shared env name with Ollama's num_predict knob. */
 export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 export function resolveMaxOutputTokens(): number {
-  const raw = process.env.ANALYZER_MAX_OUTPUT_TOKENS;
-  if (!raw) return DEFAULT_MAX_OUTPUT_TOKENS;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_MAX_OUTPUT_TOKENS;
+  return configValue<number>('analyzer.gemini.maxOutputTokens');
 }
 
 /* Inter-attempt backoffs for the retry loop in generateWithLimiter.
@@ -95,21 +94,43 @@ export class GeminiStreamIdleError extends Error {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = resolve(__dirname, '..', '..', '..', 'skills');
 const SKILL_FILES = {
-  /* Legacy whole-book stage 1 — kept for any caller still wiring it. */
+  /* Legacy whole-book stage 1 — kept for any caller still wiring it.
+     Not in the prompt registry so it reads directly from disk. */
   whole_book_stage1: 'audiobook-character-analysis.md',
-  /* Phase 0a — per-chapter cast detection (the current default). */
+  /* Phase 0a — per-chapter cast detection (the current default).
+     Routes through the prompt-fork loader (prompt.castDetection). */
   per_chapter_stage1: 'audiobook-character-detection-per-chapter.md',
-  /* Phase 1 — per-chapter sentence attribution. */
+  /* Phase 1 — per-chapter sentence attribution.
+     Routes through the prompt-fork loader (prompt.sentenceAttribution). */
   per_chapter_stage2: 'audiobook-sentence-attribution.md',
-  /* fs-33 — emotion-only backfill pass (does NOT re-attribute). */
+  /* fs-33 — emotion-only backfill pass (does NOT re-attribute).
+     Routes through the prompt-fork loader (prompt.emotionAnnotation). */
   emotion_annotation: 'audiobook-emotion-annotation.md',
 } as const;
 export type SkillName = keyof typeof SKILL_FILES;
 
+/* Mapping from skill name to prompt-registry id, for the three skills that
+   support user-forkable prompts. The legacy whole_book_stage1 isn't in the
+   registry and still reads directly from disk. */
+const SKILL_TO_PROMPT_ID: Partial<Record<SkillName, string>> = {
+  per_chapter_stage1: 'prompt.castDetection',
+  per_chapter_stage2: 'prompt.sentenceAttribution',
+  emotion_annotation: 'prompt.emotionAnnotation',
+};
+
 /* Read the skill file fresh on every request so prompt iteration doesn't
    require a server restart. The files are small (~3-5 KB) and read once
-   per analysis — negligible cost. */
+   per analysis — negligible cost.
+
+   For the three registry-backed skills, resolves through readPrompt() so a
+   user-forked copy in ~/.castwright/prompts/<id>.md takes effect on the next
+   analysis run without a restart (apply:'live'). The legacy whole_book_stage1
+   still reads from disk directly. */
 export async function loadSkill(skill: SkillName): Promise<string> {
+  const promptId = SKILL_TO_PROMPT_ID[skill];
+  if (promptId) {
+    return (await readPrompt(promptId)).text;
+  }
   return readFile(resolve(SKILLS_DIR, SKILL_FILES[skill]), 'utf8');
 }
 
