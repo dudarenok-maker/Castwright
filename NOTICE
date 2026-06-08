@@ -12,6 +12,10 @@ downloaded on demand from their official source and are never bundled.
 Rule of thumb: the installer may fetch weights from their official home; the
 release archive bundles nothing whose licence is unverified.
 
+Brand & trademarks: the Castwright name, marks, logos, and identity assets are
+all rights reserved (Copyright © 2026 Mikhail Dudarenok) and are NOT distributed
+in this repository. See docs/legal/brand-and-trademarks.md.
+
 ============================================================
 Bundled model weights
 ============================================================
