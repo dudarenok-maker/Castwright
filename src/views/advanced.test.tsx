@@ -146,8 +146,10 @@ beforeEach(() => {
 describe('AdvancedView — group headers', () => {
   it('renders the group section headings after fetchConfig hydrates', async () => {
     renderView();
-    expect(await screen.findByText('Text-to-speech')).toBeInTheDocument();
-    expect(screen.getByText('Analyzer prompts')).toBeInTheDocument();
+    /* findAllByText — nav rail + section header both carry the label text;
+       at least one must be in the DOM. */
+    expect((await screen.findAllByText('Text-to-speech')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Analyzer prompts').length).toBeGreaterThan(0);
   });
 
   it('renders a knob label inside the tts section', async () => {
@@ -222,7 +224,8 @@ describe('AdvancedView — restart banner', () => {
 
   it('does NOT show the restart banner when no restart-sidecar knob is overridden', async () => {
     renderView();
-    await screen.findByText('Text-to-speech'); // hydration complete
+    /* Wait for hydration — findAllByText because nav rail also has the label. */
+    await screen.findAllByText('Text-to-speech');
     expect(screen.queryByText(/Voice-engine setting changed/i)).not.toBeInTheDocument();
   });
 });

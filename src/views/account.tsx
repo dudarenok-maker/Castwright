@@ -206,7 +206,17 @@ export function AccountView() {
       <div className="space-y-6">
         <UpgradeCard />
 
-        <SettingsAccordion>
+        <SettingsAccordion
+          sections={[
+            { id: 'acct-profile', label: 'Profile', risk: 'low' },
+            { id: 'acct-cast-analysis', label: 'Cast analysis', risk: 'low' },
+            { id: 'acct-covers', label: 'Covers', risk: 'low' },
+            { id: 'acct-appearance', label: 'Appearance', risk: 'low' },
+            { id: 'acct-backups', label: 'Backups', risk: 'low' },
+            { id: 'acct-workspace', label: 'Workspace', risk: 'low' },
+            { id: 'acct-device-local', label: 'Device-local', risk: 'low' },
+          ]}
+        >
           <SettingsSection
             group={acctGroup('acct-profile', 'Profile', 'How you appear in the top bar and the change log.')}
             overriddenCount={0}
