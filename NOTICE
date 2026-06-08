@@ -47,6 +47,7 @@ Coqui XTTS v2 (text-to-speech; zero-shot voice cloning)
 Whisper / faster-whisper (optional speech-to-text quality check)
   Licence:  MIT (OpenAI Whisper models) — downloaded on demand under their
             upstream licence.
+  Status:   Download-on-demand; not bundled.
   Source:   https://github.com/SYSTRAN/faster-whisper
 
 ============================================================

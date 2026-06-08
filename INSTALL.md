@@ -18,7 +18,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
   - Windows: `winget install Gyan.FFmpeg`
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
-- **~3 GB free disk** for the Kokoro TTS weights
+- **~3 GB free disk** (Kokoro TTS weights ~1.1 GB, plus the Node modules and Python virtual environment)
 - **NVIDIA GPU + recent drivers** (optional but strongly recommended — Kokoro on CPU is ~10× slower than on a modest GPU)
 
 > **Note for Linux deployers**: validated on Ubuntu 22.04+. The same scripts should work on any glibc Linux with `bash`, `curl`, and the prereqs above. Snap-installed ffmpeg sometimes ends up at `/snap/bin/ffmpeg` instead of `/usr/bin/ffmpeg`; if `which ffmpeg` returns empty after `apt install`, prepend `/snap/bin` to your PATH.
@@ -88,7 +88,7 @@ Browser opens `http://localhost:8080`.
 
 To stop: `npm run stop:prod`.
 
-> **Gatekeeper note**: macOS may prompt that downloaded binaries (`python`, `ffmpeg`, sidecar `.dylib`s) are from an "unidentified developer." Allowing them once via System Settings → Privacy & Security is expected; the v1 release zip is not codesigned.
+> **Gatekeeper note**: macOS may prompt that downloaded binaries (`python`, `ffmpeg`, sidecar `.dylib`s) are from an "unidentified developer." Allowing them once via System Settings → Privacy & Security is expected; this release zip is not codesigned.
 
 ---
 
@@ -191,7 +191,7 @@ steps above). All knobs have safe defaults — set only what you need.
 
 The install bundle ships Kokoro weights for TTS only — the analyzer needs either a local Ollama daemon or a Gemini API key. The server-side default is `ANALYZER=local` (Ollama); if no Ollama daemon is reachable, the analyzer auto-falls back to the Gemini free tier when a key is configured.
 
-**Option A — Ollama (private, fully on-device).** Since v1.3.0 the Account → Models card in the running app installs Ollama and pulls models without leaving the UI:
+**Option A — Ollama (private, fully on-device).** The Account → Models card in the running app installs Ollama and pulls models without leaving the UI:
 
 1. Start the app (`npm run start:prod`), open **Account → Models**.
 2. Click **Install Ollama** (platform-aware bootstrap; Windows / macOS / Linux all covered).
@@ -212,7 +212,7 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 
 ## Switching TTS to Qwen3-TTS
 
-Qwen3-TTS designs a unique voice per character from the cast persona instead of picking from a preset catalogue — only two English Qwen speakers exist upstream, so the app caches each designed voice's embedding and reuses it across the book and series for vocal consistency. This is the v1.5.0 headline TTS engine and **becomes the default for new books once it's installed** (until then, and on any box without it, books render in Kokoro). It is **NOT** auto-downloaded with the Kokoro / Coqui paths — it needs a one-time install of the Python package + model weights (~5 GB).
+Qwen3-TTS designs a unique voice per character from the cast persona instead of picking from a preset catalogue — only two English Qwen speakers exist upstream, so the app caches each designed voice's embedding and reuses it across the book and series for vocal consistency. It **becomes the default for new books once it's installed** (until then, and on any box without it, books render in Kokoro). It is **NOT** auto-downloaded with the Kokoro / Coqui paths — it needs a one-time install of the Python package + model weights (~2.5 GB).
 
 **Recommended — install in-app (no terminal).** Start the app, open **Account → Models**, and click **Install Qwen3-TTS** on the Qwen card. It downloads the Base + VoiceDesign models in the background with live progress; when it finishes, new books default to Qwen. The CLI below stays available for scripted / offline / CI setups and is equivalent.
 
@@ -313,7 +313,7 @@ this machinery, so there is nothing to convert.
 <install>/
   launch.mjs            <- start the app from here (shortcut / start-app.bat points at it)
   .current-version      <- e.g. "1.7.0"
-  releases/v1.7.0/      <- the code (one extracted zip)
+  releases/vX.Y.Z/      <- the code (one extracted zip per release)
   workspace/            <- your library (books, voices)
   venv/  models/kokoro/ <- shared Python venv + Kokoro weights
   logs/  .run/
