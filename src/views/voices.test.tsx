@@ -1982,4 +1982,16 @@ describe('fe-34 — variant filter toggle', () => {
     const variantGroup = screen.getByRole('group', { name: 'Filter by emotion variants' });
     expect(within(variantGroup).getByRole('button', { name: 'All' })).toBeInTheDocument();
   });
+
+  it('shows a per-card "Needs" badge on a designed voice missing a variant', async () => {
+    renderToggleView();
+    await act(async () => {}); // flush the getBaseVoices mount effect
+    // Default 'all' filter shows both designed cards. Only Fury (no variants,
+    // speaks an "angry" quote) is missing one → exactly one Needs badge.
+    const needs = screen.getAllByTestId('needs-variants-badge');
+    expect(needs).toHaveLength(1);
+    expect(needs[0]).toHaveTextContent('Needs · 1');
+    // Calm is fully covered → carries the Variants badge, never a Needs badge.
+    expect(screen.getByTestId('variants-badge')).toHaveTextContent('Variants');
+  });
 });
