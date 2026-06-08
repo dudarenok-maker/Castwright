@@ -1,6 +1,6 @@
 ---
-status: draft
-shipped: null
+status: stable
+shipped: 2026-06-06
 owner: null
 ---
 
@@ -103,5 +103,4 @@ detail, so only it re-downloads.
 
 ## Ship notes
 
-(Filled on ship: date + commit SHA; flip `status:` to `stable` and archive once the
-`app-3` acceptance passes.)
+Shipped **2026-06-06** via PR [#570](https://github.com/dudarenok-maker/AudioBook-Generator/issues/570), closing `srv-32` (#538); per-chapter `durationSec` (from the segments file) followed **2026-06-07** via PR [#601](https://github.com/dudarenok-maker/AudioBook-Generator/issues/601). `GET /api/library/sync-manifest` — two-level, gzip'd, `?since` delta over a `scan.ts:collectBooks` walk; index carries audio-aware `updatedAt` + the full `activeBookIds`, detail keys chapters off the srv-35 `uuid` with a finalize-converged fingerprint + actual `urlSuffix`/`durationSec`/`lufs` + `activeChapterUuids`. Bumped `GET /api/info` `schemas.syncManifest` for compat-gating. Second MVP server prereq for the Android companion (plan 188); feeds `app-3` delta sync (shipped) and `fs-15`.
