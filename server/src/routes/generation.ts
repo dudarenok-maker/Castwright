@@ -79,7 +79,6 @@ import {
   resolveAsrSampleEvery,
   buildCastNameAllowlist,
 } from '../tts/segment-asr-qa.js';
-import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 import type { FailureCode } from './failure-taxonomy.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
@@ -1120,10 +1119,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          encode/disk happens after and is excluded) — drives the RTF rollup +
          the dev top-bar throughput pill. */
       const synthStartMs = Date.now();
-      /* srv-17c recovery loop (see MAX_RECYCLE_RECOVERIES). Wraps ONLY the synth
-         call: on a transient sidecar-down (recycle/respawn/crash, or a drain-503)
-         we wait out the respawn on the readiness gate and re-render. AbortError
-         and non-transient / poison errors re-throw to the outer catch unchanged. */
+      /* srv-17c recovery is now IN-LOOP (C1, Wave 3): synthesiseChapter recovers
+         a mid-render recycle from the failed synth site via the `onRecoverRecycle`
+         hook below (riding out the respawn on the readiness gate) WITHOUT
+         re-rendering completed groups. See the hook + MAX_RECYCLE_RECOVERIES. */
       /* srv-31 — surface the ASR content-QA pass as a "verifying" phase. Fired
          per sampled group (onProgress) AND per drift re-record (onRerecord);
          both bump the no-progress watchdog and broadcast a chapter_verifying
@@ -1140,10 +1139,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           totalLines,
         });
       };
-      let result: Awaited<ReturnType<typeof synthesiseChapter>>;
-      for (let recovery = 0; ; recovery += 1) {
-        try {
-          result = await synthesiseChapter({
+      const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
         provider,
@@ -1270,45 +1266,35 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
               },
             }
           : {}),
-          });
-          break;
-        } catch (synthErr) {
-          /* Recoverable only while the run is live and the budget remains. Two
-             recoverable shapes:
-               1. a transient sidecar-down (connection drop on recycle/crash, or
-                  a drain-503), and
-               2. a ChapterSynthTimeoutError — a synth that HUNG past the per-call
-                  ceiling. Under a host-RAM recycle the respawned sidecar can be
-                  HTTP-up but still loading the model in-band, so the in-flight
-                  call stalls to the timeout instead of failing fast. That timeout
-                  is non-transient by construction, so without this it bubbles to
-                  the outer catch and stops the run (2026-05-31 KOTLC CH24). Ride
-                  it out the same way: wait on the readiness gate, then re-render
-                  against a sidecar that is actually ready.
-             AbortError, poison, and every other fatal classifier error re-throw
-             to the outer catch unchanged. */
-          const isRecycleTimeout =
-            (synthErr as { name?: string })?.name === 'ChapterSynthTimeoutError';
-          if (
-            (synthErr as { name?: string })?.name === 'AbortError' ||
-            (!isTransient(synthErr) && !isRecycleTimeout) ||
-            chapterSignal.aborted ||
-            recovery >= MAX_RECYCLE_RECOVERIES
-          ) {
-            throw synthErr;
-          }
+        /* C1 (srv-17c, Wave 3) — recover in-loop (preserves completed groups)
+           instead of the old outer for-loop that re-rendered the WHOLE chapter
+           on a mid-render recycle (the RTF collapse). synthesiseChapter now calls
+           this hook from the failed synth site, waits out the respawn on the
+           readiness gate, and re-attempts ONLY that work item; every already-
+           filled `results[]` slot survives because the function never restarts.
+           Recoverable = a transient sidecar-down (recycle/respawn/crash drop, or
+           a drain-503 — both `transient` once withTtsRetry's short budget
+           exhausts) OR a ChapterSynthTimeoutError (a synth that HUNG because the
+           respawned sidecar was still loading the model in-band — non-transient
+           by construction, classified recoverable inside withRecycleRecovery).
+           MAX_RECYCLE_RECOVERIES is the shared per-chapter budget; on exhaustion
+           synthesiseChapter throws RecycleStormError, which the outer catch maps
+           to chapter_failed (Task 3 names it). AbortError, poison, and every
+           other fatal classifier error still re-throw unchanged. */
+        maxRecycleRecoveries: MAX_RECYCLE_RECOVERIES,
+        onRecoverRecycle: async ({ engine: recEngine, attempt }) => {
           console.warn(
-            `[generation] chapter ${chapter.id} (${chapter.slug}): ${
-              isRecycleTimeout
-                ? 'synth stalled (likely a mid-render recycle)'
-                : 'sidecar unavailable mid-synth (recycle/respawn)'
-            } — riding out the respawn, re-attempt ${recovery + 1}/${MAX_RECYCLE_RECOVERIES}.`,
+            `[generation] chapter ${chapter.id} (${chapter.slug}): sidecar unavailable ` +
+              `mid-synth (recycle/respawn) — riding out the respawn, re-attempt ` +
+              `${attempt}/${MAX_RECYCLE_RECOVERIES} (preserving completed groups).`,
           );
           /* Polls through the supervisor respawn (srv-17b, 120 s budget); throws
-             AbortError if the run is paused/displaced mid-wait. */
-          await ensureSidecarEngineReady(engine, chapterSignal);
-        }
-      }
+             AbortError if the run is paused/displaced mid-wait → propagates out
+             of synthesiseChapter as a clean stop (the outer catch returns on
+             AbortError). Task 2 (C2) wraps this in a recovering tick + heartbeat. */
+          await ensureSidecarEngineReady(recEngine, chapterSignal);
+        },
+      });
 
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
