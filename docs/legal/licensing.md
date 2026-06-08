@@ -2,8 +2,8 @@
 
 Maintainer-facing record of Castwright's licensing model, the bundled-model
 audit, and the checklist that must clear before the GitHub repository is made
-public. Companion to
-[`brand/monetisation-free-vs-gated-2026-06-08.md`](../brand/monetisation-free-vs-gated-2026-06-08.md)
+public. Companion to the local-only planning brief
+`brand/monetisation-free-vs-gated-2026-06-08.md` (kept out of the public repo),
 §5 and §7.
 
 ## The model
@@ -12,13 +12,14 @@ public. Companion to
   (**FSL-1.1-ALv2**, a.k.a. FSL-1.1-Apache-2.0). Source-available, *not* OSI
   open source: any use is permitted except a Competing Use, and each release's
   code converts to plain Apache-2.0 two years after it is made available. File:
-  [`/LICENSE`](../LICENSE).
-- **Brand** — the `brand/` assets are all rights reserved
-  ([`brand/LICENSE`](../brand/LICENSE)). A code licence is not a licence to the
-  identity.
+  [`/LICENSE`](../../LICENSE).
+- **Brand** — the Castwright name and brand assets are all rights reserved and
+  kept out of this repository (see
+  [`brand-and-trademarks.md`](brand-and-trademarks.md)). A code licence is not a
+  licence to the identity.
 - **Engine weights** — bundled only if the upstream licence permits commercial
   redistribution; non-commercial weights are download-on-demand from their
-  official home and never bundled ([`/NOTICE`](../NOTICE)).
+  official home and never bundled ([`/NOTICE`](../../NOTICE)).
 - **Paid gate (future)** — an Ed25519-signed offline licence key for the "Cast
   Pass", no phone-home (monetisation §7.2). Not built; needs an `fs-` plan.
 
@@ -44,7 +45,7 @@ release archive bundles nothing whose licence is unverified.
 **Done in the docs/licensing pass:**
 
 - [x] `LICENSE` (FSL-1.1-ALv2)
-- [x] `brand/LICENSE` (all rights reserved + nominative fair use)
+- [x] `docs/legal/brand-and-trademarks.md` (brand + trademark carve-out; assets kept out of the repo)
 - [x] `NOTICE` (bundled-model attributions + audit summary)
 - [x] README license statement (source-available, brand carve-out, model notice)
 - [x] CONTRIBUTING contribution-licensing terms (DCO / CLA / PRs-by-invitation)
@@ -64,7 +65,9 @@ release archive bundles nothing whose licence is unverified.
     have every clone re-clone. Do **not** run casually.
 - [ ] **cla-assistant bot** wired (GitHub App) so external PRs collect the CLA.
 - [ ] **Branch protection on `main`** (available once the repo is public / Pro):
-      require the PR-title check and a review.
+      require the PR-title check and a review. Also update the now-stale
+      `CONTRIBUTING.md` heading "Server-side enforcement (private repo on Free
+      plan)".
 - [ ] **`gh repo edit --visibility public`** and confirm the repo name is
       `Castwright`.
 - [ ] **Licence-key seam (Cast Pass)** — needs an `fs-` plan (server settings +
@@ -74,14 +77,14 @@ release archive bundles nothing whose licence is unverified.
 ## Trade mark
 
 Register "Castwright" as a trade mark (AU via IP Australia first, ~AU$250/class
-self-filed; US later) — tracked as **ops-12**. Strengthens the `brand/`
-all-rights-reserved carve-out against a confusing fork. Not executed here.
+self-filed; US later) — tracked as **ops-12**. Strengthens the brand & trademark
+carve-out against a confusing fork. Not executed here.
 
 ## Sources
 
 - FSL template: <https://github.com/getsentry/fsl.software> (`FSL-1.1-ALv2.template.md`).
 - Engine licences: the Hugging Face model cards linked in the audit table,
   verified 8 June 2026.
-- Decisions & rationale:
-  [`brand/monetisation-free-vs-gated-2026-06-08.md`](../brand/monetisation-free-vs-gated-2026-06-08.md)
+- Decisions & rationale: the local-only planning brief
+  `brand/monetisation-free-vs-gated-2026-06-08.md` (kept out of the public repo),
   §5 (action items) and §7 (distribution & licensing).

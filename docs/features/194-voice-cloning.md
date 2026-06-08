@@ -11,7 +11,7 @@ owner: null
 > URL surface: `#/voices` (cloned-voice section + capture flow), cast profile drawer
 > OpenAPI ops: new — voice-sample capture/upload + clone-design endpoints (TBD)
 
-Pays off the brand promise — _"even in your own voice"_ (`docs/project-narrative.md`,
+Pays off the brand promise — _"even in your own voice"_ (`brand/project-narrative.md`,
 [#622](https://github.com/dudarenok-maker/AudioBook-Generator/issues/622)). A parent reads a
 bedtime story in their own voice while away; a kid hears themselves as the hero.
 
