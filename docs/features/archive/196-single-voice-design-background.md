@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-07
 owner: null
 ---
 
@@ -89,7 +89,7 @@ Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev` or `npm run test:e2e`).
 
 ## Ship notes
 
-(Filled in when status flips to `stable`. Append: shipped date, commit SHA, any behaviour delta vs. the original spec. Once filled, the plan becomes eligible for archive — move to `docs/features/archive/` in the same PR as the ship.)
+Shipped **2026-06-07** via PR [#639](https://github.com/dudarenok-maker/AudioBook-Generator/issues/639) (commit `0906207`). Single-character Qwen voice design became a detached, SSE-streamed, reattachable background job reusing the bulk `castDesign` slice/middleware/pill (`kind: 'bulk' | 'single'`); branded in-drawer `DesignProgress` (ragged-waveform mark + soft-fill ETA + honest `designing`/`rendering` phases); first designs auto-persist + toast, re-designs hold a `-preview` and enter `ready-to-compare`; symmetric single↔bulk 409 via the shared `designBusy` registry; cold-boot resubscribe. Behaviour delta vs. spec: descoped first-design auto-play (user clicks Play). Live-GPU acceptance owed.
 
 Shipped: {{date}}
 SHA: {{sha}}
