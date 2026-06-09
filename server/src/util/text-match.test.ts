@@ -97,6 +97,39 @@ describe('matchQuoteInSource — three-tier verifier', () => {
   it('returns null for empty normalised input', () => {
     expect(matchQuoteInSource('', source)).toBeNull();
   });
+
+  it('matches a quote stitched across an INTERRUPTING mid-sentence dialogue tag', () => {
+    /* Coalfall regression (2026-06-09): source interrupts a single
+       sentence with the tag — `"If I douse the fire," Oduvan said, "I
+       lose the weld..."`. The model returns the two halves joined by the
+       comma the tag replaced. There is only ONE sentence-final period, so
+       the sentence-split `segments` tier yields a single fragment and
+       cannot fire; the clause split (on the interrupting comma) rescues
+       it. Both halves are genuine contiguous runs in the source. */
+    const interrupted = normaliseForMatch(
+      '"If I douse the fire," Oduvan said, "I lose the weld I have been nursing since noon."',
+    );
+    expect(
+      matchQuoteInSource(
+        normaliseForMatch('If I douse the fire, I lose the weld I have been nursing since noon.'),
+        interrupted,
+      ),
+    ).toBe('segments');
+  });
+
+  it('does NOT clause-rescue when an interrupting-stitch half is fabricated', () => {
+    /* Guard the looser clause split: the first half is real, the second is
+       invented and never appears in the source, so the quote stays dropped. */
+    const interrupted = normaliseForMatch(
+      '"If I douse the fire," Oduvan said, "I lose the weld I have been nursing since noon."',
+    );
+    expect(
+      matchQuoteInSource(
+        normaliseForMatch('If I douse the fire, I will summon the town guard at once.'),
+        interrupted,
+      ),
+    ).toBeNull();
+  });
 });
 
 describe('matchQuoteInSource — the Hollow Tide ledger regression', () => {

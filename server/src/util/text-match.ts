@@ -36,6 +36,23 @@ export function splitSentenceSegments(s: string, minLen = 8): string[] {
     .filter((seg) => seg.length >= minLen);
 }
 
+/** Split on CLAUSE punctuation — comma / semicolon / colon as well as
+    sentence-final `.!?` — followed by whitespace. Used as a looser fallback
+    for the "interrupting dialogue tag" stitch: source writes
+    `"If I douse the fire," Oduvan said, "I lose the weld..."` and the model
+    returns the two halves rejoined by the comma the tag replaced, all within
+    a SINGLE sentence — so splitSentenceSegments yields one fragment and can't
+    fire. `minLen` is higher (default 12) than the sentence splitter because
+    comma-delimited clauses are shorter and more common, so the floor guards
+    against two unrelated short fragments coincidentally co-occurring. */
+export function splitClauseSegments(s: string, minLen = 12): string[] {
+  return s
+    .split(/[,;:.!?]+\s+/)
+    .map(stripTerminalSentencePunct)
+    .map((seg) => seg.trim())
+    .filter((seg) => seg.length >= minLen);
+}
+
 export type QuoteMatchTier = 'verbatim' | 'terminal_punct' | 'segments';
 
 /** Three-tier substring match for evidence quotes against an already-
@@ -66,6 +83,15 @@ export function matchQuoteInSource(norm: string, normalisedSource: string): Quot
 
   const segments = splitSentenceSegments(norm);
   if (segments.length >= 2 && segments.every((seg) => normalisedSource.includes(seg))) {
+    return 'segments';
+  }
+
+  /* Interrupting-tag fallback — split on clause punctuation so a stitch that
+     happened MID-sentence (the dialogue tag interrupted one sentence rather
+     than sitting between two) can still verify when every clause is a real
+     contiguous run in the source. */
+  const clauses = splitClauseSegments(norm);
+  if (clauses.length >= 2 && clauses.every((seg) => normalisedSource.includes(seg))) {
     return 'segments';
   }
 
