@@ -795,6 +795,23 @@ samp {
 .design-fill { height: 6px; border-radius: 4px; overflow: hidden; background: color-mix(in srgb, var(--magenta) 18%, transparent); }
 .design-fill i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--magenta); animation: design-fill 15s cubic-bezier(.15,.75,.2,1) forwards; }
 @keyframes design-fill { 0% { width: 4% } 65% { width: 78% } 100% { width: 92% } }
+/* Slow-design state: once a design passes the fast window the eased fill would
+   sit frozen near 92% and read as "stuck". Overlay a continuously-moving
+   indeterminate shimmer so it reads "still working, no ETA" rather than
+   "stuck at 92%". */
+.design-fill--indeterminate i {
+  transition: none;
+  animation: design-indeterminate 1.2s ease-in-out infinite;
+  width: 40%;
+}
+@keyframes design-indeterminate {
+  0% {
+    margin-left: -42%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .design-wave i, .design-fill i { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
