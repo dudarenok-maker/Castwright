@@ -42,7 +42,19 @@ class _QrScanScreenState extends State<QrScanScreen> {
       body: ReaderWidget(
         onScan: _onScan,
         codeFormat: Format.qrCode,
+        // Decode robustness for real-world capture (a phone pointed at the QR on
+        // a desktop screen). The ReaderWidget defaults are tuned for big, clean
+        // codes filling the frame: tryHarder is OFF, only the centre 50% is
+        // decoded (cropPercent 0.5), and the camera caps at 720p. The pairing QR
+        // is dense ({url, token, caFingerprint}), so those defaults left it
+        // unreadable while the native camera app decoded the same code off the
+        // same screen. Match that: search the WHOLE frame at 1080p with the
+        // thorough binarizer/locator. tryRotate stays on (its default).
+        tryHarder: true,
         tryInverted: true,
+        resolution: ResolutionPreset.veryHigh,
+        cropPercent: 1.0,
+        showScannerOverlay: false,
         showToggleCamera: false,
         // Lets the user decode a saved screenshot of the QR as a fallback.
         showGallery: true,
