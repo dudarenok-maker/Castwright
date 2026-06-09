@@ -106,7 +106,7 @@ export function EmotionVariantDesigner({
   if (!baseDesigned) {
     return (
       <p data-testid="variant-gate-hint" className="text-xs text-ink/50 mt-2">
-        Design the main voice first to add emotion variants.
+        Emotion variants become available once this character has a designed base voice.
       </p>
     );
   }
