@@ -32,9 +32,24 @@ import {
   scanLibraryCharacters,
   type LibraryCharacterRecord,
 } from '../workspace/library-cast-scan.js';
+import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { jaccard, nameTokens, normaliseForMatch } from '../util/text-match.js';
 
 export const voiceMatchRouter = Router();
+
+/* Generic role-names exist in every book under the same deterministic id
+   (the narrator keeps voiceId/id 'narrator' across the whole library), so a
+   library-wide exact-name match fires against EVERY book's narrator — a
+   Skulduggery narrator claiming a Keeper narrator, with the tie broken by
+   arbitrary scan order. Unlike a real recurring character, a narrator is only
+   legitimately reused WITHIN its series, where the analysis-time linker
+   (series-reuse-link.ts) already handles continuity. So generic-role
+   candidates are scoped to the current book's series; everything else keeps
+   matching library-wide (designed-voice reuse across books is intentional). */
+const GENERIC_ROLE_IDS = new Set(['narrator']);
+function isGenericRole(c: CharacterMatchInput): boolean {
+  return GENERIC_ROLE_IDS.has(c.id) || normaliseForMatch(c.name) === 'narrator';
+}
 
 export interface CharacterMatchInput {
   id: string;
@@ -282,9 +297,21 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
       voices.push(v);
     }
 
+    /* Same-series bookIds for generic-role scoping. Resolves the current
+       book's (author, series) and lists its confirmed series-mates; empty
+       when the book is standalone, earliest, or not yet on disk — in which
+       case a narrator legitimately matches nothing. */
+    const seriesMateBookIds = new Set(
+      (await scanSeriesCharactersForBookId(bookId)).map((r) => r.bookId),
+    );
+
     const matches = characters.map((c) => {
+      const generic = isGenericRole(c);
       const scored: Candidate[] = [];
       for (const v of voices) {
+        /* A narrator only reuses within its own series; a real character
+           keeps matching library-wide. */
+        if (generic && !seriesMateBookIds.has(v.bookId)) continue;
         const cand = scoreOne(c, v);
         if (cand) scored.push(cand);
       }
