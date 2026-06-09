@@ -84,7 +84,7 @@ and pins the CA itself — **no OS root-cert install is needed on the phone**
 
 The discipline throughout: a **pure, unit-tested brain over injectable IO**, with
 native plugins (just_audio / audio_service / drift / connectivity / secure
-storage / mobile_scanner) at the thin, device-tested edge.
+storage / flutter_zxing) at the thin, device-tested edge.
 
 ## CI
 
