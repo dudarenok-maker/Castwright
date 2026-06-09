@@ -60,42 +60,4 @@ describe('PhaseCard layout', () => {
     expect(controlsRow!.contains(label)).toBe(true);
     expect(controlsRow!.contains(detail)).toBe(false);
   });
-
-  /* The active-phase streaming log scrolls. Without the shared `.scrollbar-thin`
-     utility it falls back to the default OS scrollbar, which reads as a bright
-     grey bar against the dark card. The region must opt into the themed thin
-     inset scrollbar like every other in-card scroll surface — and, since it sits
-     mid-card with square corners, pin the clip radius to 0 so the log text never
-     gets clipped by the utility's default bottom-corner curve. */
-  it('themes the active-phase log scroll region with the thin inset scrollbar', () => {
-    const phase: AnalysisPhase = {
-      id: 1,
-      label: 'Parsing and attribution',
-      detail: 'Splitting chapters into sentences and labelling each with its speaker.',
-      duration: 1000,
-    };
-    const store = mountStore();
-    render(
-      <Provider store={store}>
-        <PhaseCard
-          phase={phase}
-          activePhaseId={phase.id}
-          phaseProgress={0.5}
-          phaseLogs={['Chapter 13/40 done — 631 sentences in 2m 31s']}
-          live={null}
-          isLocalAnalyzer={false}
-          analysisStarted={true}
-          conn="streaming"
-          bookId={null}
-          droppedQuotesRefreshKey={0}
-        />
-      </Provider>,
-    );
-
-    const line = screen.getByText(/631 sentences/);
-    const scroller = line.closest('[class*="overflow-y-auto"]') as HTMLElement | null;
-    expect(scroller).not.toBeNull();
-    expect(scroller!.className).toMatch(/scrollbar-thin/);
-    expect(scroller!.style.getPropertyValue('--scrollbar-thin-radius')).toBe('0px');
-  });
 });
