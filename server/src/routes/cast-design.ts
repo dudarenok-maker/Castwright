@@ -43,8 +43,22 @@ import { applyOverrideToCastFiles } from './voices.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
+import { ensureSidecarEngineReady } from '../tts/ensure-sidecar-loaded.js';
 
 export const castDesignRouter = Router();
+
+/* A back-to-back bulk run is statistically guaranteed to eventually hit a
+   sidecar recycle (the committed/VRAM ceiling self-exit + supervisor respawn).
+   When that lands mid-design the in-flight call fails with an "unreachable"-class
+   error; rather than halt the whole job (the old behaviour — every remaining
+   character would then fail identically), we wait for the respawn and RETRY the
+   same character. Bounded so a genuinely-dead sidecar still stops the run
+   instead of grinding forever. */
+export const MAX_RECYCLE_RIDEOUTS = 2;
+
+/* The error-message shapes that mean "the sidecar is down / recycling" (vs. a
+   per-character synthesis failure that should be recorded and skipped past). */
+const SIDECAR_DOWN_RE = /unreachable|did not complete within|stopped responding/i;
 
 interface CastFile {
   characters: CastCharacter[];
@@ -151,7 +165,9 @@ async function runDesignJob(
     const heartbeat = setInterval(() => broadcast(job, { type: 'heartbeat', characterId }), HEARTBEAT_MS);
     try {
       /* Persona fallback (Gemini) when the character has none, persisted
-         minimal-patch so a concurrent edit to another character survives. */
+         minimal-patch so a concurrent edit to another character survives.
+         Computed ONCE before the ride-out loop — a recycle retry re-renders the
+         voice, not the persona. */
       let persona = (character.voiceStyle ?? '').trim();
       if (!persona) {
         persona = await generateVoiceStylePersona(character);
@@ -164,41 +180,69 @@ async function runDesignJob(
       }
 
       const sampleVoiceId = character.voiceId ?? `char-${characterId}`;
-      const { voiceId } = await designQwenVoiceForCharacter({
-        bookDir: job.bookDir,
-        character,
-        characterId,
-        persona,
-        sampleVoiceId,
-        modelKey,
-        language,
-        signal: job.controller.signal,
-      });
 
-      /* Persist the override exactly as the drawer does — match key is the
-         character's voiceId/id, the name is the designed `qwen-…` id. */
-      const matchKey = character.voiceId ?? character.id;
-      await applyOverrideToCastFiles(matchKey, { engine: 'qwen', name: voiceId }, seriesFilter);
+      /* Ride-out retry loop: a recycle mid-design fails this attempt with an
+         "unreachable"-class error while the supervisor respawns the sidecar.
+         Wait for it to come back (ensureSidecarEngineReady polls /load through
+         the respawn) and retry THIS character, up to MAX_RECYCLE_RIDEOUTS. */
+      let rideouts = 0;
+      for (;;) {
+        try {
+          const { voiceId } = await designQwenVoiceForCharacter({
+            bookDir: job.bookDir,
+            character,
+            characterId,
+            persona,
+            sampleVoiceId,
+            modelKey,
+            language,
+            signal: job.controller.signal,
+          });
 
-      job.done += 1;
-      broadcast(job, { type: 'character_designed', characterId, voiceId });
-    } catch (e) {
-      const message = (e as Error).message || 'Voice design failed.';
-      /* A sidecar-wide failure (down / stuck) would fail every remaining
-         character identically — stop early with a catastrophic error instead
-         of grinding through N timeouts. */
-      if (/unreachable|did not complete within|stopped responding/i.test(message)) {
-        clearInterval(heartbeat);
-        endJob(job, { type: 'error', code: 'sidecar_unavailable', message });
-        return;
+          /* Persist the override exactly as the drawer does — match key is the
+             character's voiceId/id, the name is the designed `qwen-…` id. */
+          const matchKey = character.voiceId ?? character.id;
+          await applyOverrideToCastFiles(matchKey, { engine: 'qwen', name: voiceId }, seriesFilter);
+
+          job.done += 1;
+          broadcast(job, { type: 'character_designed', characterId, voiceId });
+          break;
+        } catch (e) {
+          const message = (e as Error).message || 'Voice design failed.';
+          if (SIDECAR_DOWN_RE.test(message)) {
+            /* Sidecar down/recycling. Ride out the respawn and retry this
+               character — unless we've exhausted the budget (genuinely dead) or
+               the job was cancelled, in which case stop the run. */
+            if (!job.controller.signal.aborted && rideouts < MAX_RECYCLE_RIDEOUTS) {
+              rideouts += 1;
+              broadcast(job, { type: 'heartbeat', characterId }); // keep the pill alive through the respawn
+              try {
+                await ensureSidecarEngineReady('qwen', job.controller.signal);
+              } catch {
+                /* aborted (pause) during the wait — stop cleanly; the outer
+                   loop's abort-check ends the job. */
+                break;
+              }
+              continue; // sidecar should be back — retry this character
+            }
+            /* Exhausted ride-outs (or aborted): a still-down sidecar would fail
+               every remaining character identically — stop with a catastrophic
+               error instead of grinding through N timeouts. */
+            clearInterval(heartbeat);
+            endJob(job, { type: 'error', code: 'sidecar_unavailable', message });
+            return;
+          }
+          /* Per-character synthesis failure — record it and move on. */
+          job.failures.push({ characterId, name: character.name ?? characterId, error: message });
+          broadcast(job, {
+            type: 'character_failed',
+            characterId,
+            name: character.name ?? characterId,
+            errorReason: message,
+          });
+          break;
+        }
       }
-      job.failures.push({ characterId, name: character.name ?? characterId, error: message });
-      broadcast(job, {
-        type: 'character_failed',
-        characterId,
-        name: character.name ?? characterId,
-        errorReason: message,
-      });
     } finally {
       clearInterval(heartbeat);
     }

@@ -360,6 +360,112 @@ describe('spawnSidecar', () => {
     }
   });
 
+  it('REPLACES a sidecar whose effective memory ceiling does not match the server config (stale dev sidecar)', async () => {
+    /* The recurring trigger: a sidecar started WITHOUT this server's .env (a dev
+       run, or a stale-worktree launch) computes the AUTO restart ceiling instead
+       of the configured one, then recycles far too early and breaks bulk design.
+       When the server is configured with an explicit ceiling, a live sidecar
+       reporting a DIFFERENT effective ceiling was started under a different
+       config and must be replaced (A1) — even in dev, where policy would
+       otherwise adopt it. */
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    const prevRestart = process.env.SIDECAR_RESTART_MB;
+    const prevNodeEnv = process.env.NODE_ENV;
+    process.env.SIDECAR_RESTART_MB = '48500'; // this server expects 48500 MB
+    process.env.NODE_ENV = 'development'; // dev would normally ADOPT — guard is config-driven, not policy
+    try {
+      probeFn.mockResolvedValueOnce(true).mockResolvedValue(false);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1,
+        committedMb: 9000,
+        recyclePending: false,
+        memRestartMb: 14135, // auto ceiling — started without this server's .env
+        vramRestartMb: 8000,
+      }));
+      const findPidFn = vi.fn(async () => 6161);
+      const onAdoptExisting = vi.fn();
+      const calls: Array<{ cmd: string; args: string[] }> = [];
+      const trackingSpawn = vi.fn((cmd: string, args: string[]) => {
+        calls.push({ cmd, args });
+        const child = makeFakeChild();
+        if (cmd === 'taskkill') setImmediate(() => child.emit('exit', 0, null));
+        return child;
+      });
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: trackingSpawn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        findPidFn,
+        log,
+        warn,
+        onAdoptExisting,
+      });
+
+      expect(onAdoptExisting).not.toHaveBeenCalled(); // did NOT adopt the mis-configured sidecar
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('config'));
+      expect(calls[0]).toEqual({ cmd: 'taskkill', args: ['/PID', '6161', '/T', '/F'] });
+      expect(calls[1].cmd).toBe('powershell.exe'); // fresh spawn happened
+      expect(handle).not.toBeNull();
+    } finally {
+      if (prevRestart === undefined) delete process.env.SIDECAR_RESTART_MB;
+      else process.env.SIDECAR_RESTART_MB = prevRestart;
+      process.env.NODE_ENV = prevNodeEnv;
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it('ADOPTS a sidecar whose effective ceiling MATCHES the server config (no false replace)', async () => {
+    /* The guard must not fire when the live sidecar agrees with the configured
+       ceiling — otherwise every dev HMR reload would needlessly cold-restart. */
+    const prevRestart = process.env.SIDECAR_RESTART_MB;
+    const prevNodeEnv = process.env.NODE_ENV;
+    process.env.SIDECAR_RESTART_MB = '48500';
+    process.env.NODE_ENV = 'development';
+    try {
+      probeFn.mockResolvedValueOnce(true);
+      const healthProbeFn = vi.fn(async () => ({
+        reachable: true,
+        looksLikeSidecar: true,
+        protocolVersion: 1,
+        committedMb: 9000,
+        recyclePending: false,
+        memRestartMb: 48500, // matches config
+        vramRestartMb: 8000,
+      }));
+      const onAdoptExisting = vi.fn();
+
+      const handle = await spawnSidecar({
+        autoStart: true,
+        modelKey: 'kokoro-v1',
+        eagerLoadKokoro: true,
+        eagerLoadQwen: true,
+        repoRoot,
+        spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+        probeFn,
+        healthProbeFn,
+        log,
+        warn,
+        onAdoptExisting,
+      });
+
+      expect(onAdoptExisting).toHaveBeenCalled(); // adopted — ceilings agree
+      expect(handle).toBeNull(); // no spawn
+    } finally {
+      if (prevRestart === undefined) delete process.env.SIDECAR_RESTART_MB;
+      else process.env.SIDECAR_RESTART_MB = prevRestart;
+      process.env.NODE_ENV = prevNodeEnv;
+    }
+  });
+
   it('in dev, still ADOPTS a healthy same-build sidecar (HMR fast-path preserved)', async () => {
     /* dev adopt path must be unchanged — tsx watch HMR must not reload the
        model on every code save. */
