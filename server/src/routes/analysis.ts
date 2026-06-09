@@ -82,7 +82,7 @@ import {
 } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
-import { linkSeriesReuseAtAnalysis } from '../workspace/series-reuse-link.js';
+import { linkSeriesReuseAtAnalysis, pruneStaleReuseLinks } from '../workspace/series-reuse-link.js';
 import {
   normaliseForMatch as normaliseForMatchShared,
   matchQuoteInSource,
@@ -2736,6 +2736,10 @@ export async function runMainAnalyzerJob(
                without this it would re-link a pair the user separated and
                re-stamp links already established (srv-13). */
             seedReuseGuardsFromPriorCast(priorCastForMerge, characters);
+            const staleDropped = await pruneStaleReuseLinks(recordRef.bookId, characters);
+            if (staleDropped > 0) {
+              log(0, `Cleared ${staleDropped} stale reuse link${staleDropped === 1 ? '' : 's'} pointing at a book no longer in this series.`);
+            }
             const linked = await linkSeriesReuseAtAnalysis(recordRef.bookId, characters);
             if (linked > 0) {
               log(0, `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`);
@@ -4283,6 +4287,13 @@ async function runSubsetAnalyzerJob(
     if (record.bookId) {
       try {
         seedReuseGuardsFromPriorCast(priorCastForMerge, enriched);
+        const staleDropped = await pruneStaleReuseLinks(record.bookId, enriched);
+        if (staleDropped > 0) {
+          log(
+            0,
+            `Cleared ${staleDropped} stale reuse link${staleDropped === 1 ? '' : 's'} pointing at a book no longer in this series.`,
+          );
+        }
         const linked = await linkSeriesReuseAtAnalysis(record.bookId, enriched);
         if (linked > 0) {
           log(
