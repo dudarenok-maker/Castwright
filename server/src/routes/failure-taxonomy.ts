@@ -17,6 +17,7 @@
 
 export type FailureCode =
   | 'vram-spill'
+  | 'recycle-storm'
   | 'sidecar-unreachable'
   | 'analyzer-rate-limit'
   | 'oom'
@@ -80,6 +81,26 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     remediation:
       'Start the TTS sidecar (npm start launches it automatically), wait for the sidecar pill to ' +
       'go green, then resume the run.',
+  },
+  /* C3 (Wave 3) — the named recycle-storm signal from synthesise-chapter.ts
+     (`RecycleStormError`): the sidecar recycled/respawned more times than the
+     in-loop budget allows while rendering ONE chapter. MUST be placed BEFORE
+     the vram-spill entry: RecycleStormError's message contains "VRAM/RAM
+     headroom", which matches vram-spill's /VRAM/i regex, and the table is
+     first-match-wins. Matched TYPE-DRIVEN (ctx.name) first so a future message
+     reword can't silently mis-classify it; the raw-message regex is a fallback
+     only. Non-fatal per chapter — the cross-chapter cascade (recordNonFatal in
+     generation.ts) escalates to a run-stop when storms repeat, just like a
+     stall. */
+  {
+    code: 'recycle-storm',
+    fatal: false,
+    match: (raw, ctx) =>
+      ctx.name === 'RecycleStormError' || /recycled \d+× while rendering/.test(raw),
+    userMessage: 'The TTS engine kept restarting while rendering this chapter.',
+    remediation:
+      'The sidecar is likely thrashing — the host-memory leak (side-11) or too little ' +
+      'VRAM/RAM headroom. Restart the TTS sidecar and/or lower generation concurrency, then Retry.',
   },
   /* CUDA out-of-memory — the GPU allocator itself refused. Distinct from the
      host-RAM OOM kill below. Comes BEFORE the cuda-poisoned check because an

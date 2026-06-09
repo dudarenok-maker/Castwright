@@ -1543,6 +1543,14 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          queue advances; the cascade counter below still escalates if stalls
          repeat across chapters, which signals a systemic wedge). */
       const isStall = (e as { name?: string })?.name === 'ChapterStallError';
+      /* C3 (Wave 3) — RecycleStormError: synthesiseChapter exhausted the in-loop
+         recycle-recovery budget on a single chapter (the sidecar thrashed while
+         rendering it). Short-circuit BEFORE describeSynthesisError so the named
+         code/remediation ride through (the taxonomy entry would also classify it
+         correctly, but the literal object keeps the wording owned here and avoids
+         re-deriving it). Non-fatal, like a stall — recordNonFatal below escalates
+         to a run-stop if storms repeat across chapters. */
+      const isRecycleStorm = (e as { name?: string })?.name === 'RecycleStormError';
       const initial = isStall
         ? {
             errorReason: (e as Error).message,
@@ -1552,7 +1560,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
               'Click Retry on this chapter. If it stalls repeatedly, restart the TTS sidecar to ' +
               'clear a wedged GPU state, then retry.',
           }
-        : describeSynthesisError(e, engine);
+        : isRecycleStorm
+          ? {
+              errorReason: (e as Error).message,
+              fatal: false,
+              code: 'recycle-storm' as FailureCode,
+              remediation:
+                'Restart the TTS sidecar (clears a thrashing/leaking process) and/or lower ' +
+                'generation concurrency, then Retry. If it persists, the host-memory leak ' +
+                '(side-11) needs headroom.',
+            }
+          : describeSynthesisError(e, engine);
       let { errorReason, fatal } = initial;
       /* fs-19 — the structured code + remediation ride alongside the legacy
          reason on both the broadcast and the persisted state. Const (not part of
@@ -1562,6 +1580,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         console.error(
           `[generation] chapter ${chapter.id} (${chapter.slug}) STALLED during ${stallPhase}: ` +
             `no progress for ${Math.round(noProgressMs / 1000)}s — recorded as failed so the queue advances.`,
+        );
+      } else if (isRecycleStorm) {
+        const recoveries = (e as { recoveries?: number })?.recoveries ?? MAX_RECYCLE_RECOVERIES;
+        console.error(
+          `[generation] chapter ${chapter.id} (${chapter.slug}) RECYCLE STORM: sidecar recycled ` +
+            `${recoveries}× on one chapter — recorded non-fatal; cascade will stop the run if it repeats.`,
         );
       } else {
         console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
