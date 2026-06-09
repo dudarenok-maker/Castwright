@@ -1518,3 +1518,61 @@ describe('CastView — Design full cast button', () => {
     expect(screen.queryByTestId('design-scope-picker')).toBeNull();
   });
 });
+
+describe('CastView — variant glyph strip in the Status column', () => {
+  /* fs-34 / Task 9 — the Status column shows a per-emotion glyph strip for
+     Qwen rows instead of the legacy count badge + "N tags need a variant"
+     text hint.  The strip renders inline below the lifecycle pill; the old
+     VariantsBadge count and missing-variants-hint span must not appear. */
+
+  const sophie: Character = {
+    id: 'sophie',
+    name: 'Sophie',
+    role: 'Hero',
+    color: 'mentor',
+    lines: 20,
+    scenes: 5,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-sophie', variants: { angry: { name: 'qwen-sophie-angry' } } },
+    },
+  };
+  const sophieSentences: Sentence[] = [
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'sophie', emotion: 'excited' },
+  ];
+
+  function renderGlyphTest() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+    });
+    return render(
+      <Provider store={store}>
+        <CastView
+          characters={[sophie]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={sophieSentences}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('cast row shows the variant glyph strip and not the legacy count badge', () => {
+    renderGlyphTest();
+    /* The view renders both a desktop grid row and a mobile card row — scope
+       to the desktop grid row (same strategy used by other CastView tests). */
+    const row = rowFor('Sophie');
+    /* angry is designed → state=designed; excited is in-use but not in variants → state=needed */
+    expect(within(row).getByTestId('variant-glyph-angry')).toHaveAttribute('data-state', 'designed');
+    expect(within(row).getByTestId('variant-glyph-excited')).toHaveAttribute('data-state', 'needed');
+    expect(within(row).queryByTestId('variants-badge')).not.toBeInTheDocument();
+    expect(within(row).queryByTestId('missing-variants-hint')).not.toBeInTheDocument();
+  });
+});
