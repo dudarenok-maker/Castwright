@@ -122,6 +122,7 @@ describe('scanLibrary derived stats', () => {
     expect(b.status).toBe('analysing');
     expect(b.characterCount).toBe(0);
     expect(b.voiceCount).toBe(0);
+    expect(b.voiceIds).toEqual([]);
     expect(b.runtime).toBeUndefined();
   });
 
@@ -157,6 +158,10 @@ describe('scanLibrary derived stats', () => {
     const b = books.find((x) => x.title === 'Shared Voice Book')!;
     expect(b.characterCount).toBe(3);
     expect(b.voiceCount).toBe(2);
+    /* voiceIds exposes the same deduped set (voiceId ?? id) so the library
+       view can union across books for a distinct-voices total. The narrator
+       has no voiceId, so it contributes its id. */
+    expect([...b.voiceIds].sort()).toEqual(['narrator', 'voice-elder-female']);
   });
 
   it('complete book sums per-chapter segments.json into a formatted runtime', async () => {
