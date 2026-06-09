@@ -101,6 +101,9 @@ beforeAll(async () => {
         gender: 'female',
         ageRange: 'teen',
       },
+      /* Same-series narrator — the legitimate reuse target for a later
+         Keeper book's narrator. */
+      { id: 'narrator', name: 'Narrator', voiceId: 'v_narr_the Hollow Tide', gender: 'neutral' },
     ],
     true,
   );
@@ -143,6 +146,20 @@ beforeAll(async () => {
     makeBookId(AUTHOR, SERIES, 'Book Three Unconfirmed'),
     [{ id: 'Brann', name: 'Brann', voiceId: 'v_Brann_wip', gender: 'male', ageRange: 'teen' }],
     false,
+  );
+
+  /* A DIFFERENT author + series, confirmed, with its own narrator. Every
+     book's narrator shares the deterministic id/name "narrator", so a
+     library-wide exact-name match would let this unrelated-series narrator
+     surface as a candidate for a Keeper book's narrator. It must not. */
+  writeBookOnDisk(
+    workspaceRoot,
+    'Derek Landy',
+    'Skulduggery Pleasant',
+    'Scepter of the Ancients',
+    makeBookId('Derek Landy', 'Skulduggery Pleasant', 'Scepter of the Ancients'),
+    [{ id: 'narrator', name: 'Narrator', voiceId: 'v_narr_skul', gender: 'neutral' }],
+    true,
   );
 
   app = express();
@@ -357,5 +374,36 @@ describe('voice-match router', () => {
     expect(res.body.matches[0].candidates.length).toBeGreaterThan(0); // Marlow matched
     expect(res.body.matches[1].candidates).toEqual([]); // nobody empty
     expect(res.body.matches[2].candidates.length).toBeGreaterThan(0); // Wren matched
+  });
+
+  it('generic role (narrator) only matches within the same series', async () => {
+    /* Call as Book Two (The Hollow Tide). The library holds two
+       narrators: Book One's (same series, v_narr_the Hollow Tide) and Scepter of the
+       Ancients' (Skulduggery Pleasant, v_narr_skul). Both are an exact
+       name match, but a narrator is only legitimately reused within its
+       own series — the cross-series one must be excluded. */
+    const bookTwoId = makeBookIdFn(AUTHOR, SERIES, 'Book Two');
+    const res = await callMatch(bookTwoId, {
+      characters: [{ id: 'narrator', name: 'Narrator', attributes: [], gender: 'neutral' }],
+    });
+    expect(res.status).toBe(200);
+    const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
+    expect(voiceIds).toContain('v_narr_the Hollow Tide'); // same-series narrator surfaces
+    expect(voiceIds).not.toContain('v_narr_skul'); // cross-series narrator excluded
+  });
+
+  it('a real named character still matches library-wide across series', async () => {
+    /* The series scope applies ONLY to generic role-names. A genuinely
+       recurring character keeps matching against the whole library — here
+       Marlow still matches the Keeper-series Marlow from a Skulduggery-series
+       book, because reusing a designed voice across the library is the
+       intended feature. */
+    const scepterId = makeBookIdFn('Derek Landy', 'Skulduggery Pleasant', 'Scepter of the Ancients');
+    const res = await callMatch(scepterId, {
+      characters: [{ id: 'Marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],
+    });
+    expect(res.status).toBe(200);
+    const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
+    expect(voiceIds).toContain('v_Marlow'); // cross-series named char still matches
   });
 });
