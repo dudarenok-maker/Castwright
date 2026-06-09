@@ -178,6 +178,8 @@ describe('EditBookMetaModal — tag suggestions (plan 73)', () => {
     const dropdown = screen.getByTestId('tag-suggestions');
     expect(within(dropdown).getByTestId('tag-suggestion-draft')).toBeInTheDocument();
     expect(within(dropdown).getByTestId('tag-suggestion-series-2')).toBeInTheDocument();
+    // Scroll regions share the themed thin inset scrollbar, never the OS default.
+    expect(dropdown.className).toMatch(/scrollbar-thin/);
   });
 
   it('filters suggestions by the current query', () => {
