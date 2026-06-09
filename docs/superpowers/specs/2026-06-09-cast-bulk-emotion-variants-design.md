@@ -126,12 +126,21 @@ design adds:
 - per task, call `designQwenVoiceForCharacter({ …, emotion })` — the helper
   already designs under `<baseVoiceId>__<emotion>` (qwen-voice.ts:198) — then
   persist the `qwen.variants[emotion]` slot;
-- the persistence **scope matches the base** in this job: series-scoped for a
-  series book (so a series-shared voice keeps its variants series-shared),
-  workspace/book-scoped for a standalone. A shared persistence helper extracted
-  from the single-variant route (`qwen-voice.ts` ~L442) avoids divergence.
+- variant persistence is **book-scoped in v1** (matching the existing
+  single-variant route, qwen-voice.ts:444): the base voiceId is already
+  series-unified so the designed `.pt` is reusable across the series, but the
+  per-book `cast.json` `variants[emotion]` slot is recorded only for this book.
+  `applyOverrideToCastFiles` cannot carry variant slots (it overwrites the
+  engine slot with `{ name }`, dropping `variants`), so a shared book-scoped
+  helper (`persistEmotionVariant`) is extracted from the single route and used
+  by both. **Deferred (follow-up):** propagating the recorded slot to sibling
+  books in the series so their cast rows show the variant without re-design.
 - `job.total` counts bases + variant tasks; the pill copy becomes
   "Designing voices & variants… (k of N)".
+- a new SSE event `variant_designed { characterId, emotion, voiceId }` (and an
+  `onVariantDesigned` client callback) lets the client mirror the variant via
+  `castActions.setCharacterEmotionVariant` so the right glyph flips live — base
+  voices keep using the existing `character_designed` → `setQwenOverrideName`.
 
 **Mutual exclusion (unchanged).** The job holds the per-book design lock, so
 single-design and re-analysis stay mutually exclusive with it, exactly as today.
