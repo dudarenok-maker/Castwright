@@ -101,6 +101,21 @@ def test_health_smoke(client: TestClient) -> None:
     assert body["kokoro_loading"] is False
 
 
+def test_health_reports_effective_recycle_ceilings(client: TestClient) -> None:
+    """/health surfaces the EFFECTIVE hard recycle ceilings (committed RAM and
+    reserved VRAM) so the Node spawn-gate can detect a sidecar started under a
+    DIFFERENT config (e.g. a dev launch with no .env → auto ceiling) and refuse
+    to adopt it. Keys must always be present (value may be None when a ceiling
+    is disabled / VRAM is unreadable)."""
+    body = client.get("/health").json()
+    assert "mem_restart_mb" in body
+    assert "vram_restart_mb" in body
+    # When set, they are positive numbers; None is allowed (disabled/unreadable).
+    for key in ("mem_restart_mb", "vram_restart_mb"):
+        val = body[key]
+        assert val is None or (isinstance(val, (int, float)) and val > 0)
+
+
 def test_health_reflects_loaded_state(client: TestClient) -> None:
     """When the model is loaded, /health reports model_loaded:true and the
     resolved device. The Generate-screen pill flips from 'Idle' → 'Model
