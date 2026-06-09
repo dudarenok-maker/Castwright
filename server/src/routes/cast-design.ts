@@ -38,11 +38,44 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { isTtsModelKey, TTS_MODEL_LABELS, type TtsModelKey } from '../tts/index.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
-import { designQwenVoiceForCharacter } from './qwen-voice.js';
+import type { Emotion } from '../handoff/schemas.js';
+import { VARIANT_EMOTIONS, designQwenVoiceForCharacter, persistEmotionVariant } from './qwen-voice.js';
 import { applyOverrideToCastFiles } from './voices.js';
 import { generateVoiceStylePersona } from '../analyzer/voice-style.js';
 import { findAuthorSeriesForBookId } from '../workspace/series-cast-scan.js';
 import { markDesignBusy, clearDesignBusy, isAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
+
+type DesignScope = 'bases' | 'variants' | 'both';
+interface VariantTask {
+  characterId: string;
+  emotions: Exclude<Emotion, 'neutral'>[];
+}
+/** One unit of work for the serial loop: a base voice (no emotion) or a variant. */
+interface DesignTask {
+  characterId: string;
+  emotion?: Exclude<Emotion, 'neutral'>;
+}
+
+/** bases → base task per id; variants → one task per (char, emotion); both →
+    for each character, its base (if requested) then its variant emotions, so a
+    just-designed base is in place before its variants run. */
+function buildTaskList(
+  scope: DesignScope,
+  characterIds: string[],
+  variantTasks: VariantTask[],
+): DesignTask[] {
+  if (scope === 'bases') return characterIds.map((id) => ({ characterId: id }));
+  if (scope === 'variants')
+    return variantTasks.flatMap((t) => t.emotions.map((e) => ({ characterId: t.characterId, emotion: e })));
+  const variantsById = new Map(variantTasks.map((t) => [t.characterId, t.emotions]));
+  const ids = [...new Set([...characterIds, ...variantTasks.map((t) => t.characterId)])];
+  const out: DesignTask[] = [];
+  for (const id of ids) {
+    if (characterIds.includes(id)) out.push({ characterId: id });
+    for (const e of variantsById.get(id) ?? []) out.push({ characterId: id, emotion: e });
+  }
+  return out;
+}
 
 export const castDesignRouter = Router();
 
@@ -111,13 +144,14 @@ function endJob(job: DesignJob, finalEv?: unknown): void {
     whatever subscribers are currently attached (zero during a reload gap). */
 async function runDesignJob(
   job: DesignJob,
-  characterIds: string[],
+  tasks: DesignTask[],
   modelKey: TtsModelKey,
   language: string,
   seriesFilter: { author: string; series: string } | undefined,
 ): Promise<void> {
-  for (const characterId of characterIds) {
+  for (const task of tasks) {
     if (job.controller.signal.aborted) break;
+    const { characterId, emotion } = task;
 
     /* Re-read fresh each iteration so a concurrent edit (rename, a manual
        design) is reflected, and the override write below races the smallest
@@ -130,12 +164,25 @@ async function runDesignJob(
       broadcast(job, { type: 'character_skipped', characterId });
       continue;
     }
-    /* Freshness-skip: someone designed this character (or a linked duplicate)
-       since the list was captured — never clobber it. */
-    if (character.overrideTtsVoices?.qwen?.name) {
-      job.skipped += 1;
-      broadcast(job, { type: 'character_skipped', characterId });
-      continue;
+
+    if (!emotion) {
+      /* Base voice — freshness-skip: someone designed this character (or a
+         linked duplicate) since the list was captured — never clobber it. */
+      if (character.overrideTtsVoices?.qwen?.name) {
+        job.skipped += 1;
+        broadcast(job, { type: 'character_skipped', characterId });
+        continue;
+      }
+    } else {
+      /* Variant — skip when the base is missing (can't make a variant without
+         a base) or the variant is already designed (idempotent). */
+      const baseName = character.overrideTtsVoices?.qwen?.name;
+      const already = character.overrideTtsVoices?.qwen?.variants?.[emotion];
+      if (!baseName || already) {
+        job.skipped += 1;
+        broadcast(job, { type: 'character_skipped', characterId });
+        continue;
+      }
     }
 
     job.currentCharacterId = characterId;
@@ -151,7 +198,9 @@ async function runDesignJob(
     const heartbeat = setInterval(() => broadcast(job, { type: 'heartbeat', characterId }), HEARTBEAT_MS);
     try {
       /* Persona fallback (Gemini) when the character has none, persisted
-         minimal-patch so a concurrent edit to another character survives. */
+         minimal-patch so a concurrent edit to another character survives.
+         (Only needed for base designs; variants always have a base so a
+         persona must already exist — but we apply the same fallback for safety.) */
       let persona = (character.voiceStyle ?? '').trim();
       if (!persona) {
         persona = await generateVoiceStylePersona(character);
@@ -163,7 +212,11 @@ async function runDesignJob(
         }
       }
 
-      const sampleVoiceId = character.voiceId ?? `char-${characterId}`;
+      const baseSampleVoiceId = character.voiceId ?? `char-${characterId}`;
+      const sampleVoiceId = emotion
+        ? `${baseSampleVoiceId}__${emotion}`
+        : baseSampleVoiceId;
+
       const { voiceId } = await designQwenVoiceForCharacter({
         bookDir: job.bookDir,
         character,
@@ -172,16 +225,22 @@ async function runDesignJob(
         sampleVoiceId,
         modelKey,
         language,
+        emotion,
         signal: job.controller.signal,
       });
 
-      /* Persist the override exactly as the drawer does — match key is the
-         character's voiceId/id, the name is the designed `qwen-…` id. */
-      const matchKey = character.voiceId ?? character.id;
-      await applyOverrideToCastFiles(matchKey, { engine: 'qwen', name: voiceId }, seriesFilter);
-
-      job.done += 1;
-      broadcast(job, { type: 'character_designed', characterId, voiceId });
+      if (!emotion) {
+        /* Base path — persist the override exactly as the drawer does. */
+        const matchKey = character.voiceId ?? character.id;
+        await applyOverrideToCastFiles(matchKey, { engine: 'qwen', name: voiceId }, seriesFilter);
+        job.done += 1;
+        broadcast(job, { type: 'character_designed', characterId, voiceId });
+      } else {
+        /* Variant path — record the slot in the book's cast.json. */
+        await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId);
+        job.done += 1;
+        broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId });
+      }
     } catch (e) {
       const message = (e as Error).message || 'Voice design failed.';
       /* A sidecar-wide failure (down / stuck) would fail every remaining
@@ -217,17 +276,42 @@ async function runDesignJob(
 
 castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response) => {
   const { bookId } = req.params;
-  const body = (req.body ?? {}) as { characterIds?: unknown; modelKey?: unknown };
+  const body = (req.body ?? {}) as {
+    characterIds?: unknown;
+    modelKey?: unknown;
+    scope?: unknown;
+    variantTasks?: unknown;
+  };
   const characterIds = Array.isArray(body.characterIds)
     ? body.characterIds.filter((x): x is string => typeof x === 'string')
     : null;
+
+  const scope: DesignScope =
+    body.scope === 'variants' || body.scope === 'both' ? body.scope : 'bases';
+  const variantTasks: VariantTask[] = Array.isArray(body.variantTasks)
+    ? (body.variantTasks as unknown[])
+        .map((t) => t as { characterId?: unknown; emotions?: unknown })
+        .filter(
+          (t): t is VariantTask =>
+            typeof t.characterId === 'string' &&
+            Array.isArray(t.emotions) &&
+            t.emotions.every(
+              (e) => typeof e === 'string' && (VARIANT_EMOTIONS as string[]).includes(e),
+            ),
+        )
+        .map((t) => ({ characterId: t.characterId, emotions: t.emotions as VariantTask['emotions'] }))
+    : [];
+
+  const hasWork =
+    (characterIds !== null && characterIds.length > 0) ||
+    (scope !== 'bases' && variantTasks.length > 0);
 
   const located = await findBookByBookId(bookId);
   if (!located) return res.status(404).json({ error: 'Book not found.' });
   const { bookDir } = located;
 
   const existing = inFlightByBook.get(bookId);
-  const isStart = characterIds !== null && characterIds.length > 0 && !existing;
+  const isStart = hasWork && !existing;
 
   /* Start-path validation BEFORE we flush SSE headers (so a 4xx is a real
      status code, not an SSE error event). */
@@ -306,12 +390,14 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
   const seriesInfo = isStandalone ? null : await findAuthorSeriesForBookId(bookId);
   const seriesFilter = seriesInfo ?? undefined;
 
+  const tasks = buildTaskList(scope, characterIds ?? [], variantTasks);
+
   const job: DesignJob = {
     controller: new AbortController(),
     subscribers: new Set(),
     bookId,
     bookDir,
-    total: characterIds!.length,
+    total: tasks.length,
     done: 0,
     skipped: 0,
     failures: [],
@@ -329,7 +415,7 @@ castDesignRouter.post('/:bookId/cast/design', async (req: Request, res: Response
     /* Sticky: keep running for a reload re-attach. */
   });
 
-  void runDesignJob(job, characterIds!, modelKey!, language, seriesFilter).catch((e) => {
+  void runDesignJob(job, tasks, modelKey!, language, seriesFilter).catch((e) => {
     /* Defensive — the loop catches per-character; a throw here is unexpected. */
     endJob(job, {
       type: 'error',
