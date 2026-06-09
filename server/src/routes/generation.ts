@@ -30,7 +30,12 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
-import { completeEntry, markAwaitingConfirm, resetEntryToQueued } from '../workspace/queue-io.js';
+import {
+  completeEntry,
+  markAwaitingConfirm,
+  resetEntryToQueued,
+  setPaused,
+} from '../workspace/queue-io.js';
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
@@ -1548,8 +1553,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          rendering it). Short-circuit BEFORE describeSynthesisError so the named
          code/remediation ride through (the taxonomy entry would also classify it
          correctly, but the literal object keeps the wording owned here and avoids
-         re-deriving it). Non-fatal, like a stall — recordNonFatal below escalates
-         to a run-stop if storms repeat across chapters. */
+         re-deriving it). Non-fatal per chapter. The run-stop is the queue PAUSE
+         set below (on the queue path: one POST = one chapter, so the
+         cross-chapter cascade can never escalate). The cascade still escalates
+         only on the back-compat `*` job, which loops many chapters in one POST. */
       const isRecycleStorm = (e as { name?: string })?.name === 'RecycleStormError';
       const initial = isStall
         ? {
@@ -1585,7 +1592,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         const recoveries = (e as { recoveries?: number })?.recoveries ?? MAX_RECYCLE_RECOVERIES;
         console.error(
           `[generation] chapter ${chapter.id} (${chapter.slug}) RECYCLE STORM: sidecar recycled ` +
-            `${recoveries}× on one chapter — recorded non-fatal; cascade will stop the run if it repeats.`,
+            `${recoveries}× on one chapter — recorded non-fatal. On the queue path the run is ` +
+            `stopped by pausing the queue (below); the back-compat \`*\` job relies on the cascade.`,
         );
       } else {
         console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
@@ -1645,6 +1653,32 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           `[generation] failed to persist error state for chapter ${chapter.id}:`,
           persistErr,
         );
+      }
+      /* C3 (Wave 3) — recycle storm on the QUEUE path: pause the queue so a
+         thrashing sidecar stops the run instead of grinding chapter after
+         chapter. The dispatcher fires ONE POST per chapter, so the cross-chapter
+         cascade above (recordNonFatal) can never escalate on this path — this
+         server-side pause is the faithful "stop the run". Runs AFTER the
+         chapter_failed broadcast + state persist, so the failure surfaces
+         regardless. fatal stays false (the queue-pause is the run-stop; flipping
+         fatal would needlessly take the `*`-job controller.abort() path).
+         BEST-EFFORT: a queue-write hiccup must never mask the real chapter
+         failure, so this is wrapped + warns on error only. The back-compat `*`
+         job (no queueEntryId) is untouched — it keeps relying on the cascade. */
+      if (isRecycleStorm && job.queueEntryId != null) {
+        try {
+          const before = await readQueueFile(queueJsonPath());
+          await writeQueueFile(queueJsonPath(), setPaused(before, true));
+          console.error(
+            '[generation] RECYCLE STORM: paused the queue — restart the TTS sidecar / ' +
+              'restore headroom, then resume.',
+          );
+        } catch (pauseErr) {
+          console.warn(
+            `[generation] failed to pause the queue after a recycle storm on chapter ${chapter.id}:`,
+            pauseErr,
+          );
+        }
       }
       if (fatal) {
         /* Back-compat `*` job only: set the flag AND abort the signal so the
