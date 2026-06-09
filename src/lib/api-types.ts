@@ -2253,6 +2253,8 @@ export interface components {
             completedChapters: number;
             characterCount: number;
             voiceCount: number;
+            /** @description Distinct voice ids (voiceId ?? id) behind voiceCount. The library view unions these across books for a library-wide distinct-voices total; summing voiceCount would count a series-reused voice once per book. */
+            voiceIds?: string[];
             matchedFromLibrary?: number;
             progress?: number;
             /** @description human-formatted total runtime, e.g. '4h 38m' */
