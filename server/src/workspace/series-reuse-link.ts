@@ -62,6 +62,7 @@ export interface LinkableCharacter {
     bookTitle?: string;
     confidence?: number;
   } | null;
+  matchFactors?: unknown[];
   notLinkedTo?: { bookId: string; characterId: string }[];
 }
 
@@ -147,6 +148,67 @@ export interface LinkSeriesReuseOptions {
   ) => Promise<{ author: string; series: string } | null>;
   positions?: () => Promise<Map<string, number | null>>;
   castLoader?: CastLoader;
+}
+
+/* Revert a stale-linked character. A pure reuse row's voice was denormalised
+   FROM the now-stale link, so it reverts to a fresh, unlinked voice; a user-
+   owned voice (tuned/locked) keeps its voice and only loses the dead badge. */
+function clearStaleLink(c: LinkableCharacter): void {
+  delete c.matchedFrom;
+  delete c.matchFactors;
+  if (c.voiceState === 'reused') {
+    c.voiceId = c.id;
+    c.voiceState = 'generated';
+    delete c.overrideTtsVoices;
+    delete c.voiceStyle;
+    delete c.ttsEngine;
+  }
+}
+
+/* Drop a `matchedFrom` whose target is no longer a valid reuse source — i.e.
+   not a same-author + same-series, strictly-EARLIER book (exactly what
+   linkSeriesReuseAtAnalysis links against). This heals links that go stale when
+   a book is re-homed to another series or made standalone after the link was
+   stamped: seedReuseGuardsFromPriorCast preserves the old link across re-
+   analysis, and the UI unmatch refuses non-series-mates, so without this the
+   dead link is unclearable. Conservative: a same-series link with an unknown
+   position on either side is LEFT intact (a flaky scan must not nuke a
+   legitimate link), and the whole pass no-ops when the current book can't be
+   resolved. Mutates in place; returns the count dropped. Run BEFORE the link
+   pass so a series book can then re-link to its correct earlier sibling. */
+export async function pruneStaleReuseLinks(
+  bookId: string,
+  characters: LinkableCharacter[],
+  options: LinkSeriesReuseOptions = {},
+): Promise<number> {
+  if (!bookId || characters.length === 0) return 0;
+  const linked = characters.filter((c) => c.matchedFrom?.bookId);
+  if (linked.length === 0) return 0;
+
+  const resolveAuthorSeries = options.resolveAuthorSeries ?? findAuthorSeriesForBookId;
+  const meta = await resolveAuthorSeries(bookId);
+  if (!meta) return 0; // can't resolve the current book — don't guess
+
+  const positions = await (options.positions ?? seriesPositionByBookId)();
+  const myPos = positions.get(bookId) ?? null;
+
+  let dropped = 0;
+  for (const c of linked) {
+    const targetBookId = c.matchedFrom!.bookId!;
+    const targetMeta = await resolveAuthorSeries(targetBookId);
+    const sameSeries =
+      !!targetMeta && targetMeta.author === meta.author && targetMeta.series === meta.series;
+    /* Earlier-only guard mirrors the linker: a same-series link is valid only
+       when the target is a strictly-lower position. Unknown positions can't
+       prove "earlier", so they're treated as acceptable (conservative keep). */
+    const targetPos = positions.get(targetBookId) ?? null;
+    const earlierOk = myPos === null || targetPos === null || targetPos < myPos;
+    if (sameSeries && earlierOk) continue;
+
+    clearStaleLink(c);
+    dropped++;
+  }
+  return dropped;
 }
 
 /* Mutate `characters` in place, stamping reuse links against prior same-series
