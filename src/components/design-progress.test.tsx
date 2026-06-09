@@ -46,4 +46,9 @@ describe('DesignProgress', () => {
     expect(container.querySelector('[data-testid="design-waveform"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="design-fill"]')).toBeTruthy();
   });
+
+  it('shows the rendering phase label', () => {
+    render(<DesignProgress phase="rendering" />);
+    expect(screen.getByText(/rendering the 12s audition/i)).toBeInTheDocument();
+  });
 });
