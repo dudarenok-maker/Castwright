@@ -21,7 +21,7 @@
    /sample coherence check can assert the provider is untouched. Real ffmpeg
    encodes the audition (same boundary as voice-sample.ts). */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import {
   mkdtempSync,
   rmSync,
@@ -648,6 +648,65 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     const res = await request(app).delete(`/api/books/${bookId}/cast/Maerin/emotion-variant/excited`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, removed: 'excited' });
+  });
+});
+
+describe('persistEmotionVariant', () => {
+  /* These tests import persistEmotionVariant and exercise it directly against a
+     temp bookDir — isolated from the supertest Express fixture above so they do
+     not depend on WORKSPACE_DIR or the sidecar mock. */
+  let bookDir: string;
+  let persistEmotionVariantFn: typeof import('./qwen-voice.js').persistEmotionVariant;
+
+  beforeAll(async () => {
+    ({ persistEmotionVariant: persistEmotionVariantFn } = await import('./qwen-voice.js'));
+  });
+
+  beforeEach(async () => {
+    const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+    bookDir = await mkdtemp(join(tmpdir(), 'cast-'));
+    await mkdir(join(bookDir, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'Wren', voiceId: 'Wren', overrideTtsVoices: { qwen: { name: 'qwen-Wren' } } },
+        ],
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(bookDir, { recursive: true, force: true });
+  });
+
+  it('records the variant slot without clobbering the base name', async () => {
+    const { readFile } = await import('node:fs/promises');
+    await persistEmotionVariantFn(bookDir, 'Wren', 'angry', 'qwen-Wren__angry');
+    const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+    expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe('qwen-Wren');
+    expect(cast.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({
+      name: 'qwen-Wren__angry',
+    });
+  });
+
+  it('preserves a sibling variant when adding another', async () => {
+    const { readFile } = await import('node:fs/promises');
+    await persistEmotionVariantFn(bookDir, 'Wren', 'angry', 'qwen-Wren__angry');
+    await persistEmotionVariantFn(bookDir, 'Wren', 'sad', 'qwen-Wren__sad');
+    const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+    expect(Object.keys(cast.characters[0].overrideTtsVoices.qwen.variants).sort()).toEqual([
+      'angry',
+      'sad',
+    ]);
+  });
+
+  it('is a no-op for an unknown character', async () => {
+    const { readFile } = await import('node:fs/promises');
+    await persistEmotionVariantFn(bookDir, 'ghost', 'angry', 'x');
+    const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
+    expect(cast.characters[0].overrideTtsVoices.qwen.variants).toBeUndefined();
   });
 });
 

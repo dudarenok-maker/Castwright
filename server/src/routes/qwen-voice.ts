@@ -114,6 +114,29 @@ export function buildVariantInstruct(persona: string, emotion: Exclude<Emotion, 
   return `${persona.trim()} ${EMOTION_INSTRUCT[emotion]}`.trim();
 }
 
+/* fs-25 / fe-32 — record a designed emotion variant onto a character's qwen
+   slot in the BOOK's cast.json. Book-scoped (the base voiceId is already
+   series-unified so the `.pt` is reusable, but the slot is recorded per book).
+   Preserves the base `name` (defaulting it to the derived base id when the slot
+   is fresh) and any sibling variants. No-op for an unknown character. Shared by
+   the single design-voice route and the bulk "Design full cast" job. */
+export async function persistEmotionVariant(
+  bookDir: string,
+  characterId: string,
+  emotion: Exclude<Emotion, 'neutral'>,
+  variantVoiceId: string,
+): Promise<void> {
+  const cast = await readJson<CastFile>(castJsonPath(bookDir));
+  const character = cast?.characters?.find((c) => c.id === characterId);
+  if (!cast || !character) return;
+  const baseVoiceId = deriveQwenVoiceId(character, characterId);
+  character.overrideTtsVoices = character.overrideTtsVoices ?? {};
+  const qwenSlot = character.overrideTtsVoices.qwen ?? { name: baseVoiceId };
+  qwenSlot.variants = { ...(qwenSlot.variants ?? {}), [emotion]: { name: variantVoiceId } };
+  character.overrideTtsVoices.qwen = qwenSlot;
+  await writeJsonAtomic(castJsonPath(bookDir), cast);
+}
+
 /* Preview/promote (plan 161). The A/B "current vs proposed" audition must NOT
    overwrite a character's live bespoke voice while the user is still deciding —
    but `deriveQwenVoiceId` is stable per character and the design route always
@@ -418,7 +441,6 @@ qwenVoiceRouter.post(
     /* Plan 161 — `preview:true` stages the design under a `-preview` sibling id
        so the live voice isn't overwritten during an A/B comparison; the drawer
        promotes it on approve. Default false keeps the original in-place design. */
-    const baseVoiceId = deriveQwenVoiceId(character, characterId);
     try {
       const { voiceId, url } = await designQwenVoiceForCharacter({
         bookDir,
@@ -433,15 +455,10 @@ qwenVoiceRouter.post(
       });
       /* fs-25 — record a (non-preview) emotion variant onto the character's
          qwen slot so generation can resolve it (Wave 2) and the cast UI can show
-         the Variants badge. Preserves any existing base `name`; defaults it to
-         the derived base id when the slot is fresh so base lines still resolve.
-         The base-voice design itself still persists via the drawer's Save. */
+         the Variants badge. The base-voice design itself still persists via the
+         drawer's Save. */
       if (emotion && body.preview !== true) {
-        character.overrideTtsVoices = character.overrideTtsVoices ?? {};
-        const qwenSlot = character.overrideTtsVoices.qwen ?? { name: baseVoiceId };
-        qwenSlot.variants = { ...(qwenSlot.variants ?? {}), [emotion]: { name: voiceId } };
-        character.overrideTtsVoices.qwen = qwenSlot;
-        await writeJsonAtomic(castJsonPath(bookDir), cast);
+        await persistEmotionVariant(bookDir, characterId, emotion, voiceId);
       }
       return res.status(200).json({ voiceId, url });
     } catch (e) {
