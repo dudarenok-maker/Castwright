@@ -115,6 +115,39 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByText(/your library is empty/i)).not.toBeInTheDocument();
   });
 
+  /* Regression — the "Voices" totals tile must count DISTINCT voices across
+     the whole library (deduped by voiceId), not sum each book's per-book
+     count. A voice reused across a series was previously counted once per
+     book it appeared in, so an 8-book series inflated the figure ~7×. */
+  it('Voices total dedups voices shared across books (not a per-book sum)', () => {
+    const bookA: LibraryBook = {
+      ...oneBook,
+      bookId: 'a',
+      title: 'Book A',
+      seriesPosition: 1,
+      voiceCount: 3,
+      voiceIds: ['narrator', 'sophie', 'keefe'],
+    };
+    const bookB: LibraryBook = {
+      ...oneBook,
+      bookId: 'b',
+      title: 'Book B',
+      seriesPosition: 2,
+      voiceCount: 3,
+      voiceIds: ['narrator', 'sophie', 'fitz'],
+    };
+    const author: LibraryAuthor = {
+      name: 'Shannon Messenger',
+      series: [{ name: 'Keeper of the Lost Cities', books: [bookA, bookB] }],
+    };
+    renderView({ loaded: true, authors: [author] });
+    /* Union {narrator, sophie, keefe, fitz} = 4 distinct voices.
+       The old summing behaviour would have shown 6. */
+    const tile = screen.getByTestId('stat-tile-voices');
+    expect(tile).toHaveTextContent('4');
+    expect(tile).not.toHaveTextContent('6');
+  });
+
   it('renders the cover <img> overlay when book.coverImageUrl is set', () => {
     const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
     const authorWithCover: LibraryAuthor = {

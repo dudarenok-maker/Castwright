@@ -12,7 +12,10 @@
 
 export function StatTile({ label, value }: { label: string; value: number | string }) {
   return (
-    <div className="bg-white rounded-2xl border border-ink/10 p-4">
+    <div
+      className="bg-white rounded-2xl border border-ink/10 p-4"
+      data-testid={`stat-tile-${label.toLowerCase().replace(/\s+/g, '-')}`}
+    >
       <p className="text-[11px] uppercase tracking-wider text-ink/50 font-semibold">{label}</p>
       <p className="text-2xl font-bold text-ink tabular-nums mt-1">{value}</p>
     </div>

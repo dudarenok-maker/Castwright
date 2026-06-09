@@ -247,6 +247,12 @@ export interface LibraryBook {
   completedChapters: number;
   characterCount: number;
   voiceCount: number;
+  /** The distinct voice ids (`voiceId ?? id`) behind `voiceCount`. Exposed
+      so the library view can union them across books for a library-wide
+      DISTINCT-voices total — summing `voiceCount` would count a voice
+      reused across a series once per book. Always present (defaults to
+      `[]` when cast.json is absent or malformed). */
+  voiceIds: string[];
   matchedFromLibrary?: number;
   progress?: number;
   runtime?: string;
@@ -441,6 +447,7 @@ async function scanBook(
      that we don't gate the whole row on it. */
   let castCharacterCount = 0;
   let castVoiceCount = 0;
+  let castVoiceIds: string[] = [];
   if (hasCast) {
     try {
       const cast = await readJson<CastJsonForScan>(castJson);
@@ -452,6 +459,7 @@ async function scanBook(
         if (vid) voiceIds.add(vid);
       }
       castVoiceCount = voiceIds.size;
+      castVoiceIds = [...voiceIds];
     } catch {
       /* ignore; counts stay at 0 */
     }
@@ -551,6 +559,7 @@ async function scanBook(
     completedChapters,
     characterCount: castCharacterCount,
     voiceCount: castVoiceCount,
+    voiceIds: castVoiceIds,
     progress:
       status === 'analysing'
         ? analysingProgress

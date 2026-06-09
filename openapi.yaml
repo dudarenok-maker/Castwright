@@ -2979,6 +2979,10 @@ components:
         completedChapters: { type: integer }
         characterCount: { type: integer }
         voiceCount: { type: integer }
+        voiceIds:
+          type: array
+          items: { type: string }
+          description: 'Distinct voice ids (voiceId ?? id) behind voiceCount. The library view unions these across books for a library-wide distinct-voices total; summing voiceCount would count a series-reused voice once per book.'
         matchedFromLibrary: { type: integer }
         progress: { type: number, minimum: 0, maximum: 1 }
         runtime: { type: string, description: "human-formatted total runtime, e.g. '4h 38m'" }
