@@ -813,5 +813,5 @@ samp {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .design-wave i, .design-fill i { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+  .design-wave i, .design-fill i, .design-fill--indeterminate i { animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
 }
