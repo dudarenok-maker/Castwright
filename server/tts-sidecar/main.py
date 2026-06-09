@@ -373,6 +373,54 @@ class SynthBatchResult:
         self.audio_ms = audio_ms
 
 
+class _VdKokoroArbiter:
+    """Mutual exclusion between a VoiceDesign forward and Kokoro synths.
+
+    Kokoro runs on onnxruntime-gpu (a separate allocator from torch), so a
+    resident Kokoro + Qwen Base + the 1.7B VoiceDesign model oversubscribe an
+    8 GB card and spill. This arbiter guarantees the two heaviest-combined ops
+    never co-reside: a design waits for in-flight Kokoro synths to drain, then
+    blocks new ones until it finishes. Kokoro synths still run concurrently with
+    EACH OTHER (writer-priority readers/writer), so normal generation is
+    unaffected when no design is running. Qwen Base generation never touches this
+    arbiter, so a Qwen-voiced chapter generates at full speed alongside a design.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._kokoro_in_flight = 0
+        self._design_active = False
+
+    @contextmanager
+    def kokoro_synth(self):
+        with self._cv:
+            while self._design_active:
+                self._cv.wait()
+            self._kokoro_in_flight += 1
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._kokoro_in_flight -= 1
+                self._cv.notify_all()
+
+    @contextmanager
+    def design(self):
+        with self._cv:
+            while self._kokoro_in_flight > 0:
+                self._cv.wait()
+            self._design_active = True
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._design_active = False
+                self._cv.notify_all()
+
+
+_VD_KOKORO = _VdKokoroArbiter()
+
+
 class Engine:
     """Each engine returns mono PCM as int16 little-endian + a sample rate.
     We never persist audio here — the Node side encodes PCM to MP3 and
