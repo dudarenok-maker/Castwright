@@ -89,9 +89,11 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
      headroom", which matches vram-spill's /VRAM/i regex, and the table is
      first-match-wins. Matched TYPE-DRIVEN (ctx.name) first so a future message
      reword can't silently mis-classify it; the raw-message regex is a fallback
-     only. Non-fatal per chapter — the cross-chapter cascade (recordNonFatal in
-     generation.ts) escalates to a run-stop when storms repeat, just like a
-     stall. */
+     only. `fatal: false` because the chapter itself isn't poison. The RUN is
+     stopped a different way per dispatch path: on the queue path (one POST per
+     chapter) generation.ts PAUSES the queue on a storm; the cross-chapter
+     cascade (recordNonFatal in generation.ts) only escalates to a run-stop on
+     the back-compat `*` job, which loops many chapters in one POST. */
   {
     code: 'recycle-storm',
     fatal: false,

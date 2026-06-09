@@ -249,6 +249,15 @@ describe('srv-17c in-worker recovery after a mid-synth sidecar death', () => {
     // NOT a generic vram-spill / unknown classification.
     expect(body).toContain('"errorCode":"recycle-storm"');
     expect(body).toMatch(/"remediation":"[^"]*(?:sidecar|concurrency|headroom)/i);
+    /* C3 — on the QUEUE path one POST = one chapter, so the cross-chapter
+       cascade can never escalate. A recycle-storm instead PAUSES the queue
+       server-side, stopping a thrashing sidecar from grinding chapter after
+       chapter. The harness seeds paused:false, so a true flag proves the
+       storm set it. */
+    await vi.waitFor(async () => {
+      const file = await readQueueFile(queuePath);
+      expect(file.paused).toBe(true);
+    });
   }, 10_000);
 
   it('does NOT recover a non-transient error — surfaces immediately', async () => {
