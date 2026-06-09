@@ -114,6 +114,56 @@ def test_kokoro_synthesize_acquires_the_arbiter(monkeypatch):
     assert seen["in_flight_during_create"] == 1
 
 
+def test_qwen_base_synth_not_gated_by_vd_kokoro_arbiter(monkeypatch):
+    """QwenEngine.synthesize (Base) must complete while _VD_KOKORO.design() is
+    held in another thread — i.e. Qwen Base generation is NOT blocked by an
+    in-flight VoiceDesign operation. Only KokoroEngine.synthesize gates on the
+    arbiter; QwenEngine.synthesize uses only _synth_lock."""
+    import main
+    import numpy as np
+
+    qeng = main.QwenEngine()
+
+    class _FakeBase:
+        def generate_voice_clone(self, text, language, voice_clone_prompt):
+            return [np.zeros(10, dtype="float32")], 24000
+
+    qeng._base = _FakeBase()
+    # Patch _ensure_base_loaded so the real model isn't required.
+    monkeypatch.setattr(qeng, "_ensure_base_loaded", lambda: None)
+    # Patch _load_voice_prompt so no .pt file is needed on disk.
+    monkeypatch.setattr(
+        qeng,
+        "_load_voice_prompt",
+        lambda voice: ({"prompt": True}, "english", True),
+    )
+
+    design_holding = threading.Event()
+    release_design = threading.Event()
+    synth_completed = threading.Event()
+
+    def hold_design():
+        with main._VD_KOKORO.design():
+            design_holding.set()
+            release_design.wait(timeout=2)
+
+    design_thread = threading.Thread(target=hold_design)
+    design_thread.start()
+    design_holding.wait(timeout=1)
+
+    # Qwen Base synthesize must NOT block on _VD_KOKORO — run it from the
+    # main thread while design_thread holds arb.design().
+    result = qeng.synthesize("qwen3-tts-0.6b", "qwen-narrator", "Hello there.")
+
+    synth_completed.set()
+    release_design.set()
+    design_thread.join(timeout=2)
+
+    # If we got here, synthesize did not block on _VD_KOKORO.
+    assert result is not None, "QwenEngine.synthesize must return a SynthResult"
+    assert result.sample_rate == 24000
+
+
 def test_design_voice_holds_arbiter_and_evicts_resident_kokoro(monkeypatch):
     """design_voice must take arb.design() around its VoiceDesign forward and,
     if Kokoro is resident, unload it first so the 1.7B load has headroom."""

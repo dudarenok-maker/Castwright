@@ -676,4 +676,11 @@ describe('evaluateDesignLiveness', () => {
       evaluateDesignLiveness({ startedAt: T0, now: T0 + 600_001, health: 'reachable', absoluteMaxMs: 600_000 }),
     ).toEqual({ action: 'abort', reason: 'absolute' });
   });
+  it('prefers unreachable over absolute when both conditions are true', () => {
+    /* A sidecar that disappears exactly at the ceiling should report the more
+       informative 'unreachable' reason, not the generic 'absolute' ceiling. */
+    expect(
+      evaluateDesignLiveness({ startedAt: T0, now: T0 + 600_001, health: 'unreachable', absoluteMaxMs: 600_000 }),
+    ).toEqual({ action: 'abort', reason: 'unreachable' });
+  });
 });

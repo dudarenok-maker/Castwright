@@ -79,8 +79,8 @@ export function evaluateDesignLiveness(p: {
   health: 'reachable' | 'unreachable';
   absoluteMaxMs: number;
 }): DesignLivenessResult {
-  if (p.now - p.startedAt >= p.absoluteMaxMs) return { action: 'abort', reason: 'absolute' };
   if (p.health === 'unreachable') return { action: 'abort', reason: 'unreachable' };
+  if (p.now - p.startedAt >= p.absoluteMaxMs) return { action: 'abort', reason: 'absolute' };
   return { action: 'continue' };
 }
 

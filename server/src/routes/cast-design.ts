@@ -187,7 +187,7 @@ async function runDesignJob(
       /* A sidecar-wide failure (down / stuck) would fail every remaining
          character identically — stop early with a catastrophic error instead
          of grinding through N timeouts. */
-      if (/unreachable|did not complete within/i.test(message)) {
+      if (/unreachable|did not complete within|stopped responding/i.test(message)) {
         clearInterval(heartbeat);
         endJob(job, { type: 'error', code: 'sidecar_unavailable', message });
         return;
