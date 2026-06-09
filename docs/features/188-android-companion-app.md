@@ -62,6 +62,34 @@ iOS-ready: app-pinned TLS, dual-platform plugins, the unsigned-iOS CI compile is
 PR). _srv-33 ships the server capability; wiring the companion to mint + use a per-device token
 at pairing (so revoke targets one phone) is a tiny optional follow-up._
 
+### Update (2026-06-09) — web pairing-QR surface + scanner ML Kit crash
+
+**Web pairing QR shipped (the desktop half of `app-2`).** The app could always scan/parse
+a `{ url, token, caFingerprint }` QR (`PairedServer.fromQrPayload`), but nothing in the web
+app *drew* one — pairing was manual-entry only. Added `src/modals/pair-device.tsx`
+(`PairDeviceModal`) + a **"Pair a device"** button on the listen-view companion banner
+(`companion-app-banner.tsx`). It renders the QR from `GET /api/export/lan`, which **already**
+returns `token` + `caFingerprint` (srv-20), so **no server change was needed**. Falls back to
+a copyable manual-entry list, and explains how to enable LAN HTTPS when the payload is
+incomplete (not https / no token / no CA). Tests: `pair-device.test.tsx` (11) +
+`companion-app-banner.test.tsx` (pair-button→modal) + an e2e in `download-tiles.spec.ts`.
+
+**Scanner crash on Android 16 (mobile_scanner 7.2.0).** `Scan QR` showed the plugin's raw
+default error — `NullPointerException: Attempt to invoke virtual method '…' on a null object
+reference` — a black screen with an obfuscated trace. Diagnosed via `adb logcat`: the NPE is
+inside **ML Kit's own `process()` pipeline** on `controller.start()`, reproduced on a Pixel 10
+Pro **API-36** emulator *and* a real device (identical obfuscation → the emulator is a faithful
+oracle). It is **independent of the bundled vs unbundled ML Kit variant**. mobile_scanner 7.2.0
+is the latest, and downgrading is blocked by the Android-15/16 **16 KB page-alignment**
+requirement (7.x is the variant with 16 KB-aligned native libs). Mitigations landed
+(`qr_scan_screen.dart`): an explicit QR-only `MobileScannerController` + a friendly
+`errorBuilder` that degrades to **"Couldn't start the camera → Enter details manually"**
+(no more black-screen gibberish), and switched to the **unbundled** ML Kit (18.3.1 via Play
+Services) as the camera-scan fix candidate — the emulator can't fairly validate it (its GMS ML
+Kit reports "no usable artifacts"). **Owed:** real-phone validation of the actual scan path;
+manual entry is the guaranteed pairing path meanwhile. Upstream-issue / version-bump tracking
+is the next step if the unbundled variant doesn't resolve it on a real device.
+
 ### Dev setup (this box — full toolchain installed + validated)
 
 The Flutter + Android toolchain is installed and the app **runs on a Pixel 10 Pro emulator**:

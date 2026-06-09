@@ -4928,7 +4928,17 @@ async function mockCreateBookShareLink(bookId: string): Promise<BookShareLink> {
 
 async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
   await wait(20);
-  return { urls: ['http://192.168.1.42:8080'], port: 8080, protocol: 'http' };
+  /* HTTPS + token + caFingerprint so the companion Pair-a-device QR has a
+     complete payload to render in mock mode (the export modal just renders
+     urls[0], so https is harmless there). */
+  return {
+    urls: ['https://192.168.1.42:8443'],
+    port: 8443,
+    protocol: 'https',
+    token: 'mock-lan-token-0123456789abcdef',
+    caFingerprint:
+      'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89',
+  };
 }
 
 /* GPU semaphore state — surfaces the depth/inFlight/max triple from the

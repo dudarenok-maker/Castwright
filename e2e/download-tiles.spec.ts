@@ -86,4 +86,22 @@ test.describe('plan 57 — download tiles', () => {
     await expect(page.getByTestId('listener-app-plex')).toHaveCount(0);
     await expect(page.getByTestId('listener-app-apple_books')).toBeVisible();
   });
+
+  test('Pair a device opens a scannable pairing QR with manual-entry fallback', async ({ page }) => {
+    const pair = page.getByTestId('companion-pair-device');
+    await expect(pair).toBeVisible();
+    await pair.click();
+
+    const modal = page.getByTestId('pair-device-modal');
+    await expect(modal).toBeVisible({ timeout: 10_000 });
+
+    // The QR renders as a data: image from the mocked LAN pairing payload.
+    const qr = page.getByTestId('pair-qr-image');
+    await expect(qr).toBeVisible();
+    await expect(qr).toHaveAttribute('src', /^data:image\/png/);
+
+    // Manual-entry fallback (collapsed <details>) carries the values.
+    await modal.getByText(/enter these manually/i).click();
+    await expect(modal.getByText('https://192.168.1.42:8443')).toBeVisible();
+  });
 });
