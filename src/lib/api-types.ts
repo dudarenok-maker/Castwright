@@ -2809,6 +2809,8 @@ export interface components {
              * @enum {string}
              */
             source: "current" | "library";
+            /** @description True when this voice belongs to a book in the currently-open book's (author, series) — including the open book itself. Absent/false when no book is open or the open book is a standalone (a standalone has no series continuity). The cast view's "Series" tab scopes to `source === 'library' && inCurrentSeries`, so it shows only this series' siblings rather than every other book in the workspace. */
+            inCurrentSeries?: boolean;
             /** @description Marker for narrator-like voices that span an entire book. */
             reusable?: boolean;
             /** @description Workspace-level pin flag from audiobook-workspace/voices.json. */
