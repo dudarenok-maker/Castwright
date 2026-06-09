@@ -373,6 +373,58 @@ class SynthBatchResult:
         self.audio_ms = audio_ms
 
 
+class _VdKokoroArbiter:
+    """Mutual exclusion between a VoiceDesign forward and Kokoro synths.
+
+    Kokoro runs on onnxruntime-gpu (a separate allocator from torch), so a
+    resident Kokoro + Qwen Base + the 1.7B VoiceDesign model oversubscribe an
+    8 GB card and spill. This arbiter guarantees the two heaviest-combined ops
+    never co-reside: a design waits for in-flight Kokoro synths to drain, then
+    blocks new ones until it finishes. Kokoro synths still run concurrently with
+    EACH OTHER (a drain-and-lock policy, not writer-priority: a waiting design
+    does NOT block new Kokoro synths until it has drained the in-flight ones
+    and set `_design_active`), so normal generation is unaffected when no
+    design is running. Under a continuous Kokoro stream a design may therefore
+    wait up to ~one sentence's duration beyond the last drain point —
+    acceptable because designs are rare and brief. Qwen Base generation never touches this
+    arbiter, so a Qwen-voiced chapter generates at full speed alongside a design.
+    """
+
+    def __init__(self) -> None:
+        self._cv = threading.Condition()
+        self._kokoro_in_flight = 0
+        self._design_active = False
+
+    @contextmanager
+    def kokoro_synth(self):
+        with self._cv:
+            while self._design_active:
+                self._cv.wait()
+            self._kokoro_in_flight += 1
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._kokoro_in_flight -= 1
+                self._cv.notify_all()
+
+    @contextmanager
+    def design(self):
+        with self._cv:
+            while self._kokoro_in_flight > 0:
+                self._cv.wait()
+            self._design_active = True
+        try:
+            yield
+        finally:
+            with self._cv:
+                self._design_active = False
+                self._cv.notify_all()
+
+
+_VD_KOKORO = _VdKokoroArbiter()
+
+
 class Engine:
     """Each engine returns mono PCM as int16 little-endian + a sample rate.
     We never persist audio here — the Node side encodes PCM to MP3 and
@@ -780,57 +832,61 @@ class KokoroEngine(Engine):
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
-        self._ensure_loaded(model)
-        assert self._kokoro is not None
+        # Resident-VRAM exclusion: never let this Kokoro forward overlap a
+        # VoiceDesign forward (the three-way 8 GB spill). Held around load+create
+        # so a design can't evict Kokoro out from under an in-flight synth.
+        with _VD_KOKORO.kokoro_synth():
+            self._ensure_loaded(model)
+            assert self._kokoro is not None
 
-        # Pre-flight voice validation. Non-English voice IDs (ef_*, ff_*,
-        # etc.) or unknown names fall back to FALLBACK_VOICE. The Node
-        # side reads X-Voice-Substituted-From and surfaces a warning so
-        # the upstream catalog can be fixed.
-        actual_voice = voice
-        substituted_from: Optional[str] = None
-        if self._voices and voice not in self._voices:
-            substituted_from = voice
-            actual_voice = (
-                self.FALLBACK_VOICE
-                if self.FALLBACK_VOICE in self._voices
-                else self._voices[0]
-            )
-            log.warning(
-                "Voice '%s' not in Kokoro English subset — substituting '%s'. "
-                "Valid sample: %s",
-                voice, actual_voice, ", ".join(self._voices[:8]),
-            )
+            # Pre-flight voice validation. Non-English voice IDs (ef_*, ff_*,
+            # etc.) or unknown names fall back to FALLBACK_VOICE. The Node
+            # side reads X-Voice-Substituted-From and surfaces a warning so
+            # the upstream catalog can be fixed.
+            actual_voice = voice
+            substituted_from: Optional[str] = None
+            if self._voices and voice not in self._voices:
+                substituted_from = voice
+                actual_voice = (
+                    self.FALLBACK_VOICE
+                    if self.FALLBACK_VOICE in self._voices
+                    else self._voices[0]
+                )
+                log.warning(
+                    "Voice '%s' not in Kokoro English subset — substituting '%s'. "
+                    "Valid sample: %s",
+                    voice, actual_voice, ", ".join(self._voices[:8]),
+                )
 
-        # kokoro-onnx's create() returns (samples, sample_rate). samples is
-        # a numpy float32 array in [-1, 1]; sample_rate is the model's
-        # native rate (24 kHz for v1). Wrap defensively in case a future
-        # release changes the return shape.
-        gen_start = time.perf_counter()
-        result = self._kokoro.create(
-            text,
-            voice=actual_voice,
-            speed=1.0,
-            lang=self._language,
-        )
-        gen_ms = (time.perf_counter() - gen_start) * 1000.0
-        if isinstance(result, tuple) and len(result) == 2:
-            audio, sample_rate = result
-        else:
-            audio = result
-            sample_rate = self.NATIVE_SAMPLE_RATE
-        audio_ms = _audio_duration_ms(audio, int(sample_rate))
-        log.info(
-            "kokoro synth: voice=%s text_len=%d gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
-            actual_voice, len(text), gen_ms, audio_ms,
-            (gen_ms / audio_ms if audio_ms > 0 else 0.0),
-        )
-        pcm = _float_audio_to_int16_le(audio)
-        return SynthResult(
-            pcm=pcm,
-            sample_rate=int(sample_rate),
-            substituted_from=substituted_from,
-        )
+            # kokoro-onnx's create() returns (samples, sample_rate). samples is
+            # a numpy float32 array in [-1, 1]; sample_rate is the model's
+            # native rate (24 kHz for v1). Wrap defensively in case a future
+            # release changes the return shape.
+            gen_start = time.perf_counter()
+            result = self._kokoro.create(
+                text,
+                voice=actual_voice,
+                speed=1.0,
+                lang=self._language,
+            )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+            if isinstance(result, tuple) and len(result) == 2:
+                audio, sample_rate = result
+            else:
+                audio = result
+                sample_rate = self.NATIVE_SAMPLE_RATE
+            audio_ms = _audio_duration_ms(audio, int(sample_rate))
+            log.info(
+                "kokoro synth: voice=%s text_len=%d gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
+                actual_voice, len(text), gen_ms, audio_ms,
+                (gen_ms / audio_ms if audio_ms > 0 else 0.0),
+            )
+            pcm = _float_audio_to_int16_le(audio)
+            return SynthResult(
+                pcm=pcm,
+                sample_rate=int(sample_rate),
+                substituted_from=substituted_from,
+            )
 
 
 def _float_audio_to_int16_le(audio: Any) -> bytes:
@@ -1306,31 +1362,42 @@ class QwenEngine(Engine):
         self._design_last_used = time.monotonic()
         self._design_in_flight += 1
         try:
-            self._ensure_design_loaded()
-            self._ensure_base_loaded()
-            # Serialise the GPU forwards against any concurrent synth/design — see
-            # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-            with self._synth_lock:
-                # Re-ensure the models UNDER the lock. Every in-place nuller of
-                # `_design`/`_base` (the idle watchdog, a concurrent
-                # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
-                # so a model ensured before we took the lock may have been freed
-                # in the gap. Re-ensuring here is the airtight backstop against
-                # "'NoneType' object has no attribute 'generate_voice_design'".
-                # Idempotent / a no-op on the warm path; `_ensure_*` don't take
-                # `_synth_lock`, so this can't deadlock.
+            # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
+            # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
+            # (waits for any in-flight Kokoro synth to drain, blocks new ones),
+            # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
+            # reloads on the next synth (~1s); when no generation ran it isn't
+            # resident, so this is a no-op.
+            with _VD_KOKORO.design():
+                _kokoro_eng = ENGINES.get("kokoro")
+                if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
+                    log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
+                    _kokoro_eng.unload()
                 self._ensure_design_loaded()
                 self._ensure_base_loaded()
-                # 1. design a reference clip from the persona instruction.
-                ref_wavs, ref_sr = self._design.generate_voice_design(
-                    text=ref_text, language=lang, instruct=instruct
-                )
-                ref_audio = ref_wavs[0]
+                # Serialise the GPU forwards against any concurrent synth/design — see
+                # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                with self._synth_lock:
+                    # Re-ensure the models UNDER the lock. Every in-place nuller of
+                    # `_design`/`_base` (the idle watchdog, a concurrent
+                    # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
+                    # so a model ensured before we took the lock may have been freed
+                    # in the gap. Re-ensuring here is the airtight backstop against
+                    # "'NoneType' object has no attribute 'generate_voice_design'".
+                    # Idempotent / a no-op on the warm path; `_ensure_*` don't take
+                    # `_synth_lock`, so this can't deadlock.
+                    self._ensure_design_loaded()
+                    self._ensure_base_loaded()
+                    # 1. design a reference clip from the persona instruction.
+                    ref_wavs, ref_sr = self._design.generate_voice_design(
+                        text=ref_text, language=lang, instruct=instruct
+                    )
+                    ref_audio = ref_wavs[0]
 
-                # 2. distil into a reusable clone prompt on the Base model.
-                prompt = self._base.create_voice_clone_prompt(
-                    ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-                )
+                    # 2. distil into a reusable clone prompt on the Base model.
+                    prompt = self._base.create_voice_clone_prompt(
+                        ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                    )
 
             # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
             os.makedirs(self._voices_dir, exist_ok=True)
