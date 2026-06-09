@@ -274,6 +274,10 @@ export function CastView({
      reachable even after the last row flips and the counts hit 0). */
   const showDesignFullCast =
     (ttsEngine === 'qwen' && (needsVoiceIds.length > 0 || variantCount > 0)) || designRunningHere;
+  useEffect(() => {
+    if (designRunningHere || designRunningElsewhere) setScopeOpen(false);
+  }, [designRunningHere, designRunningElsewhere]);
+
   const onDesignFullCast = () => {
     if (designRunningHere) {
       if (bookId) void api.pauseCastDesign(bookId);
@@ -538,6 +542,8 @@ export function CastView({
                   onClick={onDesignFullCast}
                   disabled={designRunningElsewhere}
                   data-testid="design-full-cast"
+                  aria-haspopup="menu"
+                  aria-expanded={scopeOpen}
                   className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
                     designRunningElsewhere
                       ? 'bg-ink/5 text-ink/40 cursor-not-allowed'

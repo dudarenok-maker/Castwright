@@ -1437,4 +1437,84 @@ describe('CastView — Design full cast button', () => {
     });
     expect(screen.getByTestId('design-full-cast')).toHaveTextContent('Cancel design · 1/3');
   });
+
+  it('picking "both" from the scope picker dispatches designAllRequested with scope:both, non-empty characterIds AND variantTasks', () => {
+    /* needsVoice: Qwen character with no designed voice → lands in needsVoiceIds.
+       withBase: Qwen character with a base voice + an in-use emotion without a
+       variant → lands in variantTasks. Both lists are non-empty so the "both"
+       scope path is fully exercised. */
+    const needsVoice: Character = {
+      id: 'needs-voice',
+      name: 'Needs Voice',
+      role: 'Extra',
+      color: 'mentor',
+      lines: 3,
+      scenes: 1,
+      attributes: [],
+      ttsEngine: 'qwen',
+      overrideTtsVoices: undefined,
+    };
+    const withBase: Character = {
+      id: 'with-base',
+      name: 'With Base',
+      role: 'Hero',
+      color: 'mentor',
+      lines: 10,
+      scenes: 3,
+      attributes: [],
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-with-base', variants: {} } },
+    };
+    const bothSents: Sentence[] = [
+      { id: 20, chapterId: 1, text: 'I am furious!', characterId: 'with-base', emotion: 'angry' },
+    ];
+    const actionsBoth: Array<{ type: string; payload?: unknown }> = [];
+    const recorderBoth =
+      () => (next: (a: unknown) => unknown) => (action: unknown) => {
+        actionsBoth.push(action as { type: string; payload?: unknown });
+        return next(action);
+      };
+    const storeBoth = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      middleware: (g) => g().concat(recorderBoth),
+    });
+    storeBoth.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    storeBoth.dispatch(uiSlice.actions.openBook({ id: 'b3', status: 'complete' }));
+    render(
+      <Provider store={storeBoth}>
+        <CastView
+          characters={[needsVoice, withBase]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={bothSents}
+          title="X"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    expect(screen.getByTestId('design-scope-picker')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('scope-both'));
+    const a = actionsBoth.find((x) => x.type === castDesignActions.designAllRequested.type) as
+      | {
+          payload: {
+            bookId: string;
+            characterIds: string[];
+            modelKey: string;
+            scope: string;
+            variantTasks: Array<{ characterId: string; emotions: string[] }>;
+          };
+        }
+      | undefined;
+    expect(a?.payload.bookId).toBe('b3');
+    expect(a?.payload.scope).toBe('both');
+    /* Both lists non-empty: needsVoice in characterIds, withBase in variantTasks */
+    expect(a?.payload.characterIds).toEqual(['needs-voice']);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'with-base', emotions: ['angry'] }]);
+    /* Picker closes after picking */
+    expect(screen.queryByTestId('design-scope-picker')).toBeNull();
+  });
 });
