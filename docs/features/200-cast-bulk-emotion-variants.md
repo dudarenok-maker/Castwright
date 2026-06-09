@@ -259,10 +259,12 @@ Requires a Qwen project with weights installed + a book with emotion-tagged sent
 
 ## Follow-ups
 
-- **Series-wide variant-slot propagation** — after a book-scoped variant is designed and
-  written to `cast.json`, propagate the `variants[emotion]` slot to sibling books in the
-  series (the `.pt` is already reusable; only the `cast.json` record is missing). Analogous
-  to how `applyOverrideToCastFiles` propagates base voice assignments.
+- **Series-wide variant-slot propagation** (`srv-37`,
+  [#688](https://github.com/dudarenok-maker/AudioBook-Generator/issues/688)) — after a
+  book-scoped variant is designed and written to `cast.json`, propagate the
+  `variants[emotion]` slot to sibling books in the series (the `.pt` is already reusable;
+  only the `cast.json` record is missing). Analogous to how `applyOverrideToCastFiles`
+  propagates base voice assignments.
 - **Responsive coverage case for the scope picker** — add a phone/tablet viewport case to
   `e2e/responsive/coverage.spec.ts` (the picker bottom-sheet placement on mobile).
 
