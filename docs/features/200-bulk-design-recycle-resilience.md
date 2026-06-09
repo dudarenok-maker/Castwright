@@ -103,7 +103,13 @@ sidecar).
 
 ## Ship notes
 
-_Pending._ Builds on `108-qwen-coexistence.md` (VRAM coexistence) and the
+Shipped to `main` 2026-06-10 in **274522d0** (direct fast-forward merge, no PR).
+Closes bug **#690** — _"Design full cast halts after the first voice (sidecar
+recycle not recovered)"_. Live-GPU acceptance (restart via `start-prod.bat` so
+the sidecar comes up with the correct `.env` ceilings) is the only remaining
+check.
+
+Builds on `108-qwen-coexistence.md` (VRAM coexistence) and the
 voice-design contention robustness work (PR #685,
 `docs/superpowers/specs/2026-06-09-voice-design-contention-robustness-design.md`).
 Pairs with `195-design-full-cast.md`.
