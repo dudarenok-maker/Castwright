@@ -19,6 +19,7 @@ import {
   DEFAULT_QWEN_BATCH_TOKEN_BUDGET,
   ChapterSynthTimeoutError,
   MissingDesignedVoiceError,
+  RecycleStormError,
   type CastCharacter,
 } from './synthesise-chapter.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
@@ -2432,4 +2433,149 @@ describe('synthesiseChapter pre-assembly QA gate', () => {
     const body = result.segments.find((s) => s.sentenceIds.includes(1));
     expect(body?.voiceSubstitutedFrom).toBeUndefined();
   });
+});
+
+/* ── C1 (Wave 3): in-loop recycle recovery ───────────────────────────
+   A transient sidecar-down mid-pool must recover WITHOUT discarding the
+   already-completed groups: synthesiseChapter calls the injected
+   `onRecoverRecycle` hook (the readiness wait, in production) and re-attempts
+   ONLY the failed work item; every filled `results[]` slot survives because the
+   function never restarts. On budget exhaustion it throws the named
+   `RecycleStormError`; an abort or a non-transient error never recovers; and
+   with no hook a transient bubbles out unchanged (the pre-C1 passthrough every
+   other caller relies on).
+
+   NOTE ON CALL COUNTS: each synth site wraps `withTtsRetry` (1 primary + 2
+   retries on a persistent transient), so a single recovery attempt makes up to
+   3 provider calls. These tests therefore assert on the RECOVERY count
+   (`onRecoverRecycle` invocations / `RecycleStormError.recoveries`), which is
+   the contract C1 introduces — independent of the inner retry budget. */
+describe('synthesiseChapter C1 in-loop recycle recovery', () => {
+  const c1Cast: CastCharacter[] = [
+    { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
+  ];
+
+  function transientErr(): Error {
+    return Object.assign(new Error('sidecar not reachable (fetch failed)'), {
+      transient: true as const,
+      cause: 'network' as const,
+    });
+  }
+
+  it('recovers a transient mid-pool failure WITHOUT re-rendering completed groups', async () => {
+    /* 3 single-sentence groups, serial (sentenceConcurrency 1). The middle
+       group's first synthGroup throws a persistent transient (drains its whole
+       withTtsRetry budget → 3 provider calls), which trips ONE in-loop recovery;
+       on the re-attempt the provider succeeds. Groups 0 + 2 synth exactly once
+       (never re-rendered). */
+    const calls = new Map<string, number>();
+    let g1Budget = 3; // throw for the first synthGroup's full retry budget, then succeed
+    const provider: TtsProvider = {
+      synthesize: vi.fn(async (input: SynthesizeInput): Promise<SynthesizeOutput> => {
+        calls.set(input.text, (calls.get(input.text) ?? 0) + 1);
+        if (input.text.includes('middle') && g1Budget > 0) {
+          g1Budget -= 1;
+          throw transientErr();
+        }
+        return { pcm: Buffer.alloc(2), sampleRate: 24000, mimeType: 'audio/pcm' };
+      }),
+    };
+    const onRecoverRecycle = vi.fn(async () => {});
+
+    const result = await synthesiseChapter({
+      sentences: [
+        sentence(1, 'narrator', 'first line.'),
+        sentence(2, 'narrator', 'middle line.'),
+        sentence(3, 'narrator', 'last line.'),
+      ],
+      cast: c1Cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'kokoro',
+      sentenceConcurrency: 1,
+      groupHeartbeatMs: 0,
+      onRecoverRecycle,
+      maxRecycleRecoveries: 2,
+    });
+
+    expect(onRecoverRecycle).toHaveBeenCalledTimes(1); // exactly one recovery
+    expect(onRecoverRecycle).toHaveBeenCalledWith({ engine: 'kokoro', attempt: 1 });
+    expect(calls.get('first line.')).toBe(1); // completed group NOT re-rendered
+    expect(calls.get('last line.')).toBe(1); // completed group NOT re-rendered
+    expect(result.segments.length).toBe(3); // chapter completed
+  }, 15_000);
+
+  it('throws RecycleStormError after the shared budget is exhausted', async () => {
+    const onRecoverRecycle = vi.fn(async () => {});
+    const provider: TtsProvider = {
+      synthesize: vi.fn(async (): Promise<SynthesizeOutput> => {
+        throw transientErr();
+      }),
+    };
+
+    const err = await synthesiseChapter({
+      sentences: [sentence(1, 'narrator', 'a line.')],
+      cast: c1Cast,
+      provider,
+      modelKey: 'gemini-2.5-flash',
+      engine: 'kokoro',
+      sentenceConcurrency: 1,
+      groupHeartbeatMs: 0,
+      onRecoverRecycle,
+      maxRecycleRecoveries: 2,
+    }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(RecycleStormError);
+    expect((err as RecycleStormError).recoveries).toBe(2);
+    // 1 primary attempt + 2 recoveries = 3 synth attempts → hook fired twice.
+    expect(onRecoverRecycle).toHaveBeenCalledTimes(2);
+  }, 30_000);
+
+  it('a non-transient error does NOT recover (re-throws immediately)', async () => {
+    const onRecoverRecycle = vi.fn(async () => {});
+    const provider: TtsProvider = {
+      synthesize: vi.fn(async (): Promise<SynthesizeOutput> => {
+        throw new Error('index out of range in self');
+      }),
+    };
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'a line.')],
+        cast: c1Cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'kokoro',
+        sentenceConcurrency: 1,
+        groupHeartbeatMs: 0,
+        onRecoverRecycle,
+        maxRecycleRecoveries: 2,
+      }),
+    ).rejects.toThrow('index out of range');
+    expect(onRecoverRecycle).not.toHaveBeenCalled(); // non-transient → no recovery
+    expect(provider.synthesize).toHaveBeenCalledTimes(1); // withTtsRetry bails on non-transient
+  });
+
+  it('passthrough — with no onRecoverRecycle a transient bubbles out unchanged (pre-C1)', async () => {
+    const provider: TtsProvider = {
+      synthesize: vi.fn(async (): Promise<SynthesizeOutput> => {
+        throw transientErr();
+      }),
+    };
+
+    await expect(
+      synthesiseChapter({
+        sentences: [sentence(1, 'narrator', 'a line.')],
+        cast: c1Cast,
+        provider,
+        modelKey: 'gemini-2.5-flash',
+        engine: 'kokoro',
+        sentenceConcurrency: 1,
+        groupHeartbeatMs: 0,
+        // NO onRecoverRecycle → no in-loop recovery; transient bubbles out.
+      }),
+    ).rejects.toMatchObject({ transient: true });
+  }, 15_000);
 });

@@ -126,6 +126,14 @@ adoption-policy decision:
   recycles on the same chapter — stop grinding: pause the run and surface a
   clear alert naming the cause (likely the leak / undersized headroom) instead
   of burning hours. Builds on the existing `MAX_RECYCLE_RECOVERIES` fall-through.
+  *As shipped:* `synthesiseChapter` throws a named `RecycleStormError` on budget
+  exhaustion → `generation.ts` maps it to a `recycle-storm` failure code +
+  remediation AND **pauses the queue** (`setPaused` on the queue file) on the
+  queue path so the dispatcher halts. (The original "rely on the `recordNonFatal`
+  cascade" idea was dropped: the cascade is per-POST and the queue dispatches one
+  chapter per POST, so it never escalates on the queue path — the explicit
+  queue-pause is what delivers "pause the run." The back-compat `*` job, many
+  chapters per POST, still uses the cascade.)
 
 ## Delivery (3 waves, each independently valuable)
 
@@ -141,6 +149,22 @@ adoption-policy decision:
 > supervisor respawn-state — NOT handle-ownership, which would have wedged the
 > dispatcher for adopted sidecars). Typecheck + server (2376 tests) green. Plan:
 > `docs/superpowers/plans/2026-06-08-generation-stall-protection-wave2.md`.
+>
+> **Wave 3 landed 2026-06-09** on `feat/server-generation-stall-protection-wave3`
+> (internal order C1 → C2 → C3, since C2/C3 build on C1's `onRecoverRecycle`
+> seam): **C1** `3da94091` (in-loop recovery — completed groups preserved; the
+> recovery boundary moved from a whole-chapter re-invoke into `synthesiseChapter`'s
+> per-group loop via an injected `onRecoverRecycle` hook + `withRecycleRecovery`
+> passthrough helper + `RecycleStormError`; the old whole-chapter recovery test
+> was relocated to a unit-level resume-preservation proof). **C2** `35abcea9` +
+> `0aa8e4f1` (`chapter_recovering` SSE tick + 10s heartbeat from the hook +
+> `phase: 'recovering'` mirroring `chapter_verifying`; the fix holds the progress
+> bar rather than regressing it). **C3** `f122b0cd` + `253beec5` (named
+> `recycle-storm` taxonomy entry ordered before `vram-spill` to beat its "VRAM"
+> substring match, + **queue-pause** on a storm so the run actually stops — the
+> per-POST cascade can't escalate on the queue path). Typecheck + server (2384
+> tests) + frontend green. Plan:
+> `docs/superpowers/plans/2026-06-08-generation-stall-protection-wave3.md`.
 
 1. **Wave 1 — config safety (ships first; prevents *this* incident):** A1, A2,
    A4 + prod-fresh-sidecar policy.

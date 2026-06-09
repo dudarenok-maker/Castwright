@@ -369,6 +369,55 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     expect(screen.queryByText(/Synthesising/)).not.toBeInTheDocument();
   });
 
+  it('shows the recovering caption on a chapter in the recovering phase', () => {
+    const recovering: Chapter = {
+      ...chapter1,
+      state: 'in_progress',
+      phase: 'recovering',
+      progress: 0.9,
+    };
+    const ch2Queued: Chapter = { ...chapter2 };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+      },
+    });
+    store.dispatch(chaptersSlice.actions.setChapters([recovering, ch2Queued]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [recovering, ch2Queued],
+        sentences,
+      } as any),
+    );
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[recovering, ch2Queued]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    expect(screen.getByText('Recovering — restarting TTS engine…')).toBeInTheDocument();
+    // The frozen synthesising caption must NOT show for the recovering row.
+    expect(screen.queryByText(/Synthesising/)).not.toBeInTheDocument();
+  });
+
   it('suppresses the stale "Active:" line when a chapter is in the verifying phase', () => {
     const verifying: Chapter = {
       ...chapter1,
