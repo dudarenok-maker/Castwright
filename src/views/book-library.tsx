@@ -308,7 +308,10 @@ export function BookLibraryView({
            the table itself, not the document body. Desktop ≥md
            viewports never overflow this wrapper, so the visual is
            a no-op there. */
-        <div className="overflow-x-auto -mx-4 px-4 sm:-mx-6 sm:px-6 md:mx-0 md:px-0">
+        <div
+          className="overflow-x-auto scrollbar-thin -mx-4 px-4 sm:-mx-6 sm:px-6 md:mx-0 md:px-0"
+          style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
+        >
           <LibraryTable
             loaded={loaded}
             isLibraryEmpty={authors.length === 0}

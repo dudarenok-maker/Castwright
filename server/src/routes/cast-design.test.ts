@@ -141,6 +141,8 @@ function parseSse(text: string): Array<Record<string, any>> {
 
 let designLock: typeof import('../tts/design-lock.js');
 let qwenVoiceMod: typeof import('./qwen-voice.js');
+let ensureMod: typeof import('../tts/ensure-sidecar-loaded.js');
+let MAX_RECYCLE_RIDEOUTS: number;
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-design-test-'));
@@ -149,14 +151,18 @@ beforeAll(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
   vi.stubGlobal('fetch', fetchMock);
 
-  const [{ castDesignRouter }, qwenVoice, { makeBookId }, lock] = await Promise.all([
+  const [castDesign, qwenVoice, { makeBookId }, lock, ensure] = await Promise.all([
     import('./cast-design.js'),
     import('./qwen-voice.js'),
     import('../workspace/paths.js'),
     import('../tts/design-lock.js'),
+    import('../tts/ensure-sidecar-loaded.js'),
   ]);
+  const { castDesignRouter } = castDesign;
+  MAX_RECYCLE_RIDEOUTS = castDesign.MAX_RECYCLE_RIDEOUTS;
   qwenVoiceMod = qwenVoice;
   designLock = lock;
+  ensureMod = ensure;
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
 
@@ -250,17 +256,54 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(charById('fitz')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_fitz');
   });
 
-  it('sidecar liveness watchdog "stopped responding to /health" triggers fast-fail (sidecar_unavailable)', async () => {
-    /* Regression: the bulk-design fast-fail regex previously matched
-       "unreachable|did not complete within" but NOT the new liveness-watchdog
-       message "stopped responding to /health during voice design". Without the
-       fix, the job would grind through every remaining character to the 600s
-       ceiling instead of stopping early. */
-    const stoppedMsg =
-      `TTS sidecar (http://localhost:9000) stopped responding to /health during voice design — the process may have crashed or been recycled.`;
-    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockRejectedValue(
-      new Error(stoppedMsg),
+  it('rides out a mid-bulk sidecar recycle: waits for respawn, retries the character, and completes', async () => {
+    /* A recycle (committed/VRAM ceiling) mid-bulk makes ONE design fail with an
+       "unreachable" error while the supervisor respawns. The job must wait for
+       the sidecar to come back (ensureSidecarEngineReady) and RETRY that
+       character — NOT halt the whole run. This is the core robustness fix:
+       bulk design survives the recycles it is statistically guaranteed to hit. */
+    const ensureSpy = vi
+      .spyOn(ensureMod, 'ensureSidecarEngineReady')
+      .mockResolvedValue(undefined); // sidecar is back immediately
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValueOnce(new Error('TTS sidecar (http://localhost:9000) is unreachable'))
+      .mockResolvedValue({ voiceId: 'qwen-v_aria' } as Awaited<
+        ReturnType<typeof qwenVoiceMod.designQwenVoiceForCharacter>
+      >);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.find((e) => e.type === 'error')).toBeUndefined(); // NOT halted
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'aria')).toBe(
+      true,
     );
+    expect(events.find((e) => e.type === 'idle')).toMatchObject({ done: 1, total: 1 });
+    expect(ensureSpy).toHaveBeenCalled(); // rode out the respawn
+    expect(designSpy).toHaveBeenCalledTimes(2); // initial failure + one retry
+
+    ensureSpy.mockRestore();
+    designSpy.mockRestore();
+  });
+
+  it('halts with sidecar_unavailable only after the ride-out retries are exhausted', async () => {
+    /* If the sidecar never returns (genuinely dead, not a transient recycle),
+       the job must still stop rather than grind forever — but only AFTER it has
+       given the supervisor a bounded number of respawn-and-retry attempts. */
+    const ensureSpy = vi
+      .spyOn(ensureMod, 'ensureSidecarEngineReady')
+      .mockResolvedValue(undefined);
+    const designSpy = vi
+      .spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter')
+      .mockRejectedValue(
+        new Error(
+          'TTS sidecar (http://localhost:9000) stopped responding to /health during voice design.',
+        ),
+      );
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)
@@ -269,13 +312,15 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
     const errorEvent = events.find((e) => e.type === 'error');
-    expect(errorEvent).toBeDefined();
     expect(errorEvent?.code).toBe('sidecar_unavailable');
-    expect(errorEvent?.message).toMatch(/stopped responding/i);
-    /* The loop stopped after the first character — aria is NOT in character_designed */
     expect(events.some((e) => e.type === 'character_designed')).toBe(false);
+    /* One initial attempt + the bounded ride-out retries, then halt — and it
+       gave up on the FIRST character (didn't grind through fitz too). */
+    expect(designSpy).toHaveBeenCalledTimes(1 + MAX_RECYCLE_RIDEOUTS);
+    expect(ensureSpy).toHaveBeenCalledTimes(MAX_RECYCLE_RIDEOUTS);
 
-    spy.mockRestore();
+    ensureSpy.mockRestore();
+    designSpy.mockRestore();
   });
 
   it('mutual exclusion: refuses to start while analysis is busy (409)', async () => {

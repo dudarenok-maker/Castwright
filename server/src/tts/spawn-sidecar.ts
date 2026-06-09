@@ -109,6 +109,50 @@ export function adoptCommittedCeilingMb(): number {
   return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 20_000;
 }
 
+/* The hard recycle ceilings (committed RAM / reserved VRAM, MB) THIS server
+   would configure for a sidecar it spawns — resolved from the SAME registry
+   knobs buildSidecarEnv injects (so an explicit .env / config override is the
+   expectation, while an auto/default knob means "no fixed expectation": both
+   sides auto-compute the same value on the same box). null = no expectation. */
+export function expectedSidecarCeilings(): {
+  memRestartMb: number | null;
+  vramRestartMb: number | null;
+} {
+  const resolve = (key: string): number | null => {
+    const knob = allKnobs().find((k) => k.key === key);
+    if (!knob) return null;
+    const st = resolveKnob(knob);
+    /* Only a NON-default (env / override) value is a real expectation; a knob
+       left at its 0=auto default is injected nowhere, so the sidecar
+       auto-computes and we don't second-guess it. */
+    if (st.source === 'default') return null;
+    const n = Number(st.effective);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+  return {
+    memRestartMb: resolve('sidecar.restartMb'),
+    vramRestartMb: resolve('sidecar.vramRestartMb'),
+  };
+}
+
+/* True when the live sidecar's effective ceiling disagrees with what this
+   server would configure (beyond a 1 MB float-rounding tolerance). Only
+   compares dimensions where BOTH an expectation and a reported value exist —
+   a missing field (older sidecar) or an auto/default config is never a
+   mismatch, so the guard can't false-fire. */
+export function sidecarCeilingMismatch(health: SidecarHealthProbe): string | null {
+  const expected = expectedSidecarCeilings();
+  const off = (exp: number | null, got: number | null | undefined): boolean =>
+    exp !== null && typeof got === 'number' && Math.abs(got - exp) > 1;
+  if (off(expected.memRestartMb, health.memRestartMb)) {
+    return `committed-RAM recycle ceiling ${Math.round(health.memRestartMb!)}MB != configured ${expected.memRestartMb}MB`;
+  }
+  if (off(expected.vramRestartMb, health.vramRestartMb)) {
+    return `reserved-VRAM recycle ceiling ${Math.round(health.vramRestartMb!)}MB != configured ${expected.vramRestartMb}MB`;
+  }
+  return null;
+}
+
 /* Prod never adopts a pre-existing sidecar: at boot there is no in-flight synth,
    so a clean owned process (governed by the graceful soft/hard recycle path) is
    strictly safer than bolting onto an orphan of unknown leak/build. Dev keeps
@@ -139,6 +183,14 @@ export interface SidecarHealthProbe {
       committed/VRAM ceiling and intends to recycle at the next boundary. An
       adopt target reporting this is about to self-exit, so we replace it. */
   recyclePending: boolean;
+  /** The sidecar's EFFECTIVE hard recycle ceilings (committed RAM / reserved
+      VRAM, MB) — what it will actually self-exit at, after resolving its env +
+      auto defaults. Optional: an older sidecar omits them (→ undefined). The
+      adopt gate compares these against the server's configured ceilings to
+      detect a sidecar started under a DIFFERENT config (e.g. a dev launch with
+      no .env → auto ceiling) that must not silently serve this server. */
+  memRestartMb?: number | null;
+  vramRestartMb?: number | null;
 }
 
 /** Probe a listening process's /health to decide whether it's the CURRENT
@@ -169,7 +221,17 @@ export async function probeSidecarHealth(
       typeof body.protocol_version === 'number' ? body.protocol_version : null;
     const committedMb = typeof body.committed_mb === 'number' ? body.committed_mb : null;
     const recyclePending = body.recycle_pending === true;
-    return { reachable: true, looksLikeSidecar, protocolVersion, committedMb, recyclePending };
+    const memRestartMb = typeof body.mem_restart_mb === 'number' ? body.mem_restart_mb : null;
+    const vramRestartMb = typeof body.vram_restart_mb === 'number' ? body.vram_restart_mb : null;
+    return {
+      reachable: true,
+      looksLikeSidecar,
+      protocolVersion,
+      committedMb,
+      recyclePending,
+      memRestartMb,
+      vramRestartMb,
+    };
   } catch {
     return {
       reachable: false,
@@ -443,13 +505,21 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
        dying process (the 2026-06-02 "stuck after restart" — adopted a ~26 GB
        orphan). Replace it with a clean process instead. */
     const adoptCeiling = adoptCommittedCeilingMb();
+    /* A sidecar whose effective recycle ceiling disagrees with this server's
+       config was started under a DIFFERENT config (a dev launch / stale-worktree
+       process with no .env → auto ceiling). Adopting it lets it recycle at the
+       wrong threshold and silently serve us — the exact "dev sidecar adopted by
+       prod" trigger behind the bulk-design failures. Treat it as unfit (A1). */
+    const ceilingMismatch = health.looksLikeSidecar ? sidecarCeilingMismatch(health) : null;
     const unfitReason = !health.looksLikeSidecar
       ? null // not-ours is handled separately below
       : health.recyclePending
         ? 'reports recycle_pending (about to self-recycle)'
         : adoptCeiling > 0 && health.committedMb !== null && health.committedMb >= adoptCeiling
           ? `committed ${Math.round(health.committedMb)}MB ≥ the ${adoptCeiling}MB adopt ceiling (leak-saturated)`
-          : null;
+          : ceilingMismatch
+            ? `config mismatch: ${ceilingMismatch} — started under a different config (likely a dev/stale sidecar)`
+            : null;
     const policyReplace = neverAdoptSidecar() && freshProtocol && unfitReason === null;
     const fresh = freshProtocol && unfitReason === null && !policyReplace;
     if (fresh) {

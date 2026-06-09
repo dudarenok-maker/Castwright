@@ -2557,6 +2557,14 @@ def health() -> dict[str, Any]:
         "committed_mb": _process_commit_mb(),
         "vram_reserved_mb": _vram_reserved,
         "vram_total_mb": _vram_total,
+        # EFFECTIVE hard recycle ceilings (committed RAM / reserved VRAM, MB) —
+        # what this process will actually self-exit (code 43) at, after resolving
+        # env + auto defaults. The Node spawn-gate compares these against its
+        # configured ceilings to detect a sidecar started under a DIFFERENT
+        # config (e.g. a dev launch with no .env → auto ceiling) and refuse to
+        # adopt it. None when disabled / VRAM total unreadable.
+        "mem_restart_mb": (_mem_restart_threshold_mb() or None),
+        "vram_restart_mb": (_vram_restart_threshold_mb(_vram_total) or None),
     }
 
 

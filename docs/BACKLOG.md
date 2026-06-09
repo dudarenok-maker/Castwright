@@ -267,7 +267,7 @@ _Full detail + acceptance:_ [#423](https://github.com/dudarenok-maker/AudioBook-
 
 #### `srv-37` — Propagate book-scoped emotion-variant slots to sibling books in a series ([#688](https://github.com/dudarenok-maker/AudioBook-Generator/issues/688))
 
-- _What:_ Per-book bulk emotion-variant design (fe-32, plan 200) records each designed Qwen variant as a **book-scoped** `qwen.variants[emotion]` slot. The `.pt` asset lives under the series-unified `<baseVoiceId>__<emotion>` voice id (reusable across the series), but sibling books still show the emotion as "needs a variant" until propagation copies/resolves the recorded slot into their `cast.json`.
+- _What:_ Per-book bulk emotion-variant design (fe-32, plan 201) records each designed Qwen variant as a **book-scoped** `qwen.variants[emotion]` slot. The `.pt` asset lives under the series-unified `<baseVoiceId>__<emotion>` voice id (reusable across the series), but sibling books still show the emotion as "needs a variant" until propagation copies/resolves the recorded slot into their `cast.json`.
 - _Benefit (user):_ a variant designed once in one book lights up green across the whole series without re-designing it per book.
 _Full detail + acceptance:_ [#688](https://github.com/dudarenok-maker/AudioBook-Generator/issues/688).
 

@@ -500,7 +500,12 @@ describe('BookLibraryView — loading affordance', () => {
       expect(
         screen.queryByRole('heading', { level: 2, name: 'Shannon Messenger' }),
       ).not.toBeInTheDocument();
-      expect(screen.getByTestId('library-table-row-b1')).toBeInTheDocument();
+      const row = screen.getByTestId('library-table-row-b1');
+      expect(row).toBeInTheDocument();
+      // The table's horizontal-overflow strip uses the shared thin scrollbar.
+      const strip = row.closest('[class*="overflow-x-auto"]');
+      expect(strip).not.toBeNull();
+      expect(strip!.className).toMatch(/scrollbar-thin/);
       expect(screen.getByTestId('library-view-mode-table')).toHaveAttribute(
         'aria-pressed',
         'true',
