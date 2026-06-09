@@ -74,10 +74,14 @@ def test_kokoro_blocks_while_design_active():
 def test_two_kokoro_synths_run_concurrently_when_no_design():
     arb = _VdKokoroArbiter()
     both_in = threading.Barrier(2, timeout=1)
+    errors = []
 
     def kokoro():
-        with arb.kokoro_synth():
-            both_in.wait()
+        try:
+            with arb.kokoro_synth():
+                both_in.wait()  # BrokenBarrierError if they can't co-exist
+        except Exception as e:  # noqa: BLE001 - surface to the assertion below
+            errors.append(e)
 
     t1 = threading.Thread(target=kokoro)
     t2 = threading.Thread(target=kokoro)
@@ -85,3 +89,4 @@ def test_two_kokoro_synths_run_concurrently_when_no_design():
     t2.start()
     t1.join()
     t2.join()
+    assert not errors, f"Kokoro synths could not run concurrently: {errors}"
