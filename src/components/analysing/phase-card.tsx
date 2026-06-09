@@ -111,7 +111,10 @@ function ActivePhaseLog({ lines }: { lines: string[] }) {
     <div
       ref={scrollRef}
       onScroll={onScroll}
-      className={`mt-3 ${ACTIVE_PHASE_LOG_MAX_H} overflow-y-auto pr-2 -mr-2`}
+      className={`mt-3 ${ACTIVE_PHASE_LOG_MAX_H} overflow-y-auto scrollbar-thin pr-2 -mr-2`}
+      // Mid-card square-cornered region — zero out scrollbar-thin's default
+      // bottom-corner clip so the log text isn't clipped by a phantom curve.
+      style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
     >
       <ul className="space-y-1.5 text-xs font-mono text-ink/70">
         {lines.map((s, i) => (
