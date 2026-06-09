@@ -76,6 +76,7 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       attributes: ['Neutral', 'Mid-tempo', 'Mid-Atlantic', 'Warm'],
       usedIn: 11,
       source: 'library',
+      inCurrentSeries: true,
       reusable: true,
       ttsVoice: tts('Sulafat', 'Warm'),
     }),
@@ -120,6 +121,7 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       attributes: ['Male', 'Bass', 'Scottish', '70s', 'Weathered'],
       usedIn: 1,
       source: 'library',
+      inCurrentSeries: true,
       ttsVoice: tts('Algieba', 'Smooth'),
     }),
     withGradient({
@@ -131,6 +133,7 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       attributes: ['Female', 'Soprano', 'RP English', '60s', 'Crisp'],
       usedIn: 1,
       source: 'library',
+      inCurrentSeries: true,
       ttsVoice: tts('Aoede', 'Breezy'),
     }),
     withGradient({
@@ -142,6 +145,7 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       attributes: ['Male', 'Treble', 'Scottish', '12', 'Curious'],
       usedIn: 1,
       source: 'library',
+      inCurrentSeries: true,
       ttsVoice: tts('Sadachbia', 'Lively'),
     }),
     withGradient({
@@ -208,6 +212,7 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       attributes: ['Male', 'Bright', 'Young'],
       usedIn: 1,
       source: 'library',
+      inCurrentSeries: true,
       overrideTtsVoices: { qwen: { name: 'qwen-finch' } },
       generated: true,
       // designed AND rendered → "Designed voices" with a Generated badge
