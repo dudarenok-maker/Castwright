@@ -15,6 +15,8 @@ interface StartCall {
   bookId: string;
   characterIds: string[];
   modelKey: string;
+  scope?: string;
+  variantTasks?: { characterId: string; emotions: string[] }[];
   cb: CastDesignCallbacks;
   resolve: () => void;
 }
@@ -44,11 +46,21 @@ vi.mock('../lib/api', () => ({
   api: {
     startCastDesign: (
       bookId: string,
-      { characterIds, modelKey }: { characterIds: string[]; modelKey: string },
+      {
+        characterIds,
+        modelKey,
+        scope,
+        variantTasks,
+      }: {
+        characterIds: string[];
+        modelKey: string;
+        scope?: string;
+        variantTasks?: { characterId: string; emotions: string[] }[];
+      },
       cb: CastDesignCallbacks,
     ) =>
       new Promise<void>((resolve) => {
-        startCalls.push({ bookId, characterIds, modelKey, cb, resolve });
+        startCalls.push({ bookId, characterIds, modelKey, scope, variantTasks, cb, resolve });
       }),
     subscribeCastDesign: (bookId: string, cb: CastDesignCallbacks) =>
       new Promise<void>((resolve) => {
@@ -316,5 +328,54 @@ describe('castDesignMiddleware', () => {
     expect(types).toContain('notifications/pushToast');
     /* Re-design stays staged for the drawer to resolve — NOT auto-cleared. */
     expect(store.getState().castDesign.active?.state).toBe('ready-to-compare');
+  });
+
+  /* ── fe-32 variant wiring ─────────────────────────────────────────────── */
+
+  it('passes scope + variantTasks through to api.startCastDesign', () => {
+    const store = makeStore();
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b',
+        characterIds: ['a'],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'both',
+        variantTasks: [{ characterId: 'a', emotions: ['angry'] }],
+      }),
+    );
+
+    expect(startCalls).toHaveLength(1);
+    expect(startCalls[0]).toMatchObject({
+      bookId: 'b',
+      scope: 'both',
+      variantTasks: [{ characterId: 'a', emotions: ['angry'] }],
+    });
+  });
+
+  it('onVariantDesigned mirrors the variant into the cast slice and bumps done', () => {
+    const store = makeStore();
+    /* Seed character 'a' so setCharacterEmotionVariant has somewhere to land. */
+    store.dispatch(
+      castSlice.actions.setCharacters([{ id: 'a', name: 'Alice' } as never]),
+    );
+    store.dispatch(
+      castDesignActions.designAllRequested({
+        bookId: 'b',
+        characterIds: [],
+        modelKey: 'qwen3-tts-0.6b',
+        scope: 'variants',
+        variantTasks: [{ characterId: 'a', emotions: ['angry'] }],
+      }),
+    );
+
+    expect(startCalls).toHaveLength(1);
+    const { cb } = startCalls[0];
+    const doneBefore = store.getState().castDesign.active?.done ?? 0;
+    cb.onVariantDesigned?.({ characterId: 'a', emotion: 'angry', voiceId: 'qwen-a__angry' });
+
+    expect(store.getState().castDesign.active?.done).toBe(doneBefore + 1);
+    expect(
+      store.getState().cast.characters.find((c) => c.id === 'a')?.overrideTtsVoices?.qwen?.variants?.angry,
+    ).toEqual({ name: 'qwen-a__angry' });
   });
 });

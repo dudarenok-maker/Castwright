@@ -21,6 +21,7 @@
    `analysis-slice`. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import type { Emotion } from '../lib/types';
 
 /** A single character's design failure, surfaced in the terminal summary. */
 export interface CastDesignFailure {
@@ -83,11 +84,18 @@ const initialState: CastDesignState = {
   active: null,
 };
 
+/** fe-32 — design scope for the bulk job. */
+export type CastDesignScope = 'bases' | 'variants' | 'both';
+
 /** Payload for the request action the middleware intercepts (no-op reducer). */
 export interface DesignAllRequestedPayload {
   bookId: string;
   characterIds: string[];
   modelKey: string;
+  /** Default 'bases' keeps today's behaviour. */
+  scope?: CastDesignScope;
+  /** Demand-driven variant work-list (used for 'variants'/'both'). */
+  variantTasks?: { characterId: string; emotions: Emotion[] }[];
 }
 
 export const castDesignSlice = createSlice({

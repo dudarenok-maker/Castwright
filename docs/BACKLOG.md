@@ -334,12 +334,6 @@ _Full detail + acceptance:_ [#668](https://github.com/dudarenok-maker/Castwright
 - _Benefit (user):_ graceful re-entry into a long book after days away.
 _Full detail + acceptance:_ [#481](https://github.com/dudarenok-maker/AudioBook-Generator/issues/481).
 
-#### `fe-32` — Rebaseline modal: series-wide emotion-variant design (fs-25 Wave 6b) ([#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512))
-
-- _What:_ Extend the plan-108 "Rebaseline the series" modal to also design chosen emotion variants for the principal cast across a series (gated on each base existing), reusing the Wave-5b per-emotion controls + variant-aware audition; the base-only path stays intact when no variants are selected.
-- _Benefit (user):_ design expressive variants for a recurring cast across a whole series in one flow. _Re-homed from `fs-25` on archive._
-_Full detail + acceptance:_ [#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512).
-
 #### `fs-36` — per-quote emotion: "manual clear sticks" sentinel (fs-33 follow-up) ([#593](https://github.com/dudarenok-maker/AudioBook-Generator/issues/593))
 
 - _What:_ A manually-*cleared* emotion is stored as `undefined` today, indistinguishable from never-set, so a re-run of Detect-emotions re-fills it. Persist an explicit `neutral` sentinel and have `applyDetectedEmotions` treat it as occupied.

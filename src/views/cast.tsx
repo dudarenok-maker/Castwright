@@ -17,8 +17,8 @@ import {
   Pill,
   VoiceSwatch,
   ReusedBadge,
-  VariantsBadge,
 } from '../components/primitives';
+import { VariantGlyphStrip } from '../components/variant-glyph-strip';
 import {
   resolveVoiceStatus,
   statusFilterKeys,
@@ -54,7 +54,10 @@ import { buildCharacterHint } from '../lib/build-character-hint';
 import { CompareCastModal } from '../modals/compare-cast-modal';
 import { StaleAudioBanner } from '../components/stale-audio-banner';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
+import { DesignScopePicker } from '../components/design-scope-picker';
 import { api } from '../lib/api';
+import type { CastDesignScope } from '../store/cast-design-slice';
+import { buildVariantTasks } from '../lib/variant-tasks';
 
 interface Props {
   characters: Character[];
@@ -139,6 +142,10 @@ export function CastView({
   /* fs-34 — index used emotions per character ONCE (not per row) for the
      "N tags need a variant" cast-row count. */
   const usedEmotions = useMemo(() => usedEmotionsByCharacter(sentences ?? []), [sentences]);
+  /* fe-32 — demand-driven variant work-list for the scope picker. */
+  const variantTasks = useMemo(() => buildVariantTasks(characters, usedEmotions), [characters, usedEmotions]);
+  const variantCount = useMemo(() => variantTasks.reduce((n, t) => n + t.emotions.length, 0), [variantTasks]);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const [query, setQuery] = useState('');
   /* fe-16 — non-English books are Qwen-locked. On entry, eagerly load Qwen so
      the user isn't blocked on a manual ModelControlPill load before designing
@@ -262,21 +269,35 @@ export function CastView({
   const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
   const designRunningElsewhere =
     designActive?.state === 'running' && designActive.bookId !== bookId;
-  /* Show the button on a Qwen project with ≥1 undesigned character, OR while a
-     run for this book is active (so the Cancel control stays reachable even
-     after the last row flips and the needs-voice count hits 0). */
-  const showDesignFullCast = (ttsEngine === 'qwen' && needsVoiceIds.length > 0) || designRunningHere;
+  /* Show the button on a Qwen project with ≥1 undesigned character OR ≥1 variant
+     to design, OR while a run for this book is active (so the Cancel control stays
+     reachable even after the last row flips and the counts hit 0). */
+  const showDesignFullCast =
+    (ttsEngine === 'qwen' && (needsVoiceIds.length > 0 || variantCount > 0)) || designRunningHere;
+  useEffect(() => {
+    if (designRunningHere || designRunningElsewhere) setScopeOpen(false);
+  }, [designRunningHere, designRunningElsewhere]);
+
   const onDesignFullCast = () => {
     if (designRunningHere) {
       if (bookId) void api.pauseCastDesign(bookId);
       return;
     }
-    if (!bookId || needsVoiceIds.length === 0 || designRunningElsewhere) return;
+    if (!bookId || designRunningElsewhere) return;
+    setScopeOpen((v) => !v);
+  };
+
+  const startDesign = (scope: CastDesignScope) => {
+    setScopeOpen(false);
+    if (!bookId) return;
+    const modelKey = sampleModelKeyForEngine('qwen', ttsModelKey);
     dispatch(
       castDesignActions.designAllRequested({
         bookId,
-        characterIds: needsVoiceIds,
-        modelKey: sampleModelKeyForEngine('qwen', ttsModelKey),
+        characterIds: scope === 'variants' ? [] : needsVoiceIds,
+        modelKey,
+        scope,
+        variantTasks: scope === 'bases' ? [] : variantTasks,
       }),
     );
   };
@@ -516,39 +537,54 @@ export function CastView({
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             {(showDesignFullCast || designRunningElsewhere) && (
-              <button
-                onClick={onDesignFullCast}
-                disabled={designRunningElsewhere}
-                data-testid="design-full-cast"
-                className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
-                  designRunningElsewhere
-                    ? 'bg-ink/5 text-ink/40 cursor-not-allowed'
-                    : designRunningHere
-                      ? 'bg-ink/6 text-ink/70 hover:bg-ink/10'
-                      : 'bg-magenta text-white hover:bg-magenta/90'
-                }`}
-                title={
-                  designRunningElsewhere
-                    ? 'A design run is already in progress for another book.'
-                    : undefined
-                }
-              >
-                {designRunningHere ? (
+              <div className="relative">
+                <button
+                  onClick={onDesignFullCast}
+                  disabled={designRunningElsewhere}
+                  data-testid="design-full-cast"
+                  aria-haspopup="menu"
+                  aria-expanded={scopeOpen}
+                  className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
+                    designRunningElsewhere
+                      ? 'bg-ink/5 text-ink/40 cursor-not-allowed'
+                      : designRunningHere
+                        ? 'bg-ink/6 text-ink/70 hover:bg-ink/10'
+                        : 'bg-magenta text-white hover:bg-magenta/90'
+                  }`}
+                  title={
+                    designRunningElsewhere
+                      ? 'A design run is already in progress for another book.'
+                      : undefined
+                  }
+                >
+                  {designRunningHere ? (
+                    <>
+                      <IconClose className="w-4 h-4" />
+                      <span>
+                        Cancel design · {designActive?.done ?? 0}/{designActive?.total ?? 0}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <IconSpinner className="w-4 h-4" />
+                      <span>
+                        Design full cast{needsVoiceIds.length > 0 ? ` (${needsVoiceIds.length})` : ''}
+                      </span>
+                    </>
+                  )}
+                </button>
+                {scopeOpen && !designRunningHere && !designRunningElsewhere && (
                   <>
-                    <IconClose className="w-4 h-4" />
-                    <span>
-                      Cancel design · {designActive?.done ?? 0}/{designActive?.total ?? 0}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <IconSpinner className="w-4 h-4" />
-                    <span>
-                      Design full cast{needsVoiceIds.length > 0 ? ` (${needsVoiceIds.length})` : ''}
-                    </span>
+                    <div className="fixed inset-0 z-40" onClick={() => setScopeOpen(false)} aria-hidden />
+                    <DesignScopePicker
+                      baseCount={needsVoiceIds.length}
+                      variantCount={variantCount}
+                      onPick={startDesign}
+                      onClose={() => setScopeOpen(false)}
+                    />
                   </>
                 )}
-              </button>
+              </div>
             )}
             <button
               onClick={() => setShowLibrary(!showLibrary)}
@@ -826,7 +862,7 @@ export function CastView({
                     voice={voice}
                     projectEngine={ttsEngine}
                     renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
-                    missingVariants={countMissingVariants(c, usedEmotions.get(c.id))}
+                    usedEmotionsForChar={usedEmotions.get(c.id)}
                   />
                 </span>
                 <span
@@ -1030,7 +1066,7 @@ export function CastView({
                     voice={voice}
                     projectEngine={ttsEngine}
                     renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
-                    missingVariants={countMissingVariants(c, usedEmotions.get(c.id))}
+                    usedEmotionsForChar={usedEmotions.get(c.id)}
                   />
                   </span>
                   <button
@@ -1264,7 +1300,7 @@ function StatusPill({
   voice,
   projectEngine,
   renderedFallbackEngine,
-  missingVariants = 0,
+  usedEmotionsForChar,
 }: {
   c: Character;
   voice: Voice | undefined;
@@ -1272,39 +1308,33 @@ function StatusPill({
   /* fe-16 — engine this character ACTUALLY rendered in (Qwen → Kokoro
      fallback). `'kokoro'` surfaces the "Fallback (Kokoro)" pill. */
   renderedFallbackEngine?: string | null;
-  /* fs-34 — distinct per-quote emotions this character uses that lack a designed
-     variant. Rendered (Qwen only) as a small "N tags need a variant" hint. */
-  missingVariants?: number;
+  /* fs-34 — distinct per-quote emotions this character uses in the book.
+     Rendered (Qwen only) as a per-emotion glyph strip on line 2. */
+  usedEmotionsForChar?: Set<string>;
 }) {
   /* Effective engine = the character's own override folded over the project
      default — so a default-engine character on a Qwen project follows the Qwen
      lifecycle (e.g. "Needs voice"), not a stale preset `voiceState` pill. */
   const effectiveEngine = c.ttsEngine ?? projectEngine;
-  const { lifecycle, reused, hasEmotionVariants, variantCount } = resolveVoiceStatus(
+  const { lifecycle, reused } = resolveVoiceStatus(
     c,
     voice,
     effectiveEngine,
     renderedFallbackEngine,
   );
-  /* The missing-variant hint only matters where emotion is audible: a Qwen
-     character (own override or matched Qwen voice). */
   const isQwen = effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen';
-  const showMissing = isQwen && missingVariants > 0;
-  if (!lifecycle && !reused && !hasEmotionVariants && !showMissing) return null;
+  const usedEmotions = usedEmotionsForChar ?? new Set<string>();
+  const designed = new Set(Object.keys(c.overrideTtsVoices?.qwen?.variants ?? {}));
+  const hasVariants = designed.size > 0;
+  const showStrip = isQwen && (usedEmotions.size > 0 || hasVariants);
+  if (!lifecycle && !reused && !showStrip) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 flex-wrap">
-      {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
-      {reused && <ReusedBadge />}
-      {hasEmotionVariants && <VariantsBadge count={variantCount} />}
-      {showMissing && (
-        <span
-          data-testid="missing-variants-hint"
-          className="text-[10px] font-medium text-ink/45"
-          title="Per-quote emotions in use that have no designed variant yet — they render in the base voice."
-        >
-          {missingVariants} {missingVariants === 1 ? 'tag needs' : 'tags need'} a variant
-        </span>
-      )}
+    <span className="inline-flex flex-col items-start gap-1.5">
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
+        {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
+        {reused && <ReusedBadge />}
+      </span>
+      {showStrip && <VariantGlyphStrip usedEmotions={usedEmotions} designedEmotions={designed} />}
     </span>
   );
 }
