@@ -17,8 +17,8 @@ import {
   Pill,
   VoiceSwatch,
   ReusedBadge,
-  VariantsBadge,
 } from '../components/primitives';
+import { VariantGlyphStrip } from '../components/variant-glyph-strip';
 import {
   resolveVoiceStatus,
   statusFilterKeys,
@@ -862,7 +862,7 @@ export function CastView({
                     voice={voice}
                     projectEngine={ttsEngine}
                     renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
-                    missingVariants={countMissingVariants(c, usedEmotions.get(c.id))}
+                    usedEmotionsForChar={usedEmotions.get(c.id)}
                   />
                 </span>
                 <span
@@ -1066,7 +1066,7 @@ export function CastView({
                     voice={voice}
                     projectEngine={ttsEngine}
                     renderedFallbackEngine={renderedFallbackByCharacter[c.id]}
-                    missingVariants={countMissingVariants(c, usedEmotions.get(c.id))}
+                    usedEmotionsForChar={usedEmotions.get(c.id)}
                   />
                   </span>
                   <button
@@ -1300,7 +1300,7 @@ function StatusPill({
   voice,
   projectEngine,
   renderedFallbackEngine,
-  missingVariants = 0,
+  usedEmotionsForChar,
 }: {
   c: Character;
   voice: Voice | undefined;
@@ -1308,39 +1308,33 @@ function StatusPill({
   /* fe-16 — engine this character ACTUALLY rendered in (Qwen → Kokoro
      fallback). `'kokoro'` surfaces the "Fallback (Kokoro)" pill. */
   renderedFallbackEngine?: string | null;
-  /* fs-34 — distinct per-quote emotions this character uses that lack a designed
-     variant. Rendered (Qwen only) as a small "N tags need a variant" hint. */
-  missingVariants?: number;
+  /* fs-34 — distinct per-quote emotions this character uses in the book.
+     Rendered (Qwen only) as a per-emotion glyph strip on line 2. */
+  usedEmotionsForChar?: Set<string>;
 }) {
   /* Effective engine = the character's own override folded over the project
      default — so a default-engine character on a Qwen project follows the Qwen
      lifecycle (e.g. "Needs voice"), not a stale preset `voiceState` pill. */
   const effectiveEngine = c.ttsEngine ?? projectEngine;
-  const { lifecycle, reused, hasEmotionVariants, variantCount } = resolveVoiceStatus(
+  const { lifecycle, reused } = resolveVoiceStatus(
     c,
     voice,
     effectiveEngine,
     renderedFallbackEngine,
   );
-  /* The missing-variant hint only matters where emotion is audible: a Qwen
-     character (own override or matched Qwen voice). */
   const isQwen = effectiveEngine === 'qwen' || voice?.ttsVoice?.provider === 'qwen';
-  const showMissing = isQwen && missingVariants > 0;
-  if (!lifecycle && !reused && !hasEmotionVariants && !showMissing) return null;
+  const usedEmotions = usedEmotionsForChar ?? new Set<string>();
+  const designed = new Set(Object.keys(c.overrideTtsVoices?.qwen?.variants ?? {}));
+  const hasVariants = designed.size > 0;
+  const showStrip = isQwen && (usedEmotions.size > 0 || hasVariants);
+  if (!lifecycle && !reused && !showStrip) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 flex-wrap">
-      {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
-      {reused && <ReusedBadge />}
-      {hasEmotionVariants && <VariantsBadge count={variantCount} />}
-      {showMissing && (
-        <span
-          data-testid="missing-variants-hint"
-          className="text-[10px] font-medium text-ink/45"
-          title="Per-quote emotions in use that have no designed variant yet — they render in the base voice."
-        >
-          {missingVariants} {missingVariants === 1 ? 'tag needs' : 'tags need'} a variant
-        </span>
-      )}
+    <span className="inline-flex flex-col items-start gap-1.5">
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
+        {lifecycle && <Pill color={lifecycle.color}>{lifecycle.label}</Pill>}
+        {reused && <ReusedBadge />}
+      </span>
+      {showStrip && <VariantGlyphStrip usedEmotions={usedEmotions} designedEmotions={designed} />}
     </span>
   );
 }
