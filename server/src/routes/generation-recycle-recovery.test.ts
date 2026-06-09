@@ -244,7 +244,11 @@ describe('srv-17c in-worker recovery after a mid-synth sidecar death', () => {
 
     expect(body).toContain('"type":"chapter_failed"');
     expect(body).not.toContain('"type":"chapter_complete"');
-    // Task 3 asserts the recycle-storm code/remediation in the chapter_failed frame.
+    // C3 — the chapter_failed frame carries the named recycle-storm code + a
+    // concrete remediation (restart sidecar / lower concurrency / side-11),
+    // NOT a generic vram-spill / unknown classification.
+    expect(body).toContain('"errorCode":"recycle-storm"');
+    expect(body).toMatch(/"remediation":"[^"]*(?:sidecar|concurrency|headroom)/i);
   }, 10_000);
 
   it('does NOT recover a non-transient error — surfaces immediately', async () => {

@@ -155,6 +155,43 @@ describe('classifyFailure', () => {
     expect(out.userMessage).toMatch(/authentication/i);
   });
 
+  it('classifies a RecycleStormError (by ctx.name) as recycle-storm, non-fatal', () => {
+    /* C3 — the named recycle-storm error from synthesise-chapter.ts. Its real
+       message contains "VRAM/RAM headroom", which would match the vram-spill
+       regex; the type-driven ctx.name signature MUST win because it is ordered
+       before vram-spill (first-match-wins). */
+    const err = Object.assign(
+      new Error(
+        'The TTS sidecar recycled 2× while rendering this single chapter — it is likely ' +
+          'thrashing (host-memory leak or insufficient VRAM/RAM headroom). Stopping so the ' +
+          "run doesn't grind. Restart the sidecar / lower concurrency, then Retry.",
+      ),
+      { name: 'RecycleStormError' },
+    );
+    const out = classifyFailure(err, 'kokoro');
+    expect(out.code).toBe('recycle-storm');
+    expect(out.code).not.toBe('vram-spill'); // ORDERING: must not be swallowed by the VRAM regex
+    expect(out.fatal).toBe(false);
+    expect(out.userMessage).toMatch(/kept restarting|restarting/i);
+    expect(out.remediation).toMatch(/sidecar|headroom|concurrency/i);
+    assertJargonFree(out.userMessage);
+  });
+
+  it('classifies a recycle-storm by raw message fallback (no ctx.name) as recycle-storm', () => {
+    /* Defense-in-depth: even with the type-driven ctx.name absent (e.g. a
+       message-only error from another path), the raw-message fallback regex
+       classifies it as recycle-storm, NOT vram-spill. */
+    const out = classifyFailure(
+      new Error(
+        'The TTS sidecar recycled 3× while rendering this single chapter — insufficient VRAM headroom.',
+      ),
+      'kokoro',
+    );
+    expect(out.code).toBe('recycle-storm');
+    expect(out.code).not.toBe('vram-spill');
+    expect(out.fatal).toBe(false);
+  });
+
   it('passes an unknown error through as code "unknown", non-fatal, raw userMessage', () => {
     const out = classifyFailure(new Error('Something unexpected and unmapped happened'));
     expect(out.code).toBe('unknown');
