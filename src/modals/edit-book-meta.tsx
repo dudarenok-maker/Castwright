@@ -304,7 +304,8 @@ export function EditBookMetaModal({ open, book, onClose, onSave }: Props) {
               {suggestionsOpen && suggestions.length > 0 && (
                 <ul
                   data-testid="tag-suggestions"
-                  className="mt-1 max-h-32 overflow-y-auto rounded-xl bg-white border border-ink/10 shadow-card"
+                  className="mt-1 max-h-32 overflow-y-auto scrollbar-thin rounded-xl bg-white border border-ink/10 shadow-card"
+                  style={{ ['--scrollbar-thin-radius' as string]: '12px' } as React.CSSProperties}
                 >
                   {suggestions.slice(0, 8).map((s) => (
                     <li key={s}>

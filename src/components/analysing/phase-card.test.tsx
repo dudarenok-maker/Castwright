@@ -60,4 +60,50 @@ describe('PhaseCard layout', () => {
     expect(controlsRow!.contains(label)).toBe(true);
     expect(controlsRow!.contains(detail)).toBe(false);
   });
+
+  /* The active-phase streaming log scrolls. Without the shared `.scrollbar-thin`
+     utility it falls back to the default OS scrollbar, which reads as a bright
+     grey bar against the card. It must use the same treatment as the admin
+     throughput table: a rounded, bordered, overflow-hidden wrapper with the
+     scroller inside, opting into the themed thin inset scrollbar — with the
+     clip radius pinned to the rounded-2xl (16px) wrapper so the thumb hugs the
+     curve instead of bleeding past it. */
+  it('mounts the active-phase log scroll region like the admin table (thin inset scrollbar)', () => {
+    const phase: AnalysisPhase = {
+      id: 1,
+      label: 'Parsing and attribution',
+      detail: 'Splitting chapters into sentences and labelling each with its speaker.',
+      duration: 1000,
+    };
+    const store = mountStore();
+    render(
+      <Provider store={store}>
+        <PhaseCard
+          phase={phase}
+          activePhaseId={phase.id}
+          phaseProgress={0.5}
+          phaseLogs={['Chapter 13/40 done — 631 sentences in 2m 31s']}
+          live={null}
+          isLocalAnalyzer={false}
+          analysisStarted={true}
+          conn="streaming"
+          bookId={null}
+          droppedQuotesRefreshKey={0}
+        />
+      </Provider>,
+    );
+
+    const line = screen.getByText(/631 sentences/);
+    const scroller = line.closest('[class*="overflow-y-auto"]') as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    // Same shared utility as Listen / Account / admin — not the default OS bar.
+    expect(scroller!.className).toMatch(/scrollbar-thin/);
+    // Clip radius matches the rounded-2xl wrapper so the thumb hugs the curve.
+    expect(scroller!.style.getPropertyValue('--scrollbar-thin-radius')).toBe('16px');
+    // Mounted inside a rounded, bordered, overflow-hidden wrapper (admin idiom).
+    const wrapper = scroller!.parentElement as HTMLElement;
+    expect(wrapper.className).toMatch(/rounded-2xl/);
+    expect(wrapper.className).toMatch(/border/);
+    expect(wrapper.className).toMatch(/overflow-hidden/);
+  });
 });

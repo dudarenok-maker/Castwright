@@ -203,7 +203,7 @@ export function QueueModal({ open, onClose }: QueueModalProps) {
           </div>
 
           {/* Body */}
-          <div className="px-6 py-5 flex-1 overflow-y-auto">
+          <div className="px-6 py-5 flex-1 overflow-y-auto scrollbar-thin">
             {!loaded ? (
               <p className="text-sm text-ink/60">Loading queue…</p>
             ) : count === 0 && activeView ? (
