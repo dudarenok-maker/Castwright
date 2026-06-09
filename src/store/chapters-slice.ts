@@ -458,6 +458,21 @@ export const chaptersSlice = createSlice({
         return;
       }
 
+      if (ev.type === 'chapter_recovering') {
+        /* C2 (Wave 3) — sidecar recycled mid-render; the worker is riding out
+           the respawn on the readiness gate (up to ~210 s). Mirror
+           chapter_verifying: hold the row in_progress with a distinct phase so
+           the view shows "Recovering…" instead of a frozen caption + the 30 s
+           stall banner. Keep the existing progress when the tick omits it so the
+           bar stays where synthesis left it. */
+        ch.phase = 'recovering';
+        ch.state = 'in_progress';
+        ch.progress = ev.progress ?? ch.progress;
+        if (ev.currentLine != null) ch.currentLine = ev.currentLine;
+        if (ev.totalLines != null) ch.totalLines = ev.totalLines;
+        return;
+      }
+
       if (ev.type === 'chapter_complete') {
         ch.state = 'done';
         ch.progress = 1;

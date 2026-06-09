@@ -1,22 +1,24 @@
 /* srv-17c — in-worker recovery when the sidecar dies mid-synth.
  *
- * A host-RAM recycle (plan 143), a crash, or an OOM drops the in-flight
- * `/synthesize` connection (or, while a recycle drains, returns a non-poisoned
- * 503). Both surface as a `transient` error once `withTtsRetry`'s short budget
- * exhausts. The srv-17b readiness gate only protects the NEXT chapter; the one
- * already mid-synth would otherwise be classified fatal ("sidecar not
- * reachable") → `chapter_failed` + run abort, recovered only by a later manual
- * Retry / boot sweep (the ch36/ch46 drops).
+ * As of C1 (Wave 3) the recovery loop lives INSIDE `synthesiseChapter`: a
+ * mid-render recycle is recovered from the failed synth site via an injected
+ * `onRecoverRecycle` hook (riding out the respawn on the readiness gate),
+ * WITHOUT re-rendering the already-completed groups. `generation.ts` no longer
+ * wraps the whole chapter in a `for (recovery…)` loop — it injects the hook
+ * (wired to `ensureSidecarEngineReady`) and maps a thrown `RecycleStormError`
+ * (budget exhausted) to `chapter_failed` via the outer catch.
  *
- * These pin the recovery loop in `processOneChapter`:
- *   1. transient-then-success → chapter COMPLETES (srv-16 done-prune), NO
- *      `chapter_failed`, and the readiness gate was polled between attempts;
- *   2. transient on every attempt → after MAX_RECYCLE_RECOVERIES it falls
- *      through to the unchanged `chapter_failed` path (a truly-dead sidecar
- *      still surfaces, never an infinite loop);
- *   3. a non-transient error → NO recovery loop (straight to failure), proving
- *      poison / fatal-classifier errors still surface immediately;
- *   4. an abort mid-wait (pause / displacement) → clean stop, no failure tick.
+ * Because this suite mocks `synthesiseChapter` wholesale, it can no longer drive
+ * the inner recovery — it pins the generation-side WIRING instead:
+ *   1. the injected `onRecoverRecycle` drives `ensureSidecarEngineReady`, then
+ *      the chapter COMPLETES (no `chapter_failed`);
+ *   2. a thrown `RecycleStormError` → `chapter_failed` (budget exhausted);
+ *   3. a non-transient error → `chapter_failed` (surfaces immediately);
+ *   4. an abort thrown from the hook's wait (pause / displacement mid-recovery)
+ *      → clean stop, no failure tick.
+ * The resume-preservation proof (completed groups survive a recovery) now lives
+ * in `synthesise-chapter.test.ts` (the C1 unit tests), where the real per-group
+ * loop is exercised.
  *
  * Same fetch+SSE socket harness as generation-orphan-recovery.test.ts; we drive
  * a real http.Server and read the SSE body text to assert which ticks fired. */
@@ -78,17 +80,6 @@ let writeQueueFile: (
   path: string,
   file: import('../workspace/queue-io.js').QueueFile,
 ) => Promise<void>;
-
-/* A transient sidecar-down error — exactly what `sidecar.ts:post()` annotates on
-   a connection drop (and what `throwForResponse` annotates on a non-poisoned
-   5xx). `withTtsRetry` has already exhausted its short budget by the time this
-   reaches `processOneChapter`. */
-function transientSidecarDown(): Error {
-  return Object.assign(new Error('Local TTS sidecar not reachable at http://x. (fetch failed)'), {
-    transient: true as const,
-    cause: 'network' as const,
-  });
-}
 
 function okResult() {
   return {
@@ -216,60 +207,75 @@ async function readEntryStatus(): Promise<string | undefined> {
 }
 
 describe('srv-17c in-worker recovery after a mid-synth sidecar death', () => {
-  it('re-renders the chapter after a transient sidecar-down — completes, no chapter_failed', async () => {
+  it('drives ensureSidecarEngineReady from onRecoverRecycle, then completes (no chapter_failed)', async () => {
     let calls = 0;
-    synthesiseImpl = async () => {
+    synthesiseImpl = async (args: any) => {
       calls += 1;
-      if (calls === 1) throw transientSidecarDown(); // recycle kills the first attempt
-      return okResult(); // sidecar respawned → second attempt succeeds
+      if (calls === 1) {
+        // First call: exercise the injected hook once (simulating an in-loop
+        // recovery), then succeed — proving generation wires the hook to the gate.
+        await args.onRecoverRecycle({ engine: 'kokoro', attempt: 1 });
+        return okResult();
+      }
+      return okResult();
     };
 
     const body = await runChapter();
 
-    expect(calls).toBe(2); // failed once, recovered once
+    expect(calls).toBe(1); // synthesiseChapter called ONCE (recovery is internal now)
+    expect(ensureReadyCalls).toBeGreaterThanOrEqual(2); // preload gate + the hook's wait
+    // C2 — the hook emits a visible "recovering" tick while it rides out the respawn.
+    expect(body).toContain('"type":"chapter_recovering"');
     expect(body).toContain('"type":"chapter_complete"');
     expect(body).not.toContain('"type":"chapter_failed"');
-    // Preload gate (1) + one recovery wait (1) = the gate was polled between attempts.
-    expect(ensureReadyCalls).toBeGreaterThanOrEqual(2);
     // srv-16 done-prune fired → the entry is gone (never left failed/in_progress).
     await vi.waitFor(async () => {
       expect(await readEntryStatus()).toBeUndefined();
     });
   }, 10_000);
 
-  it('falls through to chapter_failed once the recovery budget is exhausted', async () => {
-    let calls = 0;
+  it('surfaces chapter_failed when synthesiseChapter throws RecycleStormError', async () => {
+    const { RecycleStormError } = await import('../tts/synthesise-chapter.js');
     synthesiseImpl = async () => {
-      calls += 1;
-      throw transientSidecarDown(); // sidecar never comes back
+      throw new RecycleStormError(2, new Error('sidecar down'));
     };
 
     const body = await runChapter();
 
-    // 1 primary + MAX_RECYCLE_RECOVERIES (2) re-attempts = 3 synth calls, then fail.
-    expect(calls).toBe(3);
     expect(body).toContain('"type":"chapter_failed"');
     expect(body).not.toContain('"type":"chapter_complete"');
+    // C3 — the chapter_failed frame carries the named recycle-storm code + a
+    // concrete remediation (restart sidecar / lower concurrency / side-11),
+    // NOT a generic vram-spill / unknown classification.
+    expect(body).toContain('"errorCode":"recycle-storm"');
+    expect(body).toMatch(/"remediation":"[^"]*(?:sidecar|concurrency|headroom)/i);
+    /* C3 — on the QUEUE path one POST = one chapter, so the cross-chapter
+       cascade can never escalate. A recycle-storm instead PAUSES the queue
+       server-side, stopping a thrashing sidecar from grinding chapter after
+       chapter. The harness seeds paused:false, so a true flag proves the
+       storm set it. */
+    await vi.waitFor(async () => {
+      const file = await readQueueFile(queuePath);
+      expect(file.paused).toBe(true);
+    });
   }, 10_000);
 
   it('does NOT recover a non-transient error — surfaces immediately', async () => {
-    let calls = 0;
     synthesiseImpl = async () => {
-      calls += 1;
       throw new Error('index out of range in self'); // XTTS tensor — fatal, not transient
     };
 
     const body = await runChapter();
 
-    expect(calls).toBe(1); // no recovery loop for a non-transient error
     expect(body).toContain('"type":"chapter_failed"');
   }, 10_000);
 
-  it('stops cleanly (no chapter_failed) when the run is aborted during the recovery wait', async () => {
-    let calls = 0;
-    synthesiseImpl = async () => {
-      calls += 1;
-      throw transientSidecarDown();
+  it('stops cleanly when the hook wait aborts (pause/displacement mid-recovery)', async () => {
+    synthesiseImpl = async (args: any) => {
+      // The hook's readiness wait throws AbortError (ensureReadyImpl below); that
+      // must propagate out of synthesiseChapter as a clean stop, not a failure.
+      await args.onRecoverRecycle({ engine: 'kokoro', attempt: 1 });
+      return okResult();
     };
     /* First gate call (preload) resolves; the recovery wait throws AbortError —
        as if /pause fired while we were riding out the respawn. */
@@ -279,8 +285,7 @@ describe('srv-17c in-worker recovery after a mid-synth sidecar death', () => {
 
     const body = await runChapter();
 
-    expect(calls).toBe(1); // failed once, then the recovery wait aborted
-    expect(body).not.toContain('"type":"chapter_failed"'); // abort is a clean stop
+    expect(body).not.toContain('"type":"chapter_failed"'); // abort = clean stop
     expect(body).not.toContain('"type":"chapter_complete"');
   }, 10_000);
 });

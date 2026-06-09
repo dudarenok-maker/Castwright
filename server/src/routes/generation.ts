@@ -30,7 +30,12 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
-import { completeEntry, markAwaitingConfirm, resetEntryToQueued } from '../workspace/queue-io.js';
+import {
+  completeEntry,
+  markAwaitingConfirm,
+  resetEntryToQueued,
+  setPaused,
+} from '../workspace/queue-io.js';
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { stampStateSchema } from '../workspace/state-migrate.js';
@@ -79,7 +84,6 @@ import {
   resolveAsrSampleEvery,
   buildCastNameAllowlist,
 } from '../tts/segment-asr-qa.js';
-import { isTransient } from '../tts/retry.js';
 import { describeSynthesisError, newCascadeState, recordNonFatal } from './generation-error.js';
 import type { FailureCode } from './failure-taxonomy.js';
 import { AVG_CHAPTER_BYTES, diskGuardMode, evaluateDiskGuard } from '../workspace/disk-guard.js';
@@ -1120,10 +1124,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          encode/disk happens after and is excluded) — drives the RTF rollup +
          the dev top-bar throughput pill. */
       const synthStartMs = Date.now();
-      /* srv-17c recovery loop (see MAX_RECYCLE_RECOVERIES). Wraps ONLY the synth
-         call: on a transient sidecar-down (recycle/respawn/crash, or a drain-503)
-         we wait out the respawn on the readiness gate and re-render. AbortError
-         and non-transient / poison errors re-throw to the outer catch unchanged. */
+      /* srv-17c recovery is now IN-LOOP (C1, Wave 3): synthesiseChapter recovers
+         a mid-render recycle from the failed synth site via the `onRecoverRecycle`
+         hook below (riding out the respawn on the readiness gate) WITHOUT
+         re-rendering completed groups. See the hook + MAX_RECYCLE_RECOVERIES. */
       /* srv-31 — surface the ASR content-QA pass as a "verifying" phase. Fired
          per sampled group (onProgress) AND per drift re-record (onRerecord);
          both bump the no-progress watchdog and broadcast a chapter_verifying
@@ -1140,10 +1144,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           totalLines,
         });
       };
-      let result: Awaited<ReturnType<typeof synthesiseChapter>>;
-      for (let recovery = 0; ; recovery += 1) {
-        try {
-          result = await synthesiseChapter({
+      const result = await synthesiseChapter({
         sentences,
         cast: cast.characters,
         provider,
@@ -1270,45 +1271,67 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
               },
             }
           : {}),
-          });
-          break;
-        } catch (synthErr) {
-          /* Recoverable only while the run is live and the budget remains. Two
-             recoverable shapes:
-               1. a transient sidecar-down (connection drop on recycle/crash, or
-                  a drain-503), and
-               2. a ChapterSynthTimeoutError — a synth that HUNG past the per-call
-                  ceiling. Under a host-RAM recycle the respawned sidecar can be
-                  HTTP-up but still loading the model in-band, so the in-flight
-                  call stalls to the timeout instead of failing fast. That timeout
-                  is non-transient by construction, so without this it bubbles to
-                  the outer catch and stops the run (2026-05-31 KOTLC CH24). Ride
-                  it out the same way: wait on the readiness gate, then re-render
-                  against a sidecar that is actually ready.
-             AbortError, poison, and every other fatal classifier error re-throw
-             to the outer catch unchanged. */
-          const isRecycleTimeout =
-            (synthErr as { name?: string })?.name === 'ChapterSynthTimeoutError';
-          if (
-            (synthErr as { name?: string })?.name === 'AbortError' ||
-            (!isTransient(synthErr) && !isRecycleTimeout) ||
-            chapterSignal.aborted ||
-            recovery >= MAX_RECYCLE_RECOVERIES
-          ) {
-            throw synthErr;
-          }
+        /* C1 (srv-17c, Wave 3) — recover in-loop (preserves completed groups)
+           instead of the old outer for-loop that re-rendered the WHOLE chapter
+           on a mid-render recycle (the RTF collapse). synthesiseChapter now calls
+           this hook from the failed synth site, waits out the respawn on the
+           readiness gate, and re-attempts ONLY that work item; every already-
+           filled `results[]` slot survives because the function never restarts.
+           Recoverable = a transient sidecar-down (recycle/respawn/crash drop, or
+           a drain-503 — both `transient` once withTtsRetry's short budget
+           exhausts) OR a ChapterSynthTimeoutError (a synth that HUNG because the
+           respawned sidecar was still loading the model in-band — non-transient
+           by construction, classified recoverable inside withRecycleRecovery).
+           MAX_RECYCLE_RECOVERIES is the shared per-chapter budget; on exhaustion
+           synthesiseChapter throws RecycleStormError, which the outer catch maps
+           to chapter_failed (Task 3 names it). AbortError, poison, and every
+           other fatal classifier error still re-throw unchanged. */
+        maxRecycleRecoveries: MAX_RECYCLE_RECOVERIES,
+        onRecoverRecycle: async ({ engine: recEngine, attempt }) => {
           console.warn(
-            `[generation] chapter ${chapter.id} (${chapter.slug}): ${
-              isRecycleTimeout
-                ? 'synth stalled (likely a mid-render recycle)'
-                : 'sidecar unavailable mid-synth (recycle/respawn)'
-            } — riding out the respawn, re-attempt ${recovery + 1}/${MAX_RECYCLE_RECOVERIES}.`,
+            `[generation] chapter ${chapter.id} (${chapter.slug}): sidecar unavailable ` +
+              `mid-synth (recycle/respawn) — riding out the respawn, re-attempt ` +
+              `${attempt}/${MAX_RECYCLE_RECOVERIES} (preserving completed groups).`,
           );
+          /* C2 (Wave 3) — the readiness wait below can take up to ~210 s
+             (READINESS_TIMEOUT_MS); without a tick the SSE goes silent and the
+             client's 30 s "Worker has gone quiet" stall banner fires for what is
+             actually a healthy respawn ride-out. Emit a chapter_recovering tick
+             immediately + on a 10 s heartbeat so BOTH watchdogs stay fed: the
+             server no-progress guard (bumpProgress) and the client stall detector
+             (< 30 s). 0.9 progress + the last currentLine keep the bar where
+             synthesis left it. Mirrors emitVerifying (srv-31). */
+          const emitRecovering = () => {
+            bumpProgress();
+            broadcast(job, {
+              type: 'chapter_recovering',
+              chapterId: chapter.id,
+              characterId: null,
+              /* Hold the bar where synthesis left it rather than snapping to a
+                 fixed 0.9 — a recycle can fire at any group position, so a hard
+                 0.9 would visibly REGRESS the bar (e.g. 0.95 → 0.9) for the
+                 ride-out, then jump forward. Reuse the last real tick's progress
+                 (same idiom as currentLine below); 0.9 is only the pre-first-tick
+                 seed. */
+              progress: job.lastProgressTick?.progress ?? 0.9,
+              currentLine: job.lastProgressTick?.currentLine ?? 0,
+              totalLines,
+            });
+          };
+          emitRecovering();
+          const beat = setInterval(emitRecovering, 10_000);
+          beat.unref?.();
           /* Polls through the supervisor respawn (srv-17b, 120 s budget); throws
-             AbortError if the run is paused/displaced mid-wait. */
-          await ensureSidecarEngineReady(engine, chapterSignal);
-        }
-      }
+             AbortError if the run is paused/displaced mid-wait → propagates out
+             of synthesiseChapter as a clean stop (the outer catch returns on
+             AbortError). */
+          try {
+            await ensureSidecarEngineReady(recEngine, chapterSignal);
+          } finally {
+            clearInterval(beat);
+          }
+        },
+      });
 
       /* All per-group synthesis is done; the next stretch is disk-write
          work (encode MP3 → temp file → segments JSON → atomic rename →
@@ -1525,6 +1548,16 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          queue advances; the cascade counter below still escalates if stalls
          repeat across chapters, which signals a systemic wedge). */
       const isStall = (e as { name?: string })?.name === 'ChapterStallError';
+      /* C3 (Wave 3) — RecycleStormError: synthesiseChapter exhausted the in-loop
+         recycle-recovery budget on a single chapter (the sidecar thrashed while
+         rendering it). Short-circuit BEFORE describeSynthesisError so the named
+         code/remediation ride through (the taxonomy entry would also classify it
+         correctly, but the literal object keeps the wording owned here and avoids
+         re-deriving it). Non-fatal per chapter. The run-stop is the queue PAUSE
+         set below (on the queue path: one POST = one chapter, so the
+         cross-chapter cascade can never escalate). The cascade still escalates
+         only on the back-compat `*` job, which loops many chapters in one POST. */
+      const isRecycleStorm = (e as { name?: string })?.name === 'RecycleStormError';
       const initial = isStall
         ? {
             errorReason: (e as Error).message,
@@ -1534,7 +1567,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
               'Click Retry on this chapter. If it stalls repeatedly, restart the TTS sidecar to ' +
               'clear a wedged GPU state, then retry.',
           }
-        : describeSynthesisError(e, engine);
+        : isRecycleStorm
+          ? {
+              errorReason: (e as Error).message,
+              fatal: false,
+              code: 'recycle-storm' as FailureCode,
+              remediation:
+                'Restart the TTS sidecar (clears a thrashing/leaking process) and/or lower ' +
+                'generation concurrency, then Retry. If it persists, the host-memory leak ' +
+                '(side-11) needs headroom.',
+            }
+          : describeSynthesisError(e, engine);
       let { errorReason, fatal } = initial;
       /* fs-19 — the structured code + remediation ride alongside the legacy
          reason on both the broadcast and the persisted state. Const (not part of
@@ -1544,6 +1587,13 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         console.error(
           `[generation] chapter ${chapter.id} (${chapter.slug}) STALLED during ${stallPhase}: ` +
             `no progress for ${Math.round(noProgressMs / 1000)}s — recorded as failed so the queue advances.`,
+        );
+      } else if (isRecycleStorm) {
+        const recoveries = (e as { recoveries?: number })?.recoveries ?? MAX_RECYCLE_RECOVERIES;
+        console.error(
+          `[generation] chapter ${chapter.id} (${chapter.slug}) RECYCLE STORM: sidecar recycled ` +
+            `${recoveries}× on one chapter — recorded non-fatal. On the queue path the run is ` +
+            `stopped by pausing the queue (below); the back-compat \`*\` job relies on the cascade.`,
         );
       } else {
         console.error(`[generation] chapter ${chapter.id} (${chapter.slug}) failed:`, e);
@@ -1603,6 +1653,32 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           `[generation] failed to persist error state for chapter ${chapter.id}:`,
           persistErr,
         );
+      }
+      /* C3 (Wave 3) — recycle storm on the QUEUE path: pause the queue so a
+         thrashing sidecar stops the run instead of grinding chapter after
+         chapter. The dispatcher fires ONE POST per chapter, so the cross-chapter
+         cascade above (recordNonFatal) can never escalate on this path — this
+         server-side pause is the faithful "stop the run". Runs AFTER the
+         chapter_failed broadcast + state persist, so the failure surfaces
+         regardless. fatal stays false (the queue-pause is the run-stop; flipping
+         fatal would needlessly take the `*`-job controller.abort() path).
+         BEST-EFFORT: a queue-write hiccup must never mask the real chapter
+         failure, so this is wrapped + warns on error only. The back-compat `*`
+         job (no queueEntryId) is untouched — it keeps relying on the cascade. */
+      if (isRecycleStorm && job.queueEntryId != null) {
+        try {
+          const before = await readQueueFile(queueJsonPath());
+          await writeQueueFile(queueJsonPath(), setPaused(before, true));
+          console.error(
+            '[generation] RECYCLE STORM: paused the queue — restart the TTS sidecar / ' +
+              'restore headroom, then resume.',
+          );
+        } catch (pauseErr) {
+          console.warn(
+            `[generation] failed to pause the queue after a recycle storm on chapter ${chapter.id}:`,
+            pauseErr,
+          );
+        }
       }
       if (fatal) {
         /* Back-compat `*` job only: set the flag AND abort the signal so the

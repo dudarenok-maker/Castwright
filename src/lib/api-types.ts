@@ -2463,6 +2463,12 @@ export interface components {
              *     assembly; it carries the same counters as `chapter_assembling` and
              *     surfaces a "Verifying speech…" phase so the row doesn't look frozen
              *     on "Synthesising …".
+             *     `chapter_recovering` is emitted (Wave 3, C2) while a worker rides out
+             *     a mid-render sidecar recycle/respawn on the readiness gate (up to
+             *     ~210 s). It carries the same counters as `chapter_assembling`, fires
+             *     on a 10 s heartbeat so the client's 30 s stall detector stays fed, and
+             *     surfaces a "Recovering …" phase so the row reads as healthy recovery
+             *     rather than a silent stall.
              *     `resume_from` is emitted as the FIRST event on every new subscriber
              *     (cold connect AND reconnect after `tsx watch` restart or server
              *     bounce) and carries a snapshot of completed chapter ids for the
@@ -2478,7 +2484,7 @@ export interface components {
              *     chapters keep flowing. See plan `docs/features/archive/102-global-queue-modal.md`.
              * @enum {string}
              */
-            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm";
+            type: "progress" | "chapter_assembling" | "chapter_verifying" | "chapter_recovering" | "chapter_complete" | "chapter_failed" | "idle" | "resume_from" | "warning" | "chapter_awaiting_fallback_confirm";
             chapterId?: number;
             /** @description null = chapter-wide tick (not character-specific). */
             characterId?: string | null;

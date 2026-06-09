@@ -1301,16 +1301,21 @@ function ChapterRow({
 
   const assembling = chapter.phase === 'assembling';
   const verifying = chapter.phase === 'verifying';
-  const rowStalled = stalled && chapter.state === 'in_progress';
+  /* C2 (Wave 3) — the worker is riding out a mid-render sidecar respawn. Takes
+     precedence over the stall styling: this IS a healthy recovery, not a stall. */
+  const recovering = chapter.phase === 'recovering';
+  const rowStalled = stalled && chapter.state === 'in_progress' && !recovering;
   const inProgressLabel = rowStalled
     ? 'Stalled'
-    : assembling
-      ? 'Assembling…'
-      : verifying
-        ? 'Verifying speech…'
-        : paused
-          ? 'Paused'
-          : 'Generating';
+    : recovering
+      ? 'Recovering…'
+      : assembling
+        ? 'Assembling…'
+        : verifying
+          ? 'Verifying speech…'
+          : paused
+            ? 'Paused'
+            : 'Generating';
   const inProgressPill = rowStalled ? (
     <Pill color="warning">Stalled</Pill>
   ) : (
@@ -1406,7 +1411,14 @@ function ChapterRow({
           <span className="block font-semibold text-ink truncate">
             {stripChapterPrefix(chapter.title)}
           </span>
-          {chapter.state === 'in_progress' && verifying ? (
+          {chapter.state === 'in_progress' && recovering ? (
+            /* C2 (Wave 3) — the sidecar recycled mid-render and the worker is
+               riding out the respawn. Name it explicitly so a healthy recovery
+               doesn't read as a frozen "Synthesising …" line / stall. */
+            <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
+              Recovering — restarting TTS engine…
+            </span>
+          ) : chapter.state === 'in_progress' && verifying ? (
             /* srv-31 ASR content-QA pass: the synthesis groups are done and
                counters are frozen near 99 %, so show the QA step explicitly
                instead of a stuck "Synthesising …" line. */
@@ -1486,6 +1498,7 @@ function ChapterRow({
             paused={paused}
             assembling={assembling}
             verifying={verifying}
+            recovering={recovering}
           />
         </span>
         <span className="hidden sm:block text-sm tabular-nums text-ink/60 text-right">
@@ -1784,6 +1797,7 @@ function ChapterRow({
           {chapter.state === 'in_progress' &&
             !assembling &&
             !verifying &&
+            !recovering &&
             chapter.currentLine != null &&
             chapter.currentLine > 0 && (
               <div className="mt-4 ml-[60px] flex items-center gap-3 text-xs text-ink/60">
@@ -1933,12 +1947,14 @@ function ChapterProgressBar({
   paused,
   assembling,
   verifying,
+  recovering,
 }: {
   progress: number;
   state: Chapter['state'];
   paused: boolean;
   assembling: boolean;
   verifying: boolean;
+  recovering: boolean;
 }) {
   if (state === 'queued') return <div className="h-1.5 rounded-full bg-ink/6" />;
   if (state === 'done')
@@ -1953,11 +1969,12 @@ function ChapterProgressBar({
         <div className="h-full rounded-full bg-rose-500" style={{ width: `${progress * 100}%` }} />
       </div>
     );
-  if (assembling || verifying)
+  if (assembling || verifying || recovering)
     return (
-      /* Disk-write phase (assembling) or the srv-31 ASR content-QA pass
-         (verifying) — neutral ink-tone bar with stripe motion to read as
-         "near done, busy" rather than the magenta synthesis gradient. */
+      /* Disk-write phase (assembling), the srv-31 ASR content-QA pass
+         (verifying), or a mid-render sidecar respawn ride-out (recovering, C2)
+         — neutral ink-tone bar with stripe motion to read as "near done, busy"
+         rather than the magenta synthesis gradient. */
       <div className="relative h-1.5 rounded-full bg-ink/6 overflow-hidden">
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-ink/40"
