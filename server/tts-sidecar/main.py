@@ -381,8 +381,12 @@ class _VdKokoroArbiter:
     8 GB card and spill. This arbiter guarantees the two heaviest-combined ops
     never co-reside: a design waits for in-flight Kokoro synths to drain, then
     blocks new ones until it finishes. Kokoro synths still run concurrently with
-    EACH OTHER (writer-priority readers/writer), so normal generation is
-    unaffected when no design is running. Qwen Base generation never touches this
+    EACH OTHER (a drain-and-lock policy, not writer-priority: a waiting design
+    does NOT block new Kokoro synths until it has drained the in-flight ones
+    and set `_design_active`), so normal generation is unaffected when no
+    design is running. Under a continuous Kokoro stream a design may therefore
+    wait up to ~one sentence's duration beyond the last drain point —
+    acceptable because designs are rare and brief. Qwen Base generation never touches this
     arbiter, so a Qwen-voiced chapter generates at full speed alongside a design.
     """
 
