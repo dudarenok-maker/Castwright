@@ -22,14 +22,18 @@ owner: null
 - **Technical:** the bulk design job (`cast-design.ts`) is generalized from a
   list of character IDs to a typed *task list* (`{ characterId, emotion? }[]`)
   computed demand-driven on the frontend; `persistEmotionVariant` is extracted from
-  the single-design route as a shared book-scoped helper so both paths write the
+  the single-design route as a shared helper so both paths write the
   `qwen.variants[emotion]` slot identically.
 - **Architectural:** demand-driven model — only emotions *actually tagged* on a
-  character's sentences and not yet designed surface as work. Variant persistence
-  is **book-scoped** in v1 (the `.pt` design artifact is series-unified by the
-  base `voiceId`, but the per-book `cast.json` variant slot is written only for
-  the current book). Series-wide variant-slot propagation is an explicit deferred
-  follow-up.
+  character's sentences and not yet designed surface as work. A designed variant
+  is just another voiceId derived from the series-unified base voiceId
+  (`qwen-<voiceId>__<emotion>`), so — exactly like the base voice carried by
+  `applyOverrideToCastFiles` — the variant slot **travels across every linked
+  character in the series** (`srv-37`): `persistEmotionVariant` propagates through
+  the shared `forEachMatchingCastCharacter` walk when a series scope is in play,
+  standalones excluded. A per-book variant slot would break the linked-cast
+  premise (the same character would render the emotion in one book and fall back
+  to base in another).
 
 ## How it works
 
@@ -86,7 +90,7 @@ Under `both`, the character's base is designed first and its variant tasks follo
 routes through `withDesignLock` + `gpuSemaphore` (unchanged). For a variant task
 (`emotion` is set), it calls `designQwenVoiceForCharacter({ …, emotion })` — the
 helper already designs under `<baseVoiceId>__<emotion>` — then calls
-`persistEmotionVariant(bookDir, characterId, emotion, voiceId)`.
+`persistEmotionVariant(bookDir, characterId, emotion, voiceId, seriesFilter)`.
 
 **New SSE event.** `variant_designed { characterId, emotion, voiceId }` is broadcast
 after each successful variant design. The frontend's `onVariantDesigned` callback
@@ -94,11 +98,18 @@ dispatches `castActions.setCharacterEmotionVariant({ characterId, emotion, voice
 so the glyph strip flips live. Base designs continue to use the existing
 `character_designed` event and `setQwenOverrideName`.
 
-**Variant persistence helper.** `persistEmotionVariant(bookDir, characterId, emotion, variantVoiceId)`
+**Variant persistence helper.** `persistEmotionVariant(bookDir, characterId, emotion, variantVoiceId, seriesFilter?)`
 is extracted from the single-design route and exported from `qwen-voice.ts`. It
-reads `cast.json`, merges the new variant slot while preserving the base `name` and
-any sibling variants, and writes atomically. The single-design route is refactored
-to call it. No-op for an unknown character.
+merges the new variant slot while preserving the base `name` and any sibling
+variants. When `seriesFilter` is supplied it propagates the slot to **every linked
+character across the series** via the shared `forEachMatchingCastCharacter` walk in
+`voices.ts` (the same walk `applyOverrideToCastFiles` uses), matching on the linked
+identity `voiceId ?? id` and excluding standalones; without it the write stays
+book-scoped (a standalone, or a caller with no series context). Both the single-design
+route and the bulk job compute the series scope and pass it. No-op for an unknown
+character. `applyOverrideToCastFiles` was also fixed to **preserve** an existing
+slot's `variants` when (re)assigning the base `name`, so a base re-design or its
+propagation can no longer wipe designed variants.
 
 **Pill copy.** `job.total` counts bases + variant tasks; the Design pill reads
 "Designing voices & variants… (k of N)".
@@ -143,10 +154,12 @@ loaded sentences). This means:
   skipped (not failed). Skipped tasks increment `job.skipped`.
 - `persistEmotionVariant` is a **no-op** for an unknown `characterId` — it does not
   create a character from scratch.
-- Variant persistence is **book-scoped** (writes only the current book's `cast.json`).
-  The base `voiceId` is already series-unified, so the `.pt` file is reusable across
-  sibling books — but their `cast.json` variant slots are NOT updated. Series-wide
-  propagation is the deferred follow-up.
+- Variant persistence **travels with the linked cast**: a variant designed for a
+  `voiceId` propagates the `cast.json` slot to every linked character across the
+  series (standalones excluded), mirroring base-voice propagation. A standalone (or
+  a call with no series context) writes only its own `cast.json`. This is the core
+  linked-cast invariant — the same character must never render an emotion in one
+  book and fall back to base in a sibling.
 - The existing `character_designed` SSE event and `setQwenOverrideName` reducer path
   are unchanged (base voice designs still use them).
 - `showDesignFullCast` now also fires when `variantCount > 0` (not only on
@@ -160,7 +173,13 @@ loaded sentences). This means:
 **Server (Vitest + node, real-ffmpeg where noted):**
 - `server/src/routes/qwen-voice.test.ts` — `persistEmotionVariant` unit: records the
   variant slot without clobbering the base name; preserves sibling variants when adding
-  another; is a no-op for an unknown character.
+  another; is a no-op for an unknown character (book-scoped, no series filter).
+- `server/src/routes/variant-propagation.test.ts` — linked-cast propagation: a variant
+  designed with a series scope travels to every linked character (same `voiceId`) across
+  the series; does NOT touch a different series or a standalone; bootstraps the base name
+  on a linked sibling lacking the slot; preserves sibling variants across the series; stays
+  book-scoped with no filter. Also pins that `applyOverrideToCastFiles` preserves designed
+  `variants` when (re)assigning the base name.
 - `server/src/routes/cast-design.test.ts` — scope `variants` designs each task emotion
   and persists the slot; skips a variant whose base is missing; scope `both` designs base
   then its variants in order; `job.total` and progress counts include variant tasks;
@@ -233,10 +252,6 @@ Requires a Qwen project with weights installed + a book with emotion-tagged sent
 
 ## Out of scope
 
-- **Series-wide variant-slot propagation** — the `.pt` is already series-unified (same base
-  `voiceId`), but sibling books' `cast.json` variant slots are NOT updated. The deferred
-  follow-up is to propagate the recorded slot to sibling books in the series so their
-  cast rows show the variant without re-designing. Tracked as a follow-up (see below).
 - **The series rebaseline modal** (plan 108 wave 5) — `fe-32`'s original "series-wide
   rebaseline modal for emotion variants" framing is parked. This plan delivers the
   per-book scope; the rebaseline modal remains base-only.
@@ -259,12 +274,10 @@ Requires a Qwen project with weights installed + a book with emotion-tagged sent
 
 ## Follow-ups
 
-- **Series-wide variant-slot propagation** (`srv-37`,
-  [#688](https://github.com/dudarenok-maker/AudioBook-Generator/issues/688)) — after a
-  book-scoped variant is designed and written to `cast.json`, propagate the
-  `variants[emotion]` slot to sibling books in the series (the `.pt` is already reusable;
-  only the `cast.json` record is missing). Analogous to how `applyOverrideToCastFiles`
-  propagates base voice assignments.
+- **Live cross-tab glyph flip for sibling books** — variant slots now propagate to
+  sibling books' `cast.json` immediately, but a sibling book's cast view open in
+  another tab won't repaint until it re-reads state (reopen/refresh). The on-disk data
+  is correct; only the live in-tab repaint of a *non-active* book lags. Low priority.
 - **Responsive coverage case for the scope picker** — add a phone/tablet viewport case to
   `e2e/responsive/coverage.spec.ts` (the picker bottom-sheet placement on mobile).
 

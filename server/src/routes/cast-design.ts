@@ -259,8 +259,9 @@ async function runDesignJob(
             job.done += 1;
             broadcast(job, { type: 'character_designed', characterId, voiceId });
           } else {
-            /* Variant path — record the slot in the book's cast.json. */
-            await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId);
+            /* Variant path — record the slot and propagate it across the
+               series (linked cast), the same scope the base voice uses. */
+            await persistEmotionVariant(job.bookDir, characterId, emotion, voiceId, seriesFilter);
             job.done += 1;
             broadcast(job, { type: 'variant_designed', characterId, emotion, voiceId });
           }
