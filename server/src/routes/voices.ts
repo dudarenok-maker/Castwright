@@ -84,6 +84,13 @@ interface DerivedVoice {
   gradient: [string, string];
   usedIn: number;
   source: 'current' | 'library';
+  /** True when this voice belongs to a book in the currently-open book's
+      (author, series) — including the open book itself. Always falsy when no
+      book is open or the open book is a standalone (a standalone has no
+      series continuity). Drives the cast view's "Series" tab, which scopes to
+      `source === 'library' && inCurrentSeries` so it shows only this series'
+      siblings rather than every other book in the workspace. */
+  inCurrentSeries?: boolean;
   reusable?: boolean;
   pinned?: boolean;
   /** True when this voice has rendered chapter audio at least once.
@@ -200,6 +207,11 @@ async function aggregateVoices(
      usedIn aggregates across every book that contains the same voiceId). */
   const acc = new Map<string, DerivedVoice & { books: Set<string> }>();
 
+  /* bookId → its (author, series, isStandalone), recorded for every book that
+     contributes voices. Used after the scan to resolve which voices belong to
+     the open book's series (the `inCurrentSeries` flag). */
+  const bookMeta = new Map<string, { author: string; series: string; isStandalone: boolean }>();
+
   /* One memoised cast loader for reused-voice hydration, shared across every
      book scanned below so each source book's cast.json is read at most once
      (many reused characters across the series resolve to the same source). */
@@ -224,6 +236,12 @@ async function aggregateVoices(
         if (!state || !state.castConfirmed) continue;
         const cast = await readJson<CastJson>(castJsonPath(bookDir));
         if (!cast?.characters?.length) continue;
+
+        bookMeta.set(state.bookId, {
+          author: state.author,
+          series: state.series,
+          isStandalone: state.isStandalone === true,
+        });
 
         /* Hydrate reused characters' bespoke voice from their source book so the
            ttsVoice assignment below reflects the DESIGNED voice, not the empty
@@ -343,6 +361,28 @@ async function aggregateVoices(
           });
         }
       }
+    }
+  }
+
+  /* Resolve the open book's series (null when no book is open, the book has
+     no derived voices, or it's a standalone), then flag every voice that
+     shares that (author, series). The cast view's Series tab reads this so a
+     standalone never surfaces an unrelated series' cast. */
+  const cur = currentBookId ? bookMeta.get(currentBookId) : undefined;
+  const currentSeries =
+    cur && !cur.isStandalone ? { author: cur.author, series: cur.series } : null;
+  if (currentSeries) {
+    for (const voice of acc.values()) {
+      const inSeries = Array.from(voice.books).some((bid) => {
+        const m = bookMeta.get(bid);
+        return (
+          !!m &&
+          !m.isStandalone &&
+          m.author === currentSeries.author &&
+          m.series === currentSeries.series
+        );
+      });
+      if (inSeries) voice.inCurrentSeries = true;
     }
   }
 

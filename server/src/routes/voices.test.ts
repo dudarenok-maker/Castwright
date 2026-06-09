@@ -36,6 +36,7 @@ function writeBookOnDisk(
   title: string,
   bookId: string,
   characters: object[],
+  isStandalone = false,
 ) {
   const bookDir = join(workspace, 'books', author, series, title);
   mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
@@ -48,7 +49,7 @@ function writeBookOnDisk(
       author,
       series,
       seriesPosition: null,
-      isStandalone: false,
+      isStandalone,
       manuscriptFile: 'manuscript.txt',
       castConfirmed: true,
       chapters: [],
@@ -479,6 +480,103 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
     const res = await request(app).get('/api/voices?engine=coqui');
     const keefe = res.body.voices.find((v: { id: string }) => v.id === 'v_keefe');
     expect(keefe.sampled).toBeUndefined();
+  });
+});
+
+describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
+  /* A self-contained author with: a two-book series (Trilogy), a same-author
+     spinoff in a DIFFERENT series, and a standalone. Distinct voiceIds per
+     book so each voice's source/inCurrentSeries can be asserted cleanly,
+     independent of the v_fitz aggregation above. The "Series" tab in the
+     cast view filters on `inCurrentSeries`, so a standalone's tab must come
+     up empty and a series book's tab must show only its own series' siblings
+     — not every other book in the workspace. */
+  const C_AUTHOR = 'Coast Author';
+  const C_SERIES = 'Trilogy';
+  const C_SPINOFF_SERIES = 'Spinoff Series';
+  let bookAId: string;
+  let bookBId: string;
+  let spinoffId: string;
+  let standaloneId: string;
+
+  beforeAll(async () => {
+    const paths = await import('../workspace/paths.js');
+    bookAId = paths.makeBookId(C_AUTHOR, C_SERIES, 'Book A');
+    bookBId = paths.makeBookId(C_AUTHOR, C_SERIES, 'Book B');
+    spinoffId = paths.makeBookId(C_AUTHOR, C_SPINOFF_SERIES, 'Spinoff');
+    standaloneId = paths.makeBookId(C_AUTHOR, 'Standalones', 'Lone Tale');
+    const mkChar = (id: string, name: string, voiceId: string) => ({
+      id,
+      name,
+      role: 'role',
+      color: 'magenta',
+      voiceId,
+      gender: 'female',
+      ageRange: 'adult',
+      attributes: ['Female'],
+      lines: 10,
+      scenes: 1,
+    });
+    writeBookOnDisk(workspaceRoot, C_AUTHOR, C_SERIES, 'Book A', bookAId, [
+      mkChar('char-alpha', 'Alpha', 'v_alpha'),
+    ]);
+    writeBookOnDisk(workspaceRoot, C_AUTHOR, C_SERIES, 'Book B', bookBId, [
+      mkChar('char-beta', 'Beta', 'v_beta'),
+    ]);
+    writeBookOnDisk(workspaceRoot, C_AUTHOR, C_SPINOFF_SERIES, 'Spinoff', spinoffId, [
+      mkChar('char-gamma', 'Gamma', 'v_gamma'),
+    ]);
+    writeBookOnDisk(
+      workspaceRoot,
+      C_AUTHOR,
+      'Standalones',
+      'Lone Tale',
+      standaloneId,
+      [mkChar('char-lone', 'Lone', 'v_lone')],
+      true /* isStandalone */,
+    );
+  });
+
+  const find = (voices: Array<{ id: string }>, id: string) =>
+    voices.find((v) => v.id === id) as
+      | { id: string; source: string; inCurrentSeries?: boolean }
+      | undefined;
+
+  it('flags a sibling-series voice inCurrentSeries when a series book is open', async () => {
+    const res = await request(app).get(`/api/voices?currentBookId=${bookAId}`);
+    expect(res.status).toBe(200);
+    const beta = find(res.body.voices, 'v_beta');
+    expect(beta).toBeDefined();
+    /* Beta lives only in the sibling Book B — not the open book — so it's a
+       library voice, but it IS in the open book's series. */
+    expect(beta!.source).toBe('library');
+    expect(beta!.inCurrentSeries).toBe(true);
+    /* The open book's own voice is 'current'. */
+    expect(find(res.body.voices, 'v_alpha')!.source).toBe('current');
+  });
+
+  it('does NOT flag a same-author different-series voice as inCurrentSeries', async () => {
+    const res = await request(app).get(`/api/voices?currentBookId=${bookAId}`);
+    const gamma = find(res.body.voices, 'v_gamma');
+    expect(gamma!.source).toBe('library');
+    /* Same author, different series → must stay out of the Series tab. */
+    expect(gamma!.inCurrentSeries).toBeFalsy();
+  });
+
+  it('flags no voice inCurrentSeries when the open book is a standalone', async () => {
+    const res = await request(app).get(`/api/voices?currentBookId=${standaloneId}`);
+    expect(res.status).toBe(200);
+    /* Sibling-series voices exist in the workspace, but the open standalone
+       has no series, so the cast view's Series tab must come up empty. */
+    expect(find(res.body.voices, 'v_beta')!.inCurrentSeries).toBeFalsy();
+    expect(find(res.body.voices, 'v_alpha')!.inCurrentSeries).toBeFalsy();
+    /* The standalone's own voice is still 'current'. */
+    expect(find(res.body.voices, 'v_lone')!.source).toBe('current');
+  });
+
+  it('flags no voice inCurrentSeries when no book is open', async () => {
+    const res = await request(app).get('/api/voices');
+    expect(find(res.body.voices, 'v_beta')!.inCurrentSeries).toBeFalsy();
   });
 });
 

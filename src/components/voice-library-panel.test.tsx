@@ -81,13 +81,14 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onPlaySample = vi.fn();
     /* A voice from another book in the series — no character in the
        current book uses it, so the panel should not synthesise a drawer
-       or sample target. The library tab is "library" because that's what
-       series voices use; switch to All so the test sees it. */
+       or sample target. It's `inCurrentSeries` so the panel defaults to the
+       "Series" tab and the card is visible without switching tabs. */
     render(
       <VoiceLibraryPanel
         library={[
           makeVoice('v_series', 'Other-book speaker', {
             source: 'library',
+            inCurrentSeries: true,
             bookTitle: 'Earlier Book',
             bookId: 'eb',
           }),
@@ -337,7 +338,12 @@ describe('VoiceLibraryPanel — search', () => {
        the name matches — the tab filter runs before the query. */
     const mixed: Voice[] = [
       makeVoice('v_keefe', 'Keefe Sencen', { source: 'current' }),
-      makeVoice('v_ro', 'Ro', { source: 'library', bookTitle: 'Flashback', bookId: 'fb' }),
+      makeVoice('v_ro', 'Ro', {
+        source: 'library',
+        inCurrentSeries: true,
+        bookTitle: 'Flashback',
+        bookId: 'fb',
+      }),
     ];
     render(
       <VoiceLibraryPanel library={mixed} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
@@ -374,5 +380,90 @@ describe('VoiceLibraryPanel — search', () => {
     });
     expect(screen.getByText(/No voices match/)).toBeInTheDocument();
     expect(screen.queryByText('Keefe Sencen')).toBeNull();
+  });
+});
+
+describe('VoiceLibraryPanel — Series tab scoping & default tab', () => {
+  /* The cast view's "Series" tab must scope to the open book's series
+     (`source === 'library' && inCurrentSeries`), not every other book in the
+     workspace. The default tab is context-aware: a series book opens on
+     "Series", a standalone opens on "This book". */
+  const thisBook = makeVoice('v_self', 'Captain Halloran', { source: 'current' });
+  const sibling = makeVoice('v_sib', 'Series Sibling', {
+    source: 'library',
+    inCurrentSeries: true,
+    bookTitle: 'Solway Bay',
+    bookId: 'sb',
+  });
+  const otherSeries = makeVoice('v_other', 'Unrelated Voice', {
+    source: 'library',
+    bookTitle: 'Some Other Book',
+    bookId: 'xx',
+  });
+
+  it('hides the Series tab and defaults to "This book" for a standalone (no series voices)', () => {
+    render(
+      <VoiceLibraryPanel
+        library={[thisBook, otherSeries]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+      />,
+    );
+    /* No series voices → no Series tab. */
+    expect(screen.queryByRole('button', { name: 'Series' })).toBeNull();
+    /* Defaults to "This book": shows the current-book voice, hides the
+       unrelated workspace voice (which only lives under "All"). */
+    expect(screen.getByText('Captain Halloran')).toBeInTheDocument();
+    expect(screen.queryByText('Unrelated Voice')).toBeNull();
+    /* The "All" tab still surfaces every workspace voice. */
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByText('Unrelated Voice')).toBeInTheDocument();
+  });
+
+  it('shows the Series tab and defaults to it for a series book', () => {
+    render(
+      <VoiceLibraryPanel
+        library={[thisBook, sibling, otherSeries]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'Series' })).toBeInTheDocument();
+    /* Defaults to "Series": shows only the in-series sibling, not the
+       current-book voice nor the unrelated-series voice. */
+    expect(screen.getByText('Series Sibling')).toBeInTheDocument();
+    expect(screen.queryByText('Captain Halloran')).toBeNull();
+    expect(screen.queryByText('Unrelated Voice')).toBeNull();
+  });
+
+  it('keeps an out-of-series library voice off the Series tab', () => {
+    render(
+      <VoiceLibraryPanel
+        library={[thisBook, sibling, otherSeries]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+      />,
+    );
+    /* Already on Series by default — the unrelated workspace voice must not
+       appear even though it's a `source: 'library'` voice. */
+    expect(screen.queryByText('Unrelated Voice')).toBeNull();
+    /* It IS reachable from the "All" tab. */
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByText('Unrelated Voice')).toBeInTheDocument();
+  });
+
+  it('respects a manual tab pick even after the auto-default would change', () => {
+    /* User clicks "This book" on a series book; the panel must not yank them
+       back to "Series". */
+    render(
+      <VoiceLibraryPanel
+        library={[thisBook, sibling]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'This book' }));
+    expect(screen.getByText('Captain Halloran')).toBeInTheDocument();
+    expect(screen.queryByText('Series Sibling')).toBeNull();
   });
 });
