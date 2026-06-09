@@ -140,6 +140,7 @@ function parseSse(text: string): Array<Record<string, any>> {
 }
 
 let designLock: typeof import('../tts/design-lock.js');
+let qwenVoiceMod: typeof import('./qwen-voice.js');
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-design-test-'));
@@ -148,12 +149,13 @@ beforeAll(async () => {
   process.env.VOICE_SAMPLE_AUDIO_DIR = audioDir;
   vi.stubGlobal('fetch', fetchMock);
 
-  const [{ castDesignRouter }, { qwenVoiceRouter }, { makeBookId }, lock] = await Promise.all([
+  const [{ castDesignRouter }, qwenVoice, { makeBookId }, lock] = await Promise.all([
     import('./cast-design.js'),
     import('./qwen-voice.js'),
     import('../workspace/paths.js'),
     import('../tts/design-lock.js'),
   ]);
+  qwenVoiceMod = qwenVoice;
   designLock = lock;
   bookId = makeBookId(AUTHOR, SERIES, BOOK);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, BOOK);
@@ -161,7 +163,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', castDesignRouter);
-  app.use('/api/books', qwenVoiceRouter);
+  app.use('/api/books', qwenVoice.qwenVoiceRouter);
 });
 
 beforeEach(() => {
@@ -246,6 +248,34 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(idle).toMatchObject({ done: 1, total: 2 });
     expect(idle?.failures).toHaveLength(1);
     expect(charById('Brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_Brann');
+  });
+
+  it('sidecar liveness watchdog "stopped responding to /health" triggers fast-fail (sidecar_unavailable)', async () => {
+    /* Regression: the bulk-design fast-fail regex previously matched
+       "unreachable|did not complete within" but NOT the new liveness-watchdog
+       message "stopped responding to /health during voice design". Without the
+       fix, the job would grind through every remaining character to the 600s
+       ceiling instead of stopping early. */
+    const stoppedMsg =
+      `TTS sidecar (http://localhost:9000) stopped responding to /health during voice design — the process may have crashed or been recycled.`;
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockRejectedValue(
+      new Error(stoppedMsg),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({ characterIds: ['aria', 'Brann'], modelKey: QWEN_KEY });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const errorEvent = events.find((e) => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent?.code).toBe('sidecar_unavailable');
+    expect(errorEvent?.message).toMatch(/stopped responding/i);
+    /* The loop stopped after the first character — aria is NOT in character_designed */
+    expect(events.some((e) => e.type === 'character_designed')).toBe(false);
+
+    spy.mockRestore();
   });
 
   it('mutual exclusion: refuses to start while analysis is busy (409)', async () => {
