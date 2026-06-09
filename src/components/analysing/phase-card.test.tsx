@@ -63,11 +63,12 @@ describe('PhaseCard layout', () => {
 
   /* The active-phase streaming log scrolls. Without the shared `.scrollbar-thin`
      utility it falls back to the default OS scrollbar, which reads as a bright
-     grey bar against the dark card. The region must opt into the themed thin
-     inset scrollbar like every other in-card scroll surface — and, since it sits
-     mid-card with square corners, pin the clip radius to 0 so the log text never
-     gets clipped by the utility's default bottom-corner curve. */
-  it('themes the active-phase log scroll region with the thin inset scrollbar', () => {
+     grey bar against the card. It must use the same treatment as the admin
+     throughput table: a rounded, bordered, overflow-hidden wrapper with the
+     scroller inside, opting into the themed thin inset scrollbar — with the
+     clip radius pinned to the rounded-2xl (16px) wrapper so the thumb hugs the
+     curve instead of bleeding past it. */
+  it('mounts the active-phase log scroll region like the admin table (thin inset scrollbar)', () => {
     const phase: AnalysisPhase = {
       id: 1,
       label: 'Parsing and attribution',
@@ -95,7 +96,14 @@ describe('PhaseCard layout', () => {
     const line = screen.getByText(/631 sentences/);
     const scroller = line.closest('[class*="overflow-y-auto"]') as HTMLElement | null;
     expect(scroller).not.toBeNull();
+    // Same shared utility as Listen / Account / admin — not the default OS bar.
     expect(scroller!.className).toMatch(/scrollbar-thin/);
-    expect(scroller!.style.getPropertyValue('--scrollbar-thin-radius')).toBe('0px');
+    // Clip radius matches the rounded-2xl wrapper so the thumb hugs the curve.
+    expect(scroller!.style.getPropertyValue('--scrollbar-thin-radius')).toBe('16px');
+    // Mounted inside a rounded, bordered, overflow-hidden wrapper (admin idiom).
+    const wrapper = scroller!.parentElement as HTMLElement;
+    expect(wrapper.className).toMatch(/rounded-2xl/);
+    expect(wrapper.className).toMatch(/border/);
+    expect(wrapper.className).toMatch(/overflow-hidden/);
   });
 });

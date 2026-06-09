@@ -208,7 +208,10 @@ export function FixCharacterAudioModal({
                   {firstName} has no rendered chapters yet — generate audio first.
                 </p>
               ) : (
-                <div className="max-h-56 overflow-y-auto space-y-1 pr-1">
+                <div
+                  className="max-h-56 overflow-y-auto scrollbar-thin space-y-1 pr-1"
+                  style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
+                >
                   {candidates.map((c) => (
                     <label
                       key={c.id}

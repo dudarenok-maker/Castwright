@@ -1089,7 +1089,12 @@ function Drawer({
             <IconClose className="w-5 h-5" />
           </button>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-3">{children}</div>
+        <div
+          className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-3"
+          style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
