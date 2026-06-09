@@ -650,3 +650,30 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
     expect(res.body).toEqual({ ok: true, removed: 'excited' });
   });
 });
+
+describe('evaluateDesignLiveness', () => {
+  /* Import dynamically to avoid loading qwen-voice.ts (and its workspace/paths
+     transitive dep) at test-module parse time — paths.ts captures WORKSPACE_DIR
+     once at load, so a static top-level import here would race beforeAll's env setup. */
+  let evaluateDesignLiveness: typeof import('./qwen-voice.js').evaluateDesignLiveness;
+  beforeAll(async () => {
+    ({ evaluateDesignLiveness } = await import('./qwen-voice.js'));
+  });
+
+  const T0 = 1_000_000;
+  it('continues while the sidecar is reachable and under the ceiling', () => {
+    expect(
+      evaluateDesignLiveness({ startedAt: T0, now: T0 + 200_000, health: 'reachable', absoluteMaxMs: 600_000 }),
+    ).toEqual({ action: 'continue' });
+  });
+  it('aborts as unreachable when the sidecar /health is down', () => {
+    expect(
+      evaluateDesignLiveness({ startedAt: T0, now: T0 + 200_000, health: 'unreachable', absoluteMaxMs: 600_000 }),
+    ).toEqual({ action: 'abort', reason: 'unreachable' });
+  });
+  it('aborts on the absolute ceiling even if the sidecar still pings', () => {
+    expect(
+      evaluateDesignLiveness({ startedAt: T0, now: T0 + 600_001, health: 'reachable', absoluteMaxMs: 600_000 }),
+    ).toEqual({ action: 'abort', reason: 'absolute' });
+  });
+});

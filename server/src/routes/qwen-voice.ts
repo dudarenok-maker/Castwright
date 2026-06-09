@@ -59,15 +59,30 @@ interface CastFile {
   characters: CastCharacter[];
 }
 
-/* Cold voice-design (load VoiceDesign model transiently + generate a
-   reference clip + distil the clone prompt) can take noticeably longer
-   than a warm synth on first call, so budget generously like the load
-   proxy rather than the 2s health probe. The sidecar now voices only the
-   short CALIBRATION_TEXT on the heavy 1.7B reference model (the audition
-   on the 0.6B Base still speaks the full quote), so a warm design lands in
-   ~60-90s — but a cold first-design (1.7B load + CUDA kernel JIT) plus a
-   max-length audition can still approach two minutes, so keep headroom. */
-const DESIGN_TIMEOUT_MS = 180_000;
+/* The base liveness-check interval. A design that exceeds this AND whose sidecar
+   /health is still reachable is slow-but-alive — keep waiting (almost always a
+   contended GPU). Only an unreachable sidecar or the absolute ceiling aborts.
+   (Was a blind wall-clock abort that surfaced a false "Halted" while the sidecar
+   was happily still designing.) */
+const DESIGN_LIVENESS_INTERVAL_MS = 180_000;
+/* Hard ceiling so a genuinely hung-but-pingable sidecar still fails eventually. */
+const DESIGN_ABSOLUTE_MAX_MS = 600_000;
+
+export type DesignLivenessResult =
+  | { action: 'continue' }
+  | { action: 'abort'; reason: 'unreachable' | 'absolute' };
+
+/** Pure decision for the design liveness watchdog — easy to unit-test. */
+export function evaluateDesignLiveness(p: {
+  startedAt: number;
+  now: number;
+  health: 'reachable' | 'unreachable';
+  absoluteMaxMs: number;
+}): DesignLivenessResult {
+  if (p.now - p.startedAt >= p.absoluteMaxMs) return { action: 'abort', reason: 'absolute' };
+  if (p.health === 'unreachable') return { action: 'abort', reason: 'unreachable' };
+  return { action: 'continue' };
+}
 
 /* Stable cache key for the designed voice — keyed on the character's
    voiceId when present (so a series-shared identity reuses one embedding)
@@ -205,7 +220,29 @@ export async function designQwenVoiceForCharacter(
     const sidecarUrl = getResolvedSidecarUrl();
     const target = `${sidecarUrl}/qwen/design-voice`;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), DESIGN_TIMEOUT_MS);
+    const startedAt = Date.now();
+    let abortReason: 'unreachable' | 'absolute' | null = null;
+    const livenessTimer = setInterval(() => {
+      void (async () => {
+        const { probeSidecarHealth } = await import('./sidecar-health.js');
+        const health = (await probeSidecarHealth()).status; // 'reachable' | 'unreachable'
+        const decision = evaluateDesignLiveness({
+          startedAt,
+          now: Date.now(),
+          health,
+          absoluteMaxMs: DESIGN_ABSOLUTE_MAX_MS,
+        });
+        if (decision.action === 'abort') {
+          abortReason = decision.reason;
+          controller.abort();
+        } else {
+          console.warn(
+            `[qwen-voice] design slow (${Math.round((Date.now() - startedAt) / 1000)}s) ` +
+              `— sidecar /health reachable, extending (ceiling ${DESIGN_ABSOLUTE_MAX_MS / 1000}s).`,
+          );
+        }
+      })();
+    }, DESIGN_LIVENESS_INTERVAL_MS);
     const onExternalAbort = () => controller.abort();
     if (p.signal) {
       if (p.signal.aborted) controller.abort();
@@ -228,8 +265,16 @@ export async function designQwenVoiceForCharacter(
       } catch (e) {
         const err = e as { name?: string; message?: string };
         if (err.name === 'AbortError') {
+          if (p.signal?.aborted) {
+            throw new Error('Voice design was cancelled.');
+          }
+          if (abortReason === 'unreachable') {
+            throw new Error(
+              `TTS sidecar (${sidecarUrl}) stopped responding to /health during voice design — the process may have crashed or been recycled.`,
+            );
+          }
           throw new Error(
-            `Sidecar /qwen/design-voice did not complete within ${DESIGN_TIMEOUT_MS}ms — voice design is unusually slow or the process is stuck.`,
+            `Sidecar /qwen/design-voice did not complete within ${DESIGN_ABSOLUTE_MAX_MS}ms — voice design is unusually slow or the process is stuck.`,
           );
         }
         throw new Error(
@@ -275,7 +320,7 @@ export async function designQwenVoiceForCharacter(
       );
       return { voiceId, url };
     } finally {
-      clearTimeout(timer);
+      clearInterval(livenessTimer);
       if (p.signal) p.signal.removeEventListener('abort', onExternalAbort);
       releaseGpu();
     }
