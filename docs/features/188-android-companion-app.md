@@ -74,21 +74,23 @@ a copyable manual-entry list, and explains how to enable LAN HTTPS when the payl
 incomplete (not https / no token / no CA). Tests: `pair-device.test.tsx` (11) +
 `companion-app-banner.test.tsx` (pair-button→modal) + an e2e in `download-tiles.spec.ts`.
 
-**Scanner crash on Android 16 (mobile_scanner 7.2.0).** `Scan QR` showed the plugin's raw
-default error — `NullPointerException: Attempt to invoke virtual method '…' on a null object
-reference` — a black screen with an obfuscated trace. Diagnosed via `adb logcat`: the NPE is
-inside **ML Kit's own `process()` pipeline** on `controller.start()`, reproduced on a Pixel 10
-Pro **API-36** emulator *and* a real device (identical obfuscation → the emulator is a faithful
-oracle). It is **independent of the bundled vs unbundled ML Kit variant**. mobile_scanner 7.2.0
-is the latest, and downgrading is blocked by the Android-15/16 **16 KB page-alignment**
-requirement (7.x is the variant with 16 KB-aligned native libs). Mitigations landed
-(`qr_scan_screen.dart`): an explicit QR-only `MobileScannerController` + a friendly
-`errorBuilder` that degrades to **"Couldn't start the camera → Enter details manually"**
-(no more black-screen gibberish), and switched to the **unbundled** ML Kit (18.3.1 via Play
-Services) as the camera-scan fix candidate — the emulator can't fairly validate it (its GMS ML
-Kit reports "no usable artifacts"). **Owed:** real-phone validation of the actual scan path;
-manual entry is the guaranteed pairing path meanwhile. Upstream-issue / version-bump tracking
-is the next step if the unbundled variant doesn't resolve it on a real device.
+**Scanner crash on Android 16 → replaced ML Kit with zxing (`flutter_zxing`).** `Scan QR`
+crashed with `NullPointerException: Attempt to invoke virtual method '…' on a null object
+reference`. Diagnosed via `adb logcat`: the NPE is **inside Google ML Kit's own `process()`
+pipeline** (every stack frame is obfuscated Google code — mobile_scanner's own Kotlin would show
+un-obfuscated `dev.steenbakker.*` and never appears), reproduced on a Pixel 10 Pro **API-36**
+emulator *and* a real device. Ruled out: camera permission (granted; `GrantPermissionsActivity`
+fires), native-load / 16 KB alignment (no `dlopen`/`UnsatisfiedLink` — the lib loads), and the
+ML Kit variant (bundled 17.3.0 **and** unbundled 18.3.1 fail identically). Root cause: ML Kit
+barcode is incompatible with this Android-16 runtime, and it's closed/obfuscated — unfixable from
+our layer. **Fix: dropped mobile_scanner entirely and swapped to `flutter_zxing` (zxing-cpp via
+FFI — no ML Kit, no Play Services).** `qr_scan_screen.dart` now uses `ReaderWidget`
+(`Format.qrCode`) with a built-in gallery-import fallback. Built with NDK r27 (16 KB-aligned
+`.so` by default). **Verified end-to-end on the Android-16 emulator** (the same box that
+faithfully reproduced the NPE): (1) the live camera preview opens with **zero NPE / native-load
+error**, and (2) decoding the real pairing QR via gallery-import lands back on the pairing form
+with all three fields auto-populated — exercising the same `onScan → PairedServer.fromQrPayload`
+path the live camera uses. 193 app Dart tests green.
 
 ### Dev setup (this box — full toolchain installed + validated)
 

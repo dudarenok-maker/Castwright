@@ -44,8 +44,12 @@ dependencies:
   # 10.x ships 16 KB-page-aligned native libs (datastore_shared_counter).
   flutter_secure_storage: ^10.3.1
 
-  # app-2 — scan the server pairing QR. 7.x bundles 16 KB-aligned ML Kit.
-  mobile_scanner: ^7.2.0
+  # app-2 — scan the server pairing QR via flutter_zxing (zxing-cpp through FFI),
+  # NOT ML Kit. mobile_scanner 7.2.0's ML Kit barcode scanner NPEs inside
+  # process() on start on Android 16 / API 36 — reproduced on a Pixel 10 Pro
+  # emulator AND a real device, both bundled & unbundled ML Kit variants, with
+  # camera permission granted. zxing has no ML Kit / Play Services dependency.
+  flutter_zxing: ^2.3.0
   path_provider: ^2.1.5
   flutter_foreground_task: ^9.2.2
   drift: ^2.33.0
