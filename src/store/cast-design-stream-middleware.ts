@@ -82,6 +82,10 @@ export function createCastDesignMiddleware(): Middleware {
         dispatch(castActions.setQwenOverrideName({ characterId, voiceId }));
         dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
       },
+      onVariantDesigned: ({ characterId, emotion, voiceId }) => {
+        dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
+        dispatch(castDesignActions.charDone({ bookId, lastTickAt: Date.now() }));
+      },
       onCharacterSkipped: () =>
         dispatch(castDesignActions.charSkipped({ bookId, lastTickAt: Date.now() })),
       onCharacterFailed: ({ characterId, name, errorReason }) =>
@@ -265,21 +269,25 @@ export function createCastDesignMiddleware(): Middleware {
       const a = action as { type?: string; payload?: unknown };
 
       if (a.type === REQUESTED_TYPE) {
-        const { bookId, characterIds, modelKey } = a.payload as DesignAllRequestedPayload;
+        const { bookId, characterIds, modelKey, scope, variantTasks } =
+          a.payload as DesignAllRequestedPayload;
         if (handle) return result; // a run is already streaming
-        if (!bookId || characterIds.length === 0) return result;
+        const variantCount = (variantTasks ?? []).reduce((n, t) => n + t.emotions.length, 0);
+        const baseCount = scope === 'variants' ? 0 : characterIds.length;
+        const total = baseCount + (scope === 'bases' ? 0 : variantCount);
+        if (!bookId || total === 0) return result;
         const controller = new AbortController();
         /* Seed the pill instantly (before the first SSE event lands). */
         dispatch(
           castDesignActions.begin({
             bookId,
-            total: characterIds.length,
+            total,
             currentName: null,
             lastTickAt: Date.now(),
           }),
         );
         runStream(bookId, controller, (cb) =>
-          api.startCastDesign(bookId, { characterIds, modelKey }, cb),
+          api.startCastDesign(bookId, { characterIds, modelKey, scope, variantTasks }, cb),
         );
         return result;
       }
