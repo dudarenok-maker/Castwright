@@ -10,6 +10,7 @@ owner: null
 > Key files: `src/views/cast.tsx`, `src/store/cast-design-slice.ts`, `src/store/cast-design-stream-middleware.ts`, `src/components/top-bar.tsx` (DesignPill), `src/components/layout.tsx`, `server/src/routes/cast-design.ts`, `server/src/tts/design-lock.ts`, `server/src/routes/qwen-voice.ts` (`designQwenVoiceForCharacter`)
 > URL surface: `#/books/<id>/cast` (the button); the pill is global (top bar)
 > OpenAPI ops: `POST /api/books/{id}/cast/design`, `GET …/cast/design/status`, `POST …/cast/design/pause` (SSE — not specced, per the analysis/generation precedent)
+> Recycle resilience: a back-to-back bulk run hits sidecar recycles the single-design path rarely does — see `200-bulk-design-recycle-resilience.md` for the ride-out + restart-on-43 + config-handshake fixes that keep this job from halting on the first one.
 
 ## Benefit / Rationale
 

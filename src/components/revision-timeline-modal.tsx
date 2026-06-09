@@ -81,7 +81,10 @@ export function RevisionTimelineModal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="mt-16 max-h-[80vh] w-[min(640px,90vw)] overflow-y-auto rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+      <div
+        className="mt-16 max-h-[80vh] w-[min(640px,90vw)] overflow-y-auto scrollbar-thin rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900"
+        style={{ ['--scrollbar-thin-radius' as string]: '12px' } as React.CSSProperties}
+      >
         <header className="mb-4 flex items-start justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
