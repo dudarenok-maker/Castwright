@@ -101,7 +101,7 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
           role="dialog"
           aria-modal="true"
           aria-label="Pair a device"
-          className="bg-white rounded-3xl shadow-float w-full max-w-md pointer-events-auto fade-in overflow-hidden max-h-[90vh] overflow-y-auto"
+          className="bg-white rounded-3xl shadow-float w-full max-w-md pointer-events-auto fade-in overflow-hidden max-h-[90vh] overflow-y-auto scrollbar-thin"
         >
           <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
             <span className="w-9 h-9 rounded-full bg-peach/15 grid place-items-center text-magenta">

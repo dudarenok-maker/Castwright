@@ -130,7 +130,10 @@ export function ReattributeLinesModal({
           </button>
         </div>
 
-        <div className="px-6 py-4 overflow-y-auto flex-1">
+        <div
+          className="px-6 py-4 overflow-y-auto scrollbar-thin flex-1"
+          style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
+        >
           {isEmpty ? (
             <div className="rounded-2xl border border-dashed border-ink/15 p-5 text-sm text-ink/65 leading-relaxed">
               <p className="font-semibold text-ink mb-1">Nothing to reattribute here.</p>
