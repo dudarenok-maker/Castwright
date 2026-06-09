@@ -90,3 +90,25 @@ def test_two_kokoro_synths_run_concurrently_when_no_design():
     t1.join()
     t2.join()
     assert not errors, f"Kokoro synths could not run concurrently: {errors}"
+
+
+def test_kokoro_synthesize_acquires_the_arbiter(monkeypatch):
+    """KokoroEngine.synthesize must run its load+create under the arbiter so a
+    concurrent design can't start mid-synth."""
+    import main
+
+    eng = main.KokoroEngine()
+    seen = {"in_flight_during_create": None}
+
+    class _FakeModel:
+        def create(self, text, voice, speed, lang):
+            seen["in_flight_during_create"] = main._VD_KOKORO._kokoro_in_flight
+            import numpy as np
+            return np.zeros(10, dtype="float32"), 24000
+
+    eng._kokoro = _FakeModel()
+    eng._voices = ["af_heart"]
+    monkeypatch.setattr(eng, "_ensure_loaded", lambda model: None)
+
+    eng.synthesize("kokoro", "af_heart", "hello")
+    assert seen["in_flight_during_create"] == 1
