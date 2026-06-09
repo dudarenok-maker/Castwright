@@ -32,6 +32,7 @@ import {
 import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import {
   runStage1WithRosterGuard,
+  validateRosterCoverage,
   chapterDriftExceeded,
   type MissingSpeaker,
 } from '../analyzer/roster-coverage.js';
@@ -350,22 +351,73 @@ export function verifyEvidenceAgainstSource(
    only ever surface speakers with at least one verifiable line. The
    narrator is exempt — the narrator's "lines" are prose, not dialogue,
    and the Stage-1 prompt doesn't ask for verbatim quotes from prose. */
+/** Tokenise a display name the same way the roster-coverage guard does
+    (lowercase, split on whitespace / dots / hyphens, tokens ≥ 2 chars) so a
+    tagged-speaker name ("Oduvan") overlaps a fuller cast name ("Master
+    Oduvan") on a shared token. */
+function nameTokensForDrop(name: string): Set<string> {
+  return new Set(
+    (name || '')
+      .toLowerCase()
+      .split(/[\s.-]+/)
+      .filter((t) => t.length >= 2),
+  );
+}
+
 export function dropEvidencelessCast(
   characters: CharacterOutput[],
   log: (message: string) => void,
+  sourceText = '',
 ): CharacterOutput[] {
+  /* Defense-in-depth — the evidence verifier can kill every quote of a REAL
+     speaker when the source-vs-quote match is fragile (an encoding quirk such
+     as an undecoded `&#x27;`, an LLM paraphrase). The roster-coverage guard
+     that exists to never lose a tagged speaker runs during DETECTION, before
+     this prune, so it can't protect against the prune. Re-derive the prose
+     dialogue-tag signal here (empty roster ⇒ every bounded `<Name> <verb>`
+     speaker) and keep an evidenceless character the source still tags as a
+     speaker. The narrator-less prune purpose — killing INVENTED non-speakers
+     the model hallucinated onto the roster — is preserved: those have no
+     dialogue tags, so they still drop. Only scanned when there's actually an
+     evidenceless non-narrator character to rescue. */
+  const hasEvidenceless = characters.some(
+    (c) => c.id !== 'narrator' && (c.evidence?.length ?? 0) === 0,
+  );
+  const taggedTokens = new Set<string>();
+  if (sourceText && hasEvidenceless) {
+    for (const sp of validateRosterCoverage(sourceText, []).missingSpeakers) {
+      for (const tok of nameTokensForDrop(sp.name)) taggedTokens.add(tok);
+    }
+  }
+
   const kept: CharacterOutput[] = [];
   const droppedNames: string[] = [];
+  const rescuedNames: string[] = [];
   for (const c of characters) {
     if (c.id === 'narrator') {
       kept.push(c);
       continue;
     }
     if ((c.evidence?.length ?? 0) === 0) {
+      const tagged =
+        taggedTokens.size > 0 &&
+        [...nameTokensForDrop(c.name)].some((t) => taggedTokens.has(t));
+      if (tagged) {
+        rescuedNames.push(c.name);
+        kept.push(c);
+        continue;
+      }
       droppedNames.push(c.name);
       continue;
     }
     kept.push(c);
+  }
+  if (rescuedNames.length > 0) {
+    const sample = rescuedNames.slice(0, 4).join(', ');
+    const more = rescuedNames.length > 4 ? `, +${rescuedNames.length - 4} more` : '';
+    log(
+      `Kept ${rescuedNames.length} evidenceless character${rescuedNames.length === 1 ? '' : 's'} the prose still tags as a speaker (${sample}${more}) — verifier killed every quote but the dialogue tags prove they speak.`,
+    );
   }
   if (droppedNames.length > 0) {
     const sample = droppedNames.slice(0, 4).join(', ');
@@ -2158,7 +2210,11 @@ export async function runMainAnalyzerJob(
         log(0, msg),
       );
       const before = stage1.characters.length;
-      stage1.characters = dropEvidencelessCast(stage1.characters, (msg) => log(0, msg));
+      stage1.characters = dropEvidencelessCast(
+        stage1.characters,
+        (msg) => log(0, msg),
+        record.sourceText,
+      );
       if (verified.totalDropped > 0 || stage1.characters.length !== before) {
         /* Shrink guard — when the re-verify on the resume short-circuit
            would drop more than half of a non-trivial cached roster,
@@ -2659,7 +2715,11 @@ export async function runMainAnalyzerJob(
         const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, (msg) =>
           log(0, msg),
         );
-        const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg));
+        const characters = dropEvidencelessCast(
+          rawCharacters,
+          (msg) => log(0, msg),
+          record.sourceText,
+        );
         /* Plan 126 Facet A — establish cross-book reuse links server-side.
            Match each new character against prior same-series confirmed cast
            and stamp `matchedFrom` + a unified `voiceId` + `voiceState:'reused'`
@@ -4008,7 +4068,11 @@ async function runSubsetAnalyzerJob(
     const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, (msg) =>
       log(0, msg),
     );
-    const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg));
+    const characters = dropEvidencelessCast(
+      rawCharacters,
+      (msg) => log(0, msg),
+      record.sourceText,
+    );
     const stage1: Stage1Output = {
       characters,
       chapters: record.chapterHints.map((c) => ({ id: c.id, title: c.title })),
