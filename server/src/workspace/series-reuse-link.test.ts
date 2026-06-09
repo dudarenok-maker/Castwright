@@ -13,6 +13,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   linkSeriesReuseAtAnalysis,
+  pruneStaleReuseLinks,
   type LinkableCharacter,
   type LinkSeriesReuseOptions,
 } from './series-reuse-link.js';
@@ -269,5 +270,113 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     const linked = await linkSeriesReuseAtAnalysis(BOOK2, fresh, baseOptions());
     expect(linked).toBe(0);
     expect(fresh[0].matchedFrom).toBeUndefined();
+  });
+});
+
+/* pruneStaleReuseLinks — a preserved matchedFrom (carried across re-analysis by
+   seedReuseGuardsFromPriorCast) whose target is no longer a same-author /
+   same-series EARLIER book is stale. It happens when a book is re-homed to
+   another series or made standalone after the link was stamped (the Coalfall /
+   narrator regression, 2026-06-09): the narrator stayed linked to a
+   Shannon-Messenger book after the book moved to Castwright/Standalones, and
+   neither re-analysis (preserves links by design) nor the UI unmatch (rejects
+   non-series-mates) could clear it. */
+describe('pruneStaleReuseLinks', () => {
+  const COALFALL = 'castwright__standalones__coalfall';
+  const BONUS = 'shannon__keeper__bonus';
+  const KEEPER1 = 'shannon__keeper__book1';
+  const KEEPER2 = 'shannon__keeper__book2';
+  const META: Record<string, { author: string; series: string } | null> = {
+    [COALFALL]: { author: 'Castwright', series: 'Standalones' },
+    [BONUS]: { author: 'Shannon Messenger', series: 'Keeper' },
+    [KEEPER1]: { author: 'Shannon Messenger', series: 'Keeper' },
+    [KEEPER2]: { author: 'Shannon Messenger', series: 'Keeper' },
+  };
+  const opts = (): LinkSeriesReuseOptions => ({
+    resolveAuthorSeries: async (id) => META[id] ?? null,
+    positions: async () =>
+      new Map<string, number | null>([
+        [BONUS, 1],
+        [KEEPER1, 1],
+        [KEEPER2, 2],
+        [COALFALL, null],
+      ]),
+  });
+
+  it('drops a cross-series stale link and reverts a pure-reuse voice to fresh', async () => {
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        voiceId: 'narrator',
+        voiceState: 'reused',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-narrator' } },
+        voiceStyle: 'British female',
+        matchedFrom: { bookId: BONUS, characterId: 'narrator', bookTitle: 'Bonus', confidence: 0.92 },
+      },
+    ];
+    const dropped = await pruneStaleReuseLinks(COALFALL, chars, opts());
+    expect(dropped).toBe(1);
+    const n = chars[0];
+    expect(n.matchedFrom).toBeFalsy();
+    expect(n.voiceState).toBe('generated');
+    expect(n.voiceId).toBe('narrator');
+    expect(n.overrideTtsVoices).toBeFalsy();
+    expect(n.voiceStyle).toBeFalsy();
+  });
+
+  it('keeps a valid same-series earlier-book link', async () => {
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'sophie',
+        name: 'Sophie',
+        voiceState: 'reused',
+        matchedFrom: { bookId: KEEPER1, characterId: 'sophie', bookTitle: 'Book One', confidence: 1 },
+      },
+    ];
+    const dropped = await pruneStaleReuseLinks(KEEPER2, chars, opts());
+    expect(dropped).toBe(0);
+    expect(chars[0].matchedFrom?.bookId).toBe(KEEPER1);
+    expect(chars[0].voiceState).toBe('reused');
+  });
+
+  it('drops a forward/sideways same-series link (target not strictly earlier)', async () => {
+    /* book-1 wrongly linked to book-2 (later) — the linker only makes
+       earlier-only links, so a preserved forward link is stale. */
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'sophie',
+        name: 'Sophie',
+        voiceState: 'reused',
+        matchedFrom: { bookId: KEEPER2, characterId: 'sophie', bookTitle: 'Book Two', confidence: 1 },
+      },
+    ];
+    const dropped = await pruneStaleReuseLinks(KEEPER1, chars, opts());
+    expect(dropped).toBe(1);
+    expect(chars[0].matchedFrom).toBeFalsy();
+  });
+
+  it('drops the stale badge but preserves a user-tuned voice', async () => {
+    const chars: LinkableCharacter[] = [
+      {
+        id: 'narrator',
+        name: 'Narrator',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'my-custom-voice' } },
+        matchedFrom: { bookId: BONUS, characterId: 'narrator', bookTitle: 'Bonus', confidence: 0.9 },
+      },
+    ];
+    const dropped = await pruneStaleReuseLinks(COALFALL, chars, opts());
+    expect(dropped).toBe(1);
+    expect(chars[0].matchedFrom).toBeFalsy();
+    /* User's own voice is untouched — only the stale link badge is removed. */
+    expect(chars[0].voiceState).toBe('tuned');
+    expect(chars[0].overrideTtsVoices?.qwen?.name).toBe('my-custom-voice');
+  });
+
+  it('is a no-op when there are no links to check', async () => {
+    const chars: LinkableCharacter[] = [{ id: 'oduvan', name: 'Oduvan', voiceState: 'generated' }];
+    expect(await pruneStaleReuseLinks(COALFALL, chars, opts())).toBe(0);
   });
 });
