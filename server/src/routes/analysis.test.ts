@@ -1418,6 +1418,42 @@ describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiabl
     expect(logs[0]).toContain('Dropped 1 character ');
     expect(logs[0]).not.toContain('Dropped 1 characters');
   });
+
+  /* Defense-in-depth (Coalfall / Master Oduvan, 2026-06-09): the verifier can
+     kill every quote of a REAL speaker when the source-vs-quote match is
+     fragile (an encoding quirk, an LLM paraphrase). The roster-coverage guard
+     that exists to never lose a tagged speaker runs during detection — BEFORE
+     this prune — so it can't protect against the prune. Cross-check the prose:
+     an evidenceless character the source still tags as a speaker is kept. */
+  it('keeps an evidenceless character the source tags as a speaker, drops one with no tags', () => {
+    const logs: string[] = [];
+    const source =
+      '"Leave it," said Master Oduvan, without looking up. "Whoever it is can knock." ' +
+      '"If I douse the fire," Oduvan said, "I lose the weld I have been nursing." ' +
+      'The cat watched from the rafters and did not speak.';
+    const chars: CharacterOutput[] = [
+      makeChar('narrator', 'Narrator', []),
+      makeChar('Wren', 'Wren', [{ quote: 'Real line' }]),
+      makeChar('master-oduvan', 'Master Oduvan', []), // verifier killed all his quotes — but he's tagged
+      makeChar('Pib', 'Pib', []), // pet — never tagged as a speaker in the prose
+    ];
+
+    const kept = dropEvidencelessCast(chars, (msg) => logs.push(msg), source);
+
+    expect(kept.map((c) => c.id)).toEqual(['narrator', 'Wren', 'master-oduvan']);
+    expect(logs.some((l) => /[Kk]ept 1 .*tag/.test(l))).toBe(true); // rescue logged
+    expect(logs.some((l) => l.includes('Dropped 1 character') && l.includes('Pib'))).toBe(true);
+  });
+
+  it('drops a tagged-name character when no source text is supplied (back-compat)', () => {
+    /* Without source text there's no tag signal — the prune behaves exactly
+       as before, so the two-arg call sites and tests are unaffected. */
+    const kept = dropEvidencelessCast(
+      [makeChar('narrator', 'Narrator', []), makeChar('oduvan', 'Oduvan', [])],
+      () => {},
+    );
+    expect(kept.map((c) => c.id)).toEqual(['narrator']);
+  });
 });
 
 /* B1 — sticky analysis: in-flight job map + /pause endpoint.
