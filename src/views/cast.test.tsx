@@ -1332,15 +1332,91 @@ describe('CastView — Design full cast button', () => {
     expect(screen.queryByTestId('design-full-cast')).toBeNull();
   });
 
-  it('click dispatches designAllRequested with the needs-voice ids + a Qwen modelKey', () => {
+  it('click opens the scope picker (no immediate dispatch)', () => {
     const { actions } = setup({ modelKey: 'qwen3-tts-0.6b', ready: true });
     fireEvent.click(screen.getByTestId('design-full-cast'));
+    /* Picker must be visible now */
+    expect(screen.getByTestId('design-scope-picker')).toBeInTheDocument();
+    /* No designAllRequested dispatched yet */
+    expect(actions.find((x) => x.type === castDesignActions.designAllRequested.type)).toBeUndefined();
+  });
+
+  it('picking "bases" from the scope picker dispatches designAllRequested with scope:bases', () => {
+    const { actions } = setup({ modelKey: 'qwen3-tts-0.6b', ready: true });
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    fireEvent.click(screen.getByTestId('scope-bases'));
     const a = actions.find((x) => x.type === castDesignActions.designAllRequested.type) as
-      | { payload: { bookId: string; characterIds: string[]; modelKey: string } }
+      | { payload: { bookId: string; characterIds: string[]; modelKey: string; scope: string } }
       | undefined;
     expect(a?.payload.bookId).toBe('b1');
     expect(a?.payload.characterIds).toEqual(['sweeney']);
     expect(a?.payload.modelKey).toMatch(/qwen/);
+    expect(a?.payload.scope).toBe('bases');
+    /* Picker closes after picking */
+    expect(screen.queryByTestId('design-scope-picker')).toBeNull();
+  });
+
+  it('opens the scope picker and dispatches a variants-scope design', () => {
+    /* sophie: has a base voice + an in-use emotion missing a variant */
+    const sophie: Character = {
+      id: 'sophie',
+      name: 'Sophie',
+      role: 'Hero',
+      color: 'mentor',
+      lines: 20,
+      scenes: 5,
+      attributes: [],
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: {} } },
+    };
+    const variantSents: Sentence[] = [
+      { id: 10, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
+    ];
+    const actions2: Array<{ type: string; payload?: unknown }> = [];
+    const recorder2 =
+      () => (next: (a: unknown) => unknown) => (action: unknown) => {
+        actions2.push(action as { type: string; payload?: unknown });
+        return next(action);
+      };
+    const store2 = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      middleware: (g) => g().concat(recorder2),
+    });
+    store2.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    store2.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    render(
+      <Provider store={store2}>
+        <CastView
+          characters={[sophie]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={variantSents}
+          title="X"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    expect(screen.getByTestId('design-scope-picker')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('scope-variants'));
+    const a = actions2.find((x) => x.type === castDesignActions.designAllRequested.type) as
+      | {
+          payload: {
+            bookId: string;
+            characterIds: string[];
+            modelKey: string;
+            scope: string;
+            variantTasks: Array<{ characterId: string; emotions: string[] }>;
+          };
+        }
+      | undefined;
+    expect(a?.payload.bookId).toBe('b2');
+    expect(a?.payload.scope).toBe('variants');
+    expect(a?.payload.characterIds).toEqual([]);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'sophie', emotions: ['angry'] }]);
   });
 
   it('shows a Cancel control while a run for this book is active', () => {
