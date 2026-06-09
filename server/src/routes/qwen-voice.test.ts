@@ -656,10 +656,15 @@ describe('persistEmotionVariant', () => {
      temp bookDir — isolated from the supertest Express fixture above so they do
      not depend on WORKSPACE_DIR or the sidecar mock. */
   let bookDir: string;
+  /* A second temp dir whose character has NO pre-existing qwen override slot —
+     exercises the bootstrap-from-derived-base-id default branch. */
+  let bookDirFresh: string;
   let persistEmotionVariantFn: typeof import('./qwen-voice.js').persistEmotionVariant;
+  let deriveQwenVoiceIdFn: typeof import('./qwen-voice.js').deriveQwenVoiceId;
 
   beforeAll(async () => {
-    ({ persistEmotionVariant: persistEmotionVariantFn } = await import('./qwen-voice.js'));
+    ({ persistEmotionVariant: persistEmotionVariantFn, deriveQwenVoiceId: deriveQwenVoiceIdFn } =
+      await import('./qwen-voice.js'));
   });
 
   beforeEach(async () => {
@@ -674,11 +679,22 @@ describe('persistEmotionVariant', () => {
         ],
       }),
     );
+
+    bookDirFresh = await mkdtemp(join(tmpdir(), 'cast-fresh-'));
+    await mkdir(join(bookDirFresh, '.audiobook'), { recursive: true });
+    await writeFile(
+      join(bookDirFresh, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        /* No overrideTtsVoices at all — exercises the slot-bootstrap path. */
+        characters: [{ id: 'fresh', voiceId: 'fresh_voice' }],
+      }),
+    );
   });
 
   afterEach(async () => {
     const { rm } = await import('node:fs/promises');
     await rm(bookDir, { recursive: true, force: true });
+    await rm(bookDirFresh, { recursive: true, force: true });
   });
 
   it('records the variant slot without clobbering the base name', async () => {
@@ -707,6 +723,18 @@ describe('persistEmotionVariant', () => {
     await persistEmotionVariantFn(bookDir, 'ghost', 'angry', 'x');
     const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
     expect(cast.characters[0].overrideTtsVoices.qwen.variants).toBeUndefined();
+  });
+
+  it('bootstraps the qwen slot with the derived base name when absent', async () => {
+    const { readFile } = await import('node:fs/promises');
+    /* The character has no overrideTtsVoices at all — the helper must derive the
+       base voiceId and bootstrap `{ name: <derived> }` before recording the variant. */
+    const expectedBaseName = deriveQwenVoiceIdFn({ id: 'fresh', voiceId: 'fresh_voice' } as any, 'fresh');
+    const variantVoiceId = `${expectedBaseName}__angry`;
+    await persistEmotionVariantFn(bookDirFresh, 'fresh', 'angry', variantVoiceId);
+    const cast = JSON.parse(await readFile(join(bookDirFresh, '.audiobook', 'cast.json'), 'utf8'));
+    expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe(expectedBaseName);
+    expect(cast.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({ name: variantVoiceId });
   });
 });
 
