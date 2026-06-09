@@ -11,8 +11,9 @@
 
 import { useEffect, useState } from 'react';
 
-import { CastwaveMark, IconApple, IconDownload, IconPlay } from '../../lib/icons';
+import { CastwaveMark, IconApple, IconDownload, IconPlay, IconQrCode } from '../../lib/icons';
 import { ComingSoonBadge } from '../primitives';
+import { PairDeviceModal } from '../../modals/pair-device';
 import { api } from '../../lib/api';
 import type { CompanionApkAvailability } from '../../lib/types';
 
@@ -21,6 +22,7 @@ const APK_DOWNLOAD_URL = '/api/companion/apk';
 
 export function CompanionAppBanner() {
   const [apk, setApk] = useState<CompanionApkAvailability | null>(null);
+  const [pairOpen, setPairOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,8 +67,19 @@ export function CompanionAppBanner() {
               sizeBytes={apk.sizeBytes}
             />
           )}
+          <button
+            type="button"
+            onClick={() => setPairOpen(true)}
+            data-testid="companion-pair-device"
+            aria-label="Pair a device with the Castwright Companion"
+            className="min-h-[44px] inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold border border-magenta/30 text-magenta hover:bg-magenta/5 transition-colors"
+          >
+            <IconQrCode className="w-4 h-4" />
+            <span>Pair a device</span>
+          </button>
         </div>
       </div>
+      <PairDeviceModal open={pairOpen} onClose={() => setPairOpen(false)} />
     </section>
   );
 }
