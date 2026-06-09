@@ -86,6 +86,9 @@ const library: Voice[] = [
     gradient: ['#E5B69C', '#C77B5C'],
     usedIn: 2,
     source: 'library',
+    /* A sibling-series voice available to reuse — so the panel surfaces it on
+       its default "Series" tab (the cast view's whole reuse affordance). */
+    inCurrentSeries: true,
     ttsVoice: {
       provider: 'coqui',
       name: 'Aaron Dreschner',

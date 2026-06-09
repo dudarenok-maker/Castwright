@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, Voice } from '../lib/types';
@@ -46,15 +46,48 @@ export function VoiceLibraryPanel({
   onTapAssign,
   assigningVoiceId,
 }: VoiceLibraryPanelProps) {
-  const [tab, setTab] = useState<Tab>('all');
   const [query, setQuery] = useState('');
+  /* Whether any voice belongs to the open book's series (a sibling book — the
+     `source === 'library'` half — that shares its author + series). The server
+     tags these `inCurrentSeries`. A standalone (or a one-book series) has none,
+     so the "Series" tab is meaningless and we hide it rather than surface an
+     empty / wrong-series tab. */
+  const hasSeriesVoices = useMemo(
+    () => library.some((v) => v.source === 'library' && v.inCurrentSeries),
+    [library],
+  );
+  /* Context-aware default: a series book opens on its "Series" tab (the
+     siblings available to reuse); a standalone opens on "This book". The tab
+     stays auto-driven until the user picks one — and `library` often arrives
+     async, so re-derive when the series signal flips (the ref keeps a manual
+     pick from being overwritten when voices load in). */
+  const [tab, setTab] = useState<Tab>('current');
+  const userPickedRef = useRef(false);
+  useEffect(() => {
+    if (userPickedRef.current) return;
+    setTab(hasSeriesVoices ? 'library' : 'current');
+  }, [hasSeriesVoices]);
+  const pickTab = (t: Tab) => {
+    userPickedRef.current = true;
+    setTab(t);
+  };
+  /* Guard against a selected 'library' tab that no longer exists (voices
+     changed out from under it) — fall back to "This book" for filtering and
+     the active-state highlight. */
+  const activeTab: Tab = tab === 'library' && !hasSeriesVoices ? 'current' : tab;
   /* Tab filter first, then a case-insensitive substring match on the two
      fields a card actually shows (character name + book title). With 75+
      voices the tabs alone don't make a single character findable, so the
      search box is the primary on-ramp on a long series. */
   const q = query.trim().toLowerCase();
   const filtered = library
-    .filter((v) => tab === 'all' || v.source === tab)
+    .filter((v) => {
+      if (activeTab === 'all') return true;
+      if (activeTab === 'current') return v.source === 'current';
+      /* 'library' tab is labelled "Series": only this book's series siblings,
+         not every other book in the workspace. */
+      return v.source === 'library' && !!v.inCurrentSeries;
+    })
     .filter(
       (v) =>
         !q ||
@@ -65,7 +98,7 @@ export function VoiceLibraryPanel({
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'all', label: 'All' },
     { id: 'current', label: 'This book' },
-    { id: 'library', label: 'Series' },
+    ...(hasSeriesVoices ? [{ id: 'library' as Tab, label: 'Series' }] : []),
   ];
   const findCharacter = (v: Voice) =>
     characters ? findCharacterForVoice(v, characters) : undefined;
@@ -95,8 +128,8 @@ export function VoiceLibraryPanel({
           {tabs.map((t) => (
             <button
               key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`flex-1 px-2 py-1 rounded-full font-medium transition-colors ${tab === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
+              onClick={() => pickTab(t.id)}
+              className={`flex-1 px-2 py-1 rounded-full font-medium transition-colors ${activeTab === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60'}`}
             >
               {t.label}
             </button>
