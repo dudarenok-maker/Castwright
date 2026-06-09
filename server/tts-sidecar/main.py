@@ -832,57 +832,61 @@ class KokoroEngine(Engine):
         log.info("Kokoro model unloaded.")
 
     def synthesize(self, model: str, voice: str, text: str) -> SynthResult:
-        self._ensure_loaded(model)
-        assert self._kokoro is not None
+        # Resident-VRAM exclusion: never let this Kokoro forward overlap a
+        # VoiceDesign forward (the three-way 8 GB spill). Held around load+create
+        # so a design can't evict Kokoro out from under an in-flight synth.
+        with _VD_KOKORO.kokoro_synth():
+            self._ensure_loaded(model)
+            assert self._kokoro is not None
 
-        # Pre-flight voice validation. Non-English voice IDs (ef_*, ff_*,
-        # etc.) or unknown names fall back to FALLBACK_VOICE. The Node
-        # side reads X-Voice-Substituted-From and surfaces a warning so
-        # the upstream catalog can be fixed.
-        actual_voice = voice
-        substituted_from: Optional[str] = None
-        if self._voices and voice not in self._voices:
-            substituted_from = voice
-            actual_voice = (
-                self.FALLBACK_VOICE
-                if self.FALLBACK_VOICE in self._voices
-                else self._voices[0]
-            )
-            log.warning(
-                "Voice '%s' not in Kokoro English subset — substituting '%s'. "
-                "Valid sample: %s",
-                voice, actual_voice, ", ".join(self._voices[:8]),
-            )
+            # Pre-flight voice validation. Non-English voice IDs (ef_*, ff_*,
+            # etc.) or unknown names fall back to FALLBACK_VOICE. The Node
+            # side reads X-Voice-Substituted-From and surfaces a warning so
+            # the upstream catalog can be fixed.
+            actual_voice = voice
+            substituted_from: Optional[str] = None
+            if self._voices and voice not in self._voices:
+                substituted_from = voice
+                actual_voice = (
+                    self.FALLBACK_VOICE
+                    if self.FALLBACK_VOICE in self._voices
+                    else self._voices[0]
+                )
+                log.warning(
+                    "Voice '%s' not in Kokoro English subset — substituting '%s'. "
+                    "Valid sample: %s",
+                    voice, actual_voice, ", ".join(self._voices[:8]),
+                )
 
-        # kokoro-onnx's create() returns (samples, sample_rate). samples is
-        # a numpy float32 array in [-1, 1]; sample_rate is the model's
-        # native rate (24 kHz for v1). Wrap defensively in case a future
-        # release changes the return shape.
-        gen_start = time.perf_counter()
-        result = self._kokoro.create(
-            text,
-            voice=actual_voice,
-            speed=1.0,
-            lang=self._language,
-        )
-        gen_ms = (time.perf_counter() - gen_start) * 1000.0
-        if isinstance(result, tuple) and len(result) == 2:
-            audio, sample_rate = result
-        else:
-            audio = result
-            sample_rate = self.NATIVE_SAMPLE_RATE
-        audio_ms = _audio_duration_ms(audio, int(sample_rate))
-        log.info(
-            "kokoro synth: voice=%s text_len=%d gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
-            actual_voice, len(text), gen_ms, audio_ms,
-            (gen_ms / audio_ms if audio_ms > 0 else 0.0),
-        )
-        pcm = _float_audio_to_int16_le(audio)
-        return SynthResult(
-            pcm=pcm,
-            sample_rate=int(sample_rate),
-            substituted_from=substituted_from,
-        )
+            # kokoro-onnx's create() returns (samples, sample_rate). samples is
+            # a numpy float32 array in [-1, 1]; sample_rate is the model's
+            # native rate (24 kHz for v1). Wrap defensively in case a future
+            # release changes the return shape.
+            gen_start = time.perf_counter()
+            result = self._kokoro.create(
+                text,
+                voice=actual_voice,
+                speed=1.0,
+                lang=self._language,
+            )
+            gen_ms = (time.perf_counter() - gen_start) * 1000.0
+            if isinstance(result, tuple) and len(result) == 2:
+                audio, sample_rate = result
+            else:
+                audio = result
+                sample_rate = self.NATIVE_SAMPLE_RATE
+            audio_ms = _audio_duration_ms(audio, int(sample_rate))
+            log.info(
+                "kokoro synth: voice=%s text_len=%d gen_ms=%.0f audio_ms=%.0f rtf=%.2f",
+                actual_voice, len(text), gen_ms, audio_ms,
+                (gen_ms / audio_ms if audio_ms > 0 else 0.0),
+            )
+            pcm = _float_audio_to_int16_le(audio)
+            return SynthResult(
+                pcm=pcm,
+                sample_rate=int(sample_rate),
+                substituted_from=substituted_from,
+            )
 
 
 def _float_audio_to_int16_le(audio: Any) -> bytes:
