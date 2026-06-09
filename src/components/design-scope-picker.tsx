@@ -43,6 +43,7 @@ export function DesignScopePicker({
     return (
       <button
         type="button"
+        role="menuitem"
         data-testid={`scope-${scope}`}
         disabled={count === 0}
         onClick={() => onPick(scope)}
@@ -56,7 +57,7 @@ export function DesignScopePicker({
           className={`text-xs font-bold px-2.5 py-1 rounded-full shrink-0 ${
             count === 0
               ? 'bg-emerald-500/10 text-emerald-700'
-              : 'bg-amber-500/12 text-amber-700'
+              : 'bg-amber-500/10 text-amber-700'
           }`}
         >
           {count === 0 ? 'all done' : `${count} ${unit}`}
@@ -76,7 +77,7 @@ export function DesignScopePicker({
         <span className="text-[10px] uppercase tracking-widest text-ink/50 font-semibold">
           What should I design?
         </span>
-        <button onClick={onClose} aria-label="Close" className="text-ink/40 hover:text-ink p-1">
+        <button type="button" onClick={onClose} aria-label="Close" className="text-ink/40 hover:text-ink p-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 grid place-items-center">
           <IconClose className="w-3.5 h-3.5" />
         </button>
       </div>
