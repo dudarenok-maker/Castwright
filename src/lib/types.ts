@@ -524,6 +524,12 @@ export interface LibraryBook {
   completedChapters: number;
   characterCount: number;
   voiceCount: number;
+  /** Distinct voice ids (`voiceId ?? id`) behind `voiceCount`. The library
+      view unions these across books for a library-wide DISTINCT-voices total
+      — summing `voiceCount` would count a series-reused voice once per book.
+      Optional only so pre-`voiceIds` fixtures/cached payloads still type;
+      the server always emits it (defaults to `[]`). */
+  voiceIds?: string[];
   matchedFromLibrary?: number;
   progress?: number;
   runtime?: string;

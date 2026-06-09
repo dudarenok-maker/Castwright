@@ -190,7 +190,11 @@ export function BookLibraryView({
   const totals = {
     books: allBooks.length,
     runtime: allBooks.reduce((s, b) => s + (b.runtime ? parseRuntime(b.runtime) : 0), 0),
-    voices: allBooks.reduce((s, b) => s + (b.voiceCount || 0), 0),
+    /* Distinct voices across the whole library — union the per-book voice-id
+       sets rather than summing per-book counts, so a voice reused across a
+       series (the headline consistency feature) counts once, not once per
+       book. Falls back to nothing for any book missing the field. */
+    voices: new Set(allBooks.flatMap((b) => b.voiceIds ?? [])).size,
     inProgress: allBooks.filter((b) => IN_PROGRESS_STATUSES.has(b.status)).length,
   };
   const filters: Array<{ id: Filter; label: string }> = [
