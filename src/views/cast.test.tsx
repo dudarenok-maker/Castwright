@@ -1332,15 +1332,91 @@ describe('CastView — Design full cast button', () => {
     expect(screen.queryByTestId('design-full-cast')).toBeNull();
   });
 
-  it('click dispatches designAllRequested with the needs-voice ids + a Qwen modelKey', () => {
+  it('click opens the scope picker (no immediate dispatch)', () => {
     const { actions } = setup({ modelKey: 'qwen3-tts-0.6b', ready: true });
     fireEvent.click(screen.getByTestId('design-full-cast'));
+    /* Picker must be visible now */
+    expect(screen.getByTestId('design-scope-picker')).toBeInTheDocument();
+    /* No designAllRequested dispatched yet */
+    expect(actions.find((x) => x.type === castDesignActions.designAllRequested.type)).toBeUndefined();
+  });
+
+  it('picking "bases" from the scope picker dispatches designAllRequested with scope:bases', () => {
+    const { actions } = setup({ modelKey: 'qwen3-tts-0.6b', ready: true });
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    fireEvent.click(screen.getByTestId('scope-bases'));
     const a = actions.find((x) => x.type === castDesignActions.designAllRequested.type) as
-      | { payload: { bookId: string; characterIds: string[]; modelKey: string } }
+      | { payload: { bookId: string; characterIds: string[]; modelKey: string; scope: string } }
       | undefined;
     expect(a?.payload.bookId).toBe('b1');
     expect(a?.payload.characterIds).toEqual(['sweeney']);
     expect(a?.payload.modelKey).toMatch(/qwen/);
+    expect(a?.payload.scope).toBe('bases');
+    /* Picker closes after picking */
+    expect(screen.queryByTestId('design-scope-picker')).toBeNull();
+  });
+
+  it('opens the scope picker and dispatches a variants-scope design', () => {
+    /* sophie: has a base voice + an in-use emotion missing a variant */
+    const sophie: Character = {
+      id: 'sophie',
+      name: 'Sophie',
+      role: 'Hero',
+      color: 'mentor',
+      lines: 20,
+      scenes: 5,
+      attributes: [],
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: {} } },
+    };
+    const variantSents: Sentence[] = [
+      { id: 10, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
+    ];
+    const actions2: Array<{ type: string; payload?: unknown }> = [];
+    const recorder2 =
+      () => (next: (a: unknown) => unknown) => (action: unknown) => {
+        actions2.push(action as { type: string; payload?: unknown });
+        return next(action);
+      };
+    const store2 = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      middleware: (g) => g().concat(recorder2),
+    });
+    store2.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    store2.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    render(
+      <Provider store={store2}>
+        <CastView
+          characters={[sophie]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={variantSents}
+          title="X"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    expect(screen.getByTestId('design-scope-picker')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('scope-variants'));
+    const a = actions2.find((x) => x.type === castDesignActions.designAllRequested.type) as
+      | {
+          payload: {
+            bookId: string;
+            characterIds: string[];
+            modelKey: string;
+            scope: string;
+            variantTasks: Array<{ characterId: string; emotions: string[] }>;
+          };
+        }
+      | undefined;
+    expect(a?.payload.bookId).toBe('b2');
+    expect(a?.payload.scope).toBe('variants');
+    expect(a?.payload.characterIds).toEqual([]);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'sophie', emotions: ['angry'] }]);
   });
 
   it('shows a Cancel control while a run for this book is active', () => {
@@ -1360,5 +1436,143 @@ describe('CastView — Design full cast button', () => {
       },
     });
     expect(screen.getByTestId('design-full-cast')).toHaveTextContent('Cancel design · 1/3');
+  });
+
+  it('picking "both" from the scope picker dispatches designAllRequested with scope:both, non-empty characterIds AND variantTasks', () => {
+    /* needsVoice: Qwen character with no designed voice → lands in needsVoiceIds.
+       withBase: Qwen character with a base voice + an in-use emotion without a
+       variant → lands in variantTasks. Both lists are non-empty so the "both"
+       scope path is fully exercised. */
+    const needsVoice: Character = {
+      id: 'needs-voice',
+      name: 'Needs Voice',
+      role: 'Extra',
+      color: 'mentor',
+      lines: 3,
+      scenes: 1,
+      attributes: [],
+      ttsEngine: 'qwen',
+      overrideTtsVoices: undefined,
+    };
+    const withBase: Character = {
+      id: 'with-base',
+      name: 'With Base',
+      role: 'Hero',
+      color: 'mentor',
+      lines: 10,
+      scenes: 3,
+      attributes: [],
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-with-base', variants: {} } },
+    };
+    const bothSents: Sentence[] = [
+      { id: 20, chapterId: 1, text: 'I am furious!', characterId: 'with-base', emotion: 'angry' },
+    ];
+    const actionsBoth: Array<{ type: string; payload?: unknown }> = [];
+    const recorderBoth =
+      () => (next: (a: unknown) => unknown) => (action: unknown) => {
+        actionsBoth.push(action as { type: string; payload?: unknown });
+        return next(action);
+      };
+    const storeBoth = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      middleware: (g) => g().concat(recorderBoth),
+    });
+    storeBoth.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    storeBoth.dispatch(uiSlice.actions.openBook({ id: 'b3', status: 'complete' }));
+    render(
+      <Provider store={storeBoth}>
+        <CastView
+          characters={[needsVoice, withBase]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={bothSents}
+          title="X"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    expect(screen.getByTestId('design-scope-picker')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('scope-both'));
+    const a = actionsBoth.find((x) => x.type === castDesignActions.designAllRequested.type) as
+      | {
+          payload: {
+            bookId: string;
+            characterIds: string[];
+            modelKey: string;
+            scope: string;
+            variantTasks: Array<{ characterId: string; emotions: string[] }>;
+          };
+        }
+      | undefined;
+    expect(a?.payload.bookId).toBe('b3');
+    expect(a?.payload.scope).toBe('both');
+    /* Both lists non-empty: needsVoice in characterIds, withBase in variantTasks */
+    expect(a?.payload.characterIds).toEqual(['needs-voice']);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'with-base', emotions: ['angry'] }]);
+    /* Picker closes after picking */
+    expect(screen.queryByTestId('design-scope-picker')).toBeNull();
+  });
+});
+
+describe('CastView — variant glyph strip in the Status column', () => {
+  /* fs-34 / Task 9 — the Status column shows a per-emotion glyph strip for
+     Qwen rows instead of the legacy count badge + "N tags need a variant"
+     text hint.  The strip renders inline below the lifecycle pill; the old
+     VariantsBadge count and missing-variants-hint span must not appear. */
+
+  const sophie: Character = {
+    id: 'sophie',
+    name: 'Sophie',
+    role: 'Hero',
+    color: 'mentor',
+    lines: 20,
+    scenes: 5,
+    attributes: [],
+    ttsEngine: 'qwen',
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-sophie', variants: { angry: { name: 'qwen-sophie-angry' } } },
+    },
+  };
+  const sophieSentences: Sentence[] = [
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'sophie', emotion: 'excited' },
+  ];
+
+  function renderGlyphTest() {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+    });
+    return render(
+      <Provider store={store}>
+        <CastView
+          characters={[sophie]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={sophieSentences}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('cast row shows the variant glyph strip and not the legacy count badge', () => {
+    renderGlyphTest();
+    /* The view renders both a desktop grid row and a mobile card row — scope
+       to the desktop grid row (same strategy used by other CastView tests). */
+    const row = rowFor('Sophie');
+    /* angry is designed → state=designed; excited is in-use but not in variants → state=needed */
+    expect(within(row).getByTestId('variant-glyph-angry')).toHaveAttribute('data-state', 'designed');
+    expect(within(row).getByTestId('variant-glyph-excited')).toHaveAttribute('data-state', 'needed');
+    expect(within(row).queryByTestId('variants-badge')).not.toBeInTheDocument();
+    expect(within(row).queryByTestId('missing-variants-hint')).not.toBeInTheDocument();
   });
 });

@@ -3815,6 +3815,8 @@ export interface CastDesignCallbacks {
   onHeartbeat?: (e: { characterId: string }) => void;
   /** A character was designed + persisted; `voiceId` is the bespoke qwen name. */
   onCharacterDesigned?: (e: { characterId: string; voiceId: string }) => void;
+  /** fe-32 — a designed emotion VARIANT was persisted (bulk job). */
+  onVariantDesigned?: (e: { characterId: string; emotion: Emotion; voiceId: string }) => void;
   /** A character was skipped (already had a Qwen voice when its turn came). */
   onCharacterSkipped?: (e: { characterId: string }) => void;
   /** A character's design failed; the run continues past it. */
@@ -3857,6 +3859,7 @@ interface CastDesignStreamEvent {
   characterId?: string;
   name?: string;
   voiceId?: string;
+  emotion?: Emotion;
   errorReason?: string;
   failures?: Array<{ characterId: string; name: string; error: string }>;
   code?: string;
@@ -3881,7 +3884,7 @@ export interface CastDesignStatus {
   failures?: Array<{ characterId: string; name: string; error: string }>;
 }
 
-async function readCastDesignStream(
+export async function readCastDesignStream(
   res: Response,
   cb: CastDesignCallbacks,
 ): Promise<void> {
@@ -3951,6 +3954,14 @@ async function readCastDesignStream(
         if (typeof e.characterId === 'string' && typeof e.voiceId === 'string')
           cb.onCharacterDesigned?.({ characterId: e.characterId, voiceId: e.voiceId });
         break;
+      case 'variant_designed':
+        if (
+          typeof e.characterId === 'string' &&
+          typeof e.emotion === 'string' &&
+          typeof e.voiceId === 'string'
+        )
+          cb.onVariantDesigned?.({ characterId: e.characterId, emotion: e.emotion as Emotion, voiceId: e.voiceId });
+        break;
       case 'character_skipped':
         if (typeof e.characterId === 'string')
           cb.onCharacterSkipped?.({ characterId: e.characterId });
@@ -3997,15 +4008,25 @@ async function readCastDesignStream(
   }
 }
 
-async function realStartCastDesign(
+export async function realStartCastDesign(
   bookId: string,
-  { characterIds, modelKey }: { characterIds: string[]; modelKey: string },
+  {
+    characterIds,
+    modelKey,
+    scope,
+    variantTasks,
+  }: {
+    characterIds: string[];
+    modelKey: string;
+    scope?: 'bases' | 'variants' | 'both';
+    variantTasks?: { characterId: string; emotions: Emotion[] }[];
+  },
   cb: CastDesignCallbacks,
 ): Promise<void> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cast/design`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ characterIds, modelKey }),
+    body: JSON.stringify({ characterIds, modelKey, scope, variantTasks }),
     signal: cb.signal,
   });
   await readCastDesignStream(res, cb);
@@ -4123,22 +4144,45 @@ async function realPauseCastDesign(bookId: string): Promise<void> {
 }
 
 /* Mock bulk-design — emits a short deterministic sequence (one designed voice
-   per character id) with small delays so the e2e can observe the pill ticking
-   and the rows flipping to "Designed". */
+   per character id, plus variant_designed per emotion variant) with small
+   delays so the e2e can observe the pill ticking and the rows flipping to
+   "Designed". Honors scope: 'bases'=bases only, 'variants'=variants only,
+   'both'=both (default). */
 async function mockStartCastDesign(
   _bookId: string,
-  { characterIds }: { characterIds: string[]; modelKey: string },
+  {
+    characterIds,
+    scope,
+    variantTasks,
+  }: {
+    characterIds: string[];
+    modelKey: string;
+    scope?: 'bases' | 'variants' | 'both';
+    variantTasks?: { characterId: string; emotions: Emotion[] }[];
+  },
   cb: CastDesignCallbacks,
 ): Promise<void> {
-  const total = characterIds.length;
+  const baseIds = scope === 'variants' ? [] : characterIds;
+  const vTasks = scope === 'bases' ? [] : (variantTasks ?? []);
+  const total = baseIds.length + vTasks.reduce((n, t) => n + t.emotions.length, 0);
   let done = 0;
-  for (const characterId of characterIds) {
+  for (const characterId of baseIds) {
     if (cb.signal?.aborted) return;
     cb.onProgress?.({ characterId, name: characterId, done, total });
     await wait(120);
     if (cb.signal?.aborted) return;
     cb.onCharacterDesigned?.({ characterId, voiceId: `qwen-${characterId}` });
     done += 1;
+  }
+  for (const t of vTasks) {
+    for (const emotion of t.emotions) {
+      if (cb.signal?.aborted) return;
+      cb.onProgress?.({ characterId: t.characterId, name: t.characterId, done, total });
+      await wait(120);
+      if (cb.signal?.aborted) return;
+      cb.onVariantDesigned?.({ characterId: t.characterId, emotion, voiceId: `qwen-${t.characterId}__${emotion}` });
+      done += 1;
+    }
   }
   cb.onIdle?.({ done, total, skipped: 0, failures: [] });
 }

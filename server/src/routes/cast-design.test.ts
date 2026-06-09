@@ -371,3 +371,130 @@ describe('single-design mutual exclusion', () => {
     }
   });
 });
+
+describe('scope + variantTasks (fs-25)', () => {
+  /* Seed a character that already has a base Qwen voice — ready for variant design. */
+  const charWithBase = {
+    id: 'keefe',
+    name: 'Keefe',
+    role: 'supporting',
+    color: 'sky',
+    voiceId: 'v_keefe',
+    voiceStyle: 'a charismatic, quick-witted young man, playful with an undercurrent of emotion',
+    overrideTtsVoices: { qwen: { name: 'qwen-v_keefe' } },
+  };
+
+  /* Seed a character that has NO base Qwen voice yet. */
+  const charNoBase = {
+    id: 'biana',
+    name: 'Biana',
+    role: 'supporting',
+    color: 'pink',
+    voiceId: 'v_biana',
+    voiceStyle: 'a graceful, perceptive young woman, polished but warm',
+  };
+
+  beforeEach(() => {
+    /* Write a cast file with both variant-test characters (plus the standard
+       set so the other tests keep working when they run in isolation). */
+    writeBookOnDisk([...characters, charWithBase, charNoBase]);
+  });
+
+  it('scope:variants designs the requested emotion and persists the variant slot', async () => {
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_keefe__angry',
+      url: '/voice-samples/qwen-v_keefe__angry.mp3',
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [{ characterId: 'keefe', emotions: ['angry'] }],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    const variantEvent = events.find((e) => e.type === 'variant_designed');
+    expect(variantEvent).toBeDefined();
+    expect(variantEvent).toMatchObject({ characterId: 'keefe', emotion: 'angry' });
+
+    const cast = readCast();
+    const keefe = cast.characters.find((c) => c.id === 'keefe');
+    expect(keefe?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
+
+    spy.mockRestore();
+  });
+
+  it('scope:variants skips a variant whose base voice is missing', async () => {
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
+      voiceId: 'qwen-v_biana__angry',
+      url: '/voice-samples/qwen-v_biana__angry.mp3',
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'variants',
+        characterIds: [],
+        variantTasks: [{ characterId: 'biana', emotions: ['angry'] }],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'biana')).toBe(true);
+    expect(events.some((e) => e.type === 'variant_designed')).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+
+    spy.mockRestore();
+  });
+
+  it('scope:both designs base then its variants in order for one character', async () => {
+    /* biana has no base yet — scope:both should design the base first, then the variant. */
+    const designedIds: string[] = [];
+    const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockImplementation(
+      async (p) => {
+        const id = p.emotion ? `qwen-v_biana__${p.emotion}` : 'qwen-v_biana';
+        designedIds.push(id);
+        /* Simulate a base voice being persisted so the variant skip-check passes. */
+        if (!p.emotion) {
+          /* Manually write the base into cast.json so the variant freshness check
+             sees it (mirrors what applyOverrideToCastFiles would do). */
+          const cast = readCast();
+          const ch = cast.characters.find((c) => c.id === 'biana');
+          if (ch) {
+            ch.overrideTtsVoices = { ...(ch.overrideTtsVoices ?? {}), qwen: { name: 'qwen-v_biana' } };
+            writeFileSync(
+              join(bookDir, '.audiobook', 'cast.json'),
+              JSON.stringify(cast),
+            );
+          }
+        }
+        return { voiceId: id, url: `/voice-samples/${id}.mp3` };
+      },
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/design`)
+      .send({
+        modelKey: QWEN_KEY,
+        scope: 'both',
+        characterIds: ['biana'],
+        variantTasks: [{ characterId: 'biana', emotions: ['whisper'] }],
+      });
+
+    expect(res.status).toBe(200);
+    const events = parseSse(res.text);
+
+    const baseIdx = events.findIndex((e) => e.type === 'character_designed' && e.characterId === 'biana');
+    const variantIdx = events.findIndex((e) => e.type === 'variant_designed' && e.characterId === 'biana');
+    expect(baseIdx).toBeGreaterThanOrEqual(0);
+    expect(variantIdx).toBeGreaterThanOrEqual(0);
+    expect(baseIdx).toBeLessThan(variantIdx);
+
+    spy.mockRestore();
+  });
+});

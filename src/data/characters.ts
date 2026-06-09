@@ -77,6 +77,8 @@ export const initialCharacters: Character[] = [
     tone: { warmth: 55, pace: 70, authority: 40, emotion: 75 },
     voiceId: 'v_eliza',
     voiceState: 'tuned',
+    ttsEngine: 'qwen',
+    overrideTtsVoices: { qwen: { name: 'qwen-eliza' } },
     description: 'Sharp-tongued, sharper-witted. Hides fear behind sarcasm.',
     evidence: [
       {

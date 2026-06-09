@@ -23,7 +23,7 @@ export const initialSentences: Sentence[] = [
     id: 4,
     chapterId: 3,
     characterId: 'halloran',
-    text: "“And send word below: tell the cook we'll not be eating warm tonight.”",
+    text: '“And send word below: tell the cook we’ll not be eating warm tonight.”',
   },
   {
     id: 5,
@@ -38,7 +38,13 @@ export const initialSentences: Sentence[] = [
     text: "She was thinner than the manifest she wasn't on.",
   },
   { id: 7, chapterId: 3, characterId: 'narrator', text: 'He pretended, in turn, not to notice.' },
-  { id: 8, chapterId: 3, characterId: 'eliza', text: "“You'll get us all drowned, you old fool.”" },
+  {
+    id: 8,
+    chapterId: 3,
+    characterId: 'eliza',
+    text: '“You’ll get us all drowned, you old fool.”',
+    emotion: 'angry',
+  },
   {
     id: 9,
     chapterId: 3,
