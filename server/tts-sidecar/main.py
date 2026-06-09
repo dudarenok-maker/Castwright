@@ -1362,31 +1362,42 @@ class QwenEngine(Engine):
         self._design_last_used = time.monotonic()
         self._design_in_flight += 1
         try:
-            self._ensure_design_loaded()
-            self._ensure_base_loaded()
-            # Serialise the GPU forwards against any concurrent synth/design — see
-            # `_synth_lock` in __init__ (the Base model isn't thread-safe).
-            with self._synth_lock:
-                # Re-ensure the models UNDER the lock. Every in-place nuller of
-                # `_design`/`_base` (the idle watchdog, a concurrent
-                # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
-                # so a model ensured before we took the lock may have been freed
-                # in the gap. Re-ensuring here is the airtight backstop against
-                # "'NoneType' object has no attribute 'generate_voice_design'".
-                # Idempotent / a no-op on the warm path; `_ensure_*` don't take
-                # `_synth_lock`, so this can't deadlock.
+            # Resident-VRAM exclusion (root fix): a VoiceDesign forward and a
+            # Kokoro synth must not co-reside on the 8 GB card. Take the arbiter
+            # (waits for any in-flight Kokoro synth to drain, blocks new ones),
+            # then evict a resident Kokoro so the 1.7B load has headroom. Kokoro
+            # reloads on the next synth (~1s); when no generation ran it isn't
+            # resident, so this is a no-op.
+            with _VD_KOKORO.design():
+                _kokoro_eng = ENGINES.get("kokoro")
+                if isinstance(_kokoro_eng, KokoroEngine) and _kokoro_eng._kokoro is not None:
+                    log.info("Evicting resident Kokoro to free VRAM for VoiceDesign load.")
+                    _kokoro_eng.unload()
                 self._ensure_design_loaded()
                 self._ensure_base_loaded()
-                # 1. design a reference clip from the persona instruction.
-                ref_wavs, ref_sr = self._design.generate_voice_design(
-                    text=ref_text, language=lang, instruct=instruct
-                )
-                ref_audio = ref_wavs[0]
+                # Serialise the GPU forwards against any concurrent synth/design — see
+                # `_synth_lock` in __init__ (the Base model isn't thread-safe).
+                with self._synth_lock:
+                    # Re-ensure the models UNDER the lock. Every in-place nuller of
+                    # `_design`/`_base` (the idle watchdog, a concurrent
+                    # /synthesize's unload_design, a full /unload) holds `_synth_lock`,
+                    # so a model ensured before we took the lock may have been freed
+                    # in the gap. Re-ensuring here is the airtight backstop against
+                    # "'NoneType' object has no attribute 'generate_voice_design'".
+                    # Idempotent / a no-op on the warm path; `_ensure_*` don't take
+                    # `_synth_lock`, so this can't deadlock.
+                    self._ensure_design_loaded()
+                    self._ensure_base_loaded()
+                    # 1. design a reference clip from the persona instruction.
+                    ref_wavs, ref_sr = self._design.generate_voice_design(
+                        text=ref_text, language=lang, instruct=instruct
+                    )
+                    ref_audio = ref_wavs[0]
 
-                # 2. distil into a reusable clone prompt on the Base model.
-                prompt = self._base.create_voice_clone_prompt(
-                    ref_audio=(ref_audio, ref_sr), ref_text=ref_text
-                )
+                    # 2. distil into a reusable clone prompt on the Base model.
+                    prompt = self._base.create_voice_clone_prompt(
+                        ref_audio=(ref_audio, ref_sr), ref_text=ref_text
+                    )
 
             # 3. cache prompt + manifest to disk (workspace-shared, keyed by voiceId).
             os.makedirs(self._voices_dir, exist_ok=True)
