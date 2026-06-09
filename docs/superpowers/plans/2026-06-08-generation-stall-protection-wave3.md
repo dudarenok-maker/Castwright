@@ -44,12 +44,18 @@ to the spec; only the internal task order differs.
 groups/workers of a chapter and equals the current `MAX_RECYCLE_RECOVERIES` (2),
 so total recovery attempts per chapter are unchanged from today — what changes is
 that each attempt re-renders ONE group, not the whole chapter. **C3 disposition
-(decided):** a single chapter's recycle-storm is recorded as a **non-fatal**
-named failure (`fatal: false`); the existing cross-chapter cascade
-(`recordNonFatal`) escalates to a run-stop when storms repeat — identical to how
-`ChapterStallError` is handled. This avoids a bespoke queue-pause path; if the
-user later wants a single storm to immediately pause the queue, that is a
-one-line follow-up (flip the branch to `fatal: true`).
+(REVISED after the C3 code-quality review — see below):** a single chapter's
+recycle-storm is recorded as a **non-fatal** named failure (`fatal: false`) AND
+**pauses the queue server-side on the queue path** so the run genuinely stops
+(the spec's "pause the run"). The original plan relied solely on the
+`recordNonFatal` cross-chapter cascade — but the review proved that cascade state
+is **per-POST**, and the production queue dispatches **one chapter per POST**, so
+the cascade can never escalate on the queue path (a thrashing sidecar would grind
+for hours). The fix: on a recycle-storm with `job.queueEntryId != null`, set the
+queue file's `paused` flag (`setPaused` + `readQueueFile`/`writeQueueFile`, the
+same flag the frontend dispatcher honors), best-effort, after the failure
+surfaces. The back-compat `*` job (many chapters per POST) keeps relying on the
+cascade — there it genuinely accumulates. Shipped as commit `253beec5`.
 
 ---
 
@@ -484,9 +490,17 @@ git commit -m "feat(server,frontend): show a visible 'recovering' phase while a 
 outer catch's generic `describeSynthesisError` path → an `unknown`/`sidecar-
 unreachable` failure with no specific remediation. C3 maps it to a clear, named
 failure (`code: 'recycle-storm'`) with concrete remediation, recorded
-**non-fatal** so the existing cross-chapter cascade (`recordNonFatal`) escalates
-to a run-stop when storms repeat — identical to how `ChapterStallError` is
-handled (`isStall` branch, generation.ts ≈1527).
+**non-fatal** (`isStall`-style branch, generation.ts ≈1527).
+
+> **REVISED (C3 code-quality review):** the named failure ALONE does not satisfy
+> the spec's "pause the run." The `recordNonFatal` cascade is **per-POST** and the
+> queue dispatches **one chapter per POST**, so it never escalates on the queue
+> path. So C3 also **pauses the queue** on a recycle-storm when `job.queueEntryId
+> != null`: `readQueueFile(queueJsonPath())` → `writeQueueFile(…, setPaused(file,
+> true))` (best-effort try/catch, after the `chapter_failed` broadcast + state
+> persist). The dispatcher honors `paused` and halts. The `*` back-compat job
+> (many chapters per POST) is left on the cascade. Shipped as `253beec5`; tested
+> by asserting the queue file's `paused` flips `true` after a `RecycleStormError`.
 
 **Files:**
 - Modify: `server/src/routes/failure-taxonomy.ts` (+ `'recycle-storm'` code + signature)
