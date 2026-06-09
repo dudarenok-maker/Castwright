@@ -2,9 +2,19 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 
 /* The banner probes GET /api/companion/apk (HEAD) on mount via
-   api.checkCompanionApk. Mock it so each test drives availability. */
+   api.checkCompanionApk, and the Pair-a-device modal fetches GET
+   /api/export/lan via api.getExportLanUrls. Mock both. */
 vi.mock('../../lib/api', () => ({
-  api: { checkCompanionApk: vi.fn(async () => ({ available: false, sizeBytes: null })) },
+  api: {
+    checkCompanionApk: vi.fn(async () => ({ available: false, sizeBytes: null })),
+    getExportLanUrls: vi.fn(async () => ({
+      urls: ['https://192.168.86.20:8443'],
+      port: 8443,
+      protocol: 'https',
+      token: 'lan-token',
+      caFingerprint: 'AB:CD:EF',
+    })),
+  },
 }));
 
 import { CompanionAppBanner } from './companion-app-banner';
@@ -83,5 +93,17 @@ describe('CompanionAppBanner', () => {
     await screen.findByTestId('companion-store-apk');
     expect(screen.getByTestId('companion-store-google-play')).toBeDisabled();
     expect(screen.getByTestId('companion-store-app-store')).toBeDisabled();
+  });
+
+  it('shows a Pair a device button that opens the pairing QR modal', async () => {
+    render(<CompanionAppBanner />);
+    const pair = await screen.findByTestId('companion-pair-device');
+    expect(pair).toBeEnabled();
+    // Modal is closed until clicked.
+    expect(screen.queryByTestId('pair-device-modal')).toBeNull();
+    pair.click();
+    expect(await screen.findByTestId('pair-device-modal')).toBeInTheDocument();
+    // The QR renders from the mocked LAN pairing info.
+    expect(await screen.findByTestId('pair-qr-image')).toBeInTheDocument();
   });
 });
