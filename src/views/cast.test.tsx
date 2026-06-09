@@ -1520,6 +1520,71 @@ describe('CastView — Design full cast button', () => {
     /* Picker closes after picking */
     expect(screen.queryByTestId('design-scope-picker')).toBeNull();
   });
+
+  it('counts a baseless emotion character in the picker total but EXCLUDES it from the variants-only dispatch', () => {
+    /* withBase: qwen + base + 1 missing variant → "ready now".
+       baseless: qwen + NO base + 2 in-use emotions → counted as demand (the
+       picker total reflects the cast rows), but the variants-only scope can't
+       act on it (no base) so it must be dropped from the dispatch and a loud
+       warning shown — the user designs its base via "Both" first. */
+    const withBase: Character = {
+      id: 'with-base', name: 'With Base', role: 'Hero', color: 'mentor',
+      lines: 10, scenes: 3, attributes: [], ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-with-base', variants: {} } },
+    };
+    const baseless: Character = {
+      id: 'baseless', name: 'Baseless', role: 'Extra', color: 'mentor',
+      lines: 4, scenes: 1, attributes: [], ttsEngine: 'qwen',
+      overrideTtsVoices: undefined,
+    };
+    const sents: Sentence[] = [
+      { id: 30, chapterId: 1, text: 'Rage!', characterId: 'with-base', emotion: 'angry' },
+      { id: 31, chapterId: 1, text: 'Hush', characterId: 'baseless', emotion: 'whisper' },
+      { id: 32, chapterId: 1, text: 'Yay!', characterId: 'baseless', emotion: 'excited' },
+    ];
+    const actions: Array<{ type: string; payload?: unknown }> = [];
+    const recorder =
+      () => (next: (a: unknown) => unknown) => (action: unknown) => {
+        actions.push(action as { type: string; payload?: unknown });
+        return next(action);
+      };
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+      middleware: (g) => g().concat(recorder),
+    });
+    store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b4', status: 'complete' }));
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[withBase, baseless]}
+          setCharacters={() => {}}
+          library={library}
+          sentences={sents}
+          title="X"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByTestId('design-full-cast'));
+    /* Picker total = 3 (1 ready + 2 blocked); Both = 1 base + 3 variants = 4. */
+    expect(screen.getByTestId('scope-variants')).toHaveTextContent('3');
+    expect(screen.getByTestId('variants-split')).toHaveTextContent('1 ready');
+    expect(screen.getByTestId('variants-split')).toHaveTextContent('2 need a base');
+    expect(screen.getByTestId('variants-base-warning')).toBeInTheDocument();
+    expect(screen.getByTestId('scope-both')).toHaveTextContent('4 tasks');
+    /* Variants-only dispatch carries ONLY the ready (has-base) task. */
+    fireEvent.click(screen.getByTestId('scope-variants'));
+    const a = actions.find((x) => x.type === castDesignActions.designAllRequested.type) as
+      | { payload: { scope: string; characterIds: string[]; variantTasks: Array<{ characterId: string; emotions: string[] }> } }
+      | undefined;
+    expect(a?.payload.scope).toBe('variants');
+    expect(a?.payload.characterIds).toEqual([]);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'with-base', emotions: ['angry'] }]);
+  });
 });
 
 describe('CastView — variant glyph strip in the Status column', () => {

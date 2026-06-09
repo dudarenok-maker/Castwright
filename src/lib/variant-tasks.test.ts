@@ -2,33 +2,76 @@ import { describe, it, expect } from 'vitest';
 import { buildVariantTasks, variantWorkCounts } from './variant-tasks';
 import type { Character } from './types';
 
-const qwen = (id: string, variants: Record<string, { name: string }> = {}, name = 'qwen-' + id) =>
-  ({ id, name: id, ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name, variants } } }) as unknown as Character;
+/* A Qwen character with a designed base voice (and optional designed variants). */
+const based = (id: string, variants: Record<string, { name: string }> = {}) =>
+  ({ id, name: id, ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-' + id, variants } } }) as unknown as Character;
+
+/* A Qwen-effective character with NO designed base voice yet. */
+const baseless = (id: string) => ({ id, name: id, ttsEngine: 'qwen' }) as unknown as Character;
+
+const isQwen = (c: Character) => c.ttsEngine === 'qwen';
 
 describe('buildVariantTasks', () => {
-  it('emits only in-use emotions that lack a designed variant, base present', () => {
-    const chars = [qwen('sophie', { angry: { name: 'x' } })];
+  it('emits only in-use emotions that lack a designed variant, flagging an existing base', () => {
+    const chars = [based('sophie', { angry: { name: 'x' } })];
     const used = new Map([['sophie', new Set(['angry', 'excited'])]]);
-    expect(buildVariantTasks(chars, used)).toEqual([{ characterId: 'sophie', emotions: ['excited'] }]);
+    expect(buildVariantTasks(chars, used, isQwen)).toEqual([
+      { characterId: 'sophie', emotions: ['excited'], hasBase: true },
+    ]);
   });
-  it('excludes a character with no base voice (needs base first)', () => {
-    const fitz = { id: 'fitz', name: 'fitz', ttsEngine: 'qwen' } as unknown as Character;
+
+  it('INCLUDES a character with no base voice yet, flagged hasBase=false', () => {
+    // The bulk "Both" run designs the base first, so the variant is still
+    // counted as demand — hasBase records that it is not actionable alone.
     const used = new Map([['fitz', new Set(['angry'])]]);
-    expect(buildVariantTasks([fitz], used)).toEqual([]);
+    expect(buildVariantTasks([baseless('fitz')], used, isQwen)).toEqual([
+      { characterId: 'fitz', emotions: ['angry'], hasBase: false },
+    ]);
   });
+
+  it('excludes characters the isQwen predicate rejects (non-Qwen-effective)', () => {
+    const kokoro = { id: 'gandalf', name: 'gandalf', ttsEngine: 'kokoro' } as unknown as Character;
+    const used = new Map([['gandalf', new Set(['angry'])]]);
+    expect(buildVariantTasks([kokoro], used, isQwen)).toEqual([]);
+  });
+
   it('excludes characters with no in-use emotions', () => {
-    const used = new Map<string, Set<string>>();
-    expect(buildVariantTasks([qwen('ed')], used)).toEqual([]);
+    expect(buildVariantTasks([based('ed')], new Map(), isQwen)).toEqual([]);
   });
 });
 
 describe('variantWorkCounts', () => {
-  it('counts total missing variants across the cast', () => {
-    const chars = [qwen('sophie', { angry: { name: 'x' } }), qwen('keefe')];
-    const used = new Map([
-      ['sophie', new Set(['angry', 'excited'])],
-      ['keefe', new Set(['whisper', 'sad'])],
-    ]);
-    expect(variantWorkCounts(chars, used)).toBe(3);
+  it('splits total demand into ready (has base) vs blocked (needs a base first)', () => {
+    const tasks = buildVariantTasks(
+      [based('sophie', { angry: { name: 'x' } }), baseless('keefe')],
+      new Map([
+        ['sophie', new Set(['angry', 'excited'])], // 1 ready (excited; angry designed)
+        ['keefe', new Set(['whisper', 'sad'])], // 2 blocked (no base)
+      ]),
+      isQwen,
+    );
+    expect(variantWorkCounts(tasks)).toEqual({
+      totalTasks: 3,
+      readyTasks: 1,
+      blockedTasks: 2,
+      blockedChars: 1,
+    });
+  });
+
+  it('is all-ready when every emotion character already has a base', () => {
+    const tasks = buildVariantTasks(
+      [based('a'), based('b')],
+      new Map([
+        ['a', new Set(['angry'])],
+        ['b', new Set(['sad', 'excited'])],
+      ]),
+      isQwen,
+    );
+    expect(variantWorkCounts(tasks)).toEqual({
+      totalTasks: 3,
+      readyTasks: 3,
+      blockedTasks: 0,
+      blockedChars: 0,
+    });
   });
 });
