@@ -200,10 +200,11 @@ any later manuscript/cast edit. Prints a manifest (files + total size).
 
 The bundle cannot be frozen until the content exists, and the content needs Part A.
 
-1. **Wave 1 — Replace-manuscript feature.** Code + tests, one branch/PR
-   (`feat/fs-replace-manuscript`). Gate: `npm run verify` green → **merge to `main` and
-   `npm run build` locally**, so Wave 2 runs against a proper prod build (not a dev
-   worktree). The merge + local prod build is an explicit gate before Wave 2.
+1. **Wave 1 — Replace-manuscript feature.** ✅ SHIPPED 2026-06-11 (branch
+   `feat/fs-replace-manuscript`, issue #723, plan `docs/features/205-replace-manuscript.md`).
+   Gate before Wave 2: `npm run verify` green → **merge to `main` and `npm run build`
+   locally**, so Wave 2 runs against a proper prod build (not a dev worktree). The merge +
+   local prod build is an explicit gate before Wave 2.
 2. **Wave 2 — Produce content live (manual, GPU box, on the merged prod build).** Restart
    prod (`start:lan` / prod launcher off the freshly-built `main`), then use the new
    feature: replace the Coalfall manuscript → 5 voices preserved → design the 9 new Qwen
