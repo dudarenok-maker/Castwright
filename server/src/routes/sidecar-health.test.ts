@@ -585,3 +585,57 @@ describe('POST /api/sidecar/restart', () => {
     expect(kill).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('GET /api/sidecar/health — side-14 device fields', () => {
+  it('forwards devices + devicesState from the sidecar body', async () => {
+    /* side-14 — the sidecar's per-engine device map and probe state must flow
+       through the proxy exactly as sent, with snake_case → camelCase for
+       devices_state → devicesState. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro'],
+          devices: { kokoro: 'cpu', coqui: 'cpu', qwen: 'mps' },
+          devices_state: 'ready',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.status).toBe(200);
+    expect(res.body.devices).toEqual({ kokoro: 'cpu', coqui: 'cpu', qwen: 'mps' });
+    expect(res.body.devicesState).toBe('ready');
+  });
+
+  it('defaults devices to null and devicesState to null on an old sidecar body', async () => {
+    /* A sidecar predating side-14 omits both fields entirely. The proxy must
+       emit explicit null rather than undefined so the frontend never reads junk. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['kokoro'] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.devices).toBeNull();
+    expect(res.body.devicesState).toBeNull();
+  });
+
+  it('ignores a malformed devices field (non-object) rather than forwarding junk', async () => {
+    /* A body with devices: "cuda" (or any non-object) must be coerced to null
+       rather than blindly forwarded — the frontend only knows how to render a
+       per-engine map, not a bare string. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['kokoro'], devices: 'cuda', devices_state: 'ready' }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.devices).toBeNull();
+  });
+});
