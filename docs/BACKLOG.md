@@ -98,11 +98,18 @@ The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ## Should — important, not blocking ship
 
-Ranked top = highest priority. The two highest-ROI quick listener wins lead, then medium
+Ranked top = highest priority. The agent-surface item leads (added 2026-06-11), then the
+two highest-ROI quick listener wins, then medium
 user-value polish, then the large localization item, then dependency hygiene and the
 delivered-companion follow-ups. (The 2026-06-02 dependency-major cluster shipped via plans
 167 + 170; a fresh 2026-06-08 `npm outdated` surfaced a new wave of majors — see the note
 at the bottom of this bucket.)
+
+### `fs-44` — MCP agent surface (agents drive Castwright end-to-end) ([#721](https://github.com/dudarenok-maker/Castwright/issues/721))
+
+- _What:_ An MCP server surface so any MCP-capable agent — Claude Cowork/Code, **Codex, Copilot CLI, Gemini CLI, Cursor**, whatever harness the user lives in — drives the full pipeline (upload → analyze → cast → generate → export) programmatically instead of computer-use clicking. In-process Streamable-HTTP endpoint at `/mcp` behind the existing `requireLanToken` guard, ~15 hand-designed workflow-level tools (read/inspect, pipeline actions, cast/voice parity, `wait_for_job` long-poll over the existing job state); core-spec MCP only (client-agnostic); stdio shim as a follow-up wave. Spec: [`2026-06-11-castwright-mcp-agent-surface-design.md`](superpowers/specs/2026-06-11-castwright-mcp-agent-surface-design.md).
+- _Benefit (user / strategic):_ "produce this book overnight and tell me when it's exported" becomes a one-line agent prompt; aligns Castwright with the agent-first direction of every major harness, and the MCP pipeline e2e doubles as the missing whole-pipeline integration test.
+_Full detail + acceptance:_ [#721](https://github.com/dudarenok-maker/Castwright/issues/721).
 
 ### `fs-15` — Continue listening: cross-book listening history + progress sync ([#462](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462))
 
