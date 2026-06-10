@@ -134,11 +134,17 @@ _Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
 _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
 
-### `fs-43` — "Will it run on my machine?" device panel (sidecar reports cuda/mps/cpu incl. Apple Silicon) ([#705](https://github.com/dudarenok-maker/Castwright/issues/705))
+### `fs-43` — "Will it run on my machine?" device panel (sensible, server-sourced) ([#705](https://github.com/dudarenok-maker/Castwright/issues/705))
 
-- _What:_ A first-run / Account → Models panel showing the detected compute device (CUDA / `mps` / CPU) with the honest per-platform line, plus an NVIDIA-only-phrasing audit of the GPU-not-detected strings. Split out of `fe-37` by the 10 June critical review: it needs **sidecar** work first — `/health` reports no `mps` and no device unless Coqui is loaded, so a frontend-only panel would show nothing on Apple Silicon. Sidecar resolves + reports the active engine's device (incl. `mps`) at startup; Node passthrough; then the panel.
-- _Benefit (user):_ converts the hardware-honesty promise into UI and filters support pain before it arrives — especially for the new Apple Silicon path.
+- _What:_ A first-run / Account → Models panel showing the per-platform hardware-honesty line + the detected **host** device, **server-sourced** via `GET /api/info` (`os.platform()`/`os.arch()` → Apple Silicon / Windows / Linux). The server runs the models; a LAN browser is the phone, so client-side detection would be wrong. Surfaces existing `health.device` (cuda/cpu) when a model is loaded; honest "load a voice to confirm" otherwise. Audits + fixes frontend GPU-not-detected strings for NVIDIA-only phrasing. **Ships in the brand wave (`fe-37` #704)**; the deep ground-truth half is split to `side-14`.
+- _Benefit (user):_ answers "will it run on my Mac/PC?" honestly today — especially the new Apple Silicon path, which `os.arch()` detects reliably.
 _Full detail + acceptance:_ [#705](https://github.com/dudarenok-maker/Castwright/issues/705).
+
+### `side-14` — Device ground-truth: sidecar reports active-engine torch device incl. mps (deep half of fs-43) ([#707](https://github.com/dudarenok-maker/Castwright/issues/707))
+
+- _What:_ Make the sidecar resolve + report the **actual** torch device per active/default engine at startup, regardless of load state, incl. `mps` ground-truth — so the `fs-43` panel can show "currently running on X" not just "host is capable of X". Today `/health` reports `device` only when Coqui is loaded, never `mps` (Qwen computes mps at `main.py:914-929` but doesn't surface it; Kokoro reports none). Node passthrough + the sidecar-side NVIDIA-only string audit; pytest.
+- _Benefit (user):_ the hardware panel tells the truth about what's actually running — confirms Apple Silicon users are on Metal, not silently on CPU.
+_Full detail + acceptance:_ [#707](https://github.com/dudarenok-maker/Castwright/issues/707).
 
 ### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant ([#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402))
 
