@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Any MCP-capable agent (Claude Code/Cowork, Codex, Copilot CLI, Gemini CLI, Cursor…) drives the full Castwright pipeline — upload → analyze → cast → generate → export — through a Streamable-HTTP MCP endpoint at `/mcp`, with zero web-UI interaction.
+**Goal:** Any MCP-capable agent (Claude Code/Cowork, Codex, Copilot CLI, Gemini CLI, Cursor…) drives the full Castwright pipeline — upload → analyze → cast → generate → export — through a Streamable-HTTP MCP endpoint at `/mcp` (plus a bundled `castwright-mcp` stdio bridge for stdio-only harnesses), with zero web-UI interaction.
 
 **Architecture:** An in-process MCP endpoint mounted on the existing Express server (`server/src/index.ts`), behind the existing `requireLanToken` guard. ~15 hand-designed workflow-level tools in `server/src/mcp/` call the same importable service functions the REST routes use; where route logic is inlined today, this plan extracts it into an exported function that both the route and the tool call (never a second implementation). Long-running operations return composite `jobId`s projected through a uniform job view (`get_job` / `wait_for_job`); SSE stays UI-only.
 
@@ -10,7 +10,13 @@
 
 **Spec:** `docs/superpowers/specs/2026-06-11-castwright-mcp-agent-surface-design.md` · Issue [#721](https://github.com/dudarenok-maker/Castwright/issues/721) · Backlog `fs-44`.
 
-**Scope note:** This plan delivers spec waves 1–3 (the v1 DoD). Wave 4 (stdio shim `castwright-mcp` bin) is explicitly OUT — the docs task points stdio-only clients at the `mcp-remote` npm bridge as the interim, and wave 4 gets its own follow-up item if demand shows. The MCP endpoint is deliberately NOT added to `openapi.yaml` — it is a protocol surface, not a REST resource; the regression plan documents it instead.
+**Scope note:** This plan delivers spec waves 1–4 — wave 4 (the `castwright-mcp` stdio bridge bin) is **part of the main delivery** (2026-06-11 decision: every agent type must work, including stdio-only harnesses), implemented as task 15. The MCP endpoint is deliberately NOT added to `openapi.yaml` — it is a protocol surface, not a REST resource; the regression plan documents it instead.
+
+**Ground-truth notes (verified 2026-06-11 against the live codebase/registry — bake into execution):**
+
+- `@modelcontextprotocol/sdk` **1.29.0** declares `zod: '^3.25 || ^4.0'` (dependency AND peer), so the server's `zod@^4` is officially in-range. No version juggling; task 1's probe still validates the wiring end-to-end.
+- All four job route modules call `sub.res.end()` on every subscriber at job end (`cast-design.ts:147`, `single-design.ts:76`, `analysis.ts:1651`, `generation.ts:431`; `generation.ts:918` also compares `sub.res === res`). A synthetic subscriber without `res` **crashes the job's completion path**. Tasks 8/9/13 therefore attach subscribers built by the shared `makeRecorderSubscriber()` (task 4), which carries a stub `res = { end() {} }` — zero route-interface changes.
+- The server package has a real build (`build: tsc -p .` → `dist/`, `start: node dist/index.js`) and `tsx` for dev, so the stdio bridge ships as a compiled bin (`dist/mcp/stdio-bridge.js`) with a `bin` entry, testable from source via `node --import tsx`.
 
 **Commit scope:** `mcp` is not an allowed commit scope — use `server` (and `docs` for docs). Branch: `feat/server-fs44-mcp-agent-surface` off latest `main`, created via the using-git-worktrees skill at execution time. Open the PR as **draft** (CI-cost default), body `Closes #721`.
 
@@ -39,6 +45,7 @@
 | `tools/job-tools.ts` | `get_job`, `wait_for_job` |
 | `tools/pipeline-tools.ts` | `upload_manuscript`, `start_analysis`, `start_generation`, `export_audiobook` |
 | `tools/cast-tools.ts` | `update_character`, `merge_characters`, `design_voice`, `design_full_cast` |
+| `stdio-bridge.ts` | `castwright-mcp` bin — stdio ⇄ Streamable-HTTP pure transport proxy (wave 4, zero tool logic) |
 | `test-harness.ts` | Shared test helper: ephemeral HTTP listener + connected MCP SDK client |
 | `*.test.ts` colocated per module; `pipeline.e2e.test.ts` (routed to SLOW_FILES) |
 
@@ -47,7 +54,7 @@
 | File | Change |
 | --- | --- |
 | `server/src/index.ts` | Add `/mcp` to the guard list (line ~178) + mount `mcpRouter` |
-| `server/package.json` | Add `@modelcontextprotocol/sdk` |
+| `server/package.json` | Add `@modelcontextprotocol/sdk` + `"bin": { "castwright-mcp": "dist/mcp/stdio-bridge.js" }` |
 | `server/src/routes/generation.ts` | Export `getGenerationJobView()`; extract `beginGenerationJob()` |
 | `server/src/routes/analysis.ts` | Extract `beginAnalysisJob()` (job spawn decoupled from the SSE handler) |
 | `server/src/routes/cast-design.ts` | Export `getCastDesignJobView()`; extract `beginCastDesignJob()` |
@@ -82,7 +89,7 @@ This task proves the whole transport/SDK/zod stack early (zod-version friction b
 npm --prefix server install @modelcontextprotocol/sdk
 ```
 
-Expected: clean install. If npm reports a zod peer conflict against the server's `zod@^4`, stop and check the SDK's supported zod range; current SDK majors support zod 4 via the `zod` package's compat layer. Do not downgrade the server's zod — pick the newest SDK version whose peer range includes zod 4.
+Expected: clean install — verified 2026-06-11: SDK 1.29.0 declares `zod: '^3.25 || ^4.0'`, so the server's `zod@^4` is in-range. The probe test below validates the schema wiring end-to-end regardless.
 
 - [ ] **Step 2: Write the result helpers**
 
@@ -533,12 +540,45 @@ export function getLastEvent(jobId: string): unknown {
   return lastEvents.get(jobId);
 }
 
+/** Drop any prior outcome/event for a jobId — call when STARTING a new job that reuses
+ *  the id (e.g. a second generation run on the same book), so a stale 'done' from run 1
+ *  can never short-circuit wait_for_job on run 2. */
+export function clearRecorded(jobId: string): void {
+  outcomes.delete(jobId);
+  lastEvents.delete(jobId);
+}
+
+/**
+ * Build a synthetic subscriber for a job's `subscribers` set.
+ * CRITICAL: every job route calls `sub.res.end()` on its subscribers at job end
+ * (cast-design.ts:147, single-design.ts:76, analysis.ts:1651, generation.ts:431),
+ * so the stub `res` with a no-op end() is load-bearing — without it the job's
+ * completion path throws. `classify` maps each broadcast event to a terminal
+ * outcome (or null while still running). Also clears any stale prior outcome.
+ */
+export function makeRecorderSubscriber(
+  jobId: string,
+  classify: (ev: unknown) => JobOutcome | null,
+): { send: (ev: unknown) => void; res: { end: () => void } } {
+  clearRecorded(jobId);
+  return {
+    send: (ev: unknown) => {
+      recordEvent(jobId, ev);
+      const outcome = classify(ev);
+      if (outcome) recordOutcome(jobId, outcome);
+    },
+    res: { end: () => {} },
+  };
+}
+
 /** Test-only: reset module state between specs. */
 export function resetJobRecorder(): void {
   outcomes.clear();
   lastEvents.clear();
 }
 ```
+
+(Attach with `job.subscribers.add(makeRecorderSubscriber(jobId, classify) as never)` — the `as never` papers over the route-local subscriber interfaces' extra optional fields like `keepAlive`; `clearInterval(undefined)` at job end is harmless in Node.)
 
 - [ ] **Step 2: Write the job view**
 
@@ -631,6 +671,19 @@ export async function getJobView(jobId: string): Promise<JobView> {
     }
     const recorded = fromOutcome(jobId, kind);
     if (recorded) return recorded;
+    // Disk fallback: derive the last run's outcome from state.json chapter states
+    // (covers jobs started by the UI or a previous process — no recorder entry).
+    const book = await findBookByBookId(bookId);
+    if (book) {
+      const chapters = (book.state.chapters ?? []) as Array<{ generationState?: string; generationError?: string }>;
+      const failed = chapters.filter((c) => c.generationState === 'failed');
+      if (failed.length > 0) {
+        return { jobId, kind, state: 'failed', error: failed[0].generationError ?? `${failed.length} chapter(s) failed` };
+      }
+      if (chapters.some((c) => c.generationState === 'done')) {
+        return { jobId, kind, state: 'done', percent: 100 };
+      }
+    }
     return { jobId, kind, state: 'not_found' };
   }
 
@@ -1565,7 +1618,7 @@ import { beginAnalysisJob } from '../../routes/analysis.js';
 import { findBookByBookId } from '../../workspace/scan.js';
 import { getOrHydrateManuscript } from '../../store/manuscripts.js';
 import { makeJobId } from '../job-view.js';
-import { recordEvent, recordOutcome } from '../job-recorder.js';
+import { makeRecorderSubscriber } from '../job-recorder.js';
 import { bookNotFound } from './read-tools.js'; // shared 'book_not_found' error (also used by tasks 9–10 in this file)
 
 server.registerTool(
@@ -1600,20 +1653,20 @@ server.registerTool(
           ? `Wait for the running job: wait_for_job with jobId "${jobId}".`
           : 'Check get_system_status (analyzer reachable?) and retry.');
     }
-    job.subscribers.add({
-      send: (ev: unknown) => {
-        recordEvent(jobId, ev);
+    job.subscribers.add(
+      makeRecorderSubscriber(jobId, (ev) => {
         const e = ev as { kind?: string; message?: string };
-        if (e.kind === 'result') recordOutcome(jobId, { state: 'done', finishedAt: Date.now() });
-        if (e.kind === 'error') recordOutcome(jobId, { state: 'failed', error: e.message, finishedAt: Date.now() });
-      },
-    } as never);
+        if (e.kind === 'result') return { state: 'done', finishedAt: Date.now() };
+        if (e.kind === 'error') return { state: 'failed', error: e.message, finishedAt: Date.now() };
+        return null;
+      }) as never,
+    );
     return jsonResult(`Analysis started. Chain wait_for_job with jobId "${jobId}".`, { jobId, bookId });
   },
 );
 ```
 
-The synthetic subscriber must satisfy `AnalysisSubscriber` — if that interface requires a `res` field, widen the begin-path to accept subscriber objects without `res` (preferred: make `res` optional in `AnalysisSubscriber` and guard the one place that touches it), keeping the SSE route's behaviour identical.
+The recorder subscriber's stub `res` is what keeps `analysis.ts:1651`'s `sub.res.end()` from crashing at job end — do NOT replace it with a bare `{ send }` object.
 
 - [ ] **Step 5: Run, pass, commit**
 
@@ -1700,7 +1753,7 @@ describe('start_generation', () => {
 });
 ```
 
-If full synth mocking proves heavier than `generation.test.ts`'s existing helpers allow in this file, move BOTH generation cases into task 13's `pipeline.e2e.test.ts` (slow set) and leave only the `cast_gaps` refusal here — note the move in the task-13 commit message.
+If full synth mocking proves heavier than `generation.test.ts`'s existing helpers allow in this file, move BOTH generation cases into task 14's `pipeline.e2e.test.ts` (slow set) and leave only the `cast_gaps` refusal here — note the move in the task-14 commit message.
 
 - [ ] **Step 4: Implement the tool**
 
@@ -1739,27 +1792,21 @@ server.registerTool(
             : 'Check get_system_status (sidecar loaded?) and retry.';
       return toolError(code, (err as Error).message, detail);
     }
+    // One recorder per chapter job, all sharing the jobId; classify covers both terminal conditions.
+    // makeRecorderSubscriber clears stale outcomes once per add — same jobId, idempotent.
     for (const job of begun.jobs) {
-      job.subscribers.add({
-        send: (ev: unknown) => {
-          recordEvent(jobId, ev);
-          const e = ev as { type?: string; errorReason?: string };
+      job.subscribers.add(
+        makeRecorderSubscriber(jobId, (ev) => {
+          const e = ev as { type?: string; errorReason?: string; runDone?: number; runTotal?: number };
           if (e.type === 'chapter_failed') {
-            recordOutcome(jobId, { state: 'failed', error: e.errorReason, finishedAt: Date.now() });
+            return { state: 'failed', error: e.errorReason, finishedAt: Date.now() };
           }
-        },
-      } as never);
-    }
-    // done-outcome: the LAST chapter_complete where runDone === runTotal
-    for (const job of begun.jobs) {
-      job.subscribers.add({
-        send: (ev: unknown) => {
-          const e = ev as { type?: string; runDone?: number; runTotal?: number };
           if (e.type === 'chapter_complete' && e.runDone != null && e.runDone === e.runTotal) {
-            recordOutcome(jobId, { state: 'done', finishedAt: Date.now() });
+            return { state: 'done', finishedAt: Date.now() };
           }
-        },
-      } as never);
+          return null;
+        }) as never,
+      );
     }
     return jsonResult(
       `Generation started for ${begun.runTotal} chapter(s). Chain wait_for_job with jobId "${jobId}".`,
@@ -1769,7 +1816,7 @@ server.registerTool(
 );
 ```
 
-(Fold the two subscriber adds into one if `Subscriber` allows; shown split for clarity of the two terminal conditions. Match the real `Subscriber` interface — if it requires `res`, make it optional as in task 8.)
+(The stub `res` inside the recorder subscriber is load-bearing: `generation.ts:431` calls `sub.res.end()` at job end and `generation.ts:918` compares `sub.res === res` — a stub object satisfies both.)
 
 - [ ] **Step 5: Run, pass, commit**
 
@@ -1894,7 +1941,7 @@ git commit -m "feat(server): fs-44 export_audiobook tool via extracted createExp
 
 ---
 
-## Wave 3 — cast & voice parity + docs
+## Wave 3 — cast & voice parity + pipeline e2e
 
 ### Task 11: `update_character`
 
@@ -2232,7 +2279,7 @@ Append to `registerCastTools`:
 import { beginCastDesignJob } from '../../routes/cast-design.js';
 import { beginSingleDesignJob } from '../../routes/single-design.js';
 import { makeJobId } from '../job-view.js';
-import { recordEvent, recordOutcome } from '../job-recorder.js';
+import { makeRecorderSubscriber } from '../job-recorder.js';
 
 server.registerTool(
   'design_full_cast',
@@ -2252,22 +2299,20 @@ server.registerTool(
     const jobId = makeJobId('cast-design', bookId);
     try {
       const job = await beginCastDesignJob({ bookId, scope: scope ?? 'both' });
-      job.subscribers.add({
-        send: (ev: unknown) => {
-          recordEvent(jobId, ev);
+      job.subscribers.add(
+        makeRecorderSubscriber(jobId, (ev) => {
           const e = ev as { type?: string; message?: string; failures?: unknown[] };
           if (e.type === 'idle') {
-            recordOutcome(jobId, {
+            return {
               state: e.failures?.length ? 'failed' : 'done',
               error: e.failures?.length ? `${e.failures.length} character(s) failed` : undefined,
               finishedAt: Date.now(),
-            });
+            };
           }
-          if (e.type === 'error') {
-            recordOutcome(jobId, { state: 'failed', error: e.message, finishedAt: Date.now() });
-          }
-        },
-      } as never);
+          if (e.type === 'error') return { state: 'failed', error: e.message, finishedAt: Date.now() };
+          return null;
+        }) as never,
+      );
       return jsonResult(`Bulk design started (${job.total} character(s)). wait_for_job with "${jobId}".`,
         { jobId, bookId, total: job.total });
     } catch (err) {
@@ -2294,18 +2339,16 @@ server.registerTool(
     const jobId = makeJobId('single-design', bookId);
     try {
       const job = await beginSingleDesignJob({ bookId, characterId });
-      job.subscribers.add({
-        send: (ev: unknown) => {
-          recordEvent(jobId, ev);
+      job.subscribers.add(
+        makeRecorderSubscriber(jobId, (ev) => {
           const e = ev as { type?: string; message?: string };
           if (e.type === 'designed' || e.type === 'preview_ready') {
-            recordOutcome(jobId, { state: 'done', finishedAt: Date.now() });
+            return { state: 'done', finishedAt: Date.now() };
           }
-          if (e.type === 'error') {
-            recordOutcome(jobId, { state: 'failed', error: e.message, finishedAt: Date.now() });
-          }
-        },
-      } as never);
+          if (e.type === 'error') return { state: 'failed', error: e.message, finishedAt: Date.now() };
+          return null;
+        }) as never,
+      );
       return jsonResult(`Designing ${job.characterName}. wait_for_job with "${jobId}".`,
         { jobId, bookId, characterId });
     } catch (err) {
@@ -2350,6 +2393,8 @@ import type { McpTestContext } from './test-harness.js';
 
 // vi.mock(...) analyzer + sidecar stubs here, copied from
 // src/routes/analysis-pipelining.test.ts and src/routes/generation.test.ts
+// (src/mcp/ sits at the same '../' depth as src/routes/, so the relative
+//  mock specifiers copy unchanged — vi.mock resolves against THIS file)
 
 let ctx: McpTestContext;
 let parseToolJson: (r: unknown) => any;
@@ -2437,7 +2482,168 @@ git commit -m "test(server): fs-44 mcp full-pipeline integration test (slow set)
 
 ---
 
-### Task 15: Docs — README section + regression plan + INDEX
+## Wave 4 — stdio bridge (`castwright-mcp` bin)
+
+### Task 15: stdio ⇄ HTTP bridge bin
+
+Codex, older Copilot CLI builds, and other stdio-first harnesses spawn MCP servers as child processes. The bridge is a **pure transport proxy** — stdio JSON-RPC in, Streamable-HTTP out — so the tool surface can never fork between transports. Zero tool logic lives here.
+
+**Files:**
+- Create: `server/src/mcp/stdio-bridge.ts`
+- Modify: `server/package.json` (`bin` field)
+- Test: `server/src/mcp/stdio-bridge.test.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+`server/src/mcp/stdio-bridge.test.ts` — boots the real HTTP endpoint via the harness, then connects a SECOND client through the bridge spawned as a child process (from TS source via `node --import tsx`, cwd at `server/` so tsx resolves):
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { mkdtemp } from 'fs/promises';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import type { McpTestContext } from './test-harness.js';
+
+const here = dirname(fileURLToPath(import.meta.url)); // .../server/src/mcp
+const serverDir = join(here, '..', '..');
+const bridgeSrc = join(here, 'stdio-bridge.ts');
+
+let httpCtx: McpTestContext;
+let stdioClient: Client;
+
+beforeAll(async () => {
+  process.env.WORKSPACE_DIR = await mkdtemp(join(tmpdir(), 'audiobook-mcp-stdio-'));
+  const harness = await import('./test-harness.js');
+  httpCtx = await harness.startMcpTestClient();
+
+  stdioClient = new Client({ name: 'stdio-bridge-test', version: '0.0.0' });
+  await stdioClient.connect(
+    new StdioClientTransport({
+      command: process.execPath,
+      args: ['--import', 'tsx', bridgeSrc, '--url', httpCtx.baseUrl],
+      cwd: serverDir,
+    }),
+  );
+}, 60_000);
+
+afterAll(async () => {
+  await stdioClient.close();
+  await httpCtx.close();
+});
+
+describe('castwright-mcp stdio bridge', () => {
+  it('exposes the same tool surface as the HTTP endpoint', async () => {
+    const viaBridge = (await stdioClient.listTools()).tools.map((t) => t.name).sort();
+    const direct = (await httpCtx.client.listTools()).tools.map((t) => t.name).sort();
+    expect(viaBridge).toEqual(direct); // proxy can never fork the surface
+  });
+
+  it('round-trips a tool call through stdio → HTTP → stdio', async () => {
+    const result = await stdioClient.callTool({ name: 'ping', arguments: {} });
+    const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+    expect(text).toContain('"ok": true');
+  });
+});
+```
+
+Run: `npm --prefix server run test -- src/mcp/stdio-bridge.test.ts` — expected FAIL (bridge missing).
+
+- [ ] **Step 2: Implement the bridge**
+
+`server/src/mcp/stdio-bridge.ts` (the shebang must be line 1 — `tsc` preserves it into `dist/`):
+
+```typescript
+#!/usr/bin/env node
+/**
+ * castwright-mcp — stdio ⇄ Streamable-HTTP bridge for MCP clients without HTTP transports
+ * (Codex, stdio-only harnesses). Pure transport proxy: NO tool logic lives here, so the
+ * tool surface can never diverge from the /mcp endpoint.
+ *
+ * Usage:   castwright-mcp [--url http://localhost:8080/mcp] [--token <lan-token>]
+ * Env:     CASTWRIGHT_MCP_URL, CASTWRIGHT_MCP_TOKEN (flags win)
+ */
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+function argValue(flag: string): string | undefined {
+  const i = process.argv.indexOf(flag);
+  return i !== -1 && i + 1 < process.argv.length ? process.argv[i + 1] : undefined;
+}
+
+const url = argValue('--url') ?? process.env.CASTWRIGHT_MCP_URL ?? 'http://localhost:8080/mcp';
+const token = argValue('--token') ?? process.env.CASTWRIGHT_MCP_TOKEN;
+
+async function main(): Promise<void> {
+  const upstream = new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: token ? { headers: { Authorization: `Bearer ${token}` } } : undefined,
+  });
+  const downstream = new StdioServerTransport();
+
+  let closing = false;
+  const shutdown = (err?: unknown): void => {
+    if (closing) return;
+    closing = true;
+    if (err) process.stderr.write(`[castwright-mcp] ${(err as Error).message ?? String(err)}\n`);
+    void upstream.close();
+    void downstream.close();
+    process.exit(err ? 1 : 0);
+  };
+
+  downstream.onmessage = (msg) => {
+    upstream.send(msg).catch(shutdown);
+  };
+  upstream.onmessage = (msg) => {
+    downstream.send(msg).catch(shutdown);
+  };
+  downstream.onclose = () => shutdown();
+  upstream.onclose = () => shutdown();
+  downstream.onerror = shutdown;
+  upstream.onerror = shutdown;
+
+  await upstream.start();
+  await downstream.start();
+}
+
+void main();
+```
+
+Implementation notes for the executor:
+- This pipes raw JSON-RPC between the two `Transport` implementations — correct for a **stateless** upstream (each POST is independent; no session id to thread). Do NOT wrap it in a `Client`/`McpServer` pair — that would re-handshake and double-initialize.
+- `StreamableHTTPClientTransport.start()` is lazy (no connection until the first send) — an unreachable server surfaces on the first message; the `.catch(shutdown)` paths turn that into a clean exit 1 with the error on stderr, which stdio MCP clients report verbatim.
+
+- [ ] **Step 3: Add the bin entry**
+
+In `server/package.json` add at top level:
+
+```json
+"bin": { "castwright-mcp": "dist/mcp/stdio-bridge.js" }
+```
+
+- [ ] **Step 4: Run to verify pass (test + built bin smoke)**
+
+```bash
+npm --prefix server run test -- src/mcp/stdio-bridge.test.ts
+npm --prefix server run build
+node server/dist/mcp/stdio-bridge.js --url http://127.0.0.1:1/mcp < NUL
+```
+
+Expected: test PASS; build clean; the smoke invocation exits 1 quickly with a `[castwright-mcp]` connection error on stderr (proves the compiled bin runs standalone). On bash use `< /dev/null` instead of `< NUL`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add server/src/mcp/stdio-bridge.ts server/src/mcp/stdio-bridge.test.ts server/package.json
+git commit -m "feat(server): fs-44 castwright-mcp stdio bridge bin (wave 4)"
+```
+
+---
+
+## Docs + ship
+
+### Task 16: Docs — README section + regression plan + INDEX
 
 **Files:**
 - Modify: `README.md`
@@ -2462,21 +2668,22 @@ tools; long jobs return a `jobId` you chain through `wait_for_job`.
 claude mcp add --transport http castwright http://localhost:8080/mcp
 ```
 
-**Codex** (`~/.codex/config.toml`; use the `mcp-remote` stdio bridge if your version lacks HTTP transports)
+**Codex and other stdio-first clients** (`~/.codex/config.toml`) — use the bundled `castwright-mcp` bridge (a pure proxy onto the same endpoint):
 
 ```toml
 [mcp_servers.castwright]
-command = "npx"
-args = ["-y", "mcp-remote", "http://localhost:8080/mcp"]
+command = "node"
+args = ["<castwright-install>/server/dist/mcp/stdio-bridge.js"]
 ```
 
-**Copilot CLI / Gemini CLI / Cursor** (JSON MCP config)
+**Copilot CLI / Gemini CLI / Cursor** (JSON MCP config — HTTP where supported, else the same bridge)
 
 ```json
 { "mcpServers": { "castwright": { "url": "http://localhost:8080/mcp" } } }
 ```
 
-(stdio-only clients: same `mcp-remote` bridge as the Codex snippet.)
+LAN access from another machine: use `https://<lan-ip>:8443/mcp` and pass the LAN token
+(`Authorization: Bearer <token>` header, or `--token <token>` on the bridge).
 
 Try: *“List my books, then generate chapter 1 of <title> and tell me when it’s exported as m4b.”*
 ````
@@ -2495,7 +2702,7 @@ owner: null
 # MCP agent surface (fs-44)
 
 > Status: active
-> Key files: `server/src/mcp/` (router/server/tools/job-view), `server/src/index.ts` (mount), extracted begin/create functions in `server/src/routes/{import,analysis,generation,export,cast-merge,cast-design,single-design}.ts`
+> Key files: `server/src/mcp/` (router/server/tools/job-view/stdio-bridge), `server/src/index.ts` (mount), extracted begin/create functions in `server/src/routes/{import,analysis,generation,export,cast-merge,cast-design,single-design}.ts`
 > URL surface: none (protocol endpoint at `/mcp`)
 > OpenAPI ops: none — deliberately outside `openapi.yaml` (MCP protocol surface, not a REST resource)
 
@@ -2514,12 +2721,14 @@ owner: null
 5. `wait_for_job` never exceeds 55 s (client tool-timeout floor); long jobs are chained waits.
 6. Core-spec MCP only: tools + text content. No sampling/elicitation/roots; annotations advisory.
 7. SSE remains UI-only; MCP reads job state through the exported view getters + recorder.
+8. The `castwright-mcp` stdio bridge is a pure transport proxy — zero tool logic; its test pins `listTools()` equality with the HTTP endpoint so the surfaces can never fork.
+9. Synthetic recorder subscribers always carry a stub `res` (the job routes call `sub.res.end()` at job end).
 
 ## Manual acceptance
 
 1. `claude mcp add --transport http castwright http://localhost:8080/mcp`; in a fresh session run the full pipeline on a small public-domain manuscript (pairs with fs-22's bundled demo book) with zero UI use.
-2. Repeat from one non-Claude harness (Codex or Copilot CLI, via mcp-remote if needed).
-3. LAN mode: confirm `/mcp` 401s without the token and works with it.
+2. Repeat from one non-Claude harness (Codex or Copilot CLI), connected through the `castwright-mcp` stdio bridge.
+3. LAN mode: confirm `/mcp` 401s without the token and works with it (HTTP header and bridge `--token` both).
 
 ## Ship notes
 
@@ -2539,7 +2748,7 @@ git commit -m "docs(docs,server): fs-44 mcp agent surface docs + regression plan
 
 ---
 
-### Task 16: Full verify + PR
+### Task 17: Full verify + PR
 
 - [ ] **Step 1: Full battery**
 
@@ -2553,9 +2762,10 @@ Expected: lint + typecheck + all unit suites + e2e + build green. Triage any fai
 
 ```bash
 git push -u origin feat/server-fs44-mcp-agent-surface
-gh pr create --draft --title "feat(server): fs-44 MCP agent surface — /mcp endpoint + 15 workflow tools" --body-file <(echo "## Summary
+gh pr create --draft --title "feat(server): fs-44 MCP agent surface — /mcp endpoint, 15 workflow tools, stdio bridge" --body-file <(echo "## Summary
 
 - fs-44: Streamable-HTTP MCP endpoint at /mcp (stateless, behind requireLanToken) with 15 workflow-level tools: read/inspect, pipeline (upload/analyze/generate/export), cast & voice parity, get_job/wait_for_job over a uniform job view.
+- castwright-mcp stdio bridge bin (wave 4): pure transport proxy onto /mcp so stdio-only harnesses (Codex etc.) get the identical tool surface.
 - Route-handler logic reused via surgical extractions (createBookFromImport, beginAnalysisJob, beginGenerationJob, createExportJob, mergeCastCharacters, beginCastDesignJob, beginSingleDesignJob) — routes and tools call the same functions.
 - Regression plan docs/features/205-mcp-agent-surface.md; README 'Driving Castwright from an agent'.
 
@@ -2563,7 +2773,7 @@ Closes #721
 
 ## Test plan
 
-- server/src/mcp/*.test.ts — endpoint, every tool group, job view/recorder (vitest + real MCP SDK client over ephemeral HTTP).
+- server/src/mcp/*.test.ts — endpoint, every tool group, job view/recorder, stdio bridge surface-equality + round-trip (vitest + real MCP SDK client over ephemeral HTTP / spawned stdio child).
 - server/src/mcp/pipeline.e2e.test.ts (slow set) — full upload→analyze→generate→export through the MCP client, engines mocked.
 - All extraction-touched route suites green unchanged. npm run verify green locally.")
 ```
@@ -2578,7 +2788,7 @@ From Claude Code: `claude mcp add --transport http castwright http://localhost:8
 
 ## Post-plan checklist (maps to CLAUDE.md "Before shipping")
 
-- Regression plan: task 15 (plan 205). Backlog/issue: PR body `Closes #721`; remove the fs-44 row from `docs/BACKLOG.md` on merge.
-- Wave 4 (stdio shim): NOT in this plan — file a follow-up backlog item only if a real client can't use `mcp-remote`.
-- Known risks called out to the implementer: (1) zod-4/SDK peer range (task 1 step 1 catches it); (2) the analysis/generation extractions are the two riskiest diffs — pure-relocation discipline + the slow suites are the net; (3) `Subscriber`/`AnalysisSubscriber` interfaces may require optional-`res` widening (tasks 8–9 note the fix).
+- Regression plan: task 16 (plan 205). Backlog/issue: PR body `Closes #721`; remove the fs-44 row from `docs/BACKLOG.md` on merge.
+- Wave 4 (stdio bridge): DELIVERED by task 15 — no follow-up item needed.
+- Known risks called out to the implementer: (1) the analysis/generation extractions are the two riskiest diffs — pure-relocation discipline + the slow suites are the net; (2) recorder subscribers MUST go through `makeRecorderSubscriber` (stub `res` prevents the `sub.res.end()` crash at job end — verified call sites: cast-design.ts:147, single-design.ts:76, analysis.ts:1651, generation.ts:431); (3) zod-4/SDK compat is verified (SDK 1.29.0 range `^3.25 || ^4.0`) — task 1's probe is belt-and-suspenders.
 ```
