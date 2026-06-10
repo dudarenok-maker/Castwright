@@ -23,6 +23,12 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading');
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0); // bump to regenerate the code
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== 'ready') return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [status]);
 
   /* Fetch a new pairing session each time the modal opens (or the user hits
      "Regenerate code"). Sessions are short-lived, so don't cache across opens. */
@@ -166,6 +172,18 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
                 >
                   Regenerate code
                 </button>
+                {(() => {
+                  const remainingMs = Math.max(0, info.expiresAt - now);
+                  const mm = Math.floor(remainingMs / 60000);
+                  const ss = Math.floor((remainingMs % 60000) / 1000);
+                  return (
+                    <p data-testid="pair-code-countdown" className="text-xs text-ink/50">
+                      {remainingMs > 0
+                        ? `This code expires in ${mm}:${ss.toString().padStart(2, '0')}.`
+                        : 'This code has expired — tap Regenerate code.'}
+                    </p>
+                  );
+                })()}
                 <details className="rounded-xl border border-ink/10 bg-ink/[0.02]">
                   <summary className="px-4 py-3 cursor-pointer text-ink/70 font-medium select-none">
                     Or enter these manually
