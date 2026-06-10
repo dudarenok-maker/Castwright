@@ -1,4 +1,4 @@
-/* Single source of brand copy (fe-37 / plan 202).
+/* Single source of brand copy (fe-37 / plan 203).
 
    The brand strings used to be duplicated across views, modals, index.html and
    the PWA manifest — a tagline change meant a multi-file hunt, and the 2026-06-10
