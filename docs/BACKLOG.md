@@ -383,6 +383,12 @@ _Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ surfaces the LAN access flow inside the app instead of requiring the user to read terminal output. Especially valuable for users who first installed via the alpha release zip (no terminal interaction expected). **Niche dev/LAN surfacing — kept at Could 2026-06-08.**
 _Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401).
 
+#### `ops-14` — eslint 9→10 (+@eslint/js): deferred, upstream-blocked ([#711](https://github.com/dudarenok-maker/AudioBook-Generator/issues/711))
+
+- _What:_ The one item deps round 3 (plan 202) could not ship. `eslint ^9→^10` is blocked because the latest `eslint-plugin-react` (7.37.5) and `eslint-plugin-jsx-a11y` (6.10.2) still cap their eslint peer at `^9`, and eslint 10 removes deprecated context APIs those plugins use. Unblock when both plugins ship eslint-10 peer ranges; then bump eslint + @eslint/js + the two plugins together.
+- _Benefit (technical):_ stays on a supported eslint line; clears the last row of the round-3 `npm outdated`.
+_Full detail + acceptance:_ [#711](https://github.com/dudarenok-maker/AudioBook-Generator/issues/711).
+
 ### Listener-app handoffs
 
 #### `fe-3` — Apple Books (iOS / macOS) handoff modal ([#434](https://github.com/dudarenok-maker/AudioBook-Generator/issues/434))
