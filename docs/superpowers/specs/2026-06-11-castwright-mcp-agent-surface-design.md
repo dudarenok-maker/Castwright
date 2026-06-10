@@ -196,11 +196,17 @@ audiobook with zero UI interaction; full vitest + pipeline-e2e coverage; docs pu
 - `openapi.yaml` — contract the façade stays aligned with
 - `server/package.json` — `@modelcontextprotocol/sdk` dep (+ wave-4 `castwright-mcp` bin)
 
-## Open questions (resolve at implementation time)
+## Open questions — resolved
 
-1. Whether any extracted route logic needs a service-layer refactor first (several
-   routes inline their logic; handlers may need small extractions — keep surgical).
-2. `wait_for_job` long-poll vs client timeout defaults across harnesses (cap below the
-   most impatient client default).
-3. Whether `start_generation` should auto-queue behind an active generation (reuse the
-   existing queue) or refuse — lean: enqueue, report queue position.
+_All three resolved by the 2026-06-11 critical reviews — detail in the implementation
+plan (`docs/superpowers/plans/2026-06-11-fs44-mcp-agent-surface.md`):_
+
+1. ~~Service-layer refactors~~ — seven surgical extractions, each shared by route + tool:
+   `createBookFromImport`, `beginAnalysisJob`, `beginGenerationJob`, `createExportJob`,
+   `mergeCastCharacters`, `beginCastDesignJob`, `beginSingleDesignJob`.
+2. ~~`wait_for_job` timeout~~ — default 25 s, hard cap 55 s (below the common 60 s
+   client tool-timeout floor); long jobs are chained waits with a `timedOut` flag.
+3. ~~`start_generation` queue-or-refuse~~ — neither: the generation route's verified
+   multi-id path runs all target chapters **sequentially under one `${bookId}::*` job**,
+   the natural agent shape (one jobId, ordered walk). A second start while one is
+   active refuses with `generation_already_running` — never force-displaces.

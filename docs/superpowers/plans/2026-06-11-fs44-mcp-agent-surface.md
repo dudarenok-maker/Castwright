@@ -17,6 +17,10 @@
 - `@modelcontextprotocol/sdk` **1.29.0** declares `zod: '^3.25 || ^4.0'` (dependency AND peer), so the server's `zod@^4` is officially in-range. No version juggling; task 1's probe still validates the wiring end-to-end.
 - All four job route modules call `sub.res.end()` on every subscriber at job end (`cast-design.ts:147`, `single-design.ts:76`, `analysis.ts:1651`, `generation.ts:431`; `generation.ts:918` also compares `sub.res === res`). A synthetic subscriber without `res` **crashes the job's completion path**. Tasks 8/9/13 therefore attach subscribers built by the shared `makeRecorderSubscriber()` (task 4), which carries a stub `res = { end() {} }` — zero route-interface changes.
 - The server package has a real build (`build: tsc -p .` → `dist/`, `start: node dist/index.js`) and `tsx` for dev, so the stdio bridge ships as a compiled bin (`dist/mcp/stdio-bridge.js`) with a `bin` entry, testable from source via `node --import tsx`.
+- **Generation route semantics (round-2 review):** `POST /generation` reads `body.chapterIds` (number[], parsed at `generation.ts:481`) with three-way behaviour (~line 818): *subscribe* (no chapterIds + no force), *start* (chapterIds, or no existing job), *force-displace* (chapterIds + force — queue-dispatcher regen path). A **multi-id or no-id call walks all target chapters sequentially under ONE job keyed `${bookId}::*`** — exactly the shape `start_generation` needs (one jobId, one sequential walker). `beginGenerationJob` must take the *start* branch and must NOT pass force (never displace a running job — throw `generation_already_running` instead).
+- **Cast-design scope (round-2 review):** the route parses `body.scope` at `cast-design.ts:323-334` with type `DesignScope = 'bases' | 'variants' | 'both'` and **route default `'bases'`** — the MCP tool uses the same default.
+- **Single-design contract (round-2 review):** the route requires a validated `modelKey` (`isTtsModelKey`, `single-design.ts:191`; Qwen design = `'qwen3-tts-0.6b'` from `server/src/tts/model-keys.ts:23`) and a `preview` flag: `preview=false` → mode `'first'`, **persists immediately**; `preview=true` → mode `'redesign'`, stages a `-preview` sibling for the UI's A/B compare without persisting. The MCP tool uses `preview:false` — re-designing an already-voiced character therefore overwrites it immediately (the tool description must warn).
+- Import verification: `StagedImport`/`putStaging`/`getStaging`/`dropStaging` (import-staging.ts:10-56), `scanLibrary`/`findBookByBookId`/`findBookByManuscriptId` (scan.ts:589-636), `getOrHydrateManuscript` (manuscripts.ts:71) are all exported as the plan assumes.
 
 **Commit scope:** `mcp` is not an allowed commit scope — use `server` (and `docs` for docs). Branch: `feat/server-fs44-mcp-agent-surface` off latest `main`, created via the using-git-worktrees skill at execution time. Open the PR as **draft** (CI-cost default), body `Closes #721`.
 
@@ -26,6 +30,14 @@
 - Tests: vitest globals, async `mkdtemp` from `fs/promises`, set `process.env.WORKSPACE_DIR` **before** deferred `await import(...)` of modules-under-test in `beforeAll` (the established pattern in `server/src/routes/book-state.test.ts`).
 - Run server tests from repo root: `npm run test:server` (or `npm --prefix server run test -- <file>` for one file).
 - Commit after every green task. Pre-commit hook runs scope-filtered fast tests; if committing from a worktree where husky can't spawn, use the worktree-scoped hooks setup (memory: `extensions.worktreeConfig` + `git config --worktree core.hooksPath`), never `--no-verify`.
+
+**Subagent execution protocol (subagent-driven-development):**
+
+1. **One-time setup, BEFORE dispatching task 1** (orchestrator does this, not a subagent): `git worktree add <wt-path> -b feat/server-fs44-mcp-agent-surface origin/main` off freshly-fetched `main`; junction `node_modules` AND `server/node_modules` from the main checkout into the worktree (Windows: `New-Item -ItemType Junction`); set up the worktree-scoped husky hooks. Every task's subagent works in THIS worktree — pass the absolute worktree path in every dispatch prompt.
+2. **Dispatch = self-contained prompt**: the task's full text verbatim PLUS the "Conventions", "Ground-truth notes", and this protocol block. Subagents have no conversation context — never reference "as discussed" or a prior task's output except through what is already committed in the worktree.
+3. **Strictly sequential — do NOT parallelize tasks.** Tasks share `server/src/mcp/server.ts` (every tool group registers there), `tools/pipeline-tools.ts` (tasks 7–10 append to it), and `tools/cast-tools.ts` (tasks 11–13). Parallel subagents on this plan WILL conflict.
+4. **Orchestrator gate between tasks**: after each subagent reports, independently re-run that task's test command plus `npm run typecheck` in the worktree before dispatching the next task. A report without verbatim passing test output is rejected — send the subagent back rather than trusting the claim.
+5. Each subagent commits its own task's work (the task's final step) — the orchestrator never batches multiple tasks into one commit.
 
 ---
 
@@ -1690,23 +1702,26 @@ Same decoupling pattern as task 8, on `POST /api/books/:bookId/generation` (hand
 
 - [ ] **Step 1: Extract `beginGenerationJob`**
 
-Move the job-construction + spawn block (everything between request validation and the SSE subscriber attach) into:
+Verified route semantics (see Ground-truth notes): `POST /generation` parses `body.chapterIds` at line ~481 and branches three ways at ~818 — *subscribe* (no chapterIds + no force), *start* (chapterIds, or no existing job), *force-displace* (chapterIds + force; queue-dispatcher regen). A multi-id or no-id start runs ALL target chapters **sequentially under one job keyed `${bookId}::*`** (`chapterId: null`). Extract the **start branch's** job-construction + spawn block (between request validation and the SSE subscriber attach) into:
 
 ```typescript
-/** Create + spawn generation for a chapter set with no subscribers attached.
+/** Create + spawn generation with no subscribers attached — the route's START branch only.
+ *  A multi-id / no-id call produces the single back-compat sequential job (`${bookId}::*`),
+ *  which is exactly what the MCP path wants: one jobId, chapters walked in order.
  *  Shared by the SSE route and the MCP start_generation tool.
- *  Throws { code: 'generation_already_running' } when the same chapters are already in flight,
- *  and { code: 'cast_gaps' , characters: [...] } when unvoiced characters would force a loud fallback
- *  (the SSE route's fallbackConfirmed gate — the MCP path never auto-confirms). */
+ *  Throws { code: 'generation_already_running' } when isGenerationActive(bookId) — NEVER
+ *  force-displaces a running job (force stays a route-only, queue-dispatcher concern).
+ *  Throws { code: 'cast_gaps', characters: [...] } where the SSE route would have paused on
+ *  the fallbackConfirmed gate (the MCP path never auto-confirms a loud fallback). */
 export async function beginGenerationJob(opts: {
   bookId: string;
-  chapterIds?: number[]; // undefined = all pending chapters
+  chapterIds?: number[]; // undefined = all pending chapters (sequential walker)
 }): Promise<{ jobs: RunningJob[]; runTotal: number }> {
-  // ← moved verbatim from the route handler
+  // ← moved verbatim from the route handler's start branch
 }
 ```
 
-The route handler becomes: validate → `beginGenerationJob` (or attach to in-flight) → SSE headers → subscribe. Keep the existing fallback-confirmation flow in the ROUTE (it is a UI interaction); the extracted function refuses with `cast_gaps` where the route would have asked.
+The route handler becomes: validate → branch as today (subscribe / force-displace keep their existing inline code) → the start branch calls `beginGenerationJob` → SSE headers → subscribe. Keep the fallback-confirmation flow in the ROUTE (it is a UI interaction); the extracted function refuses with `cast_gaps` where the route would have asked.
 
 - [ ] **Step 2: Existing generation suites stay green**
 
@@ -1953,7 +1968,17 @@ git commit -m "feat(server): fs-44 export_audiobook tool via extracted createExp
 
 - [ ] **Step 1: Failing test**
 
-`server/src/mcp/tools/cast-tools.test.ts` (fixture book seeded like read-tools.test.ts, with characters `narrator` voiced and `c1` unvoiced):
+`server/src/mcp/tools/cast-tools.test.ts` — same `beforeAll` harness boilerplate as `read-tools.test.ts` (async `mkdtemp` → `process.env.WORKSPACE_DIR` → seed the book on disk → deferred-import `startMcpTestClient`), seeding `bookId: 'bk_cast_test'` with cast:
+
+```typescript
+{ characters: [
+  { id: 'narrator', name: 'Narrator', ttsEngine: 'kokoro', overrideTtsVoices: { kokoro: { name: 'af_heart' } }, lines: 10 },
+  { id: 'c1', name: 'Alice', lines: 4 },                       // unvoiced — update_character target
+  { id: 'c2', name: 'Albert', aliases: ['Bertie'], lines: 2 }, // merge_characters source (task 12)
+] }
+```
+
+Tests for this task:
 
 ```typescript
 describe('update_character', () => {
@@ -2131,7 +2156,7 @@ npm --prefix server run test -- src/routes/cast-merge.test.ts
 
 - [ ] **Step 3: Failing tool test → implement → pass**
 
-Test (append to cast-tools.test.ts; seed a third character `c2` with aliases in the fixture):
+Test (append to cast-tools.test.ts — the `c2`/Albert source character is already in the task-11 fixture; the alias assertion expects the merge to union the source's name+aliases into the target, mirroring what `cast-merge.test.ts` asserts — if the route's `mergeAliases` behaviour differs, match the route, not this sketch):
 
 ```typescript
 describe('merge_characters', () => {
@@ -2201,7 +2226,7 @@ git commit -m "feat(server): fs-44 merge_characters tool via extracted mergeCast
 
 Same pattern as tasks 8–9 — job construction + spawn decoupled from SSE subscription, design-lock 409 semantics preserved:
 
-In `cast-design.ts`:
+In `cast-design.ts` (the route parses `body.scope` at lines 323–334 into the existing `DesignScope` type — reuse it, default `'bases'` exactly as the route does):
 
 ```typescript
 /** Create + spawn the bulk design job with no subscribers. Shared by the SSE route and MCP.
@@ -2209,22 +2234,26 @@ In `cast-design.ts`:
  *  { code: 'sidecar_unavailable' } when the sidecar probe fails. */
 export async function beginCastDesignJob(opts: {
   bookId: string;
-  scope: 'bases' | 'variants' | 'both';
+  scope: DesignScope; // 'bases' | 'variants' | 'both' — existing type at cast-design.ts:~64
 }): Promise<DesignJob> {
   // ← moved verbatim from POST /api/books/:bookId/cast/design (line ~321)
 }
 ```
 
-In `single-design.ts`:
+In `single-design.ts` (the route requires a validated `modelKey` — `isTtsModelKey` at line ~191 — and a `preview` flag; it resolves persona/sampleVoiceId/language/seriesInfo before the spawn at line ~251 — ALL of that moves into the begin function):
 
 ```typescript
-/** Create + spawn a single-character voice design with no subscribers. Shared by the SSE route and MCP. */
+/** Create + spawn a single-character voice design with no subscribers. Shared by the SSE route and MCP.
+ *  preview=false → mode 'first': the result PERSISTS immediately (also on re-design — no A/B hold).
+ *  preview=true  → mode 'redesign': stages a -preview sibling for the UI's A/B compare. */
 export async function beginSingleDesignJob(opts: {
   bookId: string;
   characterId: string;
+  modelKey: TtsModelKey; // validated upstream; Qwen design = 'qwen3-tts-0.6b'
+  preview: boolean;      // MCP passes false
 }): Promise<SingleJob> {
-  // ← moved verbatim; mode ('first' | 'redesign') derived inside exactly as the route does today;
-  //   MCP always uses the non-preview path so a first design auto-persists (plan 195 behaviour)
+  // ← moved verbatim (persona/sampleVoiceId/language/seriesInfo resolution + job construction
+  //   + void runSingleDesign(job, persona, sampleVoiceId, modelKey, language, seriesInfo))
 }
 ```
 
@@ -2286,7 +2315,7 @@ server.registerTool(
   {
     title: 'Design full cast',
     description:
-      'Bulk Qwen voice design for every character that needs one. scope: bases (new voices) | variants (emotion variants for designed voices) | both. ' +
+      'Bulk Qwen voice design for every character that needs one. scope: bases (new voices, the default) | variants (emotion variants for designed voices) | both. ' +
       'GPU-heavy, minutes per character. Returns a jobId; chain wait_for_job.',
     inputSchema: {
       bookId: z.string(),
@@ -2298,7 +2327,7 @@ server.registerTool(
     if (!book) return bookNotFound(bookId);
     const jobId = makeJobId('cast-design', bookId);
     try {
-      const job = await beginCastDesignJob({ bookId, scope: scope ?? 'both' });
+      const job = await beginCastDesignJob({ bookId, scope: scope ?? 'bases' }); // 'bases' = route default
       job.subscribers.add(
         makeRecorderSubscriber(jobId, (ev) => {
           const e = ev as { type?: string; message?: string; failures?: unknown[] };
@@ -2330,7 +2359,7 @@ server.registerTool(
   {
     title: 'Design voice',
     description:
-      'Qwen voice design for ONE character (from its persona). First design auto-persists. GPU-heavy. Returns a jobId; chain wait_for_job.',
+      'Qwen voice design for ONE character (from its persona). PERSISTS immediately — re-designing an already-voiced character overwrites its current voice with no A/B compare. GPU-heavy. Returns a jobId; chain wait_for_job.',
     inputSchema: { bookId: z.string(), characterId: z.string() },
   },
   async ({ bookId, characterId }) => {
@@ -2338,7 +2367,12 @@ server.registerTool(
     if (!book) return bookNotFound(bookId);
     const jobId = makeJobId('single-design', bookId);
     try {
-      const job = await beginSingleDesignJob({ bookId, characterId });
+      const job = await beginSingleDesignJob({
+        bookId,
+        characterId,
+        modelKey: 'qwen3-tts-0.6b', // the bespoke-voice design engine (model-keys.ts)
+        preview: false,             // persist — agents have no A/B-compare drawer
+      });
       job.subscribers.add(
         makeRecorderSubscriber(jobId, (ev) => {
           const e = ev as { type?: string; message?: string };
