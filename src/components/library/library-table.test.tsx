@@ -43,6 +43,7 @@ function renderTable(opts: {
   onOpenBook?: (b: LibraryBook) => void;
   onDeleteBook?: (b: LibraryBook) => void;
   onReparseBook?: (b: LibraryBook) => void;
+  onReplaceManuscript?: (b: LibraryBook, file: File) => void;
   onEditBook?: (b: LibraryBook) => Promise<void>;
   onStartNew?: () => void;
 }) {
@@ -67,6 +68,7 @@ function renderTable(opts: {
         onOpenBook={opts.onOpenBook ?? vi.fn()}
         onDeleteBook={opts.onDeleteBook ?? vi.fn()}
         onReparseBook={opts.onReparseBook ?? vi.fn()}
+        onReplaceManuscript={opts.onReplaceManuscript ?? vi.fn()}
         onEditBook={opts.onEditBook ?? vi.fn().mockResolvedValue(undefined)}
         onStartNew={opts.onStartNew ?? vi.fn()}
       />
@@ -296,5 +298,33 @@ describe('LibraryTable — interactions', () => {
     renderTable({ authors, activeBookId: 'a1' });
     const row = screen.getByTestId('library-table-row-a1');
     expect(within(row).getByText(/Open/i)).toBeInTheDocument();
+  });
+
+  it('Replace manuscript… menu item → file upload → confirm → calls onReplaceManuscript', () => {
+    const onReplaceManuscript = vi.fn();
+    const book = makeBook({ bookId: 'a1', title: 'A One' });
+    const authors: LibraryAuthor[] = [
+      { name: 'Author A', series: [{ name: 'S', books: [book] }] },
+    ];
+    renderTable({ authors, onReplaceManuscript });
+
+    /* Open the kebab menu. */
+    fireEvent.click(screen.getByLabelText(/Actions for A One/));
+    /* Click "Replace manuscript…" — this triggers a hidden file input click. */
+    fireEvent.click(screen.getByRole('button', { name: /Replace manuscript…/i }));
+
+    /* Simulate a file being chosen via the hidden input. */
+    const input = screen.getByTestId('replace-manuscript-input') as HTMLInputElement;
+    const file = new File(['content'], 'new-manuscript.txt', { type: 'text/plain' });
+    Object.defineProperty(input, 'files', { value: [file], configurable: true });
+    fireEvent.change(input);
+
+    /* Click the confirm button in the ConfirmDialog. */
+    const confirmBtns = screen.getAllByRole('button', { name: /Replace manuscript/i });
+    fireEvent.click(confirmBtns[confirmBtns.length - 1]);
+
+    expect(onReplaceManuscript).toHaveBeenCalledTimes(1);
+    expect(onReplaceManuscript.mock.calls[0][0]).toBe(book);
+    expect(onReplaceManuscript.mock.calls[0][1]).toBe(file);
   });
 });
