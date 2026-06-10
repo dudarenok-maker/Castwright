@@ -53,6 +53,9 @@ export interface SpawnSidecarOpts {
   warn?: (...args: unknown[]) => void;
   spawnFn?: typeof spawn;
   probeFn?: typeof probeListening;
+  /** Defaults to `process.platform`; injectable so tests can exercise the
+      POSIX spawn branch without actually running on macOS/Linux. */
+  platform?: NodeJS.Platform;
   /* Override-points for the stale-sidecar handshake (side-8) — tests stub
      these so they never touch a real port/process. */
   healthProbeFn?: (host: string, port: number) => Promise<SidecarHealthProbe>;
@@ -357,9 +360,14 @@ function openLogFd(canonicalPath: string): number {
     `powershell.exe` running `start.ps1`, which itself spawned
     `python.exe` (uvicorn). A plain `process.kill(pid)` only reaps the
     powershell shell, orphaning the python grandchild. `taskkill /T /F`
-    walks the tree. Elsewhere SIGTERM cascades naturally. The spawn
-    function is injectable so tests can observe the kill call. */
-function killTree(pid: number, spawnFn: typeof spawn): Promise<void> {
+    walks the tree. On POSIX, `bash start.sh` spawns a uvicorn grandchild in
+    the same process group; when `ownGroup=true` (our own detached child is
+    the group leader) we send SIGTERM to `-pid` (negative = whole group) so
+    both bash and its uvicorn grandchild are reaped. For foreign PIDs
+    (stale-sidecar replace) `ownGroup` is false and we send to the PID
+    directly. The spawn function is injectable so tests can observe the kill
+    call. */
+function killTree(pid: number, spawnFn: typeof spawn, ownGroup = false): Promise<void> {
   return new Promise((resolve) => {
     if (process.platform === 'win32') {
       const killer = spawnFn('taskkill', ['/PID', String(pid), '/T', '/F'], {
@@ -370,9 +378,12 @@ function killTree(pid: number, spawnFn: typeof spawn): Promise<void> {
       killer.once('error', () => resolve());
     } else {
       try {
-        process.kill(pid, 'SIGTERM');
+        // Negative pid = the whole process group (our child is spawned detached,
+        // so it leads its own group) — reaps bash start.sh AND its uvicorn child.
+        if (ownGroup) process.kill(-pid, 'SIGTERM');
+        else process.kill(pid, 'SIGTERM');
       } catch {
-        /* already gone */
+        try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
       }
       resolve();
     }
@@ -481,6 +492,7 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     findPidFn = (p) => findListenerPid(p),
     onExit,
     onAdoptExisting,
+    platform = process.platform,
   } = opts;
 
   if (!autoStart) {
@@ -565,7 +577,10 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     /* fall through to the normal spawn below */
   }
 
-  const startScript = join(repoRoot, 'server', 'tts-sidecar', 'start.ps1');
+  const isWindows = platform === 'win32';
+  const startScript = join(
+    repoRoot, 'server', 'tts-sidecar', isWindows ? 'start.ps1' : 'start.sh',
+  );
   /* logs/ + .run/ default to repoRoot but honour APP_LOG_DIR / APP_RUN_DIR so
      a versioned-dir install (fs-1) parks them in a shared sibling — otherwise
      tts.pid lands inside the per-release tree that an upgrade swaps out. */
@@ -599,15 +614,14 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
 
   let child: ChildProcess;
   try {
-    child = spawnFn(
-      'powershell.exe',
-      ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', startScript],
-      {
-        env,
-        windowsHide: true,
-        stdio: ['ignore', outFd ?? 'ignore', errFd ?? 'ignore'],
-      },
-    );
+    child = isWindows
+      ? spawnFn('powershell.exe',
+          ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-File', startScript],
+          { env, windowsHide: true, stdio: ['ignore', outFd ?? 'ignore', errFd ?? 'ignore'] })
+      : spawnFn('bash', [startScript],
+          // detached → new process group so killTree can reap the uvicorn grandchild
+          // that `bash start.sh` spawns (a plain SIGTERM to bash would orphan it).
+          { env, windowsHide: true, stdio: ['ignore', outFd ?? 'ignore', errFd ?? 'ignore'], detached: true });
   } catch (err) {
     warn('[sidecar] spawn failed:', err);
     return null;
@@ -640,24 +654,38 @@ export async function spawnSidecar(opts: SpawnSidecarOpts): Promise<SidecarHandl
     `[sidecar] spawned pid=${pid} (PRELOAD_COQUI=${env.PRELOAD_COQUI}, PRELOAD_QWEN=${env.PRELOAD_QWEN}, PRELOAD_KOKORO=${env.PRELOAD_KOKORO}, modelKey=${modelKey})`,
   );
 
-  /* If the child exits on its own (e.g. start.ps1 venv check failed),
+  /* If the child exits on its own (e.g. start.ps1/start.sh venv check failed),
      surface that as a single warning so the user knows TTS won't be
-     available. The supervisor loop inside start.ps1 already handles
+     available. The supervisor loop inside start.ps1/start.sh already handles
      transient CUDA poison restarts internally; an exit here means
-     start.ps1 itself terminated. */
+     the launcher itself terminated. Use a once-guard so an 'error' event
+     followed by a synthetic 'exit' (or vice-versa) only fires onExit once. */
+  let exitNotified = false;
+  const notifyExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+    if (exitNotified) return;
+    exitNotified = true;
+    onExit?.(code, signal);
+  };
+  /* An async spawn failure (ENOENT: bash/powershell missing) emits 'error', NOT a
+     thrown exception — without this handler it crashes the Node server (the macOS
+     boot crash). Swallow, log once, and route to the supervisor as an exit so it
+     can apply its backoff/respawn policy. */
+  child.once('error', (err) => {
+    warn('[sidecar] spawn error — TTS will be unavailable:', err);
+    notifyExit(null, null);
+  });
   child.once('exit', (code, signal) => {
-    const when = formatTimestamp(new Date());
-    warn(`[sidecar] child exited (code=${code}, signal=${signal}) at ${when}`);
+    warn(`[sidecar] child exited (code=${code}, signal=${signal}) at ${formatTimestamp(new Date())}`);
     /* srv-15 — hand the exit to the supervisor so it can respawn. Plan 43
        moved sidecar ownership to the Node server and start-app.ps1 no longer
        supervises it, so without this a crash / OOM-kill / poison-exit (code
        42) would leave generation permanently stalled. */
-    onExit?.(code, signal);
+    notifyExit(code, signal);
   });
 
   return {
     pid,
     child,
-    kill: () => killTree(pid, spawnFn),
+    kill: () => killTree(pid, spawnFn, true),
   };
 }
