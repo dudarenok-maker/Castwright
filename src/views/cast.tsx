@@ -57,7 +57,7 @@ import { QwenStatusNotice } from '../components/qwen-status-notice';
 import { DesignScopePicker } from '../components/design-scope-picker';
 import { api } from '../lib/api';
 import type { CastDesignScope } from '../store/cast-design-slice';
-import { buildVariantTasks } from '../lib/variant-tasks';
+import { buildVariantTasks, variantWorkCounts } from '../lib/variant-tasks';
 
 interface Props {
   characters: Character[];
@@ -142,9 +142,6 @@ export function CastView({
   /* fs-34 — index used emotions per character ONCE (not per row) for the
      "N tags need a variant" cast-row count. */
   const usedEmotions = useMemo(() => usedEmotionsByCharacter(sentences ?? []), [sentences]);
-  /* fe-32 — demand-driven variant work-list for the scope picker. */
-  const variantTasks = useMemo(() => buildVariantTasks(characters, usedEmotions), [characters, usedEmotions]);
-  const variantCount = useMemo(() => variantTasks.reduce((n, t) => n + t.emotions.length, 0), [variantTasks]);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [query, setQuery] = useState('');
   /* fe-16 — non-English books are Qwen-locked. On entry, eagerly load Qwen so
@@ -242,6 +239,21 @@ export function CastView({
      a Qwen-pinned character. */
   const effectiveEngineFor = (c: Character): TtsEngine => c.ttsEngine ?? ttsEngine;
 
+  /* fe-32 — demand-driven variant work-list for the scope picker, scoped the
+     SAME way the cast rows' "Needs variants" chip is (effective project engine
+     OR a matched Qwen library voice) so the picker count can't disagree with
+     the rows. Counts every emotion character's missing variants; `hasBase`
+     splits the actionable-now total (`readyTasks`) from the work blocked behind
+     a missing base voice (`blockedTasks`/`blockedChars`). */
+  const isQwenForVariants = (c: Character): boolean =>
+    effectiveEngineFor(c) === 'qwen' || findVoiceForCharacter(c, library)?.ttsVoice?.provider === 'qwen';
+  const variantTasks = useMemo(
+    () => buildVariantTasks(characters, usedEmotions, isQwenForVariants),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [characters, usedEmotions, library, ttsEngine],
+  );
+  const variantWork = useMemo(() => variantWorkCounts(variantTasks), [variantTasks]);
+
   /* Status-filter keys for a character, resolved the SAME way the row's
      StatusPill resolves its labels (matched library voice + effective engine)
      so the chips and the rows can't disagree. */
@@ -273,7 +285,8 @@ export function CastView({
      to design, OR while a run for this book is active (so the Cancel control stays
      reachable even after the last row flips and the counts hit 0). */
   const showDesignFullCast =
-    (ttsEngine === 'qwen' && (needsVoiceIds.length > 0 || variantCount > 0)) || designRunningHere;
+    (ttsEngine === 'qwen' && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) ||
+    designRunningHere;
   useEffect(() => {
     if (designRunningHere || designRunningElsewhere) setScopeOpen(false);
   }, [designRunningHere, designRunningElsewhere]);
@@ -291,13 +304,23 @@ export function CastView({
     setScopeOpen(false);
     if (!bookId) return;
     const modelKey = sampleModelKeyForEngine('qwen', ttsModelKey);
+    /* 'variants' alone can only synthesise on top of an existing base, so it
+       ships ONLY the ready (has-base) tasks — the server would silently skip
+       the rest. 'both' designs the bases first, so it ships every task. Strip
+       the UI-only `hasBase` flag before it crosses the API boundary. */
+    const scopedVariantTasks =
+      scope === 'bases'
+        ? []
+        : (scope === 'variants' ? variantTasks.filter((t) => t.hasBase) : variantTasks).map(
+            ({ characterId, emotions }) => ({ characterId, emotions }),
+          );
     dispatch(
       castDesignActions.designAllRequested({
         bookId,
         characterIds: scope === 'variants' ? [] : needsVoiceIds,
         modelKey,
         scope,
-        variantTasks: scope === 'bases' ? [] : variantTasks,
+        variantTasks: scopedVariantTasks,
       }),
     );
   };
@@ -578,7 +601,10 @@ export function CastView({
                     <div className="fixed inset-0 z-40" onClick={() => setScopeOpen(false)} aria-hidden />
                     <DesignScopePicker
                       baseCount={needsVoiceIds.length}
-                      variantCount={variantCount}
+                      variantTotal={variantWork.totalTasks}
+                      variantReady={variantWork.readyTasks}
+                      variantBlocked={variantWork.blockedTasks}
+                      variantBlockedChars={variantWork.blockedChars}
                       onPick={startDesign}
                       onClose={() => setScopeOpen(false)}
                     />
