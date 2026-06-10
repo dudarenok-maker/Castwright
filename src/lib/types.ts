@@ -185,6 +185,14 @@ export interface AppInfo {
   lastSeenAppVersion: string | null;
   showWhatsNew: boolean;
   releaseNotes: string;
+  /* fs-43 — host hardware for the "Will it run on my machine?" panel
+     (server-sourced; optional, absent on an older server). */
+  hardware?: {
+    platform: string;
+    arch: string;
+    appleSilicon: boolean;
+    label: string;
+  };
 }
 
 /* Interim companion-app distribution — availability of the packaged Android

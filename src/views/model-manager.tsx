@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState, type ComponentType } from 'react';
 import { MixedHeading } from '../components/primitives';
+import { DevicePanel } from '../components/device-panel';
 import { useAppDispatch } from '../store';
 import { uiActions } from '../store/ui-slice';
 import {
@@ -65,6 +66,7 @@ export function ModelManagerView() {
       </div>
 
       <div className="space-y-6">
+        <DevicePanel />
         <ModelInventory />
         <ModelSettingsForm />
       </div>

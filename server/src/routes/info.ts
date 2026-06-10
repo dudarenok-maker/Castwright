@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { readFileSync } from 'node:fs';
+import { platform as osPlatform, arch as osArch } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,6 +38,35 @@ function schemaMap(): Record<string, number> {
   // srv-32 — the companion compat-gates the sync-manifest contract off this.
   out.syncManifest = SYNC_MANIFEST_SCHEMA;
   return out;
+}
+
+/* fs-43 — host hardware, for the in-app "Will it run on my machine?" panel.
+   Server-sourced on purpose: the SERVER runs the models, while the browser may
+   be a paired LAN phone, so client-side (navigator) detection would describe
+   the wrong machine. This is the SENSIBLE slice — host platform/arch (incl.
+   Apple Silicon, reliably detectable). The deeper "which torch device is the
+   active engine actually on, incl. mps" ground-truth is side-14. */
+export interface HardwareInfo {
+  platform: string;
+  arch: string;
+  appleSilicon: boolean;
+  label: string;
+}
+
+function detectHardware(): HardwareInfo {
+  const platform = osPlatform(); // 'win32' | 'darwin' | 'linux' | …
+  const arch = osArch(); // 'x64' | 'arm64' | …
+  const appleSilicon = platform === 'darwin' && arch === 'arm64';
+  const label = appleSilicon
+    ? 'Apple Silicon Mac'
+    : platform === 'darwin'
+      ? 'Intel Mac'
+      : platform === 'win32'
+        ? `Windows (${arch})`
+        : platform === 'linux'
+          ? `Linux (${arch})`
+          : `${platform} (${arch})`;
+  return { platform, arch, appleSilicon, label };
 }
 
 function readReleaseNotes(): string {
@@ -75,6 +105,7 @@ infoRouter.get('/', async (_req: Request, res: Response) => {
     lastSeenAppVersion: settings.lastSeenAppVersion ?? null,
     showWhatsNew: settings.showWhatsNew === true,
     releaseNotes: readReleaseNotes(),
+    hardware: detectHardware(),
   });
 });
 
