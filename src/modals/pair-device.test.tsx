@@ -30,4 +30,15 @@ describe('PairDeviceModal (QR redesign)', () => {
     render(<PairDeviceModal open onClose={() => {}} />);
     await waitFor(() => expect(screen.getByTestId('pair-device-error')).toBeInTheDocument());
   });
+
+  it('renders a countdown for the pairing code', async () => {
+    vi.spyOn(api, 'createPairSession').mockResolvedValue({
+      qrPayload: 'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R',
+      hostPort: '192.168.1.5:8443', port: 8443,
+      code: 'K7QF3M2P', fpTag: 'J4XQ2A7BWZ9K3M5R', expiresAt: Date.now() + 300000,
+    });
+    render(<PairDeviceModal open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('pair-code-countdown')).toBeInTheDocument());
+    expect(screen.getByTestId('pair-code-countdown').textContent).toMatch(/expires in \d+:\d{2}/);
+  });
 });
