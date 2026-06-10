@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { MANIFESTO } from '../lib/brand';
 import {
   IconPlay,
   IconPause,
@@ -799,7 +800,7 @@ export function GenerationView({
             {completed} of {activeChapters.length} chapters complete
             {etaSec != null && <> · approx. {formatTime(etaSec)} remaining</>}
           </p>
-          <p className="mt-1 text-sm text-ink/50">Many voices, one machine.</p>
+          <p className="mt-1 text-sm text-ink/50">{MANIFESTO}</p>
           {linesCounter.total > 0 && (
             <p className="mt-1 text-xs text-ink/55 tabular-nums">
               <span className="font-semibold text-ink/75">

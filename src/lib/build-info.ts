@@ -8,6 +8,8 @@
 // `formatBuildStamp` is intentionally pure (no `import.meta`, no globals) so the
 // display logic is unit-testable with plain fixtures.
 
+import { MADE_WITH } from './brand';
+
 export interface BuildInfo {
   version: string;
   sha: string;
@@ -32,7 +34,7 @@ export const buildInfo: BuildInfo = {
  * Prod (minimal): `v1.4.0 (a1b2c3d)` — version + short SHA only.
  */
 export function formatBuildStamp(info: BuildInfo, opts: { dev: boolean }): string {
-  const prefix = 'Made with Castwright';
+  const prefix = MADE_WITH;
   if (!opts.dev) return `${prefix} · v${info.version} (${info.sha})`;
   const sha = info.dirty ? `${info.sha}*` : info.sha;
   const parts = [prefix, `v${info.version}`, sha, info.branch];

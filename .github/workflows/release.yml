@@ -59,6 +59,12 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
 
+      # fe-37 — a hand-cut tag must not publish empty/placeholder user-facing
+      # notes. The committed RELEASE_NOTES.md top section must lead with the tag
+      # version (bump-version.mjs enforces the same gate at tag-creation time).
+      - name: Guard — committed release notes are real
+        run: node scripts/release-notes-gate.mjs "${{ github.ref_name }}"
+
       # `verify:quick` is `test:all` (hooks + frontend + server + scripts +
       # sidecar). Sidecar tests skip with a banner if the venv isn't
       # bootstrapped (which it won't be on a fresh runner — that's fine,

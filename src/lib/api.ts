@@ -4579,6 +4579,7 @@ let mockAppInfo: AppInfo = {
   lastSeenAppVersion: '1.6.0',
   showWhatsNew: false,
   releaseNotes: '# v1.6.0\n\n- In-app upgrades.\n',
+  hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
 };
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);

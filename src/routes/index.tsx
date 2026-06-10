@@ -76,6 +76,9 @@ const AboutView = lazy(() =>
 const AdvancedView = lazy(() =>
   import('../views/advanced').then((m) => ({ default: m.AdvancedView })),
 );
+const ReleaseNotesView = lazy(() =>
+  import('../views/release-notes').then((m) => ({ default: m.ReleaseNotesView })),
+);
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
@@ -345,6 +348,12 @@ function AboutRoute() {
 function AdvancedRoute() {
   useHydrateStage({ kind: 'advanced' }, []);
   return <AdvancedView />;
+}
+
+/* fe-37 — in-app release-notes history, reached from /about + Account. */
+function ReleaseNotesRoute() {
+  useHydrateStage({ kind: 'release-notes' }, []);
+  return <ReleaseNotesView />;
 }
 
 export function ChangelogRoute() {
@@ -946,6 +955,7 @@ export const router = createHashRouter([
       { path: 'models', element: <ModelManagerRoute /> },
       { path: 'about', element: <AboutRoute /> },
       { path: 'advanced', element: <AdvancedRoute /> },
+      { path: 'release-notes', element: <ReleaseNotesRoute /> },
       { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },
       { path: 'books/:bookId/confirm', element: <ConfirmRoute /> },
       { path: 'books/:bookId/:view', element: <ReadyRoute /> },

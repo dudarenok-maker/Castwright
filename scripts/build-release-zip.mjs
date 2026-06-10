@@ -7,34 +7,27 @@
 // Usage:
 //   node scripts/build-release-zip.mjs --version v1.2.3 [--out path] [--dry-run]
 
-import { createWriteStream, mkdirSync, statSync, writeFileSync, copyFileSync, existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { createWriteStream, mkdirSync, statSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, posix, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 
-/* fs-1 — bake RELEASE_NOTES.md at the release root from the annotated tag body
-   (or a passed --notes-file), so GET /api/info can surface it as the in-app
-   what's-new copy. Best-effort: a missing tag/notes falls back to a one-line
-   placeholder rather than failing the build. Returns the path written. */
-export function generateReleaseNotes(version, notesFile) {
+/* fe-37 — RELEASE_NOTES.md is now a COMMITTED, maintained brand-voice
+   multi-version history (it used to be baked from the tag body here). Ship it
+   verbatim: when it exists at the repo root (it always should in a real
+   checkout) leave it untouched so the committed brand history reaches the
+   bundle. Only if it's somehow MISSING do we write a one-line placeholder so the
+   build never hard-fails on a stripped tree. The GitHub release body comes from
+   the tag annotation in release.yml, not from this file; the legacy notesFile
+   argument is accepted but ignored. */
+export function generateReleaseNotes(version, _notesFile) {
   const out = resolve(repoRoot, 'RELEASE_NOTES.md');
-  if (notesFile && existsSync(notesFile)) {
-    copyFileSync(notesFile, out);
-    return out;
+  if (existsSync(out) && readFileSync(out, 'utf8').trim().length > 0) {
+    return out; // committed brand history — ship verbatim, never clobber
   }
-  let body = '';
-  try {
-    body = execFileSync('git', ['tag', '-l', '--format=%(contents)', version], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    }).trim();
-  } catch {
-    body = '';
-  }
-  writeFileSync(out, body || `# ${version}\n\nSee the GitHub release for details.\n`, 'utf8');
+  writeFileSync(out, `# ${version}\n\nSee the GitHub release for details.\n`, 'utf8');
   return out;
 }
 
@@ -317,9 +310,9 @@ async function main() {
   );
   mkdirSync(dirname(outPath), { recursive: true });
 
-  // fs-1 — bake RELEASE_NOTES.md so it's picked up by the manifest walk below.
+  // fe-37 — RELEASE_NOTES.md is committed (brand history); ship it verbatim.
   const notesPath = generateReleaseNotes(args.version, args.notesFile);
-  info(`[NOTES] wrote ${notesPath}`);
+  info(`[NOTES] bundling committed ${notesPath}`);
 
   info(`[SCAN] walking repo from ${repoRoot}`);
   const candidates = await walkRepo();

@@ -38,6 +38,8 @@ export function stageToHash(stage: Stage | null | undefined): string {
       return '#/about';
     case 'advanced':
       return '#/advanced';
+    case 'release-notes':
+      return '#/release-notes';
     case 'analysing':
       return stage.bookId ? `#/books/${stage.bookId}/analysing` : '#/new';
     case 'confirm': {
