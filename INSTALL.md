@@ -84,6 +84,10 @@ cp server/.env.example server/.env
 npm run start:prod
 ```
 
+> **Apple Silicon TTS device**: no configuration needed — the sidecar auto-detects
+> the GPU (`mps`) and falls back to CPU. To force a specific device, set
+> `QWEN_DEVICE=cpu` (or `mps`) in `server/.env`.
+
 Browser opens `http://localhost:8080`.
 
 To stop: `npm run stop:prod`.
@@ -198,7 +202,7 @@ The install bundle ships Kokoro weights for TTS only — the analyzer needs eith
 3. Click **Pull model** and pick e.g. `qwen3.5:4b` (~2.5 GB).
 4. **Account → Defaults for new books → Analysis model** → pick the pulled model. Save.
 
-Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Account tab.
+Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3.5:4b`, then set the model in the Account tab. On macOS, also run `brew services start ollama` so the daemon starts on login and survives reboots (registers a launchd login item).
 
 **Option B — Gemini (cloud, free tier).** Get a key from <https://aistudio.google.com>, paste it into **Account → Server configuration → Gemini API key**. Engine selection follows from the model picker — pick any Gemini model in **Defaults for new books → Analysis model**. Save. The key persists to your per-user settings file `~/.castwright/user-settings.json` (plaintext, same trust model as `server/.env`).
 
