@@ -19,7 +19,9 @@ After install you'll have a single command (`npm run start:prod`) that brings up
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
 - **~3 GB free disk** (Kokoro TTS weights ~1.1 GB, plus the Node modules and Python virtual environment)
-- **NVIDIA GPU + recent drivers** (optional but strongly recommended — Kokoro on CPU is ~10× slower than on a modest GPU)
+- **A GPU is optional but strongly recommended** (Kokoro on CPU is ~10× slower than on a modest GPU):
+  - Windows / Linux: an **NVIDIA GPU + recent drivers** (CUDA).
+  - macOS: **Apple Silicon (M-series)** is used automatically via Metal (`mps`) — no drivers, no CUDA, no config. Intel Macs fall back to CPU.
 
 > **Note for Linux deployers**: validated on Ubuntu 22.04+. The same scripts should work on any glibc Linux with `bash`, `curl`, and the prereqs above. Snap-installed ffmpeg sometimes ends up at `/snap/bin/ffmpeg` instead of `/usr/bin/ffmpeg`; if `which ffmpeg` returns empty after `apt install`, prepend `/snap/bin` to your PATH.
 
@@ -144,7 +146,7 @@ The sidecar logs to `logs/server.log` (the Node server captures sidecar stdout).
 
 ### GPU not detected
 
-Sidecar will fall back to CPU and log it. Verify `nvidia-smi` works at the OS level. Driver mismatches (e.g. CUDA 11.x runtime on a 12.x driver) are the common culprit — reinstall the matching CUDA runtime from <https://developer.nvidia.com/cuda-downloads>.
+Sidecar will fall back to CPU and log it. **On Windows / Linux (NVIDIA):** verify `nvidia-smi` works at the OS level — driver mismatches (e.g. CUDA 11.x runtime on a 12.x driver) are the common culprit; reinstall the matching CUDA runtime from <https://developer.nvidia.com/cuda-downloads>. **On macOS (Apple Silicon):** the GPU is used automatically via Metal — no driver setup is needed, and the sidecar log should show `device=mps`. Force a device with `QWEN_DEVICE=cpu` (or `mps`) in `server/.env` if you need to override the auto-detection.
 
 ### "Cannot find module '../../dist/index.html'"
 
