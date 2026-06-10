@@ -2,17 +2,18 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 
 /* The banner probes GET /api/companion/apk (HEAD) on mount via
-   api.checkCompanionApk, and the Pair-a-device modal fetches GET
-   /api/export/lan via api.getExportLanUrls. Mock both. */
+   api.checkCompanionApk, and the Pair-a-device modal creates a session via
+   api.createPairSession. Mock both. */
 vi.mock('../../lib/api', () => ({
   api: {
     checkCompanionApk: vi.fn(async () => ({ available: false, sizeBytes: null })),
-    getExportLanUrls: vi.fn(async () => ({
-      urls: ['https://192.168.86.20:8443'],
+    createPairSession: vi.fn(async () => ({
+      qrPayload: 'CWP1*192.168.86.20:8443*ABCD1234*TAGABC123',
+      hostPort: '192.168.86.20:8443',
       port: 8443,
-      protocol: 'https',
-      token: 'lan-token',
-      caFingerprint: 'AB:CD:EF',
+      code: 'ABCD1234',
+      fpTag: 'TAGABC123',
+      expiresAt: Date.now() + 300000,
     })),
   },
 }));
