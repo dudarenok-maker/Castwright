@@ -1,9 +1,14 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:crypto/crypto.dart';
 import 'package:castwright/src/data/cert_pinning.dart';
+import 'package:castwright/src/data/crockford_base32.dart';
 
 String pemOf(List<int> der) =>
     '-----BEGIN CERTIFICATE-----\n${base64.encode(der)}\n-----END CERTIFICATE-----\n';
+
+/// Named constant reused by the fingerprintTagMatches test.
+final _testPem = pemOf(List<int>.generate(64, (i) => (i * 7) % 256));
 
 void main() {
   group('cert pinning', () {
@@ -21,6 +26,15 @@ void main() {
       expect(fingerprintsMatch('AB CD EF', 'ab:cd:ef'), isTrue);
       expect(fingerprintsMatch('ab:cd', 'ab:ce'), isFalse);
       expect(fingerprintsMatch('', 'abcd'), isFalse);
+    });
+
+    test('fingerprintTagMatches accepts the first-10-byte tag, case-insensitive', () {
+      final digest = sha256.convert(pemToDer(_testPem)).bytes;
+      final tag = crockfordBase32(digest.sublist(0, 10));
+      expect(tag.length, 16);
+      expect(fingerprintTagMatches(_testPem, tag), isTrue);
+      expect(fingerprintTagMatches(_testPem, tag.toLowerCase()), isTrue);
+      expect(fingerprintTagMatches(_testPem, 'Z' * 16), isFalse);
     });
 
     test('verifyCaFingerprint round-trips: matches its own fingerprint, rejects others', () {
