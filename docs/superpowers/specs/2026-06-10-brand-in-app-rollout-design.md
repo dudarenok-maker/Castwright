@@ -1,7 +1,7 @@
 # Brand-in-app rollout — v1.7.0 wave (design spec)
 
 **Date:** 10 June 2026
-**Status:** draft — awaiting user review before plan
+**Status:** draft — revised after adversarial critical review (assumptions validated vs code)
 **Source plan:** `brand/brand-in-app-plan-2026-06-10.md` (brand-side master, local-only)
 **Brand decisions of record:** `brand/BRAND_CHANGELOG.md` (2026-06-10 entry, v2 of the brand system)
 
@@ -9,104 +9,112 @@
 
 The work to land the 10 June brand decisions *inside the application*, plus the
 gaps the audit found (no real `/about` page, placeholder release notes, no
-single source for brand strings). Scope confirmed with the user as **Must +
-Should** (plan items 1–9). This is a copy / assets / links wave — no visual
-redesign, no backend feature work.
+single source for brand strings, no in-app version history). This is a copy /
+assets / links wave — no visual redesign, no backend feature work.
 
 ## Why now
 
-The SVG brand masters were refreshed on 10 June, but the committed
-`public/og.png` and favicons were rendered from the **pre-refresh** masters. So
-every link preview and browser tab currently ships the *retired* tagline and the
-`.ai` lockup. This isn't cleanup — the app is actively broadcasting dead brand
-until item 3 lands. That item leads the wave.
+The SVG brand masters were refreshed on 10 June, but the committed `public/og.png`
+*and* the `index.html` meta tags *and* `public/manifest.webmanifest` still carry
+the **retired** tagline and the `.ai` lockup. So every link preview, browser tab,
+SEO snippet, and installed-PWA description currently broadcasts dead brand. This
+isn't cleanup — it's stopping live drift. Brand-correctness leads the wave.
 
 ## Decisions of record
 
 Confirmed with the user (10 June):
 
-1. **Scope:** Must + Should (items 1–9).
+1. **Scope:** Must + Should, minus the items the review proved cross-scope (see
+   §"Separate follow-up tracks"). The single coherent PR is frontend/ops/brand.
 2. **/about content outline:** approved as-is (the 7-block table below).
-3. **Brand strings:** single-sourced in a new `src/lib/brand.ts`.
-4. **Release-notes link target:** **in-app**, not a GitHub URL — the repo is
-   still private, so alpha testers can't open a GitHub Releases page. A GitHub
-   link gets added later at the public flip.
-5. **Release-notes register (user direction):** the in-app notes are written in
-   **brand voice for listeners/readers** — benefit-framed, no technical detail,
-   no version-soup. Technical readers go to GitHub. Two registers, two doors.
-6. **Notes are written + shipped in this wave** (user direction) — not merely
-   drafted in this spec. The v1.7.0 notes become real, visible artifacts so the
-   voice can be reviewed in the running app.
-7. **Release gates enforce real notes** (user direction) — placeholder notes must
-   be unable to reach a published release, at both the tag-creation gate
+3. **Brand strings:** single-sourced in a new `src/lib/brand.ts` (for React);
+   static files that can't import it get direct edits + a guard test.
+4. **Release-notes link target:** **in-app**, not a GitHub URL — the repo is still
+   private. GitHub link added later at the public flip.
+5. **Release-notes register:** in-app notes are **brand voice for listeners**;
+   technical readers go to the GitHub release. Two registers, two doors.
+6. **Notes are a multi-version history** (newest-first), so a user jumping
+   1.5.0 → 1.7.0 sees everything between. Backfill **1.5.0** (first full product),
+   **1.6.0**, **1.7.0** in brand voice.
+7. **Notes written + shipped in this wave** — real, visible artifacts, not just a
+   spec draft.
+8. **Release gates enforce real notes** at both the tag-creation gate
    (`bump-version.mjs`) and the publish gate (`release.yml`).
+9. **Device panel (item 7) splits to a separate sidecar-scope follow-up** — the
+   review proved it needs Python changes to be honest (see findings C1).
 
-### Two-register file mapping (the repo already separates them)
+## Critical review findings (10 June) — what changed vs the original plan
 
-| File | Audience / register | Surface | This wave |
-|---|---|---|---|
-| `RELEASE_NOTES.md` | **Users — brand voice** | Bundled in the zip; rendered by the in-app `#/release-notes` route | Replace the `v9.9.9` placeholder with real v1.7.0 brand-voice notes |
-| `docs/release-notes-next.md` | **Technical** (`## Features` headers per CONTRIBUTING) | Fed to `bump-version --notes-file` → tag annotation → GitHub Release body | Complete it: all ~10 v1.7.0 plot points in the technical register |
+Four read-only agents validated every assumption against code. Net: most held,
+the scariest one (runtime notes access) was *already solved*, and three were
+wrong enough to change the plan.
 
-Structural decisions made by default (per repo scope-discipline; flagged for
-override):
+- **C1 — Device panel can't read `mps` (REOPENED as separate track).** `/health`'s
+  `device` field is set **only when Coqui is loaded**, resolves `cuda`/`cpu`
+  **never `mps`**, and Kokoro (the default eager engine) + Qwen report no device.
+  Normal state (Kokoro resident, Coqui idle) → `health.device === null`. An honest
+  panel needs sidecar work (resolve + report the active engine's device incl.
+  `mps` at startup). **User decision: split item 7 to its own sidecar-scope plan.**
+  `server/tts-sidecar/main.py:2536` (`device = coqui._resolved_device if model_loaded else None`),
+  `:914-929` (Qwen `_resolve_torch_device` *does* do `mps`, but isn't reported).
+- **C2 — Multi-version history collides with the pipeline.** `RELEASE_NOTES.md`
+  is **regenerated per-release** by `scripts/build-release-zip.mjs`
+  (`generateReleaseNotes()`) from the **tag annotation** — single version,
+  *technical* register. So (a) an accumulating history would be clobbered each
+  release and (b) users currently see *technical* notes in the What's-New banner.
+  **Fix: decouple** (see item 5). The GitHub release body keeps coming from the
+  tag annotation via `release.yml`; the in-app brand history becomes a committed,
+  hand-maintained file the bundler stops overwriting.
+- **C3 — Three brand-string sites the plan's scan missed**, all the same
+  broadcast problem as `og.png`: `index.html` meta `description` (`:9`) +
+  `og:description` (`:22`); `public/manifest.webmanifest` description (`:4`); and
+  `src/lib/build-info.ts:35` ("Made with Castwright"). The first three are static
+  (no React) → direct edits + a guard test, not a `brand.ts` import. Folded into
+  items 2/3.
+- **C4 — Runtime notes access is already wired (good news).** `GET /api/info`
+  returns `releaseNotes` (server reads `RELEASE_NOTES.md` from disk,
+  `server/src/routes/info.ts:67`); `useAppInfo()` exposes it; `WhatsNewBanner` +
+  `UpgradeCard` already render it. `#/release-notes` just consumes
+  `info.releaseNotes`. **No new endpoint.** The banner currently renders a raw
+  `<pre>` — fine for a stub, ugly for a multi-version history (see item 5).
+- **C5 — Router mechanism is React Router, not just the hash union.** Routes are
+  lazy-mounted in `src/routes/index.tsx` (e.g. `{ path: 'about', element:
+  <AboutRoute/> }` with `useHydrateStage`). Adding `release-notes` = `Stage` union
+  + `stageToHash` case + a lazy route + `useHydrateStage`. Proven pattern, ~4
+  small touch-points.
 
-- **A — Two PRs.** Items 1–8 are `frontend`/`ops` scope → one integration branch
-  `feat/frontend-brand-v2-rollout`, verified once, one PR. **Item 9 is Flutter
-  (`app` scope)** → a separate timeboxed audit branch that opens its own
-  follow-up only if it finds breaches. The frontend wave does not block on it.
-- **B — In-app notes mechanism.** A new `#/release-notes` route (registered in
-  the router grammar beside `about`/`advanced`/`models`) renders the bundled
-  `RELEASE_NOTES.md`, linked from *Account → Application updates* and the
-  `/about` "What's new" block.
+## The work, in landing order (one PR: frontend/ops/brand)
 
-## Grounding facts (verified against the repo, 10 June)
+`brand.ts` (item 2) lands **first** so later items diff against constants. Item 3
+(assets + static brand strings) is most urgent by impact and runs in parallel.
 
-- Old tagline is live in `src/views/about.tsx:23`, verbatim as the audit reported.
-- New binding tagline (`…kept true, kept yours, book after book`) and all v2
-  rules are locked in `BRAND_CHANGELOG.md`.
-- Both asset masters exist: `brand/castwright-og.svg`, `brand/castwright-glyph.svg`.
-- Both release-notes files are placeholders: `RELEASE_NOTES.md` = `v9.9.9` stub;
-  `docs/release-notes-next.md` covers only fs-42.
-- Current version is **1.6.0** (`package.json`); the notes target **1.7.0**.
-  **The actual `1.6.0 → 1.7.0` tag is a separate release act, not part of this
-  PR** — this wave drafts the notes and adds the bump guard.
-- Item 7's device signal already exists: the sidecar `/health` returns a
-  `device` field (`cuda`/`mps`/`cpu`), surfaced by `probeSidecarHealth()` as
-  `result.device` (`server/src/routes/sidecar-health.ts`). No new endpoint.
-  (`server/src/routes/devices.ts` is a name-collision — companion tokens, not
-  hardware.)
-- Router grammar (`src/lib/router.ts`) already cases `about`/`advanced`/`models`;
-  `release-notes` slots in the same way.
-- `scripts/bump-version.mjs` already accepts `--notes-file <path>` and, when
-  absent, tags with a **placeholder annotation** behind only a soft `[NOTE]`
-  reminder — no hard gate. `--cleanup=verbatim` preserves `##` section headers.
-- `.github/workflows/release.yml` reads the tag annotation (`%(contents)`) into
-  `release/tag-notes.md` and publishes it as the GitHub Release body; a comment
-  concedes "the body will be brief — that's expected" for placeholder tags.
-  No step currently rejects placeholder notes.
-
-## The work, in landing order (one PR, items 1–8)
-
-`brand.ts` (item 2) lands **first** in the branch so every later item diffs
-against constants, not string literals — this keeps snapshot churn contained.
-Item 3 (assets) is the most urgent by impact and can land in parallel.
-
-### Item 2 — `src/lib/brand.ts` (single source)
+### Item 2 — `src/lib/brand.ts` (single source) + static-site sweep
 Export `TAGLINE`, `TAGLINE_SHORT` ("Any book, fully cast."), `MANIFESTO`,
-`TEASER` plus its mandatory in-development flag text, and `DOMAIN`. Refactor the
-six current literals (`about.tsx`, `library-empty-states.tsx`, `upload.tsx`,
-`analysing.tsx`, `generation.tsx`, the share modals) to import them. Tests assert
-against the constants, never against copied strings.
+`TEASER` (+ its mandatory in-development flag text), `DOMAIN`. Refactor the
+verified React literal sites to import them:
+`about.tsx`, `library/library-empty-states.tsx:16`, `upload.tsx:221`,
+`analysing.tsx:985`, `generation.tsx:802`, `modals/share-clip.tsx:340`,
+`modals/share-link.tsx:172`. **Static sites that can't import** (C3) get direct
+edits: `index.html:9,22`, `public/manifest.webmanifest:4`. Decide whether the
+build-info stamp prefix (`build-info.ts:35`) stays literal (it's "Made with
+Castwright", not a retired string — likely leave, but route through `brand.ts`
+for consistency). Tests assert against constants, never copied strings.
 *Benefit (architectural):* the next brand change is a one-line diff.
 
-### Item 3 — re-render public assets
-Re-run `scripts/render-brand-pngs.mjs` against the corrected
-`brand/castwright-og.svg`; extend it to render `favicon-16/32` (and the shipped
-`favicon.svg`) from `brand/castwright-glyph.svg` per the ≤32px rule; larger icons
-stay on the full mark. Verify Android launcher icons are untouched (source
-unchanged).
-*Benefit (brand):* retired copy stops shipping in every share + tab.
+### Item 3 — public assets (hand-designed favicons) + fix static brand copy
+**The favicons are hand-designed by the user** — `public/favicon-16.png`,
+`favicon-32.png`, `favicon.svg` are committed as provided (plus a refreshed
+`public/og.png`), NOT rendered from the glyph. Therefore **reconcile
+`scripts/render-brand-pngs.mjs` so a future re-run can't clobber them**: remove
+(or guard) the `favicon-16/32` JOBS, and the `og.png` JOB if the committed file
+is bespoke rather than a faithful render of `brand/castwright-og.svg` (verify
+during implementation — if a fresh render reproduces it byte-for-byte, the JOB
+can stay; otherwise drop it). The `icon-512/192`, `apple-touch`, and Android
+launcher JOBS stay on `castwright-icon.svg` (unchanged master). Pair with the C3
+static-copy fixes (same broadcast problem). Add a render-script test asserting it
+no longer writes the hand-designed favicon paths.
+*Benefit (brand):* retired copy stops shipping in shares, tabs, SEO, and the PWA;
+the hand-designed favicons survive future asset re-renders.
 
 ### Item 1 — rebuild `/about`
 Approved 7-block order:
@@ -119,118 +127,130 @@ Approved 7-block order:
 | Credits | "Voices by Kokoro, Coqui XTTS and Qwen3-TTS" — named + linked | guidelines §3 |
 | Licence | One line: source-available (FSL-1.1-Apache-2.0), link to LICENSE/NOTICE | repo LICENSE |
 | What's new | version + sha (exists) **+ link to `#/release-notes`** | build-info + item 5 |
-| Alpha ask | The narrative's call: more testers, esp. Apple Silicon / non-NVIDIA, with the contact/issues path | `project-narrative.md` |
+| Alpha ask | More testers, esp. Apple Silicon / non-NVIDIA, with the contact/issues path | `project-narrative.md` |
 
-*Benefit (user/brand):* the only in-product explanation of the product stops
-being a stub, and the teaser stops breaching its own honesty rule.
+*Benefit (user/brand):* the only in-product explanation stops being a stub, and
+the teaser stops breaching its own honesty rule.
 
 ### Item 4 — neutral tokens
 Add the six §5 neutrals to `src/styles.css` (`--ink-soft #4A4440`,
 `--ink-mute #5A534E`, `--line #D9CFC7`, `--line-soft #EEE2DA`,
-`--canvas-mute #CFC8C2`, `--peach-ink #5A2417`) and reference them from
-`tailwind.config.ts`; sweep component code for hardcoded near-greys that should
-adopt them.
+`--canvas-mute #CFC8C2`, `--peach-ink #5A2417`); reference from
+`tailwind.config.ts`; sweep hardcoded near-greys that should adopt them.
 *Benefit (technical):* closes guidelines §9 open item; one neutral vocabulary.
 
-### Item 5 — release notes, written + linked + gated
-1. **Write `RELEASE_NOTES.md`** with the real v1.7.0 **brand-voice** notes
-   (listener audience, outcomes not mechanics) — shipped in this wave so they're
-   visible in-app immediately. Draft below for voice review.
-2. **Complete `docs/release-notes-next.md`** with the full ~10-point v1.7.0
-   changelog in the **technical** register (`## Features` headers per
-   CONTRIBUTING) — this is the GitHub Release body source, not user-facing.
-3. **`#/release-notes` route** renders the bundled `RELEASE_NOTES.md`; "What's
-   new" links it from *Account → Application updates* and `/about`.
-4. **Release gate, two points:**
-   - `bump-version.mjs` — refuse to tag a real release when `RELEASE_NOTES.md`
-     is still the placeholder, or when no real `--notes-file` is supplied
-     (the soft `[NOTE]` reminder becomes a hard pre-flight failure). `--dry-run`
-     and an explicit escape hatch (`--force`) remain.
-   - `release.yml` — add a guard step that fails the publish if the resolved
-     notes (`tag-notes.md` and/or the bundled `RELEASE_NOTES.md`) are a
-     placeholder, so a hand-cut tag bypassing `bump-version.mjs` still can't
-     publish empty notes.
-*Benefit (user):* testers see what changed without archaeology; the update flow
-stops dead-ending. *Benefit (release-safety):* a placeholder can no longer reach
-a published release by any path.
+### Item 5 — release notes: multi-version, brand voice, linked, gated, decoupled
 
-#### Draft — in-app v1.7.0 notes (for voice review)
+**Two-register file mapping (decoupled per C2):**
+
+| File | Audience | Surface | This wave |
+|---|---|---|---|
+| `RELEASE_NOTES.md` (committed, **maintained**, multi-version, newest-first) | **Users — brand voice** | `GET /api/info` → `useAppInfo()` → `#/release-notes` + What's-New banner + Upgrade dialog | Replace stub with brand-voice **1.7.0 + 1.6.0 + 1.5.0** entries |
+| `docs/release-notes-next.md` (technical, `## Features`) | **Technical** | `bump-version --notes-file` → tag annotation → GitHub Release body | Complete the v1.7.0 technical changelog |
+
+Work:
+1. **Write `RELEASE_NOTES.md`** as a newest-first, multi-version brand-voice
+   history (1.7.0/1.6.0/1.5.0). Ships in this wave → visible in-app immediately.
+   Draft below for voice review.
+2. **Complete `docs/release-notes-next.md`** with the full ~10-point v1.7.0
+   changelog in the technical register.
+3. **Decouple the bundler (C2):** edit `scripts/build-release-zip.mjs` so it
+   **stops regenerating** `RELEASE_NOTES.md` from the tag annotation — the
+   committed brand file ships as-is. The GitHub body still derives from the tag
+   annotation in `release.yml` (unchanged).
+4. **`#/release-notes` route** (C5) renders `info.releaseNotes` as a readable
+   multi-version history (markdown, not raw `<pre>`); "What's new" links it from
+   *Account → Application updates* and `/about`. The What's-New **banner** shows
+   only the latest entry (top section), full history at the route.
+5. **Release gate, two points:**
+   - `bump-version.mjs` — refuse to tag a real release unless `RELEASE_NOTES.md`'s
+     **top entry matches the new version** and isn't the placeholder, and a real
+     `--notes-file` is supplied. `--dry-run` / `--force` remain escape hatches.
+   - `release.yml` — guard step fails the publish if the resolved notes are a
+     placeholder, so a hand-cut tag bypassing `bump-version.mjs` still can't ship
+     empty notes.
+*Benefit (user):* multi-version testers see the whole story without archaeology.
+*Benefit (release-safety):* a placeholder can't reach a published release by any path.
+
+#### Draft — in-app brand-voice notes (for voice review)
 
 > **Castwright 1.7.0**
+> - **It runs on a Mac now.** Apple Silicon is a first-class home for Castwright —
+>   it finds your Mac's graphics on its own, no setup, no drivers. (Intel Macs
+>   work too, just slower.)
+> - **Your whole cast can act.** Design expressive, emotion-aware voices for every
+>   character in one pass — not just your leads — and each performance stays true
+>   from the first chapter to the last.
+> - **Long books you can walk away from.** Big manuscripts ride out the rough
+>   patches on their own and keep going, so a full performance finishes while
+>   you're elsewhere.
+> - **Take your library with you.** Pair your phone in one scan and listen
+>   offline, with chapters, progress and speed that follow you.
+> - **Smaller things that add up.** Smarter cover search, cleaner exports, and a
+>   new place to tune the finer settings.
 >
-> **It runs on a Mac now.** Apple Silicon is a first-class home for Castwright —
-> it finds your Mac's graphics on its own, no setup, no drivers. (Intel Macs
-> work too, just slower.)
+> **Castwright 1.6.0**
+> - **Voices that remember.** Characters keep the same voice across a whole
+>   series, so book two sounds like book one.
+> - **A library that makes sense.** Your books group by author and series, with
+>   covers, so a growing shelf stays easy to navigate.
+> - *(fill from the 1.6.0 plot points — brand voice, outcomes only)*
 >
-> **Your whole cast can act.** Design expressive, emotion-aware voices for every
-> character in one pass — not just your leads. Each performance stays true from
-> the first chapter to the last.
->
-> **Long books you can walk away from.** Big manuscripts now ride out the rough
-> patches on their own and keep going, so a full performance finishes while
-> you're doing something else.
->
-> **Take your library with you.** Pair your phone in one scan and listen
-> offline, with chapters, progress and playback speed that follow you.
->
-> **Smaller things that add up.** Smarter cover search, cleaner exports, and a
-> new place to tune the finer settings when you want to.
+> **Castwright 1.5.0 — the first full Castwright**
+> - **Any book, performed by a full cast.** Turn a manuscript into a full-cast
+>   performance — every character its own voice, start to finish.
+> - **Your book never leaves the house.** Everything runs on your own machine.
+> - *(fill from the 1.5.0 baseline — this is the foundational release)*
 
-*Voice notes:* no "effortlessly"/"seamless"; "performed"/"perform" not
-"narrate"; outcomes over mechanics; licensing/CLA/repo-paperwork plot points are
-deliberately **omitted** (not user-facing — they live in the GitHub changelog).
+*Voice notes:* no "effortlessly"/"seamless"; "performed"/"perform" not "narrate";
+outcomes over mechanics; licensing/CLA/repo-paperwork omitted (GitHub-only).
+**1.6.0 / 1.5.0 bullets to be completed from the changelog/narrative during
+implementation — voice register reviewed here.**
 
-### Item 7 — "Will it run on my machine?" device panel
-A small panel (first-run / Account → Models) showing the detected device read
-from `health.device` (CUDA / `mps` / CPU) with the honest per-platform line
-("a gaming PC or laptop with an 8 GB GPU, or any Apple Silicon Mac"). Audit the
-in-app GPU-not-detected error strings for NVIDIA-only phrasing.
-*Benefit (user):* filters support pain before it arrives.
+### Item 6 — verification gate (woven through)
+Paired tests per repo discipline: `about.test.tsx` to the new content; brand
+coverage asserts the new tagline everywhere via `brand.ts`; **a guard test that
+no retired tagline survives anywhere** incl. `index.html` + `manifest.webmanifest`
+(C3); teaser-flag unit test; og/favicon regenerated (hash/dimension check);
+neutrals present in `styles.css`; `#/release-notes` renders the history.
+**Release-gate tests** in `scripts/tests/bump-version.test.mjs`: placeholder /
+version-mismatch rejected, real notes pass; `release.yml` guard gets a
+unit-testable placeholder-detection predicate + test. End on `npm run verify`.
 
 ### Item 8 — teaser governance test
-A grep-style test: any rendered occurrence of "Even in your own voice" must carry
-the in-development flag within the same component. Inverts when fs-38 ships (flag
-must then be *gone*).
-*Benefit (brand):* the teaser rule survives contributors who never read the guidelines.
+A test: any rendered "Even in your own voice" must carry the in-development flag
+within the same component. Inverts when fs-38 ships (flag must then be gone).
+Cheap, frontend-only — stays in this wave.
 
-### Item 6 — verification gate (woven through, not a final step)
-Paired tests per repo discipline: `about.test.tsx` updated to the new content;
-brand coverage asserts the new tagline everywhere via `brand.ts`; teaser-flag
-unit test; og/favicon regenerated (hash or dimension check in the render
-script's test); neutrals present in `styles.css`; `#/release-notes` renders.
-**Release-gate tests** (extend `scripts/tests/bump-version.test.mjs`): the
-placeholder guard rejects a tag when `RELEASE_NOTES.md` is the stub / no real
-notes file; a real notes file passes. The `release.yml` guard step gets a
-unit-testable predicate (placeholder-detection helper) with its own test. End on
-`npm run verify` green.
+## Separate follow-up tracks (own scope, own PR)
 
-## Separate track (item 9 — `app` scope, own PR)
-
-Timebox to ~1 hour: audit the Flutter companion's surfaces (pairing, library,
-player) against the same checklist — tagline / short-form usage, no `.ai` in
-lockups, engine credits where voices are shown. Scope of any fix is unknown
-until audited; the audit's findings become a follow-up issue, not part of the
-frontend wave.
+- **Item 7 — device panel (`sidecar` + frontend).** Needs sidecar work first
+  (C1): resolve + report the active engine's device incl. `mps` at startup,
+  regardless of load state, with pytest; Node passthrough; then the frontend
+  panel + the NVIDIA-only error-string audit. Own plan/issue; not in this wave.
+- **Item 9 — companion-app brand audit (`app`).** Timebox ~1h: audit Flutter
+  surfaces (pairing/library/player) for tagline/short-form, no `.ai` in lockups,
+  engine credits. Findings → follow-up issue. Own branch.
 
 ## Out of scope for this wave
 
-castwright.ai website (com-6), Cast Pass surfaces (com-1), sonic-asset production
-(§8), the actual 1.7.0 version tag, and any visual redesign.
+castwright.ai website (com-6), Cast Pass surfaces (com-1), sonic assets (§8), the
+actual 1.7.0 version tag, and any visual redesign.
 
 ## Risks
 
 | Risk | Mitigation |
 |---|---|
-| OG/favicon regeneration drifts from SVG masters again | The render script is the only path (item 3); one documented command |
+| Asset/static brand copy drifts from SVG masters again | Render script is the only path (item 3); C3 static fixes + the item-6 no-retired-tagline guard test |
 | Teaser flag dropped in a future refactor | Item 8's test |
-| Release-notes link 404s before a GitHub release exists | In-app route sidesteps it entirely; GitHub link deferred to public flip |
-| String refactor churns snapshots | `brand.ts` lands first so later items diff against constants |
-| In-app notes drift back toward a technical changelog | Voice notes in item 5 + review of the draft above before build |
-| Placeholder notes reach a published release | Two-point gate (item 5.4): `bump-version.mjs` pre-flight + `release.yml` guard step, each with a test |
+| Release-notes link 404s before a GitHub release | In-app route sidesteps it; GitHub link deferred to public flip |
+| String refactor churns snapshots | `brand.ts` lands first |
+| In-app notes drift back to a technical changelog | Voice notes + draft review (item 5) |
+| Placeholder/wrong-version notes reach a release | Two-point gate (item 5.5), each with a test |
+| Bundler re-clobbers the committed brand notes | Item 5.3 removes the regeneration; a test pins that `build-release-zip` ships the committed file verbatim |
 
 ## Repo-convention conversion
 
-When this converts to execution: each frontend item maps to an `fe-`/`ops-`
-GitHub issue with a thin `docs/BACKLOG.md` row, and the wave gets one
-`docs/features/` regression plan (per CLAUDE.md). Item 9 gets its own `app`-scope
-issue.
+Each frontend item → an `fe-`/`ops-` issue + thin `docs/BACKLOG.md` row; one
+`docs/features/` regression plan for the wave. Item 7 → its own `sidecar`-scope
+issue; item 9 → its own `app`-scope issue.
