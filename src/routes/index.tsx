@@ -151,6 +151,48 @@ export function BooksRoute() {
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
       }}
+      onReplaceManuscript={async (b, file) => {
+        let result;
+        try {
+          result = await api.replaceManuscript(b.bookId, file);
+        } catch (err) {
+          showError(`Couldn't replace "${b.title}"`, (err as Error).message, 'Replace');
+          return;
+        }
+        /* Server wiped cast.json + revisions + audio + cache — mirror the
+           reparse handler's redux reset so a stale open-book view can't show
+           pre-replace state. */
+        dispatch(castActions.setCharacters([]));
+        dispatch(manuscriptActions.reset());
+        if (bookId === b.bookId) dispatch(uiActions.goHome());
+        const refreshed = await api.getLibrary().catch(() => null);
+        if (refreshed) dispatch(libraryActions.hydrate(refreshed));
+        showInfo({
+          eyebrow: 'Replace',
+          title: 'Manuscript replaced',
+          body: (
+            <p>
+              Re-detected {result.chapterCount} chapter
+              {result.chapterCount === 1 ? '' : 's'}. Designed voices were preserved where
+              characters still match — confirm the cast again before generating.
+            </p>
+          ),
+          primaryLabel: 'Open book',
+          onPrimary: () => {
+            const target =
+              refreshed?.authors
+                .flatMap((a) => a.series.flatMap((s) => s.books))
+                .find((book) => book.bookId === b.bookId) ?? b;
+            dispatch(
+              uiActions.openBook({
+                id: target.bookId,
+                status: 'analysing',
+                manuscriptId: target.manuscriptId,
+              }),
+            );
+          },
+        });
+      }}
       onReparseBook={async (b) => {
         let result;
         try {

@@ -11,7 +11,8 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { mkdir, readFile, readdir, rm, rmdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, rmdir, writeFile, unlink } from 'node:fs/promises';
+import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
@@ -59,6 +60,22 @@ import {
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 export const bookStateRouter = Router();
+
+const manuscriptUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
+
+/* On-disk extension for each parsed manuscript format. Mirrors import.ts's
+   EXT_BY_FORMAT so a replaced manuscript keeps the canonical "manuscript.<ext>"
+   name. */
+const REPLACE_EXT_BY_FORMAT: Record<string, string> = {
+  markdown: 'md',
+  plaintext: 'txt',
+  epub: 'epub',
+  pdf: 'pdf',
+  mobi: 'mobi',
+};
 
 /* Denormalise the bespoke (qwen) voice onto any REUSED character before the
    cast persist (srv-14). The auto-match apply path stamps `matchedFrom` +
@@ -723,6 +740,149 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
   }
 });
 
+/* Shared post-parse core for reparse + replace-manuscript. Given a freshly
+   parsed manuscript, regenerates the chapter list, snapshots the srv-13
+   reuse/voice carryover, wipes the now-stale analysis cache / cast / audio,
+   reconciles manuscript-edits (via the GET-side merge — the file is left in
+   place here), appends a change-log entry, refreshes the in-memory
+   ManuscriptRecord, and returns the response payload both routes send.
+
+   The caller is responsible for everything BEFORE this point: locating the
+   book, getting the manuscript bytes onto disk (or confirming they're there),
+   updating state.manuscriptFile if the file changed, and parsing. */
+async function applyReparse(
+  bookDir: string,
+  state: BookStateJson,
+  parsed: Awaited<ReturnType<typeof parseManuscript>>,
+  opts: { changeLogType: string; changeLogTitle: string },
+) {
+  const existingEdits = await readJson<{ sentences?: unknown[] }>(
+    manuscriptEditsJsonPath(bookDir),
+  );
+  const preservedEditCount = Array.isArray(existingEdits?.sentences)
+    ? existingEdits!.sentences!.length
+    : 0;
+
+  const prevExcludedIds = new Set<number>(
+    state.chapters.filter((c) => c.excluded).map((c) => c.id),
+  );
+  const prevExcludedSlugs = new Set<string>(
+    state.chapters.filter((c) => c.excluded).map((c) => c.slug),
+  );
+  const newChapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
+    const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
+    const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
+    return {
+      id: c.id,
+      title: c.title,
+      slug: newSlug,
+      duration: '00:00',
+      excluded: carryover ? true : undefined,
+    };
+  });
+
+  const nextState: BookStateJson = {
+    ...state,
+    chapters: newChapters,
+    chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    castConfirmed: false,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
+
+  const carryoverPath = castReuseCarryoverJsonPath(bookDir);
+  const existingCast = await readJson<{
+    characters?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
+  }>(castJsonPath(bookDir));
+  const reuseRows = (existingCast?.characters ?? [])
+    .filter((c) => typeof c.id === 'string')
+    .map((c) => {
+      const row: Record<string, unknown> = { id: c.id, name: c.name };
+      if (c.aliases !== undefined) row.aliases = c.aliases;
+      for (const key of PRESERVED_VOICE_FIELDS) {
+        if (c[key] !== undefined) row[key] = c[key];
+      }
+      return row;
+    });
+  if (reuseRows.length) {
+    await writeJsonAtomic(carryoverPath, { characters: reuseRows });
+  } else if (existsSync(carryoverPath)) {
+    await rm(carryoverPath, { force: true });
+  }
+
+  const ad = audioDir(bookDir);
+  await Promise.all([
+    clearAnalysisCache(state.manuscriptId),
+    existsSync(castJsonPath(bookDir))
+      ? rm(castJsonPath(bookDir), { force: true })
+      : Promise.resolve(),
+    existsSync(revisionsJsonPath(bookDir))
+      ? rm(revisionsJsonPath(bookDir), { force: true })
+      : Promise.resolve(),
+    existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
+  ]);
+
+  if (preservedEditCount > 0) {
+    const logPath = changeLogJsonPath(bookDir);
+    const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
+    const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
+    const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
+    const noun = preservedEditCount === 1 ? 'edit' : 'edits';
+    const newEntry = {
+      id: nextId,
+      at: new Date().toISOString(),
+      ts: 'Just now',
+      date: 'today',
+      type: opts.changeLogType,
+      title: opts.changeLogTitle,
+      note: `Preserved ${preservedEditCount} manuscript ${noun}; ids will be reconciled against the next analysis run.`,
+      actor: 'system',
+    };
+    await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
+  }
+
+  const newExcludedById = new Map<number, boolean>();
+  for (const c of newChapters) {
+    if (c.excluded) newExcludedById.set(c.id, true);
+  }
+  const sourceText = parsed.sourceText;
+  const record: ManuscriptRecord = {
+    manuscriptId: state.manuscriptId,
+    format: parsed.format,
+    title: state.title,
+    wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
+    byteSize: Buffer.byteLength(sourceText, 'utf8'),
+    uploadedAt: state.createdAt,
+    sourceText,
+    chapterHints: parsed.chapters.map((c) => ({
+      ...c,
+      excluded: newExcludedById.get(c.id) || undefined,
+    })),
+    bookId: state.bookId,
+    bookDir,
+  };
+  putManuscript(record);
+
+  const wordCountByChapterId = new Map<number, number>();
+  for (const c of parsed.chapters) {
+    const body = (c.body ?? '').trim();
+    wordCountByChapterId.set(c.id, body ? body.split(/\s+/).filter(Boolean).length : 0);
+  }
+
+  return {
+    state: nextState,
+    chapterCount: newChapters.length,
+    chapterTitles: newChapters.map((c) => c.title),
+    chapters: newChapters.map((c) => ({
+      id: c.id,
+      title: c.title,
+      slug: c.slug,
+      wordCount: wordCountByChapterId.get(c.id) ?? 0,
+      excluded: !!c.excluded,
+    })),
+  };
+}
+
 /* POST /api/books/:bookId/reparse — re-runs the parser against the on-disk
    manuscript so chapter detection picks up parser-rule updates without
    forcing the user to delete and re-upload. Destructive in the sense that
@@ -750,17 +910,6 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
         .status(409)
         .json({ error: `Manuscript file missing on disk: ${state.manuscriptFile}` });
     }
-
-    /* Snapshot the edits file count BEFORE we clear analysis cache so the
-       change-log entry below can summarise what's carrying forward. We don't
-       touch the edits file itself — the GET-side merge reconciles ids on the
-       next book-state read once a fresh analysis populates the cache. */
-    const existingEdits = await readJson<{ sentences?: unknown[] }>(
-      manuscriptEditsJsonPath(bookDir),
-    );
-    const preservedEditCount = Array.isArray(existingEdits?.sentences)
-      ? existingEdits!.sentences!.length
-      : 0;
 
     /* Read the original file as a Buffer so the parser dispatcher can route
        binary formats (PDF, EPUB) the same way the upload route does. The
@@ -803,178 +952,64 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       });
     }
 
-    /* Replace the chapter list with whatever the parser produced. Slugs are
-       regenerated from the new titles so the audio dir layout stays in
-       lockstep. Old audio files (if any) become orphaned and get removed
-       below — keeping them would mislead the library into reporting wrong
-       completed counts.
-
-       Preserve the user's per-chapter excluded flag across re-parse.
-       Re-parsing the same manuscript usually produces the same id-to-
-       chapter mapping (the parser is deterministic), so id-match is
-       the primary key. Slug-match acts as a tie-breaker when the
-       parser changed numbering (e.g. a heading rule update merged two
-       sections) but the new side still has a chapter whose title-derived
-       slug matches an old excluded one. New chapters default to included. */
-    const prevExcludedIds = new Set<number>(
-      state.chapters.filter((c) => c.excluded).map((c) => c.id),
-    );
-    const prevExcludedSlugs = new Set<string>(
-      state.chapters.filter((c) => c.excluded).map((c) => c.slug),
-    );
-    const newChapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
-      const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
-      const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
-      return {
-        id: c.id,
-        title: c.title,
-        slug: newSlug,
-        duration: '00:00',
-        excluded: carryover ? true : undefined,
-      };
+    const payload = await applyReparse(bookDir, state, parsed, {
+      changeLogType: 'reparse',
+      changeLogTitle: 'Re-parsed manuscript',
     });
-
-    const nextState: BookStateJson = {
-      ...state,
-      chapters: newChapters,
-      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-      castConfirmed: false, // cast keys to chapters; force re-confirm.
-      updatedAt: new Date().toISOString(),
-    };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), nextState);
-
-    /* srv-13 — snapshot the cast's reuse/voice slice BEFORE deleting cast.json
-       so the next analysis can carry continuity forward. cast.json itself is
-       still deleted (clean slate for chapter-keyed chapterCast / drift), but
-       the carryover file resurrects matchedFrom / voiceId / voiceState /
-       designed voice / notLinkedTo / aliases at the next analysis's
-       priorCastForMerge fallback. Always rewrite from the CURRENT cast so a
-       pre-reparse manual unlink isn't resurrected; clear a stale carryover when
-       there's nothing to preserve. */
-    const carryoverPath = castReuseCarryoverJsonPath(bookDir);
-    const existingCast = await readJson<{
-      characters?: Array<{ id?: string; name?: string } & Record<string, unknown>>;
-    }>(castJsonPath(bookDir));
-    const reuseRows = (existingCast?.characters ?? [])
-      .filter((c) => typeof c.id === 'string')
-      .map((c) => {
-        const row: Record<string, unknown> = { id: c.id, name: c.name };
-        if (c.aliases !== undefined) row.aliases = c.aliases;
-        for (const key of PRESERVED_VOICE_FIELDS) {
-          if (c[key] !== undefined) row[key] = c[key];
-        }
-        return row;
-      });
-    if (reuseRows.length) {
-      await writeJsonAtomic(carryoverPath, { characters: reuseRows });
-    } else if (existsSync(carryoverPath)) {
-      await rm(carryoverPath, { force: true });
-    }
-
-    /* Wipe the analysis cache and any per-book state that's now stale.
-       Audio dir is removed wholesale; cast.json + revisions.json are deleted
-       so the cast view re-runs voice matching against the fresh chapter list
-       and stale drift events don't survive a reshuffle. manuscript-edits.json
-       is intentionally kept — its sentence ids are filtered against the next
-       analysis cache on GET, so surviving edits carry their characterId to
-       the new sentence list and the rest fall away.
-       Run the four cleanup operations in parallel — they're independent
-       (different files) and on a book with a chapter-full audio dir +
-       a fat cache file this serialised loop was tacking 100-300ms onto
-       the reparse latency. */
-    const ad = audioDir(bookDir);
-    await Promise.all([
-      clearAnalysisCache(state.manuscriptId),
-      existsSync(castJsonPath(bookDir))
-        ? rm(castJsonPath(bookDir), { force: true })
-        : Promise.resolve(),
-      existsSync(revisionsJsonPath(bookDir))
-        ? rm(revisionsJsonPath(bookDir), { force: true })
-        : Promise.resolve(),
-      existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
-    ]);
-
-    /* Append a change-log entry summarising what carried forward. The note
-       reads naturally in the Activity view; entries with no edits to preserve
-       are skipped so a vanilla reparse on a fresh book doesn't clutter the
-       log. */
-    if (preservedEditCount > 0) {
-      const logPath = changeLogJsonPath(bookDir);
-      const existingLog = await readJson<{ events?: Array<{ id?: number }> }>(logPath);
-      const prior = Array.isArray(existingLog?.events) ? existingLog!.events! : [];
-      const nextId = prior.reduce((m, e) => Math.max(m, e?.id ?? 0), 0) + 1;
-      const noun = preservedEditCount === 1 ? 'edit' : 'edits';
-      const newEntry = {
-        id: nextId,
-        at: new Date().toISOString(),
-        ts: 'Just now',
-        date: 'today',
-        type: 'reparse',
-        title: 'Re-parsed manuscript',
-        note: `Preserved ${preservedEditCount} manuscript ${noun}; ids will be reconciled against the next analysis run.`,
-        actor: 'system',
-      };
-      await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
-    }
-
-    /* Refresh the in-memory ManuscriptRecord so a follow-up analysis run
-       sees the new chapter bodies, not the cached pre-reparse copy.
-       Carry the (preserved) excluded flag from the new state so the
-       analysis route's skip path fires correctly without a separate
-       hydrate. */
-    const newExcludedById = new Map<number, boolean>();
-    for (const c of newChapters) {
-      if (c.excluded) newExcludedById.set(c.id, true);
-    }
-    const sourceText = parsed.sourceText;
-    const record: ManuscriptRecord = {
-      manuscriptId: state.manuscriptId,
-      format: parsed.format,
-      title: state.title,
-      wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
-      byteSize: Buffer.byteLength(sourceText, 'utf8'),
-      uploadedAt: state.createdAt,
-      sourceText,
-      chapterHints: parsed.chapters.map((c) => ({
-        ...c,
-        excluded: newExcludedById.get(c.id) || undefined,
-      })),
-      bookId: state.bookId,
-      bookDir,
-    };
-    putManuscript(record);
-
-    /* Per-chapter wordCount lets the re-parse dialog auto-suggest
-       front/back-matter exclusion against the *new* chapter list —
-       the parser may have re-split sections in ways that flip what's
-       short or what's recognised by title. parsed.chapters carries
-       the body verbatim from the parser; word count is cheap. */
-    const wordCountByChapterId = new Map<number, number>();
-    for (const c of parsed.chapters) {
-      const body = (c.body ?? '').trim();
-      wordCountByChapterId.set(c.id, body ? body.split(/\s+/).filter(Boolean).length : 0);
-    }
-
-    res.json({
-      state: nextState,
-      chapterCount: newChapters.length,
-      chapterTitles: newChapters.map((c) => c.title),
-      /* Rich chapter records so the re-parse dialog can render
-         checkboxes (preserved excluded + auto-suggest by wordCount)
-         identical to the confirm-stage form. */
-      chapters: newChapters.map((c) => ({
-        id: c.id,
-        title: c.title,
-        slug: c.slug,
-        wordCount: wordCountByChapterId.get(c.id) ?? 0,
-        excluded: !!c.excluded,
-      })),
-    });
+    res.json(payload);
   } catch (e) {
     console.error('[book-state] reparse failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to re-parse manuscript.' });
   }
 });
+
+/* POST /api/books/:bookId/replace-manuscript — upload a revised manuscript
+   onto an EXISTING book. Writes the new file into the book dir (swapping the
+   extension and deleting the old file if the format changed), then runs the
+   same applyReparse() core as reparse: chapters are re-detected, the srv-13
+   reuse/voice carryover is snapshotted so designed voices resurrect for
+   characters that still match on the next analysis, and analysis cache / cast
+   / audio are cleared. Book identity (bookId, dir, title/author/series, cover)
+   is untouched — this is NOT a re-import. */
+bookStateRouter.post(
+  '/:bookId/replace-manuscript',
+  manuscriptUpload.single('file'),
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'No manuscript file uploaded.' });
+
+      const located = await findBookByBookId(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      const { bookDir, state } = located;
+
+      const parsed = await parseManuscript({
+        buffer: req.file.buffer,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+      });
+
+      const newFile = `manuscript.${REPLACE_EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
+      const oldFile = state.manuscriptFile;
+
+      await writeFile(join(bookDir, newFile), req.file.buffer);
+      if (oldFile && oldFile !== newFile && existsSync(join(bookDir, oldFile))) {
+        await unlink(join(bookDir, oldFile)).catch(() => {});
+      }
+      state.manuscriptFile = newFile;
+
+      const payload = await applyReparse(bookDir, state, parsed, {
+        changeLogType: 'replace-manuscript',
+        changeLogTitle: 'Replaced manuscript',
+      });
+      res.json(payload);
+    } catch (e) {
+      console.error('[book-state] replace-manuscript failed', e);
+      res
+        .status(500)
+        .json({ error: (e as Error).message || 'Failed to replace manuscript.' });
+    }
+  },
+);
 
 /* POST /api/books/:bookId/chapters/:chapterId/exclude — toggle the
    excluded flag on a single chapter. Used by the Generate-view toggle
