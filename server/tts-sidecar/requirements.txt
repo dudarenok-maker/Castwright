@@ -28,14 +28,13 @@ numpy>=1.26,<3.0
 # both states — it logs a warning and continues in vanilla mode if
 # DeepSpeed isn't available.
 
-# Kokoro v1 — quality-tuned local TTS engine, eagerly loaded at sidecar
-# startup. The ONNX runtime auto-selects CUDA when onnxruntime-gpu is
-# installed and falls back to CPU otherwise. Tight pins because OneDrive-
-# under-sync makes wheel re-resolution expensive (WinError 5 on partial
-# installs). Run scripts/install-kokoro.ps1 once to download the model +
-# voices manifest into voices/kokoro/ (gitignored, ~330 MB).
-kokoro-onnx>=0.4.0,<0.5.0
-onnxruntime-gpu>=1.20.0,<2.0.0
+# Kokoro v1 — quality-tuned local TTS engine, eagerly loaded at sidecar startup.
+# The [gpu] extra pulls onnxruntime-gpu ONLY on x86_64 non-macOS (kokoro-onnx's
+# own platform marker); plain onnxruntime always comes from the core dep, so a
+# macOS / Apple Silicon install gets the CPU/CoreML runtime and `pip install`
+# succeeds. Run scripts/install-kokoro.{ps1,sh} once to fetch the model + voices
+# manifest into voices/kokoro/ (gitignored, ~330 MB).
+kokoro-onnx[gpu]>=0.4.0,<0.5.0
 
 # Qwen3-TTS — per-character bespoke voices via design -> clone -> cache ->
 # reuse (plan 108). NOT a fixed-voice catalog like Kokoro; voices are designed
