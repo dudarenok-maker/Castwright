@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_zxing/flutter_zxing.dart';
 
-import '../domain/paired_server.dart';
+import '../domain/pairing_qr.dart';
 
-/// Scans the server pairing QR and pops with the parsed [PairedServer]
+/// Scans the server pairing QR and pops with the parsed [PairingQr]
 /// (app-2). Non-matching codes are ignored so the camera keeps scanning.
 ///
 /// Uses `flutter_zxing` (zxing-cpp via FFI) rather than ML Kit: mobile_scanner
@@ -27,9 +27,9 @@ class _QrScanScreenState extends State<QrScanScreen> {
     final raw = code.text;
     if (raw == null || raw.isEmpty) return;
     try {
-      final server = PairedServer.fromQrPayload(raw);
+      final qr = PairingQr.parse(raw);
       _handled = true;
-      Navigator.of(context).pop(server);
+      Navigator.of(context).pop(qr);
     } on FormatException {
       // A QR, but not a pairing payload — keep scanning.
     }

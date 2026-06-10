@@ -1,6 +1,4 @@
-import 'dart:convert';
-
-/// Connection details the app pairs to, parsed from the pairing QR payload
+/// Connection details the app pairs to, stored from a successful pairing
 /// `{ url, token, caFingerprint }` (plan 188, app-2 / srv-20). Pure data with
 /// no platform dependencies, so it lives in the domain layer and is fully
 /// unit-testable. `caFingerprint` is the server CA's SHA-256, verified against
@@ -27,20 +25,6 @@ class PairedServer {
         caFingerprint: caFingerprint,
         pairedAt: pairedAt ?? this.pairedAt,
       );
-
-  /// Parse the raw text of a scanned pairing QR (a JSON object).
-  factory PairedServer.fromQrPayload(String raw) {
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(raw);
-    } catch (_) {
-      throw const FormatException('pairing QR is not valid JSON');
-    }
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('pairing QR is not a JSON object');
-    }
-    return PairedServer.fromJson(decoded);
-  }
 
   factory PairedServer.fromJson(Map<String, dynamic> json) {
     final url = _requireNonEmptyString(json, 'url');
