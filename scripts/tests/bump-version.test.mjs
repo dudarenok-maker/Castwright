@@ -88,6 +88,12 @@ function setupRepo(startVersion) {
   // resolve its own scripts/ path with the same layout the real repo has.
   mkdirSync(resolve(dir, 'scripts'));
   writeFileSync(resolve(dir, 'scripts', 'bump-version.mjs'), readFileSync(bumpScript, 'utf8'));
+  // bump-version.mjs imports ./release-notes-gate.mjs at load — mirror it too,
+  // or the throwaway script crashes on module resolution (fe-37).
+  writeFileSync(
+    resolve(dir, 'scripts', 'release-notes-gate.mjs'),
+    readFileSync(resolve(here, '..', 'release-notes-gate.mjs'), 'utf8'),
+  );
 
   // Init throwaway git repo with a local identity so commits work in CI.
   // env: cleanGitEnv() so a parent git-hook context doesn't redirect these
