@@ -100,6 +100,19 @@ dual `npm install` printing **zero new** deprecation warnings (the srv-4 re-audi
 pre-existing upstream-blocked `@google/genai` node-domexception chain is the only allowed
 remainder).
 
+## Implementation pivots (post-spec, decided during the work)
+
+- **pdfjs-dist 6 bump → pdfjs-dist removed.** Running pdf-parse 2 (bundles
+  pdfjs 5.4) next to a direct `pdfjs-dist@6` collides under tsx (`npm run dev`):
+  two pdfjs share global worker state → `API vN != Worker vM` crash on PDF
+  upload. Resolved by reading the outline from pdf-parse 2's `getInfo().outline`
+  and dropping the direct dep (user-approved Option A). See plan 202.
+- **eslint 10 deferred** — upstream-blocked (`eslint-plugin-react` /
+  `-jsx-a11y` cap their eslint peer at `^9`). `concurrently 10` + `jest-axe 10`
+  shipped; eslint tracked as ops-14.
+- **`pdf-real.test.ts`** (the real-path guard) destabilises the parallel vitest
+  fork pool, so it is routed to the serial `vitest.config.slow.ts` tier.
+
 ## Tracking & docs
 
 - 3 Backlog-item issues (pdfjs 6 · pdf-parse 2 · tooling+types group) + thin `BACKLOG.md` rows.
