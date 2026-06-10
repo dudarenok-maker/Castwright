@@ -80,6 +80,12 @@ export const MANIFEST = {
     // Sidecar source + start script + Kokoro installers
     'server/tts-sidecar/**',
 
+    // Analyzer skill prompts — read fresh off disk at runtime by
+    // server/src/config/prompts.ts (readPrompt), analyzer/gemini.ts, and
+    // analyzer/voice-style.ts. Omitting these ENOENTs every analysis on a
+    // zip install (all platforms).
+    'skills/**',
+
     // Runtime scripts the deployer invokes (start:prod / stop:prod and the
     // preflight that npm run dev triggers — useful diagnostic).
     'scripts/start-app-prod.mjs',
