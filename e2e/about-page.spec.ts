@@ -14,3 +14,15 @@ test('/about renders the brand tagline', async ({ page }) => {
     page.getByText('Any book, performed by a full cast', { exact: false }),
   ).toBeVisible({ timeout: 10_000 });
 });
+
+/* side-14 — mock mode ships a ready devices map (kokoro active on cuda), so
+   the device panel's ground-truth headline must render on /about. */
+test('/about device panel shows the ground-truth device line', async ({ page }) => {
+  await page.goto('/#/about');
+
+  const panel = page.getByTestId('device-panel');
+  await expect(panel.getByText('Currently running on:', { exact: false })).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(panel.getByText('NVIDIA GPU (CUDA)', { exact: false }).first()).toBeVisible();
+});

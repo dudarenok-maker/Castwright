@@ -10,6 +10,7 @@ import { SectionLabel, MixedHeading } from '../components/primitives';
 import { CastwaveMark } from '../lib/icons';
 import { buildInfo } from '../lib/build-info';
 import { TAGLINE, MANIFESTO, TEASER, TEASER_FLAG, HARDWARE_LINE, DOMAIN } from '../lib/brand';
+import { DevicePanel } from '../components/device-panel';
 
 /* Engine credits — kin, not competition (guidelines §3): credit Kokoro, XTTS
    and Qwen visibly, by name, linked. */
@@ -133,6 +134,9 @@ export function AboutView() {
             at <ExternalLink href={`https://${DOMAIN}`}>{DOMAIN}</ExternalLink>.
           </p>
         </section>
+
+        {/* 8 — side-14: device ground-truth panel */}
+        <DevicePanel />
       </div>
     </div>
   );
