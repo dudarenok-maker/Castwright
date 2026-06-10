@@ -807,4 +807,7 @@ export type Stage =
   | { kind: 'about' }
   /* Advanced configuration — tune model, generation, and QA knobs. Reached
      from the Admin view and Account view. */
-  | { kind: 'advanced' };
+  | { kind: 'advanced' }
+  /* fe-37 — in-app multi-version release-notes history, reached from /about and
+     Account → Application updates. */
+  | { kind: 'release-notes' };

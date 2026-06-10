@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 const h = vi.hoisted(() => ({
   info: null as null | Record<string, unknown>,
@@ -28,13 +29,21 @@ beforeEach(() => {
 describe('WhatsNewBanner', () => {
   it('renders nothing when showWhatsNew is false', () => {
     h.info = { appVersion: '1.6.0', showWhatsNew: false, releaseNotes: '' };
-    const { container } = render(<WhatsNewBanner />);
+    const { container } = render(
+      <MemoryRouter>
+        <WhatsNewBanner />
+      </MemoryRouter>,
+    );
     expect(container).toBeEmptyDOMElement();
   });
 
   it('renders the version + release notes when showWhatsNew is true', () => {
     h.info = { appVersion: '1.6.0', showWhatsNew: true, releaseNotes: '# v1.6.0\n- In-app upgrades' };
-    render(<WhatsNewBanner />);
+    render(
+      <MemoryRouter>
+        <WhatsNewBanner />
+      </MemoryRouter>,
+    );
     expect(screen.getByTestId('whats-new-banner')).toBeInTheDocument();
     expect(screen.getByText(/What's new in v1\.6\.0/)).toBeInTheDocument();
     expect(screen.getByText(/In-app upgrades/)).toBeInTheDocument();
@@ -42,7 +51,11 @@ describe('WhatsNewBanner', () => {
 
   it('dismiss calls the API and refreshes', async () => {
     h.info = { appVersion: '1.6.0', showWhatsNew: true, releaseNotes: '' };
-    render(<WhatsNewBanner />);
+    render(
+      <MemoryRouter>
+        <WhatsNewBanner />
+      </MemoryRouter>,
+    );
     fireEvent.click(screen.getByText('Dismiss'));
     await waitFor(() => expect(h.dismissWhatsNew).toHaveBeenCalledOnce());
     expect(h.refresh).toHaveBeenCalled();

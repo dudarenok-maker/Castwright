@@ -7,6 +7,7 @@
    first card in the Account view; not part of the account Save flow. */
 
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../store';
 import {
   stageUpgrade,
@@ -52,6 +53,11 @@ export function UpgradeCard() {
       <p className="text-sm text-ink/80">
         You&apos;re running <span className="font-semibold">v{runningVersion}</span>
         {info?.sidecarVersion ? ` · sidecar v${info.sidecarVersion}` : ''}.
+      </p>
+      <p className="mt-1 text-xs">
+        <Link to="/release-notes" className="font-medium text-magenta hover:underline">
+          See what&apos;s new
+        </Link>
       </p>
 
       <input ref={fileRef} type="file" accept=".zip" onChange={onPick} className="hidden" />
