@@ -1,7 +1,7 @@
 ---
 title: Pairing-QR redesign — tiny code + ephemeral pairing session
 date: 2026-06-10
-status: draft
+status: implemented
 area: app (companion pairing) / server / frontend
 supersedes-flow: plan 188 app-2 pairing-QR (JSON {url, token, caFingerprint})
 ---
