@@ -1,6 +1,10 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 
+import 'src/data/cert_pinning.dart';
 import 'src/data/companion_audio_handler.dart';
 import 'src/data/companion_runtime.dart';
 import 'src/data/pairing_service.dart';
@@ -119,15 +123,30 @@ class _HomePageState extends State<HomePage> {
   }
 
   /// One online round-trip to fetch + verify + persist the cert for a legacy
-  /// pairing, then build the runtime.
+  /// pairing (predates offline cert storage), then build the runtime.
   Future<void> _bootstrapFromServer() async {
     setState(() {
       _loading = true;
       _bootstrapError = null;
     });
     try {
-      final conn = await widget.service.pair(_paired!);
-      await widget.store.saveCaPem(conn.caPem);
+      final server = _paired!;
+      // Fetch the CA cert over a one-shot, validation-bypassing client and
+      // verify it matches the stored full SHA-256 fingerprint.
+      final client = HttpClient()..badCertificateCallback = (cert, host, port) => true;
+      final String caPem;
+      try {
+        final req = await client.getUrl(Uri.parse('${server.url}/cert/root.crt'));
+        final res = await req.close();
+        caPem = await res.transform(const Utf8Decoder()).join();
+      } finally {
+        client.close(force: true);
+      }
+      if (!verifyCaFingerprint(caPem, server.caFingerprint)) {
+        throw Exception('Certificate fingerprint mismatch — re-pair the device.');
+      }
+      await widget.store.saveCaPem(caPem);
+      final conn = Connection(server: server, caPem: caPem);
       final runtime =
           await CompanionRuntime.forConnection(conn, handler: widget.audioHandler);
       if (mounted) {
