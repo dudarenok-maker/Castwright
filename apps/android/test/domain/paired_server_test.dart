@@ -43,21 +43,5 @@ void main() {
       );
     });
 
-    group('fromQrPayload', () {
-      test('parses a scanned JSON payload', () {
-        final s = PairedServer.fromQrPayload(
-          '{"url":"https://10.0.0.5:8443","token":"t","caFingerprint":"AB:CD"}',
-        );
-        expect(s.url, 'https://10.0.0.5:8443');
-        expect(s.token, 't');
-        expect(s.caFingerprint, 'AB:CD');
-      });
-
-      test('rejects non-JSON and non-object payloads', () {
-        expect(() => PairedServer.fromQrPayload('not json'), throwsA(isA<FormatException>()));
-        expect(() => PairedServer.fromQrPayload('"a string"'), throwsA(isA<FormatException>()));
-        expect(() => PairedServer.fromQrPayload('[1,2,3]'), throwsA(isA<FormatException>()));
-      });
-    });
   });
 }

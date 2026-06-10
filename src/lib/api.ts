@@ -47,6 +47,7 @@ import type {
   ConfigResponse,
   ConfigValues,
   PromptState,
+  PairSessionInfo,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
@@ -4793,6 +4794,19 @@ async function realGetExportLanUrls(): Promise<ExportLanInfo> {
   return res.json();
 }
 
+async function realCreatePairSession(): Promise<PairSessionInfo> {
+  const res = await fetch(`/api/pair/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  });
+  if (!res.ok)
+    throw new Error(
+      `pair session failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
 /* Plan 75 — portable book bundle (single .zip with state + manuscript +
    audio + cover + change-log for one book). The export returns the
    bundle as a Blob the caller can save via URL.createObjectURL + an
@@ -4982,6 +4996,21 @@ async function mockGetExportLanUrls(): Promise<ExportLanInfo> {
     token: 'mock-lan-token-0123456789abcdef',
     caFingerprint:
       'AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89',
+  };
+}
+
+async function mockCreatePairSession(): Promise<PairSessionInfo> {
+  await wait(20);
+  const hostPort = '192.168.1.42:8443';
+  const code = 'K7QF3M2P';
+  const fpTag = 'J4XQ2A7BWZ9K3M5R';
+  return {
+    qrPayload: `CWP1*${hostPort}*${code}*${fpTag}`,
+    hostPort,
+    port: 8443,
+    code,
+    fpTag,
+    expiresAt: Date.now() + 300000,
   };
 }
 
@@ -5802,6 +5831,7 @@ const real = {
   exportPortable: realExportPortable,
   importPortable: realImportPortable,
   getExportLanUrls: realGetExportLanUrls,
+  createPairSession: realCreatePairSession,
   getChapterAudio: async ({ bookId, chapterId }: AudioArgs): Promise<ChapterAudio> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio`);
     if (!res.ok) {
@@ -6046,6 +6076,7 @@ const mock = {
   exportPortable: mockExportPortable,
   importPortable: mockImportPortable,
   getExportLanUrls: mockGetExportLanUrls,
+  createPairSession: mockCreatePairSession,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
   acceptChapterRevision: mockAcceptChapterRevision,

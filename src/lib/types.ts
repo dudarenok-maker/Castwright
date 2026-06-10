@@ -757,6 +757,17 @@ export interface PromptState {
   defaultText: string;
 }
 
+/** Result of POST /api/pair/session — the companion pairing QR payload + the
+    fields the modal also shows for manual entry. */
+export interface PairSessionInfo {
+  qrPayload: string;
+  hostPort: string;
+  port: number;
+  code: string;
+  fpTag: string;
+  expiresAt: number;
+}
+
 /* ── UI stage discriminated union ─────────────────────────────────────── */
 
 export type View =
