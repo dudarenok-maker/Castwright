@@ -763,7 +763,8 @@ class KokoroEngine(Engine):
             raise RuntimeError(
                 f"Failed to import kokoro-onnx ({e}). Install with: "
                 "`.\\.venv\\Scripts\\python.exe -m pip install kokoro-onnx onnxruntime-gpu` "
-                "in server/tts-sidecar (or onnxruntime for CPU-only)."
+                "in server/tts-sidecar (onnxruntime-gpu needs an NVIDIA GPU; on macOS / "
+                "CPU-only boxes install plain onnxruntime instead)."
             ) from e
 
         if not os.path.isfile(self._model_path):
@@ -1928,6 +1929,14 @@ async def _stop_asr_idle_watchdog() -> None:
         _asr_idle_task = None
 
 
+@app.on_event("startup")
+async def _start_device_probe() -> None:
+    """side-14 — resolve per-engine devices in the background. Runs on a worker
+    thread (torch import takes seconds); /health reports devices_state='pending'
+    until it lands. Fire-and-forget: a probe failure degrades to 'error'."""
+    asyncio.create_task(asyncio.to_thread(_run_device_probe))
+
+
 # --- Host-memory watchdog: soft reclaim + hard process-recycle ---
 #
 # Logs process RSS each tick (the leak curve — greppable as `sidecar memory:`).
@@ -2509,6 +2518,102 @@ def _qwen_install_state(qwen_loaded: bool) -> str:
     return "ready"
 
 
+# --- side-14: per-engine device ground-truth -------------------------------
+# A background startup probe imports torch/onnxruntime ONCE and caches what
+# device each engine WOULD resolve to, using each engine's own resolver so the
+# prediction can't drift from load-time reality. /health composes the map at
+# read time with loaded-engine actuals overriding predictions. The probe adds
+# torch's ~300-500 MB committed footprint at boot — paid anyway the moment a
+# torch engine loads, and far below every recycle ceiling.
+_device_probe: dict[str, Optional[str]] = {"kokoro": None, "coqui": None, "qwen": None}
+_device_probe_state: str = "pending"  # 'pending' | 'ready' | 'error'
+
+
+def _normalize_device_family(raw: Optional[str]) -> Optional[str]:
+    """'cuda:0'/'cuda:1' → 'cuda'; mps/cpu pass through; anything else (None,
+    '', an unresolved 'auto' pref) → None so callers fall back to prediction."""
+    if not raw:
+        return None
+    fam = str(raw).strip().lower().split(":", 1)[0]
+    return fam if fam in ("cuda", "mps", "cpu") else None
+
+
+def _predict_kokoro_device(ort_module: Any) -> Optional[str]:
+    """Mirror kokoro-onnx's auto-selection: CUDA EP available → cuda, else cpu.
+    Tolerates a broken/absent onnxruntime (None → caller leaves the slot null)."""
+    try:
+        providers = list(ort_module.get_available_providers())
+    except Exception:
+        return "cpu"
+    return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+
+
+def _compute_device_predictions(
+    torch_module: Any, ort_module: Any
+) -> dict[str, Optional[str]]:
+    """Per-engine would-be devices. Modules are injected for testability (same
+    pattern as CoquiEngine._resolve_runtime_options). Never raises."""
+    out: dict[str, Optional[str]] = {"kokoro": None, "coqui": None, "qwen": None}
+    if ort_module is not None:
+        out["kokoro"] = _predict_kokoro_device(ort_module)
+    if torch_module is not None:
+        qwen = ENGINES.get("qwen")
+        pref = (
+            qwen._device_pref
+            if isinstance(qwen, QwenEngine)
+            else os.environ.get("QWEN_DEVICE", "auto")
+        )
+        out["qwen"] = _normalize_device_family(_resolve_torch_device(pref, torch_module))
+        coqui = ENGINES.get("coqui")
+        if isinstance(coqui, CoquiEngine):
+            out["coqui"] = _normalize_device_family(
+                coqui._resolve_runtime_options(torch_module)["device"]
+            )
+    return out
+
+
+def _run_device_probe() -> None:
+    """Blocking probe body — run via asyncio.to_thread from the startup hook.
+    Imports the heavy modules HERE so module import (and therefore boot +
+    /health) stays instant. torch.cuda.is_available() / backends.mps.
+    is_available() query availability WITHOUT creating a CUDA context or
+    allocating VRAM — never call anything heavier here. Must never raise."""
+    global _device_probe, _device_probe_state
+    ort_module = None
+    torch_module = None
+    try:
+        import onnxruntime as ort_module  # type: ignore  # noqa: F811
+    except Exception as e:
+        log.warning("Device probe: onnxruntime unavailable (%s).", e)
+    try:
+        import torch as torch_module  # type: ignore  # noqa: F811
+    except Exception as e:
+        log.warning("Device probe: torch unavailable (%s).", e)
+    try:
+        _device_probe = _compute_device_predictions(torch_module, ort_module)
+        _device_probe_state = "ready" if torch_module is not None else "error"
+        log.info(
+            "Device probe complete: %s (state=%s).", _device_probe, _device_probe_state
+        )
+    except Exception as e:  # belt-and-braces — predictions already never raise
+        _device_probe_state = "error"
+        log.warning("Device probe failed (%s) — devices_state=error.", e)
+
+
+def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
+    """Actual ONNX Runtime providers of the LOADED Kokoro session → family.
+    kokoro-onnx internals drift across releases, so every access is guarded;
+    None → caller keeps the prediction."""
+    try:
+        sess = getattr(engine._kokoro, "sess", None)
+        if sess is None:
+            return None
+        providers = list(sess.get_providers())
+        return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+    except Exception:
+        return None
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
@@ -2562,6 +2667,18 @@ def health() -> dict[str, Any]:
     qwen_package_installed = _qwen_package_installed()
     qwen_weights_present = _qwen_weights_present() if qwen_package_installed else False
     qwen_install_state = _qwen_install_state(qwen_loaded)
+    # side-14 — per-engine device map: loaded engines report their ACTUAL
+    # device; unloaded ones the startup probe's prediction. Same resolvers on
+    # both paths, so they only disagree if availability was misread — in which
+    # case loaded truth wins. Composed at read time so engine load/unload and
+    # probe completion are order-independent.
+    devices = dict(_device_probe)
+    if isinstance(coqui, CoquiEngine) and model_loaded:
+        devices["coqui"] = _normalize_device_family(coqui._resolved_device) or devices["coqui"]
+    if isinstance(kokoro, KokoroEngine) and kokoro_loaded:
+        devices["kokoro"] = _kokoro_session_device(kokoro) or devices["kokoro"]
+    if isinstance(qwen, QwenEngine) and qwen_loaded:
+        devices["qwen"] = _normalize_device_family(qwen._device) or devices["qwen"]
     return {
         "ok": True,
         "protocol_version": SIDECAR_PROTOCOL_VERSION,
@@ -2581,6 +2698,8 @@ def health() -> dict[str, Any]:
         # operator confirm whether transcription is on the GPU or CPU.
         "asr_loaded": ASR._model is not None,
         "asr_device": ASR._device,
+        "devices": devices,
+        "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,
         "poison_reason": poison_reason,

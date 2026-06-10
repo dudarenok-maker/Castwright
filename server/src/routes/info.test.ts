@@ -69,6 +69,41 @@ describe('GET /api/info', () => {
     expect(res.body.sidecarVersion).toBe('1.6.0');
   });
 
+  it('carries sidecar devices + devicesState + the resolved activeEngine', async () => {
+    /* side-14 — /api/info must lift the per-engine device map and devicesState
+       off the single sidecar /health probe, and add the Node-resolved
+       activeEngine. With a fresh settings cache (no Qwen known-installed),
+       getResolvedTtsModelKey() returns 'kokoro-v1', so engineForModelKey maps it
+       to 'kokoro'. */
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          __version__: '1.6.0',
+          devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+          devices_state: 'ready',
+        }),
+      })),
+    );
+    const res = await request(app).get('/api/info');
+    expect(res.status).toBe(200);
+    expect(res.body.devices).toEqual({ kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' });
+    expect(res.body.devicesState).toBe('ready');
+    expect(res.body.activeEngine).toBe('kokoro');
+  });
+
+  it('reports null devices and a null devicesState when the sidecar is down', async () => {
+    /* Default fetch stub throws → devices: null, devicesState: null. activeEngine
+       is resolved Node-side so it's always present regardless of sidecar state. */
+    // Default beforeEach stub already throws 'sidecar down'.
+    const res = await request(app).get('/api/info');
+    expect(res.status).toBe(200);
+    expect(res.body.devices).toBeNull();
+    expect(res.body.devicesState).toBeNull();
+    expect(res.body.activeEngine).toBeDefined();
+  });
+
   it('reflects a post-upgrade banner + lastSeenAppVersion, then clears on dismiss', async () => {
     await writeUpgradeMeta({ lastSeenAppVersion: '1.5.1', showWhatsNew: true });
     let res = await request(app).get('/api/info');

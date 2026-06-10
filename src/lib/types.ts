@@ -193,6 +193,17 @@ export interface AppInfo {
     appleSilicon: boolean;
     label: string;
   };
+  /* side-14 — per-engine device ground-truth from the sidecar (null while the
+     sidecar's startup probe is pending or the sidecar is down) + the engine
+     the server resolves as the current default. Optional: absent on an older
+     server. */
+  devices?: {
+    kokoro: 'cuda' | 'mps' | 'cpu' | null;
+    coqui: 'cuda' | 'mps' | 'cpu' | null;
+    qwen: 'cuda' | 'mps' | 'cpu' | null;
+  } | null;
+  devicesState?: 'pending' | 'ready' | 'error' | null;
+  activeEngine?: string;
 }
 
 /* Interim companion-app distribution — availability of the packaged Android
