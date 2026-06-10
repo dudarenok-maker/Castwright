@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconClose, IconRefresh } from '../lib/icons';
 import { SectionLabel, MixedHeading } from '../components/primitives';
+import { MANIFESTO } from '../lib/brand';
 import {
   api,
   AnalysisError,
@@ -982,7 +983,7 @@ export function AnalysingView({
               ? describeRemaining(remainingMs, wordCount)
               : describeSize(wordCount)}
           </p>
-          <p className="mt-2 text-sm text-ink/50">Many voices, one machine.</p>
+          <p className="mt-2 text-sm text-ink/50">{MANIFESTO}</p>
           {/* Analyzer Load/Stop control. Rendered even without a manuscript
               so the user can pre-warm Ollama from the Analysing screen (the
               page-refresh / deep-link case where manuscriptId is null lands
