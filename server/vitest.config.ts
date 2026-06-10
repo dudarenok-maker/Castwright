@@ -37,6 +37,9 @@ const SLOW_FILES_TO_EXCLUDE = [
   'src/routes/chapters-restructure.test.ts',
   'src/routes/generation.test.ts',
   'src/routes/generation-boundary-recycle.test.ts',
+  /* Loads the real pdf-parse 2 / bundled pdfjs; destabilises the parallel
+     fork pool ("Worker exited unexpectedly"). Serialised, not slow. */
+  'src/parsers/pdf-real.test.ts',
 ];
 
 /* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or
