@@ -757,18 +757,18 @@ paths:
 
   /api/books/{bookId}/cover/candidates:
     get:
-      summary: List OpenLibrary cover candidates for a book
+      summary: List cover candidates (OpenLibrary + Apple Books + Google Books)
       operationId: getCoverCandidates
       description: |
-        Searches OpenLibrary (`/search.json?title=…&author=…`) and returns
-        up to 6 deduped cover candidates. Powers the "Find cover image"
-        modal on the library card + Listen header. Keyless — OpenLibrary
-        is the upstream and rate-limits anonymously.
+        Searches OpenLibrary, Apple Books, and Google Books and returns up to
+        6 deduped cover candidates. Powers the "Find cover image" modal on the
+        library card + Listen header. Per-source errors are swallowed; the
+        aggregate always returns whatever succeeded.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       responses:
         '200':
-          description: Candidate list (may be empty when OpenLibrary has no match)
+          description: Candidate list (may be empty when no source has a match)
           content:
             application/json:
               schema:
@@ -779,8 +779,6 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/CoverCandidate' }
         '404': { description: Book not found }
-        '502':
-          description: OpenLibrary unreachable, timed out, or returned malformed JSON
 
   /api/books/{bookId}/cover:
     get:
@@ -804,10 +802,10 @@ paths:
       summary: Download and pin one of the OpenLibrary candidates as this book's cover
       operationId: setCover
       description: |
-        Re-runs the OpenLibrary search to locate the requested candidate
-        by `openLibraryId`, downloads the JPEG to
-        `<bookDir>/.audiobook/cover.jpg`, and patches `coverImage` onto
-        state.json so the next library scan exposes `coverImageUrl`.
+        Re-runs the candidate's source search to re-locate it by `candidateId`,
+        downloads the JPEG to `<bookDir>/.audiobook/cover.jpg`, and patches
+        `coverImage` onto state.json so the next library scan exposes
+        `coverImageUrl`.
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
       requestBody:
@@ -816,11 +814,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [openLibraryId]
+              required: [candidateId]
               properties:
-                openLibraryId:
+                candidateId:
                   type: string
-                  description: 'Stable id from `CoverCandidate.openLibraryId` (e.g. `cover-i:123456`).'
+                  description: 'Composite id from `CoverCandidate.id` (e.g. `openlibrary:48006`).'
       responses:
         '200':
           description: Cover saved
@@ -831,7 +829,7 @@ paths:
                 required: [coverImageUrl]
                 properties:
                   coverImageUrl: { type: string, format: uri-reference }
-        '400': { description: Missing or malformed `openLibraryId` }
+        '400': { description: Missing or malformed candidateId }
         '404':
           { description: Book not found OR candidate no longer in the live OpenLibrary result set }
         '502':
@@ -2728,20 +2726,26 @@ components:
 
     CoverCandidate:
       type: object
-      required: [openLibraryId, coverUrl]
+      required: [id, source, coverUrl]
       properties:
-        openLibraryId:
+        id:
           type: string
           description: |
-            Stable identifier carried back to POST /api/books/{bookId}/cover
-            (`cover-i:<openLibraryCoverEditionId>`).
+            Composite, source-agnostic identifier carried back to
+            POST /api/books/{bookId}/cover as `candidateId`
+            (`<source>:<localId>`, e.g. `openlibrary:48006`, `apple:123`,
+            `google:vol_AbC`).
+        source:
+          type: string
+          enum: [openlibrary, apple, google]
+          description: Which catalogue this candidate came from. Drives the picker source badge.
         coverUrl:
           type: string
           format: uri
-          description: 'Direct OpenLibrary cover URL (`/b/id/<id>-L.jpg`).'
+          description: Direct cover image URL for this source.
         edition:
           type: string
-          description: 'Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy.'
+          description: 'Optional display string — `<publisher> · <year>` (best-effort).'
 
     SyncManifestIndex:
       type: object

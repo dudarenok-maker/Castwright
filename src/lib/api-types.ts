@@ -514,11 +514,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List OpenLibrary cover candidates for a book
-         * @description Searches OpenLibrary (`/search.json?title=…&author=…`) and returns
-         *     up to 6 deduped cover candidates. Powers the "Find cover image"
-         *     modal on the library card + Listen header. Keyless — OpenLibrary
-         *     is the upstream and rate-limits anonymously.
+         * List cover candidates (OpenLibrary + Apple Books + Google Books)
+         * @description Searches OpenLibrary, Apple Books, and Google Books and returns up to
+         *     6 deduped cover candidates. Powers the "Find cover image" modal on the
+         *     library card + Listen header. Per-source errors are swallowed; the
+         *     aggregate always returns whatever succeeded.
          */
         get: operations["getCoverCandidates"];
         put?: never;
@@ -547,10 +547,10 @@ export interface paths {
         put?: never;
         /**
          * Download and pin one of the OpenLibrary candidates as this book's cover
-         * @description Re-runs the OpenLibrary search to locate the requested candidate
-         *     by `openLibraryId`, downloads the JPEG to
-         *     `<bookDir>/.audiobook/cover.jpg`, and patches `coverImage` onto
-         *     state.json so the next library scan exposes `coverImageUrl`.
+         * @description Re-runs the candidate's source search to re-locate it by `candidateId`,
+         *     downloads the JPEG to `<bookDir>/.audiobook/cover.jpg`, and patches
+         *     `coverImage` onto state.json so the next library scan exposes
+         *     `coverImageUrl`.
          */
         post: operations["setCover"];
         /**
@@ -2072,16 +2072,23 @@ export interface components {
         };
         CoverCandidate: {
             /**
-             * @description Stable identifier carried back to POST /api/books/{bookId}/cover
-             *     (`cover-i:<openLibraryCoverEditionId>`).
+             * @description Composite, source-agnostic identifier carried back to
+             *     POST /api/books/{bookId}/cover as `candidateId`
+             *     (`<source>:<localId>`, e.g. `openlibrary:48006`, `apple:123`,
+             *     `google:vol_AbC`).
              */
-            openLibraryId: string;
+            id: string;
+            /**
+             * @description Which catalogue this candidate came from. Drives the picker source badge.
+             * @enum {string}
+             */
+            source: "openlibrary" | "apple" | "google";
             /**
              * Format: uri
-             * @description Direct OpenLibrary cover URL (`/b/id/<id>-L.jpg`).
+             * @description Direct cover image URL for this source.
              */
             coverUrl: string;
-            /** @description Optional display string — `<publisher> · <year>`. Best-effort; OpenLibrary metadata is patchy. */
+            /** @description Optional display string — `<publisher> · <year>` (best-effort). */
             edition?: string;
         };
         /**
@@ -4446,7 +4453,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Candidate list (may be empty when OpenLibrary has no match) */
+            /** @description Candidate list (may be empty when no source has a match) */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -4459,13 +4466,6 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description OpenLibrary unreachable, timed out, or returned malformed JSON */
-            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4514,8 +4514,8 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description Stable id from `CoverCandidate.openLibraryId` (e.g. `cover-i:123456`). */
-                    openLibraryId: string;
+                    /** @description Composite id from `CoverCandidate.id` (e.g. `openlibrary:48006`). */
+                    candidateId: string;
                 };
             };
         };
@@ -4532,7 +4532,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Missing or malformed `openLibraryId` */
+            /** @description Missing or malformed candidateId */
             400: {
                 headers: {
                     [name: string]: unknown;

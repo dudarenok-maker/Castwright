@@ -29,11 +29,9 @@ describe('fetchSourceJson', () => {
 
   it('throws CoverSourceError(kind="http") on a non-ok response, carrying the source', async () => {
     fetchMock.mockResolvedValue(new Response('boom', { status: 503 }));
-    await expect(fetchSourceJson('apple', 'https://x', 1000)).rejects.toMatchObject({
-      name: 'CoverSourceError',
-      source: 'apple',
-      kind: 'http',
-    });
+    const err = await fetchSourceJson('apple', 'https://x', 1000).catch((e) => e);
+    expect(err).toBeInstanceOf(CoverSourceError);
+    expect(err).toMatchObject({ source: 'apple', kind: 'http' });
   });
 
   it('throws CoverSourceError(kind="invalid") on malformed JSON', async () => {
