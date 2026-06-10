@@ -222,13 +222,34 @@ A test: any rendered "Even in your own voice" must carry the in-development flag
 within the same component. Inverts when fs-38 ships (flag must then be gone).
 Cheap, frontend-only — stays in this wave.
 
+### Item 7 — device panel: sensible-now slice (server-sourced) — fs-43, in this wave
+User direction: do what's sensible now, file the deep part. C1 proved the
+*precise* active-device readout needs sidecar work, but an honest, useful panel
+ships now without it:
+- A "Will it run on my machine?" panel showing the per-platform hardware-honesty
+  line (brand copy) + the **host** platform/arch, sourced from the **server**
+  (`os.platform()` / `os.arch()` → Apple Silicon / Windows / Linux), surfaced via
+  `GET /api/info`. The server runs the models; the browser may be a LAN phone, so
+  client-side (`navigator`) detection would be wrong — this is the load-bearing
+  reason it's server-sourced.
+- Best-effort: surface the existing `health.device` (cuda/cpu) when a model is
+  loaded; an honest "load a voice to confirm the GPU" state otherwise.
+- Audit + fix the **frontend** GPU-not-detected strings for NVIDIA-only phrasing.
+*Benefit (user):* answers "will it run on my Mac/PC?" honestly today — esp. the
+new Apple Silicon path, which `os.arch()` detects reliably.
+
 ## Separate follow-up tracks (own scope, own PR)
 
-- **Item 7 — device panel (`sidecar` + frontend).** Needs sidecar work first
-  (C1): resolve + report the active engine's device incl. `mps` at startup,
-  regardless of load state, with pytest; Node passthrough; then the frontend
-  panel + the NVIDIA-only error-string audit. Own plan/issue; not in this wave.
-- **Item 9 — companion-app brand audit (`app`).** Timebox ~1h: audit Flutter
+- **side-14 — device ground-truth (`sidecar`), deep half of fs-43.** The sidecar
+  resolves + reports the actual torch device per active/default engine at
+  startup, regardless of load state, incl. `mps` **ground-truth** (Qwen
+  `_resolve_torch_device` already computes mps at `server/tts-sidecar/main.py:914-929`
+  but never reports it; Coqui device is load-gated at `:2536`; Kokoro reports
+  none), with pytest + Node passthrough. Then the panel upgrades from "host is
+  capable of X" to "currently running on X", and the sidecar-side error strings
+  get the NVIDIA-only audit. fs-43 (#705) is re-scoped to the sensible panel
+  above; side-14 carries this deep work.
+- **app-16 — companion-app brand audit (`app`).** Timebox ~1h: audit Flutter
   surfaces (pairing/library/player) for tagline/short-form, no `.ai` in lockups,
   engine credits. Findings → follow-up issue. Own branch.
 
