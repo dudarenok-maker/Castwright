@@ -4,6 +4,7 @@ import { IconUpload, IconSpinner } from '../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
 import type { UploadArgs } from '../lib/api';
+import { TAGLINE_SHORT } from '../lib/brand';
 import { SAMPLE_MANUSCRIPT_MD } from '../mocks/canned-data';
 import { AnalysisModelPicker } from '../components/analysis-model-picker';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -218,7 +219,7 @@ export function UploadView() {
             )}
           </div>
           {!isReuploading && (
-            <p className="mt-3 text-sm text-ink/60">Any book, fully cast.</p>
+            <p className="mt-3 text-sm text-ink/60">{TAGLINE_SHORT}</p>
           )}
           <p className="mt-4 text-lg text-ink/70">
             {isReuploading ? (

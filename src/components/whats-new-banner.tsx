@@ -5,8 +5,10 @@
    so this never paints a phantom banner. */
 
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useAppInfo } from '../lib/use-app-info';
+import { latestReleaseNote } from '../lib/release-notes';
 
 export function WhatsNewBanner() {
   const { info, refresh } = useAppInfo();
@@ -43,11 +45,28 @@ export function WhatsNewBanner() {
           {dismissing ? 'Dismissing…' : 'Dismiss'}
         </button>
       </div>
-      {info.releaseNotes.trim() && (
-        <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-ink/75">
-          {info.releaseNotes.trim()}
-        </pre>
-      )}
+      {(() => {
+        // Multi-version notes (fe-37): show ONLY the latest section here; the
+        // full history lives at #/release-notes. Bullets render plain (the
+        // **bold** lead-in markers are stripped for the compact banner).
+        const latest = latestReleaseNote(info.releaseNotes);
+        if (!latest || latest.bullets.length === 0) return null;
+        return (
+          <>
+            <ul className="mt-2 space-y-1 list-disc pl-4 text-xs text-ink/75">
+              {latest.bullets.slice(0, 5).map((b, i) => (
+                <li key={i}>{b.replace(/\*\*/g, '')}</li>
+              ))}
+            </ul>
+            <Link
+              to="/release-notes"
+              className="mt-2 inline-block text-xs font-medium text-magenta hover:underline"
+            >
+              See all release notes
+            </Link>
+          </>
+        );
+      })()}
     </div>
   );
 }

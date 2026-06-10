@@ -3,8 +3,10 @@ node_modules/
 dist/
 .vite/
 *.tsbuildinfo
-# fs-1 — generated at release time by build-release-zip.mjs (from the tag body)
-RELEASE_NOTES.md
+# RELEASE_NOTES.md is now a COMMITTED, maintained brand-voice multi-version
+# history (fe-37) — served verbatim via GET /api/info and rendered at
+# #/release-notes. It is no longer generated from the tag body; the GitHub
+# release body comes from the tag annotation in release.yml instead.
 # Interim companion-app distribution — the server's default APK drop location
 # (GET /api/companion/apk). Bundled into the release zip at build time; a
 # locally-dropped APK for testing must never be committed (it's a ~tens-of-MB

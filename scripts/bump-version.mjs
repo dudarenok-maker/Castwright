@@ -24,6 +24,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { checkReleaseNotes } from './release-notes-gate.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -375,6 +376,24 @@ async function main() {
   const existingTag = git(['tag', '--list', newTag], { capture: true }).trim();
   if (existingTag.length > 0 && !args.dryRun) {
     die(`Tag ${newTag} already exists. A release for ${newVersion} was already cut; nothing to do.`);
+  }
+
+  // Pre-flight 5 (fe-37): the committed brand-voice RELEASE_NOTES.md must lead
+  // with the new version and not be a placeholder — a release can't ship empty
+  // user-facing notes. --force downgrades this to a warning for a genuine
+  // emergency; --dry-run only reports.
+  const notesPath = resolve(repoRoot, 'RELEASE_NOTES.md');
+  if (existsSync(notesPath)) {
+    const notesCheck = checkReleaseNotes(readFileSync(notesPath, 'utf8'), newVersion);
+    if (!notesCheck.ok) {
+      if (args.force) info(`[WARN] release-notes gate (--force): ${notesCheck.reason}`);
+      else if (args.dryRun) info(`[DRY-RUN][WARN] release-notes gate: ${notesCheck.reason}`);
+      else
+        die(
+          `Release-notes gate: ${notesCheck.reason} Update RELEASE_NOTES.md ` +
+            `(top entry = the new version, brand voice) before tagging, or pass --force.`,
+        );
+    }
   }
 
   const gateOn = !args.skipCrossOs;

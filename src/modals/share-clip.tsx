@@ -23,6 +23,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { IconShare, IconClose } from '../lib/icons';
 import { formatTime } from '../lib/time';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
+import { MADE_WITH, DOMAIN } from '../lib/brand';
 import type { Chapter } from '../lib/types';
 
 /** Server-enforced cap. Mirrored here so the slider widgets clamp
@@ -337,7 +338,7 @@ export function ShareClipModal({
           </div>
 
           <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
-            <span className="text-[11px] text-ink/40">Made with Castwright · castwright.ai</span>
+            <span className="text-[11px] text-ink/40">{`${MADE_WITH} · ${DOMAIN}`}</span>
             <div className="flex items-center gap-3">
               <button
                 onClick={onClose}

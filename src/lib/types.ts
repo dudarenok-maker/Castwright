@@ -185,6 +185,14 @@ export interface AppInfo {
   lastSeenAppVersion: string | null;
   showWhatsNew: boolean;
   releaseNotes: string;
+  /* fs-43 — host hardware for the "Will it run on my machine?" panel
+     (server-sourced; optional, absent on an older server). */
+  hardware?: {
+    platform: string;
+    arch: string;
+    appleSilicon: boolean;
+    label: string;
+  };
 }
 
 /* Interim companion-app distribution — availability of the packaged Android
@@ -807,4 +815,7 @@ export type Stage =
   | { kind: 'about' }
   /* Advanced configuration — tune model, generation, and QA knobs. Reached
      from the Admin view and Account view. */
-  | { kind: 'advanced' };
+  | { kind: 'advanced' }
+  /* fe-37 — in-app multi-version release-notes history, reached from /about and
+     Account → Application updates. */
+  | { kind: 'release-notes' };

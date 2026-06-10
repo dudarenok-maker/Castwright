@@ -4,6 +4,7 @@
    keep resolving. */
 
 import { CastwaveMark, IconPlus } from '../../lib/icons';
+import { TAGLINE_SHORT } from '../../lib/brand';
 import { PrimaryButton } from '../primitives';
 
 export function EmptyLibrary({ onStartNew }: { onStartNew: () => void }) {
@@ -13,7 +14,7 @@ export function EmptyLibrary({ onStartNew }: { onStartNew: () => void }) {
         <CastwaveMark className="w-8 h-8" aria-hidden="true" />
       </span>
       <h3 className="mt-5 font-serif text-2xl font-bold text-ink">Your library is empty</h3>
-      <p className="mt-2 text-sm text-ink/60">Any book, fully cast.</p>
+      <p className="mt-2 text-sm text-ink/60">{TAGLINE_SHORT}</p>
       <p className="mt-2 text-sm text-ink/60 max-w-md mx-auto leading-relaxed">
         Books live on disk under{' '}
         <code className="px-1.5 py-0.5 rounded bg-ink/5 text-[12px]">

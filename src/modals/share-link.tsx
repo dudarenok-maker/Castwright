@@ -25,6 +25,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconClose, IconCopy, IconCheck, IconLink } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
+import { MADE_WITH, DOMAIN } from '../lib/brand';
 
 export interface ShareLinkModalProps {
   open: boolean;
@@ -169,7 +170,7 @@ export function ShareLinkModal({ open, url, onClose, onCopyFailed }: ShareLinkMo
           </div>
 
           <div className="px-6 py-4 border-t border-ink/10 flex items-center justify-between gap-3">
-            <span className="text-[11px] text-ink/40">Made with Castwright · castwright.ai</span>
+            <span className="text-[11px] text-ink/40">{`${MADE_WITH} · ${DOMAIN}`}</span>
             <div className="flex items-center gap-3">
               <PrimaryButton variant="dark" onClick={onClose}>
                 Done

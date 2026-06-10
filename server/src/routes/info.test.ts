@@ -46,6 +46,20 @@ describe('GET /api/info', () => {
     expect(res.body.showWhatsNew).toBe(false);
   });
 
+  it('reports host hardware for the device panel (fs-43)', async () => {
+    const res = await request(app).get('/api/info');
+    expect(res.body.hardware).toMatchObject({
+      platform: expect.any(String),
+      arch: expect.any(String),
+      appleSilicon: expect.any(Boolean),
+      label: expect.any(String),
+    });
+    expect(res.body.hardware.label.length).toBeGreaterThan(0);
+    // appleSilicon is true iff darwin + arm64 — derived, never guessed.
+    const { platform, arch, appleSilicon } = res.body.hardware;
+    expect(appleSilicon).toBe(platform === 'darwin' && arch === 'arm64');
+  });
+
   it('surfaces the sidecar __version__ when the probe succeeds', async () => {
     vi.stubGlobal(
       'fetch',

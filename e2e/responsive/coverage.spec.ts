@@ -139,6 +139,25 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('about (global) view', async ({ page }) => {
+    await page.goto('/#/about');
+    /* "What it is" is a stable h2 in the rebuilt 7-block page (fe-37). */
+    await expect(page.getByRole('heading', { name: /What it is/i })).toBeVisible({
+      timeout: 5_000,
+    });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
+  test('release-notes (global) view', async ({ page }) => {
+    await page.goto('/#/release-notes');
+    /* The mock /api/info releaseNotes carries one bullet — its presence is the
+       hydration signal that useAppInfo resolved and the history rendered. */
+    await expect(page.getByText(/In-app upgrades/i)).toBeVisible({ timeout: 5_000 });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
   test('queue modal (plan 102)', async ({ page }) => {
     /* Intercept /api/queue so the layout's mount-effect loadQueue
        resolves and the modal can render — mock-mode otherwise has no
