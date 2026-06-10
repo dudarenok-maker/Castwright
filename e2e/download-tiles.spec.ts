@@ -95,13 +95,15 @@ test.describe('plan 57 — download tiles', () => {
     const modal = page.getByTestId('pair-device-modal');
     await expect(modal).toBeVisible({ timeout: 10_000 });
 
-    // The QR renders as a data: image from the mocked LAN pairing payload.
+    // The QR renders as a data: image from the mocked pairing session payload.
     const qr = page.getByTestId('pair-qr-image');
     await expect(qr).toBeVisible();
     await expect(qr).toHaveAttribute('src', /^data:image\/png/);
 
-    // Manual-entry fallback (collapsed <details>) carries the values.
+    // Manual-entry fallback (collapsed <details>) carries the compact CWP1
+    // values: host:port, the pairing code, and the fingerprint tag.
     await modal.getByText(/enter these manually/i).click();
-    await expect(modal.getByText('https://192.168.1.42:8443')).toBeVisible();
+    await expect(modal.getByText('192.168.1.42:8443')).toBeVisible();
+    await expect(modal.getByText('K7QF3M2P')).toBeVisible();
   });
 });
