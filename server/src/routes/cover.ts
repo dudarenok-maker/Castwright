@@ -5,7 +5,7 @@
      picker modal. Used by the manual "Find cover image" flow on the
      library card and the Listen header.
    - POST /:bookId/cover            → download the picked candidate and patch
-     state.json. Body: `{ openLibraryId }`.
+     state.json. Body: `{ candidateId }`.
    - GET  /:bookId/cover            → serve the cached JPEG bytes off disk.
    - DELETE /:bookId/cover          → remove the cached file and clear the
      state.json metadata; UI falls back to the procedural gradient.
@@ -25,14 +25,14 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
 import { coverImagePath } from '../workspace/paths.js';
+import { CoverSourceError } from '../cover/sources/types.js';
+import { findCandidateById, aggregateCovers } from '../cover/search.js';
 import {
-  OpenLibraryError,
+  CoverDownloadError,
   clearStateCover,
   downloadCover,
-  findCandidateById,
   patchStateCover,
-  searchCovers,
-} from '../cover/openlibrary.js';
+} from '../cover/store.js';
 import {
   MAX_UPLOAD_BYTES,
   UploadError,
@@ -54,14 +54,9 @@ coverRouter.get('/:bookId/cover/candidates', async (req: Request, res: Response)
   try {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
-    const { state } = located;
-    const candidates = await searchCovers(state.title, state.author);
+    const candidates = await aggregateCovers(located.state.title, located.state.author);
     res.json({ candidates });
   } catch (e) {
-    if (e instanceof OpenLibraryError) {
-      console.warn('[cover] candidates failed', e);
-      return res.status(502).json({ error: e.message, kind: e.kind });
-    }
     console.error('[cover] candidates failed', e);
     res.status(500).json({ error: (e as Error).message || 'Cover lookup failed.' });
   }
@@ -69,16 +64,16 @@ coverRouter.get('/:bookId/cover/candidates', async (req: Request, res: Response)
 
 coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
   try {
-    const openLibraryId = (req.body as { openLibraryId?: unknown })?.openLibraryId;
-    if (typeof openLibraryId !== 'string' || !openLibraryId.trim()) {
-      return res.status(400).json({ error: '`openLibraryId` is required.' });
+    const candidateId = (req.body as { candidateId?: unknown })?.candidateId;
+    if (typeof candidateId !== 'string' || !candidateId.trim()) {
+      return res.status(400).json({ error: '`candidateId` is required.' });
     }
 
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
 
-    const candidate = await findCandidateById(state.title, state.author, openLibraryId);
+    const candidate = await findCandidateById(state.title, state.author, candidateId);
     if (!candidate) {
       return res
         .status(404)
@@ -90,7 +85,7 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
 
     res.json({ coverImageUrl: `/api/books/${state.bookId}/cover` });
   } catch (e) {
-    if (e instanceof OpenLibraryError) {
+    if (e instanceof CoverSourceError || e instanceof CoverDownloadError) {
       console.warn('[cover] POST failed', e);
       return res.status(502).json({ error: e.message, kind: e.kind });
     }
