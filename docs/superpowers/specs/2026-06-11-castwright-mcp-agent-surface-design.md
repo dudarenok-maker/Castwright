@@ -20,9 +20,11 @@ all the major agent harnesses share.
 
 - **Scope: full pipeline parity** — the agent is a true alternative driver, including
   cast editing and voice design, not just a happy-path trigger.
-- **Architecture: in-process Streamable-HTTP endpoint first, stdio shim as a planned
-  wave** ("both" option) — HTTP endpoint is the single source of truth; the shim exists
-  for clients with weak/no HTTP-transport support.
+- **Architecture: in-process Streamable-HTTP endpoint first, stdio bridge as a planned
+  wave** ("both" option) — HTTP endpoint is the single source of truth; the bridge exists
+  for clients with weak/no HTTP-transport support. _Amended 2026-06-11: the stdio bridge
+  (wave 4) is part of the **main delivery**, not a follow-up — every agent type must work
+  out of the box._
 - **Priority: Should** (top of bucket) — strategic capability, not a v1 ship blocker.
 - **Client-agnostic by requirement:** must work with whatever agent the user already
   uses — Claude family, Codex, Copilot, Gemini CLI, Cursor, etc. Therefore the surface
@@ -175,14 +177,16 @@ agent can self-serve recovery.
   `design_voice`, `design_full_cast`; README/INSTALL "Driving Castwright from an agent"
   with per-client connect snippets. _Gate:_ manual acceptance from two different agent
   harnesses (one Claude, one non-Claude).
-- **Wave 4 (follow-up) — stdio shim:** `castwright-mcp` bin proxying to the HTTP
-  endpoint, for clients without solid HTTP-transport support.
+- **Wave 4 — stdio bridge (main delivery, amended 2026-06-11):** `castwright-mcp` bin
+  proxying to the HTTP endpoint, for clients without solid HTTP-transport support.
+  _Gate:_ bridge test pins `listTools()` equality with the HTTP endpoint + a tool
+  round-trip through a spawned bridge process.
 - **Follow-ups (not v1):** MCP resources (`state.json`/`cast.json`), destructive ops
   behind `destructiveHint`, prompts (canned "produce this book" recipes).
 
-**v1 DoD:** waves 1–3 shipped; a fresh agent session (Claude + one non-Claude harness)
-takes a manuscript to an exported audiobook with zero UI interaction; full vitest +
-pipeline-e2e coverage; docs published.
+**v1 DoD:** waves 1–4 shipped; a fresh agent session (Claude + one non-Claude harness,
+the latter via the `castwright-mcp` stdio bridge) takes a manuscript to an exported
+audiobook with zero UI interaction; full vitest + pipeline-e2e coverage; docs published.
 
 ## Key files
 
