@@ -10,58 +10,68 @@
    outline page destinations is intentionally out of scope — page-to-
    text-offset mapping is fragile under running headers / multi-column
    layouts. Title-only replacement covers the common case (well-authored
-   PDFs with a clean outline) safely. */
+   PDFs with a clean outline) safely.
 
-import pdfParse from 'pdf-parse';
+   One pdfjs: pdf-parse 2 bundles its own pdfjs and exposes the bookmark
+   tree via getInfo().outline, so text, metadata, AND outline all come from a
+   single PDFParse instance / single document load. We deliberately do NOT
+   also import pdfjs-dist directly — two pdfjs copies in one process share
+   global worker state and collide (an "API vN does not match Worker vM"
+   crash under tsx/dev), so the separate outline reader was removed in the
+   deps round-3 migration. */
+
+import { PDFParse } from 'pdf-parse';
 import { parseText, parseSeriesFromTitle } from './text.js';
 import type { ParsedManuscript } from './text.js';
 import { isLikelyFrontMatterTitle } from './front-matter.js';
 
 interface OutlineEntry {
   title?: unknown;
-  items?: unknown;
 }
 
-/* Pull the top-level outline titles via pdfjs-dist. Returns null on any
-   failure (no outline, parse error, unexpected shape) — caller treats
-   null as "no outline available, fall back to parseText titles".
-   Exported for pdf-outline.real.test.ts, which exercises the real pdfjs v5
-   getDocument/getOutline path against a committed fixture (pdf.test.ts mocks
-   pdfjs, so it can't catch an ESM/worker-wiring regression). */
-export async function readPdfOutlineTitles(buffer: Buffer): Promise<string[] | null> {
-  try {
-    const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
-    /* pdfjs mutates the input buffer (transferable-friendly). Pass a
-       copy via Uint8Array to keep pdf-parse's earlier read untouched.
-       pdfjs-dist 5 removed `isEvalSupported` (the eval-based font path it
-       gated is gone); we only read the outline, never render, so it was a
-       no-op for us anyway. */
-    const data = new Uint8Array(buffer);
-    const doc = await getDocument({ data, useSystemFonts: false }).promise;
-    try {
-      const outline = (await doc.getOutline()) as OutlineEntry[] | null;
-      if (!Array.isArray(outline) || outline.length === 0) return null;
-      const titles: string[] = [];
-      for (const entry of outline) {
-        const t = typeof entry.title === 'string' ? entry.title.trim() : '';
-        if (!t) continue;
-        if (isLikelyFrontMatterTitle(t)) continue;
-        titles.push(t);
-      }
-      return titles.length > 0 ? titles : null;
-    } finally {
-      await doc.destroy();
-    }
-  } catch {
-    return null;
+/* Top-level chapter titles from a pdf-parse 2 outline tree (getInfo().outline,
+   the same bookmark structure pdfjs' getOutline() returns). Returns null when
+   there's no usable outline — the caller treats null as "fall back to the
+   parseText-derived titles". Front-matter entries (Copyright, Dedication, …)
+   are filtered before the caller aligns the count against the chapter count.
+   Pure + exported so pdf.test.ts and pdf-real.test.ts can drive it directly. */
+export function extractOutlineTitles(outline: unknown): string[] | null {
+  if (!Array.isArray(outline) || outline.length === 0) return null;
+  const titles: string[] = [];
+  for (const entry of outline as OutlineEntry[]) {
+    const t = typeof entry?.title === 'string' ? entry.title.trim() : '';
+    if (!t) continue;
+    if (isLikelyFrontMatterTitle(t)) continue;
+    titles.push(t);
   }
+  return titles.length > 0 ? titles : null;
 }
 
 export async function parsePdf(
   buffer: Buffer,
   opts: { fileName?: string },
 ): Promise<ParsedManuscript> {
-  const { text, info } = await pdfParse(buffer);
+  /* pdf-parse 2 is class-based: construct with the binary data, pull text +
+     the Info dict + outline, then always destroy() to free the pdfjs document.
+     Pass a Uint8Array COPY — pdfjs takes ownership of the array (transfers it
+     to its worker) — so the caller's `buffer` is never detached. */
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  let text: string;
+  let info: unknown;
+  let outline: unknown;
+  try {
+    /* pageJoiner:'' suppresses pdf-parse 2's default '-- N of M --' per-page
+       marker, which would otherwise be appended to every page and pollute
+       chapter detection (pdf-parse 1 used bare form-feed page breaks). */
+    text = (await parser.getText({ pageJoiner: '' })).text;
+    /* getInfo().info is the raw PDF Info dictionary — the same Title/Author
+       keys pdf-parse 1 returned as `info`. .outline is the bookmark tree. */
+    const infoResult = await parser.getInfo();
+    info = infoResult.info;
+    outline = infoResult.outline;
+  } finally {
+    await parser.destroy();
+  }
   const parsed = parseText(text, { fileName: opts.fileName, format: 'plaintext' });
   const meta = info as { Title?: string; Author?: string } | undefined;
   const metaTitle = meta?.Title?.trim();
@@ -72,7 +82,7 @@ export async function parsePdf(
      chapter count. Mismatches are conservative — we keep parseText
      titles rather than risk labelling chapter 5's audio as "The
      Beginning". */
-  const outlineTitles = await readPdfOutlineTitles(buffer);
+  const outlineTitles = extractOutlineTitles(outline);
   let chapters = parsed.chapters;
   if (outlineTitles && outlineTitles.length === chapters.length) {
     chapters = chapters.map((c, i) => ({ ...c, title: outlineTitles[i] }));
