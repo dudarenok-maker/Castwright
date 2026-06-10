@@ -7,7 +7,7 @@
     "node": ">=20.19.0"
   },
   "scripts": {
-    "start": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/start-app.ps1",
+    "start": "node scripts/start-app.mjs",
     "stop": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/stop-app.ps1",
     "start:prod": "node scripts/start-app-prod.mjs",
     "stop:prod": "node scripts/stop-app.mjs",
@@ -18,7 +18,7 @@
     "dev:lan": "cross-env VITE_HTTPS=1 concurrently -k -n frontend,server -c blue,magenta \"vite --host 0.0.0.0\" \"cross-env LAN_HTTPS=1 npm --prefix server run dev\"",
     "start:lan": "cross-env LAN_HTTPS=1 node scripts/start-app-prod.mjs",
     "install:cert-mobile": "node scripts/print-cert-install-instructions.mjs",
-    "tts:sidecar": "powershell -ExecutionPolicy Bypass -File server/tts-sidecar/start.ps1",
+    "tts:sidecar": "node scripts/launch-sidecar.mjs",
     "build": "tsc -b && vite build && npm --prefix server run build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && npm --prefix server run typecheck",
