@@ -2965,6 +2965,28 @@ async function realReparseBook(bookId: string): Promise<ReparseBookResponse> {
   return res.json();
 }
 
+async function realReplaceManuscript(
+  bookId: string,
+  file: File,
+): Promise<ReparseBookResponse> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/replace-manuscript`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    let detail = '';
+    try {
+      detail = ((await res.json()) as { error?: string }).error ?? '';
+    } catch {
+      /* not json */
+    }
+    throw new Error(detail || `Replace manuscript failed (${res.status}).`);
+  }
+  return res.json();
+}
+
 async function realDeleteBook(bookId: string): Promise<void> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}`, { method: 'DELETE' });
   if (!res.ok) {
@@ -2983,6 +3005,14 @@ async function mockDeleteBook(_bookId: string): Promise<void> {
 }
 
 async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
+  await wait(120);
+  return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
+}
+
+async function mockReplaceManuscript(
+  _bookId: string,
+  _file: File,
+): Promise<ReparseBookResponse> {
   await wait(120);
   return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
 }
@@ -5799,6 +5829,7 @@ const real = {
   addFromSeriesRoster: realAddFromSeriesRoster,
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
+  replaceManuscript: realReplaceManuscript,
   setChapterExcluded: realSetChapterExcluded,
   setChapterHeld: realSetChapterHeld,
   renameChapter: realRenameChapter,
@@ -6044,6 +6075,7 @@ const mock = {
   addFromSeriesRoster: mockAddFromSeriesRoster,
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
+  replaceManuscript: mockReplaceManuscript,
   setChapterExcluded: mockSetChapterExcluded,
   setChapterHeld: mockSetChapterHeld,
   renameChapter: mockRenameChapter,
