@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-10
 owner: null
 ---
 
 # 202 — Dependency major upgrades round 3 (srv-38 pdf-parse 2 · srv-39 pdfjs decouple · ops-13 tooling/type majors · ops-14 eslint 10 deferred)
 
-> Status: active (branch `worktree-deps-round-3`, pending merge)
+> Status: stable (shipped 2026-06-10 via PR #712, merge `18436529`)
 > Follows plan 164 (deps/CI hygiene), 167 (React cluster), 170 (Zod/Express/pdfjs 5/Tailwind 4).
 > Key files: `server/package.json`, `server/src/parsers/pdf.ts`, `server/src/parsers/pdf.test.ts`,
 > `server/src/parsers/pdf-real.test.ts` (was `pdf-outline.real.test.ts`),
@@ -109,6 +109,13 @@ before `gh pr ready`.
 
 ## Ship notes
 
-- _Pending merge._ Fill shipped date + merge SHA on merge; flip `status: stable`
-  and `git mv` under `docs/features/archive/`. Confirm the srv-4 zero-new-deprecation
-  re-audit on a fresh dual install at merge time.
+- **Shipped 2026-06-10** via PR #712 (merge commit `18436529`), `--merge --admin`
+  (CI billing-blocked; local `npm run verify` authoritative). Closed srv-38 #708,
+  srv-39 #709, ops-13 #710; ops-14 #711 (eslint 10) stays open as the deferred
+  follow-up. Local `main` pulled + `npm install` (root + server) + full `npm run
+  build` green post-merge.
+- **srv-4 re-audit:** confirmed — a fresh dual install prints zero new deprecation
+  warnings beyond the pre-existing upstream-blocked `@google/genai` node-domexception
+  chain.
+- **Owed:** the manual real-multi-page-PDF acceptance above (the committed fixture
+  guards wiring, not prose fidelity).
