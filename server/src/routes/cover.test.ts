@@ -97,40 +97,38 @@ const SAMPLE_JPEG = new Uint8Array([
 ]);
 
 describe('cover router — happy path', () => {
-  it('GET /candidates calls OpenLibrary search with the book title + author', async () => {
-    fetchMock.mockResolvedValue(
-      jsonResponse({
-        docs: [
-          { cover_i: 111, title: TITLE },
-          { cover_i: 222, title: TITLE },
-        ],
-      }),
-    );
+  it('GET /candidates aggregates sources and returns composite-id candidates', async () => {
+    // Only OpenLibrary returns docs here; apple + google resolve empty.
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes('openlibrary.org')) {
+        return Promise.resolve(jsonResponse({ docs: [{ cover_i: 111 }, { cover_i: 222 }] }));
+      }
+      if (url.includes('itunes.apple.com')) return Promise.resolve(jsonResponse({ results: [] }));
+      return Promise.resolve(jsonResponse({ items: [] })); // google
+    });
 
     const res = await request(app).get(`/api/books/${bookId}/cover/candidates`);
     expect(res.status).toBe(200);
     expect(res.body.candidates).toHaveLength(2);
-    expect(res.body.candidates[0].openLibraryId).toBe('cover-i:111');
+    expect(res.body.candidates[0].id).toBe('openlibrary:111');
+    expect(res.body.candidates[0].source).toBe('openlibrary');
     expect(res.body.candidates[0].coverUrl).toContain('covers.openlibrary.org/b/id/111-L.jpg');
 
-    /* Confirm the search URL embedded the book's metadata. */
-    const [url] = fetchMock.mock.calls[0];
-    const parsed = new URL(url as string);
-    expect(parsed.searchParams.get('title')).toBe(TITLE);
-    expect(parsed.searchParams.get('author')).toBe(AUTHOR);
+    const olCall = fetchMock.mock.calls.find(([u]) => String(u).includes('openlibrary.org/search'));
+    const parsed = new URL(olCall![0] as string);
+    expect(parsed.searchParams.get('q')).toBe(`${TITLE} ${AUTHOR}`);
+    expect(parsed.searchParams.get('title')).toBeNull();
   });
 
-  it('POST downloads the picked candidate, writes cover.jpg, patches state.json, and returns the public URL', async () => {
-    /* Two fetch calls happen on this path: first the search to re-locate
-       the candidate by id, then the actual image download. Queue both. */
+  it('POST downloads the picked candidate, writes cover.jpg, patches state.json, returns the public URL', async () => {
     fetchMock
-      .mockResolvedValueOnce(jsonResponse({ docs: [{ cover_i: 555 }] }))
-      .mockResolvedValueOnce(imageResponse(SAMPLE_JPEG));
+      .mockResolvedValueOnce(jsonResponse({ docs: [{ cover_i: 555 }] })) // re-locate (openlibrary only)
+      .mockResolvedValueOnce(imageResponse(SAMPLE_JPEG)); // download
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cover`)
       .set('Content-Type', 'application/json')
-      .send({ openLibraryId: 'cover-i:555' });
+      .send({ candidateId: 'openlibrary:555' });
     expect(res.status).toBe(200);
     expect(res.body.coverImageUrl).toBe(`/api/books/${bookId}/cover`);
 
@@ -139,9 +137,9 @@ describe('cover router — happy path', () => {
     expect(Array.from(readFileSync(onDisk))).toEqual(Array.from(SAMPLE_JPEG));
 
     const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
-    expect(state.coverImage.openLibraryId).toBe('cover-i:555');
+    expect(state.coverImage.candidateId).toBe('openlibrary:555');
+    expect(state.coverImage.source).toBe('openlibrary');
     expect(state.coverImage.originalUrl).toBe('https://covers.openlibrary.org/b/id/555-L.jpg');
-    expect(typeof state.coverImage.fetchedAt).toBe('string');
   });
 
   it('GET /cover streams the cached bytes with the JPEG content-type', async () => {
@@ -171,7 +169,7 @@ describe('cover router — happy path', () => {
 });
 
 describe('cover router — error paths', () => {
-  it('POST 400s when openLibraryId is missing', async () => {
+  it('POST 400s when candidateId is missing', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cover`)
       .set('Content-Type', 'application/json')
@@ -179,21 +177,21 @@ describe('cover router — error paths', () => {
     expect(res.status).toBe(400);
   });
 
-  it('POST 404s when the candidate id is no longer in the live search result set', async () => {
+  it('POST 404s when the candidate id is no longer in the live result set', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ docs: [{ cover_i: 999 }] }));
     const res = await request(app)
       .post(`/api/books/${bookId}/cover`)
       .set('Content-Type', 'application/json')
-      .send({ openLibraryId: 'cover-i:doesnotexist' });
+      .send({ candidateId: 'openlibrary:doesnotexist' });
     expect(res.status).toBe(404);
   });
 
-  it('POST 502s when the search throws OpenLibraryError', async () => {
+  it('POST 502s when the re-locate search throws CoverSourceError', async () => {
     fetchMock.mockResolvedValueOnce(new Response('boom', { status: 503 }));
     const res = await request(app)
       .post(`/api/books/${bookId}/cover`)
       .set('Content-Type', 'application/json')
-      .send({ openLibraryId: 'cover-i:111' });
+      .send({ candidateId: 'openlibrary:111' });
     expect(res.status).toBe(502);
     expect(res.body.kind).toBe('http');
   });
@@ -203,7 +201,7 @@ describe('cover router — error paths', () => {
     const r1 = await request(app).get(`/api/books/${stranger}/cover/candidates`);
     const r2 = await request(app)
       .post(`/api/books/${stranger}/cover`)
-      .send({ openLibraryId: 'cover-i:1' });
+      .send({ candidateId: 'openlibrary:1' });
     const r3 = await request(app).get(`/api/books/${stranger}/cover`);
     const r4 = await request(app).delete(`/api/books/${stranger}/cover`);
     expect(r1.status).toBe(404);

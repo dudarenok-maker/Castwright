@@ -140,7 +140,7 @@ export interface BookStateJson {
   coverGradient: [string, string];
   /** Cached cover-image metadata. Bytes live next to state.json at
       .audiobook/cover.jpg (see `coverImagePath` in workspace/paths.ts).
-      Populated by the OpenLibrary fetch (server/src/cover/openlibrary.ts)
+      Populated by the multi-source cover fetch (server/src/cover/store.ts)
       OR by a local upload (server/src/cover/upload.ts) and reverted by
       DELETE /api/books/:bookId/cover. Optional so books imported before
       this feature continue to load and fall back to the procedural
@@ -152,9 +152,13 @@ export interface BookStateJson {
       added fields are optional; legacy records without `source` infer
       `source: 'openlibrary'` by the presence of `openLibraryId`. */
   coverImage?: {
-    /** Plan 40 — discriminator. Absent on legacy records; presence of
-        `openLibraryId` infers `'openlibrary'`. */
-    source?: 'openlibrary' | 'local';
+    /** Discriminator. Legacy records (pre-multi-source) may carry
+        `openLibraryId` instead of `candidateId`; both are unused at read
+        time (the scan only checks presence + the bytes on disk). */
+    source?: 'openlibrary' | 'apple' | 'google' | 'local';
+    /** Composite `<source>:<localId>` written by the multi-source fetch. */
+    candidateId?: string;
+    /** Legacy (plan 36) — OpenLibrary-only id. Read-tolerated, not written. */
     openLibraryId?: string;
     originalUrl?: string;
     fetchedAt?: string;

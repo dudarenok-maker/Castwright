@@ -1792,10 +1792,10 @@ async function realPutListenProgress(
   return res.json();
 }
 
-/* OpenLibrary cover endpoints. The picker modal calls findCoverCandidates
-   on open, then setCover when the user clicks a thumbnail; removeCover
-   reverts to the procedural gradient. See server/src/routes/cover.ts and
-   server/src/cover/openlibrary.ts for the upstream behaviour. */
+/* Multi-source cover endpoints (OpenLibrary / Apple Books / Google Books).
+   The picker modal calls findCoverCandidates on open, then setCover when
+   the user clicks a thumbnail; removeCover reverts to the procedural
+   gradient. See server/src/routes/cover.ts for the upstream behaviour. */
 async function realFindCoverCandidates(bookId: string): Promise<{ candidates: CoverCandidate[] }> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/candidates`);
   if (!res.ok)
@@ -1807,12 +1807,12 @@ async function realFindCoverCandidates(bookId: string): Promise<{ candidates: Co
 
 async function realSetCover(
   bookId: string,
-  openLibraryId: string,
+  candidateId: string,
 ): Promise<{ coverImageUrl: string }> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ openLibraryId }),
+    body: JSON.stringify({ candidateId }),
   });
   if (!res.ok)
     throw new Error(`Cover save failed (${res.status}): ${(await res.text()) || res.statusText}`);
@@ -1880,28 +1880,34 @@ async function realPatchCoverFraming(
     );
 }
 
-/* Mock counterparts. The fake candidates point at real OpenLibrary
-   image URLs so the picker renders meaningful thumbnails under
-   VITE_USE_MOCKS=true; setCover returns the picked URL directly so the
-   library card swaps the cover without a real server round-trip. */
+/* Mock counterparts. The fake candidates span the three real sources
+   (OpenLibrary + Apple Books + Google Books) so the picker's source
+   badges render under VITE_USE_MOCKS=true; they point at real
+   OpenLibrary image URLs so thumbnails resolve. setCover returns the
+   picked URL directly so the library card swaps the cover without a
+   real server round-trip. */
 const MOCK_COVER_CANDIDATES: CoverCandidate[] = [
   {
-    openLibraryId: 'cover-i:8739161',
+    id: 'openlibrary:8739161',
+    source: 'openlibrary',
     coverUrl: 'https://covers.openlibrary.org/b/id/8739161-L.jpg',
     edition: 'Aladdin · 2012',
   },
   {
-    openLibraryId: 'cover-i:13035811',
+    id: 'apple:1444008227',
+    source: 'apple',
     coverUrl: 'https://covers.openlibrary.org/b/id/13035811-L.jpg',
-    edition: 'Aladdin · 2013',
+    edition: '2013',
   },
   {
-    openLibraryId: 'cover-i:14625765',
+    id: 'google:zNFuDwAAQBAJ',
+    source: 'google',
     coverUrl: 'https://covers.openlibrary.org/b/id/14625765-L.jpg',
-    edition: 'Aladdin · 2014',
+    edition: 'HarperCollins · 2014',
   },
   {
-    openLibraryId: 'cover-i:11193889',
+    id: 'openlibrary:11193889',
+    source: 'openlibrary',
     coverUrl: 'https://covers.openlibrary.org/b/id/11193889-L.jpg',
     edition: 'Aladdin · 2015',
   },
@@ -1914,10 +1920,10 @@ async function mockFindCoverCandidates(_bookId: string): Promise<{ candidates: C
 
 async function mockSetCover(
   _bookId: string,
-  openLibraryId: string,
+  candidateId: string,
 ): Promise<{ coverImageUrl: string }> {
   await wait(80);
-  const hit = MOCK_COVER_CANDIDATES.find((c) => c.openLibraryId === openLibraryId);
+  const hit = MOCK_COVER_CANDIDATES.find((c) => c.id === candidateId);
   return { coverImageUrl: hit?.coverUrl ?? MOCK_COVER_CANDIDATES[0].coverUrl };
 }
 
