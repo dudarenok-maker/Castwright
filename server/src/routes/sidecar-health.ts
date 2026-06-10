@@ -62,6 +62,13 @@ interface SidecarHealthBody {
   asr_loaded?: boolean;
   asr_device?: string | null;
   device?: string | null;
+  /* side-14 — per-engine device ground-truth. Sidecar values are normalised
+     families ('cuda' | 'mps' | 'cpu') or null while unknowable; devices_state
+     tracks the startup probe ('pending' until torch is imported in the
+     background, 'ready', or 'error' when torch is missing/broken). Absent on an
+     older sidecar → null. */
+  devices?: Record<string, string | null>;
+  devices_state?: string;
   /* side-11 item 2 — SOFT recycle signal. `recycle_pending` flips true once the
      sidecar's committed-private memory crosses SIDECAR_RECYCLE_SOFT_MB (below the
      hard ceiling); the generation worker reads it off this poll and triggers a
@@ -76,6 +83,43 @@ interface SidecarHealthBody {
   committed_mb?: number | null;
   vram_reserved_mb?: number | null;
   vram_total_mb?: number | null;
+}
+
+/* side-14 — per-engine device ground-truth. Sidecar values are normalised
+   families ('cuda' | 'mps' | 'cpu') or null while unknowable; devices_state
+   tracks the startup probe ('pending' until torch is imported in the
+   background, 'ready', or 'error' when torch is missing/broken). Absent on an
+   older sidecar → null. */
+export type SidecarDeviceFamily = 'cuda' | 'mps' | 'cpu';
+export type SidecarDeviceMap = Record<
+  'kokoro' | 'coqui' | 'qwen',
+  SidecarDeviceFamily | null
+>;
+export type SidecarDevicesState = 'pending' | 'ready' | 'error';
+
+const DEVICE_FAMILIES: readonly SidecarDeviceFamily[] = ['cuda', 'mps', 'cpu'];
+const DEVICES_STATES: readonly SidecarDevicesState[] = ['pending', 'ready', 'error'];
+const DEVICE_ENGINES = ['kokoro', 'coqui', 'qwen'] as const;
+
+/* side-14 — normalise the sidecar's devices map. Old sidecar omits it → null;
+   junk values per-slot → null (never forward an unknown string to the UI). */
+export function normaliseDevices(raw: unknown): SidecarDeviceMap | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const rec = raw as Record<string, unknown>;
+  const out = {} as SidecarDeviceMap;
+  for (const engine of DEVICE_ENGINES) {
+    const v = rec[engine];
+    out[engine] = DEVICE_FAMILIES.includes(v as SidecarDeviceFamily)
+      ? (v as SidecarDeviceFamily)
+      : null;
+  }
+  return out;
+}
+
+export function normaliseDevicesState(raw: unknown): SidecarDevicesState | null {
+  return DEVICES_STATES.includes(raw as SidecarDevicesState)
+    ? (raw as SidecarDevicesState)
+    : null;
 }
 
 const QWEN_INSTALL_STATES: readonly QwenInstallState[] = [
@@ -141,6 +185,9 @@ export interface SidecarHealthResult {
   committedMb?: number | null;
   vramReservedMb?: number | null;
   vramTotalMb?: number | null;
+  /* side-14 — per-engine device map + probe state, forwarded from the sidecar. */
+  devices?: SidecarDeviceMap | null;
+  devicesState?: SidecarDevicesState | null;
   error?: string;
 }
 
@@ -200,6 +247,8 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
       vramReservedMb:
         typeof body.vram_reserved_mb === 'number' ? body.vram_reserved_mb : null,
       vramTotalMb: typeof body.vram_total_mb === 'number' ? body.vram_total_mb : null,
+      devices: normaliseDevices(body.devices),
+      devicesState: normaliseDevicesState(body.devices_state),
     };
   } catch (e) {
     clearTimeout(timer);
