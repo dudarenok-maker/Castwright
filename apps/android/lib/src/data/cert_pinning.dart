@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'crockford_base32.dart';
 
 /// Cert-fingerprint pinning for the pairing flow (plan 188, app-2 / srv-20).
 ///
@@ -43,3 +44,13 @@ bool fingerprintsMatch(String a, String b) {
 /// True when the fetched CA [pem] matches the [expected] pinned fingerprint.
 bool verifyCaFingerprint(String pem, String expected) =>
     fingerprintsMatch(caFingerprintFromPem(pem), expected);
+
+/// True when [tag] equals the Crockford-base32 of the first 10 bytes (80 bits)
+/// of the certificate's SHA-256 — the QR's compact integrity tag. Normalised to
+/// upper-case alphanumerics so case differences never cause a false mismatch.
+bool fingerprintTagMatches(String pem, String tag) {
+  final digest = sha256.convert(pemToDer(pem)).bytes;
+  final expected = crockfordBase32(digest.sublist(0, 10));
+  String norm(String s) => s.toUpperCase().replaceAll(RegExp('[^0-9A-Z]'), '');
+  return norm(expected) == norm(tag);
+}
