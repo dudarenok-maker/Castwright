@@ -1879,10 +1879,12 @@ async function realPatchCoverFraming(
     );
 }
 
-/* Mock counterparts. The fake candidates point at real OpenLibrary
-   image URLs so the picker renders meaningful thumbnails under
-   VITE_USE_MOCKS=true; setCover returns the picked URL directly so the
-   library card swaps the cover without a real server round-trip. */
+/* Mock counterparts. The fake candidates span the three real sources
+   (OpenLibrary + Apple Books + Google Books) so the picker's source
+   badges render under VITE_USE_MOCKS=true; they point at real
+   OpenLibrary image URLs so thumbnails resolve. setCover returns the
+   picked URL directly so the library card swaps the cover without a
+   real server round-trip. */
 const MOCK_COVER_CANDIDATES: CoverCandidate[] = [
   {
     id: 'openlibrary:8739161',
@@ -1891,16 +1893,16 @@ const MOCK_COVER_CANDIDATES: CoverCandidate[] = [
     edition: 'Aladdin · 2012',
   },
   {
-    id: 'openlibrary:13035811',
-    source: 'openlibrary',
+    id: 'apple:1444008227',
+    source: 'apple',
     coverUrl: 'https://covers.openlibrary.org/b/id/13035811-L.jpg',
-    edition: 'Aladdin · 2013',
+    edition: '2013',
   },
   {
-    id: 'openlibrary:14625765',
-    source: 'openlibrary',
+    id: 'google:zNFuDwAAQBAJ',
+    source: 'google',
     coverUrl: 'https://covers.openlibrary.org/b/id/14625765-L.jpg',
-    edition: 'Aladdin · 2014',
+    edition: 'HarperCollins · 2014',
   },
   {
     id: 'openlibrary:11193889',

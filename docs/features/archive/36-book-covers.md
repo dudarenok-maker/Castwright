@@ -171,3 +171,24 @@ Created:
 - `server/src/routes/cover.test.ts`
 - `src/modals/cover-picker.tsx`
 - `src/modals/cover-picker.test.tsx`
+
+## Multi-source extension (2026-06-10)
+
+Cover search now aggregates **three** sources instead of OpenLibrary alone:
+**OpenLibrary + Apple Books + Google Books**. The server queries each with a
+**free-text query** (title + author) rather than an exact-title lookup, which
+fixed the OpenLibrary exact-title miss (e.g. "Scepter of the Ancients" returned
+nothing under the old isbn/title-key path). Results are **interleaved** across
+sources and rendered in a **source-badged picker grid** — each candidate tile
+carries a small badge (`OpenLibrary` / `Apple` / `Google`). Import-time
+auto-fetch walks the same sources in **priority order** and pins the first hit.
+
+Contract change: the candidate identifier moved from a bare `openLibraryId` to a
+namespaced `candidateId` (`<source>:<id>`), and the `CoverCandidate` shape gained
+`{ id, source }` (replacing the OpenLibrary-only id). `setCover` takes the
+`candidateId`; the server routes it back to the owning source adapter.
+
+Design spec: `docs/superpowers/specs/2026-06-10-multi-source-cover-search-design.md`.
+Plan: `docs/superpowers/plans/2026-06-10-multi-source-cover-search.md`.
+E2E guard: `e2e/cover-picker.spec.ts` (opens the picker via the library card
+"…" → "Find cover image" control and asserts ≥2 distinct source badges render).
