@@ -1,104 +1,44 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
-
-/* The modal fetches GET /api/export/lan via api.getExportLanUrls. Mock it so
-   each test drives the LAN/pairing state. qrcode stays real (jsdom renders a
-   data: URL fine), so we assert the QR <img> actually appears. */
-vi.mock('../lib/api', () => ({
-  api: { getExportLanUrls: vi.fn() },
-}));
-
-import { PairDeviceModal, toPairingPayload } from './pair-device';
+import { PairDeviceModal } from './pair-device';
 import { api } from '../lib/api';
-import type { ExportLanInfo } from '../lib/types';
 
-const mockedLan = vi.mocked(api.getExportLanUrls);
+describe('PairDeviceModal (QR redesign)', () => {
+  beforeEach(() => vi.restoreAllMocks());
 
-const COMPLETE: ExportLanInfo = {
-  urls: ['https://192.168.86.20:8443'],
-  port: 8443,
-  protocol: 'https',
-  token: 'lan-token-abc',
-  caFingerprint: 'AB:CD:EF:01',
-};
-
-beforeEach(() => {
-  mockedLan.mockReset();
-});
-
-describe('toPairingPayload', () => {
-  it('returns null for null info', () => {
-    expect(toPairingPayload(null)).toBeNull();
-  });
-
-  it('returns null when not HTTPS (no CA trust possible)', () => {
-    expect(
-      toPairingPayload({ urls: ['http://192.168.1.42:8080'], port: 8080, protocol: 'http' }),
-    ).toBeNull();
-  });
-
-  it('returns null when the token is missing', () => {
-    expect(toPairingPayload({ ...COMPLETE, token: undefined })).toBeNull();
-  });
-
-  it('returns null when the CA fingerprint is missing', () => {
-    expect(toPairingPayload({ ...COMPLETE, caFingerprint: undefined })).toBeNull();
-  });
-
-  it('returns null when there is no reachable URL', () => {
-    expect(toPairingPayload({ ...COMPLETE, urls: [] })).toBeNull();
-  });
-
-  it('maps a complete HTTPS info to {url, token, caFingerprint}', () => {
-    expect(toPairingPayload(COMPLETE)).toEqual({
-      url: 'https://192.168.86.20:8443',
-      token: 'lan-token-abc',
-      caFingerprint: 'AB:CD:EF:01',
+  it('renders the compact QR + manual fields from the session payload', async () => {
+    vi.spyOn(api, 'createPairSession').mockResolvedValue({
+      qrPayload: 'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R',
+      hostPort: '192.168.1.5:8443', port: 8443,
+      code: 'K7QF3M2P', fpTag: 'J4XQ2A7BWZ9K3M5R', expiresAt: Date.now() + 300000,
     });
-  });
-});
-
-describe('PairDeviceModal', () => {
-  it('renders nothing when closed', () => {
-    mockedLan.mockResolvedValue(COMPLETE);
-    const { container } = render(<PairDeviceModal open={false} onClose={() => {}} />);
-    expect(container).toBeEmptyDOMElement();
-    expect(mockedLan).not.toHaveBeenCalled();
-  });
-
-  it('renders a scannable QR image and the manual values when pairing is available', async () => {
-    mockedLan.mockResolvedValue(COMPLETE);
     render(<PairDeviceModal open onClose={() => {}} />);
-
-    const img = await screen.findByTestId('pair-qr-image');
-    expect(img).toHaveAttribute('src', expect.stringMatching(/^data:image\/png/));
-
-    // Manual-entry fallback carries all three values verbatim.
-    expect(screen.getByText('https://192.168.86.20:8443')).toBeInTheDocument();
-    expect(screen.getByText('lan-token-abc')).toBeInTheDocument();
-    expect(screen.getByText('AB:CD:EF:01')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('pair-qr-image')).toBeInTheDocument());
+    expect(screen.getByText('192.168.1.5:8443')).toBeInTheDocument();
+    expect(screen.getByText('K7QF3M2P')).toBeInTheDocument();
+    expect(screen.getByText('J4XQ2A7BWZ9K3M5R')).toBeInTheDocument();
   });
 
-  it('explains how to enable pairing when not in LAN HTTPS mode', async () => {
-    mockedLan.mockResolvedValue({ urls: ['http://192.168.1.42:8080'], port: 8080, protocol: 'http' });
+  it('shows the unavailable state when the session 409s', async () => {
+    vi.spyOn(api, 'createPairSession').mockRejectedValue(new Error('pair session failed (409): not-lan-https'));
     render(<PairDeviceModal open onClose={() => {}} />);
-
-    expect(await screen.findByTestId('pair-device-unavailable')).toBeInTheDocument();
-    expect(screen.queryByTestId('pair-qr-image')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('pair-device-unavailable')).toBeInTheDocument());
   });
 
-  it('shows an error state when the LAN probe fails', async () => {
-    mockedLan.mockRejectedValue(new Error('boom'));
+  it('shows a generic error on a non-409 failure', async () => {
+    vi.spyOn(api, 'createPairSession').mockRejectedValue(new Error('network down'));
     render(<PairDeviceModal open onClose={() => {}} />);
-    expect(await screen.findByTestId('pair-device-error')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('pair-device-error')).toBeInTheDocument());
   });
 
-  it('calls onClose when the backdrop is clicked', async () => {
-    mockedLan.mockResolvedValue(COMPLETE);
-    const onClose = vi.fn();
-    render(<PairDeviceModal open onClose={onClose} />);
-    await screen.findByTestId('pair-qr-image');
-    screen.getByTestId('pair-device-backdrop').click();
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  it('renders a countdown for the pairing code', async () => {
+    vi.spyOn(api, 'createPairSession').mockResolvedValue({
+      qrPayload: 'CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R',
+      hostPort: '192.168.1.5:8443', port: 8443,
+      code: 'K7QF3M2P', fpTag: 'J4XQ2A7BWZ9K3M5R', expiresAt: Date.now() + 300000,
+    });
+    render(<PairDeviceModal open onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('pair-code-countdown')).toBeInTheDocument());
+    expect(screen.getByTestId('pair-code-countdown').textContent).toMatch(/expires in \d+:\d{2}/);
   });
 });

@@ -2,13 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../data/pairing_service.dart';
 import '../data/pairing_store.dart';
-import '../domain/paired_server.dart';
+import '../domain/pairing_qr.dart';
 import 'qr_scan_screen.dart';
 
-/// Manual pairing form (app-2). Enter the server URL + token + CA fingerprint
-/// from the desktop pairing screen; on success the verified connection is
-/// persisted and returned. QR scanning is a follow-up (a camera is impractical
-/// on an emulator), but this exercises the full verify → pin → probe flow.
+/// Manual pairing form (app-2). Enter the server host:port + pairing code +
+/// fingerprint tag from the desktop pairing screen; on success the verified
+/// connection is persisted and returned. QR scanning fills the fields so the
+/// user can review before pairing.
 class PairingScreen extends StatefulWidget {
   const PairingScreen({super.key, required this.service, required this.store});
 
@@ -20,17 +20,17 @@ class PairingScreen extends StatefulWidget {
 }
 
 class _PairingScreenState extends State<PairingScreen> {
-  final _url = TextEditingController();
-  final _token = TextEditingController();
-  final _fingerprint = TextEditingController();
+  final _host = TextEditingController();
+  final _code = TextEditingController();
+  final _fpTag = TextEditingController();
   bool _busy = false;
   String? _error;
 
   @override
   void dispose() {
-    _url.dispose();
-    _token.dispose();
-    _fingerprint.dispose();
+    _host.dispose();
+    _code.dispose();
+    _fpTag.dispose();
     super.dispose();
   }
 
@@ -40,12 +40,11 @@ class _PairingScreenState extends State<PairingScreen> {
       _error = null;
     });
     try {
-      final server = PairedServer(
-        url: _url.text.trim(),
-        token: _token.text.trim(),
-        caFingerprint: _fingerprint.text.trim(),
-      );
-      final conn = await widget.service.pair(server);
+      final qr = PairingQr(
+          hostPort: _host.text.trim(),
+          code: _code.text.trim(),
+          fpTag: _fpTag.text.trim());
+      final conn = await widget.service.pair(qr, label: 'Companion');
       final stamped =
           conn.server.copyWith(pairedAt: DateTime.now().toIso8601String());
       await widget.store.save(stamped);
@@ -55,8 +54,6 @@ class _PairingScreenState extends State<PairingScreen> {
       setState(() => _error = e.message);
     } on FormatException catch (e) {
       setState(() => _error = e.message);
-    } catch (e) {
-      setState(() => _error = 'Pairing failed: $e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -65,14 +62,14 @@ class _PairingScreenState extends State<PairingScreen> {
   /// Open the camera scanner; on a valid pairing QR, fill the form fields so
   /// the user can review before pairing.
   Future<void> _scan() async {
-    final server = await Navigator.of(context).push<PairedServer>(
+    final qr = await Navigator.of(context).push<PairingQr>(
       MaterialPageRoute(builder: (_) => const QrScanScreen()),
     );
-    if (server != null && mounted) {
+    if (qr != null && mounted) {
       setState(() {
-        _url.text = server.url;
-        _token.text = server.token;
-        _fingerprint.text = server.caFingerprint;
+        _host.text = qr.hostPort;
+        _code.text = qr.code;
+        _fpTag.text = qr.fpTag;
         _error = null;
       });
     }
@@ -98,21 +95,19 @@ class _PairingScreenState extends State<PairingScreen> {
             ),
             const SizedBox(height: 12),
             TextField(
-              key: const Key('field-url'),
-              controller: _url,
-              keyboardType: TextInputType.url,
-              decoration: const InputDecoration(labelText: 'Server URL (https://…:8443)'),
-            ),
+                key: const Key('field-host'),
+                controller: _host,
+                decoration:
+                    const InputDecoration(labelText: 'Server (host:port)')),
             TextField(
-              key: const Key('field-token'),
-              controller: _token,
-              decoration: const InputDecoration(labelText: 'Access token'),
-            ),
+                key: const Key('field-code'),
+                controller: _code,
+                decoration: const InputDecoration(labelText: 'Pairing code')),
             TextField(
-              key: const Key('field-fingerprint'),
-              controller: _fingerprint,
-              decoration: const InputDecoration(labelText: 'CA fingerprint (SHA-256)'),
-            ),
+                key: const Key('field-fptag'),
+                controller: _fpTag,
+                decoration:
+                    const InputDecoration(labelText: 'Fingerprint tag')),
             const SizedBox(height: 16),
             if (_error != null)
               Padding(

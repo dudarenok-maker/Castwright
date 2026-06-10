@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../domain/paired_server.dart';
+import '../domain/pairing_qr.dart';
 import 'cert_pinning.dart';
 
-/// Why a pairing attempt failed — drives the user-facing error copy.
 enum PairingErrorKind { unreachable, fingerprintMismatch, tokenRejected, server }
 
 class PairingException implements Exception {
@@ -15,81 +15,68 @@ class PairingException implements Exception {
   String toString() => 'PairingException($kind): $message';
 }
 
-/// A successful pairing: the verified base URL + token + the pinned CA (PEM),
-/// ready to build authenticated, cert-pinned requests from.
+/// Thrown by a redeem fn when the server rejects the code (HTTP 401/410).
+class RedeemRejected implements Exception {
+  const RedeemRejected();
+}
+
 class Connection {
   const Connection({required this.server, required this.caPem});
   final PairedServer server;
   final String caPem;
 }
 
-/// Fetches the server CA (`/cert/root.crt`) over an *untrusted* channel —
-/// injectable so the pairing flow is unit-testable without real TLS.
+class RedeemResult {
+  const RedeemResult({required this.token, required this.caFingerprint});
+  final String token;
+  final String caFingerprint; // full SHA-256, stored on PairedServer
+}
+
 typedef CaFetcher = Future<String> Function(String baseUrl);
+typedef TagVerifier = bool Function(String caPem, String fpTag);
+typedef CodeRedeemer = Future<RedeemResult> Function(String baseUrl, String code, String caPem);
 
-/// Probes an authenticated, cert-pinned endpoint to confirm the token works —
-/// injectable for the same reason. Returns the HTTP status code.
-typedef AuthProbe = Future<int> Function(PairedServer server, String caPem);
-
-/// Pairs the app to a server (plan 188, app-2 / srv-20):
-/// 1. fetch the CA over a one-shot validation-bypassing client,
-/// 2. verify its SHA-256 == the QR's `caFingerprint` (else refuse),
-/// 3. probe an /api endpoint with the token over a CA-pinned client.
+/// Pairs the app to a server (QR redesign):
+/// 1. fetch the CA over an untrusted one-shot client,
+/// 2. verify its 80-bit fingerprint tag == the QR's `fpTag` (else refuse),
+/// 3. redeem the code over a CA-pinned client to mint a per-device token.
 class PairingService {
-  PairingService({CaFetcher? fetchCa, AuthProbe? probe})
+  PairingService({CaFetcher? fetchCa, TagVerifier? verifyTag, CodeRedeemer? redeem})
       : _fetchCa = fetchCa ?? _defaultFetchCa,
-        _probe = probe ?? _defaultProbe;
+        _verifyTag = verifyTag ?? fingerprintTagMatches,
+        _redeem = redeem ?? _defaultRedeem;
 
   final CaFetcher _fetchCa;
-  final AuthProbe _probe;
+  final TagVerifier _verifyTag;
+  final CodeRedeemer _redeem;
 
-  Future<Connection> pair(PairedServer server) async {
+  Future<Connection> pair(PairingQr qr, {required String label}) async {
     String caPem;
     try {
-      caPem = await _fetchCa(server.url);
+      caPem = await _fetchCa(qr.baseUrl);
     } catch (e) {
-      throw PairingException(
-        PairingErrorKind.unreachable,
-        'Could not reach the server to fetch its certificate ($e).',
-      );
+      throw PairingException(PairingErrorKind.unreachable,
+          'Could not reach the server to fetch its certificate ($e).');
     }
-
-    if (!verifyCaFingerprint(caPem, server.caFingerprint)) {
-      throw const PairingException(
-        PairingErrorKind.fingerprintMismatch,
-        'The server certificate did not match the pairing code. Refusing to '
-        'pair — this could be a man-in-the-middle.',
-      );
+    if (!_verifyTag(caPem, qr.fpTag)) {
+      throw const PairingException(PairingErrorKind.fingerprintMismatch,
+          'The server certificate did not match the pairing code. Refusing to pair.');
     }
-
-    int status;
+    RedeemResult r;
     try {
-      status = await _probe(server, caPem);
+      r = await _redeem(qr.baseUrl, qr.code, caPem);
+    } on RedeemRejected {
+      throw const PairingException(PairingErrorKind.tokenRejected,
+          'The server rejected the pairing code. Re-scan a fresh code.');
     } catch (e) {
-      throw PairingException(
-        PairingErrorKind.unreachable,
-        'Paired certificate verified, but the authenticated probe failed ($e).',
-      );
+      throw PairingException(PairingErrorKind.unreachable,
+          'Certificate verified, but redeeming the code failed ($e).');
     }
-    if (status == 401 || status == 403) {
-      throw const PairingException(
-        PairingErrorKind.tokenRejected,
-        'The server rejected the access token. Re-scan the current pairing code.',
-      );
-    }
-    if (status >= 400) {
-      throw PairingException(
-        PairingErrorKind.server,
-        'The server returned an unexpected status ($status).',
-      );
-    }
+    final server = PairedServer(url: qr.baseUrl, token: r.token, caFingerprint: r.caFingerprint);
     return Connection(server: server, caPem: caPem);
   }
 }
 
-/// Default CA fetch: a one-shot client that accepts the (not-yet-trusted)
-/// self-signed cert ONLY to download `/cert/root.crt`; the bytes are then
-/// fingerprint-verified before anything is trusted.
 Future<String> _defaultFetchCa(String baseUrl) async {
   final client = HttpClient()..badCertificateCallback = (_, _, _) => true;
   try {
@@ -101,18 +88,20 @@ Future<String> _defaultFetchCa(String baseUrl) async {
   }
 }
 
-/// Default authenticated probe: GET `/api/info` over a client that trusts ONLY
-/// the just-verified CA, with the Bearer token.
-Future<int> _defaultProbe(PairedServer server, String caPem) async {
+Future<RedeemResult> _defaultRedeem(String baseUrl, String code, String caPem) async {
   final ctx = SecurityContext(withTrustedRoots: false)
     ..setTrustedCertificatesBytes(utf8.encode(caPem));
   final client = HttpClient(context: ctx);
   try {
-    final req = await client.getUrl(Uri.parse('${server.url}/api/info'));
-    req.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${server.token}');
+    final req = await client.postUrl(Uri.parse('$baseUrl/api/pair/redeem'));
+    req.headers.contentType = ContentType.json;
+    req.write(jsonEncode({'code': code, 'label': Platform.localHostname}));
     final res = await req.close();
-    await res.drain<void>();
-    return res.statusCode;
+    if (res.statusCode == 401 || res.statusCode == 410) throw const RedeemRejected();
+    if (res.statusCode >= 400) throw HttpException('redeem status ${res.statusCode}');
+    final body = jsonDecode(await res.transform(utf8.decoder).join()) as Map<String, dynamic>;
+    final token = body['token'] as String;
+    return RedeemResult(token: token, caFingerprint: caFingerprintFromPem(caPem));
   } finally {
     client.close(force: true);
   }

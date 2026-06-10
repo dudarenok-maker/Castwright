@@ -1,84 +1,66 @@
 /* Pair-a-device modal (plan 188, app-2 web half).
 
    The Castwright Companion app pairs to this server over LAN HTTPS by reading a
-   QR that carries `{ url, token, caFingerprint }` — the server URL, the srv-20
-   LAN access token, and the mkcert root CA's SHA-256 (so the app fetches
-   /cert/root.crt, verifies the fingerprint, and pins it WITHOUT an OS cert
-   install). The server already exposes all three at GET /api/export/lan
-   (api.getExportLanUrls → ExportLanInfo); this modal just renders them as a
-   scannable QR, plus the raw values for manual entry as a fallback.
+   QR that carries a compact CWP1 payload — the host:port, a short pairing code,
+   and a fingerprint tag. The server issues a session at POST /api/pair/session;
+   a 409 means pairing isn't available yet (not LAN HTTPS / no cert / no token),
+   in which case we show instructions rather than a useless QR. */
 
-   Pairing is only possible in LAN HTTPS mode with a configured token + a
-   resolvable CA — otherwise we explain how to enable it rather than drawing a
-   QR the app can't act on. */
-
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 
 import { api } from '../lib/api';
 import { IconClose, IconCopy, IconQrCode, IconShield, IconCheck } from '../lib/icons';
-import type { ExportLanInfo } from '../lib/types';
+import type { PairSessionInfo } from '../lib/types';
 
 interface PairDeviceModalProps {
   open: boolean;
   onClose: () => void;
 }
 
-/** The exact payload the companion app parses (PairedServer.fromQrPayload). */
-interface PairingPayload {
-  url: string;
-  token: string;
-  caFingerprint: string;
-}
-
-/** Reduce the raw LAN info to a complete pairing payload, or null when pairing
-    isn't possible yet (not HTTPS, no token, no CA, or no reachable URL). */
-export function toPairingPayload(info: ExportLanInfo | null): PairingPayload | null {
-  if (!info) return null;
-  const url = info.urls[0];
-  if (info.protocol !== 'https' || !url || !info.token || !info.caFingerprint) return null;
-  return { url, token: info.token, caFingerprint: info.caFingerprint };
-}
-
 export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
-  const [info, setInfo] = useState<ExportLanInfo | null>(null);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [info, setInfo] = useState<PairSessionInfo | null>(null);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading');
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0); // bump to regenerate the code
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== 'ready') return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [status]);
 
-  /* Fetch the LAN pairing info each time the modal opens (the token / CA can
-     change between server runs, so don't cache across opens). */
+  /* Fetch a new pairing session each time the modal opens (or the user hits
+     "Regenerate code"). Sessions are short-lived, so don't cache across opens. */
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setStatus('loading');
     setQrDataUrl(null);
     api
-      .getExportLanUrls()
+      .createPairSession()
       .then((r) => {
         if (cancelled) return;
         setInfo(r);
         setStatus('ready');
       })
-      .catch(() => {
-        if (!cancelled) setStatus('error');
+      .catch((e: Error) => {
+        if (cancelled) return;
+        setStatus(/\b409\b/.test(e?.message ?? '') ? 'unavailable' : 'error');
       });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, nonce]);
 
-  /* Memoised so the QR effect below only re-runs when the values actually
-     change (not on every render). */
-  const payload = useMemo(() => toPairingPayload(info), [info]);
-
-  /* Render the QR from the JSON payload once we have a complete one. */
+  /* Render the QR from the compact payload once we have session info. */
   useEffect(() => {
-    if (!payload) {
+    if (status !== 'ready' || !info) {
       setQrDataUrl(null);
       return;
     }
     let cancelled = false;
-    QRCode.toDataURL(JSON.stringify(payload), { margin: 1, scale: 6 })
+    QRCode.toDataURL(info.qrPayload, { margin: 4, scale: 8, errorCorrectionLevel: 'M' })
       .then((d) => {
         if (!cancelled) setQrDataUrl(d);
       })
@@ -88,7 +70,7 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [payload]);
+  }, [status, info]);
 
   if (!open) return null;
 
@@ -135,7 +117,7 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
               </p>
             )}
 
-            {status === 'ready' && !payload && (
+            {status === 'unavailable' && (
               <div data-testid="pair-device-unavailable" className="space-y-3">
                 <p>
                   Pairing needs the server running in <strong>LAN HTTPS mode</strong> with a local
@@ -159,35 +141,57 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
               </div>
             )}
 
-            {status === 'ready' && payload && (
+            {status === 'ready' && info && (
               <div className="space-y-4">
                 <p>
                   In the app, tap <strong>Pair a device → Scan QR</strong> and point the camera here.
                   Your phone must be on the same Wi‑Fi.
                 </p>
                 <div className="grid place-items-center">
-                  {qrDataUrl ? (
-                    <img
-                      src={qrDataUrl}
-                      alt="Pairing QR code"
-                      data-testid="pair-qr-image"
-                      className="w-56 h-56 rounded-xl border border-ink/10"
-                    />
-                  ) : (
-                    <div className="w-56 h-56 rounded-xl border border-ink/10 grid place-items-center text-ink/40">
-                      Generating…
-                    </div>
-                  )}
+                  <div className="bg-white p-3 rounded-2xl border border-ink/10">
+                    {qrDataUrl ? (
+                      <img
+                        src={qrDataUrl}
+                        alt="Pairing QR code"
+                        data-testid="pair-qr-image"
+                        width={288}
+                        height={288}
+                        className="block w-72 h-72"
+                        style={{ imageRendering: 'pixelated' }}
+                      />
+                    ) : (
+                      <div className="w-72 h-72 grid place-items-center text-ink/40">
+                        Generating…
+                      </div>
+                    )}
+                  </div>
                 </div>
-
+                <button
+                  onClick={() => setNonce((n) => n + 1)}
+                  className="text-xs text-magenta hover:underline min-h-[44px]"
+                >
+                  Regenerate code
+                </button>
+                {(() => {
+                  const remainingMs = Math.max(0, info.expiresAt - now);
+                  const mm = Math.floor(remainingMs / 60000);
+                  const ss = Math.floor((remainingMs % 60000) / 1000);
+                  return (
+                    <p data-testid="pair-code-countdown" className="text-xs text-ink/50">
+                      {remainingMs > 0
+                        ? `This code expires in ${mm}:${ss.toString().padStart(2, '0')}.`
+                        : 'This code has expired — tap Regenerate code.'}
+                    </p>
+                  );
+                })()}
                 <details className="rounded-xl border border-ink/10 bg-ink/[0.02]">
                   <summary className="px-4 py-3 cursor-pointer text-ink/70 font-medium select-none">
                     Or enter these manually
                   </summary>
                   <div className="px-4 pb-4 space-y-3">
-                    <CopyRow label="Server URL" value={payload.url} />
-                    <CopyRow label="Access token" value={payload.token} mono />
-                    <CopyRow label="CA fingerprint (SHA-256)" value={payload.caFingerprint} mono />
+                    <CopyRow label="Server" value={info.hostPort} mono />
+                    <CopyRow label="Pairing code" value={info.code} mono />
+                    <CopyRow label="Fingerprint tag" value={info.fpTag} mono />
                   </div>
                 </details>
 

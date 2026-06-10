@@ -70,6 +70,7 @@ import { exportRouter } from './routes/export.js';
 import { exportLanRouter, enumerateLanUrls, isLanHttpsEnabled } from './routes/export-lan.js';
 import { certRootRouter } from './routes/cert-root.js';
 import { devicesRouter } from './routes/devices.js';
+import { pairSessionRouter, pairRedeemRouter } from './routes/pairing.js';
 import { requireLanToken } from './lan-auth.js';
 import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
@@ -173,6 +174,7 @@ void fsckAllBooks()
 /* srv-20 — optional shared-secret token guard for the LAN exposure surface.
    Scoped to /api + /workspace; /cert/root.crt + /audio stay open. OFF unless
    LAN HTTPS mode is on AND LAN_AUTH_TOKEN is set; loopback always bypasses. */
+app.use('/api/pair', pairRedeemRouter); // QR pairing — code-gated, intentionally pre-guard
 app.use(['/api', '/workspace'], requireLanToken);
 app.use('/workspace', express.static(WORKSPACE_ROOT, { fallthrough: true, maxAge: '1h' }));
 
@@ -190,6 +192,7 @@ app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new
 import { companionRouter } from './routes/companion.js';
 app.use('/api/companion', companionRouter); // interim — GET/HEAD /apk: download the packaged Android APK
 app.use('/api', devicesRouter); // srv-33 — companion per-device tokens: GET/POST /devices, DELETE /devices/:id
+app.use('/api/pair', pairSessionRouter); // QR pairing — loopback-only session mint (post-guard)
 app.use('/api/library', libraryRouter);
 app.use('/api/library', syncManifestRouter); // srv-32 — GET /api/library/sync-manifest
 app.use('/api', importRouter); // mounts /import and /books

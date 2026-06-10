@@ -1,9 +1,6 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:castwright/src/data/cert_pinning.dart';
 import 'package:castwright/src/data/pairing_service.dart';
 import 'package:castwright/src/data/pairing_store.dart';
 import 'package:castwright/src/domain/paired_server.dart';
@@ -24,15 +21,7 @@ class FakeStore implements PairingStore {
   Future<String?> loadCaPem() async => savedCaPem;
 }
 
-String pemOf(List<int> der) =>
-    '-----BEGIN CERTIFICATE-----\n${base64.encode(der)}\n-----END CERTIFICATE-----\n';
-
 void main() {
-  final pem = pemOf(List<int>.generate(40, (i) => i));
-  final goodFp = caFingerprintFromPem(pem);
-
-  // Pump a host route and open PairingScreen on top, so its success-path pop()
-  // returns to a real previous route.
   Future<void> open(WidgetTester tester, PairingService service, PairingStore store) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -52,31 +41,34 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  Future<void> fill(WidgetTester tester, String fingerprint) async {
-    await tester.enterText(find.byKey(const Key('field-url')), 'https://10.0.0.5:8443');
-    await tester.enterText(find.byKey(const Key('field-token')), 'tok');
-    await tester.enterText(find.byKey(const Key('field-fingerprint')), fingerprint);
+  Future<void> fill(WidgetTester tester) async {
+    await tester.enterText(find.byKey(const Key('field-host')), '10.0.0.5:8443');
+    await tester.enterText(find.byKey(const Key('field-code')), 'K7QF3M2P');
+    await tester.enterText(find.byKey(const Key('field-fptag')), 'J4XQ2A7BWZ9K3M5R');
     await tester.tap(find.widgetWithText(FilledButton, 'Pair'));
     await tester.pumpAndSettle();
   }
 
-  testWidgets('shows the mismatch error and does not save on a wrong fingerprint', (tester) async {
+  testWidgets('shows the mismatch error and does not save on a bad tag', (tester) async {
     final store = FakeStore();
-    final service = PairingService(fetchCa: (_) async => pem, probe: (_, _) async => 200);
+    final service = PairingService(fetchCa: (url) async => 'pem', verifyTag: (pem, tag) => false);
     await open(tester, service, store);
-    await fill(tester, 'AB:CD:EF'); // wrong fingerprint
-
+    await fill(tester);
     expect(find.byKey(const Key('pair-error')), findsOneWidget);
     expect(store.saved, isNull);
   });
 
-  testWidgets('saves the connection on a matching fingerprint + ok probe', (tester) async {
+  testWidgets('saves the connection on a good tag + successful redeem', (tester) async {
     final store = FakeStore();
-    final service = PairingService(fetchCa: (_) async => pem, probe: (_, _) async => 200);
+    final service = PairingService(
+      fetchCa: (url) async => 'pem',
+      verifyTag: (pem, tag) => true,
+      redeem: (url, code, caPem) async => const RedeemResult(token: 'tok', caFingerprint: 'AB:CD'),
+    );
     await open(tester, service, store);
-    await fill(tester, goodFp); // correct
-
+    await fill(tester);
     expect(store.saved, isNotNull);
     expect(store.saved!.url, 'https://10.0.0.5:8443');
+    expect(store.saved!.token, 'tok');
   });
 }
