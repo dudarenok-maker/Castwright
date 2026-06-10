@@ -18,6 +18,11 @@ import { defineConfig } from 'vitest/config';
        contamination (importOriginal "No X export on the mock") + a fake-sidecar
        HTTP server in beforeAll; flaked sibling generation tests under fast-pool
        parallelism (side-11/plan 158).
+     - src/parsers/pdf-real.test.ts — the only suite that loads the REAL
+       pdf-parse 2 (and its bundled pdfjs); under fast-pool parallelism it
+       crashes a sibling fork ("Worker exited unexpectedly"), ~2/3 of full
+       runs. Passes 3/3 single-fork. Not slow (~0.4s) — pool-destabilising,
+       same class as generation-boundary-recycle (deps round 3).
 
    Mirror invariant: each entry in SLOW_FILES below MUST also appear
    in server/vitest.config.ts's `test.exclude` array. Add a file in
@@ -35,6 +40,7 @@ export const SLOW_FILES = [
   'src/routes/chapters-restructure.test.ts',
   'src/routes/generation.test.ts',
   'src/routes/generation-boundary-recycle.test.ts',
+  'src/parsers/pdf-real.test.ts',
 ];
 
 export default defineConfig({
