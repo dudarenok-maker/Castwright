@@ -181,3 +181,9 @@ test('companionApkSrc honours COMPANION_APK_SRC, else defaults to the Flutter ou
     else process.env.COMPANION_APK_SRC = prev;
   }
 });
+
+test('ships the analyzer skill prompts (read at runtime from <root>/skills)', () => {
+  assert.equal(matchesManifest('skills/audiobook-sentence-attribution.md'), true);
+  assert.equal(matchesManifest('skills/audiobook-character-detection-per-chapter.md'), true);
+  assert.equal(matchesManifest('skills/audiobook-voice-style.md'), true);
+});
