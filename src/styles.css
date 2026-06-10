@@ -85,18 +85,16 @@
   --canvas: #fffdfb;
   --canvas-warm: #fcded7;
   --ink: #0f0e0d;
-  --ink-soft: #1a1a1a;
+  --ink-soft: #4a4440;
   --peach: #f79a83; /* peach = action accent */
   --peach-soft: #fcded7;
   --magenta: #a43c6c; /* magenta = secondary / brand */
   --purple-deep: #3c194f; /* deep purple = series context */
 
   /* Brand v2 neutral ramp (BRAND_CHANGELOG decision 10 / guidelines §5) — one
-     shared neutral vocabulary for app + brand. NOTE: the brand ramp also defines
-     --ink-soft #4A4440, but the app already binds --ink-soft to #1a1a1a
-     (near-black, in use across the UI). Left as-is to avoid a visual change;
-     adopting the brand #4A4440 app-wide is a separate visual decision, not part
-     of this copy/assets wave. */
+     shared neutral vocabulary for app + brand. --ink-soft (above) adopted the
+     brand ramp's #4A4440 (was #1a1a1a near-black) as a deliberate, user-approved
+     visual change after the copy/assets wave flagged the collision. */
   --ink-mute: #5a534e;
   --line: #d9cfc7;
   --line-soft: #eee2da;
