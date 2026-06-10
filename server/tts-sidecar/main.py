@@ -1158,6 +1158,16 @@ class QwenEngine(Engine):
             _reclaim_host_and_vram()
             raise
 
+    def _ensure_device_resolved(self) -> None:
+        """Resolve a 'auto' device preference to a concrete torch device once
+        torch is importable. Idempotent — an already-concrete self._device (or an
+        explicit pref like 'cuda:1'/'cpu'/'mps') is unchanged. Called by BOTH the
+        base and design load paths because design_voice loads the VoiceDesign
+        model BEFORE the base model, so resolving only in _ensure_base_loaded left
+        a design-first cold start doing `.to("auto")`."""
+        import torch  # type: ignore
+        self._device = _resolve_torch_device(self._device_pref, torch)
+
     def _ensure_base_loaded(self) -> None:
         # Fast path: already loaded, no lock needed (the assignment below is the
         # only writer and it publishes a fully-built model).
@@ -1168,15 +1178,14 @@ class QwenEngine(Engine):
         # second copy (which would corrupt the dtype state).
         with self._base_load_lock:
             if self._base is None:
-                # Resolve 'auto' to a concrete device now that torch is importable.
-                import torch as _torch_resolve  # type: ignore
-                self._device = _resolve_torch_device(self._device_pref, _torch_resolve)
+                self._ensure_device_resolved()
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
                 log.info("Qwen Base loaded.")
 
     def _ensure_design_loaded(self) -> None:
         if self._design is None:
+            self._ensure_device_resolved()
             log.info(
                 "Loading Qwen VoiceDesign model=%s on %s (transient) …",
                 self.VOICEDESIGN_MODEL, self._device,
