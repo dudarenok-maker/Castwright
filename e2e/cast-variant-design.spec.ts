@@ -72,12 +72,17 @@ test.describe('cast view → Design full cast → Emotion variants scope', () =>
        qwen.variants.angry → VariantGlyphStrip re-renders with data-state='designed'. */
     await variantsBtn.click();
 
-    /* The glyph must flip once the mock variant_designed event lands. With
-       only one in-use emotion ('angry'), VariantGlyphStrip replaces the
-       individual glyph with the "variants complete" badge once it is designed
-       (all in-use emotions have a variant). */
+    /* The glyph must flip to green once the mock variant_designed event lands.
+       The emotion glyph STAYS visible (it doesn't collapse into a summary badge)
+       — the strip just adds the 'variants-complete' marker on its wrapper once
+       every in-use emotion is designed, so a finished row reads like an
+       in-progress one with all-green ticks. */
     await expect(page.getByTestId('variants-complete').first()).toBeVisible({
       timeout: 5_000,
     });
+    await expect(page.getByTestId('variant-glyph-angry').first()).toHaveAttribute(
+      'data-state',
+      'designed',
+    );
   });
 });
