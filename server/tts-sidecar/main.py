@@ -763,7 +763,8 @@ class KokoroEngine(Engine):
             raise RuntimeError(
                 f"Failed to import kokoro-onnx ({e}). Install with: "
                 "`.\\.venv\\Scripts\\python.exe -m pip install kokoro-onnx onnxruntime-gpu` "
-                "in server/tts-sidecar (or onnxruntime for CPU-only)."
+                "in server/tts-sidecar (onnxruntime-gpu needs an NVIDIA GPU; on macOS / "
+                "CPU-only boxes install plain onnxruntime instead)."
             ) from e
 
         if not os.path.isfile(self._model_path):
