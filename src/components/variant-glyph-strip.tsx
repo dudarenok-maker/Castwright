@@ -1,9 +1,11 @@
 /* fe-32 — demand-driven per-emotion variant status for a cast row. One glyph per
    emotion the character's quotes USE; a green check badge = designed, an amber
    alert badge = needed (renders in the base voice until designed). Quiet when
-   the character uses no emotion tags; "complete" when every in-use emotion is
-   designed. Status badges are crisp SVG icons (IconCheck / IconAlertTri), not
-   emoji-text, per the spec's icon-quality requirement. */
+   the character uses no emotion tags. Designed emotions keep their glyph with a
+   green check (rather than collapsing to a summary badge) so a finished row reads
+   the same as an in-progress one — each emotion stays visible as a "done" marker.
+   Status badges are crisp SVG icons (IconCheck / IconAlertTri), not emoji-text,
+   per the spec's icon-quality requirement. */
 import type { JSX } from 'react';
 import { IconCheck, IconAlertTri } from '../lib/icons';
 
@@ -24,15 +26,12 @@ export function VariantGlyphStrip({
       <span data-testid="variants-no-tags" className="text-[10px] text-ink/35 italic">no emotion tags</span>
     );
   }
-  if (inUse.every((e) => designedEmotions.has(e))) {
-    return (
-      <span data-testid="variants-complete" className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700">
-        <IconCheck className="w-3 h-3" /> variants complete
-      </span>
-    );
-  }
+  const allDesigned = inUse.every((e) => designedEmotions.has(e));
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span
+      data-testid={allDesigned ? 'variants-complete' : undefined}
+      className="inline-flex items-center gap-1.5"
+    >
       {inUse.map((e) => {
         const designed = designedEmotions.has(e);
         return (

@@ -53,7 +53,11 @@ second line of the cast row's Status column for every Qwen character. It receive
 Quiet states (no glyph strip):
 - Non-Qwen or Qwen-with-no-base — nothing
 - Qwen with no in-use emotion tags → "no emotion tags" hint
-- All demanded variants designed → "✓ variants complete" (with SVG check)
+
+When all demanded variants are designed the strip does **not** collapse — every
+in-use emotion glyph stays visible, all turned green with a check, so a finished
+row reads the same as an in-progress one. The wrapper carries a `variants-complete`
+test marker once every in-use emotion is designed.
 
 This supersedes and **removes** the old `VariantsBadge` count badge and the "N tags
 need a variant" text hint from the cast row — the glyphs convey the same information
@@ -259,8 +263,8 @@ Requires a Qwen project with weights installed + a book with emotion-tagged sent
 4. **Close the tab and re-open** — the pill resumes (reload-resilient job). Verify the pill
    count continues ticking from where it was.
 5. **Watch a row** — as each variant completes, the corresponding amber `!` glyph flips to a
-   green `✓` live. If all of a character's demanded variants are designed, the strip shows
-   "✓ variants complete".
+   green `✓` live. When all of a character's demanded variants are designed, the glyphs stay
+   put — the row just shows every emotion glyph green with a check (no collapse to a summary).
 6. **After all variants complete** — pill clears; "Design full cast" button no longer
    appears (variantCount + needsVoiceIds both = 0).
 7. **Audition a variant** — open a character's profile drawer → click the ▶ preview button

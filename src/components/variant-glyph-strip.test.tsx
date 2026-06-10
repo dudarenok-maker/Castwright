@@ -8,9 +8,11 @@ describe('VariantGlyphStrip', () => {
     expect(screen.getByTestId('variant-glyph-angry')).toHaveAttribute('data-state', 'designed');
     expect(screen.getByTestId('variant-glyph-excited')).toHaveAttribute('data-state', 'needed');
   });
-  it('shows a complete state when every in-use emotion is designed', () => {
+  it('marks the complete state but keeps each emotion glyph visible (green/designed)', () => {
     render(<VariantGlyphStrip usedEmotions={new Set(['angry'])} designedEmotions={new Set(['angry'])} />);
     expect(screen.getByTestId('variants-complete')).toBeInTheDocument();
+    // The glyph stays — a finished row reads the same as in-progress, all green.
+    expect(screen.getByTestId('variant-glyph-angry')).toHaveAttribute('data-state', 'designed');
   });
   it('renders the no-tags hint when there are no in-use emotions', () => {
     render(<VariantGlyphStrip usedEmotions={new Set()} designedEmotions={new Set()} />);
