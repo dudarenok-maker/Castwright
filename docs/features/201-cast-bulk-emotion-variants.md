@@ -84,11 +84,13 @@ already has a designed `qwen.name`, mirroring the server's design gate).
 `variantWorkCounts` splits the list into `{ totalTasks, readyTasks, blockedTasks,
 blockedChars }` for the "40 total · 5 ready · 35 need a base" display.
 
-> **Fix (2026-06-10):** the shipped build gated `buildVariantTasks` on
-> `isQwenWithBase`, so the picker counted only already-voiced characters (e.g. 5)
-> while the cast rows' "Needs variants" chip counted the whole emotion cast (e.g.
-> 16) — the two surfaces disagreed and "Both" undercounted. The count now spans the
-> whole Qwen cast, as the table above always intended.
+> **Fix (2026-06-10 — [bug #695](https://github.com/dudarenok-maker/Castwright/issues/695), PR #694):**
+> the shipped build gated `buildVariantTasks` on `isQwenWithBase`, so the picker
+> counted only already-voiced characters (e.g. 5) while the cast rows' "Needs
+> variants" chip counted the whole emotion cast (e.g. 16) — the two surfaces
+> disagreed and "Both" undercounted. The count now spans the whole Qwen cast, as
+> the table above always intended, with the variants-only scope shipping only the
+> ready (has-base) tasks behind a loud warning.
 
 **Dependency rule.** Under `variants` scope the picker ships ONLY the `hasBase`
 (ready) tasks: a baseless character is still **counted** in the total (so the badge
@@ -289,6 +291,7 @@ Requires a Qwen project with weights installed + a book with emotion-tagged sent
 - Plan 177 (archived) — fs-25 per-quote emotion: `docs/features/archive/177-fs25-per-quote-emotion.md`
 - Plan 180 — fe-31 emotion chip preview (variant audition in the drawer): `docs/features/180-fe31-emotion-chip-preview.md`
 - Backlog: `fe-32` ([#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512))
+- Bug: scope-picker variant undercount ([#695](https://github.com/dudarenok-maker/Castwright/issues/695), PR #694) — count now spans the whole Qwen cast
 
 ## Follow-ups
 
