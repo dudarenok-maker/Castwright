@@ -80,7 +80,7 @@ web UI at <http://localhost:8080>.
 - Python 3.11 (for the TTS sidecar)
 - ffmpeg on `PATH`
 - ~3 GB free disk for the TTS weights
-- An NVIDIA GPU is strongly recommended (TTS on CPU is far slower)
+- A GPU is strongly recommended (TTS on CPU is far slower): NVIDIA on Windows/Linux, or Apple Silicon (M-series) on macOS — used automatically via Metal, no drivers or setup
 
 ## Companion app (Android)
 
