@@ -18,7 +18,10 @@ import { getAppVersion } from '../app-version.js';
 import { CURRENT_STATE_SCHEMA } from '../workspace/state-migrate.js';
 import { SCHEMA_SEAMS } from '../workspace/schema-migrate.js';
 import { SYNC_MANIFEST_SCHEMA } from '../workspace/sync-manifest.js';
-import { readUserSettings, writeUpgradeMeta, getResolvedSidecarUrl } from '../workspace/user-settings.js';
+import { readUserSettings, writeUpgradeMeta, getResolvedSidecarUrl, getResolvedTtsModelKey } from '../workspace/user-settings.js';
+import { engineForModelKey } from '../tts/model-keys.js';
+import type { SidecarDeviceMap, SidecarDevicesState } from './sidecar-health.js';
+import { normaliseDevices, normaliseDevicesState } from './sidecar-health.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /* server/{src,dist}/routes → repoRoot is three levels up. RELEASE_NOTES.md ships
@@ -77,18 +80,35 @@ function readReleaseNotes(): string {
   }
 }
 
-/** Best-effort sidecar version probe — short timeout, null on any failure so a
+interface SidecarInfoProbe {
+  version: string | null;
+  /* side-14 — per-engine device ground-truth, lifted off the SAME single
+     /health fetch as the version (no second probe). Null when the sidecar is
+     down or predates the field. */
+  devices: SidecarDeviceMap | null;
+  devicesState: SidecarDevicesState | null;
+}
+
+/** Best-effort sidecar probe — short timeout, all-null on any failure so a
     down sidecar never blocks /api/info. */
-async function fetchSidecarVersion(): Promise<string | null> {
+async function fetchSidecarInfo(): Promise<SidecarInfoProbe> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 2000);
   try {
     const res = await fetch(`${getResolvedSidecarUrl()}/health`, { signal: ctrl.signal });
-    if (!res.ok) return null;
-    const body = (await res.json()) as { __version__?: string };
-    return typeof body.__version__ === 'string' ? body.__version__ : null;
+    if (!res.ok) return { version: null, devices: null, devicesState: null };
+    const body = (await res.json()) as {
+      __version__?: string;
+      devices?: unknown;
+      devices_state?: unknown;
+    };
+    return {
+      version: typeof body.__version__ === 'string' ? body.__version__ : null,
+      devices: normaliseDevices(body.devices),
+      devicesState: normaliseDevicesState(body.devices_state),
+    };
   } catch {
-    return null;
+    return { version: null, devices: null, devicesState: null };
   } finally {
     clearTimeout(timer);
   }
@@ -97,15 +117,22 @@ async function fetchSidecarVersion(): Promise<string | null> {
 infoRouter.get('/', async (_req: Request, res: Response) => {
   const settings = await readUserSettings();
   const appVersion = getAppVersion();
-  const sidecarVersion = await fetchSidecarVersion();
+  const sidecar = await fetchSidecarInfo();
   res.json({
     appVersion,
-    sidecarVersion,
+    sidecarVersion: sidecar.version,
     schemas: schemaMap(),
     lastSeenAppVersion: settings.lastSeenAppVersion ?? null,
     showWhatsNew: settings.showWhatsNew === true,
     releaseNotes: readReleaseNotes(),
     hardware: detectHardware(),
+    /* side-14 — which device each engine runs on (sidecar ground truth) and
+       which engine the server currently resolves as the default. activeEngine
+       can be 'gemini'/'piper' for exotic defaults — the panel only headlines
+       engines present in the devices map. */
+    devices: sidecar.devices,
+    devicesState: sidecar.devicesState,
+    activeEngine: engineForModelKey(getResolvedTtsModelKey()),
   });
 });
 

@@ -42,4 +42,47 @@ describe('DevicePanel', () => {
     render(<DevicePanel />);
     expect(screen.getByText(/Detecting your hardware/)).toBeInTheDocument();
   });
+
+  it('headlines the active engine device and lists per-engine rows when ready', () => {
+    h.info = {
+      hardware: { platform: 'darwin', arch: 'arm64', appleSilicon: true, label: 'Apple Silicon Mac' },
+      devices: { kokoro: 'cpu', coqui: 'cpu', qwen: 'mps' },
+      devicesState: 'ready',
+      activeEngine: 'qwen',
+    };
+    render(<DevicePanel />);
+    expect(screen.getByText(/Currently running on:/)).toBeInTheDocument();
+    expect(screen.getByText('Apple GPU (Metal)')).toBeInTheDocument();
+    // per-engine rows carry the brand engine names
+    expect(screen.getByText('Kokoro')).toBeInTheDocument();
+    expect(screen.getByText('Coqui XTTS')).toBeInTheDocument();
+    expect(screen.getByText('Qwen3-TTS')).toBeInTheDocument();
+    // the hedge is replaced by ground truth
+    expect(screen.queryByText(/Load a voice to confirm/)).not.toBeInTheDocument();
+  });
+
+  it('falls back to capability copy while the probe is pending', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: null, coqui: null, qwen: null },
+      devicesState: 'pending',
+      activeEngine: 'kokoro',
+    };
+    render(<DevicePanel />);
+    expect(screen.queryByText(/Currently running on:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/falls back to the CPU/)).toBeInTheDocument();
+  });
+
+  it('falls back when the active engine has no device entry (e.g. gemini default)', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+      devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+      devicesState: 'ready',
+      activeEngine: 'gemini',
+    };
+    render(<DevicePanel />);
+    // no headline (gemini is cloud — no local device), but rows still show
+    expect(screen.queryByText(/Currently running on:/)).not.toBeInTheDocument();
+    expect(screen.getByText('Kokoro')).toBeInTheDocument();
+  });
 });
