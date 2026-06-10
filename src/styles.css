@@ -7,6 +7,13 @@
   --color-ink: var(--ink);
   --color-ink-soft: var(--ink-soft);
 
+  /* Brand v2 neutral ramp (BRAND_CHANGELOG decision 10 / guidelines §5). */
+  --color-ink-mute: var(--ink-mute);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-canvas-mute: var(--canvas-mute);
+  --color-peach-ink: var(--peach-ink);
+
   --color-peach: var(--peach);
   --color-peach-soft: var(--peach-soft);
 
@@ -83,6 +90,18 @@
   --peach-soft: #fcded7;
   --magenta: #a43c6c; /* magenta = secondary / brand */
   --purple-deep: #3c194f; /* deep purple = series context */
+
+  /* Brand v2 neutral ramp (BRAND_CHANGELOG decision 10 / guidelines §5) — one
+     shared neutral vocabulary for app + brand. NOTE: the brand ramp also defines
+     --ink-soft #4A4440, but the app already binds --ink-soft to #1a1a1a
+     (near-black, in use across the UI). Left as-is to avoid a visual change;
+     adopting the brand #4A4440 app-wide is a separate visual decision, not part
+     of this copy/assets wave. */
+  --ink-mute: #5a534e;
+  --line: #d9cfc7;
+  --line-soft: #eee2da;
+  --canvas-mute: #cfc8c2;
+  --peach-ink: #5a2417;
 
   /* Channel forms — for rgba() composition without re-typing the hex. */
   --peach-rgb: 247, 154, 131;
