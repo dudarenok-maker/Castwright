@@ -1928,6 +1928,14 @@ async def _stop_asr_idle_watchdog() -> None:
         _asr_idle_task = None
 
 
+@app.on_event("startup")
+async def _start_device_probe() -> None:
+    """side-14 — resolve per-engine devices in the background. Runs on a worker
+    thread (torch import takes seconds); /health reports devices_state='pending'
+    until it lands. Fire-and-forget: a probe failure degrades to 'error'."""
+    asyncio.create_task(asyncio.to_thread(_run_device_probe))
+
+
 # --- Host-memory watchdog: soft reclaim + hard process-recycle ---
 #
 # Logs process RSS each tick (the leak curve — greppable as `sidecar memory:`).
@@ -2591,6 +2599,20 @@ def _run_device_probe() -> None:
         log.warning("Device probe failed (%s) — devices_state=error.", e)
 
 
+def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
+    """Actual ONNX Runtime providers of the LOADED Kokoro session → family.
+    kokoro-onnx internals drift across releases, so every access is guarded;
+    None → caller keeps the prediction."""
+    try:
+        sess = getattr(engine._kokoro, "sess", None)
+        if sess is None:
+            return None
+        providers = list(sess.get_providers())
+        return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+    except Exception:
+        return None
+
+
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Liveness + load-state probe. `model_loaded` / `loading` / `device` let
@@ -2644,6 +2666,18 @@ def health() -> dict[str, Any]:
     qwen_package_installed = _qwen_package_installed()
     qwen_weights_present = _qwen_weights_present() if qwen_package_installed else False
     qwen_install_state = _qwen_install_state(qwen_loaded)
+    # side-14 — per-engine device map: loaded engines report their ACTUAL
+    # device; unloaded ones the startup probe's prediction. Same resolvers on
+    # both paths, so they only disagree if availability was misread — in which
+    # case loaded truth wins. Composed at read time so engine load/unload and
+    # probe completion are order-independent.
+    devices = dict(_device_probe)
+    if isinstance(coqui, CoquiEngine) and model_loaded:
+        devices["coqui"] = _normalize_device_family(coqui._resolved_device) or devices["coqui"]
+    if isinstance(kokoro, KokoroEngine) and kokoro_loaded:
+        devices["kokoro"] = _kokoro_session_device(kokoro) or devices["kokoro"]
+    if isinstance(qwen, QwenEngine) and qwen_loaded:
+        devices["qwen"] = _normalize_device_family(qwen._device) or devices["qwen"]
     return {
         "ok": True,
         "protocol_version": SIDECAR_PROTOCOL_VERSION,
@@ -2663,6 +2697,8 @@ def health() -> dict[str, Any]:
         # operator confirm whether transcription is on the GPU or CPU.
         "asr_loaded": ASR._model is not None,
         "asr_device": ASR._device,
+        "devices": devices,
+        "devices_state": _device_probe_state,
         "device": device,
         "poisoned": poisoned,
         "poison_reason": poison_reason,
