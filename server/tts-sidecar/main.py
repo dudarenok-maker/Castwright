@@ -911,6 +911,24 @@ def _audio_duration_ms(audio: Any, sample_rate: int) -> float:
     return (n / sample_rate * 1000.0) if sample_rate > 0 else 0.0
 
 
+def _resolve_torch_device(pref: str, torch_module: Any) -> str:
+    """Resolve a QWEN_DEVICE preference to a concrete torch device string.
+
+    'auto' (the default) picks cuda:0 -> mps (Apple Silicon) -> cpu by
+    availability. An explicit value (e.g. 'cuda:1', 'cpu', 'mps') is returned
+    unchanged so multi-GPU pins and forced devices are respected."""
+    p = (pref or "auto").strip().lower()
+    if p != "auto":
+        return pref
+    if torch_module.cuda.is_available():
+        return "cuda:0"
+    backends = getattr(torch_module, "backends", None)
+    mps = getattr(backends, "mps", None) if backends is not None else None
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 class QwenEngine(Engine):
     """Qwen3-TTS as a per-character BESPOKE-voice engine (plan 108).
 
@@ -978,7 +996,14 @@ class QwenEngine(Engine):
         self._design: Any = None  # transient voice-design model
         self._loading: bool = False
         self._load_lock: asyncio.Lock = asyncio.Lock()
-        self._device = os.environ.get("QWEN_DEVICE", "cuda:0")
+        self._device_pref = os.environ.get("QWEN_DEVICE", "auto")
+        # PYTORCH_ENABLE_MPS_FALLBACK lets unsupported mps ops fall back to CPU
+        # instead of raising. Read per-op at dispatch, so set it early whenever
+        # mps is in play. Concrete device is resolved lazily at load time (torch
+        # isn't imported yet here).
+        if self._device_pref.strip().lower() in ("auto", "mps") or "mps" in self._device_pref.lower():
+            os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+        self._device = self._device_pref
         # In-memory designed-voice cache: voiceId -> (clone_prompt, language).
         # Without it every /synthesize re-reads <voiceId>.pt + <voiceId>.json
         # off disk; across a book that's the same two files re-loaded hundreds
@@ -1143,6 +1168,9 @@ class QwenEngine(Engine):
         # second copy (which would corrupt the dtype state).
         with self._base_load_lock:
             if self._base is None:
+                # Resolve 'auto' to a concrete device now that torch is importable.
+                import torch as _torch_resolve  # type: ignore
+                self._device = _resolve_torch_device(self._device_pref, _torch_resolve)
                 log.info("Loading Qwen Base model=%s on %s …", self.BASE_MODEL, self._device)
                 self._base = self._load_qwen_model(self.BASE_MODEL)
                 log.info("Qwen Base loaded.")
