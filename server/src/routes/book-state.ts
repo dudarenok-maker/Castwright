@@ -66,6 +66,17 @@ const manuscriptUpload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
+/* On-disk extension for each parsed manuscript format. Mirrors import.ts's
+   EXT_BY_FORMAT so a replaced manuscript keeps the canonical "manuscript.<ext>"
+   name. */
+const REPLACE_EXT_BY_FORMAT: Record<string, string> = {
+  markdown: 'md',
+  plaintext: 'txt',
+  epub: 'epub',
+  pdf: 'pdf',
+  mobi: 'mobi',
+};
+
 /* Denormalise the bespoke (qwen) voice onto any REUSED character before the
    cast persist (srv-14). The auto-match apply path stamps `matchedFrom` +
    `voiceId` + `voiceState:'reused'` on the frontend, then persists through this
@@ -977,14 +988,7 @@ bookStateRouter.post(
         mimeType: req.file.mimetype,
       });
 
-      const EXT_BY_FORMAT: Record<string, string> = {
-        markdown: 'md',
-        plaintext: 'txt',
-        epub: 'epub',
-        pdf: 'pdf',
-        mobi: 'mobi',
-      };
-      const newFile = `manuscript.${EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
+      const newFile = `manuscript.${REPLACE_EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
       const oldFile = state.manuscriptFile;
 
       await writeFile(join(bookDir, newFile), req.file.buffer);
