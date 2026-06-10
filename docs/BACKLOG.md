@@ -180,16 +180,6 @@ _Full detail + acceptance:_ [#632](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (brand):_ the second screen tells the same story as the first.
 _Full detail + acceptance:_ [#706](https://github.com/dudarenok-maker/Castwright/issues/706).
 
-### Dependency major upgrades — _outstanding (2026-06-08 audit)_
-
-The 2026-06-01 [plan 164](features/164-deps-ci-hygiene.md) wave shipped in full — round 1 ([plan 167](features/archive/167-fe-react-cluster-upgrade.md): React 19, Vite 8 + Vitest 4, react-router 7, TypeScript 6) and round 2 ([plan 170](features/archive/170-deps-majors-zod-express-pdfjs-tailwind.md): Zod 4, Express 5, pdfjs-dist 5, Tailwind 4), plus `ops-8` (Node-24 GitHub Actions runners). A fresh `npm outdated` on **2026-06-08** surfaces a new wave of majors now behind — tracked here (no separate issues yet; fold into the next deps round):
-
-- **Functional (server):** `pdfjs-dist` 5 → 6, `pdf-parse` 1 → 2 — both touch manuscript ingestion, so each needs a parse-regression check before bumping.
-- **Tooling (root):** `eslint` 9 → 10 (+ `@eslint/js`), `concurrently` 8 → 10, `jest-axe` 9 → 10.
-- **Types:** `@types/supertest` 6 → 7, `@types/yauzl` 2 → 3. (`@types/node` tracks the runtime's Node line, not a free bump.)
-
-Deprecation hygiene for the same trees is `srv-4` (above).
-
 ---
 
 ## Could — nice to have, low-cost wins
