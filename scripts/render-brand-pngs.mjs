@@ -12,7 +12,7 @@
 import { chromium } from '@playwright/test';
 import { readFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 
 const root = resolve(import.meta.dirname, '..');
 const ICON = resolve(root, 'brand/castwright-icon.svg');
