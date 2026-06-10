@@ -453,7 +453,7 @@ function BookCard({
           ref={replaceInputRef}
           data-testid="replace-manuscript-input"
           type="file"
-          accept=".txt,.md,.epub,.pdf"
+          accept=".md,.markdown,.txt,.text,.pdf,.epub,.mobi,.azw3"
           aria-hidden="true"
           className="hidden"
           onChange={(e) => {
