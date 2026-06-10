@@ -962,6 +962,11 @@ git commit -m "feat(frontend): device panel headlines the active engine's resolv
 
 ### Task 8: e2e — /about asserts the upgraded panel
 
+> **As-built correction:** the fs-43 panel renders on the Model Manager view
+> (`#/models`, per issue #705 "first-run / Account → Models"), not `/about` as this
+> task assumed. Shipped as a new `e2e/device-panel.spec.ts` asserting at `/#/models`;
+> `e2e/about-page.spec.ts` and `src/views/about.tsx` are untouched.
+
 **Files:**
 - Modify: `e2e/about-page.spec.ts`
 
