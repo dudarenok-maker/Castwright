@@ -20,7 +20,7 @@ owner: null
 
 ## Architectural impact
 
-- **New seams:** `_run_device_probe` (asyncio.to_thread from the FastAPI `startup` event); `_probe_cache: dict` per-engine predictions; `devices` + `devices_state` on the `/health` response; `AppInfo.devices` / `AppInfo.devicesState` / `AppInfo.activeEngine` on `GET /api/info`; `sidecar-health.ts` normalises + forwards the new fields; `info.ts` adds `activeEngine = engineForModelKey(getResolvedTtsModelKey())`.
+- **New seams:** `_run_device_probe` (asyncio.to_thread from the FastAPI `startup` event); `_device_probe: dict` per-engine predictions (+ `_device_probe_state`); `devices` + `devices_state` on the `/health` response; `AppInfo.devices` / `AppInfo.devicesState` / `AppInfo.activeEngine` on `GET /api/info`; `sidecar-health.ts` normalises + forwards the new fields; `info.ts` adds `activeEngine = engineForModelKey(getResolvedTtsModelKey())`.
 - **Invariants preserved:** legacy `device` field on `/health` untouched; discriminated-union `ui.stage` untouched; OpenAPI type-source rule — `AppInfo` is hand-typed (no OpenAPI op), consistent with the pre-existing pattern.
 - **Migration story:** additive JSON fields on `/health` and `GET /api/info`. Old-sidecar / new-Node and new-sidecar / old-Node both work: the frontend + Node fall back to the prior capability copy when the fields are absent.
 - **Reversibility:** the probe is a background asyncio task; removing it leaves `/health` with the pre-existing `device` field only. The DevicePanel is a standalone component with graceful degradation — deleting it or disabling it leaves Model Manager unchanged.
@@ -29,7 +29,7 @@ owner: null
 
 - `_run_device_probe` in `server/tts-sidecar/main.py` MUST NOT raise / poison the sidecar — any exception is caught and sets `devices_state` to `'error'` on the wire; torch-missing is the canonical error path.
 - `devices_state` on `/health` is one of `'pending'` (probe not yet complete), `'ready'` (predictions cached), or `'error'` (probe raised) — the frontend keys its headline on `devicesState === 'ready'`.
-- A loaded engine's ACTUAL device overrides the probe prediction ONLY while that engine is loaded (`state === 'ready'` or `state === 'streaming'`); unloading Coqui resets `_resolved_device` to `'cpu'` and that value must NOT appear in `devices` as a live reading — the composition logic in `/health` gates overrides on loadedness.
+- A loaded engine's ACTUAL device overrides the probe prediction ONLY while that engine is loaded (gated on the loadedness booleans: Coqui `_tts is not None`, Kokoro `_kokoro is not None`, Qwen `_base is not None`); unloading Coqui resets `_resolved_device` to `'cpu'` and that value must NOT appear in `devices` as a live reading — the composition logic in `/health` gates overrides on loadedness.
 - A loaded Qwen engine whose internal device resolves to `'auto'` (pre-resolved) MUST NOT leak `'auto'` to the wire — it must fall back to the probe prediction.
 - Kokoro's probe uses the onnxruntime session's `ExecutionProvider` list (`CUDAExecutionProvider` → `'cuda'`, else `'cpu'`); onnxruntime session API drift must degrade to the probe prediction, not raise.
 - Per-engine probe failures (`junk` / unexpected value) must be `null`-normalised by `sidecar-health.ts` without poisoning sibling slots — pinned by `server/src/routes/sidecar-health.test.ts`.

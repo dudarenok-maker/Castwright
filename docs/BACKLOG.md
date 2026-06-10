@@ -140,12 +140,6 @@ _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ answers "will it run on my Mac/PC?" honestly today — especially the new Apple Silicon path, which `os.arch()` detects reliably.
 _Full detail + acceptance:_ [#705](https://github.com/dudarenok-maker/Castwright/issues/705).
 
-### `side-14` — Device ground-truth: sidecar reports active-engine torch device incl. mps (deep half of fs-43) ([#707](https://github.com/dudarenok-maker/Castwright/issues/707))
-
-- _What:_ Make the sidecar resolve + report the **actual** torch device per active/default engine at startup, regardless of load state, incl. `mps` ground-truth — so the `fs-43` panel can show "currently running on X" not just "host is capable of X". Today `/health` reports `device` only when Coqui is loaded, never `mps` (Qwen computes mps at `main.py:914-929` but doesn't surface it; Kokoro reports none). Node passthrough + the sidecar-side NVIDIA-only string audit; pytest.
-- _Benefit (user):_ the hardware panel tells the truth about what's actually running — confirms Apple Silicon users are on Metal, not silently on CPU.
-_Full detail + acceptance:_ [#707](https://github.com/dudarenok-maker/Castwright/issues/707).
-
 ### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant ([#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402))
 
 - _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
