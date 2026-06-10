@@ -638,4 +638,23 @@ describe('GET /api/sidecar/health — side-14 device fields', () => {
     const res = await request(makeApp()).get('/api/sidecar/health');
     expect(res.body.devices).toBeNull();
   });
+
+  it('nulls a junk per-slot device value while keeping the valid slots', async () => {
+    /* Per-slot junk ('gpu' is not a known family) must degrade that slot to
+       null without poisoning the rest of the map. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro'],
+          devices: { kokoro: 'gpu', coqui: 'cuda', qwen: null },
+          devices_state: 'ready',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.devices).toEqual({ kokoro: null, coqui: 'cuda', qwen: null });
+  });
 });
