@@ -328,9 +328,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'QWEN_DEVICE',
     group: 'tts-engine',
     label: 'Qwen device',
-    help: 'PyTorch device string for Qwen3-TTS (e.g. "cuda:0", "cuda:1", "cpu"). Changing this requires a sidecar restart.',
+    help: 'PyTorch device for Qwen3-TTS. "auto" (default) picks cuda:0 → mps (Apple Silicon) → cpu. Pin a specific GPU with "cuda:1", or force "cpu" / "mps". Changing this requires a sidecar restart.',
     type: 'string',
-    default: 'cuda:0', // ← QWEN_DEVICE default in tts-sidecar/main.py (line 925)
+    default: 'auto', // ← QWEN_DEVICE resolver in tts-sidecar/main.py (_resolve_torch_device)
     apply: 'restart-sidecar', risk: 'high',
   },
   {
