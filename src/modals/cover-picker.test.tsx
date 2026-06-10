@@ -40,8 +40,8 @@ vi.mock('../lib/api', () => ({
 }));
 
 const TWO_CANDIDATES: CoverCandidate[] = [
-  { openLibraryId: 'cover-i:11', coverUrl: 'https://covers/11-L.jpg', edition: 'Alpha · 2020' },
-  { openLibraryId: 'cover-i:22', coverUrl: 'https://covers/22-L.jpg', edition: 'Beta · 2021' },
+  { id: 'openlibrary:11', source: 'openlibrary', coverUrl: 'https://covers/11-L.jpg', edition: 'Alpha · 2020' },
+  { id: 'apple:22', source: 'apple', coverUrl: 'https://covers/22-L.jpg', edition: 'Beta · 2021' },
 ];
 
 beforeEach(() => {
@@ -98,15 +98,23 @@ describe('CoverPicker — rendering states (Search tab)', () => {
     expect(findCoverCandidates).toHaveBeenCalledWith('bk_test');
 
     await waitFor(() => expect(screen.getByTestId('cover-grid')).toBeInTheDocument());
-    expect(screen.getByTestId('cover-candidate-cover-i:11')).toBeInTheDocument();
-    expect(screen.getByTestId('cover-candidate-cover-i:22')).toBeInTheDocument();
+    expect(screen.getByTestId('cover-candidate-openlibrary:11')).toBeInTheDocument();
+    expect(screen.getByTestId('cover-candidate-apple:22')).toBeInTheDocument();
   });
 
-  it('renders the empty-state copy when OpenLibrary returns no candidates', async () => {
+  it('renders the empty-state copy naming all three sources', async () => {
     findCoverCandidates.mockResolvedValue({ candidates: [] });
     renderPicker();
-    await screen.findByText(/no covers found/i);
+    await screen.findByText(/across openlibrary, apple books, and google books/i);
     expect(screen.queryByTestId('cover-grid')).not.toBeInTheDocument();
+  });
+
+  it('renders a source badge on each candidate', async () => {
+    findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
+    renderPicker();
+    await screen.findByTestId('cover-grid');
+    expect(screen.getByTestId('cover-source-openlibrary:11')).toHaveTextContent(/openlibrary/i);
+    expect(screen.getByTestId('cover-source-apple:22')).toHaveTextContent(/apple/i);
   });
 
   it('renders an error state with a retry button when the fetch fails', async () => {
@@ -123,15 +131,15 @@ describe('CoverPicker — rendering states (Search tab)', () => {
 });
 
 describe('CoverPicker — pick flow (Search tab)', () => {
-  it('calls api.setCover with the chosen openLibraryId, fires onPicked, and closes', async () => {
+  it('calls api.setCover with the chosen candidateId, fires onPicked, and closes', async () => {
     findCoverCandidates.mockResolvedValue({ candidates: TWO_CANDIDATES });
     setCover.mockResolvedValue({ coverImageUrl: '/api/books/bk_test/cover' });
 
     const { onClose, onPicked } = renderPicker();
-    const tile = await screen.findByTestId('cover-candidate-cover-i:22');
+    const tile = await screen.findByTestId('cover-candidate-apple:22');
     fireEvent.click(tile);
 
-    await waitFor(() => expect(setCover).toHaveBeenCalledWith('bk_test', 'cover-i:22'));
+    await waitFor(() => expect(setCover).toHaveBeenCalledWith('bk_test', 'apple:22'));
     expect(onPicked).toHaveBeenCalledWith('/api/books/bk_test/cover');
     expect(onClose).toHaveBeenCalled();
   });
@@ -141,7 +149,7 @@ describe('CoverPicker — pick flow (Search tab)', () => {
     setCover.mockRejectedValue(new Error('download blew up'));
 
     const { onClose, onPicked } = renderPicker();
-    const tile = await screen.findByTestId('cover-candidate-cover-i:11');
+    const tile = await screen.findByTestId('cover-candidate-openlibrary:11');
     fireEvent.click(tile);
 
     await screen.findByText(/download blew up/i);

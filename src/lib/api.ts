@@ -1791,10 +1791,10 @@ async function realPutListenProgress(
   return res.json();
 }
 
-/* OpenLibrary cover endpoints. The picker modal calls findCoverCandidates
-   on open, then setCover when the user clicks a thumbnail; removeCover
-   reverts to the procedural gradient. See server/src/routes/cover.ts and
-   server/src/cover/openlibrary.ts for the upstream behaviour. */
+/* Multi-source cover endpoints (OpenLibrary / Apple Books / Google Books).
+   The picker modal calls findCoverCandidates on open, then setCover when
+   the user clicks a thumbnail; removeCover reverts to the procedural
+   gradient. See server/src/routes/cover.ts for the upstream behaviour. */
 async function realFindCoverCandidates(bookId: string): Promise<{ candidates: CoverCandidate[] }> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover/candidates`);
   if (!res.ok)
@@ -1806,12 +1806,12 @@ async function realFindCoverCandidates(bookId: string): Promise<{ candidates: Co
 
 async function realSetCover(
   bookId: string,
-  openLibraryId: string,
+  candidateId: string,
 ): Promise<{ coverImageUrl: string }> {
   const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/cover`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ openLibraryId }),
+    body: JSON.stringify({ candidateId }),
   });
   if (!res.ok)
     throw new Error(`Cover save failed (${res.status}): ${(await res.text()) || res.statusText}`);

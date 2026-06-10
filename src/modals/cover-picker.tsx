@@ -62,6 +62,12 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_MB = 10;
 const FRAMING_DEBOUNCE_MS = 300;
 
+const SOURCE_LABEL: Record<CoverCandidate['source'], string> = {
+  openlibrary: 'OpenLibrary',
+  apple: 'Apple',
+  google: 'Google',
+};
+
 export function CoverPicker(props: Props) {
   const {
     open,
@@ -147,9 +153,9 @@ export function CoverPicker(props: Props) {
   if (!open) return null;
 
   async function pickFromSearch(candidate: CoverCandidate) {
-    setSubmitting(candidate.openLibraryId);
+    setSubmitting(candidate.id);
     try {
-      const { coverImageUrl } = await api.setCover(bookId, candidate.openLibraryId);
+      const { coverImageUrl } = await api.setCover(bookId, candidate.id);
       onPicked(coverImageUrl);
       onClose();
     } catch (e) {
@@ -329,7 +335,7 @@ export function CoverPicker(props: Props) {
                   >
                     OpenLibrary
                   </a>
-                  . Click a cover to use it.
+                  , Apple Books &amp; Google Books. Click a cover to use it.
                 </>
               )}
               {tab === 'upload' && (
@@ -430,18 +436,18 @@ function SearchPanel({
               by <span className="font-semibold text-ink">{bookAuthor}</span>
             </>
           ) : null}{' '}
-          on OpenLibrary.
+          across OpenLibrary, Apple Books, and Google Books.
         </p>
       )}
       {state.kind === 'ready' && state.candidates.length > 0 && (
         <div data-testid="cover-grid" className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {state.candidates.map((c) => (
             <button
-              key={c.openLibraryId}
-              data-testid={`cover-candidate-${c.openLibraryId}`}
+              key={c.id}
+              data-testid={`cover-candidate-${c.id}`}
               onClick={() => onPick(c)}
               disabled={busy}
-              className={`group relative rounded-2xl overflow-hidden border bg-canvas aspect-2/3 focus:outline-hidden transition-shadow ${submitting === c.openLibraryId ? 'border-magenta ring-2 ring-magenta/30' : 'border-ink/10 hover:shadow-card hover:border-ink/20'} disabled:cursor-not-allowed disabled:opacity-50`}
+              className={`group relative rounded-2xl overflow-hidden border bg-canvas aspect-2/3 focus:outline-hidden transition-shadow ${submitting === c.id ? 'border-magenta ring-2 ring-magenta/30' : 'border-ink/10 hover:shadow-card hover:border-ink/20'} disabled:cursor-not-allowed disabled:opacity-50`}
             >
               <img
                 src={c.coverUrl}
@@ -449,6 +455,12 @@ function SearchPanel({
                 className="absolute inset-0 w-full h-full object-cover"
                 loading="lazy"
               />
+              <span
+                data-testid={`cover-source-${c.id}`}
+                className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded-md bg-ink/70 text-white text-[9px] font-semibold uppercase tracking-wide"
+              >
+                {SOURCE_LABEL[c.source]}
+              </span>
               {c.edition && (
                 <span className="absolute bottom-0 inset-x-0 px-2 py-1 bg-ink/70 text-white text-[10px] leading-tight truncate">
                   {c.edition}
