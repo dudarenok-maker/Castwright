@@ -1885,22 +1885,26 @@ async function realPatchCoverFraming(
    library card swaps the cover without a real server round-trip. */
 const MOCK_COVER_CANDIDATES: CoverCandidate[] = [
   {
-    openLibraryId: 'cover-i:8739161',
+    id: 'openlibrary:8739161',
+    source: 'openlibrary',
     coverUrl: 'https://covers.openlibrary.org/b/id/8739161-L.jpg',
     edition: 'Aladdin · 2012',
   },
   {
-    openLibraryId: 'cover-i:13035811',
+    id: 'openlibrary:13035811',
+    source: 'openlibrary',
     coverUrl: 'https://covers.openlibrary.org/b/id/13035811-L.jpg',
     edition: 'Aladdin · 2013',
   },
   {
-    openLibraryId: 'cover-i:14625765',
+    id: 'openlibrary:14625765',
+    source: 'openlibrary',
     coverUrl: 'https://covers.openlibrary.org/b/id/14625765-L.jpg',
     edition: 'Aladdin · 2014',
   },
   {
-    openLibraryId: 'cover-i:11193889',
+    id: 'openlibrary:11193889',
+    source: 'openlibrary',
     coverUrl: 'https://covers.openlibrary.org/b/id/11193889-L.jpg',
     edition: 'Aladdin · 2015',
   },
@@ -1913,10 +1917,10 @@ async function mockFindCoverCandidates(_bookId: string): Promise<{ candidates: C
 
 async function mockSetCover(
   _bookId: string,
-  openLibraryId: string,
+  candidateId: string,
 ): Promise<{ coverImageUrl: string }> {
   await wait(80);
-  const hit = MOCK_COVER_CANDIDATES.find((c) => c.openLibraryId === openLibraryId);
+  const hit = MOCK_COVER_CANDIDATES.find((c) => c.id === candidateId);
   return { coverImageUrl: hit?.coverUrl ?? MOCK_COVER_CANDIDATES[0].coverUrl };
 }
 
