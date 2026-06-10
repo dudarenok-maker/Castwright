@@ -65,26 +65,40 @@ The existing "Design full cast" button **no longer fires immediately** — it op
 `DesignScopePicker` (`src/components/design-scope-picker.tsx`), a popover with
 three rows:
 
-| Scope | Work count | Action |
+| Scope | Work count badge | Action |
 |---|---|---|
-| **Base voices** | characters with lifecycle `Needs voice` | bases only (today's behaviour) |
-| **Emotion variants** | Σ demanded-but-missing variants across Qwen cast | variants only |
-| **Both** | bases + their needed variants | bases first, then variants |
+| **Base voices** | characters with lifecycle `Needs voice` | bases only |
+| **Emotion variants** | Σ demanded-but-missing variants across the **whole** Qwen cast (total), with a `✓ N ready now · ⚠ M need a base` split underneath | variants only — ships the *ready* tasks; disabled until ≥1 is ready, with a loud "needs a base first — use Both" warning |
+| **Both** | bases + every needed variant | bases first, then variants |
 
 A scope with zero work is disabled with a green "all done" chip. Selecting a scope
 dispatches `castDesignActions.designAllRequested({ scope, characterIds, variantTasks })`.
 
-**Work-list computation.** `buildVariantTasks` (`src/lib/variant-tasks.ts`) iterates
-the cast: for each Qwen character that HAS a base voice, emits the in-use emotions
-that lack a designed variant. `variantWorkCounts` gives the picker its count. The
-list is computed at dispatch time and passed to the server as `variantTasks` in the
-POST body — the server re-validates freshness (already-designed = skip, missing-base
-= skip) to avoid clobbering concurrent work.
+**Count = the whole Qwen cast (matches the rows).** `buildVariantTasks`
+(`src/lib/variant-tasks.ts`) takes an `isQwen` predicate from the caller; the cast
+view passes the SAME predicate its "Needs variants" chip and glyph strips use
+(effective project engine OR a matched Qwen library voice), so the picker total can
+never disagree with the rows. For each matching character it emits the in-use
+emotions lacking a designed variant, tagging each task `hasBase` (= the character
+already has a designed `qwen.name`, mirroring the server's design gate).
+`variantWorkCounts` splits the list into `{ totalTasks, readyTasks, blockedTasks,
+blockedChars }` for the "40 total · 5 ready · 35 need a base" display.
 
-**Dependency rule.** Under `variants` scope, a character still missing its base
-voice is silently skipped (the base must exist before a variant can be designed).
-Under `both`, the character's base is designed first and its variant tasks follow.
-`buildTaskList` in `cast-design.ts` enforces the base-before-variant ordering.
+> **Fix (2026-06-10 — [bug #695](https://github.com/dudarenok-maker/Castwright/issues/695), PR #694):**
+> the shipped build gated `buildVariantTasks` on `isQwenWithBase`, so the picker
+> counted only already-voiced characters (e.g. 5) while the cast rows' "Needs
+> variants" chip counted the whole emotion cast (e.g. 16) — the two surfaces
+> disagreed and "Both" undercounted. The count now spans the whole Qwen cast, as
+> the table above always intended, with the variants-only scope shipping only the
+> ready (has-base) tasks behind a loud warning.
+
+**Dependency rule.** Under `variants` scope the picker ships ONLY the `hasBase`
+(ready) tasks: a baseless character is still **counted** in the total (so the badge
+matches the cast rows) but **excluded** from the dispatch, with a loud warning that
+it needs a base first; the row is disabled until ≥1 task is ready. Under `both`,
+every task is shipped and `buildTaskList` (`cast-design.ts`) designs each
+character's base before its variants. The server still defensively skips a variant
+whose base is missing (belt-and-braces against a stale client).
 
 **Server execution.** `cast-design.ts` receives the unified task list. Each task
 routes through `withDesignLock` + `gpuSemaphore` (unchanged). For a variant task
@@ -144,11 +158,12 @@ loaded sentences). This means:
 - `VariantGlyphStrip` renders **nothing** (or the quiet "no emotion tags" hint)
   for non-Qwen characters — variants are Qwen-only. Guard at `ttsEngine === 'qwen'`
   in `cast.tsx` before passing props.
-- `buildVariantTasks` (and therefore the `variantTasks` sent to the server) includes
-  ONLY Qwen characters that **have a base voice** (`overrideTtsVoices?.qwen?.name`
-  truthy). A character without a base is excluded from the `variants` task list; it
-  only appears under `both` as a base task (and only gets variant tasks once the base
-  is in place).
+- `buildVariantTasks` **counts** every Qwen-effective character with demanded-but-
+  missing variants (the picker total must match the cast rows' "Needs variants" chip),
+  tagging each task `hasBase`. The `variantTasks` **dispatched** are scope-dependent:
+  `variants` ships only `hasBase` tasks (a baseless character is counted but excluded,
+  with a loud warning); `both` ships every task and designs the base first. A baseless
+  character only gets its variants once its base is in place (via `both`).
 - The server's `runDesignJob` checks freshness per task at execution time — a variant
   whose base was concurrently removed between picker-open and task execution is
   skipped (not failed). Skipped tasks increment `job.skipped`.
@@ -162,7 +177,7 @@ loaded sentences). This means:
   book and fall back to base in a sibling.
 - The existing `character_designed` SSE event and `setQwenOverrideName` reducer path
   are unchanged (base voice designs still use them).
-- `showDesignFullCast` now also fires when `variantCount > 0` (not only on
+- `showDesignFullCast` now also fires when `variantWork.totalTasks > 0` (not only on
   `needsVoiceIds.length > 0`), so the button appears for a fully-voiced cast that
   still has outstanding variant work.
 
@@ -199,15 +214,20 @@ loaded sentences). This means:
   cast slice and bumps done; variants-only start (empty `characterIds`) proceeds.
 
 **Frontend — work-list + scope picker (Vitest + RTL):**
-- `src/lib/variant-tasks.test.ts` — `buildVariantTasks` emits only in-use emotions
-  lacking a designed variant for chars with a base voice; excludes chars with no base;
-  excludes chars with no in-use emotions. `variantWorkCounts` returns the total.
-- `src/components/design-scope-picker.test.tsx` — shows live counts and a combined
-  "both" total; disables an empty scope with "all done"; calls `onPick` with the chosen
-  scope; all three rows disabled when total is zero.
-- `src/views/cast.test.tsx` — clicking the button opens the picker; clicking a scope row
-  dispatches `designAllRequested` with the correct payload (`scope`, `variantTasks`);
-  existing base-only dispatch updated to go through the picker.
+- `src/lib/variant-tasks.test.ts` — `buildVariantTasks` emits in-use emotions lacking a
+  designed variant for every character the `isQwen` predicate accepts, flagging `hasBase`
+  (base present) vs not; **includes** a baseless character (hasBase=false); excludes chars
+  the predicate rejects or with no in-use emotions. `variantWorkCounts` splits a list into
+  `{ totalTasks, readyTasks, blockedTasks, blockedChars }`.
+- `src/components/design-scope-picker.test.tsx` — shows the variant total badge, the
+  `N ready · M need a base` split, and the combined "both" total; surfaces the loud
+  base-voice warning when some variants are blocked (hidden when all ready); disables
+  "Emotion variants" when nothing is ready but keeps the warning; "all done" for an
+  empty scope; calls `onPick`; all rows disabled when there's no work.
+- `src/views/cast.test.tsx` — clicking the button opens the picker; picking a scope
+  dispatches `designAllRequested` with the correct payload; a baseless emotion character
+  is **counted** in the picker total but **excluded** from the `variants` dispatch (base-
+  then-variant deferred to `both`); existing base-only dispatch goes through the picker.
 
 **Frontend — glyph strip (Vitest + RTL):**
 - `src/components/variant-glyph-strip.test.tsx` — renders one glyph per in-use emotion
@@ -271,6 +291,7 @@ Requires a Qwen project with weights installed + a book with emotion-tagged sent
 - Plan 177 (archived) — fs-25 per-quote emotion: `docs/features/archive/177-fs25-per-quote-emotion.md`
 - Plan 180 — fe-31 emotion chip preview (variant audition in the drawer): `docs/features/180-fe31-emotion-chip-preview.md`
 - Backlog: `fe-32` ([#512](https://github.com/dudarenok-maker/AudioBook-Generator/issues/512))
+- Bug: scope-picker variant undercount ([#695](https://github.com/dudarenok-maker/Castwright/issues/695), PR #694) — count now spans the whole Qwen cast
 
 ## Follow-ups
 

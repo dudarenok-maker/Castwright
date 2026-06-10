@@ -1,19 +1,36 @@
 /* fe-32 — scope picker for the single "Design full cast" button. One entry,
    three scopes, each annotated with its live work count so GPU cost is visible
-   before starting. A scope with zero work is disabled ("all done"). Closes on
-   Escape; the parent handles outside-click. */
+   before starting. A scope with zero ACTIONABLE work is disabled ("all done").
+   Closes on Escape; the parent handles outside-click.
+
+   "Emotion variants" reports the WHOLE cast's variant demand (matching the
+   cast rows' "Needs variants" chip), split into "ready now" (characters that
+   already have a base voice) vs "need a base". The variants-only scope can only
+   synthesise on top of an existing base, so it's disabled until ≥1 is ready and
+   carries a loud warning; the "Both" scope designs the bases first, so its task
+   count includes every variant. */
 import { useEffect, type JSX } from 'react';
-import { IconSparkle, IconClose } from '../lib/icons';
+import { IconSparkle, IconClose, IconCheck, IconAlertTri } from '../lib/icons';
 import type { CastDesignScope } from '../store/cast-design-slice';
 
 export function DesignScopePicker({
   baseCount,
-  variantCount,
+  variantTotal,
+  variantReady,
+  variantBlocked,
+  variantBlockedChars,
   onPick,
   onClose,
 }: {
   baseCount: number;
-  variantCount: number;
+  /** Total (character × emotion) variant tasks across the whole cast. */
+  variantTotal: number;
+  /** Variant tasks for characters that already have a base voice. */
+  variantReady: number;
+  /** Variant tasks blocked behind a missing base voice. */
+  variantBlocked: number;
+  /** Distinct characters whose variants are blocked behind a missing base. */
+  variantBlockedChars: number;
   onPick: (scope: CastDesignScope) => void;
   onClose: () => void;
 }): JSX.Element {
@@ -25,7 +42,12 @@ export function DesignScopePicker({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const bothCount = baseCount + variantCount;
+  const bothCount = baseCount + variantTotal;
+
+  const badgeClass = (active: boolean) =>
+    `text-xs font-bold px-2.5 py-1 rounded-full shrink-0 ${
+      active ? 'bg-amber-500/10 text-amber-700' : 'bg-emerald-500/10 text-emerald-700'
+    }`;
 
   function Row({
     scope,
@@ -53,15 +75,7 @@ export function DesignScopePicker({
           <span className="block text-sm font-bold text-ink">{title}</span>
           <span className="block text-xs text-ink/55">{desc}</span>
         </span>
-        <span
-          className={`text-xs font-bold px-2.5 py-1 rounded-full shrink-0 ${
-            count === 0
-              ? 'bg-emerald-500/10 text-emerald-700'
-              : 'bg-amber-500/10 text-amber-700'
-          }`}
-        >
-          {count === 0 ? 'all done' : `${count} ${unit}`}
-        </span>
+        <span className={badgeClass(count > 0)}>{count === 0 ? 'all done' : `${count} ${unit}`}</span>
       </button>
     );
   }
@@ -81,6 +95,7 @@ export function DesignScopePicker({
           <IconClose className="w-3.5 h-3.5" />
         </button>
       </div>
+
       <Row
         scope="bases"
         title="Base voices"
@@ -88,13 +103,59 @@ export function DesignScopePicker({
         count={baseCount}
         unit="needed"
       />
-      <Row
-        scope="variants"
-        title="Emotion variants"
-        desc="Tagged emotions missing a variant"
-        count={variantCount}
-        unit="needed"
-      />
+
+      {/* Emotion variants — bespoke row: total-demand badge + ready/blocked
+          split, disabled until ≥1 is designable, with a loud base-voice
+          warning when some are blocked. */}
+      <button
+        type="button"
+        role="menuitem"
+        data-testid="scope-variants"
+        disabled={variantReady === 0}
+        onClick={() => onPick('variants')}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-ink/4 disabled:cursor-not-allowed border-t border-ink/8 min-h-[44px]"
+      >
+        <span className="flex-1 min-w-0">
+          <span className={`block text-sm font-bold ${variantReady === 0 ? 'text-ink/40' : 'text-ink'}`}>
+            Emotion variants
+          </span>
+          <span className={`block text-xs ${variantReady === 0 ? 'text-ink/35' : 'text-ink/55'}`}>
+            Tagged emotions missing a variant
+          </span>
+          {variantTotal > 0 && (
+            <span
+              data-testid="variants-split"
+              className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] font-semibold"
+            >
+              <span className="inline-flex items-center gap-1 text-emerald-700">
+                <IconCheck className="w-3 h-3" />
+                {variantReady} ready now
+              </span>
+              {variantBlocked > 0 && (
+                <span className="inline-flex items-center gap-1 text-amber-700">
+                  <IconAlertTri className="w-3 h-3" />
+                  {variantBlocked} need a base
+                </span>
+              )}
+            </span>
+          )}
+        </span>
+        <span className={badgeClass(variantTotal > 0)}>{variantTotal === 0 ? 'all done' : variantTotal}</span>
+      </button>
+      {variantBlockedChars > 0 && (
+        <p
+          data-testid="variants-base-warning"
+          className="px-4 pb-3 -mt-0.5 text-[11px] text-amber-700 flex items-start gap-1.5"
+        >
+          <IconAlertTri className="w-3 h-3 mt-0.5 shrink-0" />
+          <span>
+            Variants only run for voices that already exist —{' '}
+            {variantBlockedChars} {variantBlockedChars === 1 ? 'character needs' : 'characters need'} a
+            base voice first. Choose “Both” to design everything.
+          </span>
+        </p>
+      )}
+
       <Row
         scope="both"
         title="Both"
