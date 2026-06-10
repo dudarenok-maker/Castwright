@@ -141,9 +141,10 @@ launch PR (2026-06-10) already fixed the worst case.
   safe defaults; `/api/info` carries `activeEngine` + devices off one fetch.
 - **frontend Vitest** (`device-panel.test.tsx`): pending, cuda headline, mps headline +
   per-engine rows, sidecar-down fallback.
-- **e2e**: extend `e2e/about-page.spec.ts` to assert the upgraded panel text against the
-  mock payload (UI-visible change crossing the api seam). `/about` is not in the visual
-  snapshot set — no baseline churn.
+- **e2e**: `e2e/device-panel.spec.ts` asserts the upgraded panel text against the mock
+  payload at the panel's real home, `#/models` (fs-43 #705 places it "first-run /
+  Account → Models" — NOT `/about`, which this spec originally assumed). `#/models` is
+  not in the visual snapshot set — no baseline churn.
 
 ## Non-goals
 
