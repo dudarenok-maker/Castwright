@@ -886,6 +886,36 @@ describe('spawnSidecar', () => {
     expect(onExit).toHaveBeenCalledWith(42, null);
   });
 
+  it('spawns bash start.sh on non-Windows platforms', async () => {
+    const calls: Array<{ file: string; args: readonly string[] }> = [];
+    const fakeSpawn = ((file: string, args: readonly string[]) => {
+      calls.push({ file, args });
+      const child: any = new EventEmitter();
+      child.pid = 4321; child.stdout = null; child.stderr = null;
+      return child;
+    }) as unknown as typeof import('node:child_process').spawn;
+    await spawnSidecar({
+      autoStart: true, modelKey: 'kokoro-v1', eagerLoadKokoro: true, eagerLoadQwen: false,
+      repoRoot, spawnFn: fakeSpawn, probeFn: async () => false,
+      platform: 'darwin', log: () => {}, warn: () => {},
+    } as any);
+    expect(calls[0].file).toBe('bash');
+    expect(String(calls[0].args[0])).toMatch(/tts-sidecar[\\/]start\.sh$/);
+  });
+
+  it('does not throw when the spawned child emits an error event', async () => {
+    const child: any = new EventEmitter();
+    child.pid = 999; child.stdout = null; child.stderr = null;
+    const fakeSpawn = (() => child) as unknown as typeof import('node:child_process').spawn;
+    const handle = await spawnSidecar({
+      autoStart: true, modelKey: 'kokoro-v1', eagerLoadKokoro: true, eagerLoadQwen: false,
+      repoRoot, spawnFn: fakeSpawn, probeFn: async () => false,
+      platform: 'darwin', log: () => {}, warn: () => {},
+    } as any);
+    expect(() => child.emit('error', new Error('ENOENT'))).not.toThrow();
+    expect(handle).not.toBeNull();
+  });
+
   it('handle.kill() on win32 shells out to taskkill /T /F /PID', async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
