@@ -70,6 +70,7 @@ interface Props {
   onOpenBook: (book: LibraryBook) => void;
   onDeleteBook: (book: LibraryBook) => void;
   onReparseBook: (book: LibraryBook) => void;
+  onReplaceManuscript: (book: LibraryBook, file: File) => void | Promise<void>;
   onEditBook: (book: LibraryBook, patch: EditBookMetaPatch) => Promise<void>;
   /** Fires after the CoverPicker modal successfully updates the book's
       cover (either picked a new candidate or removed the existing one).
@@ -103,6 +104,7 @@ export function BookLibraryView({
   onOpenBook,
   onDeleteBook,
   onReparseBook,
+  onReplaceManuscript,
   onEditBook,
   onCoverChanged,
   onStartNew,
@@ -296,6 +298,7 @@ export function BookLibraryView({
           onOpenBook={onOpenBook}
           onDeleteBook={onDeleteBook}
           onReparseBook={onReparseBook}
+          onReplaceManuscript={onReplaceManuscript}
           onEditBook={onEditBook}
           onCoverChanged={onCoverChanged}
           onStartNew={onStartNew}
@@ -320,6 +323,7 @@ export function BookLibraryView({
             onOpenBook={onOpenBook}
             onDeleteBook={onDeleteBook}
             onReparseBook={onReparseBook}
+            onReplaceManuscript={onReplaceManuscript}
             onEditBook={onEditBook}
             onCoverChanged={onCoverChanged}
             onStartNew={onStartNew}

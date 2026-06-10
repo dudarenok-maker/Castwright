@@ -181,6 +181,7 @@ describe('a11y — book library view', () => {
           onOpenBook={vi.fn()}
           onDeleteBook={vi.fn()}
           onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
           onEditBook={vi.fn()}
           onStartNew={vi.fn()}
         />

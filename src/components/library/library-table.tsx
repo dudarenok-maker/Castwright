@@ -47,6 +47,7 @@ interface Props {
   onOpenBook: (book: LibraryBook) => void;
   onDeleteBook: (book: LibraryBook) => void;
   onReparseBook: (book: LibraryBook) => void;
+  onReplaceManuscript: (book: LibraryBook, file: File) => void | Promise<void>;
   onEditBook: (book: LibraryBook, patch: EditBookMetaPatch) => Promise<void>;
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
@@ -75,6 +76,7 @@ export function LibraryTable({
   onOpenBook,
   onDeleteBook,
   onReparseBook,
+  onReplaceManuscript,
   onEditBook,
   onCoverChanged,
   onStartNew,
@@ -204,6 +206,7 @@ export function LibraryTable({
                         onOpen={() => onOpenBook(book)}
                         onDelete={() => onDeleteBook(book)}
                         onReparse={() => onReparseBook(book)}
+                        onReplace={(file) => onReplaceManuscript(book, file)}
                         onEdit={(patch) => onEditBook(book, patch)}
                         onCoverChanged={() => onCoverChanged?.(book)}
                       />
@@ -226,6 +229,7 @@ function BookRow({
   onOpen,
   onDelete,
   onReparse,
+  onReplace,
   onEdit,
   onCoverChanged,
 }: {
@@ -235,6 +239,7 @@ function BookRow({
   onOpen: () => void;
   onDelete: () => void;
   onReparse: () => void;
+  onReplace: (file: File) => void;
   onEdit: (patch: EditBookMetaPatch) => Promise<void> | void;
   onCoverChanged?: () => Promise<void> | void;
 }) {
@@ -243,6 +248,9 @@ function BookRow({
   const coverGrad = `linear-gradient(135deg, ${from}, ${to})`;
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmReparse, setConfirmReparse] = useState(false);
+  const [confirmReplace, setConfirmReplace] = useState(false);
+  const [pendingReplaceFile, setPendingReplaceFile] = useState<File | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [coverPickerOpen, setCoverPickerOpen] = useState(false);
@@ -382,6 +390,15 @@ function BookRow({
               <button
                 onClick={() => {
                   setMenuOpen(false);
+                  replaceInputRef.current?.click();
+                }}
+                className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
+              >
+                <IconRefresh className="w-4 h-4" /> Replace manuscript…
+              </button>
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
                   setConfirmDelete(true);
                 }}
                 className="w-full px-3 py-2.5 text-left text-sm font-medium text-red-700 hover:bg-red-50 inline-flex items-center gap-2"
@@ -440,6 +457,49 @@ function BookRow({
               onReparse();
             }}
             onClose={() => setConfirmReparse(false)}
+          />
+          <input
+            ref={replaceInputRef}
+            data-testid="replace-manuscript-input"
+            type="file"
+            accept=".txt,.md,.epub,.pdf"
+            aria-hidden="true"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              e.target.value = '';
+              if (f) {
+                setPendingReplaceFile(f);
+                setConfirmReplace(true);
+              }
+            }}
+          />
+          <ConfirmDialog
+            open={confirmReplace}
+            eyebrow="Replace"
+            title={book.title}
+            icon={<IconRefresh className="w-4 h-4" />}
+            body={
+              <div className="space-y-2">
+                <p>This replaces the manuscript file and re-detects chapters from the new file.</p>
+                <p className="text-ink/60">
+                  Cached analysis and any generated audio are discarded. Designed voices are
+                  preserved where characters still match — you'll confirm the cast again before
+                  generating.
+                </p>
+              </div>
+            }
+            confirmLabel="Replace manuscript"
+            onConfirm={() => {
+              setConfirmReplace(false);
+              const f = pendingReplaceFile;
+              setPendingReplaceFile(null);
+              if (f) onReplace(f);
+            }}
+            onClose={() => {
+              setConfirmReplace(false);
+              setPendingReplaceFile(null);
+            }}
           />
           <ConfirmDialog
             open={confirmDelete}

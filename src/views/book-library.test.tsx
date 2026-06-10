@@ -65,6 +65,7 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
           onOpenBook={vi.fn()}
           onDeleteBook={vi.fn()}
           onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
           onEditBook={vi.fn()}
           onStartNew={vi.fn()}
         />
@@ -277,6 +278,7 @@ describe('BookLibraryView — loading affordance', () => {
           onOpenBook={vi.fn()}
           onDeleteBook={vi.fn()}
           onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
           onEditBook={vi.fn()}
           onStartNew={vi.fn()}
         />
@@ -320,6 +322,7 @@ describe('BookLibraryView — loading affordance', () => {
           onOpenBook={vi.fn()}
           onDeleteBook={vi.fn()}
           onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
           onEditBook={vi.fn()}
           onStartNew={vi.fn()}
         />
@@ -365,6 +368,7 @@ describe('BookLibraryView — loading affordance', () => {
           onOpenBook={vi.fn()}
           onDeleteBook={vi.fn()}
           onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
           onEditBook={vi.fn()}
           onStartNew={vi.fn()}
         />
@@ -419,6 +423,7 @@ describe('BookLibraryView — loading affordance', () => {
           onOpenBook={vi.fn()}
           onDeleteBook={vi.fn()}
           onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
           onEditBook={vi.fn()}
           onStartNew={vi.fn()}
           onImportPortable={onImportPortable}
@@ -620,6 +625,7 @@ describe('BookLibraryView — loading affordance', () => {
       onOpenBook: vi.fn(),
       onDeleteBook: vi.fn(),
       onReparseBook: vi.fn(),
+      onReplaceManuscript: vi.fn(),
       onEditBook: vi.fn(),
       onStartNew: vi.fn(),
     };
