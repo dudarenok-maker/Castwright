@@ -38,7 +38,7 @@ export async function searchApple(title: string, author: string): Promise<CoverC
     out.push({
       id: `apple:${localId}`,
       source: 'apple',
-      coverUrl: r.artworkUrl100.replace('100x100bb', '600x600bb'),
+      coverUrl: r.artworkUrl100.replace(/100x100bb/g, '600x600bb'),
       edition: formatEdition(undefined, parseYear(r.releaseDate)),
     });
     if (out.length >= MAX_PER_SOURCE) break;

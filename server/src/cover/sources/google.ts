@@ -24,7 +24,7 @@ interface GoogleVolume {
 function normaliseImage(u: string): string {
   return u
     .replace(/^http:/, 'https:')
-    .replace(/&edge=curl/, '')
+    .replace(/[?&]edge=curl/, '')
     .replace(/zoom=\d/, 'zoom=1');
 }
 
