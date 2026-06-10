@@ -4580,6 +4580,9 @@ let mockAppInfo: AppInfo = {
   showWhatsNew: false,
   releaseNotes: '# v1.6.0\n\n- In-app upgrades.\n',
   hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },
+  devices: { kokoro: 'cuda', coqui: 'cuda', qwen: 'cuda' },
+  devicesState: 'ready',
+  activeEngine: 'kokoro',
 };
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
