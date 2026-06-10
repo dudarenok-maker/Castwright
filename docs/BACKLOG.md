@@ -37,12 +37,6 @@ to monitoring). Prior full pass 2026-06-02 folded in the 29 brainstorm items #45
 - _Benefit (business):_ protects the brand a real business is being built on; avoids a forced rename after launch.
 _Full detail + acceptance:_ [#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626).
 
-### `fe-37` — Brand-in-app v1.7.0 rollout (tagline / about / brand.ts / neutrals / multi-version release notes + gate) ([#704](https://github.com/dudarenok-maker/Castwright/issues/704))
-
-- _What:_ Land the 10 June v2 brand decisions inside the app for the v1.7.0 ship + close the audit gaps. Single PR on `feat/frontend-brand-v2-rollout`: new tagline single-sourced in `src/lib/brand.ts` (+ 3 missed static sites — `index.html` meta, `manifest.webmanifest`); rebuilt `/about` (7 blocks, teaser flagged); hand-designed favicons + refreshed `og.png` (+ render-script reconcile so re-runs don't clobber them); six neutral tokens; **multi-version** brand-voice release notes (1.5.0 / 1.6.0 / 1.7.0) at a new `#/release-notes` history view linked from Account + `/about`, decoupled from the tag-annotation bundler; technical notes in `release-notes-next.md`; two-point release gate (`bump-version.mjs` + `release.yml` reject placeholder/wrong-version notes).
-- _Benefit (user / brand):_ the app stops broadcasting retired brand in previews, tabs, SEO and the PWA; v1.7.0 presents a coherent, honest Castwright with real, multi-version in-app notes. Splits out `fs-43` + `app-16`.
-_Full detail + acceptance:_ [#704](https://github.com/dudarenok-maker/Castwright/issues/704) · spec `docs/superpowers/specs/2026-06-10-brand-in-app-rollout-design.md`.
-
 ### `srv-1` — Merge journal for deterministic alias un-link ([#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397))
 
 - _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.
@@ -134,12 +128,6 @@ _Full detail + acceptance:_ [#416](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ cheap targeted re-detect for one edited/late-added chapter without re-running the whole book's quota.
 _Full detail + acceptance:_ [#592](https://github.com/dudarenok-maker/AudioBook-Generator/issues/592).
 
-### `fs-43` — "Will it run on my machine?" device panel (sensible, server-sourced) ([#705](https://github.com/dudarenok-maker/Castwright/issues/705))
-
-- _What:_ A first-run / Account → Models panel showing the per-platform hardware-honesty line + the detected **host** device, **server-sourced** via `GET /api/info` (`os.platform()`/`os.arch()` → Apple Silicon / Windows / Linux). The server runs the models; a LAN browser is the phone, so client-side detection would be wrong. Surfaces existing `health.device` (cuda/cpu) when a model is loaded; honest "load a voice to confirm" otherwise. Audits + fixes frontend GPU-not-detected strings for NVIDIA-only phrasing. **Ships in the brand wave (`fe-37` #704)**; the deep ground-truth half is split to `side-14`.
-- _Benefit (user):_ answers "will it run on my Mac/PC?" honestly today — especially the new Apple Silicon path, which `os.arch()` detects reliably.
-_Full detail + acceptance:_ [#705](https://github.com/dudarenok-maker/Castwright/issues/705).
-
 ### `fe-5` — Broad hover-affordance audit with `coarse-pointer:` Tailwind variant ([#402](https://github.com/dudarenok-maker/AudioBook-Generator/issues/402))
 
 - _What:_ Plan 81 wave 4 shipped a `coarse-pointer:` Tailwind variant (matches `@media (pointer: coarse)`) for touch devices that don't expose hover. First consumer is the manuscript boundary handle label. Sweep `src/` for all uses of `group-hover:` / `peer-hover:` / `hover:opacity-0` and apply the variant where the hover-revealed content is functional (e.g. action buttons), not purely decorative (e.g. card lift transitions).
@@ -185,16 +173,6 @@ _Full detail + acceptance:_ [#632](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Timeboxed (~1h) audit of the Flutter companion's surfaces (pairing, library, player) against the v2 brand checklist — new tagline/short-form (no retired "…effortlessly. Even in your own voice."), no `.ai` inside lockups, engine credits where voices are shown. Split out of `fe-37` (separate `app` scope). Findings → a follow-up `app`-scope fix PR or close-clean.
 - _Benefit (brand):_ the second screen tells the same story as the first.
 _Full detail + acceptance:_ [#706](https://github.com/dudarenok-maker/Castwright/issues/706).
-
-### Dependency major upgrades — _outstanding (2026-06-08 audit)_
-
-The 2026-06-01 [plan 164](features/164-deps-ci-hygiene.md) wave shipped in full — round 1 ([plan 167](features/archive/167-fe-react-cluster-upgrade.md): React 19, Vite 8 + Vitest 4, react-router 7, TypeScript 6) and round 2 ([plan 170](features/archive/170-deps-majors-zod-express-pdfjs-tailwind.md): Zod 4, Express 5, pdfjs-dist 5, Tailwind 4), plus `ops-8` (Node-24 GitHub Actions runners). A fresh `npm outdated` on **2026-06-08** surfaces a new wave of majors now behind — tracked here (no separate issues yet; fold into the next deps round):
-
-- **Functional (server):** `pdfjs-dist` 5 → 6, `pdf-parse` 1 → 2 — both touch manuscript ingestion, so each needs a parse-regression check before bumping.
-- **Tooling (root):** `eslint` 9 → 10 (+ `@eslint/js`), `concurrently` 8 → 10, `jest-axe` 9 → 10.
-- **Types:** `@types/supertest` 6 → 7, `@types/yauzl` 2 → 3. (`@types/node` tracks the runtime's Node line, not a free bump.)
-
-Deprecation hygiene for the same trees is `srv-4` (above).
 
 ---
 
