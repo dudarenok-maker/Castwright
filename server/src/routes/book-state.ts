@@ -11,7 +11,8 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { mkdir, readFile, readdir, rm, rmdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, rmdir, writeFile, unlink } from 'node:fs/promises';
+import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
@@ -59,6 +60,11 @@ import {
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 export const bookStateRouter = Router();
+
+const manuscriptUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 },
+});
 
 /* Denormalise the bespoke (qwen) voice onto any REUSED character before the
    cast persist (srv-14). The auto-match apply path stamps `matchedFrom` +
@@ -945,6 +951,61 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     res.status(500).json({ error: (e as Error).message || 'Failed to re-parse manuscript.' });
   }
 });
+
+/* POST /api/books/:bookId/replace-manuscript — upload a revised manuscript
+   onto an EXISTING book. Writes the new file into the book dir (swapping the
+   extension and deleting the old file if the format changed), then runs the
+   same applyReparse() core as reparse: chapters are re-detected, the srv-13
+   reuse/voice carryover is snapshotted so designed voices resurrect for
+   characters that still match on the next analysis, and analysis cache / cast
+   / audio are cleared. Book identity (bookId, dir, title/author/series, cover)
+   is untouched — this is NOT a re-import. */
+bookStateRouter.post(
+  '/:bookId/replace-manuscript',
+  manuscriptUpload.single('file'),
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'No manuscript file uploaded.' });
+
+      const located = await findBookByBookId(req.params.bookId);
+      if (!located) return res.status(404).json({ error: 'Book not found.' });
+      const { bookDir, state } = located;
+
+      const parsed = await parseManuscript({
+        buffer: req.file.buffer,
+        fileName: req.file.originalname,
+        mimeType: req.file.mimetype,
+      });
+
+      const EXT_BY_FORMAT: Record<string, string> = {
+        markdown: 'md',
+        plaintext: 'txt',
+        epub: 'epub',
+        pdf: 'pdf',
+        mobi: 'mobi',
+      };
+      const newFile = `manuscript.${EXT_BY_FORMAT[parsed.format] ?? 'txt'}`;
+      const oldFile = state.manuscriptFile;
+
+      await writeFile(join(bookDir, newFile), req.file.buffer);
+      if (oldFile && oldFile !== newFile && existsSync(join(bookDir, oldFile))) {
+        await unlink(join(bookDir, oldFile)).catch(() => {});
+      }
+      state.manuscriptFile = newFile;
+
+      const payload = await applyReparse(bookDir, state, parsed, {
+        changeLogType: 'replace-manuscript',
+        changeLogTitle: 'Replaced manuscript',
+      });
+      res.json(payload);
+    } catch (e) {
+      console.error('[book-state] replace-manuscript failed', e);
+      res
+        .status(500)
+        .json({ error: (e as Error).message || 'Failed to replace manuscript.' });
+    }
+  },
+);
 
 /* POST /api/books/:bookId/chapters/:chapterId/exclude — toggle the
    excluded flag on a single chapter. Used by the Generate-view toggle
