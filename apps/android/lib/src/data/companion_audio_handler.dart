@@ -51,7 +51,7 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
     mediaItem.add(MediaItem(
       id: np.id,
       title: np.title,
-      album: np.album.isEmpty ? 'Audiobook' : np.album,
+      album: np.album.isEmpty ? 'Castwright' : np.album,
       duration: np.duration,
       artUri: (np.artPath != null && np.artPath!.isNotEmpty)
           ? Uri.file(np.artPath!)
