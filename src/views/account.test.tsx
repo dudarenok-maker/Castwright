@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
+import { MemoryRouter } from 'react-router-dom';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { accountSlice, fetchAccountSettings, type AccountState } from '../store/account-slice';
@@ -62,7 +63,9 @@ function renderView(initial: Partial<UserSettings> = {}) {
     store,
     ...render(
       <Provider store={store}>
-        <AccountView />
+        <MemoryRouter>
+          <AccountView />
+        </MemoryRouter>
       </Provider>,
     ),
   };
@@ -214,7 +217,9 @@ describe('AccountView â€” hydration sync', () => {
     });
     render(
       <Provider store={store}>
-        <AccountView />
+        <MemoryRouter>
+          <AccountView />
+        </MemoryRouter>
       </Provider>,
     );
     /* The store starts on built-in defaults; fetch dispatches and the form
@@ -246,7 +251,9 @@ describe('AccountView â€” hydration sync', () => {
     });
     render(
       <Provider store={store}>
-        <AccountView />
+        <MemoryRouter>
+          <AccountView />
+        </MemoryRouter>
       </Provider>,
     );
     await store.dispatch(fetchAccountSettings());

@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
+import { MemoryRouter } from 'react-router-dom';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { accountSlice, type AccountState } from '../store/account-slice';
@@ -103,7 +104,9 @@ function renderView(initial: Partial<UserSettings> = {}) {
     store,
     ...render(
       <Provider store={store}>
-        <AccountView />
+        <MemoryRouter>
+          <AccountView />
+        </MemoryRouter>
       </Provider>,
     ),
   };
