@@ -140,7 +140,7 @@ export interface BookStateJson {
   coverGradient: [string, string];
   /** Cached cover-image metadata. Bytes live next to state.json at
       .audiobook/cover.jpg (see `coverImagePath` in workspace/paths.ts).
-      Populated by the OpenLibrary fetch (server/src/cover/openlibrary.ts)
+      Populated by the multi-source cover fetch (server/src/cover/store.ts)
       OR by a local upload (server/src/cover/upload.ts) and reverted by
       DELETE /api/books/:bookId/cover. Optional so books imported before
       this feature continue to load and fall back to the procedural

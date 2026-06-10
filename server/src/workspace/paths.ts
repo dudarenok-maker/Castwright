@@ -178,8 +178,8 @@ export function droppedQuotesJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'dropped-quotes.json');
 }
 
-/** Per-book cached cover image. JPEG bytes downloaded from OpenLibrary
-    (server/src/cover/openlibrary.ts). Sibling to state.json so the
+/** Per-book cached cover image. JPEG bytes downloaded via the cover search
+    (server/src/cover/store.ts). Sibling to state.json so the
     library scan can discover it cheaply via existsSync. Always a .jpg —
     OpenLibrary serves JPEGs and we don't re-encode. */
 export function coverImagePath(bookDir: string): string {

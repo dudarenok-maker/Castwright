@@ -5,7 +5,7 @@
      picker modal. Used by the manual "Find cover image" flow on the
      library card and the Listen header.
    - POST /:bookId/cover            → download the picked candidate and patch
-     state.json. Body: `{ openLibraryId }`.
+     state.json. Body: `{ candidateId }`.
    - GET  /:bookId/cover            → serve the cached JPEG bytes off disk.
    - DELETE /:bookId/cover          → remove the cached file and clear the
      state.json metadata; UI falls back to the procedural gradient.
