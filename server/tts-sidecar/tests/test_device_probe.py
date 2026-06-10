@@ -213,3 +213,24 @@ def test_health_kokoro_session_api_drift_falls_back(monkeypatch) -> None:
     monkeypatch.setattr(kokoro, "_kokoro", _NoSessKokoro())
     body = _health()
     assert body["devices"]["kokoro"] == "cuda"  # prediction survives drift
+
+
+def test_run_device_probe_without_torch_sets_error_state(monkeypatch) -> None:
+    """Direct probe-body test: a box where torch can't import must land
+    devices_state='error' on the wire (the frontend keys its fallback off this)
+    — and the probe must swallow the failure rather than raise. A None entry in
+    sys.modules makes `import torch` raise ImportError inside the probe."""
+    monkeypatch.setitem(sys.modules, "torch", None)
+    monkeypatch.setattr(
+        main, "_device_probe", {"kokoro": None, "coqui": None, "qwen": None}
+    )
+    monkeypatch.setattr(main, "_device_probe_state", "pending")
+    main._run_device_probe()  # must not raise
+    assert main._device_probe_state == "error"
+    # Torch-dependent slots stay null; kokoro may still resolve via the real
+    # onnxruntime in the venv (machine-dependent), so only its presence is pinned.
+    assert main._device_probe["coqui"] is None
+    assert main._device_probe["qwen"] is None
+    assert "kokoro" in main._device_probe
+    body = _health()
+    assert body["devices_state"] == "error"
