@@ -42,6 +42,11 @@ BeforeAll {
                 -RedirectStandardOutput $outFile -RedirectStandardError $errFile
             $text = (Get-Content $outFile -Raw -ErrorAction SilentlyContinue) +
                     (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+            # Windows PowerShell wraps Write-Error text at the inherited console
+            # width, which can split an asserted venv path mid-GUID (narrow
+            # consoles ~104 cols flake both Its). The assertions only ever match
+            # path substrings, so flatten the line breaks before they see it.
+            $text = $text -replace '\r?\n', ''
             return [pscustomobject]@{ ExitCode = $p.ExitCode; Output = $text }
         } finally {
             if ($null -eq $prev) { Remove-Item Env:\SIDECAR_VENV_DIR -ErrorAction SilentlyContinue }
