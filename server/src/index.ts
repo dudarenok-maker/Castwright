@@ -191,6 +191,8 @@ import { infoRouter } from './routes/info.js';
 app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new state
 import { companionRouter } from './routes/companion.js';
 app.use('/api/companion', companionRouter); // interim — GET/HEAD /apk: download the packaged Android APK
+import { samplesRouter } from './routes/samples.js';
+app.use('/api/samples', samplesRouter); // fs-22 — list + load the bundled demo book
 app.use('/api', devicesRouter); // srv-33 — companion per-device tokens: GET/POST /devices, DELETE /devices/:id
 app.use('/api/pair', pairSessionRouter); // QR pairing — loopback-only session mint (post-guard)
 app.use('/api/library', libraryRouter);
