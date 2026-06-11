@@ -26,6 +26,8 @@
        lose a designed/reused voice. User deletes/merges already remove the id
        from cast.json, so only analyzer-dropped characters get rescued. */
 
+import { normaliseForMatch } from '../util/text-match.js';
+
 /** Per-character fields owned by voice design / reuse, not by the analyzer. */
 export const PRESERVED_VOICE_FIELDS = [
   'voiceId',
@@ -84,16 +86,58 @@ export function voicedSurvivorsDropped(
 }
 
 /** Overlay the existing cast's voice-design fields onto the freshly-analysed
-    roster (matched by `id`), union aliases, and re-add voiced characters the
-    fresh roster dropped. Returns a new array; inputs are not mutated. */
+    roster (matched by `id`, with a same-name fallback for analyzer id drift),
+    union aliases, and re-add voiced characters the fresh roster dropped.
+    Returns a new array; inputs are not mutated. */
 export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
   existing: ReadonlyArray<CastRecord>,
   fresh: T[],
 ): T[] {
   if (!existing.length) return fresh;
   const byId = new Map(existing.map((c) => [c.id, c]));
+  const freshIds = new Set(fresh.map((f) => f.id));
+  const nameOf = (c: { name?: unknown } & Record<string, unknown>): string =>
+    typeof c.name === 'string' ? normaliseForMatch(c.name) : '';
+
+  /* Name-fallback for analyzer id drift. The analyzer is non-deterministic about
+     a character's id across runs (it relabelled the dragon `coalfall` →
+     `coalfall-dragon` between two analyses of the same book). The id-keyed
+     overlay then misses, the fresh row comes up voiceless, AND the dropped
+     voiced row is re-added below as a 0-line orphan — a visible duplicate.
+     Match a voiced existing character whose id the fresh roster DROPPED to a
+     same-name fresh character so its designed voice rides onto the freshly-
+     detected row (which carries the lines + the more descriptive, library-
+     unique id). Guard against ambiguity: a normalised name shared by more than
+     one dropped-voiced existing OR more than one fresh row is left to the
+     id-only path (too risky to guess). */
+  const freshNameCounts = new Map<string, number>();
+  for (const f of fresh) {
+    const key = nameOf(f as T & Record<string, unknown>);
+    if (key) freshNameCounts.set(key, (freshNameCounts.get(key) ?? 0) + 1);
+  }
+  const droppedVoicedByName = new Map<string, CastRecord>();
+  const ambiguousNames = new Set<string>();
+  for (const old of existing) {
+    if (freshIds.has(old.id) || !isVoicedOrReused(old)) continue;
+    const key = nameOf(old);
+    if (!key) continue;
+    if (droppedVoicedByName.has(key)) ambiguousNames.add(key);
+    else droppedVoicedByName.set(key, old);
+  }
+  const claimedByName = new Set<string>(); // existing ids whose voice rode onto a fresh row
+
   const overlaid = fresh.map((f) => {
-    const old = byId.get(f.id);
+    let old = byId.get(f.id);
+    if (!old) {
+      const key = nameOf(f as T & Record<string, unknown>);
+      if (key && !ambiguousNames.has(key) && freshNameCounts.get(key) === 1) {
+        const cand = droppedVoicedByName.get(key);
+        if (cand) {
+          old = cand;
+          claimedByName.add(cand.id);
+        }
+      }
+    }
     if (!old) return f;
     const merged = { ...(f as Record<string, unknown>) };
     for (const key of PRESERVED_VOICE_FIELDS) {
@@ -104,10 +148,11 @@ export function mergeAnalysisResultWithExistingCast<T extends { id: string }>(
     return merged as T;
   });
 
-  /* Carry forward voiced/reused characters the fresh roster omitted. */
-  const freshIds = new Set(fresh.map((f) => f.id));
+  /* Carry forward voiced/reused characters the fresh roster omitted — UNLESS
+     their designed voice already rode onto a same-name fresh row above (id
+     drift), which would otherwise re-add them as a 0-line duplicate. */
   for (const old of existing) {
-    if (freshIds.has(old.id)) continue;
+    if (freshIds.has(old.id) || claimedByName.has(old.id)) continue;
     if (isVoicedOrReused(old)) overlaid.push(old as unknown as T);
   }
   return overlaid;
