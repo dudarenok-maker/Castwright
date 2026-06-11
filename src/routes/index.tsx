@@ -491,37 +491,16 @@ export function AnalysingRoute() {
         dispatch(chaptersActions.hydrateFromAnalysis(payload));
         dispatch(manuscriptActions.hydrateFromAnalysis(payload));
         dispatch(uiActions.analysisComplete({ bookId: payload.bookId }));
-        /* Re-read the authoritative merged cast.json after analysis. The
-           analysis payload carries the freshly-detected roster, but a voice
-           DESIGNED IN THIS BOOK that the server restored via the
-           reparse/replace carryover (srv-13) is NOT in the payload — and
-           hydrateFromAnalysis's overlay can't resurrect it because the
-           reparse/replace handler cleared the cast slice, so there's nothing
-           to overlay FROM. Without this the /confirm screen renders "No voice
-           designed yet" for characters whose designed voice is safe on disk
-           (the layout's confirm-stage hydration is skipped once the SSE stream
-           has populated the slice). Fire-and-forget; failure leaves the
-           payload roster, which a manual reload then reconciles. */
-        if (payload.bookId) {
-          const targetBookId = payload.bookId;
-          void api
-            .getBookState(targetBookId)
-            .then((res) => {
-              const merged = res?.cast?.characters;
-              if (merged && merged.length > 0) {
-                dispatch(castActions.setCharacters(merged));
-              }
-            })
-            .catch(() => {
-              /* non-fatal — confirm falls back to the analysis payload roster */
-            });
-        }
+        /* NOTE: designed voices the carryover restored into cast.json but the
+           analysis payload omits are re-read on the confirm screen itself
+           (ConfirmRoute's getBookState effect) — the layout's hydration is
+           skipped on this transition once the SSE stream filled the slice. */
       }}
     />
   );
 }
 
-function ConfirmRoute() {
+export function ConfirmRoute() {
   const { bookId = '' } = useParams<{ bookId: string }>();
   const [searchParams] = useSearchParams();
   const openProfileId = searchParams.get('profile');
@@ -535,6 +514,34 @@ function ConfirmRoute() {
      book imports do so it can't evict TTS mid-chapter. Gemini/Gemma
      engines pass through unguarded. */
   const { guard, modal: guardModal } = useLocalAnalyzerGuard();
+
+  /* Authoritative cast re-read on confirm entry. The analysis-complete payload
+     carries the freshly-detected roster but OMITS designed voices the
+     reparse/replace carryover (srv-13) restored into cast.json, and the
+     layout's hydration is skipped here once the analysing SSE stream populated
+     the slice — so the confirm screen would render "No voice designed yet" for
+     a character whose designed voice is safe on disk. Re-reading the merged
+     cast.json on entry (the same path that already works on a manual reload)
+     surfaces those voices. Runs once per book; the confirm screen's own edits
+     (match decisions, fresh designs) all post-date this and persist to disk, so
+     a later re-entry re-reads them rather than clobbering. */
+  useEffect(() => {
+    if (!bookId) return;
+    let cancelled = false;
+    api
+      .getBookState(bookId)
+      .then((res) => {
+        if (!cancelled && res?.cast?.characters && res.cast.characters.length > 0) {
+          dispatch(castActions.setCharacters(res.cast.characters));
+        }
+      })
+      .catch(() => {
+        /* non-fatal — fall back to whatever the slice already holds */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bookId, dispatch]);
 
   return (
     <>
