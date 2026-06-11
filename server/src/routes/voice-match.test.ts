@@ -15,6 +15,11 @@ import request from 'supertest';
 let workspaceRoot: string;
 let app: Express;
 let makeBookIdFn: (a: string, s: string, t: string) => string;
+/* The "current book" we're analysing. It must be a REAL on-disk book in the
+   Keeper series so the (author, series)-scoped matcher resolves its
+   series-mates (Book One / Book Two) as eligible candidates. Assigned in
+   beforeAll once makeBookId is imported. */
+let CURRENT_BOOK_ID: string;
 
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
@@ -162,6 +167,12 @@ beforeAll(async () => {
     true,
   );
 
+  /* The current book being analysed — a real Keeper-series book on disk so the
+     (author, series) matcher resolves Book One / Book Two as its series-mates.
+     Its own cast is empty (and it's excluded as a self-candidate anyway). */
+  CURRENT_BOOK_ID = makeBookId(AUTHOR, SERIES, 'Current Book');
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, 'Current Book', CURRENT_BOOK_ID, [], false);
+
   app = express();
   app.use(express.json());
   app.use('/api/books', voiceMatchRouter);
@@ -180,10 +191,6 @@ function callMatch(bookId: string, body: object) {
 }
 
 describe('voice-match router', () => {
-  /* The "current book" we're analysing — distinct from the two prior books
-     on disk, so all library voices are eligible. */
-  const CURRENT_BOOK_ID = 'currently-analysing__std__new-book';
-
   it('returns empty matches when the library has nothing useful', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
@@ -392,18 +399,34 @@ describe('voice-match router', () => {
     expect(voiceIds).not.toContain('v_narr_skul'); // cross-series narrator excluded
   });
 
-  it('a real named character still matches library-wide across series', async () => {
-    /* The series scope applies ONLY to generic role-names. A genuinely
-       recurring character keeps matching against the whole library — here
-       Marlow still matches the Keeper-series Marlow from a Skulduggery-series
-       book, because reusing a designed voice across the library is the
-       intended feature. */
+  it('a real named character does NOT match across a different author/series', async () => {
+    /* Auto-match is scoped to the current book's same-author + same-series
+       mates — for EVERY character, not just generic role-names. A
+       Skulduggery-series "Marlow" must NOT grab the Keeper-series Marlow's
+       designed voice: an unrelated author's same-named character is a
+       coincidence, not a recurring character. (Cross-series reuse stays
+       possible as an explicit Voice-library assignment, just never as a
+       silent auto-match.) Mirrors the real-world "Pell Hollis" (a Castwright
+       standalone) wrongly grabbing "Pell" from Della Renwick's Saltgrave. */
     const scepterId = makeBookIdFn('Derek Landy', 'Skulduggery Pleasant', 'Scepter of the Ancients');
     const res = await callMatch(scepterId, {
       characters: [{ id: 'Marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],
     });
     expect(res.status).toBe(200);
     const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
-    expect(voiceIds).toContain('v_Marlow'); // cross-series named char still matches
+    expect(voiceIds).not.toContain('v_Marlow'); // cross-author/series named char excluded
+  });
+
+  it('a real named character STILL matches a same-series sibling book', async () => {
+    /* The scope tightening must not break legitimate within-series reuse:
+       calling as Book Three (The Hollow Tide), "Marlow" still
+       matches the Keeper-series Marlow designed in Book One / Book Two. */
+    const bookThreeId = makeBookIdFn(AUTHOR, SERIES, 'Book Three Unconfirmed');
+    const res = await callMatch(bookThreeId, {
+      characters: [{ id: 'Marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],
+    });
+    expect(res.status).toBe(200);
+    const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
+    expect(voiceIds.some((v: string) => v === 'v_Marlow' || v === 'v_Marlow_alt')).toBe(true);
   });
 });
