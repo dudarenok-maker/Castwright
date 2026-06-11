@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:app_links/app_links.dart';
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 
@@ -10,6 +12,7 @@ import 'src/data/companion_runtime.dart';
 import 'src/data/pairing_service.dart';
 import 'src/data/pairing_store.dart';
 import 'src/domain/paired_server.dart';
+import 'src/domain/pairing_qr.dart';
 import 'src/ui/library_home_screen.dart';
 import 'src/ui/pairing_screen.dart';
 
@@ -30,7 +33,7 @@ Future<void> main() async {
 
 class AudiobookCompanionApp extends StatelessWidget {
   const AudiobookCompanionApp(
-      {super.key, required this.store, this.service, this.audioHandler});
+      {super.key, required this.store, this.service, this.audioHandler, this.deepLinks});
 
   final PairingStore store;
 
@@ -39,6 +42,9 @@ class AudiobookCompanionApp extends StatelessWidget {
 
   /// The media-session handler (null in widget tests).
   final CompanionAudioHandler? audioHandler;
+
+  /// Injectable deep-link stream (null in production — uses App Links platform channel).
+  final Stream<Uri>? deepLinks;
 
   @override
   Widget build(BuildContext context) {
@@ -52,7 +58,8 @@ class AudiobookCompanionApp extends StatelessWidget {
       home: HomePage(
           store: store,
           service: service ?? PairingService(),
-          audioHandler: audioHandler),
+          audioHandler: audioHandler,
+          deepLinks: deepLinks),
     );
   }
 }
@@ -62,11 +69,15 @@ class HomePage extends StatefulWidget {
       {super.key,
       required this.store,
       required this.service,
-      this.audioHandler});
+      this.audioHandler,
+      this.deepLinks});
 
   final PairingStore store;
   final PairingService service;
   final CompanionAudioHandler? audioHandler;
+
+  /// Injectable deep-link stream (null in production — uses App Links platform channel).
+  final Stream<Uri>? deepLinks;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -81,10 +92,48 @@ class _HomePageState extends State<HomePage> {
   /// capture it before offline mode works.
   String? _bootstrapError;
 
+  StreamSubscription<Uri>? _deepLinkSub;
+
+  /// Cold-start initial link first, then the live warm stream. Injected in tests.
+  Stream<Uri> _platformDeepLinks() async* {
+    final appLinks = AppLinks();
+    final initial = await appLinks.getInitialLink();
+    if (initial != null) yield initial;
+    yield* appLinks.uriLinkStream;
+  }
+
+  void _listenDeepLinks() {
+    final stream = widget.deepLinks ?? _platformDeepLinks();
+    _deepLinkSub = stream.listen(_handleDeepLink, onError: (_) {});
+  }
+
+  Uri? _lastHandledLink;
+
+  void _handleDeepLink(Uri uri) {
+    // uriLinkStream can also surface the cold-start link getInitialLink already
+    // yielded — de-dupe so we never stack two pairing screens for one launch URI.
+    if (uri == _lastHandledLink) return;
+    final PairingQr qr;
+    try {
+      qr = PairingQr.parse(uri.toString());
+    } on FormatException {
+      return; // not a pairing link — ignore
+    }
+    _lastHandledLink = uri;
+    _openPairing(initialQr: qr);
+  }
+
   @override
   void initState() {
     super.initState();
     _boot();
+    _listenDeepLinks();
+  }
+
+  @override
+  void dispose() {
+    _deepLinkSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _boot() async {
@@ -165,10 +214,11 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<void> _openPairing() async {
+  Future<void> _openPairing({PairingQr? initialQr}) async {
     final result = await Navigator.of(context).push<PairedServer>(
       MaterialPageRoute(
-        builder: (_) => PairingScreen(service: widget.service, store: widget.store),
+        builder: (_) => PairingScreen(
+            service: widget.service, store: widget.store, initialQr: initialQr),
       ),
     );
     if (result != null && mounted) {
@@ -204,7 +254,7 @@ class _HomePageState extends State<HomePage> {
               const Text('Not paired yet', key: Key('home-status')),
               const SizedBox(height: 16),
               FilledButton(
-                  onPressed: _openPairing, child: const Text('Pair a device')),
+                  onPressed: () => _openPairing(), child: const Text('Pair a device')),
             ],
           ),
         ),
