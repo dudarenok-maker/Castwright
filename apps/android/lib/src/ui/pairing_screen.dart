@@ -10,10 +10,14 @@ import 'qr_scan_screen.dart';
 /// connection is persisted and returned. QR scanning fills the fields so the
 /// user can review before pairing.
 class PairingScreen extends StatefulWidget {
-  const PairingScreen({super.key, required this.service, required this.store});
+  const PairingScreen(
+      {super.key, required this.service, required this.store, this.initialQr});
 
   final PairingService service;
   final PairingStore store;
+
+  /// When opened from a deep link, pre-fills the form for review before pairing.
+  final PairingQr? initialQr;
 
   @override
   State<PairingScreen> createState() => _PairingScreenState();
@@ -25,6 +29,17 @@ class _PairingScreenState extends State<PairingScreen> {
   final _fpTag = TextEditingController();
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final qr = widget.initialQr;
+    if (qr != null) {
+      _host.text = qr.hostPort;
+      _code.text = qr.code;
+      _fpTag.text = qr.fpTag;
+    }
+  }
 
   @override
   void dispose() {
