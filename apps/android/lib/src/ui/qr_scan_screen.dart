@@ -1,37 +1,73 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_zxing/flutter_zxing.dart';
+import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../domain/pairing_qr.dart';
 
-/// Scans the server pairing QR and pops with the parsed [PairingQr]
-/// (app-2). Non-matching codes are ignored so the camera keeps scanning.
-///
-/// Uses `flutter_zxing` (zxing-cpp via FFI) rather than ML Kit: mobile_scanner
-/// 7.2.0's ML Kit barcode scanner NPEs inside `process()` on start on Android
-/// 16 / API 36 (reproduced on a Pixel 10 Pro emulator + a real device). zxing
-/// has no ML Kit / Play Services dependency. `ReaderWidget` is a self-contained
-/// camera scanner with a built-in gallery import — so the user can also pick a
-/// screenshot of the QR if the live camera is awkward.
+/// Returns the decoded barcode strings found in the image at [imagePath].
+typedef BarcodeDecoder = Future<List<String>> Function(String imagePath);
+
+/// Returns a captured/selected image path, or null if the user cancelled.
+typedef PickImage = Future<String?> Function(ImageSource source);
+
+/// Scans the desktop pairing QR from a STILL image (app-2). zxing-cpp could not
+/// decode the QR on a real Android 16 device; ML Kit can, and a still image
+/// avoids the live-camera ML Kit lifecycle that NPE'd on API 36. Both the image
+/// source and the decoder are injected so the screen logic is unit-testable and
+/// the decoder is swappable in one place.
 class QrScanScreen extends StatefulWidget {
-  const QrScanScreen({super.key});
+  // ignore: prefer_const_constructors_in_immutables
+  QrScanScreen({super.key, BarcodeDecoder? decode, PickImage? pickImage})
+      : decode = decode ?? mlkitDecodeQr,
+        pickImage = pickImage ?? _defaultPickImage;
+
+  final BarcodeDecoder decode;
+  final PickImage pickImage;
 
   @override
   State<QrScanScreen> createState() => _QrScanScreenState();
 }
 
 class _QrScanScreenState extends State<QrScanScreen> {
-  bool _handled = false;
+  bool _busy = false;
+  String? _error;
 
-  void _onScan(Code code) {
-    if (_handled || !mounted) return;
-    final raw = code.text;
-    if (raw == null || raw.isEmpty) return;
+  Future<void> _scanFrom(ImageSource source) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
-      final qr = PairingQr.parse(raw);
-      _handled = true;
-      Navigator.of(context).pop(qr);
-    } on FormatException {
-      // A QR, but not a pairing payload — keep scanning.
+      final path = await widget.pickImage(source);
+      if (path == null) {
+        if (mounted) setState(() => _busy = false); // cancelled
+        return;
+      }
+      final raws = await widget.decode(path);
+      for (final raw in raws) {
+        try {
+          final qr = PairingQr.parse(raw);
+          if (mounted) Navigator.of(context).pop(qr);
+          return;
+        } on FormatException {
+          // a barcode, but not a pairing payload — try the next one
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = 'No Castwright pairing code found in that image. '
+              'Try again, or enter the code manually.';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = "Couldn't read that image ($e). "
+              'Try again, or enter the code manually.';
+        });
+      }
     }
   }
 
@@ -39,30 +75,69 @@ class _QrScanScreenState extends State<QrScanScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Scan pairing code')),
-      body: ReaderWidget(
-        onScan: _onScan,
-        codeFormat: Format.qrCode,
-        // Decode robustness for real-world capture (a phone pointed at the QR on
-        // a desktop screen). These settings (tryHarder, veryHigh resolution,
-        // cropPercent 1.0) were originally required when the pairing QR carried a
-        // dense JSON payload ({url, token, caFingerprint}) that the ReaderWidget
-        // defaults couldn't decode from a screen. The QR is now compact —
-        // CWP1*host:port*code*fpTag — so the aggressive settings are belt-and-
-        // suspenders, but they're cheap and protect against marginal capture
-        // conditions (glare, small screen, off-axis angle). tryRotate stays on.
-        tryHarder: true,
-        tryInverted: true,
-        resolution: ResolutionPreset.veryHigh,
-        cropPercent: 1.0,
-        showScannerOverlay: false,
-        showToggleCamera: false,
-        // Lets the user decode a saved screenshot of the QR as a fallback.
-        showGallery: true,
-        loading: const DecoratedBox(
-          decoration: BoxDecoration(color: Colors.black),
-          child: Center(child: CircularProgressIndicator()),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Point your phone at the QR on the desktop and take a photo, '
+              'or pick a screenshot of it.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              key: const Key('scan-camera'),
+              onPressed: _busy ? null : () => _scanFrom(ImageSource.camera),
+              icon: const Icon(Icons.photo_camera),
+              label: const Text('Take a photo of the QR'),
+              style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48)),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('scan-gallery'),
+              onPressed: _busy ? null : () => _scanFrom(ImageSource.gallery),
+              icon: const Icon(Icons.image),
+              label: const Text('Choose a screenshot'),
+              style: OutlinedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(48)),
+            ),
+            const SizedBox(height: 16),
+            if (_busy) const Center(child: CircularProgressIndicator()),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _error!,
+                  key: const Key('scan-error'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
+          ],
         ),
       ),
     );
   }
+}
+
+/// Default decoder: Google ML Kit, QR format only, on a still image file.
+Future<List<String>> mlkitDecodeQr(String imagePath) async {
+  final scanner = BarcodeScanner(formats: [BarcodeFormat.qrCode]);
+  try {
+    final barcodes =
+        await scanner.processImage(InputImage.fromFilePath(imagePath));
+    return [for (final b in barcodes) b.rawValue]
+        .whereType<String>()
+        .toList();
+  } finally {
+    await scanner.close();
+  }
+}
+
+Future<String?> _defaultPickImage(ImageSource source) async {
+  final x = await ImagePicker().pickImage(source: source);
+  return x?.path;
 }
