@@ -17,7 +17,10 @@ import {
   type LinkableCharacter,
   type LinkSeriesReuseOptions,
 } from './series-reuse-link.js';
-import { seedReuseGuardsFromPriorCast } from '../store/merge-analysis-cast.js';
+import {
+  seedReuseGuardsFromPriorCast,
+  mergeAnalysisResultWithExistingCast,
+} from '../store/merge-analysis-cast.js';
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
 
 const AUTHOR = 'A';
@@ -324,6 +327,47 @@ describe('pruneStaleReuseLinks', () => {
     expect(n.voiceId).toBe('narrator');
     expect(n.overrideTtsVoices).toBeFalsy();
     expect(n.voiceStyle).toBeFalsy();
+  });
+
+  /* The fix: analysis prunes the PRIOR cast before merging it into cast.json.
+     Without it, mergeAnalysisResultWithExistingCast re-overlays the stale
+     `matchedFrom` (+ its denormalised voice) straight from the prior, undoing
+     the roster-side prune — the real "Pell Hollis (standalone) keeps Saltgrave's
+     Pell voice across every re-analysis" bug. */
+  const staleTamPrior = (): LinkableCharacter[] => [
+    {
+      id: 'Pell-hollis',
+      name: 'Pell Hollis',
+      voiceId: 'Pell',
+      voiceState: 'reused',
+      ttsEngine: 'qwen',
+      overrideTtsVoices: { qwen: { name: 'qwen-Pell' } },
+      voiceStyle: 'teen male',
+      matchedFrom: { bookId: BONUS, characterId: 'Pell', bookTitle: 'Bonus', confidence: 0.48 },
+    },
+  ];
+  const freshTam = () => [
+    { id: 'Pell-hollis', name: 'Pell Hollis', voiceState: 'generated' as const },
+  ];
+  type MergeExisting = Parameters<typeof mergeAnalysisResultWithExistingCast>[0];
+
+  it('prune-then-merge: a cross-series link does NOT resurrect via the cast.json merge', async () => {
+    const prior = staleTamPrior();
+    await pruneStaleReuseLinks(COALFALL, prior, opts());
+    const merged = mergeAnalysisResultWithExistingCast(prior as unknown as MergeExisting, freshTam());
+    const t = merged[0] as Record<string, unknown>;
+    expect(t.matchedFrom).toBeFalsy();
+    expect(t.overrideTtsVoices).toBeFalsy();
+  });
+
+  it('sanity: WITHOUT the prune, the merge would have carried the stale link', async () => {
+    const merged = mergeAnalysisResultWithExistingCast(
+      staleTamPrior() as unknown as MergeExisting,
+      freshTam(),
+    );
+    const t = merged[0] as Record<string, unknown>;
+    expect(t.matchedFrom).toBeTruthy();
+    expect((t.overrideTtsVoices as { qwen?: { name?: string } })?.qwen?.name).toBe('qwen-Pell');
   });
 
   it('keeps a valid same-series earlier-book link', async () => {
