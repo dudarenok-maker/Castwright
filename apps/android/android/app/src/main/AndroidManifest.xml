@@ -2,6 +2,9 @@
     xmlns:tools="http://schemas.android.com/tools">
     <!-- app-2: network calls to the paired server + QR pairing-code scanning. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- app-2: live mobile_scanner camera preview for pairing-QR scanning
+         (mobile_scanner requests this at runtime). -->
+    <uses-permission android:name="android.permission.CAMERA"/>
     <!-- app-3: foreground service so a multi-book download isn't killed by the
          OS. (FOREGROUND_SERVICE/WAKE_LOCK/POST_NOTIFICATIONS are merged in by
          flutter_foreground_task; the data-sync type needs its own permission on

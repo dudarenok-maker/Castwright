@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
-/// Pumps QrScanScreen behind a launcher button and captures the popped result.
+/// Pumps QrScanScreen (live camera OFF — the mobile_scanner platform view can't
+/// run under flutter test) behind a launcher button and captures the popped
+/// result. Exercises the gallery still-image path through the injected seams.
 Future<void> _pumpScanner(
   WidgetTester tester, {
   required PickImage pickImage,
@@ -20,8 +22,8 @@ Future<void> _pumpScanner(
             onPressed: () async {
               final qr = await Navigator.of(context).push<PairingQr>(
                 MaterialPageRoute(
-                  builder: (_) =>
-                      QrScanScreen(pickImage: pickImage, decode: decode),
+                  builder: (_) => QrScanScreen(
+                      pickImage: pickImage, decode: decode, liveCamera: false),
                 ),
               );
               onResult(qr);
@@ -36,7 +38,7 @@ Future<void> _pumpScanner(
 }
 
 void main() {
-  testWidgets('valid QR pops a PairingQr', (tester) async {
+  testWidgets('a valid QR from the gallery pops a PairingQr', (tester) async {
     PairingQr? result;
     var resolved = false;
     await _pumpScanner(
@@ -49,7 +51,7 @@ void main() {
         resolved = true;
       },
     );
-    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.tap(find.byKey(const Key('scan-gallery')));
     await tester.pumpAndSettle();
     expect(resolved, isTrue);
     expect(result?.code, 'K7QF3M2P');
@@ -63,10 +65,10 @@ void main() {
       decode: (_) async => ['https://example.com/not-a-pair'],
       onResult: (_) {},
     );
-    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.tap(find.byKey(const Key('scan-gallery')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('scan-error')), findsOneWidget);
-    expect(find.byKey(const Key('scan-camera')), findsOneWidget); // still open
+    expect(find.byKey(const Key('scan-gallery')), findsOneWidget); // still open
   });
 
   testWidgets('no barcode in the image shows an error', (tester) async {
@@ -76,7 +78,7 @@ void main() {
       decode: (_) async => <String>[],
       onResult: (_) {},
     );
-    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.tap(find.byKey(const Key('scan-gallery')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('scan-error')), findsOneWidget);
   });
@@ -88,7 +90,7 @@ void main() {
       decode: (_) async => <String>[],
       onResult: (_) {},
     );
-    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.tap(find.byKey(const Key('scan-gallery')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('scan-error')), findsNothing);
   });
