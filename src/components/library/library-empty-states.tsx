@@ -7,7 +7,13 @@ import { CastwaveMark, IconPlus } from '../../lib/icons';
 import { TAGLINE_SHORT } from '../../lib/brand';
 import { PrimaryButton } from '../primitives';
 
-export function EmptyLibrary({ onStartNew }: { onStartNew: () => void }) {
+export function EmptyLibrary({
+  onStartNew,
+  onTrySample,
+}: {
+  onStartNew: () => void;
+  onTrySample?: () => void;
+}) {
   return (
     <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center">
       <span className="w-16 h-16 mx-auto rounded-full bg-magenta/10 grid place-items-center text-magenta">
@@ -29,6 +35,14 @@ export function EmptyLibrary({ onStartNew }: { onStartNew: () => void }) {
             Import your first book
           </span>
         </PrimaryButton>
+        {onTrySample && (
+          <button
+            onClick={onTrySample}
+            className="mt-3 text-sm font-medium text-ink/70 underline underline-offset-2 hover:text-ink"
+          >
+            or try a sample book
+          </button>
+        )}
       </div>
     </div>
   );

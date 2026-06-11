@@ -308,6 +308,29 @@ export function BooksRoute() {
         });
       }}
       onStartNew={() => dispatch(uiActions.startNewBook())}
+      onTrySample={async () => {
+        let result;
+        try {
+          result = await api.loadSample('the-coalfall-commission');
+        } catch (err) {
+          showError("Couldn't load the sample", (err as Error).message, 'Sample');
+          return;
+        }
+        const refreshed = await api.getLibrary().catch(() => null);
+        if (refreshed) dispatch(libraryActions.hydrate(refreshed));
+        const book = refreshed?.authors
+          .flatMap((a) => a.series.flatMap((s) => s.books))
+          .find((b) => b.bookId === result.bookId);
+        if (book) {
+          dispatch(
+            uiActions.openBook({
+              id: book.bookId,
+              status: book.status,
+              manuscriptId: book.manuscriptId,
+            }),
+          );
+        }
+      }}
       onImportPortable={async (file) => {
         /* Plan 75 — POST the bundle, refresh the library, surface a
            toast so the user sees confirmation when the import lands

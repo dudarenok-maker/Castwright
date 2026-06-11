@@ -78,6 +78,7 @@ interface Props {
       propagates back through the slice. */
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
+  onTrySample?: () => void | Promise<void>;
   /** Plan 75 — when present, exposes the "Import portable bundle"
       button in the library chrome. The orchestrator wires the chosen
       File to api.importPortable + refreshes the library. */
@@ -108,6 +109,7 @@ export function BookLibraryView({
   onEditBook,
   onCoverChanged,
   onStartNew,
+  onTrySample,
   onImportPortable,
 }: Props) {
   const [filter, setFilter] = useState<Filter>('all');
@@ -302,6 +304,7 @@ export function BookLibraryView({
           onEditBook={onEditBook}
           onCoverChanged={onCoverChanged}
           onStartNew={onStartNew}
+          onTrySample={onTrySample}
         />
       ) : (
         /* Plan 81 (Wave 3, books) — wrap the dense table in an
