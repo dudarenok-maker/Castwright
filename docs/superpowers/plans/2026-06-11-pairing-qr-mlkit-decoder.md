@@ -31,25 +31,28 @@
 **Files:**
 - Modify: `apps/android/pubspec.yaml`
 
-- [ ] **Step 1: Remove `flutter_zxing`, add the ML Kit + picker + deep-link deps**
+- [ ] **Step 1: Remove `flutter_zxing`, add the new deps (auto-resolved versions)**
 
-In `apps/android/pubspec.yaml`, delete the `flutter_zxing` block (the lines with the long `# app-2 — … flutter_zxing` comment and `flutter_zxing: ^2.3.0`) and replace with:
+Use `pub` so the latest compatible versions are chosen (do NOT hardcode versions that may not exist):
+
+```bash
+cd apps/android
+flutter pub remove flutter_zxing
+flutter pub add google_mlkit_barcode_scanning image_picker app_links
+```
+Expected: resolves with no version-conflict error. If a constraint conflicts with an existing plugin (`drift`/`audio_service`/`flutter_foreground_task`), note the conflict and pin the nearest compatible version of the NEW dep only — do not touch the existing deps.
+
+- [ ] **Step 2: Add the explanatory comment above the new deps**
+
+`pub add` doesn't write comments. In `apps/android/pubspec.yaml`, add above the `google_mlkit_barcode_scanning:` line:
 
 ```yaml
   # app-2 — scan the server pairing QR. zxing-cpp (flutter_zxing) could not decode
   # the QR on a real Android 16 device (confirmed 2026-06-11: valid QR, native lib
   # bundled, still 0 decodes). Decode a STILL image with Google ML Kit instead —
-  # never the live-camera widget whose ML Kit lifecycle NPE'd on API 36.
-  google_mlkit_barcode_scanning: ^0.14.1
-  image_picker: ^1.1.2
-  # app-2 (deep-link readiness) — receive the future https://castwright.ai/pair App Link.
-  app_links: ^6.3.2
+  # never the live-camera widget whose ML Kit lifecycle NPE'd on API 36. app_links
+  # receives the future https://castwright.ai/pair App Link (deep-link readiness).
 ```
-
-- [ ] **Step 2: Resolve dependencies**
-
-Run: `cd apps/android && flutter pub get`
-Expected: resolves with no version-conflict error. If a constraint conflicts, run `flutter pub get` output and pin the nearest compatible versions (do not change other deps).
 
 - [ ] **Step 3: Confirm the old decoder is gone**
 
@@ -620,13 +623,20 @@ Link) with the **warm** stream, so both paths flow through one subscription:
     _deepLinkSub = stream.listen(_handleDeepLink, onError: (_) {});
   }
 
+  Uri? _lastHandledLink;
+
   void _handleDeepLink(Uri uri) {
+    // `uriLinkStream` (app_links 6.x) can also surface the cold-start link that
+    // `getInitialLink()` already yielded — de-dupe so we never stack two
+    // pairing screens for one launch URI.
+    if (uri == _lastHandledLink) return;
     final PairingQr qr;
     try {
       qr = PairingQr.parse(uri.toString());
     } on FormatException {
       return; // not a pairing link — ignore
     }
+    _lastHandledLink = uri;
     _openPairing(initialQr: qr);
   }
 ```
@@ -756,12 +766,26 @@ git commit -m "feat(app): route an incoming pair deep link into a pre-filled pai
 
 ---
 
-## Task 6: Declare the App Link intent-filter (dormant until launch)
+## Task 6: Manifest — drop the stale CAMERA permission, add the App Link intent-filter
 
 **Files:**
 - Modify: `apps/android/android/app/src/main/AndroidManifest.xml`
 
-- [ ] **Step 1: Add the `autoVerify` intent-filter to `MainActivity`**
+- [ ] **Step 1: Remove the now-unused `CAMERA` permission**
+
+The live camera is gone. `image_picker`'s camera capture delegates to the **system
+camera app** (`ACTION_IMAGE_CAPTURE`) and does NOT need this app to hold `CAMERA` — but
+if `CAMERA` stays *declared*, Android requires it granted at runtime before the capture
+intent, and nothing in the app requests it (no `permission_handler`). So delete this line:
+
+```xml
+    <uses-permission android:name="android.permission.CAMERA"/>
+```
+Keep `INTERNET` and the foreground-service permissions. After the release build (Task 8),
+confirm the merged manifest has no `CAMERA` (no merged dependency re-added it):
+`unzip -p build/app/outputs/flutter-apk/app-release.apk AndroidManifest.xml | grep -a CAMERA || echo "no CAMERA — good"`.
+
+- [ ] **Step 2: Add the `autoVerify` intent-filter to `MainActivity`**
 
 Inside the `<activity android:name=".MainActivity" …>` element, after the existing `MAIN`/`LAUNCHER` `<intent-filter>`, add:
 
@@ -780,16 +804,16 @@ Inside the `<activity android:name=".MainActivity" …>` element, after the exis
             </intent-filter>
 ```
 
-- [ ] **Step 2: Verify the manifest still parses (debug build)**
+- [ ] **Step 3: Verify the manifest still parses (debug build)**
 
 Run: `cd apps/android && flutter build apk --debug`
 Expected: BUILD SUCCESSFUL (manifest merges cleanly). If the build box can't build Android, defer this verification to Task 8's build gate and note it.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add apps/android/android/app/src/main/AndroidManifest.xml
-git commit -m "feat(app): declare autoVerify App Link intent-filter for castwright.ai/pair"
+git commit -m "feat(app): drop CAMERA permission; declare castwright.ai/pair App Link"
 ```
 
 ---
