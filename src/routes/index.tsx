@@ -491,6 +491,31 @@ export function AnalysingRoute() {
         dispatch(chaptersActions.hydrateFromAnalysis(payload));
         dispatch(manuscriptActions.hydrateFromAnalysis(payload));
         dispatch(uiActions.analysisComplete({ bookId: payload.bookId }));
+        /* Re-read the authoritative merged cast.json after analysis. The
+           analysis payload carries the freshly-detected roster, but a voice
+           DESIGNED IN THIS BOOK that the server restored via the
+           reparse/replace carryover (srv-13) is NOT in the payload — and
+           hydrateFromAnalysis's overlay can't resurrect it because the
+           reparse/replace handler cleared the cast slice, so there's nothing
+           to overlay FROM. Without this the /confirm screen renders "No voice
+           designed yet" for characters whose designed voice is safe on disk
+           (the layout's confirm-stage hydration is skipped once the SSE stream
+           has populated the slice). Fire-and-forget; failure leaves the
+           payload roster, which a manual reload then reconciles. */
+        if (payload.bookId) {
+          const targetBookId = payload.bookId;
+          void api
+            .getBookState(targetBookId)
+            .then((res) => {
+              const merged = res?.cast?.characters;
+              if (merged && merged.length > 0) {
+                dispatch(castActions.setCharacters(merged));
+              }
+            })
+            .catch(() => {
+              /* non-fatal — confirm falls back to the analysis payload roster */
+            });
+        }
       }}
     />
   );
