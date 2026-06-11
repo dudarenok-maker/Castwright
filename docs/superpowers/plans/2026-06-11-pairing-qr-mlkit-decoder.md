@@ -10,6 +10,29 @@
 
 ---
 
+## Agent Context — paste this into EVERY implementer/reviewer subagent dispatch
+
+> You are implementing ONE task of a larger plan. You have NO prior context — everything you need is in your task text plus this block. **Do not read the plan file**; work only from what you're given.
+>
+> - **Repo:** `C:\Claude\Projects\Audiobook-Generator` (Windows; both PowerShell and a git-bash Bash tool are available). **All work for this plan is under `apps/android`** (a Flutter app). **Scope is `app` ONLY** — do not touch `src/`, `server/`, `docs/` (except the one task that says so), or anything outside `apps/android`.
+> - **Branch:** `fix/app-pairing-mlkit-decoder` is already checked out — commit onto it. **Never commit to `main`.**
+> - **Flutter:** `flutter` is on PATH (also `C:\Users\dudar\flutter\bin\flutter.bat`). Run Dart tests with `cd apps/android && flutter test <path>`.
+> - **Dart package name is `castwright`** → imports are `package:castwright/...` (e.g. `package:castwright/src/domain/pairing_qr.dart`). The Android `applicationId`/package is **`ai.castwright`**.
+> - **Commit convention (husky-enforced, do NOT bypass):** subject `\<type\>(app): \<subject\>`, **≤100 chars**; types `feat|fix|docs|build|chore|refactor|test`. Never `--no-verify`. Pre-commit runs scope-filtered tests.
+> - **Bash-tool commit gotcha:** the Bash tool is **git-bash, not PowerShell** — write messages with plain `-m "..."` flags (one per line), NOT PowerShell `@'...'@` here-strings (that lands `@` as the subject and the hook rejects it).
+> - **TDD:** follow your steps in order — write the failing test, run it RED, implement, run it GREEN, commit. Don't add anything the task doesn't ask for (YAGNI).
+> - **Preconditions:** assume all lower-numbered tasks are already committed. **Compile window:** the deps task removes `flutter_zxing` before its only consumer (`qr_scan_screen.dart`) is rewritten, so until **Task 3** lands, `lib/` does not fully compile. Run **only the scoped test your steps name** — do NOT run a full `flutter analyze`/`flutter build` before Task 3.
+> - **If blocked or the task text is ambiguous:** stop and report `NEEDS_CONTEXT` / `BLOCKED` with specifics — do not guess or widen scope.
+
+## Orchestrator notes (subagent-driven execution)
+
+- Dispatch **one implementer subagent per task, in numeric order**, each given the Agent Context block + the full task text (never the plan file). Run the two-stage review (spec compliance, then code quality) after each. Tell reviewers to **scope to the task's files** (the tree doesn't fully compile until Task 3).
+- **Tasks 7 and 9 are NOT subagent tasks — they are human/orchestrator gates.** Task 7 needs the user to generate a keystore with secret passwords; Task 9 needs the user to physically scan the QR on the Android 16 phone. Run these *with the user*; do not dispatch a code subagent for them.
+- **Suggested models:** Tasks 1, 6 (mechanical) → cheap; Tasks 2, 3, 4, 5, 10 (logic/integration) → standard; Task 8 (build + plugin-compat triage) → standard.
+- **Task 9 is the hard gate:** do not `gh pr ready` until it is green on the real device. If ML Kit NPEs there, the pivot is one file (swap `mlkitDecodeQr` for a `zxing2` impl behind the same `BarcodeDecoder` typedef) — re-dispatch a subagent for just that.
+
+---
+
 ## File Structure
 
 - `apps/android/pubspec.yaml` — swap deps: remove `flutter_zxing`; add `google_mlkit_barcode_scanning`, `image_picker`, `app_links`.
@@ -818,7 +841,7 @@ git commit -m "feat(app): drop CAMERA permission; declare castwright.ai/pair App
 
 ---
 
-## Task 7: Establish stable release signing (operational — user-run)
+## Task 7: Establish stable release signing  ⛔ HUMAN/ORCHESTRATOR — NOT a subagent task
 
 **Files:**
 - Create (user, git-ignored): `apps/android/android/key.properties`
@@ -918,7 +941,7 @@ git commit -m "build(app): refresh companion APK with the ML Kit pairing decoder
 
 ---
 
-## Task 9: On-device acceptance — the hard gate
+## Task 9: On-device acceptance — the hard gate  ⛔ HUMAN/ORCHESTRATOR — NOT a subagent task
 
 **Files:** none (manual, recorded in the regression plan).
 
