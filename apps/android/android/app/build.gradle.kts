@@ -51,6 +51,15 @@ android {
 
     buildTypes {
         release {
+            // app-2: disable R8 minification/shrinking. ML Kit barcode scanning
+            // (google_mlkit_barcode_scanning) loads classes via reflection and
+            // ships NO consumer ProGuard rules, so R8 strips them and the scanner
+            // NPEs at runtime ("getClass() on a null object reference"). The prior
+            // flutter_zxing build was fine under R8 (C++/FFI, no reflection). For
+            // an alpha sideload, turning shrinking off is the certain fix; a later
+            // pass could re-enable it with tuned ML Kit keep rules to reclaim size.
+            isMinifyEnabled = false
+            isShrinkResources = false
             // Real upload key when key.properties is present; debug fallback
             // otherwise so the release APK still builds + sideloads for alpha.
             signingConfig = if (hasReleaseKeystore) {
