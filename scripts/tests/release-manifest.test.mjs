@@ -187,3 +187,8 @@ test('ships the analyzer skill prompts (read at runtime from <root>/skills)', ()
   assert.equal(matchesManifest('skills/audiobook-character-detection-per-chapter.md'), true);
   assert.equal(matchesManifest('skills/audiobook-voice-style.md'), true);
 });
+
+test('ships the fs-22 bundled demo book (manuscript + cast + voice files)', () => {
+  assert.equal(matchesManifest('samples/the-coalfall-commission/.audiobook/cast.json'), true);
+  assert.equal(matchesManifest('samples/the-coalfall-commission/voices/qwen/qwen-coalfall.pt'), true);
+});
