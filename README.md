@@ -33,6 +33,9 @@ or MP3.
   speaker tags are surfaced for a quick review pass. DRM-protected files are
   rejected up front. Re-uploading a book shows a sentence-level diff before
   anything changes.
+- **Try a sample** — a ready-made demo book (an original full-cast story) loads
+  in one click with its whole cast already designed, so you can generate and hear
+  a full performance before importing anything of your own.
 - **Analyzer choice** — run a fully local model via Ollama (no API key, nothing
   leaves your machine) or use the Gemini free tier. For long books, an optional
   two-model pipeline runs cast detection and sentence attribution in parallel to
