@@ -63,7 +63,7 @@ class _PairingScreenState extends State<PairingScreen> {
   /// the user can review before pairing.
   Future<void> _scan() async {
     final qr = await Navigator.of(context).push<PairingQr>(
-      MaterialPageRoute(builder: (_) => const QrScanScreen()),
+      MaterialPageRoute(builder: (_) => QrScanScreen()),
     );
     if (qr != null && mounted) {
       setState(() {

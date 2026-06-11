@@ -1,33 +1,95 @@
+import 'package:castwright/src/domain/pairing_qr.dart';
+import 'package:castwright/src/ui/qr_scan_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_zxing/flutter_zxing.dart';
+import 'package:image_picker/image_picker.dart';
 
-import 'package:castwright/src/ui/qr_scan_screen.dart';
+/// Pumps QrScanScreen behind a launcher button and captures the popped result.
+Future<void> _pumpScanner(
+  WidgetTester tester, {
+  required PickImage pickImage,
+  required BarcodeDecoder decode,
+  required void Function(PairingQr?) onResult,
+}) async {
+  await tester.pumpWidget(MaterialApp(
+    home: Builder(
+      builder: (context) => Scaffold(
+        body: Center(
+          child: ElevatedButton(
+            child: const Text('open'),
+            onPressed: () async {
+              final qr = await Navigator.of(context).push<PairingQr>(
+                MaterialPageRoute(
+                  builder: (_) =>
+                      QrScanScreen(pickImage: pickImage, decode: decode),
+                ),
+              );
+              onResult(qr);
+            },
+          ),
+        ),
+      ),
+    ),
+  ));
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+}
 
-/// Regression guard for the pairing-QR scanner decode config.
-///
-/// The scanner shipped with flutter_zxing's `ReaderWidget` defaults (tryHarder
-/// OFF, centre-50% crop, 720p), which left the dense pairing QR unreadable on a
-/// real phone even though the native camera app decoded the same code off the
-/// same screen. These assertions pin the robustness knobs so a refactor can't
-/// silently fall back to the weak defaults.
 void main() {
-  testWidgets('configures ReaderWidget for robust real-world QR decode', (tester) async {
-    // ReaderWidget's camera init runs through platform channels that no-op in a
-    // widget test; it swallows the failure and stays in the tree, so a single
-    // pump is enough to read its configuration without settling camera futures.
-    await tester.pumpWidget(const MaterialApp(home: QrScanScreen()));
-    await tester.pump();
+  testWidgets('valid QR pops a PairingQr', (tester) async {
+    PairingQr? result;
+    var resolved = false;
+    await _pumpScanner(
+      tester,
+      pickImage: (_) async => '/fake/qr.png',
+      decode: (_) async =>
+          ['CWP1*192.168.1.5:8443*K7QF3M2P*J4XQ2A7BWZ9K3M5R'],
+      onResult: (qr) {
+        result = qr;
+        resolved = true;
+      },
+    );
+    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.pumpAndSettle();
+    expect(resolved, isTrue);
+    expect(result?.code, 'K7QF3M2P');
+  });
 
-    final reader = tester.widget<ReaderWidget>(find.byType(ReaderWidget));
+  testWidgets('a non-pairing barcode shows an error and stays open',
+      (tester) async {
+    await _pumpScanner(
+      tester,
+      pickImage: (_) async => '/fake/qr.png',
+      decode: (_) async => ['https://example.com/not-a-pair'],
+      onResult: (_) {},
+    );
+    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('scan-error')), findsOneWidget);
+    expect(find.byKey(const Key('scan-camera')), findsOneWidget); // still open
+  });
 
-    expect(reader.codeFormat, Format.qrCode);
-    expect(reader.tryHarder, isTrue,
-        reason: 'tryHarder is the single biggest decode lever for camera capture');
-    expect(reader.cropPercent, 1.0,
-        reason: 'decode the whole frame, not a centre crop, so the QR resolves anywhere in view');
-    expect(reader.resolution, ResolutionPreset.veryHigh,
-        reason: 'the dense pairing QR needs more than 720p to resolve its modules');
-    expect(reader.tryInverted, isTrue);
+  testWidgets('no barcode in the image shows an error', (tester) async {
+    await _pumpScanner(
+      tester,
+      pickImage: (_) async => '/fake/qr.png',
+      decode: (_) async => <String>[],
+      onResult: (_) {},
+    );
+    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('scan-error')), findsOneWidget);
+  });
+
+  testWidgets('cancelling the picker is a no-op (no error)', (tester) async {
+    await _pumpScanner(
+      tester,
+      pickImage: (_) async => null,
+      decode: (_) async => <String>[],
+      onResult: (_) {},
+    );
+    await tester.tap(find.byKey(const Key('scan-camera')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('scan-error')), findsNothing);
   });
 }
