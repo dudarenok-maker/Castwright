@@ -88,6 +88,11 @@ export const MANIFEST = {
     // fs-1 upgrade machinery the deployer/runtime needs.
     'scripts/restart-after-upgrade.mjs',
     'scripts/setup-versioned-install.mjs',
+
+    // fs-22 — the bundled, generate-able demo book (manuscript + designed cast
+    // + voice files, no audio). Loaded into the workspace via the "Try the
+    // sample" affordance (POST /api/samples/:slug/load).
+    'samples/**',
   ],
   exclude: [
     // Installed deps + venv (deployer runs npm ci / pip install).
