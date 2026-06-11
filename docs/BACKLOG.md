@@ -52,12 +52,6 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 _The onboarding & first-run cluster below was promoted from Could to Must on 2026-06-08 —
 first-run friction is the biggest adoption blocker for non-technical deployers._
 
-### `fs-22` — Bundled demo book (real, generate-able) ([#475](https://github.com/dudarenok-maker/AudioBook-Generator/issues/475))
-
-- _What:_ Ship a tiny public-domain manuscript so a new user can analyze + generate + hear real output in ~30s without uploading anything. Distinct from the mock canned-data — this one runs the real pipeline and doubles as a smoke test.
-- _Benefit (user):_ instant "wow" + a built-in end-to-end smoke test.
-_Full detail + acceptance:_ [#475](https://github.com/dudarenok-maker/AudioBook-Generator/issues/475).
-
 ### `fe-28` — Onboarding empty states + first-run checklist ([#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472))
 
 - _What:_ Make first-run guidance explicit: the books-library empty state walks a new user to their first upload, plus a small dismissible first-run checklist (upload → confirm cast → generate → listen). Pure frontend, driven off existing state.

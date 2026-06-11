@@ -1,0 +1,8 @@
+{
+  "voiceId": "qwen-narrator__whisper",
+  "instruct": "Mid-30th adult female voice with a standard British accent. The voice has a warm, clear, and expressive timbre, a bit on the slower side. She speaks with a captivating, narrative rhythm, blending youthful curiosity with emotional depth. The tone is earnest, wondrous, and highly articulate, perfectly suited for reading a young adult magical fantasy. Delivered in a soft, hushed whisper.",
+  "language": "English",
+  "refText": "The quick brown fox jumps over the lazy dog, and she wondered what tomorrow would bring.",
+  "baseModel": "Qwen/Qwen3-TTS-12Hz-0.6B-Base",
+  "designModel": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+}
