@@ -400,6 +400,12 @@ _Full detail + acceptance:_ [#434](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
 _Full detail + acceptance:_ [#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436).
 
+#### `app-17` — Host `castwright.ai/assetlinks.json` to light up companion deep-link pairing ([#729](https://github.com/dudarenok-maker/Castwright/issues/729))
+
+- _What:_ The 2026-06-11 pairing fix ships the deep-link prep (https-URL QR + `autoVerify` intent-filter + in-app handler). Remaining piece, gated on the `castwright.ai` public launch: host `/.well-known/assetlinks.json` (pin the distributed APK's signing-cert SHA-256) so the phone's **stock camera** auto-opens the app from the same QR — no app rebuild.
+- _Benefit (user):_ zero-friction pairing (native camera opens the app); robust in-app ML Kit scanner remains the path until then.
+- _Depends on:_ castwright.ai public launch. _Full detail:_ [#729](https://github.com/dudarenok-maker/Castwright/issues/729).
+
 ---
 
 ## Won't (this round) — explicitly parked
