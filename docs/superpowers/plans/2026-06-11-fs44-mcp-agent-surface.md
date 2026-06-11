@@ -1248,7 +1248,7 @@ Expected: FAIL — tools not registered.
 
 - [ ] **Step 3: Implement**
 
-`server/src/mcp/tools/job-tools.ts`. Timeout cap **55 s** (below the common 60 s client tool-timeout floor), default 25 s, poll every 750 ms; return early on terminal state OR phase/percent change after the first terminal-or-changed observation? No — spec: return on **completion/failure/phase change**. Implementation returns on (a) terminal state, (b) `phase` differing from the first observation, (c) timeout (flagged).
+`server/src/mcp/tools/job-tools.ts`. Timeout cap **55 s** (below the common 60 s client tool-timeout floor); default **25 s** — deliberately under the stricter ~30 s tool-timeout some harnesses ship, so a default-args `wait_for_job` never gets killed client-side. Do not "helpfully" raise either number. Poll every 750 ms; return on (a) terminal state, (b) `phase` differing from the first observation, (c) timeout (flagged `timedOut: true`).
 
 ```typescript
 import { z } from 'zod';
@@ -2647,6 +2647,8 @@ void main();
 Implementation notes for the executor:
 - This pipes raw JSON-RPC between the two `Transport` implementations — correct for a **stateless** upstream (each POST is independent; no session id to thread). Do NOT wrap it in a `Client`/`McpServer` pair — that would re-handshake and double-initialize.
 - `StreamableHTTPClientTransport.start()` is lazy (no connection until the first send) — an unreachable server surfaces on the first message; the `.catch(shutdown)` paths turn that into a clean exit 1 with the error on stderr, which stdio MCP clients report verbatim.
+- **Protocol-version edge:** in a raw pipe nobody calls `upstream.setProtocolVersion()` (the SDK's `Client` layer normally does it after `initialize`), so post-initialize POSTs may omit the `MCP-Protocol-Version` header. The SDK server assumes the back-compat default when the header is absent, and the test below proves the round-trip — but if a future SDK tightens this, the fix is: in `upstream.onmessage`, sniff the initialize result (`msg.result?.protocolVersion`) and call `upstream.setProtocolVersion(...)` before forwarding.
+- **stdout purity is the cardinal stdio-MCP rule:** nothing but JSON-RPC may reach stdout — all bridge diagnostics go to stderr (as the `shutdown` helper does). Never add a `console.log` here.
 
 - [ ] **Step 3: Add the bin entry**
 
@@ -2790,7 +2792,7 @@ git commit -m "docs(docs,server): fs-44 mcp agent surface docs + regression plan
 npm run verify
 ```
 
-Expected: lint + typecheck + all unit suites + e2e + build green. Triage any failure per the CLAUDE.md hook-failure protocol (related → fix; pre-existing → surface to the user, do not fix in this branch).
+Expected: lint + typecheck + all unit suites + e2e + build green. Triage any failure per the CLAUDE.md hook-failure protocol (related → fix; pre-existing → surface to the user, do not fix in this branch). Known environment flake: if a concurrent dev session is squatting Playwright's port 5174, the e2e leg fails spuriously — re-run that leg with `CI=1 PLAYWRIGHT_PORT=<free port>` rather than touching any test.
 
 - [ ] **Step 2: Push + draft PR**
 
