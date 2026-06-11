@@ -20,6 +20,7 @@ import {
   IconMore,
   IconTrash,
   IconRefresh,
+  IconUpload,
   IconPencil,
   IconImage,
 } from '../../lib/icons';
@@ -283,7 +284,7 @@ function BookCard({
                 }}
                 className="w-full px-3 py-2.5 text-left text-sm font-medium text-ink hover:bg-ink/4 inline-flex items-center gap-2 border-b border-ink/5"
               >
-                <IconRefresh className="w-4 h-4" /> Replace manuscript…
+                <IconUpload className="w-4 h-4" /> Replace manuscript…
               </button>
               <button
                 onClick={() => {
@@ -471,7 +472,7 @@ function BookCard({
           open={confirmReplace}
           eyebrow="Replace"
           title={book.title}
-          icon={<IconRefresh className="w-4 h-4" />}
+          icon={<IconUpload className="w-4 h-4" />}
           body={
             <div className="space-y-2">
               <p>This replaces the manuscript file and re-detects chapters from the new file.</p>
