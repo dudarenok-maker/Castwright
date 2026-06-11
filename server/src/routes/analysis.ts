@@ -1985,6 +1985,20 @@ export async function runMainAnalyzerJob(
         ? await readPriorCastForMerge(recordRef.bookDir)
         : [];
 
+    /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
+       feeds the seed + every cast.json merge below. pruneStaleReuseLinks on the
+       freshly-detected roster (further down) drops such a link, but
+       mergeAnalysisResultWithExistingCast re-overlays `matchedFrom` straight
+       from this prior — so without cleaning the prior the stale link
+       resurrects on every re-analysis (a standalone's character holding a
+       different series' designed voice). No-op for a clean / empty prior. */
+    if (recordRef.bookId && priorCastForMerge.length) {
+      await pruneStaleReuseLinks(
+        recordRef.bookId,
+        priorCastForMerge as unknown as Parameters<typeof pruneStaleReuseLinks>[1],
+      );
+    }
+
     if (requestedFresh) {
       await clearAnalysisCache(manuscriptId);
       /* Match the filesystem to the cleared cache state. Without this,
@@ -3884,6 +3898,17 @@ async function runSubsetAnalyzerJob(
   const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> = record.bookDir
     ? await readPriorCastForMerge(record.bookDir)
     : [];
+
+  /* Heal cross-series/author reuse links in the prior cast before it feeds the
+     seed + cast.json merges (see the streaming path for the full rationale —
+     the merge re-overlays a stale `matchedFrom` the roster-side prune already
+     dropped). No-op for a clean / empty prior. */
+  if (record.bookId && priorCastForMerge.length) {
+    await pruneStaleReuseLinks(
+      record.bookId,
+      priorCastForMerge as unknown as Parameters<typeof pruneStaleReuseLinks>[1],
+    );
+  }
 
   /* Used inside the persist guards below in place of the old `clientGone`
      flag. The detached job survives the original requester disconnecting,
