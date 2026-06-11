@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-11
 owner: null
 ---
 
@@ -56,5 +56,21 @@ Run with `npm start` against a real workspace (no mock flag).
 
 ## Ship notes
 
-(Filled when status → stable.)
-Closes #475.
+Shipped 2026-06-11 (closes #475). The bundling wave (after Wave 1's
+replace-manuscript feature in plan 205 and the manual content-design Wave 2):
+
+- **Bundle** `samples/the-coalfall-commission/` committed (PR #727, merge
+  `8c36c551`) — manuscript + `.audiobook/{state,cast,manuscript-edits}.json` +
+  44 Qwen voice files (13 characters, each with a Kokoro fallback preset). No
+  audio; the analysis cache rebuilds from `manuscript-edits.json` on first
+  generate.
+- **Tooling** — `scripts/capture-sample-book.mjs` + `scripts/lib/kokoro-fallback.mjs`
+  (freeze + deterministic preset mapping), `server/src/routes/samples.ts`
+  (`POST /api/samples/:slug/load`, idempotent, voices merged no-clobber),
+  "Try the sample" affordance (empty-library + upload view).
+- **Release packaging** (PR #728, merge `20b9de82`) — `samples/**` added to the
+  release-zip manifest; `.gitattributes` marks `.pt`/`.epub` binary; INSTALL.md
+  "Try the demo book" section; README + 1.7.0 RELEASE_NOTES bullets (PR #731).
+
+Follow-up shipped same day: analyzer id-drift voice rescue + distinct Replace
+icon (PR #730, merge `9e2cb07e`) — see plan 205 cross-reference.
