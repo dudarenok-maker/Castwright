@@ -24,7 +24,7 @@ class FakeStore implements PairingStore {
 
 void main() {
   testWidgets('unpaired home shows the status + a Pair a device button', (tester) async {
-    await tester.pumpWidget(AudiobookCompanionApp(store: FakeStore()));
+    await tester.pumpWidget(AudiobookCompanionApp(store: FakeStore(), deepLinks: Stream<Uri>.empty()));
     await tester.pumpAndSettle();
 
     expect(find.text('Castwright'), findsWidgets);
@@ -39,6 +39,7 @@ void main() {
         store: FakeStore(
           const PairedServer(url: 'https://10.0.0.5:8443', token: 't', caFingerprint: 'f'),
         ),
+        deepLinks: Stream<Uri>.empty(),
       ),
     );
     await tester.pumpAndSettle();
