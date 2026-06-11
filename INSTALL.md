@@ -130,6 +130,21 @@ To stop: `npm run stop:prod`.
 
 ---
 
+## Try the demo book
+
+The app ships with a generate-able demo — **The Coalfall Commission** (an original
+Castwright work). On the books-library empty state or the upload screen, click
+**"try a sample book"** to load it into your workspace with its full 13-character
+cast already designed, then **Generate** to hear it.
+
+The designed voices are **Qwen** (the flagship per-character engine), so generating
+the demo as designed needs the Qwen model installed (Model Manager → install Qwen)
+on a GPU. Every character also carries a **Kokoro** fallback preset, so the demo
+still generates with a full cast on a box without Qwen — just less bespoke. No audio
+ships in the bundle; the demo runs the real pipeline locally.
+
+---
+
 ## Troubleshooting
 
 ### "ffmpeg not found on PATH"
