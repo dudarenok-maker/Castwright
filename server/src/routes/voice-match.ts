@@ -37,20 +37,6 @@ import { jaccard, nameTokens, normaliseForMatch } from '../util/text-match.js';
 
 export const voiceMatchRouter = Router();
 
-/* Generic role-names exist in every book under the same deterministic id
-   (the narrator keeps voiceId/id 'narrator' across the whole library), so a
-   library-wide exact-name match fires against EVERY book's narrator — a
-   Skulduggery narrator claiming a Keeper narrator, with the tie broken by
-   arbitrary scan order. Unlike a real recurring character, a narrator is only
-   legitimately reused WITHIN its series, where the analysis-time linker
-   (series-reuse-link.ts) already handles continuity. So generic-role
-   candidates are scoped to the current book's series; everything else keeps
-   matching library-wide (designed-voice reuse across books is intentional). */
-const GENERIC_ROLE_IDS = new Set(['narrator']);
-function isGenericRole(c: CharacterMatchInput): boolean {
-  return GENERIC_ROLE_IDS.has(c.id) || normaliseForMatch(c.name) === 'narrator';
-}
-
 export interface CharacterMatchInput {
   id: string;
   name: string;
@@ -306,12 +292,16 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
     );
 
     const matches = characters.map((c) => {
-      const generic = isGenericRole(c);
       const scored: Candidate[] = [];
       for (const v of voices) {
-        /* A narrator only reuses within its own series; a real character
-           keeps matching library-wide. */
-        if (generic && !seriesMateBookIds.has(v.bookId)) continue;
+        /* Auto-match is scoped to the current book's same-author + same-series
+           mates — for EVERY character, not just generic role-names. Matching a
+           real character library-wide let an unrelated author/series's same-
+           named character grab a designed voice (a Castwright standalone's
+           "Tam Hollis" claiming Shannon Messenger's "Tam"). Cross-series reuse
+           stays available as an explicit Voice-library assignment; it is never
+           a silent auto-match. */
+        if (!seriesMateBookIds.has(v.bookId)) continue;
         const cand = scoreOne(c, v);
         if (cand) scored.push(cand);
       }
