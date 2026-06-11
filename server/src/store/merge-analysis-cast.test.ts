@@ -110,6 +110,55 @@ describe('mergeAnalysisResultWithExistingCast', () => {
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
     expect(merged[0].aliases).toEqual(['Marlow', 'Sir Singe', 'Mr. Halden']);
   });
+
+  it('id drift: a relabelled character carries its voice onto the same-name fresh row (no duplicate)', () => {
+    // The analyzer relabelled the dragon `coalfall` -> `coalfall-dragon` between
+    // runs. The old voiced row was dropped by id; without the name fallback the
+    // fresh `coalfall-dragon` would be voiceless AND old `coalfall` re-added as a
+    // 0-line orphan.
+    const existing: C[] = [
+      {
+        id: 'coalfall',
+        name: 'Coalfall',
+        voiceState: 'tuned',
+        voiceId: 'coalfall',
+        ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-coalfall' } },
+      },
+    ];
+    const fresh: C[] = [{ id: 'coalfall-dragon', name: 'Coalfall', lines: 33 } as C];
+    const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
+    // The descriptive, library-unique fresh id wins; no orphan.
+    expect(merged.map((c) => c.id)).toEqual(['coalfall-dragon']);
+    const dragon = merged[0];
+    expect(dragon.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-coalfall' } });
+    expect(dragon.ttsEngine).toBe('qwen');
+    expect(dragon.voiceState).toBe('tuned');
+    expect((dragon as C).lines).toBe(33); // analyzer-owned fields stay from the fresh row
+  });
+
+  it('id drift: an ambiguous name (two fresh rows) falls back to id-only + re-adds the orphan', () => {
+    const existing: C[] = [
+      {
+        id: 'coalfall',
+        name: 'Coalfall',
+        voiceState: 'tuned',
+        overrideTtsVoices: { qwen: { name: 'qwen-coalfall' } },
+      },
+    ];
+    // Two fresh rows share the name → too risky to guess; don't merge by name.
+    const fresh: C[] = [
+      { id: 'coalfall-dragon', name: 'Coalfall' } as C,
+      { id: 'coalfall-other', name: 'Coalfall' } as C,
+    ];
+    const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
+    expect(merged.map((c) => c.id)).toEqual(['coalfall-dragon', 'coalfall-other', 'coalfall']);
+    // The orphan keeps its voice; neither fresh row got it.
+    expect(merged.find((c) => c.id === 'coalfall')!.overrideTtsVoices).toEqual({
+      qwen: { name: 'qwen-coalfall' },
+    });
+    expect(merged.find((c) => c.id === 'coalfall-dragon')!.overrideTtsVoices).toBeUndefined();
+  });
 });
 
 describe('seedReuseGuardsFromPriorCast', () => {
