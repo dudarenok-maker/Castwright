@@ -24,6 +24,8 @@ vi.mock('../lib/api', () => ({
         chapters: [{ id: 1, title: 'Chapter 1' }],
       },
     })),
+    loadSample: vi.fn(async () => ({ bookId: 'castwright__standalones__the-coalfall-commission' })),
+    getLibrary: vi.fn(async () => ({ authors: [], books: [] })),
   },
   SlugCollisionError: class SlugCollisionError extends Error {},
 }));
@@ -161,10 +163,10 @@ describe('UploadView — phone viewport (375×667, Wave 3)', () => {
     expect(select.className).toContain('w-full');
   });
 
-  it('stacks "Use sample" / "Paste text" buttons full-width with ≥44px tap targets', () => {
+  it('stacks "Try the demo book" / "Paste text" buttons full-width with ≥44px tap targets', () => {
     const store = makeStore();
     renderUpload(store);
-    const sample = screen.getByRole('button', { name: /use sample manuscript/i });
+    const sample = screen.getByRole('button', { name: /try the demo book/i });
     const paste = screen.getByRole('button', { name: /paste text/i });
     for (const btn of [sample, paste]) {
       expect(btn.className).toContain('w-full');

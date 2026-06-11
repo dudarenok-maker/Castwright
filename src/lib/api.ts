@@ -3004,6 +3004,20 @@ async function mockDeleteBook(_bookId: string): Promise<void> {
   await wait(80);
 }
 
+async function realLoadSample(slug: string): Promise<{ bookId: string }> {
+  const res = await fetch(`/api/samples/${encodeURIComponent(slug)}/load`, { method: 'POST' });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = ((await res.json()) as { error?: string }).error ?? ''; } catch { /* not json */ }
+    throw new Error(detail || `Couldn't load the sample (${res.status}).`);
+  }
+  return res.json();
+}
+async function mockLoadSample(_slug: string): Promise<{ bookId: string }> {
+  await wait(150);
+  return { bookId: 'castwright__standalones__the-coalfall-commission' };
+}
+
 async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
   await wait(120);
   return { state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] };
@@ -5829,6 +5843,7 @@ const real = {
   addFromSeriesRoster: realAddFromSeriesRoster,
   deleteBook: realDeleteBook,
   reparseBook: realReparseBook,
+  loadSample: realLoadSample,
   replaceManuscript: realReplaceManuscript,
   setChapterExcluded: realSetChapterExcluded,
   setChapterHeld: realSetChapterHeld,
@@ -6075,6 +6090,7 @@ const mock = {
   addFromSeriesRoster: mockAddFromSeriesRoster,
   deleteBook: mockDeleteBook,
   reparseBook: mockReparseBook,
+  loadSample: mockLoadSample,
   replaceManuscript: mockReplaceManuscript,
   setChapterExcluded: mockSetChapterExcluded,
   setChapterHeld: mockSetChapterHeld,

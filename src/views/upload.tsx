@@ -5,10 +5,10 @@ import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primiti
 import { api } from '../lib/api';
 import type { UploadArgs } from '../lib/api';
 import { TAGLINE_SHORT } from '../lib/brand';
-import { SAMPLE_MANUSCRIPT_MD } from '../mocks/canned-data';
 import { AnalysisModelPicker } from '../components/analysis-model-picker';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { libraryActions } from '../store/library-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
@@ -191,12 +191,28 @@ export function UploadView() {
     );
   }
 
-  function handleSample() {
-    guardedUpload({
-      text: SAMPLE_MANUSCRIPT_MD,
-      fileName: 'the-northern-star.md',
-      format: 'markdown',
-    });
+  async function handleSample() {
+    let result;
+    try {
+      result = await api.loadSample('the-coalfall-commission');
+    } catch (err) {
+      setError((err as Error).message);
+      return;
+    }
+    const refreshed = await api.getLibrary().catch(() => null);
+    if (refreshed) dispatch(libraryActions.hydrate(refreshed));
+    const book = refreshed?.authors
+      .flatMap((a) => a.series.flatMap((s) => s.books))
+      .find((b) => b.bookId === result.bookId);
+    if (book) {
+      dispatch(
+        uiActions.openBook({
+          id: book.bookId,
+          status: book.status,
+          manuscriptId: book.manuscriptId,
+        }),
+      );
+    }
   }
 
   return (
@@ -344,7 +360,7 @@ export function UploadView() {
             onClick={handleSample}
             className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-full bg-white border border-ink/15 text-ink/80 hover:border-ink/30 hover:text-ink disabled:opacity-50"
           >
-            Use sample manuscript
+            Try the demo book
           </button>
           <button
             disabled={busy}

@@ -35,3 +35,7 @@ src/lib/api-types.ts text eol=lf
 *.m4b binary
 *.pdf binary
 *.zip binary
+*.epub binary
+*.pt binary
+*.opus binary
+*.mobi binary
