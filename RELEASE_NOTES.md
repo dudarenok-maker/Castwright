@@ -1,5 +1,6 @@
 # Castwright 1.7.0
 
+- **Try it in one click.** A ready-made sample — an original story performed by a full cast — loads with every voice already designed, so you can generate and hear what Castwright does before importing a thing of your own.
 - **It runs on a Mac now.** Apple Silicon is a first-class home for Castwright — it finds your Mac's graphics on its own, no setup and no drivers. (Intel Macs work too, just slower.)
 - **Your whole cast can act.** Design expressive, emotion-aware voices for every character in one pass — not just your leads — and each performance stays true from the first chapter to the last.
 - **Long books you can walk away from.** Big manuscripts ride out the rough patches on their own and keep going, so a full performance finishes while you're elsewhere.
