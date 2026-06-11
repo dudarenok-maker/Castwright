@@ -42,7 +42,8 @@
 - `apps/android/lib/main.dart` — `HomePage` listens to an injectable deep-link `Stream<Uri>` and opens a pre-filled `PairingScreen`.
 - `apps/android/android/app/src/main/AndroidManifest.xml` — add the `autoVerify` App Link intent-filter.
 - `apps/android/android/key.properties` (git-ignored, **user-created**) + release build — stable signing.
-- Tests: `test/domain/pairing_qr_test.dart` (extend), `test/ui/qr_scan_screen_test.dart` (new), `test/ui/pairing_screen_initial_qr_test.dart` (new), `test/main_deep_link_test.dart` (new).
+- Tests: `test/domain/pairing_qr_test.dart` (extend), `test/ui/qr_scan_screen_test.dart` (**REPLACE** — currently tests the old `flutter_zxing` `ReaderWidget`), `test/ui/pairing_screen_initial_qr_test.dart` (new), `test/main_deep_link_test.dart` (new), `test/widget_test.dart` (**update** — inject an empty `deepLinks` stream so the app-shell test doesn't hit the App Links platform channel).
+- Verified unaffected: `test/ui/pairing_screen_test.dart` (never opens the scanner; `initialQr` is optional/null), and the other `test/ui/*_screen_test.dart` (they pump their own screens, not the app shell).
 - `docs/features/208-pairing-qr-mlkit-decoder.md` — regression plan; `docs/features/INDEX.md` — entry.
 
 > **Note on the `app/` scope & worktree:** all code changes are under `apps/android`. The branch `fix/app-pairing-mlkit-decoder` already exists and holds the spec. Implement on that branch.
@@ -343,9 +344,9 @@ Future<String?> _defaultPickImage(ImageSource source) async {
 }
 ```
 
-- [ ] **Step 2: Write the screen-logic tests (fake picker + decoder)**
+- [ ] **Step 2: Replace the screen-logic tests (fake picker + decoder)**
 
-Create `apps/android/test/ui/qr_scan_screen_test.dart`:
+`apps/android/test/ui/qr_scan_screen_test.dart` **already exists** — it tests the old `flutter_zxing` `ReaderWidget` (imports `flutter_zxing`, asserts `reader.tryHarder`/`cropPercent`/etc.) and will no longer compile once the dep is gone. **Replace its ENTIRE contents** with the following (this intentionally deletes the obsolete ReaderWidget regression test — the widget no longer exists):
 
 ```dart
 import 'package:castwright/src/domain/pairing_qr.dart';
@@ -775,15 +776,38 @@ void main() {
 Run: `cd apps/android && flutter test test/main_deep_link_test.dart`
 Expected: PASS (2 tests).
 
-- [ ] **Step 6: Run the whole Dart test suite**
+- [ ] **Step 6: Fix the existing app-shell test (avoid the App Links platform channel)**
+
+`test/widget_test.dart` pumps `AudiobookCompanionApp(store: FakeStore())` with no
+`deepLinks`. After this task, `HomePage.initState` would call `AppLinks().getInitialLink()`
+on a real platform channel → `MissingPluginException` (an uncaught async error that fails
+`flutter test`). Inject an empty stream in **both** `pumpWidget` calls:
+
+```dart
+    await tester.pumpWidget(AudiobookCompanionApp(store: FakeStore(), deepLinks: Stream<Uri>.empty()));
+```
+and the paired-home one:
+```dart
+      AudiobookCompanionApp(
+        store: FakeStore(
+          const PairedServer(url: 'https://10.0.0.5:8443', token: 't', caFingerprint: 'f'),
+        ),
+        deepLinks: Stream<Uri>.empty(),
+      ),
+```
+(`Stream<Uri>.empty()` emits nothing and closes — the shell builds with no deep link.)
+Confirm no OTHER test builds the shell: `grep -rl "AudiobookCompanionApp" test` should list
+only `widget_test.dart` and `main_deep_link_test.dart`.
+
+- [ ] **Step 7: Run the whole Dart test suite**
 
 Run: `cd apps/android && flutter test`
-Expected: PASS — all existing + new tests green.
+Expected: PASS — all existing + new tests green (incl. the updated `widget_test.dart`).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add apps/android/lib/main.dart apps/android/test/main_deep_link_test.dart
+git add apps/android/lib/main.dart apps/android/test/main_deep_link_test.dart apps/android/test/widget_test.dart
 git commit -m "feat(app): route an incoming pair deep link into a pre-filled pairing screen"
 ```
 
