@@ -2,7 +2,6 @@
     xmlns:tools="http://schemas.android.com/tools">
     <!-- app-2: network calls to the paired server + QR pairing-code scanning. -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.CAMERA"/>
     <!-- app-3: foreground service so a multi-book download isn't killed by the
          OS. (FOREGROUND_SERVICE/WAKE_LOCK/POST_NOTIFICATIONS are merged in by
          flutter_foreground_task; the data-sync type needs its own permission on
@@ -34,6 +33,18 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- app-2 deep-link readiness (app-17 lights it up at launch): the
+                 phone's stock camera auto-opens the app from the pairing QR once
+                 https://castwright.ai/.well-known/assetlinks.json pins this app's
+                 release-signing SHA-256. Dormant (no auto-verify) until then. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                      android:host="castwright.ai"
+                      android:pathPrefix="/pair"/>
             </intent-filter>
         </activity>
         <!-- app-3: flutter_foreground_task download service. Warning: do not
