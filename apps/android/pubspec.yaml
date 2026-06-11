@@ -57,9 +57,9 @@ dependencies:
   # bundled, still 0 decodes). Decode a STILL image with Google ML Kit instead —
   # never the live-camera widget whose ML Kit lifecycle NPE'd on API 36. app_links
   # receives the future https://castwright.ai/pair App Link (deep-link readiness).
-  google_mlkit_barcode_scanning: ^0.14.2
   image_picker: ^1.2.2
   app_links: ^7.1.1
+  mobile_scanner: ^7.2.0
 
 dev_dependencies:
   flutter_test:
