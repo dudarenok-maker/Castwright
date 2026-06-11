@@ -55,6 +55,7 @@ interface Props {
   onEditBook: (book: LibraryBook, patch: EditBookMetaPatch) => Promise<void>;
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
+  onTrySample?: () => void | Promise<void>;
 }
 
 export function LibraryGrid({
@@ -69,9 +70,10 @@ export function LibraryGrid({
   onEditBook,
   onCoverChanged,
   onStartNew,
+  onTrySample,
 }: Props) {
   if (!loaded) return <LibrarySkeleton />;
-  if (isLibraryEmpty) return <EmptyLibrary onStartNew={onStartNew} />;
+  if (isLibraryEmpty) return <EmptyLibrary onStartNew={onStartNew} onTrySample={onTrySample} />;
   return (
     <div className="space-y-10">
       {authors.map((author) => (
