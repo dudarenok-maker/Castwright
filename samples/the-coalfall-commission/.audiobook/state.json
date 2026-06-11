@@ -1,0 +1,58 @@
+{
+  "bookId": "castwright__standalones__the-coalfall-commission",
+  "manuscriptId": "mns_-8zHQk0f3q",
+  "title": "The Coalfall Commission",
+  "author": "Castwright",
+  "series": "Standalones",
+  "seriesPosition": null,
+  "isStandalone": true,
+  "manuscriptFile": "manuscript.epub",
+  "castConfirmed": true,
+  "chapters": [
+    {
+      "id": 1,
+      "title": "The Coalfall Commission",
+      "slug": "01-the-coalfall-commission",
+      "duration": "00:00",
+      "uuid": "3ccb8d66-256e-4b42-b218-c205b81b09e0",
+      "excluded": true
+    },
+    {
+      "id": 2,
+      "title": "The Coalfall Commission",
+      "slug": "02-the-coalfall-commission",
+      "duration": "00:00",
+      "uuid": "795523a9-1517-42ed-b540-f197e89a4080",
+      "excluded": true
+    },
+    {
+      "id": 3,
+      "title": "Chapter One — The Knock",
+      "slug": "03-chapter-one-the-knock",
+      "duration": "00:00",
+      "uuid": "1017f4fa-5728-431e-8c60-a784def0fa3e"
+    },
+    {
+      "id": 4,
+      "title": "Chapter Two — The Pour",
+      "slug": "04-chapter-two-the-pour",
+      "duration": "00:00",
+      "uuid": "4934a15c-411e-4d16-a073-7d27eaca15ce"
+    }
+  ],
+  "coverGradient": [
+    "#3C194F",
+    "#0F0E0D"
+  ],
+  "createdAt": "2026-06-09T00:43:33.392Z",
+  "updatedAt": "2026-06-11T01:49:46.225Z",
+  "chapterTitleParserVersion": 2,
+  "language": "en",
+  "schema": 1,
+  "narratorCredit": null,
+  "genre": null,
+  "publicationDate": null,
+  "description": null,
+  "notes": null,
+  "tags": []
+}
