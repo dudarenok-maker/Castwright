@@ -90,6 +90,22 @@ The remaining deferred follow-up is `fs-14` (Russian UI localization) below._
 
 ---
 
+### Companion app
+
+_The Android companion shipped (plan 188); these are the launch-blocking gaps — the deep-link pairing flip and the iOS half of the mobile audience._
+
+#### `app-17` — Host `castwright.ai/assetlinks.json` to light up companion deep-link pairing ([#729](https://github.com/dudarenok-maker/Castwright/issues/729))
+
+- _What:_ The 2026-06-11 pairing fix ships the app-side deep-link readiness (`PairingQr` URL parser + `app_links` handler + `autoVerify` intent-filter) and a stable release-signing key. Launch flip, gated on the `castwright.ai` public launch: flip the server `/session` payload to the https URL + host `/.well-known/assetlinks.json` (pin `ai.castwright` + the recorded release SHA) so the phone's **stock camera** auto-opens the app — no app rebuild. The robust in-app live-camera ML Kit scanner (plan 208) is the path until then.
+- _Benefit (user):_ zero-friction pairing — the phone's native camera opens the app, no in-app scanner step.
+- _Depends on:_ castwright.ai public launch. _Full detail:_ [#729](https://github.com/dudarenok-maker/Castwright/issues/729) · [plan 208](features/208-pairing-qr-mlkit-decoder.md).
+
+#### `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555))
+
+- _What:_ Build + release the Flutter companion on iOS. The codebase stays iOS-ready by construction (app-managed TLS trust, dual-platform Flutter plugins, an unsigned iOS CI compile from `app-1`), so this is incremental, not a rewrite. _Codec caveat:_ iOS `AVPlayer` can't play `.ogg` — for iOS the server must render MP3/M4A (OGG is Android-only); the app reads the format from the manifest and surfaces it.
+- _Benefit (user):_ brings the companion to iPhone/iPad listeners — the other half of the mobile audience.
+_Full detail + acceptance:_ [#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555) · [plan 188](features/188-android-companion-app.md).
+
 ## Should — important, not blocking ship
 
 Ranked top = highest priority. The agent-surface item leads (added 2026-06-11), then the
@@ -156,12 +172,6 @@ can't ship until its loopback-proxy prerequisite is built._
 - _What:_ The pure pieces shipped (`resolvePlaybackSource` + `AppSettings.streamOverLan` + `AudioEngine.setStreamUrl`, 4 tests) but **cannot be wired**: `just_audio` streams via the platform player (ExoPlayer/AVPlayer) over the **OS** network stack, which can't trust the **app-pinned mkcert CA** (the TLS model deliberately avoids an OS cert install) → streaming `https://<lan>:8443` fails TLS. No `streamOverLan` toggle was wired (no dead control). _Unblock:_ a local loopback proxy that re-serves chapter bytes (fetched via the pinned `ApiClient`) to `just_audio` over `127.0.0.1`.
 - _Benefit (user):_ zero-wait preview before a download. Low urgency — offline-first download/play is unaffected.
 _Full detail + acceptance:_ [#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553) · [plan 188](features/188-android-companion-app.md).
-
-### `app-12` — iOS build + release of the companion app ([#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555))
-
-- _What:_ Build + release the Flutter companion on iOS. The codebase stays iOS-ready by construction (app-managed TLS trust, dual-platform Flutter plugins, an unsigned iOS CI compile from `app-1`), so this is incremental, not a rewrite. _Codec caveat:_ iOS `AVPlayer` can't play `.ogg` — for iOS the server must render MP3/M4A (OGG is Android-only); the app reads the format from the manifest and surfaces it.
-- _Benefit (user):_ brings the companion to iPhone/iPad listeners — the other half of the mobile audience.
-_Full detail + acceptance:_ [#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555) · [plan 188](features/188-android-companion-app.md).
 
 ### `app-15` — legacy (pre-API-26) launcher icon PNGs + iOS app-icon set ([#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632))
 
@@ -399,12 +409,6 @@ _Full detail + acceptance:_ [#434](https://github.com/dudarenok-maker/AudioBook-
 - _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
 - _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
 _Full detail + acceptance:_ [#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436).
-
-#### `app-17` — Host `castwright.ai/assetlinks.json` to light up companion deep-link pairing ([#729](https://github.com/dudarenok-maker/Castwright/issues/729))
-
-- _What:_ The 2026-06-11 pairing fix ships the app-side deep-link readiness (`PairingQr` URL parser + `app_links` handler + `autoVerify` intent-filter) and a stable release-signing key. Launch flip, gated on the `castwright.ai` public launch: flip the server `/session` payload to the https URL + host `/.well-known/assetlinks.json` (pin `ai.castwright` + the recorded release SHA) so the phone's **stock camera** auto-opens the app — no app rebuild.
-- _Benefit (user):_ zero-friction pairing (native camera opens the app); robust in-app ML Kit scanner remains the path until then.
-- _Depends on:_ castwright.ai public launch. _Full detail:_ [#729](https://github.com/dudarenok-maker/Castwright/issues/729).
 
 ---
 
