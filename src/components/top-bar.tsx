@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { IconArrowLeft, IconSpinner, IconClock, IconWarning, CastwaveMark } from '../lib/icons';
 import { Avatar } from './primitives';
 import { ThemeToggleButton } from './theme-toggle';
@@ -7,6 +8,9 @@ import { buildInfo } from '../lib/build-info';
 import { StatusPopover } from './status-popover';
 import { AdminPill } from './admin-pill';
 import type { Stage, View } from '../lib/types';
+import { useAppDispatch } from '../store';
+import { startLinearTour, startScreenTour } from '../store/tour-slice';
+import { screenForStage } from '../lib/tour-steps';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
 export interface GenerationPillData {
@@ -343,17 +347,7 @@ export function TopBar({
           <span className="hidden sm:inline-flex">
             <VersionPill onClick={onOpenAccount} />
           </span>
-          <a
-            href="#/help"
-            aria-label="Help"
-            title="Help & troubleshooting"
-            data-testid="topbar-help"
-            className={`inline-flex items-center justify-center w-9 h-9 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-full text-sm font-semibold transition-colors ${
-              stage === 'help' ? 'bg-ink text-canvas' : 'text-ink/70 hover:bg-ink/10'
-            }`}
-          >
-            ?
-          </a>
+          <HelpMenu stage={stage} view={view} />
           <ThemeToggleButton />
           <button
             type="button"
@@ -366,6 +360,117 @@ export function TopBar({
         </div>
       </div>
     </header>
+  );
+}
+
+/* Help menu — the "?" button expands into a three-item popover menu anchored
+   to the trigger. Portaled (createPortal → document.body) so the top-bar's
+   overflow-x-clip never clips it. Outside-click + Escape close it. */
+function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) {
+  const dispatch = useAppDispatch();
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const screen = screenForStage(stage, view);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    function compute() {
+      const el = triggerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setPos({ top: rect.bottom + 6, left: rect.right - 160 });
+    }
+    compute();
+    window.addEventListener('scroll', compute, true);
+    window.addEventListener('resize', compute);
+    return () => {
+      window.removeEventListener('scroll', compute, true);
+      window.removeEventListener('resize', compute);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const t = e.target as Node | null;
+      if (!t) return;
+      if (triggerRef.current?.contains(t)) return;
+      if (menuRef.current?.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
+    }
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label="Help"
+        title="Help & troubleshooting"
+        data-testid="topbar-help"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((s) => !s)}
+        className={`inline-flex items-center justify-center w-9 h-9 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-full text-sm font-semibold transition-colors ${
+          stage === 'help' ? 'bg-ink text-canvas' : 'text-ink/70 hover:bg-ink/10'
+        }`}
+      >
+        ?
+      </button>
+      {open && typeof document !== 'undefined' && createPortal(
+        <div
+          ref={menuRef}
+          role="menu"
+          aria-label="Help menu"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          className="fixed z-50 bg-white border border-ink/15 rounded-xl shadow-float py-1 min-w-[160px]"
+          style={{
+            top: pos?.top ?? 0,
+            left: pos?.left ?? 0,
+            visibility: pos ? 'visible' : 'hidden',
+          }}
+        >
+          <a
+            href="#/help"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="flex items-center px-4 py-2.5 min-h-[44px] sm:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors"
+          >
+            Help
+          </a>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { dispatch(startLinearTour()); setOpen(false); }}
+            className="flex items-center w-full px-4 py-2.5 min-h-[44px] sm:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left"
+          >
+            Take the tour
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!screen}
+            onClick={() => { if (screen) { dispatch(startScreenTour(screen)); setOpen(false); } }}
+            className="flex items-center w-full px-4 py-2.5 min-h-[44px] sm:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left disabled:opacity-40 disabled:cursor-default"
+          >
+            Show me this screen
+          </button>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 

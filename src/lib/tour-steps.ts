@@ -70,3 +70,13 @@ export const TOUR_STEPS: ReadonlyArray<TourStep> = [
 export function stepsForScreen(screen: TourScreen): TourStep[] {
   return TOUR_STEPS.filter((s) => s.screen === screen);
 }
+
+/** Map the top-bar stage+view to a TourScreen for "Show me this screen". */
+export function screenForStage(stageKind: string, view: string | null): TourScreen | null {
+  if (stageKind === 'books') return 'library';
+  if (stageKind === 'ready') {
+    if (view === 'manuscript' || view === 'cast' || view === 'generate' || view === 'listen')
+      return view;
+  }
+  return null;
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TOUR_STEPS, stepsForScreen, TOUR_SCREENS } from './tour-steps';
+import { TOUR_STEPS, stepsForScreen, TOUR_SCREENS, screenForStage } from './tour-steps';
 
 describe('tour-steps registry', () => {
   it('has the 13 steps across 5 stations in order', () => {
@@ -25,5 +25,14 @@ describe('tour-steps registry', () => {
 
   it('every step id is unique', () => {
     expect(new Set(TOUR_STEPS.map((s) => s.id)).size).toBe(TOUR_STEPS.length);
+  });
+});
+
+describe('screenForStage', () => {
+  it('screenForStage maps stage-kind + view to a TourScreen', () => {
+    expect(screenForStage('books', null)).toBe('library');
+    expect(screenForStage('ready', 'cast')).toBe('cast');
+    expect(screenForStage('ready', 'log')).toBeNull();
+    expect(screenForStage('account', null)).toBeNull();
   });
 });
