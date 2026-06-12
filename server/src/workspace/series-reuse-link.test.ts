@@ -28,24 +28,24 @@ const SERIES = 'S';
 const BOOK1 = 'book-1';
 const BOOK2 = 'book-2';
 
-/* Prior confirmed cast living in book-1 (seriesPosition 1). Sophie carries the
-   designed qwen voice; Keefe is plain. */
+/* Prior confirmed cast living in book-1 (seriesPosition 1). Wren carries the
+   designed qwen voice; Marlow is plain. */
 const PRIOR_LIBRARY: LibraryCharacterRecord[] = [
   {
     bookId: BOOK1,
     bookTitle: 'Book One',
     character: {
-      id: 'sophie',
-      name: 'Sophie',
+      id: 'wren',
+      name: 'Wren',
       gender: 'female',
       ageRange: 'teen',
-      voiceId: 'sophie',
+      voiceId: 'wren',
     },
   },
   {
     bookId: BOOK1,
     bookTitle: 'Book One',
-    character: { id: 'keefe', name: 'Keefe', gender: 'male', ageRange: 'teen' },
+    character: { id: 'marlow', name: 'Marlow', gender: 'male', ageRange: 'teen' },
   },
 ];
 
@@ -58,15 +58,15 @@ function baseOptions(overrides: Partial<LinkSeriesReuseOptions> = {}): LinkSerie
         [BOOK1, 1],
         [BOOK2, 2],
       ]),
-    /* Source cast loader for the bespoke-voice denormalisation: book-1's Sophie
+    /* Source cast loader for the bespoke-voice denormalisation: book-1's Wren
        owns the qwen voice. */
     castLoader: async (bookId: string) =>
       bookId === BOOK1
         ? [
             {
-              id: 'sophie',
+              id: 'wren',
               ttsEngine: 'qwen',
-              overrideTtsVoices: { qwen: { name: 'voice_sophie' } },
+              overrideTtsVoices: { qwen: { name: 'voice_wren' } },
               voiceStyle: 'a poised, confident teenage girl',
             },
           ]
@@ -78,23 +78,23 @@ function baseOptions(overrides: Partial<LinkSeriesReuseOptions> = {}): LinkSerie
 describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
   it('links a recurring same-name character and unifies voiceId + denormalises voice', async () => {
     const characters: LinkableCharacter[] = [
-      { id: 'sophie-new', name: 'Sophie', gender: 'female', ageRange: 'teen' },
-      { id: 'newbie', name: 'Tam', gender: 'male' }, // no prior match
+      { id: 'wren-new', name: 'Wren', gender: 'female', ageRange: 'teen' },
+      { id: 'newbie', name: 'Pell', gender: 'male' }, // no prior match
     ];
     const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
     expect(linked).toBe(1);
 
-    const sophie = characters[0];
-    expect(sophie.matchedFrom?.bookId).toBe(BOOK1);
-    expect(sophie.matchedFrom?.characterId).toBe('sophie');
-    expect(sophie.voiceId).toBe('sophie');
-    expect(sophie.voiceState).toBe('reused');
+    const wren = characters[0];
+    expect(wren.matchedFrom?.bookId).toBe(BOOK1);
+    expect(wren.matchedFrom?.characterId).toBe('wren');
+    expect(wren.voiceId).toBe('wren');
+    expect(wren.voiceState).toBe('reused');
     /* Bespoke voice + persona denormalised from the source book (srv-18). */
-    expect(sophie.ttsEngine).toBe('qwen');
-    expect(sophie.overrideTtsVoices?.qwen?.name).toBe('voice_sophie');
-    expect(sophie.voiceStyle).toBe('a poised, confident teenage girl');
+    expect(wren.ttsEngine).toBe('qwen');
+    expect(wren.overrideTtsVoices?.qwen?.name).toBe('voice_wren');
+    expect(wren.voiceStyle).toBe('a poised, confident teenage girl');
     /* Prior name unioned into aliases (already same name → dropped as self). */
-    expect(sophie.aliases).toBeUndefined();
+    expect(wren.aliases).toBeUndefined();
 
     /* Non-matching character untouched. */
     expect(characters[1].matchedFrom).toBeUndefined();
@@ -103,11 +103,11 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
   it('never auto-links a notLinkedTo pair', async () => {
     const characters: LinkableCharacter[] = [
       {
-        id: 'sophie-adult',
-        name: 'Sophie',
+        id: 'wren-adult',
+        name: 'Wren',
         gender: 'female',
         ageRange: 'adult',
-        notLinkedTo: [{ bookId: BOOK1, characterId: 'sophie' }],
+        notLinkedTo: [{ bookId: BOOK1, characterId: 'wren' }],
       },
     ];
     const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
@@ -120,7 +120,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     /* book-1 IS the earliest — there is no lower-positioned prior to match
        against, so the pass is a no-op even though the library is non-empty. */
     const characters: LinkableCharacter[] = [
-      { id: 'sophie', name: 'Sophie', gender: 'female', ageRange: 'teen' },
+      { id: 'wren', name: 'Wren', gender: 'female', ageRange: 'teen' },
     ];
     const linked = await linkSeriesReuseAtAnalysis(BOOK1, characters, baseOptions());
     expect(linked).toBe(0);
@@ -129,10 +129,10 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
 
   it('skips unknown-male/female buckets and already-linked characters', async () => {
     const characters: LinkableCharacter[] = [
-      { id: 'unknown-female', name: 'Sophie' }, // bucket — never reused
+      { id: 'unknown-female', name: 'Wren' }, // bucket — never reused
       {
-        id: 'sophie-prelinked',
-        name: 'Sophie',
+        id: 'wren-prelinked',
+        name: 'Wren',
         matchedFrom: { bookId: 'other', characterId: 'x', confidence: 1 },
       },
     ];
@@ -145,7 +145,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
 
   it('does not demote a tuned voice to reused but still stamps the link', async () => {
     const characters: LinkableCharacter[] = [
-      { id: 'sophie-tuned', name: 'Sophie', gender: 'female', ageRange: 'teen', voiceState: 'tuned' },
+      { id: 'wren-tuned', name: 'Wren', gender: 'female', ageRange: 'teen', voiceState: 'tuned' },
     ];
     const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, baseOptions());
     expect(linked).toBe(1);
@@ -154,7 +154,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
   });
 
   it('returns 0 for a standalone / out-of-library book', async () => {
-    const characters: LinkableCharacter[] = [{ id: 'x', name: 'Sophie' }];
+    const characters: LinkableCharacter[] = [{ id: 'x', name: 'Wren' }];
     const linked = await linkSeriesReuseAtAnalysis(BOOK2, characters, {
       ...baseOptions(),
       resolveAuthorSeries: async () => null,
@@ -255,12 +255,12 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
     // that carries the user's "not the same person" decision, but the fresh
     // row itself has none.
     const fresh: LinkableCharacter[] = [
-      { id: 'sophie-adult', name: 'Sophie', gender: 'female', ageRange: 'adult' },
+      { id: 'wren-adult', name: 'Wren', gender: 'female', ageRange: 'adult' },
     ];
     const priorCast = [
       {
-        id: 'sophie-adult',
-        notLinkedTo: [{ bookId: BOOK1, characterId: 'sophie' }],
+        id: 'wren-adult',
+        notLinkedTo: [{ bookId: BOOK1, characterId: 'wren' }],
       },
     ];
 
@@ -332,22 +332,22 @@ describe('pruneStaleReuseLinks', () => {
   /* The fix: analysis prunes the PRIOR cast before merging it into cast.json.
      Without it, mergeAnalysisResultWithExistingCast re-overlays the stale
      `matchedFrom` (+ its denormalised voice) straight from the prior, undoing
-     the roster-side prune — the real "Tam Hollis (standalone) keeps Neverseen's
-     Tam voice across every re-analysis" bug. */
+     the roster-side prune — the real "Pell Hollis (standalone) keeps Saltgrave's
+     Pell voice across every re-analysis" bug. */
   const staleTamPrior = (): LinkableCharacter[] => [
     {
-      id: 'tam-hollis',
-      name: 'Tam Hollis',
-      voiceId: 'tam',
+      id: 'pell-hollis',
+      name: 'Pell Hollis',
+      voiceId: 'pell',
       voiceState: 'reused',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'qwen-tam' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-pell' } },
       voiceStyle: 'teen male',
-      matchedFrom: { bookId: BONUS, characterId: 'tam', bookTitle: 'Bonus', confidence: 0.48 },
+      matchedFrom: { bookId: BONUS, characterId: 'pell', bookTitle: 'Bonus', confidence: 0.48 },
     },
   ];
   const freshTam = () => [
-    { id: 'tam-hollis', name: 'Tam Hollis', voiceState: 'generated' as const },
+    { id: 'pell-hollis', name: 'Pell Hollis', voiceState: 'generated' as const },
   ];
   type MergeExisting = Parameters<typeof mergeAnalysisResultWithExistingCast>[0];
 
@@ -367,16 +367,16 @@ describe('pruneStaleReuseLinks', () => {
     );
     const t = merged[0] as Record<string, unknown>;
     expect(t.matchedFrom).toBeTruthy();
-    expect((t.overrideTtsVoices as { qwen?: { name?: string } })?.qwen?.name).toBe('qwen-tam');
+    expect((t.overrideTtsVoices as { qwen?: { name?: string } })?.qwen?.name).toBe('qwen-pell');
   });
 
   it('keeps a valid same-series earlier-book link', async () => {
     const chars: LinkableCharacter[] = [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         voiceState: 'reused',
-        matchedFrom: { bookId: KEEPER1, characterId: 'sophie', bookTitle: 'Book One', confidence: 1 },
+        matchedFrom: { bookId: KEEPER1, characterId: 'wren', bookTitle: 'Book One', confidence: 1 },
       },
     ];
     const dropped = await pruneStaleReuseLinks(KEEPER2, chars, opts());
@@ -390,10 +390,10 @@ describe('pruneStaleReuseLinks', () => {
        earlier-only links, so a preserved forward link is stale. */
     const chars: LinkableCharacter[] = [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         voiceState: 'reused',
-        matchedFrom: { bookId: KEEPER2, characterId: 'sophie', bookTitle: 'Book Two', confidence: 1 },
+        matchedFrom: { bookId: KEEPER2, characterId: 'wren', bookTitle: 'Book Two', confidence: 1 },
       },
     ];
     const dropped = await pruneStaleReuseLinks(KEEPER1, chars, opts());

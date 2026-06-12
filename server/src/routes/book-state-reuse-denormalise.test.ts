@@ -72,15 +72,15 @@ beforeAll(async () => {
   targetBookId = makeBookId(AUTHOR, SERIES, TARGET_TITLE);
 
   const booksRoot = join(workspaceRoot, 'books', AUTHOR, SERIES);
-  /* Source book — Sophie carries the designed qwen voice. */
+  /* Source book — Wren carries the designed qwen voice. */
   writeBook(join(booksRoot, SOURCE_TITLE), sourceBookId, SOURCE_TITLE, [
     {
-      id: 'sophie',
-      name: 'Sophie',
+      id: 'wren',
+      name: 'Wren',
       role: 'protagonist',
       color: '#abc',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'voice_sophie_designed' } },
+      overrideTtsVoices: { qwen: { name: 'voice_wren_designed' } },
       voiceStyle: 'a poised, confident teenage girl',
     },
   ]);
@@ -106,15 +106,15 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
       patch: {
         characters: [
           {
-            id: 'sophie',
-            name: 'Sophie',
+            id: 'wren',
+            name: 'Wren',
             role: 'protagonist',
             color: '#def',
-            voiceId: 'sophie',
+            voiceId: 'wren',
             voiceState: 'reused',
             matchedFrom: {
               bookId: sourceBookId,
-              characterId: 'sophie',
+              characterId: 'wren',
               bookTitle: SOURCE_TITLE,
               confidence: 0.92,
             },
@@ -131,14 +131,14 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
     const onDisk = JSON.parse(
       readFileSync(join(targetBookDir, '.audiobook', 'cast.json'), 'utf8'),
     );
-    const sophie = onDisk.characters.find((c: { id: string }) => c.id === 'sophie');
-    expect(sophie.ttsEngine).toBe('qwen');
-    expect(sophie.overrideTtsVoices.qwen.name).toBe('voice_sophie_designed');
+    const wren = onDisk.characters.find((c: { id: string }) => c.id === 'wren');
+    expect(wren.ttsEngine).toBe('qwen');
+    expect(wren.overrideTtsVoices.qwen.name).toBe('voice_wren_designed');
     /* The persona is denormalised the same way (srv-18). */
-    expect(sophie.voiceStyle).toBe('a poised, confident teenage girl');
+    expect(wren.voiceStyle).toBe('a poised, confident teenage girl');
     /* Identity fields survive the pass untouched. */
-    expect(sophie.voiceState).toBe('reused');
-    expect(sophie.matchedFrom.bookId).toBe(sourceBookId);
+    expect(wren.voiceState).toBe('reused');
+    expect(wren.matchedFrom.bookId).toBe(sourceBookId);
   });
 
   it('leaves a character that already owns a qwen voice untouched', async () => {
@@ -147,17 +147,17 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
       patch: {
         characters: [
           {
-            id: 'sophie',
-            name: 'Sophie',
+            id: 'wren',
+            name: 'Wren',
             role: 'protagonist',
             color: '#def',
-            voiceId: 'sophie',
+            voiceId: 'wren',
             voiceState: 'reused',
             ttsEngine: 'qwen',
             overrideTtsVoices: { qwen: { name: 'own_explicit_voice' } },
             matchedFrom: {
               bookId: sourceBookId,
-              characterId: 'sophie',
+              characterId: 'wren',
               bookTitle: SOURCE_TITLE,
               confidence: 0.92,
             },
@@ -174,8 +174,8 @@ describe('book-state PUT cast — reused-voice denormalisation (srv-14)', () => 
     const onDisk = JSON.parse(
       readFileSync(join(targetBookDir, '.audiobook', 'cast.json'), 'utf8'),
     );
-    const sophie = onDisk.characters.find((c: { id: string }) => c.id === 'sophie');
-    expect(sophie.overrideTtsVoices.qwen.name).toBe('own_explicit_voice');
+    const wren = onDisk.characters.find((c: { id: string }) => c.id === 'wren');
+    expect(wren.overrideTtsVoices.qwen.name).toBe('own_explicit_voice');
   });
 
   it('passes through a non-reused character (no matchedFrom) unchanged', async () => {

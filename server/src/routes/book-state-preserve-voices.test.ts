@@ -1,5 +1,5 @@
 /* Durable guard regression — PUT /:bookId/state slice=cast must never strip a
-   designed Qwen voice off a GENERATED character (the 2026-06-05 Stellarlune
+   designed Qwen voice off a GENERATED character (the 2026-06-05 The Drowning Bell
    incident).
 
    A generated character stores its bespoke voice in `overrideTtsVoices.qwen`
@@ -69,17 +69,17 @@ beforeAll(async () => {
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
 
-  /* Maruca — a GENERATED character (no voiceId): her designed voice lives
+  /* Berrin — a GENERATED character (no voiceId): her designed voice lives
      only in overrideTtsVoices.qwen. */
   writeBook(bookDir, bookId, [
     {
-      id: 'maruca',
-      name: 'Maruca',
+      id: 'berrin',
+      name: 'Berrin',
       role: 'minor',
       color: '#abc',
       voiceState: 'generated',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'qwen-maruca' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-berrin' } },
       voiceStyle: 'a wry, steady woman',
     },
   ]);
@@ -97,11 +97,11 @@ afterAll(() => {
 describe('book-state PUT cast — designed-voice preservation (durable strip guard)', () => {
   it('preserves a generated character\'s designed voice when the UI sends a voiceless cast', async () => {
     /* The strip payload: the cast-confirm flow re-derived the roster and lost
-       Maruca's voice fields entirely. */
+       Berrin's voice fields entirely. */
     const incoming = {
       slice: 'cast',
       patch: {
-        characters: [{ id: 'maruca', name: 'Maruca', role: 'minor', color: '#abc', voiceState: 'generated' }],
+        characters: [{ id: 'berrin', name: 'Berrin', role: 'minor', color: '#abc', voiceState: 'generated' }],
       },
     };
     const res = await request(app)
@@ -110,10 +110,10 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       .send(incoming);
     expect(res.status).toBe(204);
 
-    const maruca = onDiskCast().characters.find((c) => c.id === 'maruca')!;
-    expect(maruca.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-maruca' } });
-    expect(maruca.ttsEngine).toBe('qwen');
-    expect(maruca.voiceStyle).toBe('a wry, steady woman');
+    const berrin = onDiskCast().characters.find((c) => c.id === 'berrin')!;
+    expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin' } });
+    expect(berrin.ttsEngine).toBe('qwen');
+    expect(berrin.voiceStyle).toBe('a wry, steady woman');
   });
 
   it('lets a deliberate re-design overwrite the on-disk voice (incoming wins)', async () => {
@@ -122,13 +122,13 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       patch: {
         characters: [
           {
-            id: 'maruca',
-            name: 'Maruca',
+            id: 'berrin',
+            name: 'Berrin',
             role: 'minor',
             color: '#abc',
             voiceState: 'generated',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-maruca-v2' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-berrin-v2' } },
           },
         ],
       },
@@ -139,7 +139,7 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       .send(incoming);
     expect(res.status).toBe(204);
 
-    const maruca = onDiskCast().characters.find((c) => c.id === 'maruca')!;
-    expect(maruca.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-maruca-v2' } });
+    const berrin = onDiskCast().characters.find((c) => c.id === 'berrin')!;
+    expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin-v2' } });
   });
 });

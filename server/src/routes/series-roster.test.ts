@@ -1,6 +1,6 @@
 /* Integration tests for the series-roster route.
 
-   Seeds a tempdir workspace with three KOTLC books (two confirmed, one
+   Seeds a tempdir workspace with three the Hollow Tide books (two confirmed, one
    not), one standalone, and one book in a different series, then asserts
    the GET endpoint returns only the in-series confirmed cast for a given
    bookId. Mirrors the series-cast-scan.test.ts fixture shape so the
@@ -14,7 +14,7 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 
 const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
+const SERIES = 'The Hollow Tide';
 
 let workspaceRoot: string;
 let app: Express;
@@ -76,25 +76,25 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-series-roster-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  keeperBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Keeper of the Lost Cities', {
+  keeperBookId = seed(workspaceRoot, AUTHOR, SERIES, 'The Hollow Tide', {
     confirmed: true,
     characters: [
       { id: 'narrator', name: 'Narrator' },
       {
-        id: 'sophie',
-        name: 'Sophie',
-        voiceId: 'v_sophie',
-        aliases: ['Sophie Foster'],
+        id: 'wren',
+        name: 'Wren',
+        voiceId: 'v_wren',
+        aliases: ['Wren Sparrow'],
         gender: 'female',
         ageRange: 'teen',
       },
-      { id: 'dex', name: 'Dex', voiceId: 'v_dex', gender: 'male', ageRange: 'teen' },
+      { id: 'hart', name: 'Hart', voiceId: 'v_hart', gender: 'male', ageRange: 'teen' },
     ],
   });
-  bonusBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Bonus Keefe Story', {
+  bonusBookId = seed(workspaceRoot, AUTHOR, SERIES, 'the Coalfall Commission', {
     confirmed: true,
     characters: [
-      { id: 'keefe', name: 'Keefe', voiceId: 'v_keefe' },
+      { id: 'marlow', name: 'Marlow', voiceId: 'v_marlow' },
       { id: 'ro', name: 'Ro', voiceId: 'v_ro' },
     ],
   });
@@ -126,17 +126,17 @@ describe('GET /api/books/:bookId/series-roster', () => {
   it('returns confirmed series-mates for an in-series book, excluding itself', async () => {
     const res = await request(app).get(`/api/books/${keeperBookId}/series-roster`);
     expect(res.status).toBe(200);
-    /* Keeper itself excluded → Bonus Keefe's 2 characters remain. */
+    /* Keeper itself excluded → Bonus Marlow's 2 characters remain. */
     expect(res.body.characters).toHaveLength(2);
     const names = (res.body.characters as Array<{ name: string }>).map((c) => c.name).sort();
-    expect(names).toEqual(['Keefe', 'Ro']);
+    expect(names).toEqual(['Marlow', 'Ro']);
   });
 
   it('preserves voiceId, aliases, gender, ageRange on each entry', async () => {
     /* Query from Unlocked's vantage so Keeper #1's full cast surfaces. */
     const res = await request(app).get(`/api/books/${unlockedBookId}/series-roster`);
     expect(res.status).toBe(200);
-    const sophie = (
+    const wren = (
       res.body.characters as Array<{
         name: string;
         voiceId?: string;
@@ -146,14 +146,14 @@ describe('GET /api/books/:bookId/series-roster', () => {
         bookId: string;
         bookTitle: string;
       }>
-    ).find((c) => c.name === 'Sophie');
-    expect(sophie).toBeDefined();
-    expect(sophie?.voiceId).toBe('v_sophie');
-    expect(sophie?.aliases).toEqual(['Sophie Foster']);
-    expect(sophie?.gender).toBe('female');
-    expect(sophie?.ageRange).toBe('teen');
-    expect(sophie?.bookId).toBe(keeperBookId);
-    expect(sophie?.bookTitle).toBe('Keeper of the Lost Cities');
+    ).find((c) => c.name === 'Wren');
+    expect(wren).toBeDefined();
+    expect(wren?.voiceId).toBe('v_wren');
+    expect(wren?.aliases).toEqual(['Wren Sparrow']);
+    expect(wren?.gender).toBe('female');
+    expect(wren?.ageRange).toBe('teen');
+    expect(wren?.bookId).toBe(keeperBookId);
+    expect(wren?.bookTitle).toBe('The Hollow Tide');
   });
 
   it('excludes unconfirmed casts and standalones', async () => {
@@ -163,7 +163,7 @@ describe('GET /api/books/:bookId/series-roster', () => {
     /* Bonus excluded itself. Keeper #1 surfaces 3. Unlocked is unconfirmed
        (excluded). Standalone excluded by isStandalone gate. Sibling Book
        is in a different series (excluded). */
-    expect(ids.sort()).toEqual(['dex', 'narrator', 'sophie']);
+    expect(ids.sort()).toEqual(['hart', 'narrator', 'wren']);
   });
 
   it('excludes books in a different series even when the author matches', async () => {
@@ -177,8 +177,8 @@ describe('GET /api/books/:bookId/series-roster', () => {
     /* A standalone book asking "who else is in my series" can still see
        the series regulars (see series-cast-scan.test.ts §"returns [] for
        a standalone book" — the standalone's own cast is the thing that
-       doesn't flow back). For Some Standalone, sitting under the KOTLC
-       folder, that means it sees KOTLC #1 + Bonus Keefe = 5 characters. */
+       doesn't flow back). For Some Standalone, sitting under the the Hollow Tide
+       folder, that means it sees the Hollow Tide #1 + Bonus Marlow = 5 characters. */
     const res = await request(app).get(`/api/books/${standaloneBookId}/series-roster`);
     expect(res.status).toBe(200);
     expect(res.body.characters).toHaveLength(5);

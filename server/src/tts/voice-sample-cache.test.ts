@@ -45,10 +45,10 @@ describe('buildSampleText', () => {
 
 describe('voiceSampleFileName', () => {
   const base = {
-    cacheScope: 'char-keefe',
+    cacheScope: 'char-marlow',
     modelKey: 'qwen3-tts-0.6b' as const,
     text: 'Hard to starboard.',
-    voiceName: 'qwen-v_keefe',
+    voiceName: 'qwen-v_marlow',
   };
 
   it('is deterministic for identical inputs', () => {
@@ -56,7 +56,7 @@ describe('voiceSampleFileName', () => {
   });
 
   it('matches the documented <scope>-<modelKey>-<hash>.mp3 shape', () => {
-    expect(voiceSampleFileName(base)).toMatch(/^char-keefe-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+    expect(voiceSampleFileName(base)).toMatch(/^char-marlow-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
   });
 
   it('changes when any of scope / modelKey / text / voiceName change', () => {
@@ -64,7 +64,7 @@ describe('voiceSampleFileName', () => {
     expect(voiceSampleFileName({ ...base, cacheScope: 'char-other' })).not.toBe(f0);
     expect(voiceSampleFileName({ ...base, modelKey: 'kokoro-v1' })).not.toBe(f0);
     expect(voiceSampleFileName({ ...base, text: 'A different line.' })).not.toBe(f0);
-    expect(voiceSampleFileName({ ...base, voiceName: 'qwen-v_elwin' })).not.toBe(f0);
+    expect(voiceSampleFileName({ ...base, voiceName: 'qwen-v_oduvan' })).not.toBe(f0);
   });
 
   it('the design route and the player land on the SAME filename for the same inputs', () => {

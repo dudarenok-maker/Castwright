@@ -41,7 +41,7 @@ export const characterSchema = z
      the same person across books in a series. */
     aliases: z.array(z.string()).optional(),
     /* Cross-book pairs this character has been explicitly marked as NOT
-     the same person — e.g. teenage Sophie vs adult Sophie. Written
+     the same person — e.g. teenage Wren vs adult Wren. Written
      symmetrically by POST /:bookId/cast/:characterId/not-linked-to.
      Optional + additive so older cast.json files keep validating. Plan 101. */
     notLinkedTo: z
@@ -79,7 +79,7 @@ export const characterSchema = z
     /* How Phase 0a found this character. `'dialogue'` (default): the analyzer
        observed a verbatim utterance attributed to them. `'narrator-mention'`:
        the analyzer saw them named by narration with a role/relationship
-       marker ("his bodyguard, Grizel"; "Sandor, Sophie's goblin bodyguard")
+       marker ("his bodyguard, Sela"; "Garrow, Wren's goblin bodyguard")
        but no quoted dialogue. The minor-cast fold treats these differently
        — narrator-mention entries with a protected role survive the
        <3-lines threshold so canonical-but-rarely-quoted characters

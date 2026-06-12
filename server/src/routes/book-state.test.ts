@@ -207,14 +207,14 @@ describe('book-state router — renderedFallbackByCharacter (fe-16)', () => {
       JSON.stringify({
         chapterId: 1,
         characterSnapshots: {
-          sophie: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
-          keefe: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-keefe' },
+          wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
+          marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-marlow' },
         },
       }),
     );
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
-    expect(res.body.renderedFallbackByCharacter).toEqual({ sophie: 'kokoro' });
+    expect(res.body.renderedFallbackByCharacter).toEqual({ wren: 'kokoro' });
     rmSync(join(audioRoot, 'chapter-one.segments.json'), { force: true });
   });
 });
@@ -241,15 +241,15 @@ describe('book-state router — dropped-quotes endpoint', () => {
           affectedCharacters: 1,
           entries: [
             {
-              characterId: 'sophie',
-              characterName: 'Sophie',
+              characterId: 'wren',
+              characterName: 'Wren',
               quote: 'fabricated dialogue',
               truncated: false,
               reason: 'not_in_source',
             },
             {
-              characterId: 'sophie',
-              characterName: 'Sophie',
+              characterId: 'wren',
+              characterName: 'Wren',
               quote: '   ',
               truncated: false,
               reason: 'empty_after_normalisation',
@@ -658,7 +658,7 @@ describe('book-state router — rehydrate on GET populates real chapter bodies',
       'Chapter 2',
       '',
       'The next morning she discovered the lamp had failed.',
-      'Sophie ran down the cliff path to find help.',
+      'Wren ran down the cliff path to find help.',
     ].join('\n');
     writeFileSync(join(rehydrateBookDir, 'manuscript.txt'), manuscriptText);
 
@@ -703,7 +703,7 @@ describe('book-state router — rehydrate on GET populates real chapter bodies',
       expect(ch.body.length).toBeGreaterThan(0);
     }
     expect(rec!.chapterHints[0].body).toMatch(/keeper climbed/);
-    expect(rec!.chapterHints[1].body).toMatch(/Sophie ran/);
+    expect(rec!.chapterHints[1].body).toMatch(/Wren ran/);
   });
 
   it('reports a wordCount matching the parsed source (not the raw file byte count)', async () => {
@@ -841,7 +841,7 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
           { id: 1, chapterId: 8, characterId: 'the-jogger', text: 'Watch out!' },
           { id: 2, chapterId: 8, characterId: 'the-jogger', text: 'Coming through!' },
           { id: 3, chapterId: 8, characterId: 'the-jogger', text: 'Move!' },
-          { id: 4, chapterId: 8, characterId: 'sophie', text: 'Sorry!' },
+          { id: 4, chapterId: 8, characterId: 'wren', text: 'Sorry!' },
         ],
       },
     });
@@ -857,7 +857,7 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
           { id: 1, chapterId: 8, characterId: 'unknown-male', text: 'Watch out!' },
           { id: 2, chapterId: 8, characterId: 'unknown-male', text: 'Coming through!' },
           { id: 3, chapterId: 8, characterId: 'unknown-male', text: 'Move!' },
-          { id: 4, chapterId: 8, characterId: 'sophie', text: 'Sorry!' },
+          { id: 4, chapterId: 8, characterId: 'wren', text: 'Sorry!' },
         ],
       }),
     );
@@ -866,7 +866,7 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
     expect(res.status).toBe(200);
     const speakers = (res.body.chapterCharacters?.[8] ?? []) as string[];
     expect(speakers).toContain('unknown-male');
-    expect(speakers).toContain('sophie');
+    expect(speakers).toContain('wren');
     /* The pre-fold descriptor id must NOT leak through to the
        Generate view — that's the phantom-Queued-row bug. */
     expect(speakers).not.toContain('the-jogger');
@@ -885,7 +885,7 @@ describe('book-state router — chapterCharacters reflects the post-fold roster'
        to synthesise from), so showing the pre-fold roster on the
        analysing view is the existing intended behaviour — pin it. */
     expect(speakers).toContain('the-jogger');
-    expect(speakers).toContain('sophie');
+    expect(speakers).toContain('wren');
   });
 });
 
@@ -894,7 +894,7 @@ describe('book-state router — backfills missing cast.lines from attribution', 
      roster.ts mints `<id>_from_<book>` without a `lines` field, and nothing
      rewrites it after analysis attributes sentences to it) rendered a blank
      line count in the cast view even though the manuscript attributes lines to
-     it (the Unlocked "Councilor Alina" case). The GET handler now derives the
+     it (the Unlocked "Councilor Linnet" case). The GET handler now derives the
      count from manuscript-edits.json and fills it in when the row lacks one,
      without clobbering counts the analyzer already stamped. */
   const LINES_TITLE = 'Lines Backfill Test';
@@ -936,8 +936,8 @@ describe('book-state router — backfills missing cast.lines from attribution', 
       JSON.stringify({
         characters: [
           { id: 'narrator', name: 'Narrator' },
-          { id: 'sophie', name: 'Sophie', lines: 99 },
-          { id: 'alina_from_shannon-', name: 'Councilor Alina' },
+          { id: 'wren', name: 'Wren', lines: 99 },
+          { id: 'linnet_from_shannon-', name: 'Councilor Linnet' },
           { id: 'ghost_from_shannon-', name: 'Ghost Link' },
         ],
       }),
@@ -948,10 +948,10 @@ describe('book-state router — backfills missing cast.lines from attribution', 
       JSON.stringify({
         sentences: [
           { id: 1, chapterId: 63, characterId: 'narrator', text: 'She spun toward the sound.' },
-          { id: 2, chapterId: 63, characterId: 'alina_from_shannon-', text: 'Of course she told us.' },
-          { id: 3, chapterId: 63, characterId: 'alina_from_shannon-', text: 'Oh, really?' },
-          { id: 4, chapterId: 63, characterId: 'alina_from_shannon-', text: 'Then why?' },
-          { id: 5, chapterId: 63, characterId: 'sophie', text: 'I never said that.' },
+          { id: 2, chapterId: 63, characterId: 'linnet_from_shannon-', text: 'Of course she told us.' },
+          { id: 3, chapterId: 63, characterId: 'linnet_from_shannon-', text: 'Oh, really?' },
+          { id: 4, chapterId: 63, characterId: 'linnet_from_shannon-', text: 'Then why?' },
+          { id: 5, chapterId: 63, characterId: 'wren', text: 'I never said that.' },
         ],
       }),
     );
@@ -969,7 +969,7 @@ describe('book-state router — backfills missing cast.lines from attribution', 
     const byId = Object.fromEntries(chars.map((c) => [c.id, c.lines]));
     /* The linked row had 3 sentences attributed in chapter 63 → count is
        now surfaced instead of blank. */
-    expect(byId['alina_from_shannon-']).toBe(3);
+    expect(byId['linnet_from_shannon-']).toBe(3);
     /* A linked row with zero attributed lines becomes a truthful 0, not
        undefined/blank. */
     expect(byId['ghost_from_shannon-']).toBe(0);
@@ -979,11 +979,11 @@ describe('book-state router — backfills missing cast.lines from attribution', 
     const res = await request(app).get(`/api/books/${linesBookId}/state`);
     expect(res.status).toBe(200);
     const chars = res.body.cast.characters as Array<{ id: string; lines?: number }>;
-    const sophie = chars.find((c) => c.id === 'sophie');
-    /* Sophie's stored count (99) is replaced by her CURRENT attribution count
+    const wren = chars.find((c) => c.id === 'wren');
+    /* Wren's stored count (99) is replaced by her CURRENT attribution count
        (1 sentence in manuscript-edits) — the cast view always reflects the
        live attribution, not a value that may have drifted since analysis. */
-    expect(sophie?.lines).toBe(1);
+    expect(wren?.lines).toBe(1);
   });
 
   it('preserves stored counts when no attribution source is loaded (analysis in flight)', async () => {
@@ -997,12 +997,12 @@ describe('book-state router — backfills missing cast.lines from attribution', 
     const res = await request(app).get(`/api/books/${linesBookId}/state`);
     expect(res.status).toBe(200);
     const chars = res.body.cast.characters as Array<{ id: string; lines?: number }>;
-    const sophie = chars.find((c) => c.id === 'sophie');
+    const wren = chars.find((c) => c.id === 'wren');
     /* Stored count survives; the linked row that never had one stays
        absent rather than being forced to a misleading 0. */
-    expect(sophie?.lines).toBe(99);
-    const alina = chars.find((c) => c.id === 'alina_from_shannon-');
-    expect(alina?.lines).toBeUndefined();
+    expect(wren?.lines).toBe(99);
+    const linnet = chars.find((c) => c.id === 'linnet_from_shannon-');
+    expect(linnet?.lines).toBeUndefined();
   });
 });
 

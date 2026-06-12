@@ -12,7 +12,7 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 
 const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
+const SERIES = 'The Hollow Tide';
 
 let workspaceRoot: string;
 let app: Express;
@@ -73,25 +73,25 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-series-cast-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  keeperBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Keeper of the Lost Cities', {
+  keeperBookId = seed(workspaceRoot, AUTHOR, SERIES, 'The Hollow Tide', {
     confirmed: true,
     characters: [
       { id: 'narrator', name: 'Narrator', lines: 400 },
-      { id: 'sophie', name: 'Sophie', voiceId: 'v_sophie', lines: 120, voiceStyle: 'bright teen' },
-      { id: 'dex', name: 'Dex', voiceId: 'v_dex', lines: 40 },
+      { id: 'wren', name: 'Wren', voiceId: 'v_wren', lines: 120, voiceStyle: 'bright teen' },
+      { id: 'hart', name: 'Hart', voiceId: 'v_hart', lines: 40 },
     ],
   });
-  bonusBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Bonus Keefe Story', {
+  bonusBookId = seed(workspaceRoot, AUTHOR, SERIES, 'the Coalfall Commission', {
     confirmed: true,
     characters: [
       {
-        id: 'keefe',
-        name: 'Keefe',
-        voiceId: 'v_keefe',
+        id: 'marlow',
+        name: 'Marlow',
+        voiceId: 'v_marlow',
         lines: 90,
         voiceStyle: 'sardonic charmer',
         ttsEngine: 'qwen',
-        overrideTtsVoices: { qwen: { name: 'keefe-designed' } },
+        overrideTtsVoices: { qwen: { name: 'marlow-designed' } },
       },
       { id: 'ro', name: 'Ro', voiceId: 'v_ro', lines: 15 },
     ],
@@ -124,28 +124,28 @@ describe('GET /api/books/:bookId/series-cast', () => {
   it('returns the full cast of every OTHER confirmed series book, excluding itself', async () => {
     const res = await request(app).get(`/api/books/${keeperBookId}/series-cast`);
     expect(res.status).toBe(200);
-    /* Keeper itself excluded → Bonus Keefe's 2 characters remain. */
+    /* Keeper itself excluded → Bonus Marlow's 2 characters remain. */
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();
-    expect(ids).toEqual(['keefe', 'ro']);
+    expect(ids).toEqual(['marlow', 'ro']);
   });
 
   it('passes through full cast.json fidelity (lines / voiceStyle / overrideTtsVoices / ttsEngine)', async () => {
     /* Query from Unlocked's vantage so Keeper #1 + Bonus surface. */
     const res = await request(app).get(`/api/books/${unlockedBookId}/series-cast`);
     expect(res.status).toBe(200);
-    const keefe = (res.body.characters as Array<Record<string, unknown>>).find(
-      (c) => c.id === 'keefe',
+    const marlow = (res.body.characters as Array<Record<string, unknown>>).find(
+      (c) => c.id === 'marlow',
     );
-    expect(keefe).toMatchObject({
+    expect(marlow).toMatchObject({
       lines: 90,
       voiceStyle: 'sardonic charmer',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'keefe-designed' } },
-      voiceId: 'v_keefe',
+      overrideTtsVoices: { qwen: { name: 'marlow-designed' } },
+      voiceId: 'v_marlow',
     });
     /* Provenance tags for a future consumer. */
-    expect(keefe?.sourceBookId).toBe(bonusBookId);
-    expect(keefe?.sourceBookTitle).toBe('Bonus Keefe Story');
+    expect(marlow?.sourceBookId).toBe(bonusBookId);
+    expect(marlow?.sourceBookTitle).toBe('the Coalfall Commission');
   });
 
   it('excludes unconfirmed casts and standalones', async () => {
@@ -154,7 +154,7 @@ describe('GET /api/books/:bookId/series-cast', () => {
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();
     /* Bonus excluded itself. Keeper #1 surfaces 3. Unlocked unconfirmed,
        Standalone isStandalone, Sibling different-series — all excluded. */
-    expect(ids).toEqual(['dex', 'narrator', 'sophie']);
+    expect(ids).toEqual(['hart', 'narrator', 'wren']);
   });
 
   it('excludes books in a different series even when the author matches', async () => {
@@ -172,7 +172,7 @@ describe('GET /api/books/:bookId/series-cast', () => {
     const res = await request(app).get(`/api/books/${standaloneBookId}/series-cast`);
     expect(res.status).toBe(200);
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();
-    expect(ids).toEqual(['dex', 'keefe', 'narrator', 'ro', 'sophie']);
+    expect(ids).toEqual(['hart', 'marlow', 'narrator', 'ro', 'wren']);
   });
 
   it('returns 200 with empty characters for an unknown bookId', async () => {

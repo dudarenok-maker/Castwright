@@ -43,7 +43,7 @@ describe('describeSynthesisError', () => {
   });
 
   it('does NOT classify a local synth timeout as a Gemini rate-limit (the "degenerate" substring bug)', () => {
-    /* 2026-05-31 KOTLC Stellarlune CH24: a local Qwen batch blew the 600s
+    /* 2026-05-31 the Hollow Tide The Drowning Bell CH24: a local Qwen batch blew the 600s
        per-call ceiling and threw ChapterSynthTimeoutError. Its message contains
        "runaway/degenerate input" — and the OLD /rate/i quota regex matched the
        "rate" inside "dege·nerate", so the local timeout was reported as

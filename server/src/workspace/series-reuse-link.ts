@@ -273,7 +273,7 @@ export async function linkSeriesReuseAtAnalysis(
 
     const notLinkedToPrior = (v: LibraryVoice): boolean =>
       /* notLinkedTo guard — the user explicitly declared this pair is NOT the
-         same person (e.g. teenage vs adult Sophie); never auto-link it. */
+         same person (e.g. teenage vs adult Wren); never auto-link it. */
       (c.notLinkedTo ?? []).some(
         (p) => p.bookId === v.bookId && p.characterId === v.characterId,
       );

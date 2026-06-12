@@ -55,8 +55,8 @@ describe('denormaliseAllCaps', () => {
 
 describe('softenDashes', () => {
   it('replaces a flanked em-dash (the `right—missing` pattern) with a comma', () => {
-    expect(softenDashes('right—missing Sophie by inches—then jumped the curb')).toBe(
-      'right, missing Sophie by inches, then jumped the curb',
+    expect(softenDashes('right—missing Wren by inches—then jumped the curb')).toBe(
+      'right, missing Wren by inches, then jumped the curb',
     );
   });
 
@@ -138,16 +138,16 @@ describe('normaliseForTts (composed)', () => {
        must leave it with no all-caps run AND no em-dashes. */
     const input =
       'THE NEXT SECOND WAS A BLUR. ' +
-      'The car swerved right—missing Sophie by inches—then jumped the curb and sideswiped a streetlight. ' +
-      'The heavy steel lantern cracked from its base and plummeted toward Sophie.';
+      'The car swerved right—missing Wren by inches—then jumped the curb and sideswiped a streetlight. ' +
+      'The heavy steel lantern cracked from its base and plummeted toward Wren.';
     const output = normaliseForTts(input);
 
     expect(output).not.toMatch(/[A-Z]{3,}/);
     expect(output).not.toMatch(/[—–]/);
     expect(output).toBe(
       'The Next Second Was A Blur. ' +
-        'The car swerved right, missing Sophie by inches, then jumped the curb and sideswiped a streetlight. ' +
-        'The heavy steel lantern cracked from its base and plummeted toward Sophie.',
+        'The car swerved right, missing Wren by inches, then jumped the curb and sideswiped a streetlight. ' +
+        'The heavy steel lantern cracked from its base and plummeted toward Wren.',
     );
   });
 

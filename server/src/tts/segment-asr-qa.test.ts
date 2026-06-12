@@ -89,13 +89,13 @@ describe('classifyTranscript', () => {
   });
 
   it('proper-noun substitution is tolerated via the allowlist', () => {
-    // Whisper hears "Sophie Foster" as "Sophie Faster" — without the allowlist
+    // Whisper hears "Wren Sparrow" as "Wren Faster" — without the allowlist
     // that's a substitution; with it, the line is clean.
-    const expected = 'Sophie Foster ran toward the gates of Eternalia at dawn.';
-    const heard = 'Sophie Faster ran toward the gates of Eternalia at dawn.';
+    const expected = 'Wren Sparrow ran toward the gates of Eternalia at dawn.';
+    const heard = 'Wren Faster ran toward the gates of Eternalia at dawn.';
     const without = classifyTranscript(expected, heard, CLEAN);
     const withList = classifyTranscript(expected, heard, CLEAN, {
-      nameAllowlist: ['Sophie Foster', 'Eternalia'],
+      nameAllowlist: ['Wren Sparrow', 'Eternalia'],
     });
     expect(without.sub).toBe(1);
     expect(withList.sub).toBe(0);

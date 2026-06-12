@@ -11,7 +11,7 @@
      audio in front of the real narration.
    - Em-dashes (U+2014) and en-dashes (U+2013) sometimes send the autoregressive
      decoder into a loop, especially when wedged between lowercase words
-     (e.g. `right—missing Sophie by inches—then`).
+     (e.g. `right—missing Wren by inches—then`).
    - Zero-width / format characters (U+200B–U+200F, U+202A–U+202E, U+2060,
      U+FEFF) survive copy-paste from PDFs and HTML scrapers. XTTS's tokenizer
      can produce out-of-vocab embedding indices on these, which surfaces as a

@@ -62,17 +62,17 @@ function readCast(bookDir: string): { characters: Array<Record<string, any>> } {
   return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
 }
 function keefeOf(bookDir: string) {
-  return readCast(bookDir).characters.find((c) => c.id === 'keefe');
+  return readCast(bookDir).characters.find((c) => c.id === 'marlow');
 }
 
-/** Keefe with a designed qwen base — the linked identity is `voiceId: v_keefe`. */
+/** Marlow with a designed qwen base — the linked identity is `voiceId: v_marlow`. */
 function keefeWithBase() {
   return {
-    id: 'keefe',
-    name: 'Keefe',
-    voiceId: 'v_keefe',
+    id: 'marlow',
+    name: 'Marlow',
+    voiceId: 'v_marlow',
     voiceStyle: 'a sardonic, charming teenage boy',
-    overrideTtsVoices: { qwen: { name: 'qwen-v_keefe' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } },
   };
 }
 
@@ -97,17 +97,17 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
     const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [keefeWithBase()]);
     const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [keefeWithBase()]);
 
-    await persistEmotionVariant(bookOne, 'keefe', 'angry', 'qwen-v_keefe__angry', {
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry', {
       author: AUTHOR,
       series: SERIES,
     });
 
     /* Both linked books carry the variant — the originating book AND its sibling. */
     expect(keefeOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_keefe__angry',
+      name: 'qwen-v_marlow__angry',
     });
     expect(keefeOf(bookTwo)?.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_keefe__angry',
+      name: 'qwen-v_marlow__angry',
     });
   });
 
@@ -118,7 +118,7 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
       isStandalone: true,
     });
 
-    await persistEmotionVariant(bookOne, 'keefe', 'angry', 'qwen-v_keefe__angry', {
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry', {
       author: AUTHOR,
       series: SERIES,
     });
@@ -132,17 +132,17 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
     const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [keefeWithBase()]);
     /* Sibling has the linked identity but no qwen override yet. */
     const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [
-      { id: 'keefe', name: 'Keefe', voiceId: 'v_keefe' },
+      { id: 'marlow', name: 'Marlow', voiceId: 'v_marlow' },
     ]);
 
-    await persistEmotionVariant(bookOne, 'keefe', 'sad', 'qwen-v_keefe__sad', {
+    await persistEmotionVariant(bookOne, 'marlow', 'sad', 'qwen-v_marlow__sad', {
       author: AUTHOR,
       series: SERIES,
     });
 
     const sibling = keefeOf(bookTwo)?.overrideTtsVoices?.qwen;
-    expect(sibling?.name).toBe('qwen-v_keefe');
-    expect(sibling?.variants?.sad).toEqual({ name: 'qwen-v_keefe__sad' });
+    expect(sibling?.name).toBe('qwen-v_marlow');
+    expect(sibling?.variants?.sad).toEqual({ name: 'qwen-v_marlow__sad' });
   });
 
   it('preserves sibling variants when adding another emotion across the series', async () => {
@@ -150,8 +150,8 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
     const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [keefeWithBase()]);
     const filter = { author: AUTHOR, series: SERIES };
 
-    await persistEmotionVariant(bookOne, 'keefe', 'angry', 'qwen-v_keefe__angry', filter);
-    await persistEmotionVariant(bookOne, 'keefe', 'sad', 'qwen-v_keefe__sad', filter);
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry', filter);
+    await persistEmotionVariant(bookOne, 'marlow', 'sad', 'qwen-v_marlow__sad', filter);
 
     for (const dir of [bookOne, bookTwo]) {
       expect(Object.keys(keefeOf(dir)?.overrideTtsVoices?.qwen?.variants ?? {}).sort()).toEqual([
@@ -165,7 +165,7 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
     const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [keefeWithBase()]);
     const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [keefeWithBase()]);
 
-    await persistEmotionVariant(bookOne, 'keefe', 'angry', 'qwen-v_keefe__angry');
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry');
 
     expect(keefeOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
     expect(keefeOf(bookTwo)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
@@ -175,26 +175,26 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
 describe('applyOverrideToCastFiles — preserves designed variants', () => {
   it('keeps variants when (re)assigning the base name across the series', async () => {
     const withVariant = () => ({
-      id: 'keefe',
-      name: 'Keefe',
-      voiceId: 'v_keefe',
+      id: 'marlow',
+      name: 'Marlow',
+      voiceId: 'v_marlow',
       overrideTtsVoices: {
-        qwen: { name: 'qwen-v_keefe', variants: { angry: { name: 'qwen-v_keefe__angry' } } },
+        qwen: { name: 'qwen-v_marlow', variants: { angry: { name: 'qwen-v_marlow__angry' } } },
       },
     });
     const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [withVariant()]);
     const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [withVariant()]);
 
     await applyOverrideToCastFiles(
-      'v_keefe',
-      { engine: 'qwen', name: 'qwen-v_keefe' },
+      'v_marlow',
+      { engine: 'qwen', name: 'qwen-v_marlow' },
       { author: AUTHOR, series: SERIES },
     );
 
     for (const dir of [bookOne, bookTwo]) {
       const qwen = keefeOf(dir)?.overrideTtsVoices?.qwen;
-      expect(qwen?.name).toBe('qwen-v_keefe');
-      expect(qwen?.variants?.angry).toEqual({ name: 'qwen-v_keefe__angry' });
+      expect(qwen?.name).toBe('qwen-v_marlow');
+      expect(qwen?.variants?.angry).toEqual({ name: 'qwen-v_marlow__angry' });
     }
   });
 });

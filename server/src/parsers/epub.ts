@@ -279,7 +279,7 @@ function assembleManuscript(
   let { title, series, seriesPosition } = meta;
   /* Bug B: when Calibre metadata is absent (common in non-Calibre-produced
      EPUBs) but the dc:title carries the series info in a parenthetical like
-     "Everblaze (Keeper of the Lost Cities Book 3)", split it off so the saved
+     "The Tidewatcher’s Oath (The Hollow Tide Book 3)", split it off so the saved
      book has clean title + populated series fields. The frontend surfaces an
      "auto-extracted from title — verify" chip when this fires. */
   let seriesFromTitle = false;

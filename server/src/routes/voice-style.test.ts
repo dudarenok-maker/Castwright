@@ -28,8 +28,8 @@ vi.mock('../analyzer/voice-style.js', () => ({
 }));
 
 const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
-const BOOK = 'Keeper of the Lost Cities';
+const SERIES = 'The Hollow Tide';
+const BOOK = 'The Hollow Tide';
 
 let workspaceRoot: string;
 let app: Express;
@@ -38,8 +38,8 @@ let bookId: string;
 const characters = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
   {
-    id: 'sophie',
-    name: 'Sophie',
+    id: 'wren',
+    name: 'Wren',
     role: 'protagonist',
     color: 'lilac',
     gender: 'female',
@@ -47,8 +47,8 @@ const characters = [
     evidence: [{ quote: 'I can do this.' }],
   },
   {
-    id: 'keefe',
-    name: 'Keefe',
+    id: 'marlow',
+    name: 'Marlow',
     role: 'sidekick',
     color: 'amber',
     gender: 'male',
@@ -117,18 +117,18 @@ afterAll(() => {
 
 describe('POST /api/books/:bookId/cast/:characterId/voice-style/generate', () => {
   it('generates and persists the persona to cast.json', async () => {
-    const res = await request(app).post(`/api/books/${bookId}/cast/sophie/voice-style/generate`);
+    const res = await request(app).post(`/api/books/${bookId}/cast/wren/voice-style/generate`);
     expect(res.status).toBe(200);
-    expect(res.body.voiceStyle).toBe('persona-for-sophie');
+    expect(res.body.voiceStyle).toBe('persona-for-wren');
     expect(generateVoiceStylePersona).toHaveBeenCalledTimes(1);
     /* The single character's row carries the persona; others untouched. */
     const cast = readCast();
-    expect(cast.characters.find((c) => c.id === 'sophie')?.voiceStyle).toBe('persona-for-sophie');
-    expect(cast.characters.find((c) => c.id === 'keefe')?.voiceStyle).toBeUndefined();
+    expect(cast.characters.find((c) => c.id === 'wren')?.voiceStyle).toBe('persona-for-wren');
+    expect(cast.characters.find((c) => c.id === 'marlow')?.voiceStyle).toBeUndefined();
   });
 
   it('returns 404 for an unknown bookId', async () => {
-    const res = await request(app).post('/api/books/nope/cast/sophie/voice-style/generate');
+    const res = await request(app).post('/api/books/nope/cast/wren/voice-style/generate');
     expect(res.status).toBe(404);
   });
 
@@ -139,7 +139,7 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-style/generate', () =>
 
   it('surfaces a generator failure as 500', async () => {
     generateVoiceStylePersona.mockRejectedValue(new Error('GEMINI_API_KEY is required'));
-    const res = await request(app).post(`/api/books/${bookId}/cast/sophie/voice-style/generate`);
+    const res = await request(app).post(`/api/books/${bookId}/cast/wren/voice-style/generate`);
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/GEMINI_API_KEY/);
   });
@@ -152,14 +152,14 @@ describe('POST /api/books/:bookId/cast/voice-style/generate-all', () => {
     /* Two speaking characters, narrator skipped → 2 calls, 2 personas. */
     expect(generateVoiceStylePersona).toHaveBeenCalledTimes(2);
     expect(res.body.voiceStyles).toEqual({
-      sophie: 'persona-for-sophie',
-      keefe: 'persona-for-keefe',
+      wren: 'persona-for-wren',
+      marlow: 'persona-for-marlow',
     });
     expect(res.body.failures).toEqual({});
     const cast = readCast();
     expect(cast.characters.find((c) => c.id === 'narrator')?.voiceStyle).toBeUndefined();
-    expect(cast.characters.find((c) => c.id === 'sophie')?.voiceStyle).toBe('persona-for-sophie');
-    expect(cast.characters.find((c) => c.id === 'keefe')?.voiceStyle).toBe('persona-for-keefe');
+    expect(cast.characters.find((c) => c.id === 'wren')?.voiceStyle).toBe('persona-for-wren');
+    expect(cast.characters.find((c) => c.id === 'marlow')?.voiceStyle).toBe('persona-for-marlow');
   });
 
   it('includes the narrator when includeNarrator: true', async () => {
@@ -173,17 +173,17 @@ describe('POST /api/books/:bookId/cast/voice-style/generate-all', () => {
 
   it('tolerates a per-character failure and still persists the successes', async () => {
     generateVoiceStylePersona.mockImplementation(async (c: { id: string }) => {
-      if (c.id === 'keefe') throw new Error('rate limited');
+      if (c.id === 'marlow') throw new Error('rate limited');
       return `persona-for-${c.id}`;
     });
     const res = await request(app).post(`/api/books/${bookId}/cast/voice-style/generate-all`);
     expect(res.status).toBe(200);
-    expect(res.body.voiceStyles).toEqual({ sophie: 'persona-for-sophie' });
-    expect(res.body.failures).toEqual({ keefe: 'rate limited' });
+    expect(res.body.voiceStyles).toEqual({ wren: 'persona-for-wren' });
+    expect(res.body.failures).toEqual({ marlow: 'rate limited' });
     /* The success is persisted; the failed character has no voiceStyle. */
     const cast = readCast();
-    expect(cast.characters.find((c) => c.id === 'sophie')?.voiceStyle).toBe('persona-for-sophie');
-    expect(cast.characters.find((c) => c.id === 'keefe')?.voiceStyle).toBeUndefined();
+    expect(cast.characters.find((c) => c.id === 'wren')?.voiceStyle).toBe('persona-for-wren');
+    expect(cast.characters.find((c) => c.id === 'marlow')?.voiceStyle).toBeUndefined();
   });
 
   it('returns 409 when the book has no cast on disk', async () => {

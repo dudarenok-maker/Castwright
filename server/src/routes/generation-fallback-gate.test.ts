@@ -109,18 +109,18 @@ beforeAll(async () => {
       chapters: [{ id: 1, title: 'Chapter 1', slug: 'chapter-1' }],
     }),
   );
-  /* Sophie speaks, routes to Qwen, and has NO designed Qwen voice → she would
+  /* Wren speaks, routes to Qwen, and has NO designed Qwen voice → she would
      fall back to Kokoro. That's exactly what the gate must catch. */
   writeFileSync(
     join(bookDir, '.audiobook', 'cast.json'),
     JSON.stringify({
-      characters: [{ id: 'sophie', name: 'Sophie', ttsEngine: 'qwen' }],
+      characters: [{ id: 'wren', name: 'Wren', ttsEngine: 'qwen' }],
     }),
   );
 
   await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
     chapters: {
-      1: [{ id: 1, chapterId: 1, characterId: 'sophie', text: 'Hello.' }],
+      1: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Hello.' }],
     },
   });
 
@@ -152,7 +152,7 @@ beforeEach(async () => {
     pcm: Buffer.alloc(2),
     sampleRate: 24000,
     durationSec: 1,
-    segments: [{ characterId: 'sophie', sentenceIds: [1] }],
+    segments: [{ characterId: 'wren', sentenceIds: [1] }],
   });
   await writeQueueFile(queuePath, {
     entries: [
@@ -205,13 +205,13 @@ describe('per-chapter loud Qwen→Kokoro fallback gate', () => {
     const body = await runStream();
 
     expect(body).toContain('chapter_awaiting_fallback_confirm');
-    expect(body).toContain('sophie'); // the affected character is named
+    expect(body).toContain('wren'); // the affected character is named
     expect(body).not.toContain('chapter_complete');
     expect(synthCalled).toBe(false); // never rendered
 
     const entry = await readEntry();
     expect(entry?.status).toBe('awaiting_confirm');
-    expect(entry?.fallbackCharacters?.map((c) => c.id)).toEqual(['sophie']);
+    expect(entry?.fallbackCharacters?.map((c) => c.id)).toEqual(['wren']);
   }, 10_000);
 
   it('renders straight through when the re-dispatch carries fallbackConfirmed', async () => {

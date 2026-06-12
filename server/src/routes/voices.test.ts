@@ -14,10 +14,10 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 
 const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
+const SERIES = 'The Hollow Tide';
 const BOOK_ONE = 'Book One';
 const BOOK_TWO = 'Book Two';
-/* A SECOND series under the same author, sharing the v_fitz voiceId, used
+/* A SECOND series under the same author, sharing the v_brann voiceId, used
    to prove a series-scoped override only touches the anchor book's
    series (plan 108). */
 const OTHER_SERIES = 'Unlocked';
@@ -83,16 +83,16 @@ beforeAll(async () => {
   bookOneId = paths.makeBookId(AUTHOR, SERIES, BOOK_ONE);
   bookTwoId = paths.makeBookId(AUTHOR, SERIES, BOOK_TWO);
 
-  /* Two books in the same series, both with a Fitz character sharing
-     voiceId 'v_fitz'. The aggregator should fold these into one voice
+  /* Two books in the same series, both with a Brann character sharing
+     voiceId 'v_brann'. The aggregator should fold these into one voice
      family; the override-write should touch both cast.json files. */
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE, bookOneId, [
     {
-      id: 'char-fitz',
-      name: 'Fitz',
+      id: 'char-brann',
+      name: 'Brann',
       role: 'protagonist',
       color: 'magenta',
-      voiceId: 'v_fitz',
+      voiceId: 'v_brann',
       gender: 'male',
       ageRange: 'teen',
       attributes: ['Male', 'Teen'],
@@ -102,11 +102,11 @@ beforeAll(async () => {
   ]);
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO, bookTwoId, [
     {
-      id: 'char-fitz',
-      name: 'Fitz',
+      id: 'char-brann',
+      name: 'Brann',
       role: 'protagonist',
       color: 'magenta',
-      voiceId: 'v_fitz',
+      voiceId: 'v_brann',
       gender: 'male',
       ageRange: 'teen',
       attributes: ['Male', 'Teen'],
@@ -124,11 +124,11 @@ beforeAll(async () => {
     paths.makeBookId(AUTHOR, OTHER_SERIES, OTHER_BOOK),
     [
       {
-        id: 'char-fitz',
-        name: 'Fitz',
+        id: 'char-brann',
+        name: 'Brann',
         role: 'protagonist',
         color: 'magenta',
-        voiceId: 'v_fitz',
+        voiceId: 'v_brann',
         gender: 'male',
         ageRange: 'teen',
         attributes: ['Male', 'Teen'],
@@ -161,19 +161,19 @@ describe('GET /api/voices — aggregation', () => {
   it('emits bookSeries alongside bookId so the voice-family-grouped UI can nest by series', async () => {
     const res = await request(app).get('/api/voices');
     expect(res.status).toBe(200);
-    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
-    expect(v_fitz).toBeDefined();
-    expect(v_fitz.bookSeries).toBe(SERIES);
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann).toBeDefined();
+    expect(v_brann.bookSeries).toBe(SERIES);
     /* usedIn === 3 — both same-series books plus the cross-series book
        share the same voiceId (the aggregator folds workspace-wide). */
-    expect(v_fitz.usedIn).toBe(3);
+    expect(v_brann.usedIn).toBe(3);
   });
 
   it('surfaces the character aliases + notLinkedTo on the derived voice (duplicate-detector reload fix)', async () => {
     /* The voices-view cross-book duplicate detector reads these straight
        off the library payload so it can suppress already-resolved pairs on
        the global #/voices tab WITHOUT hydrating any cast (plan 101 fix
-       2026-05-26). Mutate the first-seen cast.json for v_fitz, assert the
+       2026-05-26). Mutate the first-seen cast.json for v_brann, assert the
        payload carries both, then restore. */
     const castPath = join(
       workspaceRoot,
@@ -188,13 +188,13 @@ describe('GET /api/voices — aggregation', () => {
       characters: Array<Record<string, unknown>>;
     };
     cast.characters[0].aliases = ['Wonderboy'];
-    cast.characters[0].notLinkedTo = [{ bookId: bookTwoId, characterId: 'char-fitz' }];
+    cast.characters[0].notLinkedTo = [{ bookId: bookTwoId, characterId: 'char-brann' }];
     writeFileSync(castPath, JSON.stringify(cast));
 
     const res = await request(app).get('/api/voices');
-    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
-    expect(v_fitz.aliases).toEqual(['Wonderboy']);
-    expect(v_fitz.notLinkedTo).toEqual([{ bookId: bookTwoId, characterId: 'char-fitz' }]);
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.aliases).toEqual(['Wonderboy']);
+    expect(v_brann.notLinkedTo).toEqual([{ bookId: bookTwoId, characterId: 'char-brann' }]);
 
     /* Restore. */
     delete cast.characters[0].aliases;
@@ -204,9 +204,9 @@ describe('GET /api/voices — aggregation', () => {
 
   it('omits aliases/notLinkedTo when the character has none', async () => {
     const res = await request(app).get('/api/voices');
-    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
-    expect(v_fitz.aliases).toBeUndefined();
-    expect(v_fitz.notLinkedTo).toBeUndefined();
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.aliases).toBeUndefined();
+    expect(v_brann.notLinkedTo).toBeUndefined();
   });
 
   it('exposes overrideTtsVoices map when cast.json carries one', async () => {
@@ -227,14 +227,14 @@ describe('GET /api/voices — aggregation', () => {
     writeFileSync(castPath, JSON.stringify(cast));
 
     const res = await request(app).get('/api/voices');
-    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
-    expect(v_fitz.overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
     /* Legacy field projects the active engine's slot for backwards-
        compatible clients. */
-    expect(v_fitz.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
+    expect(v_brann.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
     /* When override engine matches the (default) Coqui engine, ttsVoice
        must resolve to the override name. */
-    expect(v_fitz.ttsVoice.name).toBe('Asya Anara');
+    expect(v_brann.ttsVoice.name).toBe('Asya Anara');
 
     /* Reset for the next test. */
     delete cast.characters[0].overrideTtsVoices;
@@ -262,9 +262,9 @@ describe('GET /api/voices — aggregation', () => {
     writeFileSync(castPath, JSON.stringify(cast));
 
     const res = await request(app).get('/api/voices');
-    const v_fitz = res.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
-    expect(v_fitz.overrideTtsVoices).toEqual({ coqui: { name: 'Damien Black' } });
-    expect(v_fitz.ttsVoice.name).toBe('Damien Black');
+    const v_brann = res.body.voices.find((v: { id: string }) => v.id === 'v_brann');
+    expect(v_brann.overrideTtsVoices).toEqual({ coqui: { name: 'Damien Black' } });
+    expect(v_brann.ttsVoice.name).toBe('Damien Black');
 
     /* Cleanup. */
     delete cast.characters[0].overrideTtsVoice;
@@ -294,7 +294,7 @@ describe('GET /api/voices — aggregation', () => {
     writeFileSync(castPath, JSON.stringify(cast));
 
     const coquiRes = await request(app).get('/api/voices?engine=coqui');
-    const fromCoqui = coquiRes.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    const fromCoqui = coquiRes.body.voices.find((v: { id: string }) => v.id === 'v_brann');
     expect(fromCoqui.ttsVoice.name).toBe('Asya Anara');
     expect(fromCoqui.overrideTtsVoices).toEqual({
       coqui: { name: 'Asya Anara' },
@@ -302,7 +302,7 @@ describe('GET /api/voices — aggregation', () => {
     });
 
     const kokoroRes = await request(app).get('/api/voices?engine=kokoro');
-    const fromKokoro = kokoroRes.body.voices.find((v: { id: string }) => v.id === 'v_fitz');
+    const fromKokoro = kokoroRes.body.voices.find((v: { id: string }) => v.id === 'v_brann');
     expect(fromKokoro.ttsVoice.name).toBe('am_onyx');
     expect(fromKokoro.overrideTtsVoices).toEqual({
       coqui: { name: 'Asya Anara' },
@@ -321,7 +321,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
      voice at all) plus a Coqui-only character. The aggregator should stamp
      `generated:true` ONLY on the voice whose designed voiceId appears in a
      rendered segments snapshot. Lives in its own series so it can't disturb
-     the v_fitz aggregation/override tests above. */
+     the v_brann aggregation/override tests above. */
   const Q_AUTHOR = 'Qwen Author';
   const Q_SERIES = 'Qwen Series';
   const Q_TITLE = 'Qwen Book';
@@ -358,21 +358,21 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
       JSON.stringify({
         characters: [
           {
-            id: 'c-elwin',
-            name: 'Elwin',
-            voiceId: 'v_elwin',
+            id: 'c-oduvan',
+            name: 'Oduvan',
+            voiceId: 'v_oduvan',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-elwin' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-oduvan' } },
             attributes: [],
             lines: 10,
             scenes: 1,
           },
           {
-            id: 'c-keefe',
-            name: 'Keefe',
-            voiceId: 'v_keefe',
+            id: 'c-marlow',
+            name: 'Marlow',
+            voiceId: 'v_marlow',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-keefe' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
             attributes: [],
             lines: 10,
             scenes: 1,
@@ -398,8 +398,8 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
         ],
       }),
     );
-    /* Only chapter 1 rendered, and only Elwin's bespoke voice appears in
-       its snapshot. Keefe is designed but never rendered. */
+    /* Only chapter 1 rendered, and only Oduvan's bespoke voice appears in
+       its snapshot. Marlow is designed but never rendered. */
     writeFileSync(
       join(bookDir, 'audio', '01-one.segments.json'),
       JSON.stringify({
@@ -409,19 +409,19 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
         synthesizedAt: new Date().toISOString(),
         segments: [],
         characterSnapshots: {
-          'c-elwin': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-elwin' },
+          'c-oduvan': { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-oduvan' },
         },
       }),
     );
 
-    /* Point the voice-sample cache at a temp dir and drop a Keefe audition
-       (`<scope>-qwen3-tts-0.6b-<hash>.mp3`, scope = voiceId v_keefe) so the
-       aggregator stamps `sampled` on Keefe — designed + auditioned but never
+    /* Point the voice-sample cache at a temp dir and drop a Marlow audition
+       (`<scope>-qwen3-tts-0.6b-<hash>.mp3`, scope = voiceId v_marlow) so the
+       aggregator stamps `sampled` on Marlow — designed + auditioned but never
        rendered. No file for Bo/Marcus → they stay un-sampled. */
     sampleCacheDir = join(workspaceRoot, 'sample-cache');
     mkdirSync(sampleCacheDir, { recursive: true });
     process.env.VOICE_SAMPLE_AUDIO_DIR = sampleCacheDir;
-    writeFileSync(join(sampleCacheDir, 'v_keefe-qwen3-tts-0.6b-deadbeef.mp3'), 'fake-mp3');
+    writeFileSync(join(sampleCacheDir, 'v_marlow-qwen3-tts-0.6b-deadbeef.mp3'), 'fake-mp3');
   });
 
   afterAll(() => {
@@ -431,16 +431,16 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
   it('marks a designed Qwen voice generated when it appears in a rendered snapshot', async () => {
     const res = await request(app).get('/api/voices?engine=qwen');
     expect(res.status).toBe(200);
-    const elwin = res.body.voices.find((v: { id: string }) => v.id === 'v_elwin');
-    expect(elwin.ttsVoice.name).toBe('qwen-elwin');
-    expect(elwin.generated).toBe(true);
+    const oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_oduvan');
+    expect(oduvan.ttsVoice.name).toBe('qwen-oduvan');
+    expect(oduvan.generated).toBe(true);
   });
 
   it('leaves a designed-but-unrendered Qwen voice without the generated flag', async () => {
     const res = await request(app).get('/api/voices?engine=qwen');
-    const keefe = res.body.voices.find((v: { id: string }) => v.id === 'v_keefe');
-    expect(keefe.ttsVoice.name).toBe('qwen-keefe');
-    expect(keefe.generated).toBeFalsy();
+    const marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_marlow');
+    expect(marlow.ttsVoice.name).toBe('qwen-marlow');
+    expect(marlow.generated).toBeFalsy();
   });
 
   it('never stamps generated on a voice with no designed Qwen voiceId', async () => {
@@ -452,17 +452,17 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
 
   it('does not scan segments (no generated flag) when the engine is not Qwen', async () => {
     /* Preset path must stay untouched — the segments scan only runs for the
-       Qwen engine query, so even the rendered Elwin voice carries no flag. */
+       Qwen engine query, so even the rendered Oduvan voice carries no flag. */
     const res = await request(app).get('/api/voices?engine=coqui');
-    const elwin = res.body.voices.find((v: { id: string }) => v.id === 'v_elwin');
-    expect(elwin.generated).toBeUndefined();
+    const oduvan = res.body.voices.find((v: { id: string }) => v.id === 'v_oduvan');
+    expect(oduvan.generated).toBeUndefined();
   });
 
   it('marks a designed Qwen voice sampled when a cached audition exists (not yet generated)', async () => {
     const res = await request(app).get('/api/voices?engine=qwen');
-    const keefe = res.body.voices.find((v: { id: string }) => v.id === 'v_keefe');
-    expect(keefe.sampled).toBe(true);
-    expect(keefe.generated).toBeFalsy(); // sampled is the tier below generated
+    const marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_marlow');
+    expect(marlow.sampled).toBe(true);
+    expect(marlow.generated).toBeFalsy(); // sampled is the tier below generated
   });
 
   it('leaves a designed Qwen voice with no cached audition un-sampled', async () => {
@@ -475,11 +475,11 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
 
   it('does not stamp sampled when the engine is not Qwen', async () => {
     /* The sample-cache scan only runs for the Qwen engine query — the preset
-       path stays byte-for-byte unchanged even though a v_keefe audition file
+       path stays byte-for-byte unchanged even though a v_marlow audition file
        exists on disk. */
     const res = await request(app).get('/api/voices?engine=coqui');
-    const keefe = res.body.voices.find((v: { id: string }) => v.id === 'v_keefe');
-    expect(keefe.sampled).toBeUndefined();
+    const marlow = res.body.voices.find((v: { id: string }) => v.id === 'v_marlow');
+    expect(marlow.sampled).toBeUndefined();
   });
 });
 
@@ -487,7 +487,7 @@ describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
   /* A self-contained author with: a two-book series (Trilogy), a same-author
      spinoff in a DIFFERENT series, and a standalone. Distinct voiceIds per
      book so each voice's source/inCurrentSeries can be asserted cleanly,
-     independent of the v_fitz aggregation above. The "Series" tab in the
+     independent of the v_brann aggregation above. The "Series" tab in the
      cast view filters on `inCurrentSeries`, so a standalone's tab must come
      up empty and a series book's tab must show only its own series' siblings
      — not every other book in the workspace. */
@@ -583,7 +583,7 @@ describe('GET /api/voices?currentBookId — inCurrentSeries scoping', () => {
 describe('PUT /api/voices/:voiceId/override', () => {
   it('writes the override into overrideTtsVoices[engine] across every cast.json sharing the voiceId', async () => {
     const res = await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
     expect(res.status).toBe(204);
 
@@ -599,8 +599,8 @@ describe('PUT /api/voices/:voiceId/override', () => {
 
   it('pins ttsEngine to the override engine across the series (plan 108 — fixes wrong model in other books)', async () => {
     const res = await request(app)
-      .put('/api/voices/v_fitz/override')
-      .send({ override: { engine: 'qwen', name: 'qwen-v_fitz' } });
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_brann' } });
     expect(res.status).toBe(204);
 
     /* Setting a Qwen voice override switches the character TO Qwen everywhere
@@ -613,17 +613,17 @@ describe('PUT /api/voices/:voiceId/override', () => {
 
     /* Cleanup — this describe accumulates state across tests; drop the slot we
        added so the following slot-merge test starts from a known shape. */
-    await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+    await request(app).put('/api/voices/v_brann/override').send({ override: null });
   });
 
   it('preserves other engine slots when updating one engine', async () => {
     /* The per-engine map's whole point: setting the Coqui slot must not
        wipe a previously-set Kokoro slot. */
     await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({ override: { engine: 'kokoro', name: 'am_onyx' } });
     await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
 
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
@@ -633,7 +633,7 @@ describe('PUT /api/voices/:voiceId/override', () => {
     });
 
     /* Cleanup. */
-    await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+    await request(app).put('/api/voices/v_brann/override').send({ override: null });
   });
 
   it('migrates legacy overrideTtsVoice on the first write that touches the cast', async () => {
@@ -657,7 +657,7 @@ describe('PUT /api/voices/:voiceId/override', () => {
     writeFileSync(castPath, JSON.stringify(cast));
 
     await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
 
     const after = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
@@ -669,17 +669,17 @@ describe('PUT /api/voices/:voiceId/override', () => {
     expect(after.characters[0].overrideTtsVoice).toBeUndefined();
 
     /* Cleanup. */
-    await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+    await request(app).put('/api/voices/v_brann/override').send({ override: null });
   });
 
   it('clears every engine slot when override is null', async () => {
     await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({ override: { engine: 'coqui', name: 'Asya Anara' } });
     await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({ override: { engine: 'kokoro', name: 'am_onyx' } });
-    const clear = await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+    const clear = await request(app).put('/api/voices/v_brann/override').send({ override: null });
     expect(clear.status).toBe(204);
 
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
@@ -692,7 +692,7 @@ describe('PUT /api/voices/:voiceId/override', () => {
 
   it('400 when override body is malformed', async () => {
     const res = await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({ override: { engine: 'nope', name: 'Asya Anara' } });
     expect(res.status).toBe(400);
   });
@@ -709,7 +709,7 @@ describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => 
   afterEach(async () => {
     /* Clear all three casts between cases so the cross-series assertions
        start clean. */
-    await request(app).put('/api/voices/v_fitz/override').send({ override: null });
+    await request(app).put('/api/voices/v_brann/override').send({ override: null });
     const otherPath = join(
       workspaceRoot,
       'books',
@@ -728,9 +728,9 @@ describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => 
 
   it("writes ONLY to the anchor book's series, leaving other series untouched", async () => {
     const res = await request(app)
-      .put('/api/voices/v_fitz/override')
+      .put('/api/voices/v_brann/override')
       .send({
-        override: { engine: 'qwen', name: 'qwen-v_fitz' },
+        override: { engine: 'qwen', name: 'qwen-v_brann' },
         scope: 'series',
         bookId: bookOneId,
       });
@@ -739,8 +739,8 @@ describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => 
     /* Both same-series books got the Qwen designed voiceId. */
     const one = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_ONE);
     const two = readCastFromDisk(workspaceRoot, AUTHOR, SERIES, BOOK_TWO);
-    expect(one.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_fitz' } });
-    expect(two.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_fitz' } });
+    expect(one.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_brann' } });
+    expect(two.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_brann' } });
 
     /* The cross-series book did NOT change. */
     const other = readCastFromDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
@@ -749,24 +749,24 @@ describe('PUT /api/voices/:voiceId/override — series scope (plan 108)', () => 
 
   it('defaults to a workspace-wide write when no scope is passed', async () => {
     await request(app)
-      .put('/api/voices/v_fitz/override')
-      .send({ override: { engine: 'qwen', name: 'qwen-v_fitz' } });
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_brann' } });
     /* All three books — including the cross-series one — get the override. */
     const other = readCastFromDisk(workspaceRoot, AUTHOR, OTHER_SERIES, OTHER_BOOK);
-    expect(other.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_fitz' } });
+    expect(other.characters[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-v_brann' } });
   });
 
   it("400s when scope is 'series' but bookId is missing", async () => {
     const res = await request(app)
-      .put('/api/voices/v_fitz/override')
-      .send({ override: { engine: 'qwen', name: 'qwen-v_fitz' }, scope: 'series' });
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_brann' }, scope: 'series' });
     expect(res.status).toBe(400);
   });
 
   it('404s when the series-anchor bookId is unknown', async () => {
     const res = await request(app)
-      .put('/api/voices/v_fitz/override')
-      .send({ override: { engine: 'qwen', name: 'qwen-v_fitz' }, scope: 'series', bookId: 'nope' });
+      .put('/api/voices/v_brann/override')
+      .send({ override: { engine: 'qwen', name: 'qwen-v_brann' }, scope: 'series', bookId: 'nope' });
     expect(res.status).toBe(404);
   });
 });

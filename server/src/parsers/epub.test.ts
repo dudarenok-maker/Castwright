@@ -43,7 +43,7 @@ describe('parseEpub', () => {
     expect(out.seriesFromTitle).toBe(false);
   });
 
-  /* Bug B regression: EPUB with `dc:title` = "Everblaze (Keeper of the
+  /* Bug B regression: EPUB with `dc:title` = "The Tidewatcher’s Oath (Keeper of the
      Lost Cities Book 3)" and NO Calibre series tags. The parser should
      split the parenthetical off and populate series + seriesPosition
      from the heuristic, and mark `seriesFromTitle: true`. */
@@ -51,8 +51,8 @@ describe('parseEpub', () => {
     it('extracts series + position from the dc:title parenthetical', async () => {
       const buf = await readFile(seriesFromTitleFixturePath);
       const out = await parseEpub(buf, { fileName: 'sample-title-no-calibre.epub' });
-      expect(out.title).toBe('Everblaze');
-      expect(out.series).toBe('Keeper of the Lost Cities');
+      expect(out.title).toBe('The Tidewatcher’s Oath');
+      expect(out.series).toBe('The Hollow Tide');
       expect(out.seriesPosition).toBe(3);
       expect(out.seriesFromTitle).toBe(true);
     });
@@ -153,7 +153,7 @@ describe('parseEpub', () => {
 });
 
 /* Regression: namespace-prefixed OPF (plan 116). Publisher EPUBs (e.g. Simon
-   & Schuster's "Stellarlune") namespace every package element with an `opf:`
+   & Schuster's "The Drowning Bell") namespace every package element with an `opf:`
    prefix (`<opf:manifest>`, `<opf:item>`, `<opf:spine>`, `<opf:itemref>`).
    epub2's manifest/spine walker only recognises UNPREFIXED names, so the
    primary path extracts zero chapters and — before this fix — threw "EPUB had

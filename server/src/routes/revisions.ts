@@ -153,7 +153,7 @@ export async function getRevisionsForBook(
         detectedAt,
       };
       /* Engine drift (plan 108): the character's resolved engine changed since
-         this chapter rendered (e.g. Biana moved from Kokoro to Qwen). Use the
+         this chapter rendered (e.g. Maerin moved from Kokoro to Qwen). Use the
          rendered engine as the fallback default so a character with no explicit
          ttsEngine and an unchanged engine doesn't false-fire. */
       const renderedEngine = (snapshot.voiceEngine as TtsEngine | undefined) ?? 'kokoro';

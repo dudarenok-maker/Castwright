@@ -6,7 +6,7 @@
    against) carry the same merged identity-level profile, while each book
    retains its own audio identity and per-book metrics.
 
-   Use case: a novella first met Elwin in passing; a later full novel has
+   Use case: a novella first met Oduvan in passing; a later full novel has
    208 lines and 7 scenes of him. The user is on the full novel's confirm
    page, has picked "Reuse" so the new book uses the novella's voice, and
    ticks the override checkbox. Result: both books' cast.json entries gain

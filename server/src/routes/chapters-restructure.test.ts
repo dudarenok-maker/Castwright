@@ -1158,7 +1158,7 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
             id: 1,
             chapterId: 1,
             characterId: 'narr',
-            text: 'Registry File For Sophie Foster',
+            text: 'Registry File For Wren Sparrow',
           },
           // Dialogue — should be rejected.
           {
@@ -1184,7 +1184,7 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
     expect(res.status).toBe(200);
 
     const state = readState();
-    expect(state.chapters[0].title).toBe('Registry File For Sophie Foster');
+    expect(state.chapters[0].title).toBe('Registry File For Wren Sparrow');
     expect(state.chapters[1].title).toBe('Chapter 2'); // dialogue rejected
     expect(state.chapters[2].title).toBe('Chapter 3'); // too long, rejected
   });

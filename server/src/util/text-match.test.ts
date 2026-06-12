@@ -1,5 +1,5 @@
 /* Unit tests for the shared text-match helpers. Companions to the
-   verifier integration tests in routes/analysis.test.ts — the KOTLC
+   verifier integration tests in routes/analysis.test.ts — the the Hollow Tide
    regression cases here pin the false-positive shapes that motivated
    the three-tier match (see Phase-0 dropped-quotes ledger 2026-05-15). */
 
@@ -62,7 +62,7 @@ describe('matchQuoteInSource — three-tier verifier', () => {
   });
 
   it('returns "terminal_punct" for period-for-comma drift before a dialogue tag', () => {
-    /* The signature KOTLC false positive: source has `extinct,` (comma
+    /* The signature the Hollow Tide false positive: source has `extinct,` (comma
        because a dialogue tag follows), model emits `extinct.` (period
        because the line is a complete utterance). */
     expect(matchQuoteInSource(normaliseForMatch('Mammoths are extinct.'), source)).toBe(
@@ -132,31 +132,31 @@ describe('matchQuoteInSource — three-tier verifier', () => {
   });
 });
 
-describe('matchQuoteInSource — KOTLC ledger regression', () => {
+describe('matchQuoteInSource — the Hollow Tide ledger regression', () => {
   /* The user pasted these as `not in source` after a Gemma 4 run on
-     2026-05-15. Each is a verbatim or near-verbatim Keefe / Sophie
+     2026-05-15. Each is a verbatim or near-verbatim Marlow / Wren
      line that the old strict-substring matcher dropped. The minimal
      source fragment below preserves the punctuation pattern that
      defeated each tier — keep these in this single block so future
      regressions surface here, not on the user's next analysis run. */
   const sourceFragments = [
-    /* Stitched: "Kick his butt, Sophie!" Keefe cheered. "It's about time..." */
-    '"Kick his butt, Sophie!" Keefe cheered. "It\'s about time someone took Fitz down."',
-    /* Stitched + terminal-punct: ","Keefe said behind her. He flashed... */
-    '"A Level Two making it to the top ten," Keefe said behind her. He flashed a crooked smile. "And you said you weren\'t mysterious."',
+    /* Stitched: "Kick his butt, Wren!" Marlow cheered. "It's about time..." */
+    '"Kick his butt, Wren!" Marlow cheered. "It\'s about time someone took Brann down."',
+    /* Stitched + terminal-punct: ","Marlow said behind her. He flashed... */
+    '"A Level Two making it to the top ten," Marlow said behind her. He flashed a crooked smile. "And you said you weren\'t mysterious."',
     /* Stitched with narration block between halves */
-    '"Makeovers?" Keefe scoffed behind them. "You girls sure know how to have fun. Maybe you can braid each other\'s hair and giggle about boys while you\'re at it."',
+    '"Makeovers?" Marlow scoffed behind them. "You girls sure know how to have fun. Maybe you can braid each other\'s hair and giggle about boys while you\'re at it."',
     /* Terminal-punct drift: source has `,"` before dialogue tag */
     'whispered, "Told you so," when his dad wasn\'t looking.',
     /* Terminal-punct drift on a long quote */
-    '"Sorry, I forgot you\'re worse at this stuff than me," Dex said smugly.',
+    '"Sorry, I forgot you\'re worse at this stuff than me," Hart said smugly.',
     /* Stitched across two paragraphs of source */
-    '"I promise I\'ll be careful," Sophie said. "You don\'t have to worry."',
+    '"I promise I\'ll be careful," Wren said. "You don\'t have to worry."',
   ].join('\n\n');
   const normSource = normaliseForMatch(sourceFragments);
 
   it.each([
-    ["Kick his butt, Sophie! It's about time someone took Fitz down.", 'segments'],
+    ["Kick his butt, Wren! It's about time someone took Brann down.", 'segments'],
     ["A Level Two making it to the top ten. And you said you weren't mysterious.", 'segments'],
     [
       "Makeovers? You girls sure know how to have fun. Maybe you can braid each other's hair and giggle about boys while you're at it.",
@@ -165,7 +165,7 @@ describe('matchQuoteInSource — KOTLC ledger regression', () => {
     ['Told you so.', 'terminal_punct'],
     ["Sorry, I forgot you're worse at this stuff than me.", 'terminal_punct'],
     ["I promise I'll be careful. You don't have to worry.", 'segments'],
-  ])('keeps real KOTLC quote %s via %s tier', (quote, expectedTier) => {
+  ])('keeps real the Hollow Tide quote %s via %s tier', (quote, expectedTier) => {
     expect(matchQuoteInSource(normaliseForMatch(quote), normSource)).toBe(expectedTier);
   });
 });

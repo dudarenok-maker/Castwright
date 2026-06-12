@@ -261,7 +261,7 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
   });
 
   it('auto-excludes front/back-matter at import even with no excludedSlugs (plan 148)', async () => {
-    /* The KOTLC stall: EPUB back-matter (Acknowledgments / Contents / a
+    /* The the Hollow Tide stall: EPUB back-matter (Acknowledgments / Contents / a
        next-book teaser) was queued because nothing flagged it. Layer A now
        applies the front/back-matter heuristic at import, so these default to
        excluded WITHOUT the client sending excludedSlugs. Story chapters stay
@@ -380,8 +380,8 @@ describe('POST /api/import — seriesFromTitle plumbing', () => {
       contentType: 'application/epub+zip',
     });
     expect(res.status).toBe(200);
-    expect(res.body.candidate.title).toBe('Everblaze');
-    expect(res.body.candidate.series).toBe('Keeper of the Lost Cities');
+    expect(res.body.candidate.title).toBe('The Tidewatcher’s Oath');
+    expect(res.body.candidate.series).toBe('The Hollow Tide');
     expect(res.body.candidate.seriesPosition).toBe(3);
     expect(res.body.candidate.seriesFromTitle).toBe(true);
   });

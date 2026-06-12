@@ -49,8 +49,8 @@ describe('appendBatch', () => {
       affectedCharacters: 1,
       entries: [
         {
-          characterId: 'sophie',
-          characterName: 'Sophie',
+          characterId: 'wren',
+          characterName: 'Wren',
           quote: 'fabricated',
           truncated: false,
           reason: 'not_in_source',
@@ -130,8 +130,8 @@ describe('loadDroppedQuotes / saveDroppedQuotes', () => {
       affectedCharacters: 1,
       entries: [
         {
-          characterId: 'keefe',
-          characterName: 'Keefe',
+          characterId: 'marlow',
+          characterName: 'Marlow',
           quote: 'stitched dialogue',
           truncated: false,
           reason: 'not_in_source',

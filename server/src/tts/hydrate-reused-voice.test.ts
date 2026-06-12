@@ -19,74 +19,74 @@ const designed = (id: string, name: string): ReuseHydratable => ({
 
 describe('resolveReusedVoiceFields', () => {
   it('returns null when the character already owns a qwen voice', async () => {
-    const c = designed('sandor', 'qwen-sandor');
+    const c = designed('garrow', 'qwen-garrow');
     const r = await resolveReusedVoiceFields(c, loaderFrom({}));
     expect(r).toBeNull();
   });
 
   it('returns null when there is no matchedFrom to follow', async () => {
-    const c: ReuseHydratable = { id: 'cassius' };
+    const c: ReuseHydratable = { id: 'vane' };
     expect(await resolveReusedVoiceFields(c, loaderFrom({}))).toBeNull();
   });
 
   it('hydrates from the source book when the reused char has no override', async () => {
     const reused: ReuseHydratable = {
-      id: 'sandor',
-      matchedFrom: { bookId: 'kotlc', characterId: 'sandor' },
+      id: 'garrow',
+      matchedFrom: { bookId: 'the Hollow Tide', characterId: 'garrow' },
     };
     const r = await resolveReusedVoiceFields(
       reused,
-      loaderFrom({ kotlc: [designed('sandor', 'qwen-sandor')] }),
+      loaderFrom({ 'the Hollow Tide': [designed('garrow', 'qwen-garrow')] }),
     );
-    expect(r).toEqual({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-sandor' } } });
+    expect(r).toEqual({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-garrow' } } });
   });
 
   it('fs-25 — carries the source book\'s emotion variants onto the reused character', async () => {
     const reused: ReuseHydratable = {
-      id: 'sophie',
-      matchedFrom: { bookId: 'book1', characterId: 'sophie' },
+      id: 'wren',
+      matchedFrom: { bookId: 'book1', characterId: 'wren' },
     };
     const source: ReuseHydratable = {
-      id: 'sophie',
+      id: 'wren',
       ttsEngine: 'qwen',
       overrideTtsVoices: {
-        qwen: { name: 'qwen-sophie', variants: { angry: { name: 'qwen-sophie__angry' } } },
+        qwen: { name: 'qwen-wren', variants: { angry: { name: 'qwen-wren__angry' } } },
       },
     };
     const hydrated = await hydrateCharacterVoice(reused, loaderFrom({ book1: [source] }));
     // the variant travels with the base voice into the reused book (Wave 6a).
     expect(hydrated.overrideTtsVoices?.qwen).toEqual({
-      name: 'qwen-sophie',
-      variants: { angry: { name: 'qwen-sophie__angry' } },
+      name: 'qwen-wren',
+      variants: { angry: { name: 'qwen-wren__angry' } },
     });
   });
 
   it('follows a multi-hop matchedFrom chain to the book that holds the override', async () => {
     /* C → B (reused, no override) → A (holds the designed voice). */
-    const inC: ReuseHydratable = { id: 'sandor', matchedFrom: { bookId: 'B', characterId: 'sandor' } };
-    const inB: ReuseHydratable = { id: 'sandor', matchedFrom: { bookId: 'A', characterId: 'sandor' } };
+    const inC: ReuseHydratable = { id: 'garrow', matchedFrom: { bookId: 'B', characterId: 'garrow' } };
+    const inB: ReuseHydratable = { id: 'garrow', matchedFrom: { bookId: 'A', characterId: 'garrow' } };
     const r = await resolveReusedVoiceFields(
       inC,
-      loaderFrom({ B: [inB], A: [designed('sandor', 'qwen-sandor')] }),
+      loaderFrom({ B: [inB], A: [designed('garrow', 'qwen-garrow')] }),
     );
-    expect(r?.overrideTtsVoices.qwen?.name).toBe('qwen-sandor');
+    expect(r?.overrideTtsVoices.qwen?.name).toBe('qwen-garrow');
   });
 
   it('returns null when the source book is missing', async () => {
     const reused: ReuseHydratable = {
-      id: 'sandor',
-      matchedFrom: { bookId: 'gone', characterId: 'sandor' },
+      id: 'garrow',
+      matchedFrom: { bookId: 'gone', characterId: 'garrow' },
     };
     expect(await resolveReusedVoiceFields(reused, loaderFrom({}))).toBeNull();
   });
 
-  it('returns null when no book in the chain carries an override (the Lord Cassius case)', async () => {
+  it('returns null when no book in the chain carries an override (the Lord Vane case)', async () => {
     /* Every book reuses but none holds the override — runtime resolution can't
        recover it (only the data-recovery migration's on-disk fallback can). */
-    const stell: ReuseHydratable = { id: 'lord-cassius', matchedFrom: { bookId: 'everblaze', characterId: 'lord-cassius' } };
-    const everblaze: ReuseHydratable = { id: 'lord-cassius' }; // origin, override lost
+    const stell: ReuseHydratable = { id: 'lord-vane', matchedFrom: { bookId: 'the tidewatcher’s oath', characterId: 'lord-vane' } };
+    const tidewatcherOath: ReuseHydratable = { id: 'lord-vane' }; // origin, override lost
     expect(
-      await resolveReusedVoiceFields(stell, loaderFrom({ everblaze: [everblaze] })),
+      await resolveReusedVoiceFields(stell, loaderFrom({ 'the tidewatcher’s oath': [tidewatcherOath] })),
     ).toBeNull();
   });
 
@@ -118,21 +118,21 @@ describe('resolveReusedVoiceFields', () => {
 describe('hydrateCharacterVoice', () => {
   it('returns the character enriched with the source override', async () => {
     const reused = {
-      id: 'sandor',
-      name: 'Sandor',
-      matchedFrom: { bookId: 'kotlc', characterId: 'sandor' },
+      id: 'garrow',
+      name: 'Garrow',
+      matchedFrom: { bookId: 'the Hollow Tide', characterId: 'garrow' },
     };
     const out = await hydrateCharacterVoice(
       reused,
-      loaderFrom({ kotlc: [designed('sandor', 'qwen-sandor')] }),
+      loaderFrom({ 'the Hollow Tide': [designed('garrow', 'qwen-garrow')] }),
     );
     expect(out.ttsEngine).toBe('qwen');
-    expect(out.overrideTtsVoices?.qwen?.name).toBe('qwen-sandor');
-    expect((out as { name: string }).name).toBe('Sandor'); // other fields preserved
+    expect(out.overrideTtsVoices?.qwen?.name).toBe('qwen-garrow');
+    expect((out as { name: string }).name).toBe('Garrow'); // other fields preserved
   });
 
   it('returns the character unchanged when nothing resolves', async () => {
-    const c = { id: 'cassius', name: 'Lord Cassius' };
+    const c = { id: 'vane', name: 'Lord Vane' };
     const out = await hydrateCharacterVoice(c, loaderFrom({}));
     expect(out).toBe(c);
   });
