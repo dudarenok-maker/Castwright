@@ -414,10 +414,7 @@ export function classifyAnalysisFailure(err: unknown, modelLabel: string): Analy
 
   const parsed = tryParseApiError(raw);
   if (parsed) {
-    /* Pass the full raw string to the quota check so `quotaValue` in the
-       details[] array (not just the extracted message) triggers daily-quota
-       detection. The parsed.message is used for display trimming only. */
-    const code = statusToFailureCode(parsed.code ?? status, raw);
+    const code = statusToFailureCode(parsed.code ?? status, parsed.message);
     /* Only trim quota messages — 4xx/5xx bodies are usually short and
        informative (an INVALID_ARGUMENT body names the failed field), so
        trimming them throws away the only useful diagnostic. */

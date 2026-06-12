@@ -312,7 +312,7 @@ describe('classifyAnalysisFailure (run-level, ports describeError verbatim — s
   });
   it('Google envelope 429 free-tier → analyzer-daily-quota with trimmed message', () => {
     const raw =
-      'got status: 429. {"error":{"code":429,"message":"You exceeded your current quota. Free tier limit, please check. More text that should be trimmed away entirely.","status":"RESOURCE_EXHAUSTED","details":[{"quotaValue":"250"}]}}';
+      'got status: 429. {"error":{"code":429,"message":"You exceeded your current quota: generate_requests_per_model_per_day_free_tier. Please check your plan and billing details. More text that should be trimmed away entirely.","status":"RESOURCE_EXHAUSTED","details":[{"quotaValue":"250"}]}}';
     const r = classifyAnalysisFailure(new Error(raw), 'Gemini (gemma-4-31b-it)');
     expect(r.code).toBe('analyzer-daily-quota');
     expect(r.userMessage).toContain('429');
