@@ -454,6 +454,35 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* fs-21 — boot-splash readiness gate. Probe setup readiness ONCE per app
+     boot (`[]` deps — never re-fetch on navigation). While the probe is in
+     flight `setupReady === null` and the splash below blocks the first paint.
+     On resolve: `!ready` → redirect to #/setup (a harmless no-op if already
+     there, so we don't read the current stage — Layout does NOT import
+     `store`); `ready` → render normally. The boot fetch runs buildDiagnostics
+     server-side (~2 s worst-case probe timeout); a failed probe fails OPEN so
+     a flaky readiness endpoint never locks the user out of the app. */
+  const [setupReady, setSetupReady] = useState<boolean | null>(null); // null = checking
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getSetupReadiness()
+      .then((r) => {
+        if (cancelled) return;
+        setSetupReady(r.ready);
+        // Redirecting to /setup when already there is a harmless no-op, so we
+        // don't need to read the current stage (Layout does NOT import `store`).
+        if (!r.ready) navigate('/setup', { replace: true });
+      })
+      .catch(() => {
+        if (!cancelled) setSetupReady(true);
+      }); // probe failure must not lock the app out
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* Prior-series roster cache, keyed by source bookId. Fetched the
      first time we know there's an open book — feeds both the
      ProfileDrawer's "From prior books in this series" optgroup AND
@@ -1268,6 +1297,17 @@ export function Layout() {
     onGoToGeneration: () => generationPill?.onClick(),
     onGoToDesign: () => designPill?.onClick(),
   };
+
+  /* fs-21 — boot-splash. Gates the first paint until the readiness probe
+     resolves. Placed AFTER every hook call in the component so this early
+     return can never skip a hook (rules-of-hooks). */
+  if (setupReady === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-canvas">
+        <p className="text-ink/60 text-sm">Checking your setup…</p>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen ${trackChapter ? 'pb-24' : 'pb-20'}`}>

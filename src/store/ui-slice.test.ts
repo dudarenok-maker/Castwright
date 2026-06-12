@@ -314,6 +314,13 @@ describe('uiSlice — openAbout', () => {
   });
 });
 
+describe('uiSlice — openSetup', () => {
+  it('openSetup sets the setup stage', () => {
+    const s = uiSlice.reducer(undefined, uiActions.openSetup());
+    expect(s.stage).toEqual({ kind: 'setup' });
+  });
+});
+
 describe('uiSlice — openHelp', () => {
   it('openHelp with focusCode sets stage to { kind: help, focusCode }', () => {
     const s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.openHelp({ focusCode: 'x' }));

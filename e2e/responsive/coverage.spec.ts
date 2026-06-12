@@ -218,6 +218,15 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('setup view (boot gate not-ready)', async ({ page }) => {
+    await page.goto('/#/?setup=notready');
+    await expect(page.getByRole('heading', { name: /Set up Castwright/i })).toBeVisible({
+      timeout: 5_000,
+    });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
   test('advanced configuration view', async ({ page }) => {
     await page.goto('/#/advanced');
     await expect(page.getByRole('heading', { name: /Advanced configuration/i })).toBeVisible({ timeout: 5_000 });
