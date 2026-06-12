@@ -312,17 +312,19 @@ export function TopBar({
               ))}
             </nav>
           )}
-          {/* One compact Status pill (pushed right via ml-auto) replaces the
-              former TTS / analysis / generation / revisions cluster. Hovering
-              (or tapping / focusing) it reveals an anchored popover with the
-              full detail — no modal, no backdrop, so it never dismisses an open
-              cast drawer. Hidden on idle global views (statusSummary === null). */}
-          {statusSummary && (
-            <div className="ml-auto shrink-0">
-              <StatusPill summary={statusSummary} detail={statusDetail} />
-            </div>
-          )}
         </div>
+        {/* One compact Status pill replacing the former TTS / analysis /
+            generation / revisions cluster. Kept OUTSIDE the scrolling middle
+            strip (shrink-0) so a wide breadcrumb — e.g. the listen view's long
+            book title — can never scroll it off-screen / clip it to "Revis".
+            Hovering (or tapping / focusing) reveals an anchored popover with the
+            full detail — no modal, no backdrop, so it never dismisses an open
+            cast drawer. Hidden on idle global views (statusSummary === null). */}
+        {statusSummary && (
+          <div className="shrink-0">
+            <StatusPill summary={statusSummary} detail={statusDetail} />
+          </div>
+        )}
         <div className="flex items-center gap-3 shrink-0">
           <AdminPill onClick={onOpenAdmin} active={stage === 'admin'} />
           {(queueCount ?? 0) > 0 && onOpenQueue && (

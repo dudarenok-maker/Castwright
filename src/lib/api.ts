@@ -4444,6 +4444,15 @@ async function realGetWorkspaceInfo(): Promise<WorkspaceInfo> {
 
 async function mockGetWorkspaceInfo(): Promise<WorkspaceInfo> {
   await wait(40);
+  /* Marketing capture: show a realistic, configured-looking workspace path
+     instead of the `(mock)` placeholder — which also renders amber as an
+     unconfigured "default", wrong for a hero shot. Capture-only. */
+  if (DEMO_CAPTURE)
+    return {
+      root: '~/Audiobooks/Castwright',
+      booksRoot: '~/Audiobooks/Castwright/books',
+      source: 'env',
+    };
   return { root: '(mock)', booksRoot: '(mock)/books', source: 'default' };
 }
 
