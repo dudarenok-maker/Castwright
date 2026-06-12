@@ -2,14 +2,14 @@
    conservative tag-flip (the quote immediately before a `<Name> <speech-verb>`
    tag, only when currently narrator, only when Name resolves to one rostered
    character) and the prose-tag detection the fold uses to keep a 0-line tagged
-   speaker. Regression for Stellarlune ch16 Behnam. */
+   speaker. Regression for The Drowning Bell ch16 Behnam. */
 
 import { describe, it, expect } from 'vitest';
 import { recoverTaggedNarratorLines, taggedSpeakerIds } from './recover-tagged-lines.js';
 
 const roster = [
   { id: 'behnam', name: 'Behnam Aria' },
-  { id: 'sophie-foster', name: 'Sophie Foster' },
+  { id: 'wren-sparrow', name: 'Wren Sparrow' },
   { id: 'kenric', name: 'Kenric' },
 ];
 
@@ -30,9 +30,9 @@ describe('recoverTaggedNarratorLines', () => {
     expect(byId.get('behnam')).toBe(1);
   });
 
-  it('matches by first name ("Sophie said" → sophie-foster)', () => {
-    const sentences = [s(1, 1, 'narrator', '“Hi,”'), s(2, 1, 'narrator', 'Sophie said.')];
-    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('sophie-foster');
+  it('matches by first name ("Wren said" → wren-sparrow)', () => {
+    const sentences = [s(1, 1, 'narrator', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
+    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('wren-sparrow');
   });
 
   it('does not overwrite a non-narrator quote', () => {
@@ -52,11 +52,11 @@ describe('recoverTaggedNarratorLines', () => {
 
   it('skips an ambiguous first name shared by two characters', () => {
     const dup = [
-      { id: 'sophie-foster', name: 'Sophie Foster' },
-      { id: 'sophie-elwin', name: 'Sophie Elwin' },
+      { id: 'wren-sparrow', name: 'Wren Sparrow' },
+      { id: 'wren-oduvan', name: 'Wren Oduvan' },
     ];
-    const sentences = [s(1, 1, 'narrator', '“Hi,”'), s(2, 1, 'narrator', 'Sophie said.')];
-    expect(recoverTaggedNarratorLines(sentences, dup).flipped).toBe(0); // "sophie" → ambiguous
+    const sentences = [s(1, 1, 'narrator', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
+    expect(recoverTaggedNarratorLines(sentences, dup).flipped).toBe(0); // "wren" → ambiguous
   });
 
   it('skips pronoun openers ("she said")', () => {
@@ -65,7 +65,7 @@ describe('recoverTaggedNarratorLines', () => {
   });
 
   it('is a no-op on a correctly-attributed book', () => {
-    const sentences = [s(1, 1, 'sophie-foster', '“Hi,”'), s(2, 1, 'narrator', 'Sophie said.')];
+    const sentences = [s(1, 1, 'wren-sparrow', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
     expect(recoverTaggedNarratorLines(sentences, roster).flipped).toBe(0);
   });
 
@@ -85,7 +85,7 @@ describe('taggedSpeakerIds', () => {
     ];
     const ids = taggedSpeakerIds(sentences, roster);
     expect(ids.has('behnam')).toBe(true);
-    expect(ids.has('sophie-foster')).toBe(false);
+    expect(ids.has('wren-sparrow')).toBe(false);
     expect([...ids]).toEqual(['behnam']);
   });
 });

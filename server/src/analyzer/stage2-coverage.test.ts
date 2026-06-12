@@ -1,7 +1,7 @@
 /* Stage-2 attribution coverage guard. The per-chapter attribution model
    (prose → per-sentence JSON) can fall into a degenerate repeat-loop: it
    re-emits a span of sentences and terminates early, so the chapter is both
-   DUPLICATED and TRUNCATED (the 2026-06-05 Stellarlune ch12/ch18 forensics).
+   DUPLICATED and TRUNCATED (the 2026-06-05 The Drowning Bell ch12/ch18 forensics).
    The cache ingest trusts the model's list with no coverage check, so it ships.
 
    These tests pin the detector that compares the attributed sentences against

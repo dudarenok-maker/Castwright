@@ -181,7 +181,7 @@ describe('verifyEvidenceAgainstSource', () => {
   });
 
   it('keeps stitched same-speaker quotes via the segment tier when every segment is in source', () => {
-    /* Regression for the KOTLC false-positive class: the model joins two
+    /* Regression for the the Hollow Tide false-positive class: the model joins two
        consecutive same-speaker utterances and drops the narration tag
        between them. The pure-substring check used to drop these; the
        three-tier match now keeps them as `segments`. */
@@ -213,16 +213,16 @@ describe('verifyEvidenceAgainstSource', () => {
   });
 
   it('keeps quotes whose only difference is terminal-punct drift (period for comma before a dialogue tag)', () => {
-    /* The other half of the KOTLC false-positive class. Source punctuates
+    /* The other half of the the Hollow Tide false-positive class. Source punctuates
        the utterance with `,` because a dialogue tag follows; the model
        emits `.` because it treats the line as a complete sentence. */
     const src = '"Mammoths are extinct," she interrupted. The dog barked.';
     const chars: CharacterOutput[] = [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
-        color: 'sophie',
+        color: 'wren',
         evidence: [{ quote: 'Mammoths are extinct.' }],
       },
     ];
@@ -403,17 +403,17 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     const roster = new Map<string, CharacterOutput>();
     mergeRosterChapter(roster, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
-      { id: 'sophie', name: 'Sophie', role: 'protagonist', color: 'orange' },
+      { id: 'wren', name: 'Wren', role: 'protagonist', color: 'orange' },
     ]);
-    expect(Array.from(roster.keys())).toEqual(['narrator', 'sophie']);
+    expect(Array.from(roster.keys())).toEqual(['narrator', 'wren']);
   });
 
   it('merges evidence quotes into an existing entry, deduping on normalised quote text', () => {
     const roster = new Map<string, CharacterOutput>();
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
         color: 'orange',
         evidence: [{ quote: 'Hello world.' }],
@@ -422,24 +422,24 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     /* Same quote with smart-quote variation should NOT add a duplicate. */
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
         color: 'orange',
         evidence: [{ quote: '“Hello world.”' }, { quote: 'Different line.' }],
       },
     ]);
-    const sophie = roster.get('sophie')!;
-    expect(sophie.evidence).toHaveLength(2);
-    expect(sophie.evidence!.map((e) => e.quote)).toEqual(['Hello world.', 'Different line.']);
+    const wren = roster.get('wren')!;
+    expect(wren.evidence).toHaveLength(2);
+    expect(wren.evidence!.map((e) => e.quote)).toEqual(['Hello world.', 'Different line.']);
   });
 
   it('keeps the longer description when a later chapter offers a richer one', () => {
     const roster = new Map<string, CharacterOutput>();
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
         color: 'orange',
         description: 'A girl.',
@@ -447,22 +447,22 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     ]);
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
         color: 'orange',
         description: 'A telepathic girl with green eyes who has just discovered the Lost Cities.',
       },
     ]);
-    expect(roster.get('sophie')!.description).toContain('telepathic');
+    expect(roster.get('wren')!.description).toContain('telepathic');
   });
 
   it('keeps the shorter description if a later chapter is shorter (longest-wins, not latest-wins)', () => {
     const roster = new Map<string, CharacterOutput>();
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
         color: 'orange',
         description: 'A telepathic girl with green eyes who has just discovered the Lost Cities.',
@@ -470,22 +470,22 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     ]);
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
         color: 'orange',
         description: 'A girl.',
       },
     ]);
-    expect(roster.get('sophie')!.description).toContain('telepathic');
+    expect(roster.get('wren')!.description).toContain('telepathic');
   });
 
   it('latest-wins for tone fields when both chapters provide them', () => {
     const roster = new Map<string, CharacterOutput>();
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'p',
         color: 'orange',
         tone: { warmth: 30, pace: 50 },
@@ -493,23 +493,23 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     ]);
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'p',
         color: 'orange',
         tone: { warmth: 80 } /* pace not provided this round */,
       },
     ]);
     /* warmth updated; pace preserved (don't blank out a known value). */
-    expect(roster.get('sophie')!.tone).toEqual({ warmth: 80, pace: 50 });
+    expect(roster.get('wren')!.tone).toEqual({ warmth: 80, pace: 50 });
   });
 
   it('attributes union without duplicates', () => {
     const roster = new Map<string, CharacterOutput>();
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'p',
         color: 'orange',
         attributes: ['curious', 'wry'],
@@ -517,22 +517,22 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     ]);
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'p',
         color: 'orange',
         attributes: ['wry', 'brave'] /* 'wry' is a duplicate */,
       },
     ]);
-    expect(roster.get('sophie')!.attributes).toEqual(['curious', 'wry', 'brave']);
+    expect(roster.get('wren')!.attributes).toEqual(['curious', 'wry', 'brave']);
   });
 
   it('first-detection wins for identity fields (gender / ageRange)', () => {
     const roster = new Map<string, CharacterOutput>();
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'p',
         color: 'orange',
         gender: 'female',
@@ -544,23 +544,23 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
        confident pass. */
     mergeRosterChapter(roster, [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'p',
         color: 'orange',
         gender: 'male',
       },
     ]);
-    expect(roster.get('sophie')!.gender).toBe('female');
-    expect(roster.get('sophie')!.ageRange).toBe('teen');
+    expect(roster.get('wren')!.gender).toBe('female');
+    expect(roster.get('wren')!.ageRange).toBe('teen');
   });
 
   it('does not mutate the incoming chapter outputs (defensive clone)', () => {
     const roster = new Map<string, CharacterOutput>();
     const incoming: CharacterOutput[] = [
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'p',
         color: 'orange',
         attributes: ['curious'],
@@ -570,9 +570,9 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
     ];
     mergeRosterChapter(roster, incoming);
     /* Mutate the merged copy. */
-    roster.get('sophie')!.attributes!.push('wry');
-    roster.get('sophie')!.evidence!.push({ quote: 'b' });
-    roster.get('sophie')!.tone!.warmth = 80;
+    roster.get('wren')!.attributes!.push('wry');
+    roster.get('wren')!.evidence!.push({ quote: 'b' });
+    roster.get('wren')!.tone!.warmth = 80;
     /* Incoming is unchanged. */
     expect(incoming[0].attributes).toEqual(['curious']);
     expect(incoming[0].evidence).toEqual([{ quote: 'a' }]);
@@ -865,8 +865,8 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
 
   it('returns complete when every non-excluded chapter has a non-empty chapterCast entry', () => {
     const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [makeChar('narrator'), makeChar('sophie')],
-      2: [makeChar('sophie'), makeChar('keefe')],
+      1: [makeChar('narrator'), makeChar('wren')],
+      2: [makeChar('wren'), makeChar('marlow')],
       3: [makeChar('narrator')],
     };
     const result = isPhase0aCoverageComplete(chapterCast, [{ id: 1 }, { id: 2 }, { id: 3 }]);
@@ -937,7 +937,7 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
 /* reconcileSentenceCharacterIds is the Phase 1 disk-write safety net for
    orphan characterIds. Without it, manuscript-edits.json can carry IDs
    that don't exist in cast.json — exactly what we found on "Unlocked"
-   where 153 sentences referenced keefe/elwin/biana/alina/sophie after
+   where 153 sentences referenced marlow/oduvan/maerin/linnet/wren after
    cast.json had been collapsed to Narrator-only by the partial-cache bug
    fixed in A1. */
 describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
@@ -956,12 +956,12 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
   it('passes through sentences whose characterId is in validIds (no-op)', () => {
     const sentences = [
       makeSentence(1, 1, 'narrator'),
-      makeSentence(2, 1, 'sophie'),
-      makeSentence(3, 2, 'keefe'),
+      makeSentence(2, 1, 'wren'),
+      makeSentence(3, 2, 'marlow'),
     ];
     const result = reconcileSentenceCharacterIds(
       sentences,
-      new Set(['narrator', 'sophie', 'keefe']),
+      new Set(['narrator', 'wren', 'marlow']),
     );
     expect(result.demotedCount).toBe(0);
     expect(result.sentences).toEqual(sentences);
@@ -970,13 +970,13 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
 
   it('demotes sentences whose characterId is missing from validIds to narrator (default fallback)', () => {
     /* Unlocked-style regression: stage1 has [narrator] only, but Phase 1
-       attributed to keefe/elwin/biana. Those ids become narrator at
+       attributed to marlow/oduvan/maerin. Those ids become narrator at
        write time, preserving the rest of the sentence shape. */
     const sentences = [
-      makeSentence(1, 1, 'narrator', 'Sophie hailed me.'),
-      makeSentence(2, 1, 'keefe', 'Hey, Foster.'),
-      makeSentence(3, 2, 'elwin', 'Yeti pee, fascinating.'),
-      makeSentence(4, 2, 'narrator', 'Elwin sighed.'),
+      makeSentence(1, 1, 'narrator', 'Wren hailed me.'),
+      makeSentence(2, 1, 'marlow', 'Hey, Foster.'),
+      makeSentence(3, 2, 'oduvan', 'Yeti pee, fascinating.'),
+      makeSentence(4, 2, 'narrator', 'Oduvan sighed.'),
     ];
     const result = reconcileSentenceCharacterIds(sentences, new Set(['narrator']));
     expect(result.demotedCount).toBe(2);
@@ -992,12 +992,12 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
     expect(result.sentences[2].chapterId).toBe(2);
     expect(result.sentences[2].text).toBe('Yeti pee, fascinating.');
     /* Per-original-id breakdown lets the caller surface a useful log line. */
-    expect(result.demotedByOriginalId.get('keefe')).toBe(1);
-    expect(result.demotedByOriginalId.get('elwin')).toBe(1);
+    expect(result.demotedByOriginalId.get('marlow')).toBe(1);
+    expect(result.demotedByOriginalId.get('oduvan')).toBe(1);
   });
 
   it('honours a custom fallbackId (caller can route to "unknown" instead of narrator)', () => {
-    const sentences = [makeSentence(1, 1, 'keefe')];
+    const sentences = [makeSentence(1, 1, 'marlow')];
     const result = reconcileSentenceCharacterIds(sentences, new Set(['narrator']), {
       fallbackId: 'unknown',
     });
@@ -1007,8 +1007,8 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
   it('invokes onDemote for each orphan sentence with the original id intact', () => {
     const sentences = [
       makeSentence(1, 1, 'narrator'),
-      makeSentence(2, 1, 'keefe'),
-      makeSentence(3, 2, 'keefe'),
+      makeSentence(2, 1, 'marlow'),
+      makeSentence(3, 2, 'marlow'),
     ];
     const demotions: Array<{ sentenceId: number; originalId: string }> = [];
     reconcileSentenceCharacterIds(sentences, new Set(['narrator']), {
@@ -1017,13 +1017,13 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
       },
     });
     expect(demotions).toEqual([
-      { sentenceId: 2, originalId: 'keefe' },
-      { sentenceId: 3, originalId: 'keefe' },
+      { sentenceId: 2, originalId: 'marlow' },
+      { sentenceId: 3, originalId: 'marlow' },
     ]);
   });
 
   it('returns a fresh array — caller-provided input is not mutated', () => {
-    const sentences = [makeSentence(1, 1, 'keefe')];
+    const sentences = [makeSentence(1, 1, 'marlow')];
     const before = JSON.stringify(sentences);
     reconcileSentenceCharacterIds(sentences, new Set(['narrator']));
     expect(JSON.stringify(sentences)).toBe(before);
@@ -1065,8 +1065,8 @@ describe('attributionDriftExceeded — threshold gate for blocking confirm advan
   });
 
   it('Unlocked-shaped sample (153 demoted of 4192) stays below 5% — handled by demotion, no escalation', () => {
-    /* The real regression numbers: keefe(134) + elwin(9) + biana(8) +
-       alina(1) + sophie(1) = 153 orphan attributions out of 4192 total
+    /* The real regression numbers: marlow(134) + oduvan(9) + maerin(8) +
+       linnet(1) + wren(1) = 153 orphan attributions out of 4192 total
        sentences. 153/4192 ≈ 3.65%. Demotion runs but the route still
        advances to confirm — this is the right call: a single-voice
        audiobook of 4039 narrator + 153 demoted-to-narrator is a degraded
@@ -1147,22 +1147,22 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
       'Unlocked',
       {
         id: 7,
-        title: "Elwin's Medical Log",
-        body: "I'd just settled into bed when Sophie hailed me.",
+        title: "Oduvan's Medical Log",
+        body: "I'd just settled into bed when Wren hailed me.",
       },
       [],
     );
     expect(inbox).toContain('manuscriptId: mns_test');
     expect(inbox).toContain('Title: Unlocked');
-    expect(inbox).toContain("Chapter: 7 — Elwin's Medical Log");
-    expect(inbox).toContain("I'd just settled into bed when Sophie hailed me.");
+    expect(inbox).toContain("Chapter: 7 — Oduvan's Medical Log");
+    expect(inbox).toContain("I'd just settled into bed when Wren hailed me.");
   });
 
   it('renders the broadened first-person guidance so journal/registry chapters detect their author (regression for Unlocked)', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',
       'Unlocked',
-      { id: 7, title: "Elwin's Medical Log", body: 'Body text.' },
+      { id: 7, title: "Oduvan's Medical Log", body: 'Body text.' },
       [],
     );
     /* The broadened rule names the document formats explicitly so the
@@ -1190,8 +1190,8 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
           evidence: [{ quote: 'q1' }],
         },
         {
-          id: 'sophie',
-          name: 'Sophie',
+          id: 'wren',
+          name: 'Wren',
           role: 'Protagonist',
           color: 'unset',
           evidence: [{ quote: 'q2' }],
@@ -1200,7 +1200,7 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     );
     expect(inbox).toContain('Running roster');
     expect(inbox).toContain('"id": "narrator"');
-    expect(inbox).toContain('"id": "sophie"');
+    expect(inbox).toContain('"id": "wren"');
     expect(inbox).toContain('"role": "Protagonist"');
   });
 
@@ -1215,8 +1215,8 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
   });
 
   it('renders the series-cast prior section when sibling-book characters are supplied (C2 carry-over)', () => {
-    /* The Unlocked-shaped regression motivator: KOTLC + Bonus Keefe
-       between them have Sophie / Keefe / Elwin already confirmed.
+    /* The Unlocked-shaped regression motivator: the Hollow Tide + Bonus Marlow
+       between them have Wren / Marlow / Oduvan already confirmed.
        Carrying them into Unlocked's per-chapter prompt means the
        detector recognises them by name rather than inventing new ids. */
     const inbox = buildStage1ChapterInbox(
@@ -1226,33 +1226,33 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
       [],
       [
         {
-          id: 'sophie',
-          name: 'Sophie',
+          id: 'wren',
+          name: 'Wren',
           aliases: ['Foster'],
-          /* Deduped roster: Sophie appears in two prior books, so the
+          /* Deduped roster: Wren appears in two prior books, so the
              array carries both titles. */
-          fromBookTitles: ['Keeper of the Lost Cities', 'Exile'],
+          fromBookTitles: ['The Hollow Tide', 'Exile'],
         },
-        { id: 'keefe', name: 'Keefe', fromBookTitles: ['Bonus Keefe Story'] },
+        { id: 'marlow', name: 'Marlow', fromBookTitles: ['the Coalfall Commission'] },
         {
-          id: 'elwin',
-          name: 'Elwin',
+          id: 'oduvan',
+          name: 'Oduvan',
           description: 'A medical professional',
-          fromBookTitles: ['Keeper of the Lost Cities'],
+          fromBookTitles: ['The Hollow Tide'],
         },
       ],
     );
     expect(inbox).toContain('## Known characters from prior books in this series');
     /* All three names + their provenance render so the model can
        disambiguate same-name carry-overs across sibling books. */
-    expect(inbox).toContain('"id": "sophie"');
-    expect(inbox).toContain('"id": "keefe"');
-    expect(inbox).toContain('"id": "elwin"');
-    expect(inbox).toContain('Keeper of the Lost Cities');
-    expect(inbox).toContain('Bonus Keefe Story');
+    expect(inbox).toContain('"id": "wren"');
+    expect(inbox).toContain('"id": "marlow"');
+    expect(inbox).toContain('"id": "oduvan"');
+    expect(inbox).toContain('The Hollow Tide');
+    expect(inbox).toContain('the Coalfall Commission');
     /* The plural fromBookTitles renders as an array — important so the
-       model sees that Sophie spans two volumes, not just one. */
-    expect(inbox).toMatch(/"fromBookTitles":\s*\[\s*"Keeper of the Lost Cities",\s*"Exile"\s*\]/);
+       model sees that Wren spans two volumes, not just one. */
+    expect(inbox).toMatch(/"fromBookTitles":\s*\[\s*"The Hollow Tide",\s*"Exile"\s*\]/);
     /* Singular legacy field must NOT appear in the rendered JSON. */
     expect(inbox).not.toMatch(/"fromBookTitle":/);
     /* And the reuse-verbatim guidance is rendered so the model knows
@@ -1314,15 +1314,15 @@ describe('buildInterimCast — mid-run cast snapshot', () => {
 
   it('merges per-chapter character lists in chapter-id order and palette-colours the roster', () => {
     const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [makeChar('narrator', 'Narrator'), makeChar('sophie', 'Sophie')],
-      2: [makeChar('sophie', 'Sophie'), makeChar('keefe', 'Keefe')],
-      3: [makeChar('keefe', 'Keefe'), makeChar('biana', 'Biana')],
+      1: [makeChar('narrator', 'Narrator'), makeChar('wren', 'Wren')],
+      2: [makeChar('wren', 'Wren'), makeChar('marlow', 'Marlow')],
+      3: [makeChar('marlow', 'Marlow'), makeChar('maerin', 'Maerin')],
     };
 
     const interim = buildInterimCast(chapterCast, [1, 2, 3]);
 
-    /* 4 distinct ids after merge (narrator + sophie + keefe + biana). */
-    expect(interim.map((c) => c.id)).toEqual(['narrator', 'sophie', 'keefe', 'biana']);
+    /* 4 distinct ids after merge (narrator + wren + marlow + maerin). */
+    expect(interim.map((c) => c.id)).toEqual(['narrator', 'wren', 'marlow', 'maerin']);
 
     /* Narrator keeps its dedicated palette slot; everyone else gets a
        deterministic non-narrator slot. */
@@ -1366,13 +1366,13 @@ describe('buildInterimCast — mid-run cast snapshot', () => {
 
   it('skips chapters that are missing from the chapterCast map (cache predates the chapter, or excluded)', () => {
     const chapterCast: Record<number, CharacterOutput[]> = {
-      1: [makeChar('sophie', 'Sophie')],
+      1: [makeChar('wren', 'Wren')],
       /* chapter 2 missing entirely — buildInterimCast must not throw. */
-      3: [makeChar('keefe', 'Keefe')],
+      3: [makeChar('marlow', 'Marlow')],
     };
 
     const interim = buildInterimCast(chapterCast, [1, 2, 3]);
-    expect(interim.map((c) => c.id)).toEqual(['sophie', 'keefe']);
+    expect(interim.map((c) => c.id)).toEqual(['wren', 'marlow']);
   });
 
   it('folds descriptor names ("The Jogger", "Drooly Boy", "Unknown Intruder") into Unknown male/female buckets so the mid-run snapshot matches the post-Phase-1 fold', () => {
@@ -1385,7 +1385,7 @@ describe('buildInterimCast — mid-run cast snapshot', () => {
     const chapterCast: Record<number, CharacterOutput[]> = {
       1: [
         makeChar('narrator', 'Narrator'),
-        makeChar('sophie', 'Sophie', { gender: 'female' }),
+        makeChar('wren', 'Wren', { gender: 'female' }),
         makeChar('the-jogger', 'The Jogger', { gender: 'male' }),
       ],
       2: [
@@ -1399,9 +1399,9 @@ describe('buildInterimCast — mid-run cast snapshot', () => {
 
     expect(interim.map((c) => c.id).sort()).toEqual([
       'narrator',
-      'sophie',
       'unknown-female',
       'unknown-male',
+      'wren',
     ]);
     const male = interim.find((c) => c.id === 'unknown-male')!;
     const female = interim.find((c) => c.id === 'unknown-female')!;
@@ -1433,14 +1433,14 @@ describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiabl
     const logs: string[] = [];
     const chars: CharacterOutput[] = [
       makeChar('narrator', 'Narrator', []), // narrator is exempt
-      makeChar('sophie', 'Sophie', [{ quote: 'Real line' }]), // kept
+      makeChar('wren', 'Wren', [{ quote: 'Real line' }]), // kept
       makeChar('iggy', 'Iggy', []), // pet — verifier killed everything
       makeChar('rescuer', 'Rescuer'), // never had evidence
     ];
 
     const kept = dropEvidencelessCast(chars, (msg) => logs.push(msg));
 
-    expect(kept.map((c) => c.id)).toEqual(['narrator', 'sophie']);
+    expect(kept.map((c) => c.id)).toEqual(['narrator', 'wren']);
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain('Dropped 2 characters');
     expect(logs[0]).toContain('Iggy');
@@ -1451,24 +1451,24 @@ describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiabl
     const logs: string[] = [];
     const chars: CharacterOutput[] = [
       makeChar('narrator', 'Narrator'),
-      makeChar('sophie', 'Sophie', [{ quote: 'Line' }]),
-      makeChar('keefe', 'Keefe', [{ quote: 'Line' }]),
+      makeChar('wren', 'Wren', [{ quote: 'Line' }]),
+      makeChar('marlow', 'Marlow', [{ quote: 'Line' }]),
     ];
 
     const kept = dropEvidencelessCast(chars, (msg) => logs.push(msg));
 
-    expect(kept.map((c) => c.id)).toEqual(['narrator', 'sophie', 'keefe']);
+    expect(kept.map((c) => c.id)).toEqual(['narrator', 'wren', 'marlow']);
     expect(logs).toEqual([]);
   });
 
   it('NEVER drops the narrator even when it has zero evidence (narrator lines are prose, not dialogue)', () => {
     const chars: CharacterOutput[] = [
       makeChar('narrator', 'Narrator'), // no evidence
-      makeChar('sophie', 'Sophie', [{ quote: 'Hi.' }]),
+      makeChar('wren', 'Wren', [{ quote: 'Hi.' }]),
     ];
 
     const kept = dropEvidencelessCast(chars, () => {});
-    expect(kept.map((c) => c.id)).toEqual(['narrator', 'sophie']);
+    expect(kept.map((c) => c.id)).toEqual(['narrator', 'wren']);
   });
 
   it('singularises the log message when exactly one character is dropped', () => {
@@ -1495,14 +1495,14 @@ describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiabl
       'The cat watched from the rafters and did not speak.';
     const chars: CharacterOutput[] = [
       makeChar('narrator', 'Narrator', []),
-      makeChar('sophie', 'Sophie', [{ quote: 'Real line' }]),
+      makeChar('wren', 'Wren', [{ quote: 'Real line' }]),
       makeChar('master-oduvan', 'Master Oduvan', []), // verifier killed all his quotes — but he's tagged
       makeChar('iggy', 'Iggy', []), // pet — never tagged as a speaker in the prose
     ];
 
     const kept = dropEvidencelessCast(chars, (msg) => logs.push(msg), source);
 
-    expect(kept.map((c) => c.id)).toEqual(['narrator', 'sophie', 'master-oduvan']);
+    expect(kept.map((c) => c.id)).toEqual(['narrator', 'wren', 'master-oduvan']);
     expect(logs.some((l) => /[Kk]ept 1 .*tag/.test(l))).toBe(true); // rescue logged
     expect(logs.some((l) => l.includes('Dropped 1 character') && l.includes('Iggy'))).toBe(true);
   });
@@ -1627,13 +1627,13 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
         carryPath(dir),
         JSON.stringify({
           characters: [
-            { id: 'sophie', voiceId: 'sophie', voiceState: 'reused', matchedFrom: { bookId: 'b0' } },
+            { id: 'wren', voiceId: 'wren', voiceState: 'reused', matchedFrom: { bookId: 'b0' } },
           ],
         }),
       );
       const prior = await readPriorCastForMerge(dir);
       expect(prior).toHaveLength(1);
-      expect(prior[0]).toMatchObject({ id: 'sophie', voiceId: 'sophie', voiceState: 'reused' });
+      expect(prior[0]).toMatchObject({ id: 'wren', voiceId: 'wren', voiceState: 'reused' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

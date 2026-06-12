@@ -29,8 +29,8 @@ const VALID_RESPONSE = JSON.stringify({
       evidence: [{ quote: 'a' }, { quote: 'bb' }, { quote: 'ccc' }],
     },
     {
-      id: 'sophie',
-      name: 'Sophie',
+      id: 'wren',
+      name: 'Wren',
       role: 'protagonist',
       color: 'orange',
       evidence: [{ quote: 'dd' }, { quote: 'eee' }, { quote: 'ffff' }],
@@ -179,7 +179,7 @@ describe('OllamaAnalyzer — happy path streaming', () => {
 
     /* Parsed payload comes through. */
     expect(result.characters).toHaveLength(2);
-    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'sophie']);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'wren']);
   });
 });
 

@@ -28,15 +28,15 @@ const STAGE1_RESPONSE = JSON.stringify({
       evidence: [{ quote: 'aaa' }, { quote: 'bbbb' }, { quote: 'ccccc' }],
     },
     {
-      id: 'sophie',
-      name: 'Sophie',
+      id: 'wren',
+      name: 'Wren',
       role: 'protagonist',
       color: 'orange',
       evidence: [{ quote: 'ddd' }, { quote: 'eeee' }, { quote: 'fffff' }],
     },
     {
-      id: 'keefe',
-      name: 'Keefe',
+      id: 'marlow',
+      name: 'Marlow',
       role: 'sidekick',
       color: 'magenta',
       evidence: [{ quote: 'ggg' }, { quote: 'hhhh' }, { quote: 'iiiii' }],
@@ -112,7 +112,7 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
 
     /* And the analyzer returned the parsed payload. */
     expect(result.characters).toHaveLength(3);
-    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'sophie', 'keefe']);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'wren', 'marlow']);
   });
 
   it('skips empty chunks (text undefined) without firing onChunk', async () => {
@@ -159,8 +159,8 @@ describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detectio
         evidence: [{ quote: 'a' }, { quote: 'bb' }],
       },
       {
-        id: 'sophie',
-        name: 'Sophie',
+        id: 'wren',
+        name: 'Wren',
         role: 'protagonist',
         color: 'orange',
         evidence: [{ quote: 'cc' }, { quote: 'dddd' }],
@@ -184,7 +184,7 @@ describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detectio
     expect(onChunk).toHaveBeenCalledTimes(slices.length);
 
     expect(result.characters).toHaveLength(2);
-    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'sophie']);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'wren']);
     /* No chapters[] field on the per-chapter shape — the parser is the
        source of truth for the chapter list. */
     expect((result as unknown as { chapters?: unknown }).chapters).toBeUndefined();

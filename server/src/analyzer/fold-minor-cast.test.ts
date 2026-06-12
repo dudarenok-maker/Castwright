@@ -29,20 +29,20 @@ describe('foldMinorCast', () => {
   it('is a no-op when no character qualifies (everyone speaks ≥ minLines, no Unknown names)', () => {
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
-      makeChar('keefe', { name: 'Keefe Sencen', gender: 'male' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
+      makeChar('marlow', { name: 'Marlow Halden', gender: 'male' }),
     ];
     const sentences = makeSentences([
       [1, 'narrator'],
       [1, 'narrator'],
       [1, 'narrator'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [2, 'sophie'],
-      [2, 'sophie'],
-      [1, 'keefe'],
-      [2, 'keefe'],
-      [3, 'keefe'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [2, 'wren'],
+      [2, 'wren'],
+      [1, 'marlow'],
+      [2, 'marlow'],
+      [3, 'marlow'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
@@ -57,7 +57,7 @@ describe('foldMinorCast', () => {
   it('folds an "Unknown Jogger" with male gender into unknown-male regardless of line count', () => {
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('unknown-jogger', { name: 'Unknown Jogger', gender: 'male' }),
     ];
     /* Jogger speaks 10 lines but is still rolled up — the "Unknown" name
@@ -65,17 +65,17 @@ describe('foldMinorCast', () => {
        them as nameless. */
     const joggerLines = Array.from({ length: 10 }, () => [1, 'unknown-jogger'] as [number, string]);
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
       ...joggerLines,
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
 
     expect(result.rewrites).toEqual({ 'unknown-jogger': 'unknown-male' });
-    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'sophie', 'unknown-male']);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'wren', 'unknown-male']);
     const bucket = result.characters.find((c) => c.id === 'unknown-male')!;
     expect(bucket.name).toBe('Unknown male');
     expect(bucket.aliases).toEqual(['Unknown Jogger']);
@@ -113,38 +113,38 @@ describe('foldMinorCast', () => {
   });
 
   it('folds a named character with too few lines into the matching bucket', () => {
-    /* "Sandor" is named and not "Unknown", but only speaks once in the
+    /* "Garrow" is named and not "Unknown", but only speaks once in the
        whole book — not worth a dedicated voice profile. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
-      makeChar('sandor', { name: 'Sandor', gender: 'male' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
+      makeChar('garrow', { name: 'Garrow', gender: 'male' }),
     ];
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [5, 'sandor'], // single line
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [5, 'garrow'], // single line
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
 
-    expect(result.rewrites).toEqual({ sandor: 'unknown-male' });
-    expect(result.characters.find((c) => c.id === 'sandor')).toBeUndefined();
+    expect(result.rewrites).toEqual({ garrow: 'unknown-male' });
+    expect(result.characters.find((c) => c.id === 'garrow')).toBeUndefined();
     const bucket = result.characters.find((c) => c.id === 'unknown-male')!;
-    expect(bucket.aliases).toEqual(['Sandor']);
+    expect(bucket.aliases).toEqual(['Garrow']);
     expect(bucket.lines).toBe(1);
   });
 
   it('never folds narrator even with 0 attributed lines', () => {
-    const chars = [makeChar('narrator'), makeChar('sophie', { name: 'Sophie', gender: 'female' })];
+    const chars = [makeChar('narrator'), makeChar('wren', { name: 'Wren', gender: 'female' })];
     /* Narrator has zero attributions in this synthetic case but must
        still survive — downstream code (stage 2 prompt, voice picker)
        relies on narrator's presence. */
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
@@ -156,23 +156,23 @@ describe('foldMinorCast', () => {
   it('rolls multiple folded sources into a single bucket with aliases preserving each name and any pre-existing aliases', () => {
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('unknown-jogger', { name: 'Unknown Jogger', gender: 'male' }),
       makeChar('unknown-shopkeep', {
         name: 'Unknown Shopkeep',
         gender: 'male',
         aliases: ['The Shopkeeper'],
       }),
-      makeChar('sandor', { name: 'Sandor', gender: 'male' }), // ≤ minLines
+      makeChar('garrow', { name: 'Garrow', gender: 'male' }), // ≤ minLines
     ];
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
       [2, 'unknown-jogger'],
       [3, 'unknown-shopkeep'],
-      [4, 'sandor'],
+      [4, 'garrow'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
@@ -182,7 +182,7 @@ describe('foldMinorCast', () => {
       'Unknown Jogger',
       'Unknown Shopkeep',
       'The Shopkeeper',
-      'Sandor',
+      'Garrow',
     ]);
     expect(bucket.lines).toBe(3);
     expect(bucket.scenes).toBe(3); // chapters 2, 3, 4
@@ -197,13 +197,13 @@ describe('foldMinorCast', () => {
   it('is idempotent — running on already-folded output produces the same result', () => {
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('unknown-jogger', { name: 'Unknown Jogger', gender: 'male' }),
     ];
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
       [1, 'unknown-jogger'],
     ]);
     const first = foldMinorCast(chars, sentences, { minLines: 3 });
@@ -221,17 +221,17 @@ describe('foldMinorCast', () => {
   it('keeps the two buckets distinct: female folds go to unknown-female, male folds to unknown-male', () => {
     const chars = [
       makeChar('narrator'),
-      makeChar('keefe', { name: 'Keefe Sencen', gender: 'male' }),
+      makeChar('marlow', { name: 'Marlow Halden', gender: 'male' }),
       makeChar('unknown-woman', { name: 'Unknown Woman', gender: 'female' }),
-      makeChar('marella', { name: 'Marella', gender: 'female' }), // 1 line
+      makeChar('edda', { name: 'Edda', gender: 'female' }), // 1 line
       makeChar('unknown-runner', { name: 'Unknown Runner', gender: 'male' }), // 1 line
     ];
     const sentences = makeSentences([
-      [1, 'keefe'],
-      [1, 'keefe'],
-      [1, 'keefe'],
+      [1, 'marlow'],
+      [1, 'marlow'],
+      [1, 'marlow'],
       [2, 'unknown-woman'],
-      [3, 'marella'],
+      [3, 'edda'],
       [4, 'unknown-runner'],
     ]);
 
@@ -239,13 +239,13 @@ describe('foldMinorCast', () => {
 
     expect(result.rewrites).toEqual({
       'unknown-woman': 'unknown-female',
-      marella: 'unknown-female',
+      edda: 'unknown-female',
       'unknown-runner': 'unknown-male',
     });
     /* Two distinct minor-cast survivors. */
     const female = result.characters.find((c) => c.id === 'unknown-female')!;
     const male = result.characters.find((c) => c.id === 'unknown-male')!;
-    expect(female.aliases).toEqual(['Unknown Woman', 'Marella']);
+    expect(female.aliases).toEqual(['Unknown Woman', 'Edda']);
     expect(male.aliases).toEqual(['Unknown Runner']);
     expect(female.name).toBe('Unknown female');
     expect(male.name).toBe('Unknown male');
@@ -262,27 +262,27 @@ describe('foldMinorCast', () => {
        view. Named bystanders with 1 line should stay on the roster. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
-      makeChar('sandor', { name: 'Sandor', gender: 'male' }), // 1 line
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
+      makeChar('garrow', { name: 'Garrow', gender: 'male' }), // 1 line
       makeChar('unknown-jogger', { name: 'Unknown Jogger', gender: 'male' }), // 1 line
     ];
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [2, 'sandor'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [2, 'garrow'],
       [3, 'unknown-jogger'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 0 });
 
-    /* Sandor stayed; only Unknown Jogger folded. */
+    /* Garrow stayed; only Unknown Jogger folded. */
     expect(result.rewrites).toEqual({ 'unknown-jogger': 'unknown-male' });
     expect(result.characters.map((c) => c.id).sort()).toEqual([
+      'garrow',
       'narrator',
-      'sandor',
-      'sophie',
       'unknown-male',
+      'wren',
     ]);
   });
 
@@ -291,19 +291,19 @@ describe('foldMinorCast', () => {
        cast list down to the principals only. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }), // 8 lines — keeps
-      makeChar('keefe', { name: 'Keefe Sencen', gender: 'male' }), // 4 lines — folds
+      makeChar('wren', { name: 'Wren', gender: 'female' }), // 8 lines — keeps
+      makeChar('marlow', { name: 'Marlow Halden', gender: 'male' }), // 4 lines — folds
     ];
     const sentences = makeSentences([
-      ...Array.from({ length: 8 }, () => [1, 'sophie'] as [number, string]),
-      ...Array.from({ length: 4 }, () => [2, 'keefe'] as [number, string]),
+      ...Array.from({ length: 8 }, () => [1, 'wren'] as [number, string]),
+      ...Array.from({ length: 4 }, () => [2, 'marlow'] as [number, string]),
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 5 });
 
-    expect(result.rewrites).toEqual({ keefe: 'unknown-male' });
+    expect(result.rewrites).toEqual({ marlow: 'unknown-male' });
     const bucket = result.characters.find((c) => c.id === 'unknown-male')!;
-    expect(bucket.aliases).toEqual(['Keefe Sencen']);
+    expect(bucket.aliases).toEqual(['Marlow Halden']);
     expect(bucket.lines).toBe(4);
   });
 
@@ -316,7 +316,7 @@ describe('foldMinorCast', () => {
        cast doesn't accumulate non-speaking entries. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('marty', { name: 'Marty', gender: 'neutral' }), // pet cat — 0 lines
       makeChar('verminion', { name: 'Verminion', gender: 'neutral' }), // imp — 0 lines
       makeChar('verdi', { name: 'Verdi', gender: 'neutral' }), // pet dinosaur — 0 lines
@@ -325,14 +325,14 @@ describe('foldMinorCast', () => {
       [1, 'narrator'],
       [1, 'narrator'],
       [1, 'narrator'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
 
-    expect(result.characters.map((c) => c.id).sort()).toEqual(['narrator', 'sophie']);
+    expect(result.characters.map((c) => c.id).sort()).toEqual(['narrator', 'wren']);
     expect(result.dropped.sort()).toEqual(['Marty', 'Verdi', 'Verminion']);
     expect(result.summary.droppedSilent).toBe(3);
     expect(result.summary.foldedCount).toBe(0);
@@ -349,13 +349,13 @@ describe('foldMinorCast', () => {
        failure, not a non-speaker. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('behnam', { name: 'Behnam Aria', gender: 'male' }), // 0 lines, but tagged
     ];
     const sentences: SentenceOutput[] = [
-      { id: 1, chapterId: 1, characterId: 'sophie', text: '“Hi there,”' },
-      { id: 2, chapterId: 1, characterId: 'sophie', text: 'Sophie said brightly.' },
-      { id: 3, chapterId: 1, characterId: 'sophie', text: '“Anyone home?”' },
+      { id: 1, chapterId: 1, characterId: 'wren', text: '“Hi there,”' },
+      { id: 2, chapterId: 1, characterId: 'wren', text: 'Wren said brightly.' },
+      { id: 3, chapterId: 1, characterId: 'wren', text: '“Anyone home?”' },
       { id: 4, chapterId: 1, characterId: 'narrator', text: '“That would be easier to believe,”' },
       { id: 5, chapterId: 1, characterId: 'narrator', text: 'Behnam noted.' },
     ];
@@ -373,14 +373,14 @@ describe('foldMinorCast', () => {
        stays "fold into unknown-male" not "drop entirely". */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('unknown-passer', { name: 'Unknown Passer', gender: 'male' }),
     ];
     const sentences = makeSentences([
       [1, 'narrator'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
@@ -399,7 +399,7 @@ describe('foldMinorCast', () => {
        if they happen to clear the line-count threshold. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('the-jogger', { name: 'The Jogger', gender: 'male' }),
       makeChar('drooly-boy', { name: 'Drooly Boy', gender: 'male' }),
       makeChar('old-man', { name: 'Old Man', gender: 'male' }),
@@ -408,9 +408,9 @@ describe('foldMinorCast', () => {
     /* Each descriptor speaks 5 lines — past the minLines=3 threshold,
        so without the descriptor-pattern rule they'd survive. */
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
       ...Array.from({ length: 5 }, () => [2, 'the-jogger'] as [number, string]),
       ...Array.from({ length: 5 }, () => [3, 'drooly-boy'] as [number, string]),
       ...Array.from({ length: 5 }, () => [4, 'old-man'] as [number, string]),
@@ -433,35 +433,35 @@ describe('foldMinorCast', () => {
     expect(female.lines).toBe(5);
   });
 
-  it('does NOT fold proper names that happen to share a tail word with a generic role ("Lady Galvin", "Sir Astin")', () => {
-    /* "Lady Galvin" has "Lady" at the START — a title prefix, not the
+  it('does NOT fold proper names that happen to share a tail word with a generic role ("Lady Wick", "Sir Astin")', () => {
+    /* "Lady Wick" has "Lady" at the START — a title prefix, not the
        trailing role-word pattern. Same shape as "Sir Astin", "Dame
-       Alina", "Lord Cassius". These are proper names and must NOT
+       Linnet", "Lord Vane". These are proper names and must NOT
        fold. */
     const chars = [
       makeChar('narrator'),
-      makeChar('lady-galvin', { name: 'Lady Galvin', gender: 'female' }),
+      makeChar('lady-wick', { name: 'Lady Wick', gender: 'female' }),
       makeChar('sir-astin', { name: 'Sir Astin', gender: 'male' }),
-      makeChar('dame-alina', { name: 'Dame Alina', gender: 'female' }),
+      makeChar('dame-linnet', { name: 'Dame Linnet', gender: 'female' }),
     ];
     const sentences = makeSentences([
-      [1, 'lady-galvin'],
-      [1, 'lady-galvin'],
-      [1, 'lady-galvin'],
+      [1, 'lady-wick'],
+      [1, 'lady-wick'],
+      [1, 'lady-wick'],
       [2, 'sir-astin'],
       [2, 'sir-astin'],
       [2, 'sir-astin'],
-      [3, 'dame-alina'],
-      [3, 'dame-alina'],
-      [3, 'dame-alina'],
+      [3, 'dame-linnet'],
+      [3, 'dame-linnet'],
+      [3, 'dame-linnet'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
 
     expect(result.rewrites).toEqual({});
     expect(result.characters.map((c) => c.id).sort()).toEqual([
-      'dame-alina',
-      'lady-galvin',
+      'dame-linnet',
+      'lady-wick',
       'narrator',
       'sir-astin',
     ]);
@@ -481,13 +481,13 @@ describe('foldMinorCast', () => {
     expect(isDescriptorName('Tall Woman')).toBe(true);
     expect(isDescriptorName('Shy Girl')).toBe(true);
     /* Proper names — must NOT match. */
-    expect(isDescriptorName('Sophie')).toBe(false);
-    expect(isDescriptorName('Lady Galvin')).toBe(false);
+    expect(isDescriptorName('Wren')).toBe(false);
+    expect(isDescriptorName('Lady Wick')).toBe(false);
     expect(isDescriptorName('Sir Astin')).toBe(false);
-    expect(isDescriptorName('Dame Alina')).toBe(false);
+    expect(isDescriptorName('Dame Linnet')).toBe(false);
     expect(isDescriptorName('Mr. Sweeney')).toBe(false);
     expect(isDescriptorName('Garwin Chang')).toBe(false);
-    expect(isDescriptorName('Sandor')).toBe(false);
+    expect(isDescriptorName('Garrow')).toBe(false);
     /* Capped at two words after "The" so place-style names ("The
        Council of Twelve") don't fold. */
     expect(isDescriptorName('The Council of Twelve')).toBe(false);
@@ -502,7 +502,7 @@ describe('foldMinorCast', () => {
        just because their `lines` count is 0. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('the-jogger', { name: 'The Jogger', gender: 'male' }),
       makeChar('drooly-boy', { name: 'Drooly Boy', gender: 'male' }),
       makeChar('iggy', { name: 'Iggy', gender: 'neutral' }), // pet, 0 stage-2 lines but must SURVIVE in nameOnly mode
@@ -515,14 +515,14 @@ describe('foldMinorCast', () => {
       'the-jogger': 'unknown-male',
       'drooly-boy': 'unknown-male',
     });
-    /* Iggy and Sophie both survive — nameOnly skips the zero-line
+    /* Iggy and Wren both survive — nameOnly skips the zero-line
        drop so a pet that the verifier will later kill (Phase 0b) is
        still visible on the live roster until that point. */
     expect(result.characters.map((c) => c.id).sort()).toEqual([
       'iggy',
       'narrator',
-      'sophie',
       'unknown-male',
+      'wren',
     ]);
     const male = result.characters.find((c) => c.id === 'unknown-male')!;
     expect(male.aliases).toEqual(['The Jogger', 'Drooly Boy']);
@@ -532,8 +532,8 @@ describe('foldMinorCast', () => {
   it("dedups bucket aliases case-insensitively and never adds the bucket's own name", () => {
     const chars = [
       makeChar('narrator'),
-      makeChar('unknown-a', { name: 'Sandor', gender: 'male' }),
-      makeChar('unknown-b', { name: 'SANDOR', gender: 'male' }),
+      makeChar('unknown-a', { name: 'Garrow', gender: 'male' }),
+      makeChar('unknown-b', { name: 'GARROW', gender: 'male' }),
       makeChar('unknown-c', { name: 'Unknown male', gender: 'male' }), // pathological — collides with bucket title
     ];
     const sentences = makeSentences([
@@ -547,29 +547,29 @@ describe('foldMinorCast', () => {
     const bucket = result.characters.find((c) => c.id === 'unknown-male')!;
     /* First-name-wins, case-insensitive dedup against the survivor's
        aliases AND own name. */
-    expect(bucket.aliases).toEqual(['Sandor']);
+    expect(bucket.aliases).toEqual(['Garrow']);
   });
 
   /* ── Protected-role narrator-mention exemption (plan 97) ──────────────── */
 
   it('protects a narrator-mention character with a protected role from the zero-line drop', () => {
-    /* Grizel-in-Neverseen worked example: detected with detectionSource:
+    /* Sela-in-Saltgrave worked example: detected with detectionSource:
        narrator-mention, role: 'Bodyguard', 0 attributed dialogue lines.
        Without the exemption she would be dropped by the zero-line rule. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
-      makeChar('grizel', {
-        name: 'Grizel',
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
+      makeChar('sela', {
+        name: 'Sela',
         gender: 'female',
         role: 'Bodyguard',
         detectionSource: 'narrator-mention',
       }),
     ];
     const sentences = makeSentences([
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
@@ -577,23 +577,23 @@ describe('foldMinorCast', () => {
     expect(result.rewrites).toEqual({});
     expect(result.summary.droppedSilent).toBe(0);
     expect(result.dropped).toEqual([]);
-    /* Grizel survives intact, no fold. Referential identity preserved
+    /* Sela survives intact, no fold. Referential identity preserved
        on the no-op path (same as the existing "no character qualifies"
        case at line 47) — caller still sees the original char, line-count
        recomputation only happens when something actually folds. */
     expect(result.characters).toBe(chars);
-    expect(result.characters.find((c) => c.id === 'grizel')).toBeDefined();
+    expect(result.characters.find((c) => c.id === 'sela')).toBeDefined();
   });
 
   it('protects a narrator-mention character with a protected role from the line-count fold', () => {
-    /* Sandor-in-Neverseen worked example: 1 chapter of dialogue is below
+    /* Garrow-in-Saltgrave worked example: 1 chapter of dialogue is below
        the minLines threshold and would normally fold into unknown-male.
        With detectionSource: narrator-mention + Bodyguard role, the
-       exemption applies and Sandor survives with his single line. */
+       exemption applies and Garrow survives with his single line. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sandor', {
-        name: 'Sandor',
+      makeChar('garrow', {
+        name: 'Garrow',
         gender: 'male',
         role: 'Goblin Bodyguard',
         detectionSource: 'narrator-mention',
@@ -603,17 +603,17 @@ describe('foldMinorCast', () => {
       [1, 'narrator'],
       [1, 'narrator'],
       [1, 'narrator'],
-      [5, 'sandor'], // single line — would fold without protection
+      [5, 'garrow'], // single line — would fold without protection
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
 
     expect(result.rewrites).toEqual({});
-    expect(result.characters.find((c) => c.id === 'sandor')).toBeDefined();
-    /* No bucket synthesised — nothing folded. The single Sandor sentence
+    expect(result.characters.find((c) => c.id === 'garrow')).toBeDefined();
+    /* No bucket synthesised — nothing folded. The single Garrow sentence
        retains its attribution (no rewrite to unknown-male). */
     expect(result.characters.find((c) => c.id === 'unknown-male')).toBeUndefined();
-    expect(result.sentences.filter((s) => s.characterId === 'sandor').length).toBe(1);
+    expect(result.sentences.filter((s) => s.characterId === 'garrow').length).toBe(1);
   });
 
   it('still folds a protected-role character with detectionSource: dialogue + too few lines (targeted exemption, not blanket)', () => {
@@ -625,8 +625,8 @@ describe('foldMinorCast', () => {
        protected-role character regardless of line count. */
     const chars = [
       makeChar('narrator'),
-      makeChar('sandor', {
-        name: 'Sandor',
+      makeChar('garrow', {
+        name: 'Garrow',
         gender: 'male',
         role: 'Bodyguard',
         detectionSource: 'dialogue',
@@ -636,13 +636,13 @@ describe('foldMinorCast', () => {
       [1, 'narrator'],
       [1, 'narrator'],
       [1, 'narrator'],
-      [5, 'sandor'], // single line, detectionSource=dialogue → still folds
+      [5, 'garrow'], // single line, detectionSource=dialogue → still folds
     ]);
 
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
 
-    expect(result.rewrites).toEqual({ sandor: 'unknown-male' });
-    expect(result.characters.find((c) => c.id === 'sandor')).toBeUndefined();
+    expect(result.rewrites).toEqual({ garrow: 'unknown-male' });
+    expect(result.characters.find((c) => c.id === 'garrow')).toBeUndefined();
   });
 
   it('does NOT protect a narrator-mention character whose role is not in the protected list', () => {
@@ -697,8 +697,8 @@ describe('foldMinorCast', () => {
        rules apply across the board. */
     const chars = [
       makeChar('narrator'),
-      makeChar('grizel', {
-        name: 'Grizel',
+      makeChar('sela', {
+        name: 'Sela',
         gender: 'female',
         role: 'Bodyguard',
         detectionSource: 'narrator-mention',
@@ -710,7 +710,7 @@ describe('foldMinorCast', () => {
 
     /* With the exemption off, the 0-line drop fires. */
     expect(result.summary.droppedSilent).toBe(1);
-    expect(result.dropped).toEqual(['Grizel']);
+    expect(result.dropped).toEqual(['Sela']);
   });
 
   it('PROTECTED_ROLES_DEFAULT lists the three canonical roles', () => {
@@ -724,7 +724,7 @@ describe('foldMinorCast', () => {
        merge / voice-match), plus a genuine minor male that folds this pass. */
     const chars = [
       makeChar('narrator'),
-      makeChar('unknown-male', { name: 'Lord Cassius', gender: 'male' }),
+      makeChar('unknown-male', { name: 'Lord Vane', gender: 'male' }),
       makeChar('jogger', { name: 'The Jogger', gender: 'male' }),
     ];
     const sentences = makeSentences([
@@ -737,21 +737,21 @@ describe('foldMinorCast', () => {
     expect(bucket?.name).toBe('Unknown male');
     expect(bucket?.gender).toBe('male');
     /* The drifted NAME is deliberately not kept as an alias — otherwise the
-       matcher would re-bind Lord Cassius to the bucket on the next book. */
-    expect(bucket?.aliases ?? []).not.toContain('Lord Cassius');
+       matcher would re-bind Lord Vane to the bucket on the next book. */
+    expect(bucket?.aliases ?? []).not.toContain('Lord Vane');
   });
 
   it('canonicalises a drifted bucket even when nothing folds this pass', () => {
     const chars = [
       makeChar('narrator'),
-      makeChar('sophie', { name: 'Sophie', gender: 'female' }),
+      makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('unknown-female', { name: 'Vika', gender: 'female' }),
     ];
     const sentences = makeSentences([
       [1, 'narrator'],
-      [1, 'sophie'],
-      [1, 'sophie'],
-      [1, 'sophie'],
+      [1, 'wren'],
+      [1, 'wren'],
+      [1, 'wren'],
       [1, 'unknown-female'],
       [1, 'unknown-female'],
       [1, 'unknown-female'],
@@ -763,16 +763,16 @@ describe('foldMinorCast', () => {
   });
 
   it('never folds a non-descriptor character with ≥ minLines into a bucket (keeps its own id)', () => {
-    const chars = [makeChar('narrator'), makeChar('lord-cassius', { name: 'Lord Cassius', gender: 'male' })];
+    const chars = [makeChar('narrator'), makeChar('lord-vane', { name: 'Lord Vane', gender: 'male' })];
     const sentences = makeSentences([
-      [1, 'lord-cassius'],
-      [1, 'lord-cassius'],
-      [1, 'lord-cassius'],
-      [2, 'lord-cassius'],
+      [1, 'lord-vane'],
+      [1, 'lord-vane'],
+      [1, 'lord-vane'],
+      [2, 'lord-vane'],
     ]);
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
-    expect(result.rewrites['lord-cassius']).toBeUndefined();
-    expect(result.characters.find((c) => c.id === 'lord-cassius')?.id).toBe('lord-cassius');
+    expect(result.rewrites['lord-vane']).toBeUndefined();
+    expect(result.characters.find((c) => c.id === 'lord-vane')?.id).toBe('lord-vane');
   });
 });
 

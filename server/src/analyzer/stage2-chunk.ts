@@ -1,7 +1,7 @@
 /* Stage-2 large-chapter chunking (#528).
 
    Stage-2 attribution emits one JSON entry per sentence, so its OUTPUT scales
-   with chapter size. A very large chapter (Stellarlune ch19 = 507 sentences)
+   with chapter size. A very large chapter (The Drowning Bell ch19 = 507 sentences)
    needs ~15–20K output tokens — past the model's output cap — so the response
    is truncated mid-JSON, fails to parse, and the call throws. The engines now
    surface that as `AnalyzerTruncatedError` (see errors.ts); this module is the

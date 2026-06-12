@@ -60,9 +60,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-const BIANA: CastCharacter = {
-  id: 'biana',
-  name: 'Biana',
+const MAERIN: CastCharacter = {
+  id: 'maerin',
+  name: 'Maerin',
   role: 'protagonist',
   gender: 'female',
   ageRange: 'teen',
@@ -88,8 +88,8 @@ beforeEach(() => {
 describe('buildVoiceStylePrompt', () => {
   it('includes the profile fields and the dialogue evidence quotes', async () => {
     const { buildVoiceStylePrompt } = await import('./voice-style.js');
-    const prompt = await buildVoiceStylePrompt(BIANA);
-    expect(prompt).toContain('Biana');
+    const prompt = await buildVoiceStylePrompt(MAERIN);
+    expect(prompt).toContain('Maerin');
     expect(prompt).toContain('protagonist');
     expect(prompt).toContain('female');
     expect(prompt).toContain('teen');
@@ -108,7 +108,7 @@ describe('buildVoiceStylePrompt', () => {
     /* Task A assertion: the known phrases from SKILL_TEXT are present,
        confirming the prompt is built from the .md rather than inline code. */
     const { buildVoiceStylePrompt } = await import('./voice-style.js');
-    const prompt = await buildVoiceStylePrompt(BIANA);
+    const prompt = await buildVoiceStylePrompt(MAERIN);
     expect(prompt).toContain('You design voices for an audiobook');
     expect(prompt).toContain('Character profile:');
     expect(prompt).toContain('Voice-design persona:');
@@ -120,7 +120,7 @@ describe('buildVoiceStylePrompt', () => {
        dimensions and ending with a purpose/scenario clause, written as
        objective voice qualities rather than the character's feelings/plot. */
     const { buildVoiceStylePrompt } = await import('./voice-style.js');
-    const prompt = await buildVoiceStylePrompt(BIANA);
+    const prompt = await buildVoiceStylePrompt(MAERIN);
     /* Pitch is the dimension the old prompt omitted. */
     expect(prompt).toMatch(/pitch/i);
     /* A purpose/scenario clause is requested + exemplified. */
@@ -164,7 +164,7 @@ describe('cleanPersona', () => {
 describe('generateVoiceStylePersona', () => {
   it('pins the model to gemini-3.1-flash-lite and returns the cleaned persona', async () => {
     const { generateVoiceStylePersona } = await import('./voice-style.js');
-    const persona = await generateVoiceStylePersona(BIANA);
+    const persona = await generateVoiceStylePersona(MAERIN);
     expect(persona).toBe(
       'a poised, confident teenage girl, warm and a little playful, mid-paced',
     );
@@ -172,13 +172,13 @@ describe('generateVoiceStylePersona', () => {
     const call = generateContent.mock.calls[0][0] as { model: string; contents: string };
     expect(call.model).toBe('gemini-3.1-flash-lite');
     /* The single call carries this one character's profile only. */
-    expect(call.contents).toContain('Biana');
+    expect(call.contents).toContain('Maerin');
   });
 
   it('honours the VOICE_STYLE_MODEL env override', async () => {
     process.env.VOICE_STYLE_MODEL = 'gemini-3-flash-preview';
     const { generateVoiceStylePersona } = await import('./voice-style.js');
-    await generateVoiceStylePersona(BIANA);
+    await generateVoiceStylePersona(MAERIN);
     const call = generateContent.mock.calls[0][0] as { model: string };
     expect(call.model).toBe('gemini-3-flash-preview');
   });
@@ -188,20 +188,20 @@ describe('generateVoiceStylePersona', () => {
       text: '```\nPersona: a warm, gravelly older man, slow and weary\n```',
     });
     const { generateVoiceStylePersona } = await import('./voice-style.js');
-    const persona = await generateVoiceStylePersona(BIANA);
+    const persona = await generateVoiceStylePersona(MAERIN);
     expect(persona).toBe('a warm, gravelly older man, slow and weary');
   });
 
   it('throws a clear message when no Gemini API key resolves (no network call)', async () => {
     mockApiKey = null;
     const { generateVoiceStylePersona } = await import('./voice-style.js');
-    await expect(generateVoiceStylePersona(BIANA)).rejects.toThrow(/GEMINI_API_KEY is required/);
+    await expect(generateVoiceStylePersona(MAERIN)).rejects.toThrow(/GEMINI_API_KEY is required/);
     expect(generateContent).not.toHaveBeenCalled();
   });
 
   it('throws when the model returns an empty persona', async () => {
     generateContent.mockResolvedValue({ text: '   ' });
     const { generateVoiceStylePersona } = await import('./voice-style.js');
-    await expect(generateVoiceStylePersona(BIANA)).rejects.toThrow(/empty persona/);
+    await expect(generateVoiceStylePersona(MAERIN)).rejects.toThrow(/empty persona/);
   });
 });

@@ -60,8 +60,8 @@ export interface FoldOptions {
       'dialogue'` + 1 line still folds (the protection is targeted at
       narrator-mention characters, not blanket role-keep). Reason for
       the protection: bodyguards / mentors / family who are mentioned
-      heavily in narration but rarely quote dialogue (e.g. Grizel and
-      Sandor in Lost Cities Neverseen — see
+      heavily in narration but rarely quote dialogue (e.g. Sela and
+      Garrow in Lost Cities Saltgrave — see
       docs/features/archive/97-narrator-only-named-characters.md) would
       otherwise be silently dropped or bucketed into
       unknown-male/female. */
@@ -361,7 +361,7 @@ export function foldMinorCast(
     };
     /* Invariant (plan 122): a bucket id ALWAYS carries the canonical generic
        name + gender — never a real character's name. A drifted entry
-       ({ id: 'unknown-male', name: 'Lord Cassius' }) is normalised back to
+       ({ id: 'unknown-male', name: 'Lord Vane' }) is normalised back to
        the bucket here; its aliases / voiceId / overrides are preserved (the
        drifted NAME is deliberately NOT kept as an alias, so the matcher won't
        re-bind that character to the bucket). */

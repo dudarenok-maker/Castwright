@@ -1,7 +1,7 @@
 /* Stage-2 attribution coverage guard.
 
    The per-chapter attribution model converts a chapter's prose into a
-   per-sentence JSON list. A known degenerate failure (2026-06-05 Stellarlune
+   per-sentence JSON list. A known degenerate failure (2026-06-05 The Drowning Bell
    ch12/ch18): the model falls into a repeat-loop — it re-emits a span of
    sentences and terminates early — so the chapter is BOTH duplicated and
    truncated. Output is internally consistent (ids 1..N, no gaps), so schema
@@ -40,7 +40,7 @@ export interface Stage2CoverageThresholds {
 /* minCoverageRatio is deliberately generous (0.6): the attribution legitimately
    compresses — healthy chapters measured 0.65–1.0 against their prose (Keeper
    ch22 0.71, Exile ch56 0.78 both reach their true endings). The loop-truncate
-   defect is catastrophic by comparison (Stellarlune ch12 0.12, ch18 0.52), and
+   defect is catastrophic by comparison (The Drowning Bell ch12 0.12, ch18 0.52), and
    a loop that doesn't also truncate is caught by the duplicated-block signal
    regardless of ratio — so a low floor avoids false-flagging normal compression
    without missing the real bug. */
