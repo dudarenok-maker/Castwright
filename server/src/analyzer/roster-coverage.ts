@@ -2,8 +2,8 @@
 
    The per-chapter character-detection model (Phase 0a) occasionally drops a
    speaker from a chapter's roster even though the chapter clearly quotes them.
-   A known case (2026-06-05, Stellarlune ch19): "Prentice" speaks 10+ times
-   (`"…," Prentice repeated.`, `"Fine," Prentice agreed.`) yet never made the
+   A known case (2026-06-05, The Drowning Bell ch19): "Lessom" speaks 10+ times
+   (`"…," Lessom repeated.`, `"Fine," Lessom agreed.`) yet never made the
    roster — so stage-2 attribution, which is constrained to roster ids, dumped
    every one of his lines on the narrator and he never entered the cast.
 
@@ -21,7 +21,7 @@
    False-positive bounding (a capitalised word before a speech verb is not always
    a character — `"…" the Council agreed`, sentence-initial `She said`):
      - a STOPWORD set kills pronouns / articles / common sentence openers,
-     - possessives (`Sophie's`) are normalised away,
+     - possessives (`Wren's`) are normalised away,
      - a single-hit candidate must be QUOTE-ADJACENT (a real tag sits next to a
        `"…"`); a candidate with ≥2 tags passes without that gate,
      - `ROSTER_GUARD_IGNORE_NAMES` (comma-separated) is a per-deploy escape hatch.
@@ -78,8 +78,8 @@ const STOPWORDS = new Set([
   'something', 'nothing', 'anything', 'his', 'their', 'its', 'our', 'your',
   // generic titles / role nouns that appear capitalised before a speech verb
   // ("the Council agreed", a bare "Mentor said") but aren't character names —
-  // a real titled character ("Lord Cassius said") is captured by the name
-  // token ("Cassius"), not the title.
+  // a real titled character ("Lord Vane said") is captured by the name
+  // token ("Vane"), not the title.
   'mr', 'mrs', 'ms', 'dr', 'lord', 'lady', 'sir', 'madam', 'miss', 'king',
   'queen', 'prince', 'princess', 'captain', 'professor', 'master', 'mentor',
   'council', 'father', 'mother', 'mom', 'dad', 'uncle', 'aunt',
@@ -140,7 +140,7 @@ export function toKebabId(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Strip a trailing possessive (`Sophie's` → `Sophie`). */
+/** Strip a trailing possessive (`Wren's` → `Wren`). */
 function stripPossessive(name: string): string {
   return name.replace(/['’]s$/i, '');
 }
@@ -148,8 +148,8 @@ function stripPossessive(name: string): string {
 /** Build the set of tokens that count as "already on the roster": each name's
     full lowercased form PLUS every whitespace-delimited token of length ≥ 2.
     Dialogue tags overwhelmingly use a single name — usually the FIRST name
-    ("Sophie said" for a roster entry "Sophie Foster"), sometimes the last
-    ("Forkle said" for "Mr. Forkle") — so indexing every token (not just the
+    ("Wren said" for a roster entry "Wren Sparrow"), sometimes the last
+    ("Casper said" for "Mr. Casper") — so indexing every token (not just the
     last) is what keeps main cast from being mis-flagged as missing. */
 function rosterTokenSet(rosterNames: Iterable<string>): Set<string> {
   const set = new Set<string>();
@@ -158,8 +158,8 @@ function rosterTokenSet(rosterNames: Iterable<string>): Set<string> {
     if (!n) continue;
     set.add(n);
     // Split on whitespace, dots, AND hyphens so a compound/disguise roster name
-    // ("Keefe-as-Lady-Gisela", "Mr. Forkle") contributes each sub-token — a bare
-    // "Gisela said" / "Forkle said" tag then resolves to the rostered character.
+    // ("Marlow-as-Lady-Gisela", "Mr. Casper") contributes each sub-token — a bare
+    // "Gisela said" / "Casper said" tag then resolves to the rostered character.
     for (const tok of n.split(/[\s.-]+/).filter((t) => t.length >= 2)) set.add(tok);
   }
   return set;
@@ -180,7 +180,7 @@ export function validateRosterCoverage(
   const verbAlt = DIALOGUE_VERBS.join('|');
   /* Name = a capitalised token (letters, internal apostrophes/hyphens) directly
      followed by a lowercase speech verb. Case-sensitive: the verb must be
-     lowercase (a real tag is `Prentice said`, never `Prentice Said`). */
+     lowercase (a real tag is `Lessom said`, never `Lessom Said`). */
   const tagRe = new RegExp(`\\b([A-Z][A-Za-z’'\\-]+)\\s+(?:${verbAlt})\\b`, 'g');
 
   const body = bodyText || '';
@@ -190,7 +190,7 @@ export function validateRosterCoverage(
   for (let m = tagRe.exec(body); m; m = tagRe.exec(body)) {
     const rawName = stripPossessive(m[1]);
     const key = rawName.toLowerCase();
-    // Disguise notation ("Keefe-as-Lady-Gisela") — the underlying character is
+    // Disguise notation ("Marlow-as-Lady-Gisela") — the underlying character is
     // already cast; the prose alias isn't a new speaker.
     if (key.includes('-as-')) continue;
     // Contraction guard: "I've"/"You've"/"They'll" → test the root before the
@@ -198,7 +198,7 @@ export function validateRosterCoverage(
     const root = key.split(/['’]/)[0];
     if (isStopword(key) || isStopword(root) || ignore.has(key)) continue;
     if (roster.has(key)) continue;
-    // last-token match (tag "Forkle" vs roster token "forkle") already covered
+    // last-token match (tag "Casper" vs roster token "casper") already covered
     // because rosterTokenSet stores last tokens too.
     const start = Math.max(0, m.index - t.quoteProximityChars);
     const end = Math.min(body.length, m.index + m[0].length + t.quoteProximityChars);
@@ -438,7 +438,7 @@ export async function runStage1WithRosterGuard<
 
 /* Per-chapter attribution-drift check — the secondary net. The book-wide
    `attributionDriftExceeded` (analysis.ts) dilutes a single damaged chapter
-   below its 5% threshold (the Stellarlune ch19 ~30 demotions vanished against a
+   below its 5% threshold (the The Drowning Bell ch19 ~30 demotions vanished against a
    whole-book denominator). This flags a chapter whose demotion rate is high on
    its own. WARN-only at the call site — a narration-heavy chapter can
    legitimately demote a lot, so this informs rather than aborts. */

@@ -99,8 +99,8 @@ function projectLibraryVoice(rec: LibraryCharacterRecord): LibraryVoice | null {
 }
 
 /* All known name forms for a character — the canonical name plus any
-   aliases. Used by both the exact and token scorers so "Keefe" hits when
-   the library entry is "Sophie" with aliases ['Keefe']. */
+   aliases. Used by both the exact and token scorers so "Marlow" hits when
+   the library entry is "Wren" with aliases ['Marlow']. */
 function nameForms(name: string, aliases: string[]): string[] {
   return [name, ...aliases].filter((s) => typeof s === 'string' && s.length > 0);
 }
@@ -114,8 +114,8 @@ function exactNameOverlap(aForms: string[], bForms: string[]): boolean {
 }
 
 /* Token overlap uses only the primary names — pooling aliases into the bag
-   inflates the union and crushes the Jaccard for short names ("Keefe" vs
-   "Keefe Sencen" with a multi-word alias like "Lord Hunkyhair" would drop
+   inflates the union and crushes the Jaccard for short names ("Marlow" vs
+   "Marlow Halden" with a multi-word alias like "Sir Singe" would drop
    from 0.5 to 0.25 and fall through the floor). Alias matches travel the
    exact-overlap path, which is the right precision for them. */
 function tokenOverlap(
@@ -298,7 +298,7 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
            mates — for EVERY character, not just generic role-names. Matching a
            real character library-wide let an unrelated author/series's same-
            named character grab a designed voice (a Castwright standalone's
-           "Tam Hollis" claiming Shannon Messenger's "Tam"). Cross-series reuse
+           "Pell Hollis" claiming Shannon Messenger's "Pell"). Cross-series reuse
            stays available as an explicit Voice-library assignment; it is never
            a silent auto-match. */
         if (!seriesMateBookIds.has(v.bookId)) continue;
