@@ -88,7 +88,7 @@ pattern (already preserves tuned/locked voices) is the reference.
 
 - OpenAPI unchanged — `matchedFrom` / `voiceId` / `voiceState` already exist.
 - Never auto-link a `notLinkedTo` pair (intentional same-name-different-person,
-  e.g. teenage vs adult Sophie).
+  e.g. teenage vs adult Wren).
 - Name matching can false-positive on coincidental same names — the 0.34 floor
   + gender/age factors mitigate; keep the score on `matchedFrom.confidence` so a
   low-confidence auto-link stays visible/overridable.

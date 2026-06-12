@@ -281,12 +281,12 @@ describe('voice-match router', () => {
   });
 
   it('floor enforcement: matching gender + age alone does NOT produce a candidate', async () => {
-    /* Request Bronte — never appears anywhere in the library. Same gender
+    /* Request Castor — never appears anywhere in the library. Same gender
        and ageRange as the library Sophies / Keefes, but no name overlap.
        Floor (nameScore < 0.34) must drop every library voice. */
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'bronte', name: 'Bronte', attributes: ['stern'], gender: 'male', ageRange: 'adult' },
+        { id: 'castor', name: 'Castor', attributes: ['stern'], gender: 'male', ageRange: 'adult' },
       ],
     });
     expect(res.status).toBe(200);

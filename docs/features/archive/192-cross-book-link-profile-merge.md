@@ -15,16 +15,16 @@ owner: null
 
 ## Benefit / Rationale
 
-Reported as "I link Dame Alina and Concilor Alina and it doesn't work — it still
+Reported as "I link Dame Linnet and Concilor Linnet and it doesn't work — it still
 shows in the link options, and linking doesn't bring any representative quotes."
-Diagnosis (KOTLC / Unlocked): the link **was** persisting, but two real gaps made
+Diagnosis (the Hollow Tide / Unlocked): the link **was** persisting, but two real gaps made
 it feel broken.
 
 - **User:** Linking a recurring character to a prior book now (a) removes ALL of
   that person's prior-book copies from the picker — not just the single volume you
   picked — so the list actually clears, and (b) carries the canonical character's
   representative quotes + attributes/description/tone onto the linked row, so a
-  roster-carried row with zero of its own lines (e.g. Unlocked's "Dame Alina",
+  roster-carried row with zero of its own lines (e.g. Unlocked's "Dame Linnet",
   0 quotes) is no longer blank after linking.
 - **Technical:** The picker's suppression now keys on the canonical `voiceId`
   (the series-wide propagation key) instead of only the exact `matchedFrom`
@@ -87,14 +87,14 @@ it feel broken.
 
 ### Manual acceptance walkthrough (real backend)
 
-1. Open Unlocked → Cast → "Dame Alina" profile drawer. Before this change the
-   link picker lists several "Dame Alina" + a "Councillor Alina"; after, those
-   collapse out once the row is linked (shares `voiceId: dame-alina`).
+1. Open Unlocked → Cast → "Dame Linnet" profile drawer. Before this change the
+   link picker lists several "Dame Linnet" + a "Councillor Linnet"; after, those
+   collapse out once the row is linked (shares `voiceId: dame-linnet`).
 2. Link an unlinked recurring character to its prior-book canonical → the drawer
    immediately shows the inherited representative quotes + attributes; reload →
    they persist (cast.json round-trip).
 3. Run `BASE=C:/AudiobookWorkspace node scripts/repair-linked-character-attributes.mjs`
-   (dry run) → confirms thin multi-book rows top up (Unlocked/Dame Alina 0→29
+   (dry run) → confirms thin multi-book rows top up (Unlocked/Dame Linnet 0→29
    quotes, 0→23 attributes; rich rows + narrator untouched); `--apply` writes.
 
 ## Out of scope
@@ -106,6 +106,6 @@ it feel broken.
 ## Ship notes
 
 Shipped 2026-06-06 (merge 9cd7f57, PR #574). Live acceptance confirmed:
-Unlocked → Cast → "Dame Alina" shows inherited representative quotes/attributes
+Unlocked → Cast → "Dame Linnet" shows inherited representative quotes/attributes
 that persist across reload; `scripts/repair-linked-character-attributes.mjs --apply`
 run to top up thin multi-book rows.

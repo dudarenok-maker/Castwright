@@ -168,7 +168,7 @@ describe('castSlice — hydrateFromAnalysis', () => {
        voice continuity only for characters matched against OTHER books in the series.
        A character DESIGNED IN THIS BOOK (overrideTtsVoices.qwen, no matchedFrom) finds
        no series match and arrives voiceless, so a flat replace stripped it on the
-       confirm screen — rendering "No voice designed yet" for Berrin/Sela/Trix even
+       confirm screen — rendering "No voice designed yet" for Berrin/Sela/Quill even
        though cast.json on disk still held the voice. Mirror the mergeCharacters #518
        overlay: preserve voice-design fields by id from the existing slice. */
     const start = baseState([
@@ -300,7 +300,7 @@ describe('castSlice — mergeCharacters (Phase 0a live cast snapshots)', () => {
     /* Re-analysis streams a voiceless snapshot (analyzer doesn't produce voice
        design). mergeCharacters must NOT drop overrideTtsVoices — the designed
        Qwen voice lives there for generated characters with no voiceId. Dropping
-       it then persisting cast.json is what stripped Berrin/Sela/Trix. */
+       it then persisting cast.json is what stripped Berrin/Sela/Quill. */
     const start = baseState([
       makeChar('berrin', {
         voiceState: 'generated',
@@ -812,15 +812,15 @@ describe('castSlice — renameCharacter (rename + promote alias)', () => {
 
 describe('castSlice — setRenderedFallback (fe-16)', () => {
   it('overwrites the fallback map from the book-state hydrate', () => {
-    const start = { characters: [makeChar('sweeney')], renderedFallbackByCharacter: {} };
-    const next = castSlice.reducer(start, castActions.setRenderedFallback({ sweeney: 'kokoro' }));
-    expect(next.renderedFallbackByCharacter).toEqual({ sweeney: 'kokoro' });
+    const start = { characters: [makeChar('marrow')], renderedFallbackByCharacter: {} };
+    const next = castSlice.reducer(start, castActions.setRenderedFallback({ marrow: 'kokoro' }));
+    expect(next.renderedFallbackByCharacter).toEqual({ marrow: 'kokoro' });
   });
 
   it('clears stale entries when the new map is empty (post-redesign render)', () => {
     const start = {
-      characters: [makeChar('sweeney')],
-      renderedFallbackByCharacter: { sweeney: 'kokoro' },
+      characters: [makeChar('marrow')],
+      renderedFallbackByCharacter: { marrow: 'kokoro' },
     };
     const next = castSlice.reducer(start, castActions.setRenderedFallback({}));
     expect(next.renderedFallbackByCharacter).toEqual({});

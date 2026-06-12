@@ -26,7 +26,7 @@ const SLUG = 'chapter-one';
 const SR = 24_000;
 const MANUSCRIPT_ID = 'm_rerecord_qa';
 
-/* Re-record Bronte's 1s line as a much longer 4.5s line. Prior chapter = 2.0s,
+/* Re-record Castor's 1s line as a much longer 4.5s line. Prior chapter = 2.0s,
    so the OLD expectedSec (2.0s) vs the new ~5.5s chapter is ratio 2.75 → SUSPECT
    under the pre-fix code; the fix's expected (2.0 − 1.0 + 4.5 = 5.5s) → ok. */
 const RERECORD_SEC = 4.5;
@@ -47,7 +47,7 @@ function tone(durationSec: number, amp: number): Buffer {
 
 vi.mock('../store/analysis-cache.js', () => ({
   loadAnalysisCache: vi.fn(async () => ({
-    chapters: { 1: [{ id: 2, characterId: 'bronte', text: 'A re-recorded line.' }] },
+    chapters: { 1: [{ id: 2, characterId: 'castor', text: 'A re-recorded line.' }] },
   })),
 }));
 
@@ -106,12 +106,12 @@ beforeAll(async () => {
     JSON.stringify({
       characters: [
         { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
-        { id: 'bronte', name: 'Bronte', gender: 'female', attributes: [] },
+        { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
       ],
     }),
   );
 
-  /* 1s Amy + 1s Bronte = a 2.0s chapter. */
+  /* 1s Amy + 1s Castor = a 2.0s chapter. */
   const chapterPcm = Buffer.concat([tone(1.0, 12000), tone(1.0, 12000)]);
   const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
   writeFileSync(join(audioRoot, `${SLUG}.mp3`), mp3Bytes);
@@ -127,7 +127,7 @@ beforeAll(async () => {
       synthesizedAt: new Date().toISOString(),
       segments: [
         { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
-        { groupIndex: 1, characterId: 'bronte', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
       ],
     }),
   );
@@ -152,7 +152,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-32a QA', ()
   it('reads OK when a length-changing re-record would false-flag under the prior chapter duration', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
-      .send({ mode: 'rerecord', characterId: 'bronte', modelKey: 'kokoro-v1' });
+      .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
 
     const events = parseSse(res.text);
     const done = events.find((e) => e.type === 'splice_complete');

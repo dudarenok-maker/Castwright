@@ -19,11 +19,11 @@ attribution is constrained to roster ids, so every line of a dropped speaker is
 demoted to `narrator` — and because they end with 0 lines, the minor-cast fold
 keeps them out of the cast entirely. They vanish silently.
 
-Concrete trigger (2026-06-05): **Stellarlune ch19** ("Chapter Sixteen") —
-**Prentice** speaks 12 times (`"…," Prentice repeated.`, `"Fine," Prentice
+Concrete trigger (2026-06-05): **The Drowning Bell ch19** ("Chapter Sixteen") —
+**Lessom** speaks 12 times (`"…," Lessom repeated.`, `"Fine," Lessom
 agreed.`) yet never made the cast; all his lines became narrator voiceover. A
 book-wide audit found 4 more victims in the same book (ch16 Behnam, ch33 Cadence,
-ch34 Woltzer, ch47 Prentice again).
+ch34 Woltzer, ch47 Lessom again).
 
 - **User:** a character who speaks gets a cast slot + their own voice instead of
   being read in the narrator's voice. Existing damaged books are findable and
@@ -95,30 +95,30 @@ ch34 Woltzer, ch47 Prentice again).
 ### Automated coverage
 
 - Vitest server (`server/src/analyzer/roster-coverage.test.ts`, 21 cases) —
-  flags an absent tagged speaker (Prentice/ch19 regression); does NOT flag a
-  rostered speaker; **matches by first name** (`"Sophie said"` ↔ `"Sophie
+  flags an absent tagged speaker (Lessom/ch19 regression); does NOT flag a
+  rostered speaker; **matches by first name** (`"Wren said"` ↔ `"Wren
   Foster"` — the bug the live audit caught); last-token / title / hyphen-subtoken
   match; possessives + contractions ignored; pronoun openers ignored; collective
   nouns (`Councillors`/`Coaches`, de-pluralised) ignored; disguise aliases
-  (`Keefe-as-Lady-Gisela`) ignored / resolved via a hyphenated roster entry;
+  (`Marlow-as-Lady-Renna`) ignored / resolved via a hyphenated roster entry;
   single-hit quote-adjacency bound; `ROSTER_GUARD_IGNORE_NAMES`;
   `runStage1WithRosterGuard` retry-then-auto-add and `maxRetries=0`;
   `chapterDriftExceeded`. (Precision tuned against a live library-wide audit of
-  the full KOTLC series.)
+  the full the Hollow Tide series.)
 - node:test (`scripts/tests/dialogue-verbs-drift.test.mjs`, 3 cases) — `.mjs`
-  list ≡ canonical TS list; no duplicates; Prentice's tags covered.
+  list ≡ canonical TS list; no duplicates; Lessom's tags covered.
 - The audit script's logic is `validateRosterCoverage` (covered above); the
-  script itself is read-only I/O glue verified by the live Stellarlune run (no
+  script itself is read-only I/O glue verified by the live The Drowning Bell run (no
   dedicated test, matching the untested sibling `audit-stage2-coverage.mts`).
 
 ### Manual acceptance walkthrough (live, real backend + GPU)
 
-1. `npx tsx scripts/audit-missing-speakers.mts --book Stellarlune` → reports
+1. `npx tsx scripts/audit-missing-speakers.mts --book The Drowning Bell` → reports
    chapterIds `[16, 19, 33, 34, 47]` with the missing speakers.
 2. Re-run stage1+stage2 for those chapters: `POST
    /api/manuscripts/<mid>/analysis/chapters` `{ "chapterIds": [16,19,33,34,47] }`.
    Watch SSE for the roster-guard auto-add WARN.
-3. Re-audit → clean; `cast.json` now has `prentice` (+ behnam/cadence/woltzer)
+3. Re-audit → clean; `cast.json` now has `lessom` (+ behnam/cadence/woltzer)
    with non-zero lines; ch19 narrator bucket shrunk from 221.
 4. **[GPU]** Design/assign voices for the recovered characters; regenerate the
    affected (already-rendered) chapters' audio.
@@ -131,6 +131,6 @@ ch34 Woltzer, ch47 Prentice again).
 ## Ship notes
 
 Shipped 2026-06-06 (merge 9bc81e1, PR #520, closes #519). Live acceptance
-confirmed: Stellarlune ch16/19/33/34/47 re-analysed; roster-guard recovered
-`prentice`/`behnam`/`cadence`/`woltzer` with non-zero lines and
-`npm run audit:missing-speakers -- --book Stellarlune` is clean.
+confirmed: The Drowning Bell ch16/19/33/34/47 re-analysed; roster-guard recovered
+`lessom`/`behnam`/`cadence`/`woltzer` with non-zero lines and
+`npm run audit:missing-speakers -- --book The Drowning Bell` is clean.

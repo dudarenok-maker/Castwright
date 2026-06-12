@@ -158,8 +158,8 @@ function rosterTokenSet(rosterNames: Iterable<string>): Set<string> {
     if (!n) continue;
     set.add(n);
     // Split on whitespace, dots, AND hyphens so a compound/disguise roster name
-    // ("Marlow-as-Lady-Gisela", "Mr. Casper") contributes each sub-token — a bare
-    // "Gisela said" / "Casper said" tag then resolves to the rostered character.
+    // ("Marlow-as-Lady-Renna", "Mr. Casper") contributes each sub-token — a bare
+    // "Renna said" / "Casper said" tag then resolves to the rostered character.
     for (const tok of n.split(/[\s.-]+/).filter((t) => t.length >= 2)) set.add(tok);
   }
   return set;
@@ -190,7 +190,7 @@ export function validateRosterCoverage(
   for (let m = tagRe.exec(body); m; m = tagRe.exec(body)) {
     const rawName = stripPossessive(m[1]);
     const key = rawName.toLowerCase();
-    // Disguise notation ("Marlow-as-Lady-Gisela") — the underlying character is
+    // Disguise notation ("Marlow-as-Lady-Renna") — the underlying character is
     // already cast; the prose alias isn't a new speaker.
     if (key.includes('-as-')) continue;
     // Contraction guard: "I've"/"You've"/"They'll" → test the root before the

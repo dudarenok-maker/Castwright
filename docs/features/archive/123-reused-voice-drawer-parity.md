@@ -103,7 +103,7 @@ hardcoded "Default (Kokoro)" engine label even on a Qwen project.
 ### Manual acceptance walkthrough
 
 Real backend on a Qwen project with a series whose later book reuses prior cast
-(e.g. Stellarlune reusing Everblaze / Bonus Keefe Story voices).
+(e.g. The Drowning Bell reusing The Tidewatcher’s Oath / the Coalfall Commission voices).
 
 1. Open `#/books/<id>/cast` → reused rows show `Qwen · qwen-<name>-…` in the
    Voice column and a lifecycle pill + a small "Reused" badge in Status.

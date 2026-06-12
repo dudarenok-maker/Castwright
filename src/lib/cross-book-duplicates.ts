@@ -71,7 +71,7 @@ function identityTokens(x: { name: string; aliases?: string[] }): string[] {
 
 /* Are two same-series characters the same person, judged by name/alias?
    True when any pair of their normalised name/alias tokens `looksLikeSameName`
-   (exact or strict-substring — e.g. "wren" ⊂ "sophiefoster", "Bronte" ≡
+   (exact or strict-substring — e.g. "wren" ⊂ "sophiefoster", "Castor" ≡
    "bron-te"). Returns FALSE when either side has marked the other
    `notLinkedTo` — the user's "intentionally different" escape hatch — or when
    the two refer to the same (book, character) row. A bucket id on either side

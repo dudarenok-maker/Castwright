@@ -128,9 +128,9 @@ describe('mergeSeriesCast', () => {
     expect(out[0].lines).toBe(15);
   });
 
-  it('collapses punctuation/case id variants (Bronte ≡ bron-te)', () => {
-    const anchor = [char({ id: 'bronte', name: 'Bronte', lines: 29 })];
-    const siblings = [char({ id: 'bron-te', name: 'Bron-te', sourceBookId: 'b2', lines: 33 })];
+  it('collapses punctuation/case id variants (Castor ≡ cas-tor)', () => {
+    const anchor = [char({ id: 'castor', name: 'Castor', lines: 29 })];
+    const siblings = [char({ id: 'cas-tor', name: 'Cas-tor', sourceBookId: 'b2', lines: 33 })];
     const out = mergeSeriesCast(anchor, siblings, 'b1');
     expect(out).toHaveLength(1);
     expect(out[0].lines).toBe(62);
@@ -153,9 +153,9 @@ describe('mergeSeriesCast', () => {
     expect(out).toHaveLength(2);
   });
 
-  it('does NOT collapse unrelated names with no shared token (aldan vs alden)', () => {
+  it('does NOT collapse unrelated names with no shared token (aldan vs maelor)', () => {
     const anchor = [char({ id: 'aldan', name: 'Aldan', lines: 10 })];
-    const siblings = [char({ id: 'alden', name: 'Alden', sourceBookId: 'b2', lines: 5 })];
+    const siblings = [char({ id: 'maelor', name: 'Maelor', sourceBookId: 'b2', lines: 5 })];
     const out = mergeSeriesCast(anchor, siblings, 'b1');
     expect(out).toHaveLength(2);
   });

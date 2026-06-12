@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** fix ONE character across rendered chapters without regenerating whole chapters. The headline case: a too-quiet voice (e.g. "Bronte") gets a loudness boost in seconds — no GPU, no full re-render. Re-record is there for wrong pronunciation/tone.
+- **User:** fix ONE character across rendered chapters without regenerating whole chapters. The headline case: a too-quiet voice (e.g. "Castor") gets a loudness boost in seconds — no GPU, no full re-render. Re-record is there for wrong pronunciation/tone.
 - **Technical:** a single byte-range splice engine serves both a no-GPU gain re-mix and a GPU re-record; reuses the existing encode/loudnorm/`.previous.*` machinery, so the A/B + rollback player works unchanged.
 - **Architectural:** decode → substitute target segments → re-time → re-encode is a reusable primitive. `buildCharacterSnapshots` is now shared between generation and splice so drift snapshots can't diverge.
 
@@ -48,7 +48,7 @@ Automated:
 - e2e: `e2e/character-splice.spec.ts` (mock mode) — open cast profile → Fix audio → Loudness → apply → completion.
 
 Manual (owed — live GPU + sidecar):
-- Rendered book → Bronte profile → Fix audio → +3 dB → all chapters → confirm. Verify each chapter's Bronte segments get louder, duration unchanged (gain), `.previous.*` written, A/B audition works, chapter loudness stays ≈−16 LUFS (`ffprobe`/lufs sidecar). Then re-record one chapter's Bronte lines: verify timing integrity (downstream shift, no seam, no doubled title). Canonical manuscript per CLAUDE.md.
+- Rendered book → Castor profile → Fix audio → +3 dB → all chapters → confirm. Verify each chapter's Castor segments get louder, duration unchanged (gain), `.previous.*` written, A/B audition works, chapter loudness stays ≈−16 LUFS (`ffprobe`/lufs sidecar). Then re-record one chapter's Castor lines: verify timing integrity (downstream shift, no seam, no doubled title). Canonical manuscript per CLAUDE.md.
 
 ## Ship notes
 

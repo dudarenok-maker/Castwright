@@ -76,12 +76,12 @@ beforeAll(async () => {
     JSON.stringify({
       characters: [
         { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
-        { id: 'bronte', name: 'Bronte', gender: 'female', attributes: [] },
+        { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
       ],
     }),
   );
 
-  /* Real chapter: 1s loud Amy (healthy) + 1s of DEAD SILENCE for Bronte (a
+  /* Real chapter: 1s loud Amy (healthy) + 1s of DEAD SILENCE for Castor (a
      dropped generation). Encoded via the real MP3 encoder so the route's
      decode→scan pipeline runs against true bytes. */
   const amy = tone(1.0, 12000);
@@ -101,7 +101,7 @@ beforeAll(async () => {
       synthesizedAt: new Date().toISOString(),
       segments: [
         { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
-        { groupIndex: 1, characterId: 'bronte', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
       ],
     }),
   );
@@ -135,7 +135,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (dry-run scan)', () 
 
     const flagged = done!.flagged as Array<{ segmentIndex: number; reasons: string[] }>;
     expect(flagged).toHaveLength(1);
-    expect(flagged[0].segmentIndex).toBe(1); // Bronte's silent segment
+    expect(flagged[0].segmentIndex).toBe(1); // Castor's silent segment
     expect(flagged[0].reasons.some((r) => /silent/i.test(r))).toBe(true);
     expect(done!.repaired).toEqual([]);
 

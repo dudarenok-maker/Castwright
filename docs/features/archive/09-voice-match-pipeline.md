@@ -59,7 +59,7 @@ When the current book contains a richer profile of a recurring character than th
 
 ## Manual continuity link (when auto-match misses)
 
-When the auto-matcher's `nameScore < 0.34` floor drops a legitimate link — e.g. the new book has "Dexter Alvin Diznee" and the prior book has the canonical "Dex" (token Jaccard = 0, alias not pre-seeded) — the user has no way to fix it from the existing UI: the Profile Drawer's "Merge into another character…" dropdown only listed in-book candidates, so the prior character was unreachable. This section covers the manual-link affordance that closes that gap.
+When the auto-matcher's `nameScore < 0.34` floor drops a legitimate link — e.g. the new book has "Dexter Alvin Diznee" and the prior book has the canonical "Hart" (token Jaccard = 0, alias not pre-seeded) — the user has no way to fix it from the existing UI: the Profile Drawer's "Merge into another character…" dropdown only listed in-book candidates, so the prior character was unreachable. This section covers the manual-link affordance that closes that gap.
 
 - **Endpoint:** `POST /api/books/{bookId}/cast/link-prior`. Body: `{ sourceCharacterId, targetBookId, targetCharacterId }`. Response: `{ matchedFrom: { bookId, characterId, bookTitle, confidence: 1 }, voiceId? }`. Route at `server/src/routes/cast-link-prior.ts`.
 - **Roster endpoint:** `GET /api/books/{bookId}/series-roster`. Returns `{ characters: Array<{ id, name, bookId, bookTitle, voiceId?, aliases?, gender?, ageRange? }> }` — a thin wrapper around `scanSeriesCharactersForBookId()` so the frontend's optgroup picker has data to render. Route at `server/src/routes/series-roster.ts`. Neither route is in `openapi.yaml` — same precedent as `cast/merge` and `library-cast/override`.
@@ -82,17 +82,17 @@ Run `VITE_USE_MOCKS=true`. Upload and analyse a book until confirm-cast loads.
 
 ## Cross-book live walkthrough (real backend)
 
-The canonical e2e manuscript for cross-book matching is `~/Downloads/Bonus Keefe Story.txt` (do not commit). To exercise the live scoring against a second book in the same series:
+The canonical e2e manuscript for cross-book matching is `server/src/__fixtures__/the-coalfall-commission.md` (do not commit). To exercise the live scoring against a second book in the same series:
 
-1. With a confirmed Keepers book already in the workspace (Keefe present, cast confirmed on disk), import and analyse `Bonus Keefe Story.txt`.
-2. **On the confirm page**, the Keefe row should render:
+1. With a confirmed Keepers book already in the workspace (Marlow present, cast confirmed on disk), import and analyse `the Coalfall Commission.txt`.
+2. **On the confirm page**, the Marlow row should render:
    - "Matched · N%" pill with N derived from `0.65 * nameScore + 0.15 * gender + 0.10 * age + 0.10 * attributes`.
    - "From {prior book title}" in the Reuse tile subtitle.
-   - The continuity footer "Continuity preserved — Keefe from {prior book} will be used."
-3. **Open MatchDetail** on the Keefe row → factors include `name_exact` (score 1.0 when names match cleanly) or `name_tokens` (e.g. ½ when the prior book had "Keefe" and this one has "Keefe Sencen"). Plus gender/age_range/attributes when they contribute.
+   - The continuity footer "Continuity preserved — Marlow from {prior book} will be used."
+3. **Open MatchDetail** on the Marlow row → factors include `name_exact` (score 1.0 when names match cleanly) or `name_tokens` (e.g. ½ when the prior book had "Marlow" and this one has "Marlow Halden"). Plus gender/age_range/attributes when they contribute.
 4. **Non-recurring characters** (only in the new book) → render as Generated with no Matched pill.
 5. **Override toggle** (e.g. when the current book has a fuller portrait than the prior one): check "Update library profile from this manuscript" inside the continuity footer for any matched row, then click Confirm cast. The prior book's `cast.json` should now carry the richer `description` / `attributes` / `aliases` from this manuscript while its `voiceId` and chapter audio stay intact (`books/{author}/{series}/{prior-title}/.audiobook/cast.json`). Source's `name` lands in the library record's `aliases` if the names differed.
-6. **Manual link** (auto-matcher missed): on the new book, open the drawer for a character that has no continuity footer (e.g. "Dexter Alvin Diznee"). Click "Merge … into another character…", expand the dropdown, and pick the matching prior under the "From prior books in this series" optgroup (e.g. "Dex"). Click "Link". The drawer closes and the cast card now shows the same "Continuity preserved" footer with "Sync profile" checkbox the auto-match path produces. On disk, the prior book's character `aliases` now includes the new book's character name (`books/{author}/{series}/{prior-title}/.audiobook/cast.json`). A subsequent voice-match run on any series book will pick up the new alias and surface a real `matchedFrom` for the new character automatically.
+6. **Manual link** (auto-matcher missed): on the new book, open the drawer for a character that has no continuity footer (e.g. "Dexter Alvin Diznee"). Click "Merge … into another character…", expand the dropdown, and pick the matching prior under the "From prior books in this series" optgroup (e.g. "Hart"). Click "Link". The drawer closes and the cast card now shows the same "Continuity preserved" footer with "Sync profile" checkbox the auto-match path produces. On disk, the prior book's character `aliases` now includes the new book's character name (`books/{author}/{series}/{prior-title}/.audiobook/cast.json`). A subsequent voice-match run on any series book will pick up the new alias and surface a real `matchedFrom` for the new character automatically.
 
 ## Out of scope
 

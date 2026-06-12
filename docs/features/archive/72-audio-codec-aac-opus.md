@@ -80,7 +80,7 @@ Run with the real server + sidecar (`npm start`), `ANALYZER=local`, ffmpeg on PA
 6. **Re-open the export modal, pick AAC (M4A), Build download.** **Expected:** zip download streams; opening the zip shows per-chapter `.m4a` files. iOS / VLC / Audiobookshelf all play the contents.
 7. **Repeat steps 5-6 for `audioFormat: 'opus'`.** **Expected:** chapter files land as `.ogg`; the opus-ogg-zip export packages them.
 
-Canonical end-to-end manuscript for full-pipeline regression: `C:\Users\dudar\Downloads\Bonus Keefe Story.txt` (do not commit — copyrighted).
+Canonical end-to-end manuscript for full-pipeline regression: `server/src/__fixtures__/the-coalfall-commission.md` (do not commit — copyrighted).
 
 ## Out of scope
 

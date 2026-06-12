@@ -15,13 +15,13 @@ import { spliceSlice, type SpliceBatchRequest } from '../store/splice-slice';
 import type { Chapter } from '../lib/types';
 
 const CHAPTERS: Chapter[] = [
-  // Bronte speaks, rendered → candidate
-  { id: 1, title: 'The Meadow', duration: '2:00', state: 'done', progress: 1, characters: { bronte: 'done', amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
-  // Bronte speaks, rendered → candidate
-  { id: 2, title: 'The River', duration: '3:00', state: 'done', progress: 1, characters: { bronte: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
-  // Bronte speaks but NOT rendered → excluded
-  { id: 3, title: 'Hidden Lake', duration: '00:00', state: 'queued', progress: 0, characters: { bronte: 'queued' }, phase: null },
-  // Rendered but Bronte absent → excluded
+  // Castor speaks, rendered → candidate
+  { id: 1, title: 'The Meadow', duration: '2:00', state: 'done', progress: 1, characters: { castor: 'done', amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
+  // Castor speaks, rendered → candidate
+  { id: 2, title: 'The River', duration: '3:00', state: 'done', progress: 1, characters: { castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
+  // Castor speaks but NOT rendered → excluded
+  { id: 3, title: 'Hidden Lake', duration: '00:00', state: 'queued', progress: 0, characters: { castor: 'queued' }, phase: null },
+  // Rendered but Castor absent → excluded
   { id: 4, title: 'Alone', duration: '1:00', state: 'done', progress: 1, characters: { amy: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
 ] as Chapter[];
 
@@ -53,7 +53,7 @@ describe('FixCharacterAudioModal', () => {
     const store = makeStore(recorded);
     render(
       <Provider store={store}>
-        <FixCharacterAudioModal characterId="bronte" characterName="Bronte Allred" bookId="bk1" onClose={() => {}} />
+        <FixCharacterAudioModal characterId="castor" characterName="Castor Allred" bookId="bk1" onClose={() => {}} />
       </Provider>,
     );
     const lastStartBatch = () =>
@@ -65,7 +65,7 @@ describe('FixCharacterAudioModal', () => {
 
   it('offers only rendered chapters the character appears in', () => {
     renderModal();
-    // 2 candidates (ch1, ch2); ch3 unrendered + ch4 no-bronte excluded.
+    // 2 candidates (ch1, ch2); ch3 unrendered + ch4 no-castor excluded.
     expect(screen.getByRole('button', { name: /Apply to 2 chapters/i })).toBeTruthy();
     expect(screen.getByText(/The Meadow/)).toBeTruthy();
     expect(screen.getByText(/The River/)).toBeTruthy();
@@ -80,7 +80,7 @@ describe('FixCharacterAudioModal', () => {
     expect(action).toBeTruthy();
     expect(action!.payload).toMatchObject({
       bookId: 'bk1',
-      characterId: 'bronte',
+      characterId: 'castor',
       mode: 'remix',
       gainDb: 3,
       chapterIds: [1, 2],
@@ -108,8 +108,8 @@ describe('FixCharacterAudioModal', () => {
     render(
       <Provider store={store}>
         <FixCharacterAudioModal
-          characterId="bronte"
-          characterName="Bronte Allred"
+          characterId="castor"
+          characterName="Castor Allred"
           bookId="bk1"
           preScoped={{ mode: 'rerecord', chapterId: 2, segmentIndices: [4] }}
           onClose={() => {}}

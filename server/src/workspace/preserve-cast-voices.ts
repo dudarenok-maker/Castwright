@@ -6,7 +6,7 @@
    cast.json with whatever the UI sends. If the UI's in-memory cast lost a
    character's designed Qwen voice (a stale bundle, an analyzer cast-update, the
    confirm screen), the write erases it from disk — the 2026-06-05 The Drowning Bell
-   incident, where the analysing→cast-confirm flow stripped Berrin/Sela/Trix.
+   incident, where the analysing→cast-confirm flow stripped Berrin/Sela/Quill.
 
    This fills each incoming character's missing voice-DESIGN fields from the
    existing on-disk character. INCOMING WINS when present (a deliberate

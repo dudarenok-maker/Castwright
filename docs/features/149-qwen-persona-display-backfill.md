@@ -42,14 +42,14 @@ The persona was historically persisted only on the voice sidecar `voices/qwen/<n
 - Vitest unit (`src/modals/profile-drawer.test.tsx`) — seeds the textarea from the sidecar `instruct` when `voiceStyle` is empty (plan 149); does NOT fire the lookup when a `voiceStyle` already exists.
 - **Script:** `scripts/backfill-qwen-voicestyle.mjs` has no JS test, matching the precedent of `scripts/repair-reused-qwen-overrides.mjs` (the `scripts/tests/` Pester harness covers other scripts, not the repair `.mjs`). Validated via the dry-run + idempotency walkthrough below — intentional omission.
 
-### Manual acceptance walkthrough (real backend, `BASE="C:/AudiobookWorkspace"`, Stellarlune / Sophie)
+### Manual acceptance walkthrough (real backend, `BASE="C:/AudiobookWorkspace"`, The Drowning Bell / Wren)
 
-1. Open Sophie's drawer in Stellarlune (pre-fix): card shows "Qwen · qwen-sophie · Designed voice", 12s sample plays, but "Voice persona" is BLANK; Design → 400.
-2. Runtime fallback (route deployed, pre-backfill): re-open Sophie → textarea shows "A relatable 15-year-old girl…"; Design synthesises (no 400).
-3. Backfill dry-run → prints `+ Sophie … qwen-sophie` for Stellarlune + origin; "DRY RUN", no writes.
+1. Open Wren's drawer in The Drowning Bell (pre-fix): card shows "Qwen · qwen-wren · Designed voice", 12s sample plays, but "Voice persona" is BLANK; Design → 400.
+2. Runtime fallback (route deployed, pre-backfill): re-open Wren → textarea shows "A relatable 15-year-old girl…"; Design synthesises (no 400).
+3. Backfill dry-run → prints `+ Wren … qwen-wren` for The Drowning Bell + origin; "DRY RUN", no writes.
 4. `--apply` → `.bak` per changed cast.json; `voiceStyle` written.
-5. Re-run dry-run → 0 changed (idempotent). Stellarlune cast.json Sophie now has `"voiceStyle": "A relatable 15-year-old girl…"`.
-6. Regenerate Stellarlune → Narrator/Sophie render Qwen (link was already correct), the stale `Fallback (Kokoro)` pill clears.
+5. Re-run dry-run → 0 changed (idempotent). The Drowning Bell cast.json Wren now has `"voiceStyle": "A relatable 15-year-old girl…"`.
+6. Regenerate The Drowning Bell → Narrator/Wren render Qwen (link was already correct), the stale `Fallback (Kokoro)` pill clears.
 
 ## Out of scope
 

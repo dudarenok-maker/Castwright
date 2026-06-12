@@ -26,9 +26,9 @@ describe('isRerecordableSegment', () => {
 
 const segments = [
   seg(0, 'amy', [1]),
-  seg(1, 'bronte', [2]),
+  seg(1, 'castor', [2]),
   seg(2, 'amy', [3]),
-  seg(3, 'bronte', [4, 5]),
+  seg(3, 'castor', [4, 5]),
 ];
 
 function pcmOfSamples(n: number): Buffer {

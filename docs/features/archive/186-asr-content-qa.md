@@ -52,7 +52,7 @@ lifecycle** (design = cast-review, ASR = generation/repair). Cap GPU ASR at
 
 ### Trustworthiness (why the gate stays on)
 
-A gate that false-flags a good "Sophie Foster" line gets switched off. So:
+A gate that false-flags a good "Wren Sparrow" line gets switched off. So:
 deterministic decode (temp 0, greedy, `condition_on_previous_text=False`, VAD);
 hard normalization (case/punctuation/contractions/small-int spelling);
 sub/del/ins decomposition with a deletion-run truncation check; Whisper intrinsic

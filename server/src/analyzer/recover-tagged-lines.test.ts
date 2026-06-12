@@ -10,7 +10,7 @@ import { recoverTaggedNarratorLines, taggedSpeakerIds } from './recover-tagged-l
 const roster = [
   { id: 'behnam', name: 'Behnam Aria' },
   { id: 'wren-sparrow', name: 'Wren Sparrow' },
-  { id: 'kenric', name: 'Kenric' },
+  { id: 'aldous', name: 'Aldous' },
 ];
 
 function s(id: number, chapterId: number, characterId: string, text: string) {
@@ -36,8 +36,8 @@ describe('recoverTaggedNarratorLines', () => {
   });
 
   it('does not overwrite a non-narrator quote', () => {
-    const sentences = [s(1, 1, 'kenric', '“Hi,”'), s(2, 1, 'narrator', 'Behnam noted.')];
-    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('kenric');
+    const sentences = [s(1, 1, 'aldous', '“Hi,”'), s(2, 1, 'narrator', 'Behnam noted.')];
+    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('aldous');
   });
 
   it('does not flip across a chapter boundary', () => {
@@ -46,7 +46,7 @@ describe('recoverTaggedNarratorLines', () => {
   });
 
   it('skips an unknown name (not in roster)', () => {
-    const sentences = [s(1, 1, 'narrator', '“Who?,”'), s(2, 1, 'narrator', 'Vespera hissed.')];
+    const sentences = [s(1, 1, 'narrator', '“Who?,”'), s(2, 1, 'narrator', 'Wraythe hissed.')];
     expect(recoverTaggedNarratorLines(sentences, roster).flipped).toBe(0);
   });
 
@@ -80,7 +80,7 @@ describe('taggedSpeakerIds', () => {
   it('returns ids of rostered characters the prose tags', () => {
     const sentences = [
       s(1, 1, 'narrator', 'Behnam noted.'),
-      s(2, 1, 'narrator', 'Vespera hissed.'), // not rostered → excluded
+      s(2, 1, 'narrator', 'Wraythe hissed.'), // not rostered → excluded
       s(3, 1, 'narrator', 'plain narration with no tag'),
     ];
     const ids = taggedSpeakerIds(sentences, roster);

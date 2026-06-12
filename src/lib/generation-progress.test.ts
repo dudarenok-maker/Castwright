@@ -273,7 +273,7 @@ describe('characterRowProgress — the regenerate stale-Done regression', () => 
   });
 
   it('marks a row done by derivation once all its lines are behind the playhead', () => {
-    /* The legitimately-done-early speaker (e.g. Mr. Sweeney by line 80): all
+    /* The legitimately-done-early speaker (e.g. Mr. Marrow by line 80): all
        five lines precede the playhead, so the row is correctly "Done" even
        though the chapter is still in_progress. */
     const r = characterRowProgress({

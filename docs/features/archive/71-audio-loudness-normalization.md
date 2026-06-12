@@ -125,7 +125,7 @@ The chapter still lands on disk; only the `.lufs.json` sidecar is missing. Real-
 Requires a real chapter generation against a live sidecar (or the cached PCM trick from plan 28).
 
 1. **Set `AUDIO_LOUDNORM_ENABLED=true`** (or unset — default is ON) in `server/.env`. Start the server.
-2. **Generate a chapter** with mixed voices (the canonical Bonus Keefe Story works — multiple speakers per chapter).
+2. **Generate a chapter** with mixed voices (the canonical the Coalfall Commission works — multiple speakers per chapter).
 3. **Confirm the sidecar lands.** Inspect `<workspace>/<bookId>/audio/<chapterSlug>.lufs.json`:
    - File exists.
    - `target: -16`, `twoPass: true`.

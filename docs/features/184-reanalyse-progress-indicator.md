@@ -17,7 +17,7 @@ The per-chapter **Re-analyse** row (plan 183) and the un-exclude flow reuse the
 whole-book progress value, which the server computes as
 `0.02 + 0.93·(chaptersDone / totalChapters)`. For a **single-chapter** subset
 `total = 1`, so the bar pins at **2%** for the entire stage-1 call and then jumps
-— users watched it sit at "2%" and assumed it had hung (observed live, Stellarlune
+— users watched it sit at "2%" and assumed it had hung (observed live, The Drowning Bell
 ch16 re-analyse).
 
 - **User:** the bar actually moves during a single-chapter re-analysis, with a

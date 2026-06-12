@@ -121,12 +121,12 @@ describe('ChangeLogView filter', () => {
   it('Cast filter includes a name_change (rename / alias-promote) event', () => {
     /* Dedicated event set so the shared sampleEvents counts stay stable. */
     const events: ChangeLogEvent[] = [
-      makeEvent({ id: 1, type: 'name_change', title: 'Renamed Dame Alina' }),
+      makeEvent({ id: 1, type: 'name_change', title: 'Renamed Dame Linnet' }),
       makeEvent({ id: 2, type: 'voice_tune', title: 'Tuned Eliza' }),
     ];
     render(<ChangeLogView events={events} />);
     fireEvent.click(screen.getByRole('button', { name: /^Cast/ }));
-    expect(screen.getByText('Renamed Dame Alina')).toBeInTheDocument();
+    expect(screen.getByText('Renamed Dame Linnet')).toBeInTheDocument();
     expect(screen.queryByText('Tuned Eliza')).not.toBeInTheDocument();
   });
 

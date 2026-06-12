@@ -12,8 +12,8 @@ A reused Qwen character (one matched/linked to a prior book in the series)
 rendered chapters in the generic **Kokoro fallback voice** instead of its
 **designed Qwen voice**, silently. The cast view compounded it: the Status pill
 read **"Designed"** while the voice sub-line read **"Qwen · No voice designed
-yet"** — two contradictory readouts on the same row (observed on Vespera,
-Rayni, Lord Cassius; verified against `C:\AudiobookWorkspace`).
+yet"** — two contradictory readouts on the same row (observed on Wraythe,
+Rayni, Lord Vane; verified against `C:\AudiobookWorkspace`).
 
 ## Root cause
 
@@ -21,7 +21,7 @@ A reused character carries only `voiceId` + `matchedFrom` on disk — the reuse
 write paths (`voice-match.ts`, `cast-link-prior.ts`) propagate the identity key
 but **not** `ttsEngine` / `overrideTtsVoices`. The bespoke Qwen voice lives on
 the **source book's** character that designed it (`overrideTtsVoices.qwen.name`,
-e.g. `qwen-sandor`; the on-disk weights are `voices/qwen/qwen-<voiceId>.pt`).
+e.g. `qwen-garrow`; the on-disk weights are `voices/qwen/qwen-<voiceId>.pt`).
 
 At synthesis, `pickVoiceForEngine('qwen', voice)`
 (`server/src/tts/voice-mapping.ts`) reads **only** `overrideTtsVoices.qwen.name`
@@ -72,11 +72,11 @@ the resolved override back onto every reused cast character: (1) via the
 carries an override but the deterministic `voices/qwen/qwen-<voiceId>.pt` exists
 on disk — reconstruct `{ qwen: { name: qwen-<voiceId> } }`. The on-disk fallback
 is the *only* way to recover a voice whose override was lost in every book (Lord
-Cassius); the runtime path deliberately omits it. Dry-run by default; `--apply`
+Vane); the runtime path deliberately omits it. Dry-run by default; `--apply`
 writes after a `.bak`; `BASE` / `AUDIOBOOK_WORKSPACE` override the root.
 
 Applied to the live workspace 2026-05-29: 4 cast files written; 21 reused
-characters fixed via source chain, 10 recovered from disk (incl. Lord Cassius),
+characters fixed via source chain, 10 recovered from disk (incl. Lord Vane),
 16 left unresolved (genuinely never-designed — correctly stay on Kokoro).
 
 ## Tests

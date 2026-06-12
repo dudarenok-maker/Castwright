@@ -14,7 +14,7 @@ owner: null
 
 ## Benefit / Rationale
 
-While listening to *Stellarlune* the user hit bad generations and silence gaps
+While listening to *The Drowning Bell* the user hit bad generations and silence gaps
 that shipped in the final audiobook (e.g. story chapter 17). The existing
 chapter-level QA (`audio-qa.ts`, srv-27) only sees whole-chapter loudness + total
 duration, so a single dropped / silent / runaway **sentence** inside a long
@@ -83,7 +83,7 @@ chapter sails through — verified: ch17's `.lufs.json` reads a healthy `i =
 
 ### Manual acceptance walkthrough (live GPU — owed)
 
-1. Regenerate Stellarlune ch17 with the gate on (`SEG_QA_MAX_RERECORDS=2`).
+1. Regenerate The Drowning Bell ch17 with the gate on (`SEG_QA_MAX_RERECORDS=2`).
    Expect SSE progress to show any re-records; the new `segments.json` carries
    no `suspect` flags (or far fewer); spot-listen the previously-bad spots.
 2. Dry-run scan the EXISTING ch17 audio:
@@ -103,5 +103,5 @@ chapter sails through — verified: ch17's `.lufs.json` reads a healthy `i =
 ## Ship notes
 
 Shipped 2026-06-06 (merge 174c796, PR #513, closes #509). Live acceptance
-confirmed: the pre-assembly QA gate ran during Stellarlune regenerations — SSE
+confirmed: the pre-assembly QA gate ran during The Drowning Bell regenerations — SSE
 showed re-records and the new `segments.json` carried fewer `suspect` flags.

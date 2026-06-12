@@ -63,7 +63,7 @@ test('underscore-adjacent tokens are caught (slug compound)', () => {
 });
 
 test('Capitalised prose word next to a hyphen keeps its case (not a slug)', () => {
-  assert.equal(scrubText('Keefe-as-Lady-Gisela said'), 'Marlow-as-Lady-Gisela said');
+  assert.equal(scrubText('Keefe-as-Lady-Gisela said'), 'Marlow-as-Lady-Renna said');
   assert.equal(scrubText("id: 'keefe-foo'"), "id: 'marlow-foo'");
 });
 

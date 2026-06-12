@@ -557,9 +557,9 @@ describe('sameCharacterByNameAlias', () => {
     expect(sameCharacterByNameAlias(a, b)).toBe(true);
   });
 
-  it('matches punctuation/case variants of the id-name (Bronte ≡ bron-te)', () => {
-    const a = id({ bookId: 'b1', characterId: 'bronte', name: 'Bronte' });
-    const b = id({ bookId: 'b2', characterId: 'bron-te', name: 'Bron-te' });
+  it('matches punctuation/case variants of the id-name (Castor ≡ cas-tor)', () => {
+    const a = id({ bookId: 'b1', characterId: 'castor', name: 'Castor' });
+    const b = id({ bookId: 'b2', characterId: 'cas-tor', name: 'Cas-tor' });
     expect(sameCharacterByNameAlias(a, b)).toBe(true);
   });
 
@@ -571,7 +571,7 @@ describe('sameCharacterByNameAlias', () => {
 
   it('does NOT match unrelated names (typo variants with no shared token)', () => {
     const a = id({ bookId: 'b1', characterId: 'aldan', name: 'Aldan' });
-    const b = id({ bookId: 'b2', characterId: 'alden', name: 'Alden' });
+    const b = id({ bookId: 'b2', characterId: 'maelor', name: 'Maelor' });
     expect(sameCharacterByNameAlias(a, b)).toBe(false);
   });
 

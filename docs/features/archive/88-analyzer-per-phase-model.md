@@ -100,7 +100,7 @@ If Gemma identifies a character first in chapter 20, Gemini's chapter 5 (dispatc
 ### Manual acceptance walkthrough
 
 1. **Reboot** for clean GPU/process state per [feedback_reboot_before_perf_baselines].
-2. **Default-run on the canonical manuscript** (`C:\Users\dudar\Downloads\Bonus Keefe Story.txt`): all three env knobs at defaults. Watch telemetry:
+2. **Default-run on the canonical manuscript** (`server/src/__fixtures__/the-coalfall-commission.md`): all three env knobs at defaults. Watch telemetry:
    - Gemma chapter 9 completes (`gemma.phase0.chapter=9 watermark=10`); within ~50 ms Gemini chapter 0 dispatches (`gemini.phase1.chapter=0 roster_snapshot_size=10`).
    - Gemma and Gemini chapters interleave in the SSE stream from that point on.
    - Gemma finishes its last chapter + Phase 0b consolidation; Gemini still has N - lag_release_point chapters left.

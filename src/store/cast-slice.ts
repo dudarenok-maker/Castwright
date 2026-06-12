@@ -143,7 +143,7 @@ export const castSlice = createSlice({
          OTHER books in the series (the series-reuse pass); a character DESIGNED IN
          THIS BOOK (overrideTtsVoices.qwen, no voiceId/matchedFrom) finds no match and
          arrives voiceless. A flat replace dropped it in Redux, so /confirm rendered
-         "No voice designed yet" for Berrin/Sela/Trix even though cast.json on disk
+         "No voice designed yet" for Berrin/Sela/Quill even though cast.json on disk
          still held the voice. Existing-wins ONLY when the existing entry has the
          field, so a fresh reuse link stamped this run still flows through. */
       const byId = new Map(s.characters.map((c) => [c.id, c]));
@@ -186,7 +186,7 @@ export const castSlice = createSlice({
              them. `overrideTtsVoices` holds the designed Qwen voice for
              generated characters (no voiceId); omitting it here dropped the
              voice in Redux and a later cast persist wrote it out of cast.json
-             (#518 — Berrin/Sela/Trix stripped on re-analysis). */
+             (#518 — Berrin/Sela/Quill stripped on re-analysis). */
           next.push({
             ...inc,
             voiceId: existing.voiceId ?? inc.voiceId,

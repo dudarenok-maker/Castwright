@@ -93,7 +93,7 @@ Run `npm start` (or `npm run dev` for HMR) in mock mode (`VITE_USE_MOCKS=true`, 
 **Book-title fallback (PR #141).** Requires a multi-book session with drift events spanning at least two books, ideally one that hasn't been opened in this session:
 
 15. Open any book whose drift modal has events from BOTH the active book AND another book the user hasn't visited this session (e.g. via cross-book bulk poll). Trigger the modal via the top banner.
-16. The per-section **BOOK** headers render the workspace-scan title (e.g. "Keeper of the Lost Cities") for both books — neither shows the raw slug `shannon-messenger__keeper-of-the-lost-cities__keeper-of-the-lost-ci…`. If the active book has user-edited title overrides in `bookMeta.saved`, those win over the library scan title.
+16. The per-section **BOOK** headers render the workspace-scan title (e.g. "The Hollow Tide") for both books — neither shows the raw slug `shannon-messenger__the-hollow-tide__keeper-of-the-lost-ci…`. If the active book has user-edited title overrides in `bookMeta.saved`, those win over the library scan title.
 
 ## Out of scope
 
@@ -116,7 +116,7 @@ The first three follow-ups were additive (new invariants under "Invariants to pr
 
 ## Post-ship correction (2026-05-22)
 
-The original plan preserved one invariant that turned out to be wrong: *"Modal header chapter count remains per-event, not per-card."* The server emits one `DriftEvent` per drift factor (voice / gender / ageRange / 4 tone metrics / attributes), so a single chapter that fires three factors produced three events. The "{N} chapters flagged" label was counting those events — a Keefe chapter with `voice + warmth + attributes` drift contributed +3 to the banner. The chapter strip also rendered one row per event, so the same CH NN appeared three times in a row.
+The original plan preserved one invariant that turned out to be wrong: *"Modal header chapter count remains per-event, not per-card."* The server emits one `DriftEvent` per drift factor (voice / gender / ageRange / 4 tone metrics / attributes), so a single chapter that fires three factors produced three events. The "{N} chapters flagged" label was counting those events — a Marlow chapter with `voice + warmth + attributes` drift contributed +3 to the banner. The chapter strip also rendered one row per event, so the same CH NN appeared three times in a row.
 
 User-visible bug: the Voice Drift Detector showed "30 chapters flagged across 2 books" when only ~10 unique chapters were actually flagged, and the per-character "Show chapters" expander listed each chapter 2-3× depending on how many factors fired.
 

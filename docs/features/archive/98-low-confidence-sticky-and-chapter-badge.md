@@ -61,7 +61,7 @@ Second pain: the chapter sidebar gives no signal of which chapters even contain 
 
 ### Manual acceptance walkthrough
 
-Run on the canonical end-to-end manuscript (`C:\Users\dudar\Downloads\Bonus Keefe Story.txt`):
+Run on the canonical end-to-end manuscript (`server/src/__fixtures__/the-coalfall-commission.md`):
 
 1. Upload → analyse → confirm → open manuscript on a chapter with 8+ low-confidence sentences. Expected: stats row reads `N segments · M speakers · 8 low-confidence ▲ ▼ ... Prev Next`.
 2. Scroll halfway into the chapter body. Expected: stats row stays pinned at the top of the viewport (under the 64px global topbar).
@@ -80,5 +80,5 @@ Run on the canonical end-to-end manuscript (`C:\Users\dudar\Downloads\Bonus Keef
 ## Ship notes
 
 - **Shipped:** 2026-05-22 via PR #159, merge commit `74698a5`.
-- **Behaviour delta vs. original spec:** none. Both pieces landed exactly as specified — sticky bar at `top-16` with backdrop blur extracted into `ManuscriptStickyStatsBar`, amber count badge on chapter rows skipped at count 0.
+- **Behaviour delta vs. original spec:** none. Both pieces landed exactly as specified — sticky bar at `top-16` with backdrop haze extracted into `ManuscriptStickyStatsBar`, amber count badge on chapter rows skipped at count 0.
 - **CI note:** the Windows pre-push gate flagged the `e2e/visual.spec.ts` baselines (light + dark for library / upload / confirm / ready / listen / generate). Pushed with `--no-verify` per `feedback_visual_baselines_flaky_on_windows.md`; Linux CI cleared them on first attempt (11m17s, exit 0). The new sticky bar IS a real visual change to the manuscript view but the existing visual baseline tolerance absorbed it.

@@ -12,7 +12,7 @@ owner: null
 > OpenAPI ops: none
 > Related: [[154-false-gemini-rate-limit-misclassify]] (the incident that surfaced this), `side-11` (the host-RAM leak that *forces* the recycles), [[143-sidecar-process-recycle]]
 
-## The finding (2026-05-31, KOTLC *Stellarlune* CH24 investigation)
+## The finding (2026-05-31, the Hollow Tide *The Drowning Bell* CH24 investigation)
 
 While diagnosing the false "Gemini rate-limited" stop (plan 154), the live sidecar's
 `/debug/memory` showed — with **every engine `*_loaded: false`** — `cuda.allocated_mb

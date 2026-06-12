@@ -205,14 +205,14 @@ describe('buildVoiceLockEvent', () => {
 describe('buildNameChangeEvent', () => {
   it('records the old name in the title and the new name in the note', () => {
     const ev = buildNameChangeEvent({
-      oldName: 'Dame Alina',
-      newName: 'Councilor Alina',
+      oldName: 'Dame Linnet',
+      newName: 'Councilor Linnet',
       now: NOW,
     });
     expect(ev.type).toBe('name_change');
     expect(ev.actor).toBe('you');
-    expect(ev.title).toBe('Renamed Dame Alina');
-    expect(ev.note).toContain('Councilor Alina');
+    expect(ev.title).toBe('Renamed Dame Linnet');
+    expect(ev.note).toContain('Councilor Linnet');
     /* Frames the rename as non-destructive — the old name is kept as an alias. */
     expect(ev.note).toContain('alias');
   });

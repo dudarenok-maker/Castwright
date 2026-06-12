@@ -74,7 +74,7 @@ To add in the implementation run (this plan ships paired tests, per the testing 
 
 ### Manual acceptance walkthrough
 
-Canonical end-to-end manuscript: `C:\Users\dudar\Downloads\Bonus Keefe Story.txt` (per `CLAUDE.md`). Run with the real backend + Kokoro sidecar.
+Canonical end-to-end manuscript: `server/src/__fixtures__/the-coalfall-commission.md` (per `CLAUDE.md`). Run with the real backend + Kokoro sidecar.
 
 1. **Fresh import.** Books → Start a new book → paste the canonical manuscript. Within ~2 s the BookCard flips from gradient to OpenLibrary cover (top half cropped by default — this is the problem we're solving).
 2. **Frame tab.** Open the card's "..." menu → **Cover image** (modal header label changed from plan 36's "Find cover image"). Click the **Frame** tab. The canvas shows the cover at 1:1 with the current crop position. Drag down so the title text is visible inside the square. Adjust the zoom slider to ~1.4× to tighten on the title. Click **Save**.

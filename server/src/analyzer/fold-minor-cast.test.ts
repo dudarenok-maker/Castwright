@@ -485,7 +485,7 @@ describe('foldMinorCast', () => {
     expect(isDescriptorName('Lady Wick')).toBe(false);
     expect(isDescriptorName('Sir Astin')).toBe(false);
     expect(isDescriptorName('Dame Linnet')).toBe(false);
-    expect(isDescriptorName('Mr. Sweeney')).toBe(false);
+    expect(isDescriptorName('Mr. Marrow')).toBe(false);
     expect(isDescriptorName('Garwin Chang')).toBe(false);
     expect(isDescriptorName('Garrow')).toBe(false);
     /* Capped at two words after "The" so place-style names ("The
@@ -745,7 +745,7 @@ describe('foldMinorCast', () => {
     const chars = [
       makeChar('narrator'),
       makeChar('wren', { name: 'Wren', gender: 'female' }),
-      makeChar('unknown-female', { name: 'Vika', gender: 'female' }),
+      makeChar('unknown-female', { name: 'Senna', gender: 'female' }),
     ];
     const sentences = makeSentences([
       [1, 'narrator'],

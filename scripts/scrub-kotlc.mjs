@@ -63,6 +63,20 @@ const MAP = [
   ['Alexine', 'Thorne'],
   ['Galvin', 'Wick'],
   ['Hunkyhair', 'Singe'],
+  // long-tail minor characters
+  ['Sweeney', 'Marrow'],
+  ['Bronte', 'Castor'],
+  ['Kenric', 'Aldous'],
+  ['Gisela', 'Renna'],
+  ['Alden', 'Maelor'],
+  ['Vespera', 'Wraythe'],
+  ['Flori', 'Wisp'],
+  ['Blur', 'Haze'],
+  ['Trix', 'Quill'],
+  ['Vika', 'Senna'],
+  // NOTE: Blur/Ro/Bo are KotLC chars but ALSO common words (the `blur` DOM
+  // event, `ro`/`bo` abbreviations) — context-only, handled by a manual pass,
+  // NEVER blanket-renamed.
   // unambiguous books
   ['Stellarlune', 'The Drowning Bell'],
   ['Everblaze', 'The Tidewatcher’s Oath'], // curly ’ — safe in single-quoted JS strings

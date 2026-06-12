@@ -158,12 +158,12 @@ describe('persistenceMiddleware — payload shape', () => {
 
   it('persists the full cast on applyAddAlias so the alias is the authoritative last write', async () => {
     const next = vi.fn((x) => x);
-    const state = baseState({ cast: { characters: [{ id: 'bronte', aliases: ['Bronte'] }] } });
+    const state = baseState({ cast: { characters: [{ id: 'castor', aliases: ['Castor'] }] } });
     persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyAddAlias' });
     await advance(500);
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'cast',
-      patch: { characters: [{ id: 'bronte', aliases: ['Bronte'] }] },
+      patch: { characters: [{ id: 'castor', aliases: ['Castor'] }] },
     });
   });
 

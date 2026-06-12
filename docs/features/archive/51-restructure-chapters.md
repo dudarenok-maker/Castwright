@@ -63,7 +63,7 @@ Run in mock mode unless noted: `VITE_USE_MOCKS=true npm run dev`.
 6. Drag a chapter row to a new position via keyboard: Tab to the drag handle (with `aria-label="Reorder chapter <title>"`), press Space, arrow up/down to move, Enter to drop. "Apply reorder" button enables; confirm; order persists across a refresh.
 7. Click "Split here…" on a multi-sentence chapter → the row expands to show per-sentence rows. Click "Split after" on sentence N. Confirm; chapter count goes up by 1. Both halves' audio is deleted; chapters below are renumbered with their audio renamed.
 
-Against the real backend, the same walkthrough works on the canonical `C:\Users\dudar\Downloads\Bonus Keefe Story.txt` book the user uploaded that motivated this plan.
+Against the real backend, the same walkthrough works on the canonical `server/src/__fixtures__/the-coalfall-commission.md` book the user uploaded that motivated this plan.
 
 ## Out of scope
 
