@@ -43,6 +43,7 @@ export const SLOW_FILES = [
   'src/parsers/pdf-real.test.ts',
   'src/routes/setup-readiness.route.test.ts',
   'src/routes/kokoro-install.route.test.ts',
+  'src/routes/venv-bootstrap.route.test.ts',
 ];
 
 export default defineConfig({

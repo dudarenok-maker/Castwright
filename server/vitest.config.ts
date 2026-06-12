@@ -46,6 +46,9 @@ const SLOW_FILES_TO_EXCLUDE = [
   /* Integration route test: supertest against a live Express instance
      (kokoro install bootstrap, offline-stubbed). Serialised (fs-21). */
   'src/routes/kokoro-install.route.test.ts',
+  /* Integration route test: supertest against a live Express instance
+     (venv bootstrap, offline-stubbed). Serialised (fs-21). */
+  'src/routes/venv-bootstrap.route.test.ts',
 ];
 
 /* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or
