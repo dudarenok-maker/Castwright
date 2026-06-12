@@ -58,6 +58,8 @@ interface Props {
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
   onTrySample?: () => void | Promise<void>;
+  onStartTour?: () => void;
+  tourCompleted?: boolean;
 }
 
 export function LibraryGrid({
@@ -73,9 +75,11 @@ export function LibraryGrid({
   onCoverChanged,
   onStartNew,
   onTrySample,
+  onStartTour,
+  tourCompleted,
 }: Props) {
   if (!loaded) return <LibrarySkeleton />;
-  if (isLibraryEmpty) return <EmptyLibrary onStartNew={onStartNew} onTrySample={onTrySample} />;
+  if (isLibraryEmpty) return <EmptyLibrary onStartNew={onStartNew} onTrySample={onTrySample} onStartTour={onStartTour} tourCompleted={tourCompleted} />;
   return (
     <div className="space-y-10">
       {authors.map((author) => (
