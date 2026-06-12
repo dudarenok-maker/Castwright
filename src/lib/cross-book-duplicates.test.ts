@@ -55,19 +55,19 @@ function makeCharacter(id: string, name: string, extra: Partial<Character> = {})
 }
 
 const SERIES_NCT: BookSeriesInfo = {
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Northern Coast Trilogy',
   isStandalone: false,
 };
 
 const SERIES_OTHER: BookSeriesInfo = {
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Other Series',
   isStandalone: false,
 };
 
 const STANDALONE: BookSeriesInfo = {
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Solo Book',
   isStandalone: true,
 };

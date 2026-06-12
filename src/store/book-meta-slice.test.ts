@@ -16,7 +16,7 @@ const initial = (): BookMetaState => ({ draft: null, saved: {} });
 
 const fullMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
   title: 'The Northern Star',
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Northern Coast Trilogy · Book 2',
   narratorCredit: 'Anders Vale',
   genre: 'Literary fiction',
@@ -37,7 +37,7 @@ describe('bookMetaSlice — hydrateFromBookState', () => {
         bookId: 'ns',
         state: {
           title: 'The Northern Star',
-          author: 'Mike Dudarenok',
+          author: 'Marin Vale',
           series: 'NCT · Book 2',
           narratorCredit: 'Anders Vale',
           genre: 'Literary fiction',
@@ -48,7 +48,7 @@ describe('bookMetaSlice — hydrateFromBookState', () => {
     expect(next.draft).toBeNull();
     expect(next.saved.ns).toEqual({
       title: 'The Northern Star',
-      author: 'Mike Dudarenok',
+      author: 'Marin Vale',
       series: 'NCT · Book 2',
       narratorCredit: 'Anders Vale',
       genre: 'Literary fiction',
