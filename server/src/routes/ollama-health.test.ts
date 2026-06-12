@@ -174,6 +174,21 @@ describe('POST /api/ollama/load', () => {
     expect(res.body.status).toBe('error');
     expect(res.body.error).toMatch(/404/);
   });
+
+  it('targets the model from the request body when provided, still threading num_ctx/num_gpu', async () => {
+    fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+
+    const res = await request(makeApp())
+      .post('/api/ollama/load')
+      .send({ model: 'llama3.1:8b' });
+
+    expect(res.status).toBe(200);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.model).toBe('llama3.1:8b');
+    expect(body.keep_alive).toBe('5m');
+    expect(body.options?.num_ctx).toBe(16384);
+    expect(body.options?.num_gpu).toBe(999);
+  });
 });
 
 describe('POST /api/ollama/unload', () => {
