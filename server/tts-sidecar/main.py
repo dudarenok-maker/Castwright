@@ -2812,7 +2812,7 @@ async def load_model(req: Request) -> JSONResponse:
     # the drain+respawn instead of trusting a model that won't accept synth yet.
     if _restart_pending:
         return JSONResponse(
-            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
             status_code=503,
         )
 
@@ -3099,7 +3099,7 @@ async def synthesize(req: Request) -> Response:
         return JSONResponse(
             {
                 "detail": (
-                    "TTS sidecar is in a poisoned CUDA state from a prior CUDA "
+                    "Voice engine is in a poisoned CUDA state from a prior CUDA "
                     "error and must be restarted. A fresh process is being "
                     "respawned automatically; retry once /health responds again."
                     + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
@@ -3115,7 +3115,7 @@ async def synthesize(req: Request) -> Response:
     # waits out the respawn — the in-flight chapter already counted below drains.
     if _restart_pending:
         return JSONResponse(
-            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
             status_code=503,
         )
 
@@ -3206,7 +3206,7 @@ async def transcribe(req: Request) -> Response:
         return JSONResponse(
             {
                 "detail": (
-                    "TTS sidecar is in a poisoned CUDA state and must be restarted."
+                    "Voice engine is in a poisoned CUDA state and must be restarted."
                     + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
                 ),
                 "poisoned": True,
@@ -3215,7 +3215,7 @@ async def transcribe(req: Request) -> Response:
         )
     if _restart_pending:
         return JSONResponse(
-            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
             status_code=503,
         )
 
@@ -3300,7 +3300,7 @@ async def synthesize_batch(req: Request) -> Response:
         return JSONResponse(
             {
                 "detail": (
-                    "TTS sidecar is in a poisoned CUDA state from a prior CUDA "
+                    "Voice engine is in a poisoned CUDA state from a prior CUDA "
                     "error and must be restarted. A fresh process is being "
                     "respawned automatically; retry once /health responds again."
                     + (f" (trigger: {_process_poison_reason})" if _process_poison_reason else "")
@@ -3315,7 +3315,7 @@ async def synthesize_batch(req: Request) -> Response:
     # rides out the respawn instead of a fresh batch entering the dying process.
     if _restart_pending:
         return JSONResponse(
-            {"detail": "TTS sidecar is recycling to free memory; retry shortly."},
+            {"detail": "Voice engine is recycling to free memory; retry shortly."},
             status_code=503,
         )
 
