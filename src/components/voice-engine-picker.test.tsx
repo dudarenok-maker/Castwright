@@ -26,7 +26,7 @@ const baseProps = {
 describe('VoiceEnginePicker — fs-2 lockedToQwen', () => {
   it('locks the selector to Qwen and shows the note when lockedToQwen', () => {
     render(<VoiceEnginePicker {...baseProps} installedEngines={['kokoro', 'qwen']} lockedToQwen />);
-    const select = screen.getByLabelText('TTS engine for this character') as HTMLSelectElement;
+    const select = screen.getByLabelText('Voice engine for this character') as HTMLSelectElement;
     expect(select).toBeDisabled();
     expect(select.value).toBe('qwen');
     /* No "Default (…)" / Kokoro option offered when locked. */
@@ -45,7 +45,7 @@ describe('VoiceEnginePicker — fs-2 lockedToQwen', () => {
         installedEngines={['kokoro', 'qwen']}
       />,
     );
-    const select = screen.getByLabelText('TTS engine for this character') as HTMLSelectElement;
+    const select = screen.getByLabelText('Voice engine for this character') as HTMLSelectElement;
     expect(select).not.toBeDisabled();
     expect(screen.getByRole('option', { name: /Default \(Kokoro\)/ })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Kokoro' })).toBeInTheDocument();

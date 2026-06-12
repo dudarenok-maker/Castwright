@@ -922,7 +922,7 @@ export function GenerationView({
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold text-amber-900">Worker has gone quiet</p>
             <p className="text-sm text-amber-800/90 mt-0.5">
-              No progress for {stalledSec}s. The TTS engine may be synthesising a batch of lines or
+              No progress for {stalledSec}s. The voice engine may be synthesising a batch of lines or
               retrying — batched synthesis can run a while between updates — so give it a moment, or
               pause and resume to reset the stream.
             </p>
@@ -1418,7 +1418,7 @@ function ChapterRow({
                riding out the respawn. Name it explicitly so a healthy recovery
                doesn't read as a frozen "Synthesising …" line / stall. */
             <span className="block text-[11px] text-magenta tabular-nums mt-0.5 truncate">
-              Recovering — restarting TTS engine…
+              Recovering — restarting voice engine…
             </span>
           ) : chapter.state === 'in_progress' && verifying ? (
             /* srv-31 ASR content-QA pass: the synthesis groups are done and

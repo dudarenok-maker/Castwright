@@ -13,7 +13,7 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: "The app won't start",
     body:
       'One command starts everything: run `npm start` from the install folder and it brings up ' +
-      'the web app, the server, and the TTS sidecar together. If the browser tab opens but stays ' +
+      'the web app, the server, and the voice engine together. If the browser tab opens but stays ' +
       'blank, hard-refresh (Ctrl+Shift+R). If the terminal shows a port-in-use error, another ' +
       'copy is already running — close it first. On a fresh install, run `npm install` once ' +
       'before the first start.',
@@ -33,9 +33,9 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: 'Generation is much slower than usual',
     body:
       "The usual culprit is a crowded GPU. Check it isn't sharing the card with something heavy " +
-      '(games, a second model), and keep only one heavy TTS model loaded — unload the analyzer ' +
+      '(games, a second model), and keep only one heavy voice engine loaded — unload the analyzer ' +
       'Ollama or a second engine from the model pills. If the slowdown crept in after hours of ' +
-      "generating, restart the TTS sidecar (it reclaims leaked memory). The Admin view's " +
+      "generating, restart the voice engine (it reclaims leaked memory). The Admin view's " +
       'Resource trends panel shows the per-chapter speed history.',
   },
   {

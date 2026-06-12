@@ -54,7 +54,7 @@ test.describe('single voice design → background-survivable', () => {
     await expect(page.getByText(/Evidence from the manuscript/i)).toBeVisible({ timeout: 10_000 });
 
     /* Switch the per-character engine to Qwen. */
-    const engineSelect = page.getByLabel('TTS engine for this character');
+    const engineSelect = page.getByLabel('Voice engine for this character');
     await expect(engineSelect).toBeVisible();
     await engineSelect.selectOption('qwen');
 

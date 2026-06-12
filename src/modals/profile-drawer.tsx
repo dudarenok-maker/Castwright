@@ -1268,7 +1268,7 @@ export function ProfileDrawer({
             </div>
             <p className="mt-2 text-[11px] text-ink/50">
               Drives the gender + register slot in the voice picker. If the engine picked the wrong
-              voice for this character, correct these and Save — the TTS voice line above updates
+              voice for this character, correct these and Save — the voice line above updates
               immediately.
             </p>
           </section>
@@ -1730,7 +1730,7 @@ function sampleLoadingLabel(status: SampleStatus | 'idle', modelKey: TtsModelKey
     case 'evicting':
       return 'Evicting analyzer to free VRAM…';
     case 'loading-tts':
-      return 'Loading TTS model (~30s)…';
+      return 'Loading voice engine (~30s)…';
     case 'synthesizing':
     case 'idle':
     default:

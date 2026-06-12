@@ -149,7 +149,7 @@ describe('playSampleWithAutoLoad', () => {
     const message = await playSampleWithAutoLoad({ args: sampleArgs, playback }).catch(
       (e) => (e as Error).message,
     );
-    expect(message).toMatch(/sidecar.*:9000.*unreachable/);
+    expect(message).toMatch(/Voice engine.*:9000.*unreachable/);
     expect(message).toMatch(/ECONNREFUSED/);
     expect(api.loadSidecar).not.toHaveBeenCalled();
     expect(api.getVoiceSample).not.toHaveBeenCalled();
@@ -186,7 +186,7 @@ describe('playSampleWithAutoLoad', () => {
     });
     const playback = { play: vi.fn() };
     await expect(playSampleWithAutoLoad({ args: sampleArgs, playback })).rejects.toThrow(
-      /sidecar.*:9000.*unreachable/,
+      /Voice engine.*:9000.*unreachable/,
     );
   });
 
