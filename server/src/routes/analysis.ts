@@ -4487,4 +4487,5 @@ async function runSubsetAnalyzerJob(
 
 /* describeError, formatErrorDetail, trimQuotaMessage, tryParseApiError, and
    classifyStatus have been moved to failure-taxonomy.ts (classifyAnalysisFailure
-   / tryParseApiError exported). Call sites above now use classifyAnalysisFailure. */
+   / tryParseApiError exported). Call sites above now use classifyAnalysisFailure.
+   Note: classifyStatus was renamed statusToFailureCode (private) in its new home. */
