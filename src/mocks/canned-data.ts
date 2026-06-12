@@ -16,7 +16,7 @@ import type { AnalyseResponse } from '../lib/types';
 export const SAMPLE_MANUSCRIPT_MD = `# The Northern Star
 
 *Northern Coast Trilogy · Book 2*
-By Mike Dudarenok
+By Marin Vale
 
 ---
 
