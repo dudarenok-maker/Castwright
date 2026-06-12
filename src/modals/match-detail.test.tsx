@@ -40,8 +40,8 @@ const TEST_CHARACTER: Character = {
   sceneCount: 10,
   attributes: [],
   matchedFrom: {
-    bookId: 'kotlc',
-    bookTitle: 'Keeper of the Lost Cities',
+    bookId: 'the Hollow Tide',
+    bookTitle: 'The Hollow Tide',
     characterId: 'narrator',
     confidence: 0.92,
   },

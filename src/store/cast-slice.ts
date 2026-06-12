@@ -143,7 +143,7 @@ export const castSlice = createSlice({
          OTHER books in the series (the series-reuse pass); a character DESIGNED IN
          THIS BOOK (overrideTtsVoices.qwen, no voiceId/matchedFrom) finds no match and
          arrives voiceless. A flat replace dropped it in Redux, so /confirm rendered
-         "No voice designed yet" for Maruca/Grizel/Trix even though cast.json on disk
+         "No voice designed yet" for Berrin/Sela/Trix even though cast.json on disk
          still held the voice. Existing-wins ONLY when the existing entry has the
          field, so a fresh reuse link stamped this run still flows through. */
       const byId = new Map(s.characters.map((c) => [c.id, c]));
@@ -186,7 +186,7 @@ export const castSlice = createSlice({
              them. `overrideTtsVoices` holds the designed Qwen voice for
              generated characters (no voiceId); omitting it here dropped the
              voice in Redux and a later cast persist wrote it out of cast.json
-             (#518 — Maruca/Grizel/Trix stripped on re-analysis). */
+             (#518 — Berrin/Sela/Trix stripped on re-analysis). */
           next.push({
             ...inc,
             voiceId: existing.voiceId ?? inc.voiceId,
@@ -309,7 +309,7 @@ export const castSlice = createSlice({
       target.aliases = [...existing, trimmed];
     },
     /* Set a character's primary display name. Serves two drawer affordances:
-       free-text rename ("Dame Alina" → "Councilor Alina") and promoting an
+       free-text rename ("Dame Linnet" → "Councilor Linnet") and promoting an
        existing alias to be the primary name. Both collapse here because the
        old primary name is ALWAYS demoted into aliases — a rename never loses
        a name (earlier chapters may still use the old title). When the new
@@ -385,8 +385,8 @@ export const castSlice = createSlice({
     },
     /* From POST /api/books/:bookId/cast/:characterId/not-linked-to (plan 101).
        The user has just declared "these two cross-book characters are
-       intentionally different people" (e.g. teenage Sophie vs adult
-       Sophie). Server has pair-written the entry to both books' cast.json;
+       intentionally different people" (e.g. teenage Wren vs adult
+       Wren). Server has pair-written the entry to both books' cast.json;
        on the source side this reducer mirrors the write into redux so
        the duplicate-candidate detection memo immediately stops surfacing
        the pair. The OTHER book's redux state lives in a different tab /

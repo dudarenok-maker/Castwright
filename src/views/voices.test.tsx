@@ -119,8 +119,8 @@ vi.mock('../lib/api', () => ({
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', lines: 120 },
-  { id: 'keefe', name: 'Keefe', role: 'Empath', color: 'peach', lines: 60 },
-  { id: 'elwin', name: 'Elwin', role: 'Healer', color: 'magenta', lines: 10 },
+  { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach', lines: 60 },
+  { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10 },
 ];
 
 const sentences: Sentence[] = [];
@@ -133,7 +133,7 @@ function makeVoice(
     gradient: ['#3C194F', '#0F0E0D'],
     usedIn: 1,
     ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
-    bookSeries: 'Keeper of the Lost Cities',
+    bookSeries: 'The Hollow Tide',
     ...over,
   } as Voice;
 }
@@ -151,16 +151,16 @@ const library: Voice[] = [
     source: 'current',
   }),
   makeVoice({
-    id: 'keefe',
-    character: 'Keefe',
+    id: 'marlow',
+    character: 'Marlow',
     bookId: 'b2',
     bookTitle: 'Book Two',
     source: 'library',
     ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
   }),
   makeVoice({
-    id: 'elwin',
-    character: 'Elwin',
+    id: 'oduvan',
+    character: 'Oduvan',
     bookId: 'b1',
     bookTitle: 'Book One',
     source: 'current',
@@ -224,27 +224,27 @@ describe('LibraryView voice-family grouping', () => {
   it('nests cast members from different books under the same family', () => {
     renderView();
     const charonSection = screen.getByRole('region', { name: 'Gemini · Charon' });
-    /* Two cast members (Narrator in Book One, Keefe in Book Two) hang
+    /* Two cast members (Narrator in Book One, Marlow in Book Two) hang
        off this family. The two book titles must both appear as nested
        headers. */
     expect(within(charonSection).getByText('Book One')).toBeInTheDocument();
     expect(within(charonSection).getByText('Book Two')).toBeInTheDocument();
     /* Both cast names appear in the section. */
     expect(within(charonSection).getByText('Narrator')).toBeInTheDocument();
-    expect(within(charonSection).getByText('Keefe')).toBeInTheDocument();
+    expect(within(charonSection).getByText('Marlow')).toBeInTheDocument();
   });
 
   it('groups books under their series header when bookSeries is set', () => {
     renderView();
     const charonSection = screen.getByRole('region', { name: 'Gemini · Charon' });
     /* The series header is rendered above the books. */
-    expect(within(charonSection).getByText('Keeper of the Lost Cities')).toBeInTheDocument();
+    expect(within(charonSection).getByText('The Hollow Tide')).toBeInTheDocument();
   });
 
   it('filters to families with current-source members under the "This book" tab', () => {
     renderView();
     fireEvent.click(screen.getByRole('button', { name: /This book/i }));
-    /* Charon has Narrator (current); Kore has Elwin (current). Both stay. */
+    /* Charon has Narrator (current); Kore has Oduvan (current). Both stay. */
     const sections = screen.getAllByRole('region');
     expect(sections.length).toBe(2);
   });
@@ -252,7 +252,7 @@ describe('LibraryView voice-family grouping', () => {
   it('filters to families with only library-source members under "Series & older"', () => {
     renderView();
     fireEvent.click(screen.getByRole('button', { name: /Series & older/i }));
-    /* Only Keefe (library) survives — its family Charon. Kore's only
+    /* Only Marlow (library) survives — its family Charon. Kore's only
        member is current-source, so Kore drops out. */
     const sections = screen.getAllByRole('region');
     expect(sections.length).toBe(1);
@@ -281,14 +281,14 @@ describe('LibraryView character-card click', () => {
        navigate to the source book; the view just hands back the voice. */
     const onOpenCharacter = vi.fn<(v: Voice) => void>();
     renderView(library, onOpenCharacter);
-    /* Both `Keefe` and the bookTitle `Book Two` render the same text node
+    /* Both `Marlow` and the bookTitle `Book Two` render the same text node
        in different contexts; the character card carries role="button" so
        scope the lookup that way. */
-    const card = screen.getByText('Keefe').closest('[role="button"]')!;
+    const card = screen.getByText('Marlow').closest('[role="button"]')!;
     expect(card).not.toBeNull();
     fireEvent.click(card);
     expect(onOpenCharacter).toHaveBeenCalledTimes(1);
-    expect(onOpenCharacter.mock.calls[0][0].id).toBe('keefe');
+    expect(onOpenCharacter.mock.calls[0][0].id).toBe('marlow');
     expect(onOpenCharacter.mock.calls[0][0].bookId).toBe('b2');
   });
 
@@ -296,7 +296,7 @@ describe('LibraryView character-card click', () => {
     renderView();
     /* Without the handler the card must not advertise role="button" — the
      legacy LibraryView behavior pre-bug-fix. */
-    expect(screen.queryByRole('button', { name: 'Keefe' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Marlow' })).toBeNull();
   });
 });
 
@@ -316,8 +316,8 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       lines: 120,
       voiceId: 'narrator',
     },
-    { id: 'elwin', name: 'Elwin', role: 'Healer', color: 'magenta', lines: 10, voiceId: 'elwin' },
-    { id: 'sandor', name: 'Sandor', role: 'Guard', color: 'peach', lines: 30, voiceId: 'sandor' },
+    { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10, voiceId: 'oduvan' },
+    { id: 'garrow', name: 'Garrow', role: 'Guard', color: 'peach', lines: 30, voiceId: 'garrow' },
   ];
 
   const libraryB1: Voice[] = [
@@ -329,24 +329,24 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       source: 'current',
     }),
     makeVoice({
-      id: 'sandor',
-      character: 'Sandor',
+      id: 'garrow',
+      character: 'Garrow',
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
       ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
     }),
     makeVoice({
-      id: 'elwin',
-      character: 'Elwin',
+      id: 'oduvan',
+      character: 'Oduvan',
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
       ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
     }),
     makeVoice({
-      id: 'keefe',
-      character: 'Keefe',
+      id: 'marlow',
+      character: 'Marlow',
       bookId: 'b2',
       bookTitle: 'Book Two',
       source: 'library',
@@ -399,7 +399,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
 
   it('shows the green "same base voice ✓" badge when 2 same-family voices are selected (plan 22a)', () => {
     renderCompare();
-    /* Click Narrator + Sandor — both b1 + both Charon. */
+    /* Click Narrator + Garrow — both b1 + both Charon. */
     fireEvent.click(
       screen
         .getByText('Narrator')
@@ -408,7 +408,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     );
     fireEvent.click(
       screen
-        .getByText('Sandor')
+        .getByText('Garrow')
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
@@ -418,7 +418,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
 
   it('shows the amber "different base voices" badge when 2 cross-family voices are selected (plan 22a)', () => {
     renderCompare();
-    /* Click Narrator (Charon) + Elwin (Kore) — both b1, different families. */
+    /* Click Narrator (Charon) + Oduvan (Kore) — both b1, different families. */
     fireEvent.click(
       screen
         .getByText('Narrator')
@@ -427,7 +427,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     );
     fireEvent.click(
       screen
-        .getByText('Elwin')
+        .getByText('Oduvan')
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
@@ -445,7 +445,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     );
     fireEvent.click(
       screen
-        .getByText('Sandor')
+        .getByText('Garrow')
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
@@ -478,7 +478,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     );
     fireEvent.click(
       screen
-        .getByText('Sandor')
+        .getByText('Garrow')
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
@@ -487,7 +487,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
   });
 
   it('enables Compare on a cross-book pair and hydrates the foreign cast on click (plan 96, BACKLOG #7)', async () => {
-    /* Narrator (b1, open book) + Keefe (b2, foreign). The plan-82 lift
+    /* Narrator (b1, open book) + Marlow (b2, foreign). The plan-82 lift
        drops the cross-book guard — the button is enabled immediately,
        and the click triggers an on-demand hydrate of book b2's cast. */
     getBookState.mockResolvedValueOnce({
@@ -508,7 +508,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       },
       cast: {
         characters: [
-          { id: 'keefe', name: 'Keefe', role: 'Empath', color: 'peach', voiceId: 'keefe' },
+          { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach', voiceId: 'marlow' },
         ],
       },
       manuscript: null,
@@ -528,7 +528,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     );
     fireEvent.click(
       screen
-        .getByText('Keefe')
+        .getByText('Marlow')
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
@@ -560,7 +560,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
     );
     fireEvent.click(
       screen
-        .getByText('Sandor')
+        .getByText('Garrow')
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
@@ -631,7 +631,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       );
       fireEvent.click(
         screen
-          .getByText('Sandor')
+          .getByText('Garrow')
           .closest('div.group')!
           .querySelector('[aria-label="Select voice for compare"]')!,
       );
@@ -653,7 +653,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       );
       fireEvent.click(
         screen
-          .getByText('Sandor')
+          .getByText('Garrow')
           .closest('div.group')!
           .querySelector('[aria-label="Select voice for compare"]')!,
       );
@@ -678,7 +678,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       );
       fireEvent.click(
         screen
-          .getByText('Sandor')
+          .getByText('Garrow')
           .closest('div.group')!
           .querySelector('[aria-label="Select voice for compare"]')!,
       );
@@ -699,7 +699,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       );
       fireEvent.click(
         screen
-          .getByText('Sandor')
+          .getByText('Garrow')
           .closest('div.group')!
           .querySelector('[aria-label="Select voice for compare"]')!,
       );
@@ -755,7 +755,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       );
       fireEvent.click(
         screen
-          .getByText('Sandor')
+          .getByText('Garrow')
           .closest('div.group')!
           .querySelector('[aria-label="Select voice for compare"]')!,
       );
@@ -847,21 +847,21 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
 });
 
 describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
-  /* Cast carries a Sophie + Sophie Foster duplicate pair in book b1, both
+  /* Cast carries a Wren + Wren Sparrow duplicate pair in book b1, both
      resolving to the same Charon base voice — the substring-containment
-     case the user described. A third Sophie clone lives in book b2 so we
+     case the user described. A third Wren clone lives in book b2 so we
      can also assert the cross-book guard. */
   const charactersB1: Character[] = [
     { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', voiceId: 'narrator' },
-    { id: 'sophie', name: 'Sophie', role: 'Lead', color: 'peach', voiceId: 'sophie' },
+    { id: 'wren', name: 'Wren', role: 'Lead', color: 'peach', voiceId: 'wren' },
     {
-      id: 'sophie-foster',
-      name: 'Sophie Foster',
+      id: 'wren-sparrow',
+      name: 'Wren Sparrow',
       role: 'Lead',
       color: 'peach',
-      voiceId: 'sophie-foster',
+      voiceId: 'wren-sparrow',
     },
-    { id: 'elwin', name: 'Elwin', role: 'Healer', color: 'magenta', voiceId: 'elwin' },
+    { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', voiceId: 'oduvan' },
   ];
 
   const libraryB1: Voice[] = [
@@ -873,24 +873,24 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       source: 'current',
     }),
     makeVoice({
-      id: 'sophie',
-      character: 'Sophie',
+      id: 'wren',
+      character: 'Wren',
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
       ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
     }),
     makeVoice({
-      id: 'sophie-foster',
-      character: 'Sophie Foster',
+      id: 'wren-sparrow',
+      character: 'Wren Sparrow',
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
       ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
     }),
     makeVoice({
-      id: 'elwin',
-      character: 'Elwin',
+      id: 'oduvan',
+      character: 'Oduvan',
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
@@ -898,13 +898,13 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     }),
   ];
 
-  /* The cross-book guard test needs a second "Sophie" living in a
+  /* The cross-book guard test needs a second "Wren" living in a
      different book. Kept out of the default fixture because two
-     "Sophie" text matches would defeat plain getByText lookups in
+     "Wren" text matches would defeat plain getByText lookups in
      every other test. */
   const sophieFromBookTwo: Voice = makeVoice({
-    id: 'sophie-b2',
-    character: 'Sophie',
+    id: 'wren-b2',
+    character: 'Wren',
     bookId: 'b2',
     bookTitle: 'Book Two',
     source: 'library',
@@ -946,16 +946,16 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
 
   it('shows a "Merge into <longer-name>" button when 2 same-voice same-book duplicates are selected', () => {
     renderMerge();
-    selectCard('Sophie');
-    selectCard('Sophie Foster');
-    /* Substring containment picks "Sophie Foster" as the survivor. */
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    /* Substring containment picks "Wren Sparrow" as the survivor. */
     expect(
-      screen.getByRole('button', { name: 'Merge into Sophie Foster' }),
+      screen.getByRole('button', { name: 'Merge into Wren Sparrow' }),
     ).toBeInTheDocument();
   });
 
   it('hides the Merge button for 2 same-voice DIFFERENT-book duplicates (cross-book guard)', async () => {
-    /* "Sophie" lives in both b1 (id=sophie) and b2 (id=sophie-b2). Pick
+    /* "Wren" lives in both b1 (id=wren) and b2 (id=wren-b2). Pick
        the two same-name cards in different books — Compare stays
        enabled because plan-96 allows cross-book pairs, but Merge must
        be hidden because the server has no transport for it. */
@@ -976,7 +976,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
         updatedAt: new Date().toISOString(),
       },
       cast: {
-        characters: [{ id: 'sophie-b2', name: 'Sophie', role: 'Lead', color: 'peach' }],
+        characters: [{ id: 'wren-b2', name: 'Wren', role: 'Lead', color: 'peach' }],
       },
       manuscript: null,
       manuscriptEdits: null,
@@ -987,10 +987,10 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       analysis: undefined,
     });
     renderMerge([...libraryB1, sophieFromBookTwo]);
-    /* Two "Sophie" labels exist (one per book) — disambiguate via closest
-       book section. Sophie-b1 stays the first match; Sophie-b2 is the
+    /* Two "Wren" labels exist (one per book) — disambiguate via closest
+       book section. Wren-b1 stays the first match; Wren-b2 is the
        second. */
-    const sophieCards = screen.getAllByText('Sophie');
+    const sophieCards = screen.getAllByText('Wren');
     fireEvent.click(
       sophieCards[0]
         .closest('div.group')!
@@ -1006,21 +1006,21 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
 
   it('hides the Merge button for 2 DIFFERENT-base-voice selections', () => {
     renderMerge();
-    selectCard('Sophie');
-    selectCard('Elwin');
+    selectCard('Wren');
+    selectCard('Oduvan');
     expect(screen.getByText('different base voices')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Merge into/ })).toBeNull();
   });
 
   it('hides the Merge button when a narrator/bucket id is one of the two selected', () => {
-    /* Narrator + Sophie are both b1, but Charon ≠ Charon for narrator
+    /* Narrator + Wren are both b1, but Charon ≠ Charon for narrator
        in our test fixture (narrator carries the default ttsVoice in
        makeVoice — Charon). Force the same-base check by re-selecting
-       sophie-foster + narrator: same provider, both Charon — but
+       wren-sparrow + narrator: same provider, both Charon — but
        narrator is a forbidden id. */
     renderMerge();
     selectCard('Narrator');
-    selectCard('Sophie Foster');
+    selectCard('Wren Sparrow');
     /* Same base voice ✓ badge appears, but Merge is hidden because
        narrator is in UNMERGEABLE_IDS. Compare button stays present. */
     expect(screen.getByText('same base voice ✓')).toBeInTheDocument();
@@ -1033,19 +1033,19 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       characters: [
         { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
         {
-          id: 'sophie-foster',
-          name: 'Sophie Foster',
+          id: 'wren-sparrow',
+          name: 'Wren Sparrow',
           role: 'Lead',
           color: 'peach',
-          aliases: ['Sophie'],
+          aliases: ['Wren'],
         },
-        { id: 'elwin', name: 'Elwin', role: 'Healer', color: 'magenta' },
+        { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta' },
       ],
     });
     renderMerge();
-    selectCard('Sophie');
-    selectCard('Sophie Foster');
-    const mergeBtn = screen.getByRole('button', { name: 'Merge into Sophie Foster' });
+    selectCard('Wren');
+    selectCard('Wren Sparrow');
+    const mergeBtn = screen.getByRole('button', { name: 'Merge into Wren Sparrow' });
     fireEvent.click(mergeBtn);
     await act(async () => {
       await Promise.resolve();
@@ -1053,8 +1053,8 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     expect(mergeCharactersMock).toHaveBeenCalledTimes(1);
     expect(mergeCharactersMock).toHaveBeenCalledWith({
       bookId: 'b1',
-      sourceId: 'sophie',
-      targetId: 'sophie-foster',
+      sourceId: 'wren',
+      targetId: 'wren-sparrow',
     });
     /* Pill collapses on success — Selected label is gone. */
     expect(screen.queryByText(/^Selected$/)).toBeNull();
@@ -1554,7 +1554,7 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
 });
 
 describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => {
-  /* Two books in the same series ("Keeper of the Lost Cities"), b1 at
+  /* Two books in the same series ("The Hollow Tide"), b1 at
      seriesPosition 1 and b2 at 2, both carrying Charon-family voices. The
      per-series button surfaces on the series-group header; clicking it must
      dispatch openRebaselineModal with the series' representative book — here
@@ -1582,13 +1582,13 @@ describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => 
             name: 'Test Author',
             series: [
               {
-                name: 'Keeper of the Lost Cities',
+                name: 'The Hollow Tide',
                 books: [
                   {
                     bookId: 'b1',
                     title: 'Book One',
                     author: 'Test Author',
-                    series: 'Keeper of the Lost Cities',
+                    series: 'The Hollow Tide',
                     seriesPosition: 1,
                     isStandalone: false,
                     status: 'complete',
@@ -1604,7 +1604,7 @@ describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => 
                     bookId: 'b2',
                     title: 'Book Two',
                     author: 'Test Author',
-                    series: 'Keeper of the Lost Cities',
+                    series: 'The Hollow Tide',
                     seriesPosition: 2,
                     isStandalone: false,
                     status: 'complete',
@@ -1635,14 +1635,14 @@ describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => 
     renderGlobalWithLibrary();
     /* The button repeats per family that carries the series; at least one
        must render with the series-scoped test id. */
-    const buttons = screen.getAllByTestId('rebaseline-series-Keeper of the Lost Cities');
+    const buttons = screen.getAllByTestId('rebaseline-series-The Hollow Tide');
     expect(buttons.length).toBeGreaterThanOrEqual(1);
     expect(buttons[0]).toHaveTextContent(/Rebaseline the series/i);
   });
 
   it('clicking dispatches openRebaselineModal with the representative bookId', async () => {
     const { store } = renderGlobalWithLibrary();
-    const button = screen.getAllByTestId('rebaseline-series-Keeper of the Lost Cities')[0];
+    const button = screen.getAllByTestId('rebaseline-series-The Hollow Tide')[0];
     await act(async () => {
       fireEvent.click(button);
     });
@@ -1677,12 +1677,12 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
     }),
     makeVoice({
       id: 'q_designed',
-      character: 'Keefe',
+      character: 'Marlow',
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
-      overrideTtsVoices: { qwen: { name: 'qwen-keefe' } },
-      ttsVoice: { provider: 'qwen', name: 'qwen-keefe', description: 'Designed voice' },
+      overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-marlow', description: 'Designed voice' },
     }),
     makeVoice({
       id: 'q_sampled',
@@ -1696,13 +1696,13 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
     }),
     makeVoice({
       id: 'q_generated',
-      character: 'Elwin',
+      character: 'Oduvan',
       bookId: 'b2',
       bookTitle: 'Book Two',
       source: 'library',
-      overrideTtsVoices: { qwen: { name: 'qwen-elwin' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-oduvan' } },
       generated: true,
-      ttsVoice: { provider: 'qwen', name: 'qwen-elwin', description: 'Designed voice' },
+      ttsVoice: { provider: 'qwen', name: 'qwen-oduvan', description: 'Designed voice' },
     }),
   ];
 
@@ -1726,13 +1726,13 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
             name: 'Test Author',
             series: [
               {
-                name: 'Keeper of the Lost Cities',
+                name: 'The Hollow Tide',
                 books: [
                   {
                     bookId: 'b1',
                     title: 'Book One',
                     author: 'Test Author',
-                    series: 'Keeper of the Lost Cities',
+                    series: 'The Hollow Tide',
                     seriesPosition: 1,
                     isStandalone: false,
                     status: 'complete',
@@ -1748,7 +1748,7 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
                     bookId: 'b2',
                     title: 'Book Two',
                     author: 'Test Author',
-                    series: 'Keeper of the Lost Cities',
+                    series: 'The Hollow Tide',
                     seriesPosition: 2,
                     isStandalone: false,
                     status: 'complete',
@@ -1790,8 +1790,8 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
     const needs = screen.getByRole('region', { name: 'Qwen · Needs a voice' });
     expect(within(needs).getByText('Bo')).toBeInTheDocument();
     const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
-    expect(within(designed).getByText('Keefe')).toBeInTheDocument();
-    expect(within(designed).getByText('Elwin')).toBeInTheDocument();
+    expect(within(designed).getByText('Marlow')).toBeInTheDocument();
+    expect(within(designed).getByText('Oduvan')).toBeInTheDocument();
   });
 
   it('badges a generated voice "Generated" and an unrendered designed voice "Designed"', () => {
@@ -1819,7 +1819,7 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
 
   it('shows the per-series Rebaseline button on a Qwen section', () => {
     renderQwen();
-    const buttons = screen.getAllByTestId('rebaseline-series-Keeper of the Lost Cities');
+    const buttons = screen.getAllByTestId('rebaseline-series-The Hollow Tide');
     expect(buttons.length).toBeGreaterThanOrEqual(1);
     expect(buttons[0]).toHaveTextContent(/Rebaseline the series/i);
   });

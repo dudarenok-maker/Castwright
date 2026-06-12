@@ -296,13 +296,13 @@ describe('QueueModal', () => {
         status: 'awaiting_confirm',
         order: 0,
         fallbackCharacters: [
-          { id: 'sophie', name: 'Sophie' },
+          { id: 'wren', name: 'Wren' },
           { id: 'ro', name: 'Ro' },
         ],
       }),
     ]);
     expect(screen.getByTestId('queue-entry-a1-status')).toHaveTextContent(
-      /no designed Qwen voice for Sophie, Ro/,
+      /no designed Qwen voice for Wren, Ro/,
     );
     expect(screen.getByTestId('queue-entry-a1-confirm-fallback')).toBeInTheDocument();
     expect(screen.getByTestId('queue-entry-a1-skip-fallback')).toBeInTheDocument();

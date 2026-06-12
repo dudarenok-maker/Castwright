@@ -35,9 +35,9 @@ function makeStore(opts: { activeStream: AnalysisStreamSnapshot | null; books?: 
 }
 
 const liveLocalSnapshot: AnalysisStreamSnapshot = {
-  bookId: 'b_keefe',
-  manuscriptId: 'm_keefe',
-  bookTitle: 'Bonus Keefe Story',
+  bookId: 'b_marlow',
+  manuscriptId: 'm_marlow',
+  bookTitle: 'the Coalfall Commission',
   engine: 'local',
   phaseId: 0,
   phaseLabel: 'Detecting characters',
@@ -150,11 +150,11 @@ describe('useReverseLocalAnalyzerGuard', () => {
       activeStream: snapshotWithoutTitle,
       books: [
         {
-          bookId: 'b_keefe',
-          manuscriptId: 'm_keefe',
-          title: 'Library Title for Keefe',
+          bookId: 'b_marlow',
+          manuscriptId: 'm_marlow',
+          title: 'Library Title for Marlow',
           author: 'Shannon Messenger',
-          series: 'Keeper of the Lost Cities',
+          series: 'The Hollow Tide',
           chapters: [],
           cast: [],
           status: 'analysing',
@@ -172,7 +172,7 @@ describe('useReverseLocalAnalyzerGuard', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
-    expect(screen.getByText(/Library Title for Keefe/)).toBeInTheDocument();
+    expect(screen.getByText(/Library Title for Marlow/)).toBeInTheDocument();
   });
 
   it('falls back to the bookId in the body when the library has no matching entry and the snapshot has no title', () => {
@@ -188,6 +188,6 @@ describe('useReverseLocalAnalyzerGuard', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
-    expect(screen.getByText(/b_keefe/)).toBeInTheDocument();
+    expect(screen.getByText(/b_marlow/)).toBeInTheDocument();
   });
 });

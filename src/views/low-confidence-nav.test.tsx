@@ -29,8 +29,8 @@ import type { Chapter, Character, Sentence } from '../lib/types';
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
-  { id: 'lord-cassius', name: 'Lord Cassius', role: 'character', color: 'magenta' },
-  { id: 'sophie', name: 'Sophie', role: 'character', color: 'peach' },
+  { id: 'lord-vane', name: 'Lord Vane', role: 'character', color: 'magenta' },
+  { id: 'wren', name: 'Wren', role: 'character', color: 'peach' },
 ];
 
 const chapter: Chapter = {
@@ -49,12 +49,12 @@ const sentences: Sentence[] = [
   {
     id: 2,
     chapterId: 1,
-    characterId: 'lord-cassius',
+    characterId: 'lord-vane',
     text: 'Low confidence two.',
     confidence: 0.4,
   },
-  { id: 3, chapterId: 1, characterId: 'sophie', text: 'High confidence three.', confidence: 0.9 },
-  { id: 4, chapterId: 1, characterId: 'sophie', text: 'Low confidence four.', confidence: 0.5 },
+  { id: 3, chapterId: 1, characterId: 'wren', text: 'High confidence three.', confidence: 0.9 },
+  { id: 4, chapterId: 1, characterId: 'wren', text: 'Low confidence four.', confidence: 0.5 },
 ];
 
 function makeStore(s: Sentence[]) {
@@ -160,13 +160,13 @@ describe('ManuscriptView — low-confidence navigator', () => {
     );
     await user.click(screen.getByLabelText('Previous low-confidence sentence'));
     /* Inspector opens on the last low-confidence sentence's segment.
-       sentence id=4 belongs to Sophie — verify by reading the
+       sentence id=4 belongs to Wren — verify by reading the
        inspector's h3. Multiple inspector instances render — both should
-       show Sophie. */
+       show Wren. */
     const headings = screen.getAllByRole('heading', { level: 3 });
     expect(headings.length).toBeGreaterThanOrEqual(1);
     for (const h of headings) {
-      expect(h).toHaveTextContent('Sophie');
+      expect(h).toHaveTextContent('Wren');
     }
     /* Sanity: there is at least one "Selected segment" eyebrow above
        the heading, confirming we're reading the inspector card and not

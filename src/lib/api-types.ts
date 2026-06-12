@@ -1693,7 +1693,7 @@ export interface paths {
          * Mark a cross-book duplicate pair as intentionally separate (plan 101)
          * @description "These two cross-book characters look like duplicates to the voices-view
          *     detector, but they ARE intentionally separate people (e.g. teenage
-         *     Sophie vs adult Sophie)." Writes a symmetric `notLinkedTo` pair to BOTH
+         *     Wren vs adult Wren)." Writes a symmetric `notLinkedTo` pair to BOTH
          *     books' cast.json so the duplicate-candidate predicate stops surfacing
          *     the pair on either side. Cross-book only (same author + series, neither
          *     standalone); self-pair and same-book pairs are rejected. Idempotent — an
@@ -2846,10 +2846,10 @@ export interface components {
              *         "name": "am_onyx"
              *       },
              *       "qwen": {
-             *         "name": "qwen-sophie",
+             *         "name": "qwen-wren",
              *         "variants": {
              *           "angry": {
-             *             "name": "qwen-sophie__angry"
+             *             "name": "qwen-wren__angry"
              *           }
              *         }
              *       }
@@ -3133,15 +3133,15 @@ export interface components {
             attributes?: string[];
             /**
              * @description Alternate names this character is known by. Populated when the
-             *     user merges a duplicate roster entry (e.g. "Sophie" merged into
-             *     "Sophie Foster" adds "Sophie" here). Surfaced to the voice
+             *     user merges a duplicate roster entry (e.g. "Wren" merged into
+             *     "Wren Sparrow" adds "Wren" here). Surfaced to the voice
              *     matcher so the same person can be recognised when later books
              *     in a series detect the character under a different form.
              */
             aliases?: string[];
             /**
              * @description Cross-book pairs this character has been explicitly marked as
-             *     NOT the same person — e.g. teenage Sophie vs adult Sophie in
+             *     NOT the same person — e.g. teenage Wren vs adult Wren in
              *     the same series, both routed to the same base TTS voice but
              *     intentionally separate cast members. Written symmetrically by
              *     the `POST /api/books/:bookId/cast/:characterId/not-linked-to`

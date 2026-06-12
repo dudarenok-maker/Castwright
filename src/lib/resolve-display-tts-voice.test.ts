@@ -13,11 +13,11 @@ const vx = (o: Partial<V> = {}): V =>
 describe('resolveDisplayTtsVoice', () => {
   it('uses the character qwen override when present', () => {
     const r = resolveDisplayTtsVoice(
-      ch({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-sophie' } } }),
+      ch({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } }),
       undefined,
       'kokoro',
     );
-    expect(r).toEqual({ provider: 'qwen', name: 'qwen-sophie', description: 'Designed voice' });
+    expect(r).toEqual({ provider: 'qwen', name: 'qwen-wren', description: 'Designed voice' });
   });
 
   it('falls back to the matched qwen Voice for a reused row with no override', () => {
@@ -26,10 +26,10 @@ describe('resolveDisplayTtsVoice', () => {
        "No voice designed yet" stub. */
     const r = resolveDisplayTtsVoice(
       ch({ ttsEngine: 'qwen' }),
-      vx({ ttsVoice: { provider: 'qwen', name: 'qwen-lord-cassius', description: 'Designed voice' } }),
+      vx({ ttsVoice: { provider: 'qwen', name: 'qwen-lord-vane', description: 'Designed voice' } }),
       'kokoro',
     );
-    expect(r).toEqual({ provider: 'qwen', name: 'qwen-lord-cassius', description: 'Designed voice' });
+    expect(r).toEqual({ provider: 'qwen', name: 'qwen-lord-vane', description: 'Designed voice' });
   });
 
   it('returns the empty qwen stub when neither override nor a named qwen Voice resolves', () => {

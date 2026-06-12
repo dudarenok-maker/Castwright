@@ -13,19 +13,19 @@ const isQwen = (c: Character) => c.ttsEngine === 'qwen';
 
 describe('buildVariantTasks', () => {
   it('emits only in-use emotions that lack a designed variant, flagging an existing base', () => {
-    const chars = [based('sophie', { angry: { name: 'x' } })];
-    const used = new Map([['sophie', new Set(['angry', 'excited'])]]);
+    const chars = [based('wren', { angry: { name: 'x' } })];
+    const used = new Map([['wren', new Set(['angry', 'excited'])]]);
     expect(buildVariantTasks(chars, used, isQwen)).toEqual([
-      { characterId: 'sophie', emotions: ['excited'], hasBase: true },
+      { characterId: 'wren', emotions: ['excited'], hasBase: true },
     ]);
   });
 
   it('INCLUDES a character with no base voice yet, flagged hasBase=false', () => {
     // The bulk "Both" run designs the base first, so the variant is still
     // counted as demand — hasBase records that it is not actionable alone.
-    const used = new Map([['fitz', new Set(['angry'])]]);
-    expect(buildVariantTasks([baseless('fitz')], used, isQwen)).toEqual([
-      { characterId: 'fitz', emotions: ['angry'], hasBase: false },
+    const used = new Map([['brann', new Set(['angry'])]]);
+    expect(buildVariantTasks([baseless('brann')], used, isQwen)).toEqual([
+      { characterId: 'brann', emotions: ['angry'], hasBase: false },
     ]);
   });
 
@@ -43,10 +43,10 @@ describe('buildVariantTasks', () => {
 describe('variantWorkCounts', () => {
   it('splits total demand into ready (has base) vs blocked (needs a base first)', () => {
     const tasks = buildVariantTasks(
-      [based('sophie', { angry: { name: 'x' } }), baseless('keefe')],
+      [based('wren', { angry: { name: 'x' } }), baseless('marlow')],
       new Map([
-        ['sophie', new Set(['angry', 'excited'])], // 1 ready (excited; angry designed)
-        ['keefe', new Set(['whisper', 'sad'])], // 2 blocked (no base)
+        ['wren', new Set(['angry', 'excited'])], // 1 ready (excited; angry designed)
+        ['marlow', new Set(['whisper', 'sad'])], // 2 blocked (no base)
       ]),
       isQwen,
     );

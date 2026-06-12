@@ -541,7 +541,7 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
     const user = userEvent.setup();
     /* 30-character cast — large enough that, pre-portal, the bottom of
        the picker spilled past the inspector card and the user couldn't
-       reach the last names. "Grizel" sits at index 29 so it would have
+       reach the last names. "Sela" sits at index 29 so it would have
        been outside the visible bound. */
     const wideCast: Character[] = [
       { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
@@ -551,7 +551,7 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
         role: 'Cast' as const,
         color: 'narrator' as const,
       })),
-      { id: 'grizel', name: 'Grizel', role: 'Cast', color: 'magenta' },
+      { id: 'sela', name: 'Sela', role: 'Cast', color: 'magenta' },
     ];
     const chapter: Chapter = {
       id: 1,
@@ -601,12 +601,12 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
     await user.click(screen.getByText('A line of dialogue.'));
     await user.click(screen.getByText(/Change…/));
     const picker = screen.getByRole('dialog', { name: /reassign speaker/i });
-    /* Grizel sits at the end of a 30-row list. Pre-fix it was clipped
+    /* Sela sits at the end of a 30-row list. Pre-fix it was clipped
        below the inspector card; with the portal it's reachable. */
-    const grizel = within(picker).getByRole('option', { name: /^Grizel$/ });
-    await user.click(grizel);
+    const sela = within(picker).getByRole('option', { name: /^Sela$/ });
+    await user.click(sela);
 
-    expect(store.getState().manuscript.sentences[0].characterId).toBe('grizel');
+    expect(store.getState().manuscript.sentences[0].characterId).toBe('sela');
   });
 
   it('row Reassign popover stays open when the pointer leaves the segment row', async () => {

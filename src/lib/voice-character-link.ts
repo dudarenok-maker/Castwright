@@ -29,16 +29,16 @@ export function findCharacterForVoice(v: Voice, characters: Character[]): Charac
   return characters.find((c) => c.id === v.id);
 }
 
-/* When the voices view merges two duplicate roster entries (e.g. "Sophie"
-   + "Sophie Foster"), the longer/fuller name should survive — the shorter
+/* When the voices view merges two duplicate roster entries (e.g. "Wren"
+   + "Wren Sparrow"), the longer/fuller name should survive — the shorter
    becomes an alias on the survivor (Character.aliases). `a` is the
    first-selected character, `b` the second; the return order is
    { target, source } so the caller passes `source.id` and `target.id`
    straight into api.mergeCharacters without re-ordering.
 
    Selection rule:
-     1. Substring containment, case-insensitive — "Sophie" ⊂
-        "Sophie Foster" makes the containing name the survivor. This is
+     1. Substring containment, case-insensitive — "Wren" ⊂
+        "Wren Sparrow" makes the containing name the survivor. This is
         the use case the OpenAPI Character.aliases schema explicitly
         describes.
      2. Longer trimmed name wins. Ties on a non-empty trimmed length

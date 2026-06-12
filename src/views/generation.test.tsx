@@ -139,13 +139,13 @@ beforeEach(() => {
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
-  { id: 'keefe', name: 'Keefe', role: 'Empath', color: 'peach' },
+  { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
 ];
 
 const sentences: Sentence[] = [
   { id: 1, chapterId: 1, characterId: 'narrator', text: 'A long room.' }, // 3 words
-  { id: 2, chapterId: 1, characterId: 'keefe', text: 'Hello there friend!' }, // 3 words
-  { id: 3, chapterId: 1, characterId: 'keefe', text: 'How are you today on this fine evening?' }, // 8 words
+  { id: 2, chapterId: 1, characterId: 'marlow', text: 'Hello there friend!' }, // 3 words
+  { id: 3, chapterId: 1, characterId: 'marlow', text: 'How are you today on this fine evening?' }, // 8 words
   { id: 4, chapterId: 2, characterId: 'narrator', text: 'Elsewhere entirely.' }, // 2 words
 ];
 
@@ -155,7 +155,7 @@ const chapter1: Chapter = {
   duration: '00:49',
   state: 'done',
   progress: 1,
-  characters: { narrator: 'done', keefe: 'done' },
+  characters: { narrator: 'done', marlow: 'done' },
 };
 const chapter2: Chapter = {
   id: 2,
@@ -163,7 +163,7 @@ const chapter2: Chapter = {
   duration: '00:00',
   state: 'queued',
   progress: 0,
-  characters: { narrator: 'queued', keefe: 'queued' },
+  characters: { narrator: 'queued', marlow: 'queued' },
 };
 
 function makeStore() {
@@ -204,7 +204,7 @@ function renderView() {
         chapters={[chapter1, chapter2]}
         characters={characters}
         paused
-        title="Bonus Keefe Story"
+        title="the Coalfall Commission"
         bookId="b1"
         modelKey="coqui-xtts-v2"
         onRegenerate={() => {}}
@@ -223,7 +223,7 @@ describe('GenerationView — chapter & character metadata (regression for screen
 
   it('shows manuscript-derived word/line/speaker counts under each chapter title', () => {
     renderView();
-    /* Chapter 1: 1 narrator sentence (3 words) + 2 keefe sentences (3 + 8 = 11 words)
+    /* Chapter 1: 1 narrator sentence (3 words) + 2 marlow sentences (3 + 8 = 11 words)
        → 14 words, 3 lines, 2 speakers */
     expect(screen.getByText(/14 words · 3 lines · 2 speakers/)).toBeInTheDocument();
     /* Chapter 2: 1 narrator sentence (2 words) → 2 words, 1 line, 1 speaker */
@@ -235,7 +235,7 @@ describe('GenerationView — chapter & character metadata (regression for screen
     /* The chapter row toggle is the first button containing "CH 01". */
     fireEvent.click(screen.getByText('Chapter 1'));
     expect(screen.getByText(/1 line · 3 words/)).toBeInTheDocument(); // narrator in ch 1
-    expect(screen.getByText(/2 lines · 11 words/)).toBeInTheDocument(); // keefe in ch 1
+    expect(screen.getByText(/2 lines · 11 words/)).toBeInTheDocument(); // marlow in ch 1
   });
 
   it('reports overall progress including Done chapters with no totalLines (the 4 % bug)', () => {
@@ -298,7 +298,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
           chapters={[ch1Done, ch2Queued, ch3Excluded]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
@@ -353,7 +353,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
           chapters={[verifying, ch2Queued]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -403,7 +403,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
           chapters={[recovering, ch2Queued]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -452,7 +452,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
           chapters={[verifying, ch2Queued]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -482,7 +482,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
       progress: 0.01,
       currentLine: 0,
       totalLines: 200,
-      characters: { narrator: 'in_progress', keefe: 'queued' },
+      characters: { narrator: 'in_progress', marlow: 'queued' },
     };
     const store = configureStore({
       reducer: {
@@ -510,7 +510,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
           chapters={[live]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
@@ -542,24 +542,24 @@ describe('GenerationView — per-character progress is derived from the manuscri
 
   const cast: Character[] = [
     { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
-    { id: 'keefe', name: 'Keefe', role: 'Empath', color: 'peach' },
+    { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
     { id: 'ro', name: 'Ro', role: 'Goblin', color: 'magenta' },
-    { id: 'elwin', name: 'Elwin', role: 'Physician', color: 'violet' },
+    { id: 'oduvan', name: 'Oduvan', role: 'Physician', color: 'violet' },
   ];
 
   /* Day-One-shaped chapter: narrator dominates, the other three each speak
      once before line 13 AND have lines still to come after it — so at
-     currentLine=13 keefe/ro/elwin should each show fractional progress,
+     currentLine=13 marlow/ro/oduvan should each show fractional progress,
      not "Done". Pre-fix the slice would have marked all three "done" the
      moment the next speaker took over. */
   const dayOne: Sentence[] = [
     { id: 1, chapterId: 2, characterId: 'narrator', text: 'open' },
     { id: 2, chapterId: 2, characterId: 'narrator', text: 'b' },
-    { id: 3, chapterId: 2, characterId: 'keefe', text: 'k1' },
+    { id: 3, chapterId: 2, characterId: 'marlow', text: 'k1' },
     { id: 4, chapterId: 2, characterId: 'narrator', text: 'c' },
     { id: 5, chapterId: 2, characterId: 'ro', text: 'r1' },
     { id: 6, chapterId: 2, characterId: 'narrator', text: 'd' },
-    { id: 7, chapterId: 2, characterId: 'elwin', text: 'e1' },
+    { id: 7, chapterId: 2, characterId: 'oduvan', text: 'e1' },
     { id: 8, chapterId: 2, characterId: 'narrator', text: 'e' },
     { id: 9, chapterId: 2, characterId: 'narrator', text: 'f' },
     { id: 10, chapterId: 2, characterId: 'narrator', text: 'g' },
@@ -568,12 +568,12 @@ describe('GenerationView — per-character progress is derived from the manuscri
     { id: 13, chapterId: 2, characterId: 'narrator', text: 'j (current)' },
     /* Each non-narrator has at least one line still ahead of line 13 so
        they appear as partial progress, not "Done". */
-    { id: 14, chapterId: 2, characterId: 'keefe', text: 'k2' },
-    { id: 15, chapterId: 2, characterId: 'elwin', text: 'e2' },
+    { id: 14, chapterId: 2, characterId: 'marlow', text: 'k2' },
+    { id: 15, chapterId: 2, characterId: 'oduvan', text: 'e2' },
     { id: 16, chapterId: 2, characterId: 'ro', text: 'r2' },
-    { id: 17, chapterId: 2, characterId: 'keefe', text: 'k3' },
-    { id: 18, chapterId: 2, characterId: 'elwin', text: 'e3' },
-    { id: 19, chapterId: 2, characterId: 'elwin', text: 'e4' },
+    { id: 17, chapterId: 2, characterId: 'marlow', text: 'k3' },
+    { id: 18, chapterId: 2, characterId: 'oduvan', text: 'e3' },
+    { id: 19, chapterId: 2, characterId: 'oduvan', text: 'e4' },
     { id: 20, chapterId: 2, characterId: 'narrator', text: 'closer' },
   ];
 
@@ -591,9 +591,9 @@ describe('GenerationView — per-character progress is derived from the manuscri
          back at 'queued'. Pre-fix they'd all have been 'done' here. */
       characters: characterStatuses ?? {
         narrator: 'in_progress',
-        keefe: 'queued',
+        marlow: 'queued',
         ro: 'queued',
-        elwin: 'queued',
+        oduvan: 'queued',
       },
     };
     const store = configureStore({
@@ -622,7 +622,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
           chapters={[liveChapter]}
           characters={cast}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
@@ -645,11 +645,11 @@ describe('GenerationView — per-character progress is derived from the manuscri
   it('shows partial progress for non-active speakers with lines still ahead, not a false "Done"', () => {
     renderScenario();
     fireEvent.click(screen.getByText('DAY ONE'));
-    /* Keefe: positions [3, 14, 17] → 1 of 3 done by line 13. */
+    /* Marlow: positions [3, 14, 17] → 1 of 3 done by line 13. */
     expect(screen.getByText('1/3 done')).toBeInTheDocument();
     /* Ro: positions [5, 16] → 1 of 2 done. */
     expect(screen.getByText('1/2 done')).toBeInTheDocument();
-    /* Elwin: positions [7, 15, 18, 19] → 1 of 4 done. */
+    /* Oduvan: positions [7, 15, 18, 19] → 1 of 4 done. */
     expect(screen.getByText('1/4 done')).toBeInTheDocument();
     /* The lie was the full-green "Done" bar for any of these three. */
     expect(screen.queryByText(/^Done$/)).not.toBeInTheDocument();
@@ -659,9 +659,9 @@ describe('GenerationView — per-character progress is derived from the manuscri
     /* Regenerate-of-a-rendered-chapter case: a hydrate re-seeded every cast
        member as 'done' from the on-disk audio, and applyGenerationTick has so
        far only un-done'd the live narrator. The rows must still derive from
-       currentLine=13 + positions, not the stale 'done' — keefe/ro/elwin show
+       currentLine=13 + positions, not the stale 'done' — marlow/ro/oduvan show
        fractional progress, never a full-green "Done". */
-    renderScenario({ narrator: 'in_progress', keefe: 'done', ro: 'done', elwin: 'done' });
+    renderScenario({ narrator: 'in_progress', marlow: 'done', ro: 'done', oduvan: 'done' });
     fireEvent.click(screen.getByText('DAY ONE'));
     expect(screen.getByText('1/3 done')).toBeInTheDocument();
     expect(screen.getByText('1/2 done')).toBeInTheDocument();
@@ -689,7 +689,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
       progress: 0.5,
       currentLine: 50,
       totalLines: 100,
-      characters: { narrator: 'in_progress', keefe: 'queued' },
+      characters: { narrator: 'in_progress', marlow: 'queued' },
     };
     const store = configureStore({
       reducer: {
@@ -732,7 +732,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
           chapters={[live]}
           characters={characters}
           paused={false}
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
@@ -794,7 +794,7 @@ describe('GenerationView — activity sidebar', () => {
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
@@ -821,7 +821,7 @@ describe('GenerationView — header action once the run is complete', () => {
       state: 'done',
       progress: 1,
       duration: '00:42',
-      characters: { narrator: 'done', keefe: 'done' },
+      characters: { narrator: 'done', marlow: 'done' },
     };
     const store = configureStore({
       reducer: {
@@ -851,7 +851,7 @@ describe('GenerationView — header action once the run is complete', () => {
           chapters={[allDone1, allDone2]}
           characters={characters}
           paused={false}
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={onRegenerateBook}
@@ -905,7 +905,7 @@ describe('GenerationView — header action once the run is complete', () => {
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
@@ -1268,7 +1268,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
      Generate view diffs it against the LIVE manuscript instead of using the
      time-based change-log heuristic — precise (a reassign-then-undo reads
      not-stale) and immediate. Chapter 1's fixture sentences are
-     {1:narrator, 2:keefe, 3:keefe}. */
+     {1:narrator, 2:marlow, 3:marlow}. */
   function renderWithRenderMap(
     renderedSpeakersByChapter: Record<number, Record<number, string>>,
   ): void {
@@ -1324,15 +1324,15 @@ describe('GenerationView — precise reassignment staleness via render map (#650
   }
 
   it('shows the caption when the live mapping differs from the render map', () => {
-    /* Render had sentence 2 on narrator; the manuscript now has it on keefe. */
-    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'narrator', 3: 'keefe' } });
+    /* Render had sentence 2 on narrator; the manuscript now has it on marlow. */
+    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'narrator', 3: 'marlow' } });
     expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
   });
 
   it('does NOT show the caption when the live mapping matches the render map (no false positive)', () => {
     /* Identical to the fixture sentences → not stale, even if the time-based
        heuristic would have flagged it. */
-    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'keefe', 3: 'keefe' } });
+    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'marlow', 3: 'marlow' } });
     expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
   });
 });
@@ -1557,11 +1557,11 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   const subsetResponse = {
     bookId: 'b1',
     manuscriptId: 'm1',
-    title: 'Bonus Keefe Story',
+    title: 'the Coalfall Commission',
     phaseTimings: [],
     characters: [
       ...characters,
-      { id: 'sophie', name: 'Sophie', role: 'Protagonist', color: 'magenta' as const },
+      { id: 'wren', name: 'Wren', role: 'Protagonist', color: 'magenta' as const },
     ],
     chapters: [
       { ...chapter1, characters: {} },
@@ -1570,7 +1570,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     ],
     sentences: [
       { id: 50, chapterId: 3, characterId: 'narrator', text: 'Chapter three begins.' },
-      { id: 51, chapterId: 3, characterId: 'sophie', text: 'I have something to say.' },
+      { id: 51, chapterId: 3, characterId: 'wren', text: 'I have something to say.' },
     ],
     libraryMatches: [],
   };
@@ -1605,7 +1605,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       manuscriptSlice.actions.hydrateFromAnalysis({
         bookId: 'b1',
         manuscriptId: 'm1',
-        title: 'Bonus Keefe Story',
+        title: 'the Coalfall Commission',
         characters,
         chapters: [chapter1, chapter2, ch3Excluded],
         sentences,
@@ -1614,7 +1614,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     store.dispatch(
       manuscriptSlice.actions.uploadComplete({
         manuscriptId: 'm1',
-        title: 'Bonus Keefe Story',
+        title: 'the Coalfall Commission',
         format: 'plaintext',
         wordCount: 0,
         byteSize: 0,
@@ -1649,7 +1649,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
           chapters={[chapter1, chapter2, ch3Excluded]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"          onRegenerate={() => {}}
           onRegenerateBook={() => {}}
@@ -1697,13 +1697,13 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     /* Manuscript merge — pre-fix this stayed as the original 4 sentences. */
     const ch3Sentences = state.manuscript.sentences.filter((s) => s.chapterId === 3);
     expect(ch3Sentences).toHaveLength(2);
-    expect(ch3Sentences.map((s) => s.characterId).sort()).toEqual(['narrator', 'sophie']);
-    /* Cast merge — sophie is a newly-detected character. */
-    expect(state.cast.characters.some((c) => c.id === 'sophie')).toBe(true);
+    expect(ch3Sentences.map((s) => s.characterId).sort()).toEqual(['narrator', 'wren']);
+    /* Cast merge — wren is a newly-detected character. */
+    expect(state.cast.characters.some((c) => c.id === 'wren')).toBe(true);
     /* Chapter characters map populated for ch3 — the row will render
-       sophie + narrator as queued speakers on the next paint. */
+       wren + narrator as queued speakers on the next paint. */
     const ch3 = state.chapters.chapters.find((c) => c.id === 3);
-    expect(ch3?.characters).toMatchObject({ narrator: 'queued', sophie: 'queued' });
+    expect(ch3?.characters).toMatchObject({ narrator: 'queued', wren: 'queued' });
   });
 
   it('moves the subset bar off the floor on a heartbeat + shows live elapsed/throughput', async () => {
@@ -1964,7 +1964,7 @@ describe('GenerationView — stuck-queued escape hatch + generated-time (side: s
           chapters={chapters}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -2073,7 +2073,7 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
           chapters={chapters}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -2100,7 +2100,7 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -2138,7 +2138,7 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
           chapters={[chapter1, chapter2]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -2203,7 +2203,7 @@ describe('GenerationView — srv-27 advisory QA badge', () => {
           chapters={rows}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}
@@ -2267,7 +2267,7 @@ describe('GenerationView — fe-29 More-help deep-link', () => {
       duration: '00:00',
       state: 'failed',
       progress: 0,
-      characters: { narrator: 'failed', keefe: 'failed' },
+      characters: { narrator: 'failed', marlow: 'failed' },
       errorReason: 'Synthesis failed: VRAM exhausted.',
       ...overrides,
     };
@@ -2299,7 +2299,7 @@ describe('GenerationView — fe-29 More-help deep-link', () => {
           chapters={[failedChapter]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}

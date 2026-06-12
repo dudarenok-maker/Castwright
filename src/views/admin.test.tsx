@@ -303,8 +303,8 @@ describe('AdminView — fs-20 resource trends panel', () => {
   it('groups rows under a sticky per-book header, splitting on book change', async () => {
     mockTelemetry.mockResolvedValue({
       records: [
-        telemetry({ chapterId: 26, bookId: 'stellarlune', bookTitle: 'Stellarlune' }),
-        telemetry({ chapterId: 25, bookId: 'stellarlune', bookTitle: 'Stellarlune' }),
+        telemetry({ chapterId: 26, bookId: 'the drowning bell', bookTitle: 'The Drowning Bell' }),
+        telemetry({ chapterId: 25, bookId: 'the drowning bell', bookTitle: 'The Drowning Bell' }),
         telemetry({ chapterId: 4, bookId: 'unlocked', bookTitle: 'Unlocked' }),
       ],
     });
@@ -314,9 +314,9 @@ describe('AdminView — fs-20 resource trends panel', () => {
     const headers = within(panel)
       .getAllByTestId('resource-book-header')
       .map((h) => h.textContent);
-    expect(headers).toEqual(['Stellarlune', 'Unlocked']);
+    expect(headers).toEqual(['The Drowning Bell', 'Unlocked']);
 
-    /* The Stellarlune group owns the first two chapter rows; Unlocked owns one. */
+    /* The The Drowning Bell group owns the first two chapter rows; Unlocked owns one. */
     const groups = within(panel).getAllByTestId('resource-book-group');
     expect(within(groups[0]).getAllByTestId(/^resource-row-/)).toHaveLength(2);
     expect(within(groups[1]).getAllByTestId(/^resource-row-/)).toHaveLength(1);

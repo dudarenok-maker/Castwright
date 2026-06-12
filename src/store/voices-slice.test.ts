@@ -107,20 +107,20 @@ describe('voicesSlice — setOverride', () => {
   it('writes the override into overrideTtsVoices[engine] and projects it onto the legacy field', () => {
     const start = voicesSlice.reducer(
       undefined,
-      voicesActions.hydrate({ voices: [voice('v_fitz'), voice('v_other')] }),
+      voicesActions.hydrate({ voices: [voice('v_brann'), voice('v_other')] }),
     );
     const next = voicesSlice.reducer(
       start,
       voicesActions.setOverride({
-        voiceId: 'v_fitz',
+        voiceId: 'v_brann',
         override: { engine: 'coqui', name: 'Asya Anara' },
       }),
     );
-    const fitz = next.voices.find((v) => v.id === 'v_fitz')!;
-    expect(fitz.overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
+    const brann = next.voices.find((v) => v.id === 'v_brann')!;
+    expect(brann.overrideTtsVoices).toEqual({ coqui: { name: 'Asya Anara' } });
     /* Legacy field still reflects the active engine's slot for callers
        that haven't migrated yet. */
-    expect(fitz.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
+    expect(brann.overrideTtsVoice).toEqual({ engine: 'coqui', name: 'Asya Anara' });
     /* Unrelated voice is untouched. */
     expect(next.voices.find((v) => v.id === 'v_other')!.overrideTtsVoices).toBeUndefined();
   });
@@ -131,13 +131,13 @@ describe('voicesSlice — setOverride', () => {
     const start = voicesSlice.reducer(
       undefined,
       voicesActions.hydrate({
-        voices: [voice('v_fitz', { overrideTtsVoices: { kokoro: { name: 'am_onyx' } } })],
+        voices: [voice('v_brann', { overrideTtsVoices: { kokoro: { name: 'am_onyx' } } })],
       }),
     );
     const next = voicesSlice.reducer(
       start,
       voicesActions.setOverride({
-        voiceId: 'v_fitz',
+        voiceId: 'v_brann',
         override: { engine: 'coqui', name: 'Asya Anara' },
       }),
     );
@@ -152,7 +152,7 @@ describe('voicesSlice — setOverride', () => {
       undefined,
       voicesActions.hydrate({
         voices: [
-          voice('v_fitz', {
+          voice('v_brann', {
             overrideTtsVoices: { coqui: { name: 'Asya Anara' }, kokoro: { name: 'am_onyx' } },
           }),
         ],
@@ -160,7 +160,7 @@ describe('voicesSlice — setOverride', () => {
     );
     const next = voicesSlice.reducer(
       start,
-      voicesActions.setOverride({ voiceId: 'v_fitz', override: null }),
+      voicesActions.setOverride({ voiceId: 'v_brann', override: null }),
     );
     expect(next.voices[0].overrideTtsVoices).toBeNull();
     expect(next.voices[0].overrideTtsVoice).toBeNull();

@@ -257,7 +257,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
       chapterId: 3,
       queueEntryId: 'q3',
       fallbackCharacters: [
-        { id: 'sophie', name: 'Sophie' },
+        { id: 'wren', name: 'Wren' },
         { id: 'ro', name: 'Ro' },
       ],
     } as unknown as GenerationTick);
@@ -265,7 +265,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(toasts).toHaveLength(1);
     expect(toasts[0].kind).toBe('warn');
     expect(toasts[0].message).toMatch(/Chapter 3/);
-    expect(toasts[0].message).toMatch(/Sophie, Ro/);
+    expect(toasts[0].message).toMatch(/Wren, Ro/);
     expect(toasts[0].dedupeKey).toBe('fallback-confirm:q3');
   });
 

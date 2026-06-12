@@ -36,10 +36,10 @@ const api = {
 };
 vi.mock('../lib/api', () => ({ api: new Proxy({}, { get: (_t, k) => api[k as keyof typeof api] }) }));
 
-const character = { id: 'x', name: 'Sophie', color: 'lilac', role: 'protagonist' } as unknown as Character;
+const character = { id: 'x', name: 'Wren', color: 'lilac', role: 'protagonist' } as unknown as Character;
 const currentSubject = {
   id: 'v_x',
-  character: 'Sophie',
+  character: 'Wren',
   ttsVoice: { provider: 'kokoro', name: 'af_heart', description: 'warm' },
 } as unknown as Voice;
 

@@ -73,7 +73,7 @@ describe('ListenHeader — phone viewport render (plan 81 wave 3)', () => {
   it('renders without throwing at 375x667 and keeps the action buttons', () => {
     render(
       <ListenHeader
-        title="Bonus Keefe Story"
+        title="the Coalfall Commission"
         author="Marin Vale"
         narratorName="Anders Vale"
         voiceCount={3}
@@ -98,7 +98,7 @@ describe('ListenHeader — phone viewport render (plan 81 wave 3)', () => {
     /* Title + primary actions stay reachable. (h1 + cover-art h2 both
        carry the title, so the assertion uses getAllByText to tolerate
        both render sites.) */
-    expect(screen.getAllByText('Bonus Keefe Story').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('the Coalfall Commission').length).toBeGreaterThan(0);
     expect(screen.getByTestId('open-export-modal')).toBeInTheDocument();
     expect(screen.getByTestId('listen-replace-manuscript')).toBeInTheDocument();
     /* Touch-target invariant: the export button declares min-h-[44px]

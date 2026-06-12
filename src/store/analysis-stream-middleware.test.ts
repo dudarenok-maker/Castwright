@@ -374,9 +374,9 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
         phaseProgress: 0.1,
       }),
     );
-    lastCall().onSeriesPrior?.({ count: 3, names: ['Sophie', 'Keefe', 'Biana'] });
+    lastCall().onSeriesPrior?.({ count: 3, names: ['Wren', 'Marlow', 'Maerin'] });
     const snap = store.getState().analysis.activeStream;
-    expect(snap?.seriesPrior).toEqual({ count: 3, names: ['Sophie', 'Keefe', 'Biana'] });
+    expect(snap?.seriesPrior).toEqual({ count: 3, names: ['Wren', 'Marlow', 'Maerin'] });
   });
 
   it('clears the snapshot when the SSE resolves cleanly (terminal result)', async () => {

@@ -192,11 +192,11 @@ export const VOICE_DRIFT_EVENTS: DriftEvent[] = [
   },
   /* Second book — exercises the multi-book group header in dev. */
   {
-    id: 'drift:cc:3:sophie:attributes',
+    id: 'drift:cc:3:wren:attributes',
     bookId: 'cc',
-    characterId: 'sophie',
+    characterId: 'wren',
     chapterId: 3,
-    chapterTitle: 'A Letter From Elwin',
+    chapterTitle: 'A Letter From Oduvan',
     severity: 'moderate',
     factor: 'attributes',
     factorLabel: 'Attributes',
@@ -210,7 +210,7 @@ export const VOICE_DRIFT_EVENTS: DriftEvent[] = [
       attributes: ['warm', 'observant'],
     },
     current: {
-      name: 'Sophie Foster',
+      name: 'Wren Sparrow',
       voiceId: 'af_bella',
       gender: 'female',
       ageRange: 'teen',

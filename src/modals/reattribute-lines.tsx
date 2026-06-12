@@ -19,13 +19,13 @@ import { changeLogActions } from '../store/change-log-slice';
 import type { UnlinkAliasImpactedChapter } from '../lib/api';
 
 interface Props {
-  /** The character the alias was un-linked FROM (e.g. "Neverseen Figure").
+  /** The character the alias was un-linked FROM (e.g. "Saltgrave Figure").
       Sentences in the impacted chapters currently attributed to this id
       are the candidates the user reviews. */
   sourceCharacterId: string;
   sourceCharacterName: string;
   /** The freshly-minted standalone character ID for the un-linked alias
-      (e.g. "sandor"). The quick-set chip on each sentence reassigns the
+      (e.g. "garrow"). The quick-set chip on each sentence reassigns the
       line to this id. */
   newCharacterId: string;
   /** Display name of the un-linked alias, used in the modal header and

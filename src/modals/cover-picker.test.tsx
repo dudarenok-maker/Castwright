@@ -78,7 +78,7 @@ function renderPicker({ defaultTab = 'search', ...overrides }: RenderOpts = {}) 
       <CoverPicker
         open
         bookId="bk_test"
-        bookTitle="Bonus Keefe Story"
+        bookTitle="the Coalfall Commission"
         bookAuthor="Shannon Messenger"
         onClose={onClose}
         onPicked={onPicked}
@@ -188,7 +188,7 @@ describe('CoverPicker — closed state', () => {
         <CoverPicker
           open={false}
           bookId="bk_test"
-          bookTitle="Bonus Keefe Story"
+          bookTitle="the Coalfall Commission"
           bookAuthor="Shannon Messenger"
           onClose={() => {}}
           onPicked={() => {}}

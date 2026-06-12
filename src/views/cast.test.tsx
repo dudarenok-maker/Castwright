@@ -55,7 +55,7 @@ const narrator: Character = {
   gender: 'male',
   ageRange: 'adult',
   matchedFrom: {
-    bookTitle: 'Bonus Keefe Story',
+    bookTitle: 'the Coalfall Commission',
     bookId: 'b_prev',
     characterId: 'narrator_prev',
     confidence: 0.92,
@@ -81,7 +81,7 @@ const library: Voice[] = [
     id: 'v_narrator_lib',
     character: 'Narrator',
     bookId: 'b_prev',
-    bookTitle: 'Bonus Keefe Story',
+    bookTitle: 'the Coalfall Commission',
     attributes: ['descriptive'],
     gradient: ['#E5B69C', '#C77B5C'],
     usedIn: 2,
@@ -205,7 +205,7 @@ describe('CastView voice-column presentation', () => {
        coexist now. */
     const row = rowFor('Narrator');
     expect(within(row).getByText('Aaron Dreschner')).toBeInTheDocument();
-    expect(within(row).getByText(/From Bonus Keefe Story · 92%/)).toBeInTheDocument();
+    expect(within(row).getByText(/From the Coalfall Commission · 92%/)).toBeInTheDocument();
   });
 
   it('keeps the match-source line scoped to the reused row only', () => {
@@ -566,7 +566,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         id: 'v_qwen_narrator',
         character: 'Narrator',
         bookId: 'b_prev',
-        bookTitle: 'Bonus Keefe Story',
+        bookTitle: 'the Coalfall Commission',
         attributes: ['descriptive'],
         gradient: ['#E5B69C', '#C77B5C'],
         usedIn: 2,
@@ -589,7 +589,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
   });
 
   it('shows "Needs voice" for a DEFAULT-engine character on a Qwen project (not a stale "Matched")', () => {
-    /* The Lady Alexine bug: a character with no per-character `ttsEngine`
+    /* The Lady Thorne bug: a character with no per-character `ttsEngine`
        still synthesises via the project default (Qwen), so an undesigned one
        must read "Needs voice" — not the preset "Matched" pill its voiceState
        would otherwise produce. The Status column resolves the effective engine
@@ -931,13 +931,13 @@ describe('compareCastRows — cast table ordering', () => {
   it('pins unknown-male and unknown-female last regardless of line count', () => {
     const out = [
       mk({ id: 'unknown-male', name: 'Unknown male', lines: 9999 }),
-      mk({ id: 'sophie', name: 'Sophie', lines: 10 }),
+      mk({ id: 'wren', name: 'Wren', lines: 10 }),
       mk({ id: 'unknown-female', name: 'Unknown female', lines: 8888 }),
       mk({ id: 'narrator', name: 'Narrator', lines: 5 }),
     ]
       .sort(compareCastRows)
       .map((c) => c.id);
-    expect(out).toEqual(['sophie', 'narrator', 'unknown-male', 'unknown-female']);
+    expect(out).toEqual(['wren', 'narrator', 'unknown-male', 'unknown-female']);
   });
 
   it('orders the two buckets between themselves by line count', () => {
@@ -1360,20 +1360,20 @@ describe('CastView — Design full cast button', () => {
   });
 
   it('opens the scope picker and dispatches a variants-scope design', () => {
-    /* sophie: has a base voice + an in-use emotion missing a variant */
-    const sophie: Character = {
-      id: 'sophie',
-      name: 'Sophie',
+    /* wren: has a base voice + an in-use emotion missing a variant */
+    const wren: Character = {
+      id: 'wren',
+      name: 'Wren',
       role: 'Hero',
       color: 'mentor',
       lines: 20,
       scenes: 5,
       attributes: [],
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: {} } },
+      overrideTtsVoices: { qwen: { name: 'qwen-wren', variants: {} } },
     };
     const variantSents: Sentence[] = [
-      { id: 10, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
+      { id: 10, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
     ];
     const actions2: Array<{ type: string; payload?: unknown }> = [];
     const recorder2 =
@@ -1390,7 +1390,7 @@ describe('CastView — Design full cast button', () => {
     render(
       <Provider store={store2}>
         <CastView
-          characters={[sophie]}
+          characters={[wren]}
           setCharacters={() => {}}
           library={library}
           sentences={variantSents}
@@ -1419,7 +1419,7 @@ describe('CastView — Design full cast button', () => {
     expect(a?.payload.bookId).toBe('b2');
     expect(a?.payload.scope).toBe('variants');
     expect(a?.payload.characterIds).toEqual([]);
-    expect(a?.payload.variantTasks).toEqual([{ characterId: 'sophie', emotions: ['angry'] }]);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'wren', emotions: ['angry'] }]);
   });
 
   it('shows a Cancel control while a run for this book is active', () => {
@@ -1593,9 +1593,9 @@ describe('CastView — variant glyph strip in the Status column', () => {
      text hint.  The strip renders inline below the lifecycle pill; the old
      VariantsBadge count and missing-variants-hint span must not appear. */
 
-  const sophie: Character = {
-    id: 'sophie',
-    name: 'Sophie',
+  const wren: Character = {
+    id: 'wren',
+    name: 'Wren',
     role: 'Hero',
     color: 'mentor',
     lines: 20,
@@ -1603,12 +1603,12 @@ describe('CastView — variant glyph strip in the Status column', () => {
     attributes: [],
     ttsEngine: 'qwen',
     overrideTtsVoices: {
-      qwen: { name: 'qwen-sophie', variants: { angry: { name: 'qwen-sophie-angry' } } },
+      qwen: { name: 'qwen-wren', variants: { angry: { name: 'qwen-wren-angry' } } },
     },
   };
   const sophieSentences: Sentence[] = [
-    { id: 1, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
-    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'sophie', emotion: 'excited' },
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'wren', emotion: 'excited' },
   ];
 
   function renderGlyphTest() {
@@ -1618,7 +1618,7 @@ describe('CastView — variant glyph strip in the Status column', () => {
     return render(
       <Provider store={store}>
         <CastView
-          characters={[sophie]}
+          characters={[wren]}
           setCharacters={() => {}}
           library={library}
           sentences={sophieSentences}
@@ -1636,7 +1636,7 @@ describe('CastView — variant glyph strip in the Status column', () => {
     renderGlyphTest();
     /* The view renders both a desktop grid row and a mobile card row — scope
        to the desktop grid row (same strategy used by other CastView tests). */
-    const row = rowFor('Sophie');
+    const row = rowFor('Wren');
     /* angry is designed → state=designed; excited is in-use but not in variants → state=needed */
     expect(within(row).getByTestId('variant-glyph-angry')).toHaveAttribute('data-state', 'designed');
     expect(within(row).getByTestId('variant-glyph-excited')).toHaveAttribute('data-state', 'needed');

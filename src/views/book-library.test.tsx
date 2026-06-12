@@ -20,9 +20,9 @@ vi.mock('../lib/api', () => ({
 
 const oneBook: LibraryBook = {
   bookId: 'b1',
-  title: 'Keeper of the Lost Cities',
+  title: 'The Hollow Tide',
   author: 'Shannon Messenger',
-  series: 'Keeper of the Lost Cities',
+  series: 'The Hollow Tide',
   seriesPosition: 1,
   isStandalone: false,
   status: 'complete',
@@ -37,7 +37,7 @@ const oneBook: LibraryBook = {
 
 const oneAuthor: LibraryAuthor = {
   name: 'Shannon Messenger',
-  series: [{ name: 'Keeper of the Lost Cities', books: [oneBook] }],
+  series: [{ name: 'The Hollow Tide', books: [oneBook] }],
 };
 
 function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuthor[] }) {
@@ -127,7 +127,7 @@ describe('BookLibraryView — loading affordance', () => {
       title: 'Book A',
       seriesPosition: 1,
       voiceCount: 3,
-      voiceIds: ['narrator', 'sophie', 'keefe'],
+      voiceIds: ['narrator', 'wren', 'marlow'],
     };
     const bookB: LibraryBook = {
       ...oneBook,
@@ -135,14 +135,14 @@ describe('BookLibraryView — loading affordance', () => {
       title: 'Book B',
       seriesPosition: 2,
       voiceCount: 3,
-      voiceIds: ['narrator', 'sophie', 'fitz'],
+      voiceIds: ['narrator', 'wren', 'brann'],
     };
     const author: LibraryAuthor = {
       name: 'Shannon Messenger',
-      series: [{ name: 'Keeper of the Lost Cities', books: [bookA, bookB] }],
+      series: [{ name: 'The Hollow Tide', books: [bookA, bookB] }],
     };
     renderView({ loaded: true, authors: [author] });
-    /* Union {narrator, sophie, keefe, fitz} = 4 distinct voices.
+    /* Union {narrator, wren, marlow, brann} = 4 distinct voices.
        The old summing behaviour would have shown 6. */
     const tile = screen.getByTestId('stat-tile-voices');
     expect(tile).toHaveTextContent('4');
@@ -153,7 +153,7 @@ describe('BookLibraryView — loading affordance', () => {
     const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
     const authorWithCover: LibraryAuthor = {
       ...oneAuthor,
-      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithCover] }],
+      series: [{ name: 'The Hollow Tide', books: [bookWithCover] }],
     };
     renderView({ loaded: true, authors: [authorWithCover] });
     const img = screen.getByTestId('book-cover-b1') as HTMLImageElement;
@@ -173,30 +173,30 @@ describe('BookLibraryView — loading affordance', () => {
     const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
     const authorWithCover: LibraryAuthor = {
       ...oneAuthor,
-      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithCover] }],
+      series: [{ name: 'The Hollow Tide', books: [bookWithCover] }],
     };
     renderView({ loaded: true, authors: [authorWithCover] });
     const strip = screen.getByTestId('book-meta-strip-b1');
     expect(strip).toBeInTheDocument();
-    expect(strip).toHaveTextContent('Keeper of the Lost Cities');
+    expect(strip).toHaveTextContent('The Hollow Tide');
   });
 
   it('shows the series line + position in the metadata strip when a cover image loads', () => {
     const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
     const authorWithCover: LibraryAuthor = {
       ...oneAuthor,
-      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithCover] }],
+      series: [{ name: 'The Hollow Tide', books: [bookWithCover] }],
     };
     renderView({ loaded: true, authors: [authorWithCover] });
     const strip = screen.getByTestId('book-meta-strip-b1');
-    expect(strip).toHaveTextContent(/Keeper of the Lost Cities.*Book 1/);
+    expect(strip).toHaveTextContent(/The Hollow Tide.*Book 1/);
   });
 
   it('shows the metadata strip even when no cover image is set', () => {
     renderView({ loaded: true, authors: [oneAuthor] });
     const strip = screen.getByTestId('book-meta-strip-b1');
     expect(strip).toBeInTheDocument();
-    expect(strip).toHaveTextContent('Keeper of the Lost Cities');
+    expect(strip).toHaveTextContent('The Hollow Tide');
     expect(strip).toHaveTextContent(/Book 1/);
   });
 
@@ -204,18 +204,18 @@ describe('BookLibraryView — loading affordance', () => {
     const bonus: LibraryBook = {
       ...oneBook,
       bookId: 'b2',
-      title: 'Bonus Keefe Story',
+      title: 'the Coalfall Commission',
       seriesPosition: null,
       isStandalone: true,
       coverImageUrl: '/api/books/b2/cover',
     };
     const authorWithBonus: LibraryAuthor = {
       ...oneAuthor,
-      series: [{ name: 'Keeper of the Lost Cities', books: [bonus] }],
+      series: [{ name: 'The Hollow Tide', books: [bonus] }],
     };
     renderView({ loaded: true, authors: [authorWithBonus] });
     const strip = screen.getByTestId('book-meta-strip-b2');
-    expect(strip).toHaveTextContent('Bonus Keefe Story');
+    expect(strip).toHaveTextContent('the Coalfall Commission');
     expect(strip).toHaveTextContent('Standalone');
   });
 
@@ -227,7 +227,7 @@ describe('BookLibraryView — loading affordance', () => {
     };
     const author: LibraryAuthor = {
       ...oneAuthor,
-      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithFraming] }],
+      series: [{ name: 'The Hollow Tide', books: [bookWithFraming] }],
     };
     renderView({ loaded: true, authors: [author] });
     const img = screen.getByTestId('book-cover-b1') as HTMLImageElement;
@@ -239,7 +239,7 @@ describe('BookLibraryView — loading affordance', () => {
     const bookWithCover: LibraryBook = { ...oneBook, coverImageUrl: '/api/books/b1/cover' };
     const author: LibraryAuthor = {
       ...oneAuthor,
-      series: [{ name: 'Keeper of the Lost Cities', books: [bookWithCover] }],
+      series: [{ name: 'The Hollow Tide', books: [bookWithCover] }],
     };
     renderView({ loaded: true, authors: [author] });
     const img = screen.getByTestId('book-cover-b1') as HTMLImageElement;
@@ -250,7 +250,7 @@ describe('BookLibraryView — loading affordance', () => {
   it('renders the "Paused — resume?" badge when the cold-boot scan reports a paused snapshot', () => {
     const pausedSnap: ActiveAnalysisSummary = {
       bookId: 'b1',
-      bookTitle: 'Keeper of the Lost Cities',
+      bookTitle: 'The Hollow Tide',
       manuscriptId: 'mns_b1',
       phaseId: 1,
       phaseLabel: 'Detecting characters',
@@ -292,7 +292,7 @@ describe('BookLibraryView — loading affordance', () => {
   it('renders the "Halted — review?" badge when the snapshot state is halted', () => {
     const haltedSnap: ActiveAnalysisSummary = {
       bookId: 'b1',
-      bookTitle: 'Keeper of the Lost Cities',
+      bookTitle: 'The Hollow Tide',
       manuscriptId: 'mns_b1',
       phaseId: 2,
       phaseLabel: 'Linking refs',
@@ -340,7 +340,7 @@ describe('BookLibraryView — loading affordance', () => {
   it('omits the paused badge when the book is the currently-active card (top-bar pill takes over)', () => {
     const pausedSnap: ActiveAnalysisSummary = {
       bookId: 'b1',
-      bookTitle: 'Keeper of the Lost Cities',
+      bookTitle: 'The Hollow Tide',
       manuscriptId: 'mns_b1',
       phaseId: 1,
       phaseLabel: 'Detecting characters',

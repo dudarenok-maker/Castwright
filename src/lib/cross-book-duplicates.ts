@@ -2,7 +2,7 @@
 
    Surfaces voice-library rows that *might* be the same character across
    two books in the same series — the case the Phase-0a name matcher can
-   miss because token-level Jaccard between "Sophie" and "Sophie Foster"
+   miss because token-level Jaccard between "Wren" and "Wren Sparrow"
    is low.
 
    The predicate is intentionally cheap (pure derivation off the voice
@@ -29,7 +29,7 @@ export function normaliseDuplicateToken(s: string | undefined): string {
    Rule:
    - Identical → match
    - One is a strict, non-empty substring of the other → match (e.g.
-     'sophie' ⊂ 'sophiefoster')
+     'wren' ⊂ 'sophiefoster')
    - Otherwise no match. Token-Jaccard, edit-distance, etc. are
      deliberately out of scope — false positives erode trust faster than
      a missed pair. */
@@ -71,7 +71,7 @@ function identityTokens(x: { name: string; aliases?: string[] }): string[] {
 
 /* Are two same-series characters the same person, judged by name/alias?
    True when any pair of their normalised name/alias tokens `looksLikeSameName`
-   (exact or strict-substring — e.g. "sophie" ⊂ "sophiefoster", "Bronte" ≡
+   (exact or strict-substring — e.g. "wren" ⊂ "sophiefoster", "Bronte" ≡
    "bron-te"). Returns FALSE when either side has marked the other
    `notLinkedTo` — the user's "intentionally different" escape hatch — or when
    the two refer to the same (book, character) row. A bucket id on either side

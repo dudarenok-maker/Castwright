@@ -118,8 +118,8 @@ describe('castDesignMiddleware', () => {
     /* Seed two cast rows so the character_designed mirror has somewhere to land. */
     store.dispatch(
       castSlice.actions.setCharacters([
-        { id: 'c1', name: 'Sophie' } as never,
-        { id: 'c2', name: 'Keefe' } as never,
+        { id: 'c1', name: 'Wren' } as never,
+        { id: 'c2', name: 'Marlow' } as never,
       ]),
     );
 
@@ -146,8 +146,8 @@ describe('castDesignMiddleware', () => {
     });
 
     const { cb } = startCalls[0];
-    cb.onProgress?.({ characterId: 'c1', name: 'Sophie', done: 0, total: 2 });
-    expect(store.getState().castDesign.active?.currentName).toBe('Sophie');
+    cb.onProgress?.({ characterId: 'c1', name: 'Wren', done: 0, total: 2 });
+    expect(store.getState().castDesign.active?.currentName).toBe('Wren');
 
     cb.onCharacterDesigned?.({ characterId: 'c1', voiceId: 'qwen-c1' });
     expect(store.getState().castDesign.active?.done).toBe(1);
@@ -156,7 +156,7 @@ describe('castDesignMiddleware', () => {
       store.getState().cast.characters.find((c) => c.id === 'c1')?.overrideTtsVoices?.qwen?.name,
     ).toBe('qwen-c1');
 
-    cb.onProgress?.({ characterId: 'c2', name: 'Keefe', done: 1, total: 2 });
+    cb.onProgress?.({ characterId: 'c2', name: 'Marlow', done: 1, total: 2 });
     cb.onCharacterDesigned?.({ characterId: 'c2', voiceId: 'qwen-c2' });
     expect(store.getState().castDesign.active?.done).toBe(2);
   });
@@ -187,13 +187,13 @@ describe('castDesignMiddleware', () => {
       }),
     );
     const { cb } = startCalls[0];
-    cb.onCharacterFailed?.({ characterId: 'c1', name: 'Sophie', errorReason: 'no gemini key' });
+    cb.onCharacterFailed?.({ characterId: 'c1', name: 'Wren', errorReason: 'no gemini key' });
     cb.onCharacterDesigned?.({ characterId: 'c2', voiceId: 'qwen-c2' });
     cb.onIdle?.({
       done: 1,
       total: 2,
       skipped: 0,
-      failures: [{ characterId: 'c1', name: 'Sophie', error: 'no gemini key' }],
+      failures: [{ characterId: 'c1', name: 'Wren', error: 'no gemini key' }],
     });
 
     const snap = store.getState().castDesign.active;
@@ -238,12 +238,12 @@ describe('castDesignMiddleware', () => {
     expect(store.getState().castDesign.active).toBeNull();
 
     const { cb } = subscribeCalls[0];
-    cb.onResumeFrom?.({ total: 4, done: 2, currentName: 'Fitz' });
+    cb.onResumeFrom?.({ total: 4, done: 2, currentName: 'Brann' });
     expect(store.getState().castDesign.active).toMatchObject({
       bookId: 'b1',
       total: 4,
       done: 2,
-      currentName: 'Fitz',
+      currentName: 'Brann',
       state: 'running',
     });
   });

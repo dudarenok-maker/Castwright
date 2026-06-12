@@ -132,7 +132,7 @@ function makeStore() {
 function makeBook(over: Partial<LibraryBook> = {}): LibraryBook {
   return {
     bookId: 'b1',
-    title: 'Bonus Keefe Story',
+    title: 'the Coalfall Commission',
     author: 'Shannon Messenger',
     series: 'Standalones',
     seriesPosition: null,
@@ -184,7 +184,7 @@ describe('AnalysingRoute manuscriptId derivation', () => {
     const store = makeStore();
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
+        state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'the Coalfall Commission' } as any,
         sentences: null,
         wordCount: 2440,
         format: 'plaintext',
@@ -254,7 +254,7 @@ describe('AnalysingRoute manuscriptId derivation', () => {
     store.dispatch(uiActions.manuscriptUploaded({ bookId: 'b1', manuscriptId: 'mns-from-upload' }));
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        state: { bookId: 'b1', manuscriptId: 'mns-from-upload', title: 'Bonus Keefe Story' } as any,
+        state: { bookId: 'b1', manuscriptId: 'mns-from-upload', title: 'the Coalfall Commission' } as any,
         sentences: null,
         wordCount: 2440,
         format: 'plaintext',
@@ -329,7 +329,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     store.dispatch(castActions.setCharacters(staleChars));
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'Bonus Keefe Story' } as any,
+        state: { bookId: 'b1', manuscriptId: 'mns-real', title: 'the Coalfall Commission' } as any,
         sentences: null,
         wordCount: 100000,
         format: 'plaintext',
@@ -552,12 +552,12 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
 
     /* Modal seeded with the existing title. */
     const titleInput = (await screen.findByLabelText('Title')) as HTMLInputElement;
-    expect(titleInput.value).toBe('Bonus Keefe Story');
+    expect(titleInput.value).toBe('the Coalfall Commission');
 
     /* Edit the title. The Standalone checkbox is already checked
        (the seed sets isStandalone: true), so series/position stay
        disabled — we exercise only the title rename path here. */
-    fireEvent.change(titleInput, { target: { value: "Bonus Keefe Story (Director's Cut)" } });
+    fireEvent.change(titleInput, { target: { value: "the Coalfall Commission (Director's Cut)" } });
     fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
 
     await waitFor(() => {
@@ -566,7 +566,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     expect(putBookStateMock).toHaveBeenCalledWith('b1', {
       slice: 'state',
       patch: expect.objectContaining({
-        title: "Bonus Keefe Story (Director's Cut)",
+        title: "the Coalfall Commission (Director's Cut)",
         author: 'Shannon Messenger',
         isStandalone: true,
         seriesPosition: null,
@@ -594,7 +594,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
 
     /* Now fill in series + position. */
     const seriesInput = screen.getByLabelText('Series') as HTMLInputElement;
-    fireEvent.change(seriesInput, { target: { value: 'Keeper of the Lost Cities' } });
+    fireEvent.change(seriesInput, { target: { value: 'The Hollow Tide' } });
     const positionInput = screen.getByLabelText('Position in series') as HTMLInputElement;
     fireEvent.change(positionInput, { target: { value: '8' } });
 
@@ -607,7 +607,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
       slice: 'state',
       patch: expect.objectContaining({
         isStandalone: false,
-        series: 'Keeper of the Lost Cities',
+        series: 'The Hollow Tide',
         seriesPosition: 8,
       }),
     });
@@ -631,7 +631,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
       expect(showError).toHaveBeenCalledTimes(1);
     });
     expect(showError).toHaveBeenCalledWith(
-      expect.stringContaining('Bonus Keefe Story'),
+      expect.stringContaining('the Coalfall Commission'),
       'disk locked',
       'Edit',
     );
@@ -734,7 +734,7 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
                 books: [
                   makeBook({
                     bookId: 'b1',
-                    title: 'Bonus Keefe Story',
+                    title: 'the Coalfall Commission',
                     manuscriptId: 'mns-a',
                     status: 'analysing',
                   }),
@@ -755,7 +755,7 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
        came from the analysing view for Book A. */
     store.dispatch(
       manuscriptActions.hydrateFromBookState({
-        state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'Bonus Keefe Story' } as any,
+        state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'the Coalfall Commission' } as any,
         sentences: null,
         wordCount: 1000,
         format: 'plaintext',
@@ -830,6 +830,6 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
        initial paint is the Suspense fallback. */
     const heading = await screen.findByRole('heading', { level: 1 });
     expect(heading.textContent).toContain('Mystery Novel');
-    expect(heading.textContent).not.toContain('Bonus Keefe Story');
+    expect(heading.textContent).not.toContain('the Coalfall Commission');
   });
 });
