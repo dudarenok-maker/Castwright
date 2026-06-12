@@ -1572,7 +1572,8 @@ function broadcastToJob(job: AnalysisJob, payload: unknown): void {
   }
 }
 
-function trackForReplay(job: AnalysisJob, payload: unknown): void {
+/* Exported for unit testing (the chapter-failed replay contract). */
+export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   if (!payload || typeof payload !== 'object') return;
   const ev = payload as { kind?: string };
   switch (ev.kind) {
