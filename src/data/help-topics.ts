@@ -22,7 +22,8 @@ export const HELP_TOPICS: HelpTopic[] = [
     title: 'Voices or models are missing',
     body:
       'Open Models (Admin → Model Manager) to see what is installed. The Kokoro voice pack installs ' +
-      'with `scripts/install-kokoro.ps1`; other engines install from the Model Manager rows. If an ' +
+      'with `server/tts-sidecar/scripts/install-kokoro.ps1` (or .sh on macOS/Linux); other engines ' +
+      'install from the Model Manager rows. If an ' +
       'engine shows as installed but synthesis fails with "model not loaded", load it from its pill ' +
       'in the top bar and wait for it to turn green.',
   },
@@ -48,8 +49,9 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: 'where-files-live',
     title: 'Where are my books and audio on disk?',
     body:
-      'Each book lives in its own folder under the workspace directory (server/workspace by ' +
-      'default): the manuscript, the cast (cast.json), per-chapter audio, and exports. Deleting a ' +
-      'book folder removes that book; back up the workspace folder to keep everything.',
+      'Each book lives in its own folder under the workspace directory (the castwright-workspace ' +
+      'folder next to the install, by default): the manuscript, the cast (cast.json), per-chapter ' +
+      'audio, and exports. Deleting a book folder removes that book; back up the workspace folder ' +
+      'to keep everything.',
   },
 ];
