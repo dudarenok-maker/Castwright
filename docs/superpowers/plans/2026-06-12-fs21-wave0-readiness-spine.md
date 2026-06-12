@@ -11,6 +11,8 @@
 **Spec:** `docs/superpowers/specs/2026-06-12-fs21-first-run-wizard-design.md` · **Issue:** #474 · **Branch:** `feat/fs21-wave0-readiness-spine` off `main`.
 
 > **Per the review-first convention, do NOT file the per-wave sub-issue until this plan is reviewed.** When approved: cut `feat/fs21-wave0-readiness-spine`, open it as a **draft** PR, run `npm run verify` locally to green, then `gh pr ready`.
+>
+> **Prerequisite:** the spec + this plan currently live on `docs/docs-fs21-wizard-spec`, not `main`. **Merge that docs branch first** (or have the executor read the plan from it) so the code branch — cut off `main` — has the plan available during execution.
 
 ---
 
@@ -91,24 +93,36 @@ Expected: FAIL — `getResolvedSetupCompletedAt is not a function`.
 
 - [ ] **Step 3: Implement the field + getter + writer**
 
-In `server/src/workspace/user-settings.ts`, add `setupCompletedAt?: string | null;` to the `UserSettings` interface (near `lastSeenAppVersion`), then add (mirroring the existing `getResolvedGeminiApiKey` / `writeGeminiApiKey` read/write pattern in this file):
+In `server/src/workspace/user-settings.ts`, add `setupCompletedAt?: string | null;` to the `UserSettings` interface (near `lastSeenAppVersion`), then add the getter + writer.
+
+**Important:** the getter must read the module-level sync `cached` (NOT the async `readUserSettings()` — that returns a `Promise`), exactly like `getResolvedGeminiApiKey` does. And the writer must mirror `writeUpgradeMeta` (a *dedicated* writer that goes straight through `writeChain` + `writeJsonAtomic` + sets `cached`) — NOT `writeUserSettings()`, because that path runs `patchSchema.parse()` + `stripForbiddenKeys()` and would drop a brand-new field.
 
 ```ts
 /** fs-21 — ISO timestamp stamped when the user finishes (or exits) the
     guided first-run flow. Suppresses the guided re-intro; the hard gate
-    itself stays derived from live readiness, so this never grants access. */
+    itself stays derived from live readiness, so this never grants access.
+    Sync read off the in-process cache, like getResolvedGeminiApiKey. */
 export function getResolvedSetupCompletedAt(): string | null {
-  return readUserSettings().setupCompletedAt ?? null;
+  return cached?.setupCompletedAt ?? null;
 }
 
+/** Dedicated writer (mirrors writeUpgradeMeta): bypasses the general
+    writeUserSettings schema/strip path so the new field persists, and
+    refreshes the sync `cached` the getter reads. */
 export async function writeSetupCompletedAt(ts: string | null): Promise<UserSettings> {
-  const next = { ...readUserSettings(), setupCompletedAt: ts };
-  await writeUserSettings(next);
+  const next = writeChain.then(async () => {
+    const current = await readUserSettings();
+    const merged: UserSettings = { ...current, setupCompletedAt: ts };
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    cached = merged;
+    return merged;
+  });
+  writeChain = next.catch(() => undefined);
   return next;
 }
 ```
 
-> Use the same internal read/write helpers the neighbouring `writeGeminiApiKey` uses (`readUserSettings()` / `writeUserSettings()`). If their names differ in the file, match the local convention exactly.
+> `cached`, `writeChain`, `readUserSettings`, `writeJsonAtomic`, and `USER_SETTINGS_PATH` are all module-private symbols already declared in this file (see `writeUpgradeMeta` at ~line 605). This code lives in the same module, so it reads/writes them directly.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -338,7 +352,13 @@ import { buildDiagnostics, type DiagnosticsResponse } from './diagnostics.js';
 import { getResolvedAnalysisEngine, getResolvedSetupCompletedAt } from '../workspace/user-settings.js';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { anyTtsEnginePresent } from '../tts/engine-presence.js';
-import { REPO_ROOT } from '../workspace/paths.js';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+
+/* Repo root computed locally, exactly as models-inventory.ts does (this file
+   is also under server/src/routes/, so '..','..','..' lands on the repo root).
+   workspace/paths.ts exports WORKSPACE_ROOT, NOT a repo root — don't import. */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 export type BlockerStatus = 'pass' | 'fail';
 
@@ -394,11 +414,9 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
 });
 ```
 
-> `REPO_ROOT` import: if `server/src/workspace/paths.js` exports the repo root under a different name (e.g. `WORKSPACE_ROOT` is the workspace, not the repo), use the existing constant that `models-inventory.ts` passes to `kokoroWeightPaths(repoRoot)` — match that exact import so paths resolve identically to the inventory route.
-
 - [ ] **Step 4: Create the `anyTtsEnginePresent` helper it depends on**
 
-Create `server/src/tts/engine-presence.ts`, reusing the **same** detectors `models-inventory.ts` already imports (do not write new disk logic):
+Create `server/src/tts/engine-presence.ts`, reusing the **same** detectors `models-inventory.ts` imports (do not write new disk logic). Note the exact signatures (verified): `coquiWeightsPresent()` takes no args; `detectQwenInstallStateOnDisk(repoRoot)` **requires `repoRoot`** and returns a **string union** `'not-installed' | 'weights-missing' | 'ready'` (so compare `=== 'ready'`, there is no `.basePresent`); `totalSizeBytes(paths)` returns a `DirSize` with `.fileCount`.
 
 ```ts
 /* fs-21 — is at least one TTS engine's weights present on disk? Reuses the
@@ -411,12 +429,10 @@ import { detectQwenInstallStateOnDisk } from './qwen-install-detect.js';
 export function anyTtsEnginePresent(repoRoot: string): boolean {
   const kokoro = totalSizeBytes(kokoroWeightPaths(repoRoot)).fileCount > 0;
   const coqui = coquiWeightsPresent();
-  const qwen = detectQwenInstallStateOnDisk().basePresent;
+  const qwen = detectQwenInstallStateOnDisk(repoRoot) === 'ready';
   return kokoro || coqui || qwen;
 }
 ```
-
-> Verify the imported symbol names against `server/src/routes/models-inventory.ts` (it imports `kokoroWeightPaths`, `coquiWeightsPresent`, `detectQwenInstallStateOnDisk`). If the Qwen detector's "base present" property is named differently than `basePresent`, match the field models-inventory reads for the `qwen-base` row.
 
 - [ ] **Step 5: Run test to verify it passes**
 
@@ -432,23 +448,26 @@ git commit -m "feat(server): GET /api/setup/readiness mapper over diagnostics (f
 
 ---
 
-## Task 5: Register the readiness router
+## Task 5: Register the readiness router (+ integration route test in the slow pool)
 
 **Files:**
-- Modify: `server/src/index.ts`
-- Test: `server/src/routes/setup-readiness.test.ts` (add a supertest route case)
+- Modify: `server/src/index.ts`, `server/vitest.config.slow.ts`
+- Create: `server/src/routes/setup-readiness.route.test.ts` (integration, slow pool)
 
-- [ ] **Step 1: Write the failing route test**
+- [ ] **Step 1: Write the failing route test in its OWN file (it triggers a live sidecar probe)**
 
-Append to `server/src/routes/setup-readiness.test.ts`:
+The route handler calls `buildDiagnostics()`, which runs `probeSidecarHealth()` — a real network probe with a timeout. That makes this an integration test that can be slow/flaky in the parallel fast pool, so it lives in a **separate file routed to `test:server-slow`** (the same treatment the analyzer/diagnostics route tests get). The pure mapper logic is already covered by `setup-readiness.test.ts` (Task 4) in the fast pool.
+
+Create `server/src/routes/setup-readiness.route.test.ts`:
 
 ```ts
+import { describe, it, expect } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { setupReadinessRouter } from './setup-readiness.js';
 
-describe('GET /api/setup/readiness route', () => {
-  it('returns 200 with the readiness shape', async () => {
+describe('GET /api/setup/readiness route (integration — live probe)', () => {
+  it('returns 200 with the readiness shape even when the sidecar is down', async () => {
     const app = express();
     app.use('/api/setup', setupReadinessRouter);
     const res = await request(app).get('/api/setup/readiness');
@@ -460,12 +479,16 @@ describe('GET /api/setup/readiness route', () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails or errors**
+- [ ] **Step 2: Pin the new file to the slow pool**
 
-Run: `cd server && npx vitest run src/routes/setup-readiness.test.ts -t "route"`
-Expected: FAIL or error (route may throw if probes need wiring — that's fine; we assert 200 after registration is sound). If it already passes because the router is self-contained, proceed — the registration step below is still required for the live app.
+In `server/vitest.config.slow.ts`, add `'src/routes/setup-readiness.route.test.ts'` to the `include` list (the same array that already pins the analyzer/gemini + routes tests). Confirm the fast `server/vitest.config.ts` **excludes** it (the slow files are excluded from the fast run via the existing exclude/route mechanism — match how `diagnostics`-class tests are kept out of the fast pool).
 
-- [ ] **Step 3: Register the router in `server/src/index.ts`**
+- [ ] **Step 3: Run the slow test to verify it passes after registration**
+
+Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/setup-readiness.route.test.ts`
+Expected: PASS (200 + shape; the sidecar being unreachable just yields `fail` blockers, never a 500).
+
+- [ ] **Step 4: Register the router in `server/src/index.ts`**
 
 Mirror the diagnostics registration (`import { diagnosticsRouter } from './routes/diagnostics.js';` + `app.use('/api/diagnostics', diagnosticsRouter);`). Add:
 
@@ -479,15 +502,15 @@ and alongside the other `app.use('/api/...')` lines:
 app.use('/api/setup', setupReadinessRouter); // fs-21 — first-run readiness probe
 ```
 
-- [ ] **Step 4: Run the server test + typecheck**
+- [ ] **Step 5: Run the slow route test + typecheck**
 
-Run: `cd server && npx vitest run src/routes/setup-readiness.test.ts && npm run typecheck`
+Run: `cd server && npx vitest run --config vitest.config.slow.ts src/routes/setup-readiness.route.test.ts && npm run typecheck`
 Expected: PASS + clean typecheck.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add server/src/index.ts server/src/routes/setup-readiness.test.ts
+git add server/src/index.ts server/src/routes/setup-readiness.route.test.ts server/vitest.config.slow.ts
 git commit -m "feat(server): register /api/setup readiness router (fs-21 wave 0)"
 ```
 
@@ -567,38 +590,37 @@ git commit -m "feat(frontend): add setup stage variant + #/setup + openSetup (fs
 - Modify: `src/lib/api.ts`
 - Test: `src/lib/api.test.ts` (add cases; create if absent)
 
-The mock must drive BOTH ready and not-ready so dev + e2e can exercise the gate. Drive it off a URL query param so e2e can force a state: `?setup=notready` → not-ready, anything else → ready.
+The mock must drive BOTH ready and not-ready so dev + e2e can exercise the gate. It latches the state into `sessionStorage` from a `?setup=notready` URL param, so the state **survives the redirect to `#/setup`** (where the param is gone). Test the **exported `mockGetSetupReadiness` directly** — do NOT go through `api.*`, because the api module locks `USE_MOCKS` at import time (`import.meta.env` can't be re-toggled after import).
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mockGetSetupReadiness } from './api';
 
 describe('mockGetSetupReadiness', () => {
   beforeEach(() => {
-    vi.resetModules();
-    // @ts-expect-error test shim
-    import.meta.env.VITE_USE_MOCKS = 'true';
+    sessionStorage.clear();
+    window.location.hash = '#/';
   });
 
   it('returns ready by default', async () => {
-    window.location.hash = '#/';
-    const { api } = await import('./api.js');
-    const r = await api.getSetupReadiness();
+    const r = await mockGetSetupReadiness();
     expect(r.ready).toBe(true);
   });
 
-  it('returns not-ready when the setup=notready param is present', async () => {
+  it('latches not-ready from the setup=notready param and persists it across nav', async () => {
     window.location.hash = '#/?setup=notready';
-    const { api } = await import('./api.js');
-    const r = await api.getSetupReadiness();
-    expect(r.ready).toBe(false);
-    expect(r.blockers.tts).toBe('fail');
+    const first = await mockGetSetupReadiness();
+    expect(first.ready).toBe(false);
+    expect(first.blockers.tts).toBe('fail');
+    // param gone after a redirect — the latch keeps it not-ready
+    window.location.hash = '#/setup';
+    const second = await mockGetSetupReadiness();
+    expect(second.ready).toBe(false);
   });
 });
 ```
-
-> If `src/lib/api.test.ts` does not exist or `import.meta.env` can't be mutated in this project's jsdom setup, instead export `mockGetSetupReadiness` and test it directly with a stubbed `window.location.hash`. Match whatever pattern an existing `*mock*` test in the repo uses.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -626,8 +648,15 @@ async function realGetSetupReadiness(): Promise<SetupReadiness> {
   return (await res.json()) as SetupReadiness;
 }
 
-async function mockGetSetupReadiness(): Promise<SetupReadiness> {
-  const notReady = window.location.hash.includes('setup=notready');
+/* Exported so unit tests can drive it directly (the `api.*` indirection locks
+   USE_MOCKS at import). Latches not-ready into sessionStorage from the
+   ?setup=notready param so the state survives the redirect to #/setup, where
+   the query param is gone. */
+export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
+  if (window.location.hash.includes('setup=notready')) {
+    sessionStorage.setItem('mock-setup-readiness', 'notready');
+  }
+  const notReady = sessionStorage.getItem('mock-setup-readiness') === 'notready';
   return notReady
     ? {
         ready: false,
@@ -785,11 +814,11 @@ git commit -m "feat(frontend): setup stub view + #/setup route (fs-21 wave 0)"
 - Modify: `src/components/layout.tsx`
 - Test: `e2e/setup-gate.spec.ts` (Task 10 covers the e2e; this task's verification is the typecheck + a manual mock check)
 
-The gate: on mount, fetch readiness once. While the fetch is pending show a splash (block content). When it resolves, if `!ready` AND the current stage isn't already `setup`, navigate to `#/setup`. If `ready`, render normally. Never re-fetch on every navigation — one boot check (plus Wave 2's focus re-check, out of scope here).
+The gate: on mount, fetch readiness once. While the fetch is pending show a splash (block content). When it resolves, if `!ready` navigate to `#/setup` (a no-op if already there); if `ready`, render normally. Never re-fetch on every navigation — one boot check (plus Wave 2's focus re-check, out of scope here).
 
 - [ ] **Step 1: Add the gate state + effect**
 
-In `src/components/layout.tsx`, near the existing boot effects (the `fetchAccountSettings` effect ~line 453), add:
+In `src/components/layout.tsx`, add this state + effect **with the other top-level hooks** (the component already calls `useNavigate()` — reuse that `navigate`; place this next to the `fetchAccountSettings` boot effect ~line 453, NOT after any early return):
 
 ```tsx
 const [setupReady, setSetupReady] = useState<boolean | null>(null); // null = checking
@@ -800,16 +829,16 @@ useEffect(() => {
     .then((r) => {
       if (cancelled) return;
       setSetupReady(r.ready);
-      if (!r.ready && store.getState().ui.stage.kind !== 'setup') {
-        navigate('/setup');
-      }
+      // Redirecting to /setup when already there is a harmless no-op, so we
+      // don't need to read the current stage (Layout does NOT import `store`).
+      if (!r.ready) navigate('/setup');
     })
     .catch(() => { if (!cancelled) setSetupReady(true); }); // probe failure must not lock the app out
   return () => { cancelled = true; };
 }, []); // eslint-disable-line react-hooks/exhaustive-deps
 ```
 
-> Use the `navigate` from `useNavigate()` and the imported `store` + `api` already available in this module (Layout already imports `store` and dispatches; add `useNavigate`/`api` imports if not present, matching `src/routes/index.tsx`). On probe failure we fail OPEN (`setSetupReady(true)`) so a transient readiness error never bricks the app.
+> Layout already imports `api` (line 33) and `useNavigate` (line 2) and `useState`/`useEffect` (line 1) — no new imports needed, and **do NOT import `store`** (Layout doesn't, and we no longer need it). On probe failure we fail OPEN (`setSetupReady(true)`) so a transient readiness error never bricks the app.
 
 - [ ] **Step 2: Render the splash while checking**
 
@@ -825,12 +854,12 @@ if (setupReady === null) {
 }
 ```
 
-> Place this BEFORE the main `return (<Outlet … />)`. It only blocks the very first paint until the one-shot readiness fetch resolves; subsequent navigations don't re-trigger it (the effect has `[]` deps).
+> **Rules-of-hooks:** place this early return **immediately before the component's final top-level `return (`**, after EVERY hook call in the component (Layout has ~20 hooks — `useTheme`, `useTtsLifecycle`, the many `useEffect`/`useState`, etc.). An early return placed above any hook will throw "rendered fewer hooks than expected." It only blocks the very first paint until the one-shot readiness fetch resolves; subsequent navigations don't re-trigger it (the effect has `[]` deps).
 
 - [ ] **Step 3: Typecheck + frontend unit suite**
 
 Run: `npm run typecheck && npm run test`
-Expected: PASS (no type errors; existing Layout tests still green — if a Layout test now needs the readiness mock, add `getSetupReadiness` to that test's api stub returning `{ ready: true, … }`).
+Expected: PASS (no type errors). Existing Layout tests now mount the readiness fetch on render: in unit tests `api` resolves to the mock (which returns `ready: true`) or, if it hits the real `fetch` and rejects in jsdom, the `.catch` fails OPEN (`setSetupReady(true)`) — either way the splash resolves. If a Layout test emits an `act(...)` warning from the post-mount state update, wrap its render/assertions in `await waitFor(...)` (or assert the resolved tree) rather than disabling the gate.
 
 - [ ] **Step 4: Manual mock check**
 
@@ -867,7 +896,7 @@ test('boot gate stays out of the way when ready', async ({ page }) => {
 });
 ```
 
-> Mock mode is the e2e default (port 5174). `?setup=notready` drives `mockGetSetupReadiness` to the not-ready branch (Task 7). No server needed.
+> Mock mode is the e2e default (port 5174). `?setup=notready` drives `mockGetSetupReadiness` to the not-ready branch (Task 7). No server needed. Each Playwright test runs in a fresh browser context, so the `sessionStorage` latch from the not-ready test does not leak into the ready test.
 
 - [ ] **Step 2: Run the spec to verify it passes**
 
@@ -921,6 +950,6 @@ gh pr ready
 - Headless/Docker "works for free" → same derived gate fires on first UI open; no Wave-0-specific code needed (covered by Task 9's boot fetch) ✓
 - **Deferred to later waves (correctly out of Wave 0):** the 5-step UI bodies + install rows (Wave 2), Kokoro install route + venv bootstrap + parity audit (Wave 1), two-tier smoke test (Wave 3), Account "Re-run setup" entry (Wave 2), docs/closure (Wave 4).
 
-**Placeholder scan:** No TBD/TODO; every code step shows the code; every run step shows the command + expected result. The two `>` notes that say "verify symbol name against file X" are explicit guards against type-drift, not missing content — the canonical code is present and the guard names the exact reference file.
+**Placeholder scan:** No TBD/TODO; every code step shows the code; every run step shows the command + expected result. All previously-hedged symbols are now pinned against the real source (subagent-execution review, 2026-06-12): the settings getter reads the module-level `cached` + a `writeUpgradeMeta`-style dedicated writer (Task 1); `REPO_ROOT` is computed locally, not imported (Task 4); `detectQwenInstallStateOnDisk(repoRoot) === 'ready'` and `coquiWeightsPresent()` no-arg (Task 4); the Layout gate uses `navigate` only (no `store` import) with an explicit rules-of-hooks placement (Task 9); the mock latches not-ready into `sessionStorage` to survive the redirect and is tested via the exported `mockGetSetupReadiness` (Task 7); the live-probe route test is isolated to the slow pool (Task 5).
 
 **Type consistency:** `SetupReadiness` / `BlockerStatus` are defined identically server-side (Task 4) and client-side (Task 7). `buildSetupReadiness` input keys (`diagnostics`, `engine`, `venvPresent`, `ttsEnginePresent`, `completedAt`) match between its definition (Task 4 Step 3) and its callers (Task 4 route + Task 4 tests). `getSetupReadiness` is the api method name in Tasks 7, 8, 9. `openSetup` / `{ kind: 'setup' }` consistent across Tasks 6, 8, 9.
