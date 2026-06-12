@@ -1,6 +1,6 @@
 # Companion marketing screenshot capture (piece #1b) — design
 
-**Status:** design (approved in brainstorm 2026-06-12)
+**Status:** delivered (2026-06-12) — see plan `docs/superpowers/plans/2026-06-12-companion-marketing-capture.md`. Code green via `flutter test`/`analyze`; the live capture is operator-run on an emulator.
 **Sibling:** piece #1 (web marketing capture) — `docs/superpowers/specs/2026-06-12-demo-mode-marketing-capture-design.md`
 **App:** `apps/android` (Flutter companion, plan 188)
 **Branch:** `feat/app-companion-marketing-capture`
