@@ -49,4 +49,11 @@ describe('Hollow Tide marketing fixtures', () => {
     expect(HOLLOW_TIDE_POSED.analysing.phaseProgress).toBeGreaterThan(0);
     expect(HOLLOW_TIDE_POSED.generating.bookId).toBe('hollow-tide-2');
   });
+
+  it('book-state map and library agree on ids', () => {
+    for (const author of HOLLOW_TIDE_LIBRARY.authors)
+      for (const series of author.series)
+        for (const book of series.books)
+          expect(HOLLOW_TIDE_BOOK_STATES.has(book.bookId)).toBe(true);
+  });
 });
