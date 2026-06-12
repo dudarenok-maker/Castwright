@@ -31,7 +31,13 @@ export const TEASER_FLAG = 'In development';
     (decision 7). */
 export const DOMAIN = 'castwright.ai';
 
-/** The footer/export attribution stamp prefix. */
+/** Bare product name — used where the app stamps *itself* (the in-app build
+    footer), as opposed to the attribution stamp on exported outputs. */
+export const BRAND_NAME = 'Castwright';
+
+/** The attribution stamp prefix for exported *outputs* (share-link image,
+    share-clip export) — "Made with Castwright · castwright.ai". The in-app
+    build footer uses the bare {@link BRAND_NAME} instead. */
 export const MADE_WITH = 'Made with Castwright';
 
 /** Hardware-honesty line (decision 9) — widened for Apple Silicon. */
