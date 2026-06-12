@@ -27,7 +27,8 @@ import { SentenceEmotionControl } from '../components/sentence-emotion-control';
 import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { initialSentences } from '../data/sentences';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
+import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { uiActions } from '../store/ui-slice';
@@ -189,6 +190,40 @@ export function ManuscriptView({
     }
     return m;
   }, [sentences, currentChapterId]);
+
+  /* Guided-tour demonstrations of the manuscript controls (fe-38 final
+     acceptance). On the "Who says each line" step we dim the manuscript to
+     one speaker so the colour-coding reads clearly; on "Chapters & paragraphs"
+     we open the segment inspector ("side draw") on a character line. We pick a
+     non-narrator (a named character) when one speaks in this chapter so the
+     demo is vivid, and undo the demo state once the tour leaves the manuscript. */
+  const tourStepId = useAppSelector((s) =>
+    s.tour?.active ? (TOUR_STEPS[s.tour.stepIndex]?.id ?? null) : null,
+  );
+  const tourAppliedRef = useRef(false);
+  useEffect(() => {
+    const onManuscriptStep = tourStepId === 's4-line' || tourStepId === 's5-boundary';
+    if (onManuscriptStep) {
+      const spoken = segments.find((g) => g.characterId !== 'narrator') ?? segments[0];
+      if (tourStepId === 's4-line') {
+        setSelectedSeg(null);
+        setInspectorOpen(false);
+        setFilterChar(spoken ? spoken.characterId : null);
+      } else {
+        setFilterChar(null);
+        if (spoken) {
+          setSelectedSeg(spoken.id);
+          setInspectorOpen(true);
+        }
+      }
+      tourAppliedRef.current = true;
+    } else if (tourAppliedRef.current) {
+      tourAppliedRef.current = false;
+      setFilterChar(null);
+      setSelectedSeg(null);
+      setInspectorOpen(false);
+    }
+  }, [tourStepId, segments]);
 
   /* Order the Detected sidebar by line count in the current chapter so
      the user lands on the busiest speakers first — no scroll past silent
@@ -942,7 +977,7 @@ function SidebarPanels({
         </ul>
       </aside>
 
-      <aside className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
+      <aside data-tour-id="detected-speakers" className="bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden flex-1 basis-0 min-h-0 flex flex-col">
         <div className="shrink-0 px-5 pt-5 pb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-ink">Detected</h2>
           <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-2 rounded-full bg-ink/6 text-[11px] font-semibold text-ink/60 tabular-nums">

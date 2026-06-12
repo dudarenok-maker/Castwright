@@ -34,9 +34,9 @@ export const TOUR_STEPS: ReadonlyArray<TourStep> = [
     title: 'Add your own book',
     body: 'Later, click New book and drop a manuscript — Castwright reads it and finds the cast (a few minutes). The sample is already read.' },
   // 2 · Manuscript
-  { id: 's4-line', screen: 'manuscript', anchor: 'manuscript-line', kind: 'real',
+  { id: 's4-line', screen: 'manuscript', anchor: 'detected-speakers', kind: 'real',
     title: 'Who says each line',
-    body: "The whole book, line by line, colour-coded by speaker. Tap a line to reassign the speaker, or set a quote's emotion." },
+    body: "The whole book, line by line, colour-coded by speaker. Pick a speaker to spotlight just their lines — or tap any line to reassign it or set a quote's emotion." },
   { id: 's5-boundary', screen: 'manuscript', anchor: 'chapter-boundary', kind: 'real',
     title: 'Chapters & paragraphs',
     body: 'Adjust where chapters begin and end, and merge or split paragraphs — drag the boundary handle (touch works too).' },
@@ -47,7 +47,7 @@ export const TOUR_STEPS: ReadonlyArray<TourStep> = [
   { id: 's7-drawer', screen: 'cast', anchor: 'profile-drawer', kind: 'real', opensDrawer: true,
     title: 'Give a character a voice',
     body: 'Open a character to read their profile and lines, design a voice from a description, preview it, and add emotion variants. This is where a character gets their sound.' },
-  { id: 's8-fullcast', screen: 'cast', anchor: null, kind: 'explain',
+  { id: 's8-fullcast', screen: 'cast', anchor: 'design-full-cast-btn', kind: 'explain',
     title: 'Design the whole cast',
     body: 'When you start a fresh book, Design full cast voices the whole roster in one pass.' },
   // 4 · Generate

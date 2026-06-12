@@ -287,6 +287,15 @@ export function CastView({
   const showDesignFullCast =
     (ttsEngine === 'qwen' && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) ||
     designRunningHere;
+  /* A Qwen project whose roster is already fully designed: keep the button
+     visible but disabled, so users (and the guided tour) can still see the
+     feature exists rather than have it vanish entirely. */
+  const fullyDesignedNothingToDo =
+    ttsEngine === 'qwen' &&
+    needsVoiceIds.length === 0 &&
+    variantWork.totalTasks === 0 &&
+    !designRunningHere &&
+    !designRunningElsewhere;
   useEffect(() => {
     if (designRunningHere || designRunningElsewhere) setScopeOpen(false);
   }, [designRunningHere, designRunningElsewhere]);
@@ -559,16 +568,17 @@ export function CastView({
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {(showDesignFullCast || designRunningElsewhere) && (
+            {(showDesignFullCast || designRunningElsewhere || fullyDesignedNothingToDo) && (
               <div className="relative">
                 <button
                   onClick={onDesignFullCast}
-                  disabled={designRunningElsewhere}
+                  disabled={designRunningElsewhere || fullyDesignedNothingToDo}
                   data-testid="design-full-cast"
+                  data-tour-id="design-full-cast-btn"
                   aria-haspopup="menu"
                   aria-expanded={scopeOpen}
                   className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
-                    designRunningElsewhere
+                    designRunningElsewhere || fullyDesignedNothingToDo
                       ? 'bg-ink/5 text-ink/40 cursor-not-allowed'
                       : designRunningHere
                         ? 'bg-ink/6 text-ink/70 hover:bg-ink/10'
@@ -577,7 +587,9 @@ export function CastView({
                   title={
                     designRunningElsewhere
                       ? 'A design run is already in progress for another book.'
-                      : undefined
+                      : fullyDesignedNothingToDo
+                        ? 'Every character already has a voice.'
+                        : undefined
                   }
                 >
                   {designRunningHere ? (
