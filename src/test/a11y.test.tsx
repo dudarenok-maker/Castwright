@@ -151,7 +151,7 @@ const library: Voice[] = [
 
 const meta: EditableBookMeta = {
   title: 'the Coalfall Commission',
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Marlow Side-Stories',
   narratorCredit: 'Anders Vale',
   genre: 'Fantasy',

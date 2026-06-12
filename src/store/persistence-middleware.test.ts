@@ -352,7 +352,7 @@ describe('persistenceMiddleware — payload shape', () => {
         saved: {
           'book-1': {
             title: 'Renamed',
-            author: 'Mike Dudarenok',
+            author: 'Marin Vale',
             series: 'NCT · Book 2',
             narratorCredit: 'Anders Vale',
             genre: 'Literary fiction',
@@ -367,7 +367,7 @@ describe('persistenceMiddleware — payload shape', () => {
       slice: 'state',
       patch: {
         title: 'Renamed',
-        author: 'Mike Dudarenok',
+        author: 'Marin Vale',
         series: 'NCT · Book 2',
         narratorCredit: 'Anders Vale',
         genre: 'Literary fiction',

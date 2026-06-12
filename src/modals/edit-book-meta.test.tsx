@@ -15,7 +15,7 @@ import type { LibraryBook } from '../lib/types';
 const baseBook: LibraryBook = {
   bookId: 'b1',
   title: 'The Northern Star',
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Northern Coast Trilogy',
   seriesPosition: 2,
   isStandalone: false,
@@ -69,7 +69,7 @@ describe('EditBookMetaModal — mount smoke', () => {
   it('seeds the form fields from the open book', () => {
     renderModal();
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The Northern Star');
-    expect((screen.getByLabelText('Author') as HTMLInputElement).value).toBe('Mike Dudarenok');
+    expect((screen.getByLabelText('Author') as HTMLInputElement).value).toBe('Marin Vale');
     expect((screen.getByLabelText('Series') as HTMLInputElement).value).toBe('Northern Coast Trilogy');
   });
 });
