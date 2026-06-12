@@ -280,7 +280,7 @@ export async function linkSeriesReuseAtAnalysis(
 
     /* Stable-key pass FIRST: a character that kept its deterministic write key
        (`voiceId ?? id`) across books IS the same voice, even when the analyzer
-       renamed it to something with no name-token overlap — the Unraveled
+       renamed it to something with no name-token overlap — the The Riptide
        narrator ("Narrator" → "Author"). The name scorer's 0.34 floor can't see
        this, so match on the key directly and prefer the most-recent earlier
        book. Confidence is 1: an identical write key is definitive, not fuzzy. */

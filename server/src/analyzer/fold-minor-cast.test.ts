@@ -319,7 +319,7 @@ describe('foldMinorCast', () => {
       makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('marty', { name: 'Marty', gender: 'neutral' }), // pet cat — 0 lines
       makeChar('verminion', { name: 'Verminion', gender: 'neutral' }), // imp — 0 lines
-      makeChar('verdi', { name: 'Verdi', gender: 'neutral' }), // pet dinosaur — 0 lines
+      makeChar('rufus', { name: 'Rufus', gender: 'neutral' }), // pet dinosaur — 0 lines
     ];
     const sentences = makeSentences([
       [1, 'narrator'],
@@ -333,7 +333,7 @@ describe('foldMinorCast', () => {
     const result = foldMinorCast(chars, sentences, { minLines: 3 });
 
     expect(result.characters.map((c) => c.id).sort()).toEqual(['narrator', 'wren']);
-    expect(result.dropped.sort()).toEqual(['Marty', 'Verdi', 'Verminion']);
+    expect(result.dropped.sort()).toEqual(['Marty', 'Rufus', 'Verminion']);
     expect(result.summary.droppedSilent).toBe(3);
     expect(result.summary.foldedCount).toBe(0);
     /* No unknown-male / unknown-female bucket — these aren't background
@@ -505,7 +505,7 @@ describe('foldMinorCast', () => {
       makeChar('wren', { name: 'Wren', gender: 'female' }),
       makeChar('the-jogger', { name: 'The Jogger', gender: 'male' }),
       makeChar('drooly-boy', { name: 'Drooly Boy', gender: 'male' }),
-      makeChar('iggy', { name: 'Iggy', gender: 'neutral' }), // pet, 0 stage-2 lines but must SURVIVE in nameOnly mode
+      makeChar('pib', { name: 'Pib', gender: 'neutral' }), // pet, 0 stage-2 lines but must SURVIVE in nameOnly mode
     ];
     const sentences: never[] = [];
 
@@ -515,12 +515,12 @@ describe('foldMinorCast', () => {
       'the-jogger': 'unknown-male',
       'drooly-boy': 'unknown-male',
     });
-    /* Iggy and Wren both survive — nameOnly skips the zero-line
+    /* Pib and Wren both survive — nameOnly skips the zero-line
        drop so a pet that the verifier will later kill (Phase 0b) is
        still visible on the live roster until that point. */
     expect(result.characters.map((c) => c.id).sort()).toEqual([
-      'iggy',
       'narrator',
+      'pib',
       'unknown-male',
       'wren',
     ]);

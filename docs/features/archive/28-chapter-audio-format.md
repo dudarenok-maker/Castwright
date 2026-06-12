@@ -136,11 +136,11 @@ Run with `VITE_USE_MOCKS=false`, sidecar up, ffmpeg on PATH.
 
 ## Canonical e2e fixture
 
-`server/src/__fixtures__/the-coalfall-commission.md` — Keeper of the Lost
-Cities bonus story by Shannon Messenger. Multi-character (Marlow, Oduvan,
-Ro, narrator). **Do not commit** — copyrighted. Future regression plans
-that need a full pipeline run should cite this file and the recipe above
-rather than inventing new fixtures.
+`server/src/__fixtures__/the-coalfall-commission.md` — _The Coalfall
+Commission_, a Castwright original. Multi-character (Marlow, Oduvan,
+Nim, narrator). Committed + owned, so it's safe to cite freely. Future
+regression plans that need a full pipeline run should cite this file and
+the recipe above rather than inventing new fixtures.
 
 ## Out of scope (follow-ups)
 

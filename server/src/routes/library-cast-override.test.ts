@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const AUTHOR = 'Shannon Messenger';
+const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const NOVELLA = 'Novella';
 const FULL_NOVEL = 'Full Novel';
@@ -61,7 +61,7 @@ const richElwin = {
   ageRange: 'adult',
   attributes: ['eccentric', 'reassuring', 'humorous'],
   aliases: ['Doc'],
-  description: 'The elvin physician at Foxfire — eccentric, kind, calm under pressure.',
+  description: 'The elvin physician at Saltmoor — eccentric, kind, calm under pressure.',
   tone: { warmth: 75, pace: 55, authority: 60 },
   evidence: [{ quote: "I'll have you patched up in no time.", note: 'novel moment' }],
   lines: 208,

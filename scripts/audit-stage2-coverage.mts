@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 /* Audit every analyzed book for stage-2 attribution coverage defects —
    chapters the per-chapter attribution model TRUNCATED or LOOPED (the
-   2026-06-05 Stellarlune ch12/ch18 forensics). Read-only: it reports, it never
+   2026-06-05 The Drowning Bell ch12/ch18 forensics). Read-only: it reports, it never
    writes.
 
    For each book it RE-PARSES the source EPUB (the same `parseEpub` the analyzer

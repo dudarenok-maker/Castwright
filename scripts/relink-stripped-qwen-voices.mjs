@@ -19,8 +19,8 @@
 
    Usage (from repo root):
      node scripts/relink-stripped-qwen-voices.mjs                 # dry-run, all books
-     node scripts/relink-stripped-qwen-voices.mjs --book Stellarlune
-     node scripts/relink-stripped-qwen-voices.mjs --apply --book Stellarlune
+     node scripts/relink-stripped-qwen-voices.mjs --book The Drowning Bell
+     node scripts/relink-stripped-qwen-voices.mjs --apply --book The Drowning Bell
 
    Env: WORKSPACE_DIR (default ../audiobook-workspace, then $WORKSPACE_DIR). */
 

@@ -7,7 +7,7 @@
 
 ## Problem
 
-On a real long-book Qwen run (*Unraveled*, Keeper of the Lost Cities), generation
+On a real long-book Qwen run (*The Riptide*, The Hollow Tide), generation
 appeared to stall. Live forensics (2026-06-08) found it was not frozen but
 **degrading 3×** (RTF 1.04 early → 2.82 late, 0.96× → 0.35× realtime) and
 periodically wedging. The causal chain:

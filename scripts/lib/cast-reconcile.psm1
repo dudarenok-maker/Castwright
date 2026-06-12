@@ -4,7 +4,7 @@
 # that no longer exist in cast.json, etc.). Extracted into a module so
 # Pester can exercise the archive/remove machinery without a real workspace.
 #
-# Motivating regression: "Unlocked" (mns_VoP0mLGvov) -- cast.json had 1
+# Motivating regression: "The Floodmark" (mns_VoP0mLGvov) -- cast.json had 1
 # character (Narrator), manuscript-edits.json had 4192 sentences across
 # 6 distinct characterIds, the analysis cache held a Narrator-only stage1
 # over a sparse chapterCast. The path forward there was to wipe + re-run

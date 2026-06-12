@@ -292,11 +292,11 @@ describe('RebaselineModal — whole-series aggregation', () => {
 
   it('collapses a divergent-id same-name sibling into ONE row (plan 122 name/alias)', async () => {
     /* Anchor book-1 has "Maerin" (id 'maerin'). A later volume detected her as
-       "Maerin Vacker" (different id, NO shared voiceId) — divergent write key.
+       "Maerin Vell" (different id, NO shared voiceId) — divergent write key.
        Name/alias collapse must fold her into the single anchor row, NOT render
-       a second "Maerin Vacker" row. */
+       a second "Maerin Vell" row. */
     getSeriesCast.mockResolvedValue({
-      characters: [{ ...char('maerin-vacker', 'Maerin Vacker', 200), sourceBookId: 'book-2' } as Character],
+      characters: [{ ...char('maerin-vell', 'Maerin Vell', 200), sourceBookId: 'book-2' } as Character],
     });
     const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
     render(
@@ -308,14 +308,14 @@ describe('RebaselineModal — whole-series aggregation', () => {
     /* getByLabelText throws if there were two "Maerin" rows — single row proves
        the collapse; the divergent-id name never spawns its own row. */
     await waitFor(() => expect(screen.getByLabelText('Rebaseline Maerin')).toBeInTheDocument());
-    expect(screen.queryByLabelText('Rebaseline Maerin Vacker')).toBeNull();
+    expect(screen.queryByLabelText('Rebaseline Maerin Vell')).toBeNull();
   });
 
   it('keeps a notLinkedTo sibling as a SEPARATE row (auto-collapse escape hatch)', async () => {
     getSeriesCast.mockResolvedValue({
       characters: [
         {
-          ...char('maerin-vacker', 'Maerin Vacker', 200),
+          ...char('maerin-vell', 'Maerin Vell', 200),
           sourceBookId: 'book-2',
           notLinkedTo: [{ bookId: 'book-1', characterId: 'maerin' }],
         } as Character,
@@ -329,7 +329,7 @@ describe('RebaselineModal — whole-series aggregation', () => {
     );
     await waitFor(() => expect(getSeriesCast).toHaveBeenCalledWith('book-1'));
     /* The user marked them intentionally different → both rows remain. */
-    await waitFor(() => expect(screen.getByLabelText('Rebaseline Maerin Vacker')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByLabelText('Rebaseline Maerin Vell')).toBeInTheDocument());
     expect(screen.getByLabelText('Rebaseline Maerin')).toBeInTheDocument();
   });
 

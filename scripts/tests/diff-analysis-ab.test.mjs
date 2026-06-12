@@ -19,7 +19,7 @@ import {
 test('diffRosters: identical rosters report no changes', () => {
   const chars = [
     { id: 'narrator', name: 'Narrator' },
-    { id: 'sophie', name: 'Sophie', aliases: ['Foster'] },
+    { id: 'wren', name: 'Wren', aliases: ['Foster'] },
   ];
   const d = diffRosters(chars, structuredClone(chars));
   assert.deepEqual(d.added, []);
@@ -33,19 +33,19 @@ test('diffRosters: identical rosters report no changes', () => {
 test('diffRosters: detects add / remove / rename / field deltas', () => {
   const base = [
     { id: 'narrator', name: 'Narrator' },
-    { id: 'sophie', name: 'Sophie', aliases: ['Foster'] },
-    { id: 'keefe', name: 'Keefe' },
+    { id: 'wren', name: 'Wren', aliases: ['Foster'] },
+    { id: 'marlow', name: 'Marlow' },
   ];
   const cand = [
     { id: 'narrator', name: 'Narrator' },
-    { id: 'sophie', name: 'Sophie Foster', aliases: ['Foster', 'Sophie E. Foster'] },
-    { id: 'dex', name: 'Dex' },
+    { id: 'wren', name: 'Wren Sparrow', aliases: ['Foster', 'Wren E. Foster'] },
+    { id: 'hart', name: 'Hart' },
   ];
   const d = diffRosters(base, cand);
-  assert.deepEqual(d.added, ['dex']);
-  assert.deepEqual(d.removed, ['keefe']);
-  assert.deepEqual(d.renamed, [{ id: 'sophie', from: 'Sophie', to: 'Sophie Foster' }]);
-  assert.ok(d.fieldDeltas.some((x) => x.id === 'sophie' && x.field === 'aliases'));
+  assert.deepEqual(d.added, ['hart']);
+  assert.deepEqual(d.removed, ['marlow']);
+  assert.deepEqual(d.renamed, [{ id: 'wren', from: 'Wren', to: 'Wren Sparrow' }]);
+  assert.ok(d.fieldDeltas.some((x) => x.id === 'wren' && x.field === 'aliases'));
 });
 
 test('diffRosters: alias order does not count as a delta', () => {
@@ -58,13 +58,13 @@ test('diffRosters: alias order does not count as a delta', () => {
 test('speakerAgreement: position-aligned within a chapter, rollup + per-chapter', () => {
   const base = [
     { id: 1, chapterId: 1, characterId: 'narrator' },
-    { id: 2, chapterId: 1, characterId: 'sophie' },
-    { id: 3, chapterId: 2, characterId: 'keefe' },
+    { id: 2, chapterId: 1, characterId: 'wren' },
+    { id: 3, chapterId: 2, characterId: 'marlow' },
   ];
   const cand = [
     { id: 1, chapterId: 1, characterId: 'narrator' },
-    { id: 2, chapterId: 1, characterId: 'keefe' }, // disagree
-    { id: 3, chapterId: 2, characterId: 'keefe' },
+    { id: 2, chapterId: 1, characterId: 'marlow' }, // disagree
+    { id: 3, chapterId: 2, characterId: 'marlow' },
   ];
   const a = speakerAgreement(base, cand);
   assert.equal(a.total, 3);
@@ -77,7 +77,7 @@ test('speakerAgreement: position-aligned within a chapter, rollup + per-chapter'
 test('speakerAgreement: aligns by ordinal up to the shorter chapter side', () => {
   const base = [
     { id: 1, chapterId: 1, characterId: 'narrator' },
-    { id: 2, chapterId: 1, characterId: 'sophie' },
+    { id: 2, chapterId: 1, characterId: 'wren' },
   ];
   const cand = [{ id: 1, chapterId: 1, characterId: 'narrator' }];
   const a = speakerAgreement(base, cand);
@@ -96,7 +96,7 @@ test('emotionAgreement: absent emotion equals neutral', () => {
 
 test('newlyNarrator: counts speech collapsed onto the narrator', () => {
   const base = [
-    { id: 1, chapterId: 1, characterId: 'sophie' },
+    { id: 1, chapterId: 1, characterId: 'wren' },
     { id: 2, chapterId: 1, characterId: 'narrator' },
   ];
   const cand = [

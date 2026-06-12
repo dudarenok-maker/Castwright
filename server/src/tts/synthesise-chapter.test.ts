@@ -798,7 +798,7 @@ describe('synthesiseChapter chapter-title beat', () => {
 /* ── plan 70d — buildSentenceGroups emits one group per sentence ─────
    Earlier code folded consecutive same-speaker sentences into one
    synth call to cut HTTP roundtrips. That folding produced a 207-
-   sentence narrator group on the canonical Keeper book that ran past
+   sentence narrator group on the canonical The Hollow Tide book that ran past
    the 30 s "Worker has gone quiet" watchdog and either timed out or
    hung at very large context sizes. Per-sentence groups: continuous
    progress ticks (one per sentence), bounded synth duration, no voice
@@ -840,7 +840,7 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
   });
 
   it('scales to a 207-sentence all-narrator chapter (the regression case)', () => {
-    /* Chapter 4 of the canonical Keeper book is a structured registry
+    /* Chapter 4 of the canonical The Hollow Tide book is a structured registry
        file — 207 narrator-only sentences. Pre-fix this collapsed to 1
        giant group; post-fix each becomes its own bounded synth call. */
     const sentences = Array.from({ length: 207 }, (_, i) =>

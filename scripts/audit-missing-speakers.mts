@@ -3,9 +3,9 @@
    reports, it never writes.
 
    (a) UNCAST — characters the prose tags with a dialogue beat
-       (`"…," Prentice repeated.`) but who never made it into cast.json, so
-       stage-2 dumped their lines on the narrator (the 2026-06-05 Stellarlune
-       ch19 "Prentice" bug). `validateRosterCoverage` vs cast.json names+aliases.
+       (`"…," Lessom repeated.`) but who never made it into cast.json, so
+       stage-2 dumped their lines on the narrator (the 2026-06-05 The Drowning Bell
+       ch19 "Lessom" bug). `validateRosterCoverage` vs cast.json names+aliases.
    (b) HALF-STATE (#529) — a speaker who IS in cast.json but has 0 attributed
        lines in a chapter that tags them (an interrupted re-analysis: stage-1
        added the name, stage-2 never re-attributed). `validateAttributionCoverage`
@@ -18,8 +18,8 @@
 
    Usage (from repo root):
      npx tsx scripts/audit-missing-speakers.mts
-     npx tsx scripts/audit-missing-speakers.mts --book Stellarlune
-     npx tsx scripts/audit-missing-speakers.mts --book Stellarlune --json
+     npx tsx scripts/audit-missing-speakers.mts --book The Drowning Bell
+     npx tsx scripts/audit-missing-speakers.mts --book The Drowning Bell --json
 
    Flags:
      --book <substr>   only audit books whose "Author — Title" label matches (ci)

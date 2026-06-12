@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* Repair a book whose re-analysis loop dropped narration data.
 
-   The 2026-06-05 Stellarlune incident: navigating a confirmed book into the
+   The 2026-06-05 The Drowning Bell incident: navigating a confirmed book into the
    analysing -> cast-confirm flow re-parsed the manuscript and re-ran analysis,
    which (a) cleared the `excluded` flags on non-narration chapters (Cover,
    Dedication, back-matter) so the book's status flipped back to 'analysing',
@@ -29,7 +29,7 @@
 
    Dry-run by default. Pass --apply to write.
 
-   Config via env (defaults target the Stellarlune incident):
+   Config via env (defaults target the The Drowning Bell incident):
      BOOK_DIR        live book dir (contains .audiobook/, audio/)
      BACKUP_BOOK_DIR known-good backup of the same book dir
      CACHE_FILE      analysis cache json (server/handoff/cache/<manuscriptId>.json)
@@ -46,10 +46,10 @@ const APPLY = process.argv.includes('--apply');
 
 const BOOK_DIR =
   process.env.BOOK_DIR ??
-  'C:/AudiobookWorkspace/books/Shannon Messenger/Keeper of the Lost Cities/Stellarlune';
+  'C:/AudiobookWorkspace/books/Della Renwick/The Hollow Tide/The Drowning Bell';
 const BACKUP_BOOK_DIR =
   process.env.BACKUP_BOOK_DIR ??
-  'C:/AudiobookWorkspace/.upgrade-backups/from-1.5.1-to-1.6.0-2026-06-03T08-50-28-849Z/books/Shannon Messenger/Keeper of the Lost Cities/Stellarlune';
+  'C:/AudiobookWorkspace/.upgrade-backups/from-1.5.1-to-1.6.0-2026-06-03T08-50-28-849Z/books/Della Renwick/The Hollow Tide/The Drowning Bell';
 const CACHE_FILE =
   process.env.CACHE_FILE ?? 'server/handoff/cache/mns_SrHkwRVFEu.json';
 

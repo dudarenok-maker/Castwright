@@ -21,10 +21,10 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const AUTHOR = 'Shannon Messenger';
+const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const KEEPER_BOOK = 'The Hollow Tide';
-const EXILE_BOOK = 'Exile';
+const EXILE_BOOK = 'The Ebb';
 const TIDEWATCHER_BOOK = 'The Tidewatcher’s Oath';
 const ALIAS_BOOK = 'Saltgrave';
 const OTHER_SERIES_BOOK = 'Different Series Book';
@@ -292,7 +292,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
   });
 
   it('returns 207 with failed entries when one sibling write throws', async () => {
-    /* Force writeJsonAtomic to fail on the The Tidewatcher’s Oath cast.json path so
+    /* Force writeJsonAtomic to fail on the Tidewatcher’s Oath cast.json path so
        the sibling-iteration partial-failure branch executes. */
     const { tidewatcherBookDirPath } = {
       tidewatcherBookDirPath: join(workspaceRoot, 'books', AUTHOR, SERIES, TIDEWATCHER_BOOK),

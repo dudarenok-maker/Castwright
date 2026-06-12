@@ -286,7 +286,7 @@ export interface OverrideLibraryCastResponse {
 }
 /* Manual continuity link to a prior series book — used when the
    auto-matcher's name-score floor missed a legitimate link (e.g. "Hart"
-   in book 1 vs "Dexter Alvin Diznee" in book 2). Server appends
+   in book 1 vs "Hartwell Brennan Vale" in book 2). Server appends
    source.name to the prior book's character.aliases on disk, then
    returns the matchedFrom payload the frontend dispatches via
    castActions.applyManualMatch so the "Continuity preserved" footer +
@@ -6356,10 +6356,10 @@ const mock = {
       { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
       { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
       { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
     ];
     const records: ResourceTelemetryRecord[] = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map(
       (rtf, i) => ({

@@ -95,7 +95,7 @@ per-sentence audio quality, not source fidelity).
 
 - Re-analyzing + regenerating the two damaged chapters (the user runs this once
   the app is on the new code).
-- Auditing non-EPUB (txt/pdf) books and the Unlocked guide book (re-parse id
+- Auditing non-EPUB (txt/pdf) books and the Floodmark guide book (re-parse id
   drift makes title-gated alignment unreliable — reported as skipped).
 - **Missing-speaker / roster coverage** — a speaker the prose tags but Phase-0a
   dropped from the roster (so stage-2 demotes their lines to narrator). That is a

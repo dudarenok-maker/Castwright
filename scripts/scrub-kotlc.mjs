@@ -29,6 +29,7 @@ const MAP = [
   ['Sophie Foster', 'Wren Sparrow'],
   ['Keefe Sencen', 'Marlow Halden'],
   ['Tam Song', 'Pell Marsh'],
+  ['Dexter Alvin Diznee', 'Hartwell Brennan Vale'],
   ['Lord Hunkyhair', 'Sir Singe'],
   ['Lord Cassius', 'Lord Vane'],
   ['Lady Galvin', 'Lady Wick'],
@@ -64,6 +65,9 @@ const MAP = [
   ['Galvin', 'Wick'],
   ['Hunkyhair', 'Singe'],
   // long-tail minor characters
+  ['Dexter', 'Hartwell'], // Dex's analyzer-named long form (Dex→Hart elsewhere)
+  ['Dexy', 'Hartie'],
+  ['Dizz', 'Bren'],
   ['Sweeney', 'Marrow'],
   ['Bronte', 'Castor'],
   ['Kenric', 'Aldous'],
@@ -74,6 +78,17 @@ const MAP = [
   ['Blur', 'Haze'],
   ['Trix', 'Quill'],
   ['Vika', 'Senna'],
+  // family surnames + pets + places (the long tail the early phases missed)
+  ['Vacker', 'Vell'],
+  ['Dizznee', 'Vale'],
+  ['Diznee', 'Vale'],
+  ['Ruewen', 'Reeve'],
+  ['Alvar', 'Varek'],
+  ['Iggy', 'Pib'],
+  ['Verdi', 'Rufus'],
+  ['Silveny', 'Lumen'],
+  ['Foxfire', 'Saltmoor'],
+  ['Eternalia', 'Tidehaven'],
   // NOTE: Blur/Ro/Bo are KotLC chars but ALSO common words (the `blur` DOM
   // event, `ro`/`bo` abbreviations) — context-only, handled by a manual pass,
   // NEVER blanket-renamed.

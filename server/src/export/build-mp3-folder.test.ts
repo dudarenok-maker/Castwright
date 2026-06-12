@@ -55,7 +55,7 @@ function makeState(over: Partial<BookStateJson> = {}): BookStateJson {
     bookId: 'demo__sa__test',
     manuscriptId: 'mns_test',
     title: 'the Coalfall Commission',
-    author: 'Shannon Messenger',
+    author: 'Della Renwick',
     series: 'Standalones',
     seriesPosition: null,
     isStandalone: true,

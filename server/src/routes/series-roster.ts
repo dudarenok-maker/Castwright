@@ -3,8 +3,8 @@
    Returns the confirmed cast from every prior book that shares the
    target book's (author, series) pair, with the target book itself
    excluded. Powers the Profile Drawer's manual continuity link picker
-   so the user can fold a duplicate ("Dexter Alvin Diznee") into the
-   canonical name from a prior volume ("Dex") when the auto-matcher's
+   so the user can fold a duplicate ("Hartwell Brennan Vale") into the
+   canonical name from a prior volume ("Hart") when the auto-matcher's
    name-score floor missed the connection.
 
    Thin wrapper around scanSeriesCharactersForBookId(). Standalones,

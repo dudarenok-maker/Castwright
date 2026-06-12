@@ -27,7 +27,7 @@ vi.mock('../analyzer/voice-style.js', () => ({
   generateVoiceStylePersona,
 }));
 
-const AUTHOR = 'Shannon Messenger';
+const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK = 'The Hollow Tide';
 

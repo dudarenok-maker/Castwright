@@ -44,7 +44,7 @@ owner: null
 ### Manual acceptance walkthrough
 
 1. **Cold boot, the Hollow Tide Saltgrave analysis** → start analysis on Saltgrave. Expected: under the "Detecting characters" phase card, the pill reads `Carried in from prior books in this series · ~30-50 characters` (one row per unique character across prior books). The console log entry "Carrying in N characters from prior books in this series (…)" reports the same N. Pre-fix: ~136.
-2. **Profile Drawer continuity-link picker** → in the cast view, open a character's profile and trigger the manual continuity-link picker. Expected: the per-book entries still show up separately (Wren-from-Keeper AND Wren-from-Exile are both selectable). This proves the producer scan + `GET /api/books/:bookId/series-roster` route were NOT affected by the dedup.
+2. **Profile Drawer continuity-link picker** → in the cast view, open a character's profile and trigger the manual continuity-link picker. Expected: the per-book entries still show up separately (Wren-from-Keeper AND Wren-from-The Ebb are both selectable). This proves the producer scan + `GET /api/books/:bookId/series-roster` route were NOT affected by the dedup.
 3. **Standalone book** → start analysis on a standalone (no series siblings). Expected: pill is omitted entirely; the prompt section is omitted entirely. Same behaviour as pre-fix.
 4. **Subset retry** → trigger a single-chapter retry on a series book. Expected: the per-chapter prompt's "Known characters from prior books in this series" section carries the deduped roster (same shape as the main run).
 

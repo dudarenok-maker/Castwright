@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const AUTHOR = 'Shannon Messenger';
+const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const PRIOR_BOOK = 'The Hollow Tide';
 const SOURCE_BOOK = 'New the Hollow Tide Book';

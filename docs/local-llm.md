@@ -229,7 +229,7 @@ necessarily the best quality/throughput trade. Before changing
 `src/lib/account-defaults.ts`), measure:
 
 1. **First-attempt validation rate** per model on Stage 2 across the
-   canonical e2e manuscript (`~/Downloads/Bonus Keefe Story.txt`). A model
+   canonical e2e manuscript (`server/src/__fixtures__/the-coalfall-commission.md`). A model
    that's "smarter" but burns a retry every chapter loses on wall-clock.
 2. **Wall-clock per chapter** with `keep_alive: '5m'` active. The reload tax
    is what dominates if the model isn't held resident.

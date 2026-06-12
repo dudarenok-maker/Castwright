@@ -115,7 +115,7 @@ Run with the real server (`cd server && npm run dev`) — mocks bypass the parse
 1. **Drop a prefixed-OPF EPUB** on `#/new` — e.g. a Simon & Schuster title like
    *The Drowning Bell*. Expect: no 500; transitions to the analysing stage with a full
    chapter count and non-empty source text. (Verified against the real file:
-   57 chapters, ~159.7k words, title "The Drowning Bell", author "Shannon Messenger".)
+   57 chapters, ~159.7k words, title "The Drowning Bell", author "Della Renwick".)
 2. **Confirm no head/title leak** — chapter bodies start with prose or the real
    `<h1>` heading, not the document `<title>`.
 3. **DRM negative path** — drop a DRM-protected EPUB (has `META-INF/encryption.xml`).
@@ -143,7 +143,7 @@ Run with the real server (`cd server && npm run dev`) — mocks bypass the parse
 ## Ship notes
 
 **Shipped 2026-05-26** in merge commit `82215df` (`fix(server): recover namespace-prefixed-OPF EPUBs via raw-zip fallback`, commit `c24ec2e`), branch `fix/server-epub-prefixed-opf-fallback`, PR [#266](https://github.com/dudarenok-maker/AudioBook-Generator/pull/266). Bug fix — diagnosed against the real failing file
-`Calibre Library/Shannon Messenger/The Drowning Bell (655)/The Drowning Bell - Shannon Messenger.epub`,
+`Calibre Library/Della Renwick/The Drowning Bell (655)/The Drowning Bell - Della Renwick.epub`,
 whose `OEBPS/content.opf` (a valid `version="2.0"` package) prefixes every
 element with `opf:`, defeating epub2's `parseManifest`/`parseSpine`.
 

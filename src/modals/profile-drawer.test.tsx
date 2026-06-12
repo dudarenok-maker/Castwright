@@ -345,9 +345,9 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
 });
 
 describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
-  const dexter: Character = {
-    id: 'dexter-alvin-diznee',
-    name: 'Dexter Alvin Diznee',
+  const hartwell: Character = {
+    id: 'hartwell-brennan-vale',
+    name: 'Hartwell Brennan Vale',
     role: 'character',
     color: 'eliza',
     lines: 271,
@@ -361,13 +361,13 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     lines: 12,
     scenes: 4,
   };
-  const priorDex: PriorMergeCandidate = {
+  const priorHart: PriorMergeCandidate = {
     id: 'hart',
     name: 'Hart',
     bookId: 'the Hollow Tide_1',
     bookTitle: 'The Hollow Tide',
   };
-  const priorKeefe: PriorMergeCandidate = {
+  const priorMarlow: PriorMergeCandidate = {
     id: 'marlow',
     name: 'Marlow',
     bookId: 'the Hollow Tide_1',
@@ -378,20 +378,20 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     /* The user might be on a tiny scene with just one new character —
        no in-book candidates, but prior series characters exist. The
        manual-link affordance must still surface. */
-    renderDrawer(dexter, { mergeCandidatesPrior: [priorDex], onLinkPrior: vi.fn() });
+    renderDrawer(hartwell, { mergeCandidatesPrior: [priorHart], onLinkPrior: vi.fn() });
     expect(
-      screen.getByRole('button', { name: /Merge Dexter into another character/i }),
+      screen.getByRole('button', { name: /Merge Hartwell into another character/i }),
     ).toBeTruthy();
   });
 
   it('renders both groups under the prior-books separator when both sets are non-empty', () => {
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [inBookSibling],
-      mergeCandidatesPrior: [priorDex],
+      mergeCandidatesPrior: [priorHart],
       onMerge: vi.fn(),
       onLinkPrior: vi.fn(),
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     const dialog = screen.getByRole('dialog');
     /* The prior-books separator labels the second group. */
@@ -405,13 +405,13 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
 
   it('routes a prior-option pick to onLinkPrior with (sourceId, targetBookId, targetCharacterId) and a "Link" button label', async () => {
     const onLinkPrior = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [inBookSibling],
-      mergeCandidatesPrior: [priorDex, priorKeefe],
+      mergeCandidatesPrior: [priorHart, priorMarlow],
       onMerge: vi.fn(),
       onLinkPrior,
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     /* Click the second prior row (Marlow) — picker fires onPickRosterEntry
        which writes `prior:1` to mergeTargetId. */
@@ -421,29 +421,29 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     /* Button label flips from "Merge" to "Link" when a prior is selected. */
     fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));
     await Promise.resolve();
-    expect(onLinkPrior).toHaveBeenCalledWith('dexter-alvin-diznee', 'the Hollow Tide_1', 'marlow');
+    expect(onLinkPrior).toHaveBeenCalledWith('hartwell-brennan-vale', 'the Hollow Tide_1', 'marlow');
   });
 
   it('still routes an in-book pick to onMerge when both groups are present', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
     const onLinkPrior = vi.fn();
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [inBookSibling],
-      mergeCandidatesPrior: [priorDex],
+      mergeCandidatesPrior: [priorHart],
       onMerge,
       onLinkPrior,
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     await Promise.resolve();
-    expect(onMerge).toHaveBeenCalledWith('dexter-alvin-diznee', 'wren-sparrow');
+    expect(onMerge).toHaveBeenCalledWith('hartwell-brennan-vale', 'wren-sparrow');
     expect(onLinkPrior).not.toHaveBeenCalled();
   });
 
   it('hides the merge button entirely when both groups are empty', () => {
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [],
       mergeCandidatesPrior: [],
       onMerge: vi.fn(),
@@ -454,11 +454,11 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
 
   it('surfaces an error when onLinkPrior rejects', async () => {
     const onLinkPrior = vi.fn().mockRejectedValueOnce(new Error('Cross-series link refused.'));
-    renderDrawer(dexter, {
-      mergeCandidatesPrior: [priorDex],
+    renderDrawer(hartwell, {
+      mergeCandidatesPrior: [priorHart],
       onLinkPrior,
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     fireEvent.click(screen.getByRole('option', { name: /Hart.*The Hollow Tide/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));

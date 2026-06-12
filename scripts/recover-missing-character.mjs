@@ -9,9 +9,9 @@
    minLines: 3) then drops anyone who did slip through with <3 attributed
    lines. The combined effect: an entire category of named characters
    silently absent from the cast roster. Concrete example caught in
-   docs/features/archive/96-recover-missing-character.md: Grizel (Fitz's goblin
-   bodyguard) and Sandor (Sophie's goblin bodyguard) both missing from
-   Neverseen's cast.json across all ~65 Phase 0a stage1 outputs.
+   docs/features/archive/96-recover-missing-character.md: Sela (Brann's goblin
+   bodyguard) and Garrow (Wren's goblin bodyguard) both missing from
+   Saltgrave's cast.json across all ~65 Phase 0a stage1 outputs.
 
    This script lets the user manually fill the gap WITHOUT re-running Phase 0a
    (which would just miss them again for the same reason). Layer 2 in
@@ -23,7 +23,7 @@
 
    Required:
      <bookDir>            path to the book directory containing .audiobook/
-     --name <Name>        display name (e.g. "Grizel")
+     --name <Name>        display name (e.g. "Sela")
      --gender <m|f>       'male' or 'female' (drives the goblin/ogre default voice slot later)
      --role <role>        free-text role (e.g. "Bodyguard", "Mentor", "Family Member")
 
@@ -62,7 +62,7 @@ export const DIALOGUE_VERBS = [
   'spat', 'barked', 'snarled', 'grumbled', 'muttered', 'murmured', 'sighed',
   'breathed', 'laughed', 'cried', 'interrupted', 'interjected', 'countered',
   'noted', 'teased', 'chimed', 'sang', 'complained',
-  // expansion — Prentice's own ch19 tags ("repeated", "agreed", "reminded")
+  // expansion — Lessom's own ch19 tags ("repeated", "agreed", "reminded")
   // plus common speech verbs the original set omitted.
   'repeated', 'agreed', 'reminded', 'demanded', 'prompted', 'protested',
   'wondered', 'clarified', 'corrected', 'offered', 'explained', 'admitted',

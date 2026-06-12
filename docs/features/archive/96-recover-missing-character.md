@@ -13,7 +13,7 @@ owner: dudarenok-maker
 
 ## Benefit / Rationale
 
-- **User:** unblocks the case where Phase 0a per-chapter detection misses a canonical-but-rarely-quoted named character — bodyguards / mentors / family who are referenced heavily in narration but rarely speak. Concrete example that motivated this plan: in `C:\AudiobookWorkspace\books\Shannon Messenger\The Hollow Tide\Saltgrave\.audiobook\cast.json`, Sela (Brann's goblin bodyguard) is absent entirely (0 detections across all ~65 Phase 0a stage1 outputs in `server/handoff/outbox/mns_S3qh0_FVnz-stage1-ch*.json`) and Garrow was detected in 1 chapter then folded out by `server/src/analyzer/fold-minor-cast.ts`'s `minLines: 3` threshold. The script gets them into the roster so the user can assign voices without waiting for a Phase 0a re-run.
+- **User:** unblocks the case where Phase 0a per-chapter detection misses a canonical-but-rarely-quoted named character — bodyguards / mentors / family who are referenced heavily in narration but rarely speak. Concrete example that motivated this plan: in `C:\AudiobookWorkspace\books\Della Renwick\The Hollow Tide\Saltgrave\.audiobook\cast.json`, Sela (Brann's goblin bodyguard) is absent entirely (0 detections across all ~65 Phase 0a stage1 outputs in `server/handoff/outbox/mns_S3qh0_FVnz-stage1-ch*.json`) and Garrow was detected in 1 chapter then folded out by `server/src/analyzer/fold-minor-cast.ts`'s `minLines: 3` threshold. The script gets them into the roster so the user can assign voices without waiting for a Phase 0a re-run.
 - **Technical:** avoids a Phase 0a re-run — re-running the same analyzer with the same prompt would miss the same character for the same reason (per `feedback_verify_reanalysis_actually_needed`). The script is also additive: appending one character entry + flipping per-sentence `characterId` is mechanical and reversible.
 - **Architectural:** establishes a manual-recovery seam BEFORE the analyzer-side fix in [plan 97](97-narrator-only-named-characters.md) lands. Layer 1 ships independently of Layer 2 so the user can fix the immediate Saltgrave gap without waiting for the systemic change, and Layer 2's regression plan can cite the Saltgrave recovery as the worked example.
 
@@ -57,7 +57,7 @@ The script is invoked from a terminal, not from the app — no URL hashes or red
 
 1. **Dry-run against the Saltgrave workspace book:**
    ```
-   node scripts/recover-missing-character.mjs "C:\AudiobookWorkspace\books\Shannon Messenger\The Hollow Tide\Saltgrave" --name Sela --gender female --role Bodyguard --description "Brann's goblin bodyguard"
+   node scripts/recover-missing-character.mjs "C:\AudiobookWorkspace\books\Della Renwick\The Hollow Tide\Saltgrave" --name Sela --gender female --role Bodyguard --description "Brann's goblin bodyguard"
    ```
    → expected output:
    ```

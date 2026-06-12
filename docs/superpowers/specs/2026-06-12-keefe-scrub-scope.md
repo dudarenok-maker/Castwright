@@ -5,7 +5,7 @@
 
 ## Goal
 
-Remove all *Keeper of the Lost Cities* (Shannon Messenger, third-party copyright)
+Remove all *Keeper of the Lost Cities* (Della Renwick, third-party copyright)
 content from the repository — used today as the de-facto test/mock dataset — and
 replace it with Castwright-owned content (**The Coalfall Commission** + the
 invented **Hollow Tide** series). Commit an owned canonical e2e manuscript so the

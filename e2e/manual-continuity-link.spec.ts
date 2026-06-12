@@ -1,6 +1,6 @@
 /* Browser-level golden path for the manual continuity-link flow.
  *
- * Driving the bug from the screenshot ("Dexter Alvin Diznee" / "Dex"
+ * Driving the bug from the screenshot ("Hartwell Brennan Vale" / "Hart"
  * couldn't be merged because the dropdown only listed in-book candidates):
  * on the confirm-cast view, opening a character's drawer and using
  * "Merge ... into another character" should now surface a "From prior

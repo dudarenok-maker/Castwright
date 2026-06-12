@@ -20,7 +20,7 @@
  *      override but the deterministic designed file
  *      `voices/qwen/qwen-<voiceId>.pt` EXISTS, reconstruct the override as
  *      { qwen: { name: `qwen-<voiceId>` } }. This is the only way to recover a
- *      voice whose override was lost in every book (e.g. Lord Cassius). The
+ *      voice whose override was lost in every book (e.g. Lord Vane). The
  *      runtime path never probes disk; this migration does, once, to heal data.
  *
  * DRY RUN BY DEFAULT — prints the planned writes and exits without touching

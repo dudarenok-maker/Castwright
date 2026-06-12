@@ -21,7 +21,7 @@ vi.mock('../lib/api', () => ({
 const oneBook: LibraryBook = {
   bookId: 'b1',
   title: 'The Hollow Tide',
-  author: 'Shannon Messenger',
+  author: 'Della Renwick',
   series: 'The Hollow Tide',
   seriesPosition: 1,
   isStandalone: false,
@@ -36,7 +36,7 @@ const oneBook: LibraryBook = {
 };
 
 const oneAuthor: LibraryAuthor = {
-  name: 'Shannon Messenger',
+  name: 'Della Renwick',
   series: [{ name: 'The Hollow Tide', books: [oneBook] }],
 };
 
@@ -110,7 +110,7 @@ describe('BookLibraryView — loading affordance', () => {
        anchor for the populated branch. (The series + book titles repeat
        in multiple cells, so we can't key off them.) */
     expect(
-      screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+      screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId('library-skeleton')).not.toBeInTheDocument();
     expect(screen.queryByText(/your library is empty/i)).not.toBeInTheDocument();
@@ -138,7 +138,7 @@ describe('BookLibraryView — loading affordance', () => {
       voiceIds: ['narrator', 'wren', 'brann'],
     };
     const author: LibraryAuthor = {
-      name: 'Shannon Messenger',
+      name: 'Della Renwick',
       series: [{ name: 'The Hollow Tide', books: [bookA, bookB] }],
     };
     renderView({ loaded: true, authors: [author] });
@@ -465,7 +465,7 @@ describe('BookLibraryView — loading affordance', () => {
       expect(screen.getByTestId('library-no-results')).toBeInTheDocument();
     });
     /* The book grid itself collapses out under the no-results branch. */
-    expect(screen.queryByText('Shannon Messenger')).not.toBeInTheDocument();
+    expect(screen.queryByText('Della Renwick')).not.toBeInTheDocument();
   });
 
   describe('view-mode toggle (plan 76)', () => {
@@ -490,7 +490,7 @@ describe('BookLibraryView — loading affordance', () => {
       renderView({ loaded: true, authors: [oneAuthor] });
       /* h2 with author name only renders in the card-view branch. */
       expect(
-        screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+        screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
       ).toBeInTheDocument();
       expect(screen.getByTestId('library-view-mode-card')).toHaveAttribute(
         'aria-pressed',
@@ -503,7 +503,7 @@ describe('BookLibraryView — loading affordance', () => {
       fireEvent.click(screen.getByTestId('library-view-mode-table'));
       /* Card branch's h2 disappears; table-row testid materialises. */
       expect(
-        screen.queryByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+        screen.queryByRole('heading', { level: 2, name: 'Della Renwick' }),
       ).not.toBeInTheDocument();
       const row = screen.getByTestId('library-table-row-b1');
       expect(row).toBeInTheDocument();
@@ -539,7 +539,7 @@ describe('BookLibraryView — loading affordance', () => {
       localStorage.setItem('library.viewMode', 'not-a-real-mode');
       renderView({ loaded: true, authors: [oneAuthor] });
       expect(
-        screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+        screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
       ).toBeInTheDocument();
     });
   });
@@ -593,7 +593,7 @@ describe('BookLibraryView — loading affordance', () => {
       /* Card branch: h2 with the author name renders. Table branch
          renders <tr data-testid="library-table-row-…"> instead. */
       expect(
-        screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+        screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
       ).toBeInTheDocument();
       expect(screen.queryByTestId('library-table-row-b1')).not.toBeInTheDocument();
       /* The stored preference is intact — desktop will resume table next session. */
@@ -606,7 +606,7 @@ describe('BookLibraryView — loading affordance', () => {
       renderView({ loaded: true, authors: [oneAuthor] });
       expect(screen.getByTestId('library-table-row-b1')).toBeInTheDocument();
       expect(
-        screen.queryByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+        screen.queryByRole('heading', { level: 2, name: 'Della Renwick' }),
       ).not.toBeInTheDocument();
     });
   });
@@ -645,7 +645,7 @@ describe('BookLibraryView — loading affordance', () => {
     );
     expect(screen.queryByTestId('library-skeleton')).not.toBeInTheDocument();
     expect(
-      screen.getByRole('heading', { level: 2, name: 'Shannon Messenger' }),
+      screen.getByRole('heading', { level: 2, name: 'Della Renwick' }),
     ).toBeInTheDocument();
   });
 });

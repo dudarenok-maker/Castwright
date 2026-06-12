@@ -82,7 +82,7 @@ describe('validateStage2Coverage', () => {
 
   it('does NOT flag normal analyzer compression (coverage ~0.7, ending present)', () => {
     // The attribution legitimately drops/merges minor fragments — a healthy
-    // chapter can read ~70% coverage and still reach its ending (Keeper ch22).
+    // chapter can read ~70% coverage and still reach its ending (The Hollow Tide ch22).
     const { body, sentences } = bodyOf(20);
     // keep 14 of 20 sentences (incl. the last) → ~0.7 coverage, ending intact
     const compressed = sentences.filter((_, i) => i < 13 || i === 19);

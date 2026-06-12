@@ -153,7 +153,7 @@ describe('useReverseLocalAnalyzerGuard', () => {
           bookId: 'b_marlow',
           manuscriptId: 'm_marlow',
           title: 'Library Title for Marlow',
-          author: 'Shannon Messenger',
+          author: 'Della Renwick',
           series: 'The Hollow Tide',
           chapters: [],
           cast: [],

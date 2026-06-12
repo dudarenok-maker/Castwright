@@ -20,7 +20,7 @@ Each task is self-contained for a **fresh subagent with zero conversation contex
 - **Touch only the files named in the task's "Files" block.** Read only the files the task names. Do not refactor adjacent code.
 - **Follow the steps in order**, run the exact commands shown, and confirm the stated "Expected" output before moving on. If a command's output differs, stop and report — do not improvise past a red step.
 - **Commit** with the task's shown message at the end; one commit per task.
-- **Do NOT touch** any `Keefe` / `Bonus Keefe Story` / `Keefe Side-Stories` strings (piece #2), or `LICENSE`/`NOTICE` (piece #3).
+- **Do NOT touch** any `Marlow` / `the Coalfall Commission` / `Marlow Side-Stories` strings (piece #2), or `LICENSE`/`NOTICE` (piece #3).
 - **Covers are already staged** in git-ignored `public/marketing-covers/` (planning did this); Wave C only verifies them.
 - **Dependencies:** Wave A tasks are independent of B/C and ship on their own. Within B, do tasks in order (B1→B9). Wave C needs B complete.
 - **Capture tasks need chromium:** `npx playwright install chromium` (one-time) before any `capture:marketing` run.
@@ -64,7 +64,7 @@ A handful of steps say "read file X, confirm field/signature Y, then implement."
 - **Run one frontend test file:** `npx vitest run <path>` (single-run, no watch).
 - **Run one server test file:** `cd server && npx vitest run <path>`.
 - **Commit** at the end of each task with the shown message.
-- Replace **only** the `author` / `displayName` value `Mike Dudarenok`. **Do NOT** touch any `Keefe`/`Bonus Keefe Story` titles or `Keefe Side-Stories` series strings — those belong to piece #2.
+- Replace **only** the `author` / `displayName` value `Mike Dudarenok`. **Do NOT** touch any `Marlow`/`the Coalfall Commission` titles or `Marlow Side-Stories` series strings — those belong to piece #2.
 
 ---
 
@@ -200,7 +200,7 @@ Change only the author/name string value. In `edit-book-meta.test.tsx:72`, the a
 ```ts
     expect((screen.getByLabelText('Author') as HTMLInputElement).value).toBe('Marin Vale');
 ```
-Leave `'Bonus Keefe Story'` titles and `'Keefe Side-Stories'` series strings untouched (piece #2).
+Leave `'the Coalfall Commission'` titles and `'Marlow Side-Stories'` series strings untouched (piece #2).
 
 - [ ] **Step 2: Confirm no stray name in test sources**
 
@@ -1131,4 +1131,4 @@ git commit -m "docs(e2e): finalize marketing capture set" --allow-empty
 
 - **Spec coverage:** name scrub (A) ✓, additive Hollow Tide set under flag (B2/B3) ✓, `.env.marketing` + dedicated playwright config (B1/B5) ✓, determinism via emit-once-and-hang (B4) ✓, scene registry + runner + commands + README (B6–B8) ✓, covers (C1) ✓, account/profile/voice-library scenes (C2/C3) ✓, phone/tablet (C4) ✓, git-ignored output (B7) ✓, harness out of gate (C5) ✓.
 - **Known verify-then-implement points (precise, not placeholders):** the exact `LibraryBook` cover-URL field name (B2 Step 3), the analysing/generation mock callback signatures (B4 Step 1), the profile-drawer test id (C3), and whether any Account sub-card needs a mock (C2). Each names the exact file to read.
-- **Deferred to sibling pieces:** companion capture (#1b), Keefe character scrub (#2), legal/docs name scrub (#3).
+- **Deferred to sibling pieces:** companion capture (#1b), Marlow character scrub (#2), legal/docs name scrub (#3).

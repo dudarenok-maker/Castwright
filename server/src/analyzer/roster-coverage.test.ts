@@ -24,7 +24,7 @@ afterEach(() => {
 /* The shape of the canonical bug, abbreviated: Aldous (on the roster) talks to
    Lessom (NOT on the roster), whose replies are tagged but uncast. */
 const LESSOM_BODY = [
-  '"Because I have a proposition for the most talented Keeper I’ve ever met."',
+  '"Because I have a proposition for the most talented mind I’ve ever met."',
   '"The most talented," Lessom repeated, tucking his dreadlocks behind his ears.',
   '"That is some heavy flattery," Lessom said slowly.',
   '"We aren’t," Aldous agreed.',
@@ -53,7 +53,7 @@ describe('validateRosterCoverage', () => {
     // Indexing only the last token mis-flagged every main-cast member as missing
     // (caught by the live The Drowning Bell audit).
     const body = '"Wait," Wren said. "Now," Wren asked. "Fine," Hart agreed.';
-    const v = validateRosterCoverage(body, ['Wren Sparrow', 'Hart Dizznee']);
+    const v = validateRosterCoverage(body, ['Wren Sparrow', 'Hart Vale']);
     expect(v.ok).toBe(true);
   });
 

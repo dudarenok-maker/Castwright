@@ -438,7 +438,7 @@ export async function runStage1WithRosterGuard<
 
 /* Per-chapter attribution-drift check — the secondary net. The book-wide
    `attributionDriftExceeded` (analysis.ts) dilutes a single damaged chapter
-   below its 5% threshold (the The Drowning Bell ch19 ~30 demotions vanished against a
+   below its 5% threshold (the Drowning Bell ch19 ~30 demotions vanished against a
    whole-book denominator). This flags a chapter whose demotion rate is high on
    its own. WARN-only at the call site — a narration-heavy chapter can
    legitimately demote a lot, so this informs rather than aborts. */

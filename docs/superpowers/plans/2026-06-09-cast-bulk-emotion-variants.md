@@ -71,7 +71,7 @@ describe('persistEmotionVariant', () => {
       join(bookDir, 'cast.json'),
       JSON.stringify({
         characters: [
-          { id: 'sophie', voiceId: 'sophie', overrideTtsVoices: { qwen: { name: 'qwen-sophie' } } },
+          { id: 'wren', voiceId: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } },
         ],
       }),
     );
@@ -81,17 +81,17 @@ describe('persistEmotionVariant', () => {
   });
 
   it('records the variant slot without clobbering the base name', async () => {
-    await persistEmotionVariant(bookDir, 'sophie', 'angry', 'qwen-sophie__angry');
+    await persistEmotionVariant(bookDir, 'wren', 'angry', 'qwen-wren__angry');
     const cast = JSON.parse(await readFile(join(bookDir, 'cast.json'), 'utf8'));
-    expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe('qwen-sophie');
+    expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe('qwen-wren');
     expect(cast.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({
-      name: 'qwen-sophie__angry',
+      name: 'qwen-wren__angry',
     });
   });
 
   it('preserves a sibling variant when adding another', async () => {
-    await persistEmotionVariant(bookDir, 'sophie', 'angry', 'qwen-sophie__angry');
-    await persistEmotionVariant(bookDir, 'sophie', 'sad', 'qwen-sophie__sad');
+    await persistEmotionVariant(bookDir, 'wren', 'angry', 'qwen-wren__angry');
+    await persistEmotionVariant(bookDir, 'wren', 'sad', 'qwen-wren__sad');
     const cast = JSON.parse(await readFile(join(bookDir, 'cast.json'), 'utf8'));
     expect(Object.keys(cast.characters[0].overrideTtsVoices.qwen.variants).sort()).toEqual([
       'angry',
@@ -194,22 +194,22 @@ it('scope:variants designs each task emotion and persists the slot', async () =>
   // ARRANGE: a confirmed book whose cast has a base voice but no variants.
   const { bookId, bookDir } = await seedConfirmedBook({
     characters: [
-      { id: 'sophie', voiceId: 'sophie', ttsEngine: 'qwen',
-        voiceStyle: 'warm, bright', overrideTtsVoices: { qwen: { name: 'qwen-sophie' } } },
+      { id: 'wren', voiceId: 'wren', ttsEngine: 'qwen',
+        voiceStyle: 'warm, bright', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } },
     ],
   });
 
-  // ACT: start a variants-scope job for sophie:angry and read the SSE to completion.
+  // ACT: start a variants-scope job for wren:angry and read the SSE to completion.
   const events = await runDesignJobToCompletion(bookId, {
     modelKey: 'qwen-base',
     scope: 'variants',
     characterIds: [],
-    variantTasks: [{ characterId: 'sophie', emotions: ['angry'] }],
+    variantTasks: [{ characterId: 'wren', emotions: ['angry'] }],
   });
 
   // ASSERT: a variant_designed event fired and the slot is on disk.
   expect(events).toContainEqual(
-    expect.objectContaining({ type: 'variant_designed', characterId: 'sophie', emotion: 'angry' }),
+    expect.objectContaining({ type: 'variant_designed', characterId: 'wren', emotion: 'angry' }),
   );
   const cast = await readCastJson(bookDir);
   expect(cast.characters[0].overrideTtsVoices.qwen.variants.angry).toBeTruthy();
@@ -217,13 +217,13 @@ it('scope:variants designs each task emotion and persists the slot', async () =>
 
 it('scope:variants skips a variant whose base is missing', async () => {
   const { bookId } = await seedConfirmedBook({
-    characters: [{ id: 'fitz', voiceId: 'fitz', ttsEngine: 'qwen' }], // no qwen.name = no base
+    characters: [{ id: 'brann', voiceId: 'brann', ttsEngine: 'qwen' }], // no qwen.name = no base
   });
   const events = await runDesignJobToCompletion(bookId, {
     modelKey: 'qwen-base',
     scope: 'variants',
     characterIds: [],
-    variantTasks: [{ characterId: 'fitz', emotions: ['angry'] }],
+    variantTasks: [{ characterId: 'brann', emotions: ['angry'] }],
   });
   expect(events).toContainEqual(expect.objectContaining({ type: 'character_skipped' }));
   expect(events).not.toContainEqual(expect.objectContaining({ type: 'variant_designed' }));
@@ -231,13 +231,13 @@ it('scope:variants skips a variant whose base is missing', async () => {
 
 it('scope:both designs base then its variants for one character', async () => {
   const { bookId } = await seedConfirmedBook({
-    characters: [{ id: 'keefe', voiceId: 'keefe', ttsEngine: 'qwen', voiceStyle: 'sly' }],
+    characters: [{ id: 'marlow', voiceId: 'marlow', ttsEngine: 'qwen', voiceStyle: 'sly' }],
   });
   const events = await runDesignJobToCompletion(bookId, {
     modelKey: 'qwen-base',
     scope: 'both',
-    characterIds: ['keefe'],
-    variantTasks: [{ characterId: 'keefe', emotions: ['whisper'] }],
+    characterIds: ['marlow'],
+    variantTasks: [{ characterId: 'marlow', emotions: ['whisper'] }],
   });
   const order = events.filter((e) => e.type === 'character_designed' || e.type === 'variant_designed')
     .map((e) => e.type);
@@ -757,15 +757,15 @@ const qwen = (id: string, variants: Record<string, { name: string }> = {}, name 
 
 describe('buildVariantTasks', () => {
   it('emits only in-use emotions that lack a designed variant, base present', () => {
-    const chars = [qwen('sophie', { angry: { name: 'x' } })];
-    const used = new Map([['sophie', new Set(['angry', 'excited'])]]);
-    expect(buildVariantTasks(chars, used)).toEqual([{ characterId: 'sophie', emotions: ['excited'] }]);
+    const chars = [qwen('wren', { angry: { name: 'x' } })];
+    const used = new Map([['wren', new Set(['angry', 'excited'])]]);
+    expect(buildVariantTasks(chars, used)).toEqual([{ characterId: 'wren', emotions: ['excited'] }]);
   });
 
   it('excludes a character with no base voice (needs base first)', () => {
-    const fitz = { id: 'fitz', name: 'fitz', ttsEngine: 'qwen' } as Character;
-    const used = new Map([['fitz', new Set(['angry'])]]);
-    expect(buildVariantTasks([fitz], used)).toEqual([]);
+    const brann = { id: 'brann', name: 'brann', ttsEngine: 'qwen' } as Character;
+    const used = new Map([['brann', new Set(['angry'])]]);
+    expect(buildVariantTasks([brann], used)).toEqual([]);
   });
 
   it('excludes characters with no in-use emotions', () => {
@@ -776,12 +776,12 @@ describe('buildVariantTasks', () => {
 
 describe('variantWorkCounts', () => {
   it('counts total missing variants across the cast', () => {
-    const chars = [qwen('sophie', { angry: { name: 'x' } }), qwen('keefe')];
+    const chars = [qwen('wren', { angry: { name: 'x' } }), qwen('marlow')];
     const used = new Map([
-      ['sophie', new Set(['angry', 'excited'])],
-      ['keefe', new Set(['whisper', 'sad'])],
+      ['wren', new Set(['angry', 'excited'])],
+      ['marlow', new Set(['whisper', 'sad'])],
     ]);
-    expect(variantWorkCounts(chars, used)).toBe(3); // sophie:excited + keefe:whisper,sad
+    expect(variantWorkCounts(chars, used)).toBe(3); // wren:excited + marlow:whisper,sad
   });
 });
 ```
@@ -1017,9 +1017,9 @@ it('opens the scope picker and dispatches a variants-scope design', async () => 
   const store = makeCastStore({
     ttsEngine: 'qwen',
     characters: [
-      { id: 'sophie', name: 'Sophie', ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-sophie' } } },
+      { id: 'wren', name: 'Wren', ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } },
     ],
-    sentences: [{ id: 1, characterId: 'sophie', emotion: 'angry', text: '!' }],
+    sentences: [{ id: 1, characterId: 'wren', emotion: 'angry', text: '!' }],
   });
   renderCast(store);
   await userEvent.click(screen.getByTestId('design-full-cast'));
@@ -1031,7 +1031,7 @@ it('opens the scope picker and dispatches a variants-scope design', async () => 
       type: 'castDesign/designAllRequested',
       payload: expect.objectContaining({
         scope: 'variants',
-        variantTasks: [{ characterId: 'sophie', emotions: ['angry'] }],
+        variantTasks: [{ characterId: 'wren', emotions: ['angry'] }],
       }),
     }),
   );
@@ -1308,12 +1308,12 @@ it('cast row shows the variant glyph strip and not the legacy count badge', () =
   const store = makeCastStore({
     ttsEngine: 'qwen',
     characters: [
-      { id: 'sophie', name: 'Sophie', voiceState: 'generated', ttsEngine: 'qwen',
-        overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: { angry: { name: 'x' } } } } },
+      { id: 'wren', name: 'Wren', voiceState: 'generated', ttsEngine: 'qwen',
+        overrideTtsVoices: { qwen: { name: 'qwen-wren', variants: { angry: { name: 'x' } } } } },
     ],
     sentences: [
-      { id: 1, characterId: 'sophie', emotion: 'angry', text: '!' },
-      { id: 2, characterId: 'sophie', emotion: 'excited', text: '!' },
+      { id: 1, characterId: 'wren', emotion: 'angry', text: '!' },
+      { id: 2, characterId: 'wren', emotion: 'excited', text: '!' },
     ],
   });
   renderCast(store);

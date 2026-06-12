@@ -83,3 +83,19 @@ test('Tam (KotLC Tam Song) maps to Pell — no collision with Keefe', () => {
   assert.equal(scrubText('Keefe and Tam'), 'Marlow and Pell');
   assert.equal(scrubText('Tam Song'), 'Pell Marsh');
 });
+
+test('Dex long-form (Dexter Alvin Diznee) + derived forms map consistently', () => {
+  assert.equal(scrubText('Dexter Alvin Diznee'), 'Hartwell Brennan Vale');
+  assert.equal(scrubText("id: 'dexter-alvin-diznee'"), "id: 'hartwell-brennan-vale'");
+  assert.equal(scrubText('Dexter and Dexy and Dizz'), 'Hartwell and Hartie and Bren');
+});
+
+test('long-tail surnames / pets / places', () => {
+  assert.equal(scrubText('Maerin Vacker'), 'Maerin Vell');
+  assert.equal(scrubText('Hart Dizznee'), 'Hart Vale');
+  assert.equal(scrubText('Corvin Ruewen'), 'Corvin Reeve');
+  assert.equal(scrubText('Iggy and Verdi at Foxfire near Eternalia'),
+    'Pib and Rufus at Saltmoor near Tidehaven');
+  // common-word neighbours stay intact (bounded source tokens)
+  assert.equal(scrubText('the verdict and the index'), 'the verdict and the index');
+});

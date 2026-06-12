@@ -114,7 +114,7 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
     }),
     withGradient({
       id: 'v_keeper',
-      character: 'The Lighthouse Keeper',
+      character: 'The Lighthouse The Hollow Tide',
       bookTitle: 'Solway Bay',
       bookId: 'sb',
       bookSeries: 'Northern Coast Trilogy',

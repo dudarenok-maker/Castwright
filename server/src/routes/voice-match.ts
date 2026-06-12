@@ -298,7 +298,7 @@ voiceMatchRouter.post('/:bookId/voice-match', async (req: Request, res: Response
            mates — for EVERY character, not just generic role-names. Matching a
            real character library-wide let an unrelated author/series's same-
            named character grab a designed voice (a Castwright standalone's
-           "Pell Hollis" claiming Shannon Messenger's "Pell"). Cross-series reuse
+           "Pell Hollis" claiming Della Renwick's "Pell"). Cross-series reuse
            stays available as an explicit Voice-library assignment; it is never
            a silent auto-match. */
         if (!seriesMateBookIds.has(v.bookId)) continue;

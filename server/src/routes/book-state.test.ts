@@ -894,7 +894,7 @@ describe('book-state router — backfills missing cast.lines from attribution', 
      roster.ts mints `<id>_from_<book>` without a `lines` field, and nothing
      rewrites it after analysis attributes sentences to it) rendered a blank
      line count in the cast view even though the manuscript attributes lines to
-     it (the Unlocked "Councilor Linnet" case). The GET handler now derives the
+     it (The Floodmark "Councilor Linnet" case). The GET handler now derives the
      count from manuscript-edits.json and fills it in when the row lacks one,
      without clobbering counts the analyzer already stamped. */
   const LINES_TITLE = 'Lines Backfill Test';

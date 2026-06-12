@@ -1,7 +1,7 @@
 /* Integration tests for the cast/:characterId/not-linked-to router (plan 101).
 
    Seeds two the Hollow Tide books on disk: book A ("The Hollow Tide")
-   with a "wren" character, book B ("Exile") with a "wren" character
+   with a "wren" character, book B ("The Ebb") with a "wren" character
    that the analyzer named the same way but is intentionally a separate
    variant. The tests assert:
 
@@ -21,10 +21,10 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const AUTHOR = 'Shannon Messenger';
+const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const KEEPER_BOOK = 'The Hollow Tide';
-const EXILE_BOOK = 'Exile';
+const EXILE_BOOK = 'The Ebb';
 const OTHER_BOOK = 'Other Series Book';
 const STANDALONE = 'Some Standalone';
 

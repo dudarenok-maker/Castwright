@@ -505,7 +505,7 @@ describe('POST /api/books/:bookId/generation', () => {
 
   it('catch-up replay skips in-scope chapters so a force-regen does not snap back to "Done"', async () => {
     /* Repro for screenshot 2026-05-21 174722: user changed a voice setting
-       on Exile (every chapter Done with audio on disk), hit "Regenerate
+       on The Ebb (every chapter Done with audio on disk), hit "Regenerate
        this chapter" on ch3, the activity log fired the right events but
        the chapter row immediately snapped back to "Done" and no progress
        UI ever appeared. Root cause: the catch-up replay (designed to snap
@@ -525,7 +525,7 @@ describe('POST /api/books/:bookId/generation', () => {
     const audioRoot = join(bookDir, 'audio');
     if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
     fs.mkdirSync(audioRoot, { recursive: true });
-    /* Both chapters have audio on disk before the request — like Exile. */
+    /* Both chapters have audio on disk before the request — like The Ebb. */
     fs.writeFileSync(join(audioRoot, '01-chapter-one.mp3'), 'PRIOR-ch1');
     fs.writeFileSync(join(audioRoot, '01-chapter-one.segments.json'), '{}');
     fs.writeFileSync(join(audioRoot, '02-chapter-two.mp3'), 'PRIOR-ch2');

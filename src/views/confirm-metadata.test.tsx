@@ -16,7 +16,7 @@ const candidate: ImportCandidate = {
   tempId: 'imp_test',
   format: 'epub',
   title: 'The Hollow Tide',
-  author: 'Shannon Messenger',
+  author: 'Della Renwick',
   series: 'The Hollow Tide',
   seriesPosition: null /* Mirrors the screenshot: parser left position blank. */,
   sourceText: 'body',
@@ -29,7 +29,7 @@ const libraryBook = (
   overrides: Partial<LibraryBook> & Pick<LibraryBook, 'bookId'>,
 ): LibraryBook => ({
   title: overrides.bookId,
-  author: 'Shannon Messenger',
+  author: 'Della Renwick',
   series: 'The Hollow Tide',
   seriesPosition: null,
   isStandalone: false,
@@ -98,15 +98,15 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     const user = userEvent.setup();
     renderView([
       libraryBook({
-        bookId: 'shannon-messenger__keeper__exile',
-        title: 'Exile',
+        bookId: 'della-renwick__the-hollow-tide__the-ebb',
+        title: 'The Ebb',
         seriesPosition: 2,
       }),
     ]);
     const bookNum = screen.getByPlaceholderText('1');
     await user.type(bookNum, '2');
     expect(screen.getByText(/heads-up/i)).toBeInTheDocument();
-    expect(screen.getByText(/Exile/)).toBeInTheDocument();
+    expect(screen.getByText(/The Ebb/)).toBeInTheDocument();
   });
 
   it('does not warn when the same number exists in a different series', async () => {

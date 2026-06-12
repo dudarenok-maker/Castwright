@@ -34,9 +34,9 @@
 
    Usage (from repo root, server running):
      npx tsx scripts/repair-missing-speakers.mts                      # dry-run: audit ALL books
-     npx tsx scripts/repair-missing-speakers.mts --book Stellarlune   # dry-run: one book
+     npx tsx scripts/repair-missing-speakers.mts --book The Drowning Bell   # dry-run: one book
      npx tsx scripts/repair-missing-speakers.mts --apply              # re-run + verify ALL affected books
-     npx tsx scripts/repair-missing-speakers.mts --book Stellarlune --apply
+     npx tsx scripts/repair-missing-speakers.mts --book The Drowning Bell --apply
 
    Flags:
      --book <substr>     only books whose "Author — Title" label matches (ci).

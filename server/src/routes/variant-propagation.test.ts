@@ -21,8 +21,8 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper';
+const AUTHOR = 'Della Renwick';
+const SERIES = 'The Hollow Tide';
 const OTHER_SERIES = 'Unrelated';
 
 let workspaceRoot: string;

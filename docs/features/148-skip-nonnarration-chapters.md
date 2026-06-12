@@ -81,7 +81,7 @@ title heuristic caught the chapter.
 - A provider call that never resolves causes the chapter to fail with
   `ChapterSynthTimeoutError` within `callTimeoutMs` (driven by fake timers), the
   derived signal is aborted, and the error is not retried. (automated)
-- Manual: re-import the the Hollow Tide EPUB → chapters 52–59 land pre-excluded; a forced
+- Manual: re-import the Hollow Tide EPUB → chapters 52–59 land pre-excluded; a forced
   generation of an excluded degenerate chapter fails fast instead of hanging.
 
 ## Test plan

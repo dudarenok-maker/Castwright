@@ -133,7 +133,7 @@ function makeBook(over: Partial<LibraryBook> = {}): LibraryBook {
   return {
     bookId: 'b1',
     title: 'the Coalfall Commission',
-    author: 'Shannon Messenger',
+    author: 'Della Renwick',
     series: 'Standalones',
     seriesPosition: null,
     isStandalone: true,
@@ -213,7 +213,7 @@ describe('AnalysingRoute manuscriptId derivation', () => {
       libraryActions.hydrate({
         authors: [
           {
-            name: 'Shannon Messenger',
+            name: 'Della Renwick',
             series: [
               { name: 'Standalones', books: [makeBook({ manuscriptId: 'mns-from-library' })] },
             ],
@@ -306,7 +306,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       libraryActions.hydrate({
         authors: [
           {
-            name: 'Shannon Messenger',
+            name: 'Della Renwick',
             series: [
               {
                 name: 'Standalones',
@@ -411,7 +411,7 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     getLibraryMock.mockResolvedValue({
       authors: [
         {
-          name: 'Shannon Messenger',
+          name: 'Della Renwick',
           series: [
             {
               name: 'Standalones',
@@ -462,7 +462,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
       libraryActions.hydrate({
         authors: [
           {
-            name: 'Shannon Messenger',
+            name: 'Della Renwick',
             series: [
               {
                 name: 'Standalones',
@@ -534,7 +534,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     getLibraryMock.mockResolvedValue({
       authors: [
         {
-          name: 'Shannon Messenger',
+          name: 'Della Renwick',
           series: [
             {
               name: 'Standalones',
@@ -567,7 +567,7 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
       slice: 'state',
       patch: expect.objectContaining({
         title: "the Coalfall Commission (Director's Cut)",
-        author: 'Shannon Messenger',
+        author: 'Della Renwick',
         isStandalone: true,
         seriesPosition: null,
       }),

@@ -228,8 +228,8 @@ function buildSeriesFromTitleEpub() {
   const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
-    <dc:title>Everblaze (Keeper of the Lost Cities Book 3)</dc:title>
-    <dc:creator opf:role="aut">Shannon Messenger</dc:creator>
+    <dc:title>The Tidewatcher’s Oath (The Hollow Tide Book 3)</dc:title>
+    <dc:creator opf:role="aut">Della Renwick</dc:creator>
     <dc:identifier id="bookid">urn:uuid:fixture-sft-0001</dc:identifier>
     <dc:language>en</dc:language>
   </metadata>
@@ -250,7 +250,7 @@ function buildSeriesFromTitleEpub() {
     <meta name="dtb:totalPageCount" content="0"/>
     <meta name="dtb:maxPageNumber" content="0"/>
   </head>
-  <docTitle><text>Everblaze</text></docTitle>
+  <docTitle><text>The Tidewatcher’s Oath</text></docTitle>
   <navMap>
     <navPoint id="np1" playOrder="1"><navLabel><text>Prologue</text></navLabel><content src="chapter1.xhtml"/></navPoint>
   </navMap>
@@ -288,7 +288,7 @@ console.log(`wrote ${seriesFromTitlePath}`);
    sample.epub (so audio-tag + Calibre-series assertions carry over), but the
    chapters live one level DEEPER (`OEBPS/text/chapterN.xhtml`) so the
    href-relative-to-OPF-dir resolution path is exercised. Real-world source:
-   Simon & Schuster publisher EPUBs (e.g. "Stellarlune"). */
+   Simon & Schuster publisher EPUBs (e.g. "The Drowning Bell"). */
 function buildOpfPrefixedEpub() {
   const containerXml = `<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">

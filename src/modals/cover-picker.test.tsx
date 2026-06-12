@@ -79,7 +79,7 @@ function renderPicker({ defaultTab = 'search', ...overrides }: RenderOpts = {}) 
         open
         bookId="bk_test"
         bookTitle="the Coalfall Commission"
-        bookAuthor="Shannon Messenger"
+        bookAuthor="Della Renwick"
         onClose={onClose}
         onPicked={onPicked}
         onFramingChanged={onFramingChanged}
@@ -189,7 +189,7 @@ describe('CoverPicker — closed state', () => {
           open={false}
           bookId="bk_test"
           bookTitle="the Coalfall Commission"
-          bookAuthor="Shannon Messenger"
+          bookAuthor="Della Renwick"
           onClose={() => {}}
           onPicked={() => {}}
         />

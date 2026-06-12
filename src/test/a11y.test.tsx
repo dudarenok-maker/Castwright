@@ -73,7 +73,7 @@ const AXE_OPTS = {
 
 const libraryAuthors: LibraryAuthor[] = [
   {
-    name: 'Shannon Messenger',
+    name: 'Della Renwick',
     series: [
       {
         name: 'The Hollow Tide',
@@ -81,7 +81,7 @@ const libraryAuthors: LibraryAuthor[] = [
           {
             bookId: 'b1',
             title: 'The Hollow Tide',
-            author: 'Shannon Messenger',
+            author: 'Della Renwick',
             series: 'The Hollow Tide',
             seriesPosition: 1,
             isStandalone: false,

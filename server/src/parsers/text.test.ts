@@ -113,7 +113,7 @@ describe('parseText — series extraction from title heuristic', () => {
       '# The Tidewatcher’s Oath (The Hollow Tide Book 3)\n\nThe story.',
       {
         format: 'markdown',
-        fileName: 'Shannon Messenger - the Hollow Tide 03 - The Tidewatcher’s Oath.md',
+        fileName: 'Della Renwick - the Hollow Tide 03 - The Tidewatcher’s Oath.md',
       },
     );
     /* Filename gives the Hollow Tide + 3; the title heuristic doesn't run, so
