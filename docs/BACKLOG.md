@@ -22,6 +22,13 @@ via `Closes #NN`) and remove its row here; update the source plan's `status:` /
 Ship notes and archive it if `stable`. When you discover a new item, file a
 Backlog-item issue AND add the thin row here linking it, in the same round.
 
+_2026-06-12: added `ops-16` (Pinokio one-click installer) as a third first-class install path in
+the Must onboarding/install group, below `ops-15`. Moved `ops-12` (trademark clearance) and `ops-9`
+(server-side branch protection) out to the private commercialisation backlog — both are
+launch/business machinery, not app work (`ops-9` absorbed into its `com-4` public-repo-opening
+item). Folded the Windows code-signing and macOS notarisation requirements into `ops-1`/`ops-15`
+(the cost/vendor detail stays private)._
+
 _Last reprioritised 2026-06-08 (cleanup round: promoted the onboarding cluster, the
 voices-library/cloning item, and `srv-1` into Must; retired the delivered Android-companion,
 dependency-major, and ASR-verifying-phase rows; archived stale parked items; moved `side-11`
@@ -30,14 +37,6 @@ to monitoring). Prior full pass 2026-06-02 folded in the 29 brainstorm items #45
 ---
 
 ## Must — blocks v1 ship or hurts existing users
-
-### Brand & launch
-
-#### `ops-12` — Trademark clearance for Castwright + defensive domains ([#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626))
-
-- _What:_ Before launch, run a real trademark clearance for **Castwright** on TMview / USPTO / EUIPO / IP Australia in classes 9 (software), 41 (entertainment/audio), 42 (SaaS) — the 2026-06-07 automated sweep found no software/audio mark (only an unrelated US construction LLC) but that is **not** legal clearance. Register defensive domains (`castwright.io`, typo redirects `castwrite.ai` / `castright.ai`). `castwright.ai` is owned. _(Owner: user / business.)_
-- _Benefit (business):_ protects the brand a real business is being built on; avoids a forced rename after launch.
-_Full detail + acceptance:_ [#626](https://github.com/dudarenok-maker/AudioBook-Generator/issues/626).
 
 ### Voice & cast
 
@@ -85,15 +84,23 @@ _Full detail + acceptance:_ [#474](https://github.com/dudarenok-maker/AudioBook-
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
 
 - _What:_ Add an Inno Setup (or NSIS) script that wraps the `castwright-vX.Y.Z.zip` produced by the release-package pipeline (plan 49) into a signed `.exe` installer. Installer extracts to `%LocalAppData%\Castwright`, drops a Start Menu entry, checks the **runtime** prereqs (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links for any missing dep, then launches the app. **Model install + smoke test are owned by the `fs-21` first-run wizard** (shared with macOS `ops-15`), not the installer — so the platforms stay consistent. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
+- _Signing:_ the installer **must be code-signed** (wire `signtool` into the `release.yml` job; an **OV** certificate is sufficient — Microsoft dropped EV's SmartScreen advantage in Aug 2024). An unsigned installer trips the full-screen SmartScreen / Smart App Control "protected your PC" wall — a major funnel-killer for exactly the non-technical user the installer targets; reputation accrues to the cert as download volume grows. _(Cert procurement is tracked privately.)_
 - _Benefit (user):_ friction-free install for non-developers. Today's plan-49 deployer must read INSTALL.md and run PowerShell commands by hand; the installer reduces that to a click.
 _Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432).
 
 #### `ops-15` — macOS installer (`.dmg`) wrapping the release zip ([#735](https://github.com/dudarenok-maker/Castwright/issues/735))
 
-- _What:_ Wrap the `castwright-vX.Y.Z.zip` (plan 49) into a **signed, notarized `.dmg`** — a drag-to-`/Applications` disk image (the Mac-native idiom). The bundle delivers the app + a launcher (`.app` wrapping `start.sh`); it embeds **no** model-install script. All app-level setup — GPU detect, model install (Kokoro/Qwen/Ollama analyzer), defaults, smoke synth — is owned by the shared `fs-21` first-run wizard, identical to Windows (`ops-1`). The installer only handles the app + runtime prereqs (Node/Python/ffmpeg, bundled or checked). Extend `release.yml` with a follow-on job that builds the `.dmg` on a **macOS runner** and uploads it as a release asset. Builds on the shipped cross-platform launch groundwork (`start.sh`, cross-platform sidecar spawn).
-- _Depends on:_ a paid **Apple Developer account** (~$99/yr) + a Developer ID Application cert for signing/notarization — external prerequisite that blocks the notarized half (Gatekeeper opens cleanly on Apple Silicon only when signed + notarized); unsigned `.dmg` mechanics can be built ahead of that.
+- _What:_ Wrap the `castwright-vX.Y.Z.zip` (plan 49) into a **signed, notarized `.dmg`** — a drag-to-`/Applications` disk image (the Mac-native idiom). The bundle delivers the app + a launcher (`.app` wrapping `start.sh`); it embeds **no** model-install script. All app-level setup — GPU detect, model install (Kokoro/Qwen/Ollama analyzer), defaults, smoke synth — is owned by the shared `fs-21` first-run wizard, identical to Windows (`ops-1`). The installer only handles the app + runtime prereqs (Node/Python/ffmpeg, bundled or checked). Extend `release.yml` with a follow-on job that builds, **signs + notarizes** the `.dmg` on a **macOS runner** and uploads it as a release asset (notarization itself is free, but the notary service only accepts uploads from a paid account — so the notarized half can't ship until the Developer account exists). Builds on the shipped cross-platform launch groundwork (`start.sh`, cross-platform sidecar spawn).
+- _Depends on:_ a paid **Apple Developer account** (~$99/yr) + a Developer ID Application cert for signing/notarization — external prerequisite that blocks the notarized half (Gatekeeper **hard-blocks** unnotarized internet-downloaded apps on Apple Silicon — not a click-through); unsigned `.dmg` mechanics can be built ahead of that. The same membership is the only iOS distribution path (`app-12`). _(Account procurement is tracked privately.)_
 - _Benefit (user):_ friction-free install for non-developer Mac users — the other primary deployer platform alongside Windows. Reduces a read-INSTALL.md-and-run-shell-commands bootstrap to drag-and-drop.
 _Full detail + acceptance:_ [#735](https://github.com/dudarenok-maker/Castwright/issues/735).
+
+#### `ops-16` — Pinokio one-click installer _(issue: to file)_
+
+- _What:_ Ship a single **Pinokio** JSON install script as a third first-class install path alongside the native installers (`ops-1` Windows `.exe`, `ops-15` macOS `.dmg`): one click in the Pinokio browser fetches the release, provisions the Python venv + TTS sidecar, checks the runtime prereqs, and launches the app — then hands off to the `fs-21` first-run wizard for GPU detect + model install, identical post-install setup to the native installers. The script's update path must be automated in `release.yml` (a manual-upload channel is a future stale-version complaint).
+- _Benefit (user):_ a no-terminal, no-Python-bootstrap install for users who run Pinokio — the same "click and it's running" path the `.exe`/`.dmg` give Windows/macOS deployers. Reduces a read-INSTALL.md bootstrap to one click.
+- _Area:_ ops. _Builds on:_ `ops-1`/`ops-15` (installers), `fs-21` (first-run wizard).
+_Full detail + acceptance:_ issue to be filed.
 
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
@@ -395,12 +402,6 @@ _Full detail + acceptance:_ [#428](https://github.com/dudarenok-maker/AudioBook-
 _Full detail + acceptance:_ [#427](https://github.com/dudarenok-maker/AudioBook-Generator/issues/427).
 
 ### Ops, CI & distribution
-
-#### `ops-9` — Enable server-side branch protection on `main` (when Pro/public) ([#429](https://github.com/dudarenok-maker/AudioBook-Generator/issues/429))
-
-- _What:_ create an active ruleset on the default branch blocking deletion + non-fast-forward (force) pushes. Ready command:
-- _Benefit (technical):_ server-side enforcement that no `--no-verify` local bypass or fresh clone can sidestep; the local guard (plan 163) becomes belt-and-suspenders. Required status checks deliberately excluded (would deadlock doc-only PRs that skip `verify.yml`).
-_Full detail + acceptance:_ [#429](https://github.com/dudarenok-maker/AudioBook-Generator/issues/429).
 
 #### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
 
