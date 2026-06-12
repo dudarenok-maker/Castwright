@@ -2,7 +2,7 @@
 
 This guide walks a deployer through bringing the app up on a clean Windows, macOS, or Linux machine after extracting `castwright-vX.Y.Z.zip` from a [GitHub release](https://github.com/dudarenok-maker/Castwright/releases).
 
-After install you'll have a single command (`npm run start:prod`) that brings up the Node server (port 8080), the Python TTS sidecar (port 9000), and the built frontend — all served from `http://localhost:8080`.
+After install you'll have a single command (`npm run start:prod`) that brings up the Node server (port 8080), the Python voice engine (port 9000), and the built frontend — all served from `http://localhost:8080`.
 
 ---
 
@@ -242,10 +242,10 @@ Or the manual path: install Ollama from <https://ollama.com>, `ollama pull qwen3
 
 **Option C — Pipelined two-model split.** For long books: Phase 0 (cast detection) runs on Gemma while Phase 1 (sentence attribution) runs on Gemini Flash in parallel, hitting independent rate-limit buckets so effective quota nearly doubles. Configure under **Account → Defaults for new books → Phase 0 model + Phase 1 model + Min-lag chapters** (default 10), or set `ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL` / `ANALYZER_PHASE1_MIN_LAG_CHAPTERS` in `server/.env`.
 
-## Switching TTS to Coqui XTTS v2 (alternate, on-device)
+## Switching the voice engine to Coqui XTTS v2 (alternate, on-device)
 
-1. **Account → Defaults for new books → TTS engine** → "Local (free)".
-2. **TTS model** → "Coqui XTTS v2".
+1. **Account → Defaults for new books → Voice engine** → "Local (free)".
+2. **Voice model** → "Coqui XTTS v2".
 3. Save. The first chapter generation triggers a one-time ~2 GB model download.
 
 ## Switching TTS to Qwen3-TTS
@@ -270,7 +270,7 @@ Qwen3-TTS designs a unique voice per character from the cast persona instead of 
 
    The script auto-skips on macOS / Linux / non-`cp311` Python / non-`torch-2.6 + cu124` — a wheel that can't load doesn't get installed. Once installed, activate it by setting `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
 
-3. **Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → TTS engine** → "Local (free)" → **TTS model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast with current-vs-proposed audition before regenerating.
+3. **Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast with current-vs-proposed audition before regenerating.
 
 **Disk + VRAM.** Qwen Base ~1 GB on disk, Base + VoiceDesign together ~2.5 GB. At runtime Base resides at ~2 GB VRAM during synth and VoiceDesign loads transiently during a design (~4–5 GB on top of Base, freed on idle or at the next synth). The GPU-arbitration semaphore (`GPU_VRAM_BUDGET` in `server/.env`, default 8 GiB) keeps an 8 GB GPU from double-booking against the analyzer.
 
@@ -279,8 +279,8 @@ Qwen3-TTS designs a unique voice per character from the cast persona instead of 
 The same Gemini key configured for the analyzer (see Option B above) doubles as the TTS provider when picked.
 
 1. Get an API key from <https://aistudio.google.com> (Google account required), saved via **Account → Server configuration → Gemini API key**.
-2. **Account → Defaults for new books → TTS engine** → "Gemini (cloud)".
-3. **TTS model** → pick `gemini-3.1-flash-preview-tts` or `gemini-2.5-flash-preview-tts`. Save.
+2. **Account → Defaults for new books → Voice engine** → "Gemini (cloud)".
+3. **Voice model** → pick `gemini-3.1-flash-preview-tts` or `gemini-2.5-flash-preview-tts`. Save.
 
 The key is stored plaintext in `~/.castwright/user-settings.json` (per-user, same trust model as `server/.env` for a single-user workspace). The env var `GEMINI_API_KEY` in `server/.env` still wins if both are set — useful for CI / scripted setups.
 

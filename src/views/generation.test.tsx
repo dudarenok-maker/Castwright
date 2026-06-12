@@ -179,7 +179,7 @@ function makeStore() {
       /* Account slice powers the engines-in-use selector that determines
          which engine pill(s) render in the Generate header. Defaults to
          the same Coqui modelKey the view receives so the existing button-
-         routing assertions ("Load model (tts model)") still find the pill. */
+         routing assertions ("Load model (voice engine)") still find the pill. */
       account: accountSlice.reducer,
     },
   });
@@ -413,7 +413,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
         />
       </Provider>,
     );
-    expect(screen.getByText('Recovering — restarting TTS engine…')).toBeInTheDocument();
+    expect(screen.getByText('Recovering — restarting voice engine…')).toBeInTheDocument();
     // The frozen synthesising caption must NOT show for the recovering row.
     expect(screen.queryByText(/Synthesising/)).not.toBeInTheDocument();
   });
@@ -944,7 +944,7 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
     /* Initial /api/sidecar/health probe runs on mount; once it resolves
        to modelLoaded:false the pill flips from "loading" to "idle" and
        the button label becomes "Load model". */
-    return screen.findByRole('button', { name: /load model \(tts model\)/i });
+    return screen.findByRole('button', { name: /load model \(voice engine\)/i });
   }
 
   it('calls unloadAnalyzer before loadSidecar when the analyzer was loaded', async () => {
@@ -1010,7 +1010,7 @@ describe('GenerationView — TTS Load button auto-evicts the analyzer', () => {
 
     renderView();
     /* Pill state should be "ready" → button reads "Stop". */
-    const stopBtn = await screen.findByRole('button', { name: /stop \(tts model\)/i });
+    const stopBtn = await screen.findByRole('button', { name: /stop \(voice engine\)/i });
     fireEvent.click(stopBtn);
 
     await new Promise((r) => setTimeout(r, 0));

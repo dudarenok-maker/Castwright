@@ -147,7 +147,7 @@ describe('classifyFailure', () => {
     );
     expect(out.code).toBe('sidecar-unreachable');
     expect(out.fatal).toBe(true);
-    expect(out.userMessage).toMatch(/sidecar/i);
+    expect(out.userMessage).toMatch(/voice engine/i);
     expect(out.remediation.length).toBeGreaterThan(0);
   });
 
