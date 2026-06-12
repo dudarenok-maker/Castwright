@@ -38,7 +38,7 @@ owner: null
 
 ### Automated coverage
 
-- Vitest server (`server/src/workspace/series-prior-dedup.test.ts`) — 10 cases covering: empty input, same-name across two books → 1 merged entry with both source titles, alias-overlap merge (Book B alias matches Book A name), punctuation/case-insensitive merge (`Mr. Casper` ↔ `mr Casper`), disjoint characters stay separate, alias union across 3 books with canonical-name collapse, alias-chain transitive merge via union-find, first-seen book-walk output ordering, empty/whitespace aliases do NOT bridge, compact output omits empty aliases.
+- Vitest server (`server/src/workspace/series-prior-dedup.test.ts`) — 10 cases covering: empty input, same-name across two books → 1 merged entry with both source titles, alias-overlap merge (Book B alias matches Book A name), punctuation/case-insensitive merge (`Mr. Casper` ↔ `mr casper`), disjoint characters stay separate, alias union across 3 books with canonical-name collapse, alias-chain transitive merge via union-find, first-seen book-walk output ordering, empty/whitespace aliases do NOT bridge, compact output omits empty aliases.
 - Vitest server (`server/src/routes/analysis.test.ts:~1151`) — asserts `buildStage1ChapterInbox` renders the plural `fromBookTitles` array shape, that the singular legacy field is absent, and that a single-entry case still renders as a one-element array (schema stability for downstream prompt-parity tests).
 
 ### Manual acceptance walkthrough

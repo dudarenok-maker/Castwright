@@ -8,38 +8,38 @@ import { buildCharacterSnapshots } from './character-snapshots.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
 const cast: CastCharacter[] = [
-  { id: 'Castor', name: 'Castor', gender: 'female', ageRange: 'adult', attributes: ['warm', 'bright'] },
+  { id: 'castor', name: 'Castor', gender: 'female', ageRange: 'adult', attributes: ['warm', 'bright'] },
   { id: 'narrator', name: 'Narrator', gender: 'neutral', attributes: [] },
   { id: 'silent-guy', name: 'Mute', gender: 'male' },
 ];
 
 describe('buildCharacterSnapshots', () => {
   it('includes only characters that actually spoke', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['Castor', 'narrator']), 'kokoro', new Map());
-    expect(Object.keys(snaps).sort()).toEqual(['Castor', 'narrator']);
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor', 'narrator']), 'kokoro', new Map());
+    expect(Object.keys(snaps).sort()).toEqual(['castor', 'narrator']);
     expect(snaps['silent-guy']).toBeUndefined();
   });
 
   it('sorts attributes for stable drift comparison', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['Castor']), 'kokoro', new Map());
-    expect(snaps.Castor.attributes).toEqual(['bright', 'warm']);
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map());
+    expect(snaps.castor.attributes).toEqual(['bright', 'warm']);
   });
 
   it('records the per-character engine + a resolved voice name', () => {
-    const snaps = buildCharacterSnapshots(cast, new Set(['Castor']), 'kokoro', new Map());
-    expect(snaps.Castor.voiceEngine).toBe('kokoro');
-    expect(typeof snaps.Castor.resolvedVoiceName).toBe('string');
-    expect(snaps.Castor.resolvedVoiceName!.length).toBeGreaterThan(0);
+    const snaps = buildCharacterSnapshots(cast, new Set(['castor']), 'kokoro', new Map());
+    expect(snaps.castor.voiceEngine).toBe('kokoro');
+    expect(typeof snaps.castor.resolvedVoiceName).toBe('string');
+    expect(snaps.castor.resolvedVoiceName!.length).toBeGreaterThan(0);
   });
 
   it('threads renderedFallbackEngine through for characters that fell back', () => {
     const snaps = buildCharacterSnapshots(
       cast,
-      new Set(['Castor']),
+      new Set(['castor']),
       'qwen',
-      new Map([['Castor', 'kokoro']]),
+      new Map([['castor', 'kokoro']]),
     );
-    expect(snaps.Castor.renderedFallbackEngine).toBe('kokoro');
+    expect(snaps.castor.renderedFallbackEngine).toBe('kokoro');
   });
 
   it('omits attributes when the character has none', () => {

@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** a recurring character that the analyzer detected under divergent ids across books (`Wren` vs `Wren-foster`, `Castor` vs `bron-te`) now shows as ONE row in the Rebaseline modal, and approving its voice reaches every book — no more "two Wrens", no more silent skips. Stops the duplicate from re-appearing on every new book.
+- **User:** a recurring character that the analyzer detected under divergent ids across books (`wren` vs `wren-sparrow`, `Castor` vs `bron-te`) now shows as ONE row in the Rebaseline modal, and approving its voice reaches every book — no more "two Wrens", no more silent skips. Stops the duplicate from re-appearing on every new book.
 - **Technical:** the modal's display de-dup and the approve-time write now agree on the same conservative name/alias rule (the one the analyzer's series-prior dedup already uses), so collapse can't desync from propagation.
 - **Architectural:** locks the invariant *"a fold-bucket id never carries a real character's name"* and makes cross-book linking actually unify the propagation key (`voiceId ?? id`), closing the two data-drifts at their source.
 
@@ -30,7 +30,7 @@ Four parts:
 
 ## Architectural impact
 
-- **Invariants preserved:** the display de-dup key and the write/propagation key stay in lockstep — collapsing a row can no longer silently skip a book on approve. Auto-collapse is gated by `notLinkedTo` (plan 101), the existing "intentionally different" escape hatch (e.g. teenage vs adult Wren). Matching stays conservative (exact / strict-substring / punctuation-normalised) — typo-only id variants with no shared token (`aldan` vs `Maelor`) do NOT auto-collapse, by design.
+- **Invariants preserved:** the display de-dup key and the write/propagation key stay in lockstep — collapsing a row can no longer silently skip a book on approve. Auto-collapse is gated by `notLinkedTo` (plan 101), the existing "intentionally different" escape hatch (e.g. teenage vs adult Wren). Matching stays conservative (exact / strict-substring / punctuation-normalised) — typo-only id variants with no shared token (`aldan` vs `maelor`) do NOT auto-collapse, by design.
 - **Migration:** no schema change. Existing confirmed books were repaired by the one-off data fix in the plan above; this change is forward-looking + heals the modal display/propagation.
 - **Stale audio:** propagating a new Qwen voice to a book whose audio is already rendered makes that book's chapters stale — but that is the explicit intent of a series rebaseline (drift flags the affected chapters), so no extra gating.
 

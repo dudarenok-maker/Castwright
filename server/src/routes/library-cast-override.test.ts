@@ -284,11 +284,11 @@ describe('library-cast override router', () => {
     const leanerSourceId = makeBookId(AUTHOR, SERIES, LEANER_SOURCE_TITLE);
 
     const richerTarget = {
-      id: 'Aldous',
+      id: 'aldous',
       name: 'Aldous',
       role: 'councillor',
       color: 'eliza',
-      voiceId: 'v_Aldous_target',
+      voiceId: 'v_aldous_target',
       gender: 'male',
       ageRange: 'adult',
       description:
@@ -298,11 +298,11 @@ describe('library-cast override router', () => {
       scenes: 3,
     };
     const leanerSource = {
-      id: 'Aldous',
+      id: 'aldous',
       name: 'Aldous',
       role: '',
       color: 'eliza',
-      voiceId: 'v_Aldous_source',
+      voiceId: 'v_aldous_source',
       gender: 'male',
       description: 'A councillor.',
       lines: 12,
@@ -317,9 +317,9 @@ describe('library-cast override router', () => {
 
     const res = await callOverride({
       sourceBookId: leanerSourceId,
-      sourceCharacterId: 'Aldous',
+      sourceCharacterId: 'aldous',
       targetBookId: richerTargetId,
-      targetCharacterId: 'Aldous',
+      targetCharacterId: 'aldous',
     });
     expect(res.status).toBe(200);
     /* Target's longer description survived on BOTH sides — the source's

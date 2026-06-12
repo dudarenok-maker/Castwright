@@ -68,7 +68,7 @@ Run with `VITE_USE_MOCKS=false` (server on `:8080`, `ANALYZER=local` or `ANALYZE
 For books whose `.audiobook/` files drifted out of sync with the analysis cache before the A1/A2/A3 guards landed (orphan `characterId` references in `manuscript-edits.json`, `cast.json` collapsed to a tiny roster while the cache still has Phase 1 sentences attributing to characters that no longer exist), wipe the per-book state with the reconciliation script:
 
 ```powershell
-npm run reconcile-cast -- -BookId shannon-messenger__keeper-of-the-lost-cities__unlocked
+npm run reconcile-cast -- -BookId shannon-messenger__the-hollow-tide__unlocked
 ```
 
 The script (driven by `scripts/lib/cast-reconcile.psm1` so the archive/remove logic is Pester-tested) walks the workspace tree for the matching `state.json`, prints a summary of the current cast/edits/cache state (with any orphan IDs highlighted), prompts to confirm, then archives `cast.json`, `manuscript-edits.json`, and the analysis-cache entry to `.audiobook/.reconcile-backup-<timestamp>/`. `state.json`, `change-log.json`, and `dropped-quotes.json` are left in place so the next analysis run picks up where it left off.

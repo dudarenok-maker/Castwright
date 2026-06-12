@@ -113,7 +113,7 @@ Pre-req: the user has Syncthing on their PC pulling from
 installed from F-Droid or Google Play.
 
 1. Generate the canonical end-to-end manuscript per `CLAUDE.md` —
-   `C:\Users\dudar\Downloads\the Coalfall Commission.txt`. Run analysis,
+   `server/src/__fixtures__/the-coalfall-commission.md`. Run analysis,
    confirm cast, generate every chapter.
 2. Listen tab → **Voice** tile. The export modal opens with the format
    radio hidden (M4B forced) and the destination radio hidden

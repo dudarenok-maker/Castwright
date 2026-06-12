@@ -18,8 +18,8 @@ import { spliceRunnerMiddleware } from './splice-runner-middleware';
 import type { Chapter } from '../lib/types';
 
 const CHAPTERS: Chapter[] = [
-  { id: 1, title: 'One', duration: '2:00', state: 'done', progress: 1, characters: { Castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
-  { id: 2, title: 'Two', duration: '2:00', state: 'done', progress: 1, characters: { Castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
+  { id: 1, title: 'One', duration: '2:00', state: 'done', progress: 1, characters: { castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
+  { id: 2, title: 'Two', duration: '2:00', state: 'done', progress: 1, characters: { castor: 'done' }, phase: null, audioModelKey: 'kokoro-v1' },
 ] as Chapter[];
 
 function makeStore() {
@@ -64,7 +64,7 @@ describe('spliceRunnerMiddleware', () => {
       spliceActions.startBatch({
         id: 'b1',
         bookId: 'bk1',
-        characterId: 'Castor',
+        characterId: 'castor',
         characterName: 'Castor Allred',
         mode: 'remix',
         gainDb: 6,
@@ -103,7 +103,7 @@ describe('spliceRunnerMiddleware', () => {
     const store = makeStore();
     store.dispatch(
       spliceActions.startBatch({
-        id: 'b2', bookId: 'bk1', characterId: 'Castor', characterName: 'Castor', mode: 'remix', gainDb: 3, chapterIds: [1, 2],
+        id: 'b2', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix', gainDb: 3, chapterIds: [1, 2],
       }),
     );
     await flush();

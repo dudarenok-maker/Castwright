@@ -65,7 +65,7 @@ The "ready to listen" view shows the cover, audiobook metadata, chapter list wit
 
 ## Acceptance walkthrough
 
-Run against the canonical e2e manuscript (`~/Downloads/the Coalfall Commission.txt`, see project CLAUDE.md).
+Run against the canonical e2e manuscript (`server/src/__fixtures__/the-coalfall-commission.md`, see project CLAUDE.md).
 
 ### Top section reads from the store
 

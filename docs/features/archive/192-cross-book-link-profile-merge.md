@@ -89,7 +89,7 @@ it feel broken.
 
 1. Open Unlocked → Cast → "Dame Linnet" profile drawer. Before this change the
    link picker lists several "Dame Linnet" + a "Councillor Linnet"; after, those
-   collapse out once the row is linked (shares `voiceId: dame-Linnet`).
+   collapse out once the row is linked (shares `voiceId: dame-linnet`).
 2. Link an unlinked recurring character to its prior-book canonical → the drawer
    immediately shows the inherited representative quotes + attributes; reload →
    they persist (cast.json round-trip).

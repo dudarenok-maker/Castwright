@@ -93,7 +93,7 @@ Run `npm start` (or `npm run dev` for HMR) in mock mode (`VITE_USE_MOCKS=true`, 
 **Book-title fallback (PR #141).** Requires a multi-book session with drift events spanning at least two books, ideally one that hasn't been opened in this session:
 
 15. Open any book whose drift modal has events from BOTH the active book AND another book the user hasn't visited this session (e.g. via cross-book bulk poll). Trigger the modal via the top banner.
-16. The per-section **BOOK** headers render the workspace-scan title (e.g. "The Hollow Tide") for both books — neither shows the raw slug `shannon-messenger__keeper-of-the-lost-cities__keeper-of-the-lost-ci…`. If the active book has user-edited title overrides in `bookMeta.saved`, those win over the library scan title.
+16. The per-section **BOOK** headers render the workspace-scan title (e.g. "The Hollow Tide") for both books — neither shows the raw slug `shannon-messenger__the-hollow-tide__keeper-of-the-lost-ci…`. If the active book has user-edited title overrides in `bookMeta.saved`, those win over the library scan title.
 
 ## Out of scope
 

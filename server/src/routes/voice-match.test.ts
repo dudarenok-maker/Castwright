@@ -286,7 +286,7 @@ describe('voice-match router', () => {
        Floor (nameScore < 0.34) must drop every library voice. */
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'Castor', name: 'Castor', attributes: ['stern'], gender: 'male', ageRange: 'adult' },
+        { id: 'castor', name: 'Castor', attributes: ['stern'], gender: 'male', ageRange: 'adult' },
       ],
     });
     expect(res.status).toBe(200);

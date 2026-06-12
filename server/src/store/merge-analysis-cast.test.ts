@@ -40,20 +40,20 @@ describe('mergeAnalysisResultWithExistingCast', () => {
   it('preserves a reused-voice link (voiceId/voiceState/matchedFrom)', () => {
     const existing: C[] = [
       {
-        id: 'Wisp',
+        id: 'wisp',
         name: 'Wisp',
-        voiceId: 'Wisp',
+        voiceId: 'wisp',
         voiceState: 'reused',
-        matchedFrom: { bookId: 'unlocked', characterId: 'Wisp', confidence: 0.94 },
-        overrideTtsVoices: { qwen: { name: 'qwen-Wisp' } },
+        matchedFrom: { bookId: 'unlocked', characterId: 'wisp', confidence: 0.94 },
+        overrideTtsVoices: { qwen: { name: 'qwen-wisp' } },
       },
     ];
-    const fresh: C[] = [{ id: 'Wisp', name: 'Wisp' }];
+    const fresh: C[] = [{ id: 'wisp', name: 'Wisp' }];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged[0].voiceId).toBe('Wisp');
+    expect(merged[0].voiceId).toBe('wisp');
     expect(merged[0].voiceState).toBe('reused');
-    expect(merged[0].matchedFrom).toEqual({ bookId: 'unlocked', characterId: 'Wisp', confidence: 0.94 });
-    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Wisp' } });
+    expect(merged[0].matchedFrom).toEqual({ bookId: 'unlocked', characterId: 'wisp', confidence: 0.94 });
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-wisp' } });
   });
 
   it('keeps a brand-new character (not in the old cast) as-is', () => {
@@ -188,11 +188,11 @@ describe('voicedSurvivorsDropped', () => {
   it('lists only voiced/reused characters the fresh roster omitted', () => {
     const existing: C[] = [
       { id: 'wren', name: 'Wren', voiceId: 'wren' }, // survives
-      { id: 'Wisp', name: 'Wisp', voiceState: 'reused', voiceId: 'Wisp' }, // dropped + voiced
+      { id: 'wisp', name: 'Wisp', voiceState: 'reused', voiceId: 'wisp' }, // dropped + voiced
       { id: 'extra', name: 'Extra' }, // dropped but no voice
     ];
     const fresh: C[] = [{ id: 'wren' }];
-    expect(voicedSurvivorsDropped(existing, fresh)).toEqual([{ id: 'Wisp', name: 'Wisp' }]);
+    expect(voicedSurvivorsDropped(existing, fresh)).toEqual([{ id: 'wisp', name: 'Wisp' }]);
   });
 
   it("lets a fresh reuse-link stand when the old character had no voice", () => {

@@ -10,7 +10,7 @@ import { recoverTaggedNarratorLines, taggedSpeakerIds } from './recover-tagged-l
 const roster = [
   { id: 'behnam', name: 'Behnam Aria' },
   { id: 'wren-sparrow', name: 'Wren Sparrow' },
-  { id: 'Aldous', name: 'Aldous' },
+  { id: 'aldous', name: 'Aldous' },
 ];
 
 function s(id: number, chapterId: number, characterId: string, text: string) {
@@ -36,8 +36,8 @@ describe('recoverTaggedNarratorLines', () => {
   });
 
   it('does not overwrite a non-narrator quote', () => {
-    const sentences = [s(1, 1, 'Aldous', '“Hi,”'), s(2, 1, 'narrator', 'Behnam noted.')];
-    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('Aldous');
+    const sentences = [s(1, 1, 'aldous', '“Hi,”'), s(2, 1, 'narrator', 'Behnam noted.')];
+    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('aldous');
   });
 
   it('does not flip across a chapter boundary', () => {

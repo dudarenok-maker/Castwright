@@ -13,13 +13,13 @@ import { playEmotionVariantSample, variantVoiceIdFor } from './play-emotion-vari
 import type { Character } from './types';
 
 const baseChar = {
-  id: 'Marrow',
+  id: 'marrow',
   name: 'Marrow Todd',
   role: 'PoV',
   color: 'narrator',
-  voiceId: 'Marrow',
+  voiceId: 'marrow',
   ttsEngine: 'qwen',
-  overrideTtsVoices: { qwen: { name: 'qwen-Marrow' } },
+  overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
 } as unknown as Character;
 
 const playback = { play: vi.fn().mockResolvedValue(undefined) };
@@ -34,10 +34,10 @@ describe('variantVoiceIdFor', () => {
     const c = {
       ...baseChar,
       overrideTtsVoices: {
-        qwen: { name: 'qwen-Marrow', variants: { angry: { name: 'qwen-Marrow-angry' } } },
+        qwen: { name: 'qwen-marrow', variants: { angry: { name: 'qwen-marrow-angry' } } },
       },
     } as unknown as Character;
-    expect(variantVoiceIdFor(c, 'angry')).toBe('qwen-Marrow-angry');
+    expect(variantVoiceIdFor(c, 'angry')).toBe('qwen-marrow-angry');
     expect(variantVoiceIdFor(c, 'sad')).toBeUndefined();
   });
 
@@ -51,7 +51,7 @@ describe('playEmotionVariantSample', () => {
     const c = {
       ...baseChar,
       overrideTtsVoices: {
-        qwen: { name: 'qwen-Marrow', variants: { angry: { name: 'qwen-Marrow-angry' } } },
+        qwen: { name: 'qwen-marrow', variants: { angry: { name: 'qwen-marrow-angry' } } },
       },
     } as unknown as Character;
 
@@ -60,8 +60,8 @@ describe('playEmotionVariantSample', () => {
     expect(res.fellBackToBase).toBe(false);
     const args = playSampleWithAutoLoad.mock.calls[0][0].args;
     /* Scope is the variant cache key the design route wrote. */
-    expect(args.voiceId).toBe('Marrow__angry');
-    expect(args.voice.overrideTtsVoices.qwen.name).toBe('qwen-Marrow-angry');
+    expect(args.voiceId).toBe('marrow__angry');
+    expect(args.voice.overrideTtsVoices.qwen.name).toBe('qwen-marrow-angry');
     expect(args.modelKey).toBe('qwen3-tts-0.6b');
   });
 
@@ -71,7 +71,7 @@ describe('playEmotionVariantSample', () => {
     expect(res.fellBackToBase).toBe(true);
     const args = playSampleWithAutoLoad.mock.calls[0][0].args;
     /* Base scope (no __emotion suffix) + the base designed voice. */
-    expect(args.voiceId).toBe('Marrow');
-    expect(args.voice.overrideTtsVoices.qwen.name).toBe('qwen-Marrow');
+    expect(args.voiceId).toBe('marrow');
+    expect(args.voice.overrideTtsVoices.qwen.name).toBe('qwen-marrow');
   });
 });

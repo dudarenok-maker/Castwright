@@ -63,6 +63,20 @@ const MAP = [
   ['Thorne', 'Thorne'],
   ['Wick', 'Wick'],
   ['Singe', 'Singe'],
+  // long-tail minor characters
+  ['Marrow', 'Marrow'],
+  ['Castor', 'Castor'],
+  ['Aldous', 'Aldous'],
+  ['Renna', 'Renna'],
+  ['Maelor', 'Maelor'],
+  ['Wraythe', 'Wraythe'],
+  ['Wisp', 'Wisp'],
+  ['Blur', 'Haze'],
+  ['Quill', 'Quill'],
+  ['Senna', 'Senna'],
+  // NOTE: Blur/Ro/Bo are the Hollow Tide chars but ALSO common words (the `blur` DOM
+  // event, `ro`/`bo` abbreviations) — context-only, handled by a manual pass,
+  // NEVER blanket-renamed.
   // unambiguous books
   ['The Drowning Bell', 'The Drowning Bell'],
   ['The Tidewatcher's Oath', 'The Tidewatcher’s Oath'], // curly ’ — safe in single-quoted JS strings

@@ -29,7 +29,7 @@ owner: dudarenok-maker
 
 ## Invariants to preserve
 
-1. **kebab-case id convention** matches the analyzer's id shape. `toKebabId('Mr. Casper') === 'mr-Casper'`, `'Councillor Reld' → 'councillor-Reld'`. A future Phase 0a re-run with [plan 97](97-narrator-only-named-characters.md) in place produces the same id, so the manual entry merges cleanly instead of orphaning.
+1. **kebab-case id convention** matches the analyzer's id shape. `toKebabId('Mr. Casper') === 'mr-casper'`, `'Councillor Reld' → 'councillor-reld'`. A future Phase 0a re-run with [plan 97](97-narrator-only-named-characters.md) in place produces the same id, so the manual entry merges cleanly instead of orphaning.
 2. **Refuses double-add** by checking `cast.characters[].id` collision before write. Prevents accidental duplicate entries on repeat invocations.
 3. **Dialogue re-attribution is bounded to the immediately-preceding sentence** in the same chapter. The script never re-attributes across chapter boundaries (Phase 1 ids are per-chapter scoped) and only flips sentences currently attributed to `narrator` (a tag sentence already attributed to a non-narrator character represents third-party observation, not a true tag — see `findDialogueReattributions` for the rule).
 4. **Word-boundary matching on the speaker name** prevents `'Sela'` matching the substring `'Selaa'` (different person) or `'grow'` matching `'growth'`. Both directions of the boundary are checked.
@@ -62,7 +62,7 @@ The script is invoked from a terminal, not from the app — no URL hashes or red
    → expected output:
    ```
    [plan] add character to ...\.audiobook\cast.json:
-     id="Sela" name="Sela" role="Bodyguard" gender="female"
+     id="sela" name="Sela" role="Bodyguard" gender="female"
 
    [plan] proposed dialogue re-attributions: 0
 
@@ -75,7 +75,7 @@ The script is invoked from a terminal, not from the app — no URL hashes or red
    node scripts/recover-missing-character.mjs "...\Saltgrave" --name Garrow --gender male --role "Goblin Bodyguard" --description "Wren's fierce goblin bodyguard." --apply
    ```
 4. **Verify in the cast view:** open the book in the running app (`npm start`) → Cast view → both Sela and Garrow appear in the roster with `0 lines`, `0 scenes`, voice slot `Unassigned`. The voice library "Suggest voice" path can now match them.
-5. **Re-run refuses:** re-invoke step 2 with `--apply` → exits 1 with `character id "Sela" already exists in ...cast.json. Refusing to double-add.`.
+5. **Re-run refuses:** re-invoke step 2 with `--apply` → exits 1 with `character id "sela" already exists in ...cast.json. Refusing to double-add.`.
 
 ## Out of scope
 

@@ -91,7 +91,7 @@ beforeAll(async () => {
     JSON.stringify({
       characters: [
         { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
-        { id: 'Castor', name: 'Castor', gender: 'female', attributes: [] },
+        { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
       ],
     }),
   );
@@ -99,8 +99,8 @@ beforeAll(async () => {
   /* Real chapter: 1s loud Amy + 1s quiet Castor, encoded via the actual MP3
      encoder so the route's decode→gain→re-encode pipeline runs for real. */
   const amy = tone(1.0, 12000);
-  const Castor = tone(1.0, 3000);
-  const chapterPcm = Buffer.concat([amy, Castor]);
+  const castor = tone(1.0, 3000);
+  const chapterPcm = Buffer.concat([amy, castor]);
   const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
   writeFileSync(join(audioRoot, `${SLUG}.mp3`), mp3Bytes);
   writeFileSync(
@@ -115,7 +115,7 @@ beforeAll(async () => {
       synthesizedAt: new Date().toISOString(),
       segments: [
         { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
-        { groupIndex: 1, characterId: 'Castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
       ],
     }),
   );
@@ -145,7 +145,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
 
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
-      .send({ mode: 'remix', characterId: 'Castor', gainDb: 10 });
+      .send({ mode: 'remix', characterId: 'castor', gainDb: 10 });
 
     const events = parseSse(res.text);
     const done = events.find((e) => e.type === 'splice_complete');
@@ -179,7 +179,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
   it('rejects an out-of-range gain', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
-      .send({ mode: 'remix', characterId: 'Castor', gainDb: 99 });
+      .send({ mode: 'remix', characterId: 'castor', gainDb: 99 });
     const events = parseSse(res.text);
     expect(events.some((e) => e.type === 'chapter_failed')).toBe(true);
   });
@@ -187,7 +187,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
   it('rejects a re-record with an invalid modelKey', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
-      .send({ mode: 'rerecord', characterId: 'Castor', modelKey: 'not-a-model' });
+      .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'not-a-model' });
     const events = parseSse(res.text);
     const failed = events.find((e) => e.type === 'chapter_failed');
     expect(failed).toBeTruthy();
@@ -199,7 +199,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
     // find the sentences to re-synthesise → clean chapter_failed (not a crash).
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
-      .send({ mode: 'rerecord', characterId: 'Castor', modelKey: 'kokoro-v1' });
+      .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
     const events = parseSse(res.text);
     expect(events.some((e) => e.type === 'splice_start')).toBe(true);
     expect(events.some((e) => e.type === 'chapter_failed')).toBe(true);

@@ -116,11 +116,11 @@ describe('pickMergeSurvivor', () => {
   });
 
   it('keeps the first-selected character as survivor on a length tie (stable tiebreaker)', () => {
-    const a = makeNamedChar('a', 'Maelor');
-    const b = makeNamedChar('b', 'Castor');
-    /* Equal trimmed length (5 vs 6 → not a tie; use real tie) */
-    const a2 = makeNamedChar('a2', 'Maelor');
-    const b2 = makeNamedChar('b2', 'Bram');
+    const a = makeNamedChar('a', 'Wren');
+    const b = makeNamedChar('b', 'Maelor');
+    /* a2/b2 are the same trimmed length (6 vs 6) → a real tie */
+    const a2 = makeNamedChar('a2', 'Castor');
+    const b2 = makeNamedChar('b2', 'Maelor');
     const r = pickMergeSurvivor(a2, b2);
     expect(r.target.id).toBe('a2');
     expect(r.source.id).toBe('b2');

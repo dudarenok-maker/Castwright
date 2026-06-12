@@ -59,7 +59,7 @@ The existing 22 fold tests remain green — the changes are additive and the fas
 
 The fix lives entirely in the analyzer path. The most reliable manual check uses the Lost Cities the Coalfall Commission manuscript (known-good fixture per CLAUDE.md), which has Ro on roster + narrator references to other bodyguards.
 
-1. **Pick a test book** with the canonical the Coalfall Commission manuscript (`C:\Users\dudar\Downloads\the Coalfall Commission.txt` — see CLAUDE.md). Confirm the workspace's `.audiobook/` is fresh OR delete `cast.json` and `manuscript-edits.json` to force a fresh analysis.
+1. **Pick a test book** with the canonical the Coalfall Commission manuscript (`server/src/__fixtures__/the-coalfall-commission.md` — see CLAUDE.md). Confirm the workspace's `.audiobook/` is fresh OR delete `cast.json` and `manuscript-edits.json` to force a fresh analysis.
 2. **Run analysis with `ANALYZER=gemini` + `GEMINI_API_KEY` set** (or `ANALYZER=local` if the local Ollama is running). The per-chapter Phase 0a prompt now contains the "Narrator-only named characters" section, so the model has an option to emit a narrator-only entry.
 3. **Inspect a chapter where a bodyguard is referenced by name in narration but never speaks** — open the stage1 outbox JSON for that chapter (`server/handoff/outbox/{manuscriptId}-stage1-ch{N}.json`). The narrator-only bodyguard should appear with `detectionSource: "narrator-mention"` and an empty `evidence` array.
 4. **After analysis completes, open the book in the running app** → Cast view → the narrator-only bodyguard appears in the roster with 0 lines, 0 scenes, voice slot `Unassigned`. Without this fix the bodyguard would either be missing entirely (Phase 0a never emitted them) or rolled into `Unknown male`/`Unknown female`.

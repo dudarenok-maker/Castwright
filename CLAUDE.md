@@ -185,7 +185,7 @@ Harnesses (five tiers):
   `npm run verify` adds typecheck + e2e + build on top (pre-push gate).
 
 Canonical end-to-end manuscript for full-pipeline regression:
-`C:\Users\dudar\Downloads\the Coalfall Commission.txt` (do not commit — copyrighted).
+`server/src/__fixtures__/the-coalfall-commission.md` (do not commit — copyrighted).
 Cite this file from any regression plan that needs an e2e run rather than
 inventing fresh fixtures. See `docs/features/archive/28-chapter-audio-format.md` for
 the canonical recipe.

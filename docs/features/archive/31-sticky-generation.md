@@ -132,7 +132,7 @@ in-scope chapters so a force-regen does not snap back to "Done"`.
 ## Acceptance
 
 Use the canonical end-to-end manuscript
-`C:\Users\dudar\Downloads\the Coalfall Commission.txt` so the run lasts long
+`server/src/__fixtures__/the-coalfall-commission.md` so the run lasts long
 enough to actually navigate during synthesis. `npm run dev` + the local
 analyzer + the TTS sidecar must all be up.
 

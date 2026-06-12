@@ -812,15 +812,15 @@ describe('castSlice — renameCharacter (rename + promote alias)', () => {
 
 describe('castSlice — setRenderedFallback (fe-16)', () => {
   it('overwrites the fallback map from the book-state hydrate', () => {
-    const start = { characters: [makeChar('Marrow')], renderedFallbackByCharacter: {} };
-    const next = castSlice.reducer(start, castActions.setRenderedFallback({ Marrow: 'kokoro' }));
-    expect(next.renderedFallbackByCharacter).toEqual({ Marrow: 'kokoro' });
+    const start = { characters: [makeChar('marrow')], renderedFallbackByCharacter: {} };
+    const next = castSlice.reducer(start, castActions.setRenderedFallback({ marrow: 'kokoro' }));
+    expect(next.renderedFallbackByCharacter).toEqual({ marrow: 'kokoro' });
   });
 
   it('clears stale entries when the new map is empty (post-redesign render)', () => {
     const start = {
-      characters: [makeChar('Marrow')],
-      renderedFallbackByCharacter: { Marrow: 'kokoro' },
+      characters: [makeChar('marrow')],
+      renderedFallbackByCharacter: { marrow: 'kokoro' },
     };
     const next = castSlice.reducer(start, castActions.setRenderedFallback({}));
     expect(next.renderedFallbackByCharacter).toEqual({});

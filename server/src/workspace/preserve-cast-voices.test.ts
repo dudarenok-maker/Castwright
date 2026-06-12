@@ -43,8 +43,8 @@ describe('preserveDesignedVoicesOnCastWrite', () => {
   });
 
   it('does NOT touch reuse-link fields (voiceId / matchedFrom / voiceState) — unlink must work', () => {
-    const existing: C[] = [{ id: 'Wisp', voiceId: 'Wisp', matchedFrom: { bookId: 'u' }, voiceState: 'reused' }];
-    const incoming: C[] = [{ id: 'Wisp' }]; // user unlinked → cleared
+    const existing: C[] = [{ id: 'wisp', voiceId: 'wisp', matchedFrom: { bookId: 'u' }, voiceState: 'reused' }];
+    const incoming: C[] = [{ id: 'wisp' }]; // user unlinked → cleared
     const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
     expect(out[0].voiceId).toBeUndefined();
     expect(out[0].matchedFrom).toBeUndefined();

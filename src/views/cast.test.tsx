@@ -62,15 +62,15 @@ const narrator: Character = {
   },
 };
 
-const Marrow: Character = {
-  id: 'Marrow',
+const marrow: Character = {
+  id: 'marrow',
   name: 'Mr. Marrow',
   role: 'Teacher',
   color: 'mentor',
   lines: 5,
   scenes: 2,
   attributes: ['impatient'],
-  voiceId: 'v_Marrow',
+  voiceId: 'v_marrow',
   voiceState: 'generated',
   gender: 'male',
   ageRange: 'adult',
@@ -96,7 +96,7 @@ const library: Voice[] = [
     },
   },
   {
-    id: 'v_Marrow',
+    id: 'v_marrow',
     character: 'Mr. Marrow',
     bookId: 'b_current',
     bookTitle: 'The Northern Star',
@@ -122,7 +122,7 @@ function renderView(opts: { onOpenProfile?: (id: string | null) => void } = {}) 
   return render(
     <Provider store={store}>
       <CastView
-        characters={[narrator, Marrow]}
+        characters={[narrator, marrow]}
         setCharacters={() => {}}
         library={library}
         title="The Northern Star"
@@ -236,7 +236,7 @@ describe('CastView VoiceSwatch sample playback', () => {
     expect(swatch).toBeTruthy();
     fireEvent.click(swatch);
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('v_Marrow');
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('v_marrow');
   });
 
   it('also opens the profile drawer on the same swatch click', async () => {
@@ -247,7 +247,7 @@ describe('CastView VoiceSwatch sample playback', () => {
     fireEvent.click(swatch);
     /* The row's onClick is the click target for opening the drawer;
        the swatch click bubbles up so a single click does both things. */
-    expect(onOpenProfile).toHaveBeenCalledWith('Marrow');
+    expect(onOpenProfile).toHaveBeenCalledWith('marrow');
     /* Let the auto-load promise resolve so the row's loading→idle
        transition settles inside act, silencing the warning. */
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalled());
@@ -314,9 +314,9 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
   }
 
   const MarrowQwen: Character = {
-    ...Marrow,
+    ...marrow,
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-Marrow' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
   };
 
   it('routes a Qwen-pinned row through the Qwen model key + injects the designed voiceId', async () => {
@@ -328,12 +328,12 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
     const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
     expect(args.modelKey).toBe('qwen3-tts-0.6b');
-    expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-Marrow');
+    expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-marrow');
   });
 
   it('shows an inline error (no API call) for a Qwen-pinned row with no designed voice', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
-    renderChars([{ ...Marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
+    renderChars([{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
     const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
@@ -343,7 +343,7 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
 
   it('keeps the project model key + injects no qwen override for a non-Qwen row', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
-    const { store } = renderChars([Marrow]);
+    const { store } = renderChars([marrow]);
     const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
@@ -360,12 +360,12 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     renderChars([MarrowQwen]);
     const row = rowFor('Mr. Marrow');
     expect(row.textContent).toContain('Qwen');
-    expect(row.textContent).toContain('qwen-Marrow');
+    expect(row.textContent).toContain('qwen-marrow');
     expect(row.textContent).toContain('Designed voice');
   });
 
   it('omits the voiceId segment for a Qwen row with no designed voice', () => {
-    renderChars([{ ...Marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
+    renderChars([{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
     const row = rowFor('Mr. Marrow');
     expect(row.textContent).toContain('No voice designed yet');
     /* No designed id ⇒ no "qwen-…" segment (guards the `name &&` gate). */
@@ -401,20 +401,20 @@ describe('CastView Qwen status pill (plan 117)', () => {
   }
 
   const MarrowQwen: Character = {
-    ...Marrow,
+    ...marrow,
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-Marrow' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
   };
 
   it('shows "Needs voice" — not a green "Generated" — for a Qwen row with no designed voice', () => {
-    renderWithLibrary([{ ...Marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }], library);
+    renderWithLibrary([{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }], library);
     const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Needs voice')).toBeInTheDocument();
     expect(within(row).queryByText('Generated')).toBeNull();
   });
 
   it('shows "Designed" for a designed Qwen voice that has not rendered audio', () => {
-    /* The matched library voice (v_Marrow) carries no `generated` flag. */
+    /* The matched library voice (v_marrow) carries no `generated` flag. */
     renderWithLibrary([MarrowQwen], library);
     const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Designed')).toBeInTheDocument();
@@ -423,7 +423,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
 
   it('shows "Generated" once the matched library voice is flagged generated', () => {
     const generatedLib = library.map((v) =>
-      v.id === 'v_Marrow' ? { ...v, generated: true } : v,
+      v.id === 'v_marrow' ? { ...v, generated: true } : v,
     );
     renderWithLibrary([MarrowQwen], generatedLib);
     const row = rowFor('Mr. Marrow');
@@ -431,7 +431,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
   });
 
   it('shows "Sampled" for a designed Qwen voice whose matched library voice has a cached audition', () => {
-    const sampledLib = library.map((v) => (v.id === 'v_Marrow' ? { ...v, sampled: true } : v));
+    const sampledLib = library.map((v) => (v.id === 'v_marrow' ? { ...v, sampled: true } : v));
     renderWithLibrary([MarrowQwen], sampledLib);
     const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Sampled')).toBeInTheDocument();
@@ -447,14 +447,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
       preloadedState: {
         cast: {
           ...castSlice.getInitialState(),
-          renderedFallbackByCharacter: { [Marrow.id]: 'kokoro' },
+          renderedFallbackByCharacter: { [marrow.id]: 'kokoro' },
         },
       },
     });
     render(
       <Provider store={store}>
         <CastView
-          characters={[{ ...Marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]}
+          characters={[{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -535,13 +535,13 @@ describe('CastView Qwen status pill (plan 117)', () => {
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     await waitFor(() =>
-      expect(store.getState().voices.voices.find((v) => v.id === 'v_Marrow')?.sampled).toBe(true),
+      expect(store.getState().voices.voices.find((v) => v.id === 'v_marrow')?.sampled).toBe(true),
     );
   });
 
   it('renders the lifecycle pill and the Reused badge as separate, coexisting markers', () => {
     renderView();
-    /* Marrow: coqui, voiceState 'generated', no match → "Matched" pill only.
+    /* marrow: coqui, voiceState 'generated', no match → "Matched" pill only.
        narrator: coqui voice, voiceState 'reused' + matchedFrom → "Matched"
        lifecycle pill AND a Reused provenance badge (they no longer collapse
        into a single "Reused" pill). */
@@ -599,12 +599,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
     reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
   });
     store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
-    /* Marrow: voiceState 'generated', no ttsEngine, no qwen override; empty
+    /* marrow: voiceState 'generated', no ttsEngine, no qwen override; empty
        library ⇒ no matched voice. */
     render(
       <Provider store={store}>
         <CastView
-          characters={[Marrow]}
+          characters={[marrow]}
           setCharacters={() => {}}
           library={[]}
           title="The Northern Star"
@@ -726,7 +726,7 @@ describe('CastView desktop drag-drop is intact', () => {
     const store = configureStore({
     reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
   });
-    let castRef: Character[] = [narrator, Marrow];
+    let castRef: Character[] = [narrator, marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
     });
@@ -796,7 +796,7 @@ describe('CastView wave-4 tap-to-assign', () => {
     const store = configureStore({
     reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
   });
-    let castRef: Character[] = [narrator, Marrow];
+    let castRef: Character[] = [narrator, marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
     });
@@ -834,7 +834,7 @@ describe('CastView wave-4 tap-to-assign', () => {
     render(
       <Provider store={store}>
         <CastView
-          characters={[narrator, Marrow]}
+          characters={[narrator, marrow]}
           setCharacters={setCharacters}
           library={library}
           title="The Northern Star"
@@ -881,7 +881,7 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
     render(
       <Provider store={store}>
         <CastView
-          characters={[driftedNarrator, Marrow]}
+          characters={[driftedNarrator, marrow]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -1017,7 +1017,7 @@ describe('CastView status filter', () => {
      the row pills are (statusFilterKeys → resolveVoiceStatus), so a chip's
      count always equals its filtered row count. */
 
-  /* Default project engine is kokoro (preset), so narrator + Marrow both
+  /* Default project engine is kokoro (preset), so narrator + marrow both
      resolve to "Matched"; narrator additionally carries the Reused badge. */
   const ghost: Character = {
     id: 'ghost',
@@ -1046,7 +1046,7 @@ describe('CastView status filter', () => {
     return render(
       <Provider store={store}>
         <CastView
-          characters={[narrator, Marrow, ghost, blank]}
+          characters={[narrator, marrow, ghost, blank]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -1073,7 +1073,7 @@ describe('CastView status filter', () => {
   it('renders one chip per present status with its live count', () => {
     renderFilterView();
     expect(chip(/^Needs voice/).textContent).toContain('1');
-    expect(chip(/^Matched/).textContent).toContain('2'); // narrator + Marrow
+    expect(chip(/^Matched/).textContent).toContain('2'); // narrator + marrow
     expect(chip(/^Unset/).textContent).toContain('1');
     expect(chip(/^Reused/).textContent).toContain('1'); // narrator only
   });
@@ -1198,7 +1198,7 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
     return render(
       <Provider store={store}>
         <CastView
-          characters={[narrator, Marrow]}
+          characters={[narrator, marrow]}
           setCharacters={() => {}}
           library={library}
           title="Северный путь"
@@ -1256,14 +1256,14 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
 
 describe('CastView — Design full cast button', () => {
   const qwenNeedsVoice: Character = {
-    ...Marrow,
+    ...marrow,
     ttsEngine: 'qwen',
     overrideTtsVoices: undefined,
   };
   const qwenDesigned: Character = {
-    ...Marrow,
+    ...marrow,
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-v_Marrow' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-v_marrow' } },
   };
 
   type DesignActive = {
@@ -1352,7 +1352,7 @@ describe('CastView — Design full cast button', () => {
       | { payload: { bookId: string; characterIds: string[]; modelKey: string; scope: string } }
       | undefined;
     expect(a?.payload.bookId).toBe('b1');
-    expect(a?.payload.characterIds).toEqual(['Marrow']);
+    expect(a?.payload.characterIds).toEqual(['marrow']);
     expect(a?.payload.modelKey).toMatch(/qwen/);
     expect(a?.payload.scope).toBe('bases');
     /* Picker closes after picking */

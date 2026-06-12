@@ -151,7 +151,7 @@ language param.
 
 Run the synthesis paths against the real backend + sidecar (this feature is
 sidecar-bound). Canonical English fixture:
-`C:\Users\dudar\Downloads\the Coalfall Commission.txt` (do not commit). Russian needs a
+`server/src/__fixtures__/the-coalfall-commission.md` (do not commit). Russian needs a
 **public-domain Pushkin / Chekhov fixture** (e.g. Chekhov «Хамелеон») saved
 locally, NOT committed (mirror the Marlow-fixture convention).
 

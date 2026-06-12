@@ -27,14 +27,14 @@ function makeStore(sentences: any[]) {
 }
 
 const qwenChar = {
-  id: 'Marrow',
+  id: 'marrow',
   name: 'Marrow Todd',
   role: 'PoV',
   color: 'narrator',
-  voiceId: 'Marrow',
+  voiceId: 'marrow',
   ttsEngine: 'qwen',
   overrideTtsVoices: {
-    qwen: { name: 'qwen-Marrow', variants: { angry: { name: 'qwen-Marrow-angry' } } },
+    qwen: { name: 'qwen-marrow', variants: { angry: { name: 'qwen-marrow-angry' } } },
   },
 } as unknown as Character;
 
@@ -89,7 +89,7 @@ describe('fe-31 — emotion preview from the chip', () => {
     expect(preview).toBeEnabled();
     fireEvent.click(preview);
     await waitFor(() => expect(playEmotionVariantSample).toHaveBeenCalledTimes(1));
-    expect(playEmotionVariantSample.mock.calls[0][0]).toMatchObject({ id: 'Marrow' });
+    expect(playEmotionVariantSample.mock.calls[0][0]).toMatchObject({ id: 'marrow' });
     expect(playEmotionVariantSample.mock.calls[0][1]).toBe('angry');
     /* No fallback → no "renders neutral" note. */
     expect(screen.queryByTestId('emotion-preview-note')).toBeNull();
@@ -99,7 +99,7 @@ describe('fe-31 — emotion preview from the chip', () => {
     playEmotionVariantSample.mockResolvedValue({ fellBackToBase: true });
     const noVariant = {
       ...qwenChar,
-      overrideTtsVoices: { qwen: { name: 'qwen-Marrow' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
     } as unknown as Character;
     renderWithChar(noVariant, 'sad');
     fireEvent.click(screen.getByTestId('emotion-preview'));

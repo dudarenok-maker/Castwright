@@ -133,8 +133,8 @@ const makeChar = (m: MissingSpeaker): { id: string; name: string } => ({
 describe('runStage1WithRosterGuard', () => {
   it('retries once, then keeps the cleaner take', async () => {
     const calls = [
-      { characters: [{ id: 'Aldous', name: 'Aldous' }] }, // misses Lessom
-      { characters: [{ id: 'Aldous', name: 'Aldous' }, { id: 'lessom', name: 'Lessom' }] },
+      { characters: [{ id: 'aldous', name: 'Aldous' }] }, // misses Lessom
+      { characters: [{ id: 'aldous', name: 'Aldous' }, { id: 'lessom', name: 'Lessom' }] },
     ];
     let i = 0;
     const call = vi.fn(async () => calls[i++]);
@@ -152,7 +152,7 @@ describe('runStage1WithRosterGuard', () => {
   });
 
   it('auto-adds the missing speaker when retries still miss', async () => {
-    const call = vi.fn(async () => ({ characters: [{ id: 'Aldous', name: 'Aldous' }] }));
+    const call = vi.fn(async () => ({ characters: [{ id: 'aldous', name: 'Aldous' }] }));
     const onAutoAdd = vi.fn();
     const res = await runStage1WithRosterGuard({
       body: LESSOM_BODY,
@@ -171,7 +171,7 @@ describe('runStage1WithRosterGuard', () => {
 
   it('does not retry or add when coverage is already clean', async () => {
     const call = vi.fn(async () => ({
-      characters: [{ id: 'Aldous', name: 'Aldous' }, { id: 'lessom', name: 'Lessom' }],
+      characters: [{ id: 'aldous', name: 'Aldous' }, { id: 'lessom', name: 'Lessom' }],
     }));
     const res = await runStage1WithRosterGuard({
       body: LESSOM_BODY,
@@ -185,7 +185,7 @@ describe('runStage1WithRosterGuard', () => {
   });
 
   it('respects maxRetries=0 (no retry, straight to auto-add)', async () => {
-    const call = vi.fn(async () => ({ characters: [{ id: 'Aldous', name: 'Aldous' }] }));
+    const call = vi.fn(async () => ({ characters: [{ id: 'aldous', name: 'Aldous' }] }));
     const res = await runStage1WithRosterGuard({
       body: LESSOM_BODY,
       rosterNamesFor: (r) => r.characters.map((c) => c.name),
@@ -223,7 +223,7 @@ describe('toKebabId', () => {
 describe('validateAttributionCoverage (#529 half-state)', () => {
   const roster = [
     { id: 'lessom', name: 'Lessom' },
-    { id: 'Aldous', name: 'Aldous' },
+    { id: 'aldous', name: 'Aldous' },
   ];
 
   it('flags a rostered, prose-tagged speaker with 0 attributed lines (Lessom/ch19 half-state)', () => {
@@ -232,13 +232,13 @@ describe('validateAttributionCoverage (#529 half-state)', () => {
     const sentences = [
       { characterId: 'narrator' },
       { characterId: 'narrator' },
-      { characterId: 'Aldous' },
+      { characterId: 'aldous' },
       { characterId: 'narrator' },
     ];
     const v = validateAttributionCoverage(LESSOM_BODY, roster, sentences);
     expect(v.ok).toBe(false);
     expect(v.halfStateSpeakers.map((s) => s.id)).toContain('lessom');
-    expect(v.halfStateSpeakers.map((s) => s.id)).not.toContain('Aldous');
+    expect(v.halfStateSpeakers.map((s) => s.id)).not.toContain('aldous');
     const lessom = v.halfStateSpeakers.find((s) => s.id === 'lessom')!;
     expect(lessom.attributedLines).toBe(0);
     expect(lessom.narratorLines).toBe(3);
@@ -250,7 +250,7 @@ describe('validateAttributionCoverage (#529 half-state)', () => {
        half-state — even though most of the chapter is narration. */
     const sentences = [
       { characterId: 'lessom' },
-      { characterId: 'Aldous' },
+      { characterId: 'aldous' },
       { characterId: 'narrator' },
     ];
     const v = validateAttributionCoverage(LESSOM_BODY, roster, sentences);
