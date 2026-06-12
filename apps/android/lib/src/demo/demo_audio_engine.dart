@@ -5,23 +5,20 @@ import '../data/audio_engine.dart';
 /// deterministic now-playing frame. All control methods are no-ops.
 class DemoAudioEngine implements AudioEngine {
   DemoAudioEngine({
-    Duration position = const Duration(minutes: 7, seconds: 12),
-    Duration duration = const Duration(minutes: 23, seconds: 40),
-  })  : _position = position,
-        _duration = duration;
-
-  final Duration _position;
-  final Duration _duration;
+    this.position = const Duration(minutes: 7, seconds: 12),
+    this.duration = const Duration(minutes: 23, seconds: 40),
+  });
 
   @override
-  Duration get position => _position;
+  final Duration position;
   @override
-  Stream<Duration> get positionStream => Stream<Duration>.value(_position);
+  Stream<Duration> get positionStream => Stream<Duration>.value(position);
 
+  /// Non-null here; overrides the interface's nullable [AudioEngine.duration].
   @override
-  Duration? get duration => _duration;
+  final Duration duration;
   @override
-  Stream<Duration?> get durationStream => Stream<Duration?>.value(_duration);
+  Stream<Duration?> get durationStream => Stream<Duration?>.value(duration);
 
   @override
   bool get playing => true;

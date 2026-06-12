@@ -138,6 +138,9 @@ Future<CompanionRuntime> buildDemoRuntime({
 
   final sleepTimer = SleepTimer(onExpire: () {});
 
+  // forDemo is @visibleForTesting to keep it out of real production paths; this
+  // demo-only builder is its one sanctioned non-test caller.
+  // ignore: invalid_use_of_visible_for_testing_member
   return CompanionRuntime.forDemo(
     api: api,
     library: library,
