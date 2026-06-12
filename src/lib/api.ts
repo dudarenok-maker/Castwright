@@ -5217,6 +5217,16 @@ export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
       };
 }
 
+async function realCompleteSetup(): Promise<{ completedAt: string }> {
+  const res = await fetch('/api/setup/complete', { method: 'POST' });
+  if (!res.ok) throw new Error(`complete ${res.status}`);
+  return (await res.json()) as { completedAt: string };
+}
+
+export async function mockCompleteSetup(): Promise<{ completedAt: string }> {
+  return { completedAt: '2026-06-12T00:00:00.000Z' };
+}
+
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
@@ -5932,6 +5942,7 @@ const real = {
   getGpuQueueState: realGetGpuQueueState,
   getDiagnostics: realGetDiagnostics,
   getSetupReadiness: realGetSetupReadiness,
+  completeSetup: realCompleteSetup,
   getOllamaHealth: realGetOllamaHealth,
   loadSidecar: realLoadSidecar,
   unloadSidecar: realUnloadSidecar,
@@ -6180,6 +6191,7 @@ const mock = {
   getGpuQueueState: mockGetGpuQueueState,
   getDiagnostics: mockGetDiagnostics,
   getSetupReadiness: mockGetSetupReadiness,
+  completeSetup: mockCompleteSetup,
   getOllamaHealth: mockGetOllamaHealth,
   loadSidecar: mockLoadSidecar,
   unloadSidecar: mockUnloadSidecar,
