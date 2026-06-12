@@ -101,7 +101,7 @@ export function matchQuoteInSource(norm: string, normalisedSource: string): Quot
 /* Token set for fuzzy name matching: lowercase, split on whitespace + a few
    common name punctuation marks, drop single-letter tokens (initials,
    particles like "de", "le" that produce noisy matches across unrelated
-   names). "Marlow Halden" → {Marlow, Halden}; "Marlow" → {Marlow}; Jaccard of
+   names). "Marlow Halden" → {marlow, halden}; "Marlow" → {marlow}; Jaccard of
    the two = 1/2. */
 export function nameTokens(name: string): Set<string> {
   return new Set(

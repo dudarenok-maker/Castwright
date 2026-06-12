@@ -198,7 +198,7 @@ export function validateRosterCoverage(
     const root = key.split(/['’]/)[0];
     if (isStopword(key) || isStopword(root) || ignore.has(key)) continue;
     if (roster.has(key)) continue;
-    // last-token match (tag "Casper" vs roster token "Casper") already covered
+    // last-token match (tag "Casper" vs roster token "casper") already covered
     // because rosterTokenSet stores last tokens too.
     const start = Math.max(0, m.index - t.quoteProximityChars);
     const end = Math.min(body.length, m.index + m[0].length + t.quoteProximityChars);
