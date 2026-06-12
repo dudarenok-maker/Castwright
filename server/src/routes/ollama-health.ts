@@ -223,9 +223,10 @@ async function callOllamaGenerate(
    to the UI as "Analysis stream ended without a result event" while
    the pill stays green ("Analyzer ready"), so every Try Again triggers
    the same reload-and-die loop. */
-ollamaHealthRouter.post('/load', async (_req: Request, res: Response) => {
+ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
   const url = getResolvedOllamaUrl();
-  const model = getResolvedOllamaModel();
+  const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  const model = requested || getResolvedOllamaModel();
   const result = await callOllamaGenerate(
     url,
     {
