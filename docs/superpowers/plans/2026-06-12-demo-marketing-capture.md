@@ -222,11 +222,15 @@ git commit -m "test: rename Mike Dudarenok to Marin Vale in fixtures"
 
 # Wave B — Hollow Tide fixtures + capture plumbing
 
-### Task B1: `.env.marketing` + `DEMO_CAPTURE` flag
+### Task B1: `.env.marketing`
 
 **Files:**
 - Create: `.env.marketing`
-- Modify: `src/lib/api.ts:70`
+
+> **Note (revised during execution):** the `DEMO_CAPTURE` flag declaration was
+> moved into Task B3. Declaring it here (unused until B3) trips `tsc` TS6133
+> ("declared but never read"). B1 commits only the env file; B3 adds the flag
+> *and* its first use together, keeping typecheck green.
 
 - [ ] **Step 1: Create `.env.marketing`**
 
@@ -235,23 +239,11 @@ VITE_USE_MOCKS=true
 VITE_DEMO_CAPTURE=1
 ```
 
-- [ ] **Step 2: Add the flag next to `USE_MOCKS`**
-
-In `src/lib/api.ts`, immediately after line 70:
-```ts
-const DEMO_CAPTURE = import.meta.env.VITE_DEMO_CAPTURE === '1';
-```
-
-- [ ] **Step 3: Typecheck**
-
-Run: `npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 2: Commit**
 
 ```bash
-git add .env.marketing src/lib/api.ts
-git commit -m "feat(frontend): add VITE_DEMO_CAPTURE marketing flag"
+git add .env.marketing
+git commit -m "feat(frontend): add .env.marketing capture mode"
 ```
 
 ---
