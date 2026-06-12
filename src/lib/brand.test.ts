@@ -2,7 +2,16 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { TAGLINE, TAGLINE_SHORT, MANIFESTO, TEASER, TEASER_FLAG, DOMAIN, MADE_WITH } from './brand';
+import {
+  TAGLINE,
+  TAGLINE_SHORT,
+  MANIFESTO,
+  TEASER,
+  TEASER_FLAG,
+  DOMAIN,
+  MADE_WITH,
+  BRAND_NAME,
+} from './brand';
 
 const RETIRED_TAGLINE = 'Any book, performed by a full cast — effortlessly. Even in your own voice.';
 const BANNED_WORD = 'effortlessly';
@@ -24,6 +33,13 @@ describe('brand constants', () => {
     expect(MANIFESTO).toBe('Many voices, one machine.');
     expect(DOMAIN).toBe('castwright.ai');
     expect(MADE_WITH).toBe('Made with Castwright');
+  });
+
+  it('exposes the bare product name for the in-app build stamp (distinct from the output stamp)', () => {
+    expect(BRAND_NAME).toBe('Castwright');
+    /* The two are intentionally different: outputs are attributed "Made with
+       Castwright", the app stamps itself with just "Castwright". */
+    expect(MADE_WITH).not.toBe(BRAND_NAME);
   });
 
   it('exposes the teaser with its mandatory in-development flag', () => {
