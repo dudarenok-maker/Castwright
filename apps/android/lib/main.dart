@@ -38,6 +38,7 @@ class AudiobookCompanionApp extends StatelessWidget {
       this.service,
       this.audioHandler,
       this.deepLinks,
+      this.runtimeOverride,
       this.themeMode = ThemeMode.system});
 
   final PairingStore store;
@@ -50,6 +51,10 @@ class AudiobookCompanionApp extends StatelessWidget {
 
   /// Injectable deep-link stream (null in production — uses App Links platform channel).
   final Stream<Uri>? deepLinks;
+
+  /// Injectable pre-built runtime — used by the marketing capture + widget tests
+  /// to skip pairing/connection and render posed screens. Null in production.
+  final CompanionRuntime? runtimeOverride;
 
   /// Light/dark selection. Defaults to following the system; the capture harness
   /// forces a value per pass.
@@ -74,7 +79,8 @@ class AudiobookCompanionApp extends StatelessWidget {
           store: store,
           service: service ?? PairingService(),
           audioHandler: audioHandler,
-          deepLinks: deepLinks),
+          deepLinks: deepLinks,
+          runtimeOverride: runtimeOverride),
     );
   }
 }
@@ -85,7 +91,8 @@ class HomePage extends StatefulWidget {
       required this.store,
       required this.service,
       this.audioHandler,
-      this.deepLinks});
+      this.deepLinks,
+      this.runtimeOverride});
 
   final PairingStore store;
   final PairingService service;
@@ -93,6 +100,9 @@ class HomePage extends StatefulWidget {
 
   /// Injectable deep-link stream (null in production — uses App Links platform channel).
   final Stream<Uri>? deepLinks;
+
+  /// Injectable pre-built runtime (capture/tests). Null in production.
+  final CompanionRuntime? runtimeOverride;
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -152,6 +162,15 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _boot() async {
+    if (widget.runtimeOverride != null) {
+      _paired = await widget.store.load();
+      if (!mounted) return;
+      setState(() {
+        _runtime = widget.runtimeOverride;
+        _loading = false;
+      });
+      return;
+    }
     final server = await widget.store.load();
     if (!mounted) return;
     if (server == null) {
