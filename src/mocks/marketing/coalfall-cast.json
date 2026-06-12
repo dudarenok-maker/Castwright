@@ -1,0 +1,640 @@
+{
+  "characters": [
+    {
+      "id": "narrator",
+      "name": "Narrator",
+      "role": "Third-person observer",
+      "color": "narrator",
+      "attributes": [
+        "formal",
+        "observational",
+        "measured",
+        "rhythmic"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "description": "A grounded, steady narrator who observes the forge life with a touch of folkloric warmth.",
+      "evidence": [
+        {
+          "quote": "The dragon settled into the doorway, one eye half-closed against the warmth, and said, in the voice of a tired mountain that had not, for a very long time, been asked to wait somewhere kind.",
+          "note": "Example of the narrator's lyrical, descriptive style."
+        },
+        {
+          "quote": "The mould was sand and clay and an old bell-gauge Oduvan had not touched in nine years, since the man who taught him the gauge stopped needing tools.",
+          "note": "Descriptive, atmospheric narrative."
+        },
+        {
+          "quote": "The forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when the knocking started.",
+          "note": "Sets the scene with descriptive, atmospheric prose."
+        },
+        {
+          "quote": "The pour, when it came, was the colour of the morning that hadn’t arrived yet.",
+          "note": "Evocative, descriptive prose."
+        },
+        {
+          "quote": "The Coalfall Commission",
+          "note": "Chapter title presentation."
+        },
+        {
+          "quote": "A Castwright original.",
+          "note": "Production credit narration."
+        },
+        {
+          "quote": "Castwright",
+          "note": "Concluding atmospheric note."
+        }
+      ],
+      "lines": 153,
+      "scenes": 4,
+      "voiceState": "generated",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-narrator",
+          "variants": {
+            "whisper": {
+              "name": "qwen-narrator__whisper"
+            },
+            "angry": {
+              "name": "qwen-narrator__angry"
+            },
+            "sad": {
+              "name": "qwen-narrator__sad"
+            },
+            "excited": {
+              "name": "qwen-narrator__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsEngine": "qwen",
+      "voiceStyle": "Mid-30th adult female voice with a standard British accent. The voice has a warm, clear, and expressive timbre, a bit on the slower side. She speaks with a captivating, narrative rhythm, blending youthful curiosity with emotional depth. The tone is earnest, wondrous, and highly articulate, perfectly suited for reading a young adult magical fantasy."
+    },
+    {
+      "id": "master-oduvan",
+      "name": "Master Oduvan",
+      "role": "Blacksmith",
+      "color": "halloran",
+      "attributes": [
+        "gruff",
+        "experienced",
+        "pragmatic",
+        "authoritative",
+        "composed",
+        "professional"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 40,
+        "authority": 90,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "description": "An aged, gravel-voiced smith with decades of experience and little patience for unnecessary drama.",
+      "evidence": [
+        {
+          "quote": "If I douse the fire, I lose the weld I’ve been nursing since noon. A dragon can wait the length of a weld or it can’t, and either way I’d rather meet it warm.",
+          "note": "Establishes his pragmatic, work-focused personality."
+        },
+        {
+          "quote": "My apprentice. She’s thirteen and she thinks I can’t hear her sighing. She’ll be better than me before she’s twenty, which is the only reason I keep her.",
+          "note": "Shows his gruff affection for his apprentice."
+        },
+        {
+          "quote": "There’s your true note, such as the second-best smith makes.",
+          "note": "Professional but humble."
+        },
+        {
+          "quote": "Gentlemen, it’s a small bell. It needs a small audience.",
+          "note": "Commanding and professional."
+        }
+      ],
+      "lines": 24,
+      "scenes": 2,
+      "voiceState": "generated",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-master-oduvan",
+          "variants": {
+            "excited": {
+              "name": "qwen-master-oduvan__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "bm_george"
+        }
+      },
+      "ttsEngine": "qwen",
+      "voiceStyle": "A deep-pitched, gravelly masculine voice with a slow, measured pace and a resonant, weary timbre, projecting a detached and weathered authority for expressive character dialogue."
+    },
+    {
+      "id": "wren",
+      "name": "Wren",
+      "role": "Apprentice",
+      "color": "eliza",
+      "attributes": [
+        "earnest",
+        "observant",
+        "young",
+        "direct",
+        "reserved"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "description": "A thirteen-year-old apprentice striving to prove her competence in the forge.",
+      "evidence": [
+        {
+          "quote": "Because he forgets to be stern.",
+          "note": "Insightful, slightly informal tone."
+        },
+        {
+          "quote": "I’m not crying.",
+          "note": "Indicates her focus on the work despite her emotional state."
+        },
+        {
+          "quote": "I never sigh.",
+          "note": "Shows her defensive, slightly youthful reaction to her mentor's teasing."
+        }
+      ],
+      "lines": 13,
+      "scenes": 2,
+      "voiceState": "generated",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-wren"
+        },
+        "kokoro": {
+          "name": "af_aoede"
+        }
+      },
+      "ttsEngine": "qwen",
+      "voiceStyle": "A female teenager with a medium pitch and steady, mid-paced cadence, possessing a clear, breathy timbre and an earnest emotional register for expressive character dialogue."
+    },
+    {
+      "id": "maerin",
+      "name": "Maerin",
+      "role": "Reeve",
+      "color": "marcus",
+      "attributes": [
+        "urgent",
+        "clipped",
+        "authoritative",
+        "steady",
+        "firm",
+        "protective"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 70,
+        "emotion": 40
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "description": "A local official, prone to urgency and direct, clipped speech.",
+      "evidence": [
+        {
+          "quote": "No, child, a painted one. Real. And making straight for the only lit window in the valley, which is yours. Douse the fire.",
+          "note": "Direct and urgent instructions."
+        },
+        {
+          "quote": "Oduvan. Bar the shutters and douse the coals.",
+          "note": "Authoritative, command-driven speech."
+        }
+      ],
+      "lines": 8,
+      "scenes": 2,
+      "voiceState": "generated",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-maerin"
+        },
+        "kokoro": {
+          "name": "af_jessica"
+        }
+      },
+      "ttsEngine": "qwen",
+      "voiceStyle": "A mature female voice with a medium-low pitch and brisk, clipped pacing, featuring a crisp, resonant timbre and a cool, authoritative register, for expressive character dialogue."
+    },
+    {
+      "id": "coalfall-dragon",
+      "name": "Coalfall",
+      "role": "Ancient dragon",
+      "color": "slot-4",
+      "attributes": [
+        "ancient",
+        "deliberate",
+        "melancholy",
+        "profound"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 30,
+        "authority": 80,
+        "emotion": 50
+      },
+      "gender": "neutral",
+      "ageRange": "elderly",
+      "description": "A weary, ancient entity seeking a legacy, with a voice described like a tired mountain.",
+      "evidence": [
+        {
+          "quote": "I have come a long way. The villages call me Coalfall. That is not my name, but it will do. I am told the best smith in the valley keeps this forge.",
+          "note": "Slow, measured cadence typical of an ancient being."
+        },
+        {
+          "quote": "I do not want a sword. Everyone wants me dead, and a sword would only encourage them. I want a bell. Small enough to hang from a claw.",
+          "note": "Expresses his melancholic desire for a final memorial."
+        },
+        {
+          "quote": "For a true note. Your master is the fourth smith I have asked.",
+          "note": "Formal, ancient tone."
+        }
+      ],
+      "lines": 33,
+      "scenes": 2,
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-coalfall"
+        },
+        "kokoro": {
+          "name": "bm_george"
+        }
+      },
+      "ttsEngine": "qwen",
+      "voiceStyle": "A gender-neutral, elderly voice with an ultra-low, resonant pitch and deliberate, sluggish pacing; the timbre is gravelly, metallic, and immense, projecting unshakable authority, for expressive character dialogue.",
+      "voiceState": "generated"
+    },
+    {
+      "id": "Pell-hollis",
+      "name": "Pell Hollis",
+      "role": "Villager",
+      "color": "slot-5",
+      "attributes": [
+        "anxious",
+        "garrulous",
+        "well-meaning"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 70,
+        "authority": 20,
+        "emotion": 60
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A nervous villager prone to shouting.",
+      "evidence": [
+        {
+          "quote": "That was me shouting. Down the lane. The running, the fools, all of that. I’d shout it again.",
+          "note": "Explanatory, slightly defensive."
+        },
+        {
+          "quote": "I’ll just — I’ll stand here. By the hammers. In case.",
+          "note": "Nervous and halting."
+        }
+      ],
+      "lines": 11,
+      "scenes": 2,
+      "voiceId": "Pell-hollis",
+      "voiceState": "generated",
+      "voiceStyle": "A male adult voice with a medium-low pitch and erratic, fast-paced cadence, featuring a gravelly, restless timbre and a jittery, high-intensity emotional register for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-Pell-hollis",
+          "variants": {
+            "excited": {
+              "name": "qwen-Pell-hollis__excited"
+            },
+            "angry": {
+              "name": "qwen-Pell-hollis__angry"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen"
+    },
+    {
+      "id": "widow-casper",
+      "name": "Widow Casper",
+      "role": "Elderly villager",
+      "color": "slot-6",
+      "attributes": [
+        "cynical",
+        "sharp",
+        "wise"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 60,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "elderly",
+      "description": "An elderly, sharp-tongued local.",
+      "evidence": [
+        {
+          "quote": "Then make one up. It’s what your lot do, and tonight it’s wanted.",
+          "note": "Sharp and dismissive."
+        },
+        {
+          "quote": "Smaller than the stories.",
+          "note": "Cynical and direct."
+        }
+      ],
+      "lines": 9,
+      "scenes": 1,
+      "voiceState": "generated",
+      "voiceStyle": "A female elderly voice with a low, raspy pitch and measured, deliberate pace, possessing a brittle, clinical timbre and a detached, authoritative register, for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-widow-casper"
+        },
+        "kokoro": {
+          "name": "af_sarah"
+        }
+      },
+      "ttsEngine": "qwen"
+    },
+    {
+      "id": "brann-weir",
+      "name": "Brann Weir",
+      "role": "Quarry worker",
+      "color": "slot-7",
+      "attributes": [
+        "inquisitive",
+        "repetitive"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 50,
+        "authority": 30,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in questions.",
+      "evidence": [
+        {
+          "quote": "And we’re casting it a bell? Out of what, the church roof?",
+          "note": "Inquisitive, slightly skeptical."
+        },
+        {
+          "quote": "Is that the dragon, then?",
+          "note": "Inquisitive."
+        }
+      ],
+      "lines": 7,
+      "scenes": 1,
+      "voiceState": "generated",
+      "voiceStyle": "A male adult voice with a medium-low pitch and a steady, rhythmic pace, featuring a resonant, gravelly timbre and a curious, rising inflection for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-brann-weir"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsEngine": "qwen"
+    },
+    {
+      "id": "berrin-weir",
+      "name": "Berrin Weir",
+      "role": "Quarry worker",
+      "color": "slot-8",
+      "attributes": [
+        "concise",
+        "blunt"
+      ],
+      "tone": {
+        "warmth": 30,
+        "pace": 50,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "One of the quarry-working twins, speaks in flat statements.",
+      "evidence": [
+        {
+          "quote": "Out of bronze. The smith has bronze.",
+          "note": "Direct, factual."
+        },
+        {
+          "quote": "It’s the dragon.",
+          "note": "Flat and concise."
+        }
+      ],
+      "lines": 5,
+      "scenes": 1,
+      "voiceState": "generated",
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and steady, mid-paced delivery, characterized by a flat, uninflected monotone and dry, utilitarian precision, for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-berrin-weir"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen"
+    },
+    {
+      "id": "father-lessom",
+      "name": "Father Lessom",
+      "role": "Clergy",
+      "color": "slot-9",
+      "attributes": [
+        "hesitant",
+        "pious",
+        "formal"
+      ],
+      "tone": {
+        "warmth": 60,
+        "pace": 40,
+        "authority": 40,
+        "emotion": 50
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "The local priest, seeking propriety.",
+      "evidence": [
+        {
+          "quote": "A bell rung for the last of anything is rung for all of it.",
+          "note": "Solemn and formal."
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "voiceState": "generated",
+      "voiceStyle": "A mature male voice with a medium-low pitch and steady, measured pacing, featuring a resonant, dry timbre that conveys a calm, professional authority for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-father-lessom",
+          "variants": {
+            "whisper": {
+              "name": "qwen-father-lessom__whisper"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen"
+    },
+    {
+      "id": "ivo",
+      "name": "Ivo",
+      "role": "Pedlar",
+      "color": "slot-10",
+      "attributes": [
+        "transient",
+        "commercial",
+        "pragmatic"
+      ],
+      "tone": {
+        "warmth": 50,
+        "pace": 70,
+        "authority": 40,
+        "emotion": 40
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A traveling pedlar with unusual customs.",
+      "evidence": [
+        {
+          "quote": "A bell he wants. For himself, the bell. In my country, for the dead we plant a tree — but a tree on a claw you cannot carry, and so: a bell. Sensible.",
+          "note": "Pragmatic and observant."
+        },
+        {
+          "quote": "I have rope, if rope is wanted. Wax also. For nothing, tonight. Tomorrow, prices.",
+          "note": "Business-like, opportunistic."
+        }
+      ],
+      "lines": 9,
+      "scenes": 1,
+      "voiceState": "generated",
+      "voiceStyle": "A mature male voice with a medium-low pitch and brisk, rhythmic pacing, featuring a grainy, earthy timbre and a dry, observational emotional register, for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-ivo"
+        },
+        "kokoro": {
+          "name": "am_adam"
+        }
+      },
+      "ttsEngine": "qwen"
+    },
+    {
+      "id": "sela",
+      "name": "Sela",
+      "role": "Child",
+      "color": "slot-11",
+      "attributes": [
+        "curious",
+        "bold",
+        "matter-of-fact"
+      ],
+      "tone": {
+        "warmth": 70,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "child",
+      "description": "Maerin's young daughter, fearless around the dragon.",
+      "evidence": [
+        {
+          "quote": "I’ll do it. I’m going to live for ages.",
+          "note": "Bold and sincere."
+        },
+        {
+          "quote": "You’re the last one.",
+          "note": "Direct, observational."
+        }
+      ],
+      "lines": 12,
+      "scenes": 1,
+      "voiceState": "generated",
+      "voiceStyle": "A youthful female voice with a medium-high pitch, steady moderate pace, and a clear, resonant timbre, blending bright innocence with a surprisingly firm, unwavering steadiness for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-sela",
+          "variants": {
+            "excited": {
+              "name": "qwen-sela__excited"
+            }
+          }
+        },
+        "kokoro": {
+          "name": "af_nicole"
+        }
+      },
+      "ttsEngine": "qwen"
+    },
+    {
+      "id": "hart",
+      "name": "Hart",
+      "role": "Charcoal-burner",
+      "color": "slot-12",
+      "attributes": [
+        "quiet",
+        "grounded"
+      ],
+      "tone": {
+        "warmth": 40,
+        "pace": 30,
+        "authority": 50,
+        "emotion": 30
+      },
+      "gender": "male",
+      "ageRange": "adult",
+      "description": "A quiet charcoal-burner accustomed to working with fire.",
+      "evidence": [
+        {
+          "quote": "Burned charcoal thirty years. Everything’s a loaf.",
+          "note": "Grounded and metaphorical."
+        },
+        {
+          "quote": "Fire wants feeding. If we’re doing this.",
+          "note": "Quiet and pragmatic."
+        }
+      ],
+      "lines": 6,
+      "scenes": 1,
+      "voiceState": "generated",
+      "voiceStyle": "A mature male voice with a low, gravelly timbre and slow, measured cadence, featuring a steady, grounded projection and earthy texture for expressive character dialogue.",
+      "overrideTtsVoices": {
+        "qwen": {
+          "name": "qwen-hart"
+        },
+        "kokoro": {
+          "name": "am_michael"
+        }
+      },
+      "ttsEngine": "qwen"
+    }
+  ]
+}

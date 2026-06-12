@@ -2,6 +2,8 @@
    served in normal mock mode, so this touches no existing spec. */
 import type { LibraryResponse, BookStateResponse, Character, Sentence } from '../../lib/types';
 import type { CoverFraming } from '../../lib/cover-framing';
+import coalfallCastJson from './coalfall-cast.json';
+import coalfallManuscriptJson from './coalfall-manuscript.json';
 
 const COVER = (slug: string) => `/marketing-covers/${slug}.png`;
 
@@ -250,284 +252,22 @@ const tidewatcher = bookState({
 });
 
 /* ── Coalfall Commission — Standalone ── */
-const COALFALL_CHAPTERS = makeChapters(4, { withDuration: true });
-
-/* Canonical cast for The Coalfall Commission — dark-fantasy dragon mystery. */
-const coalfallCast: Character[] = [
-  {
-    id: 'narrator',
-    name: 'Narrator',
-    role: 'Narrator',
-    color: '#3C6E71',
-    voiceState: 'generated',
-    tone: { warmth: 0.6, pace: 0.5, authority: 0.7, emotion: 0.4 },
-    description: 'Unhurried chronicler of ash and shadow.',
-    gender: 'neutral',
-    ageRange: 'adult',
-    lines: 310,
-    scenes: 4,
-  },
-  {
-    id: 'wren',
-    name: 'Wren',
-    role: "Dragon's apprentice",
-    color: '#7B3F9E',
-    voiceState: 'reused',
-    aliases: ['Sparrow'],
-    ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-wren-v1' } },
-    tone: { warmth: 0.7, pace: 0.55, authority: 0.4, emotion: 0.75 },
-    description: "Curious, quick-tongued apprentice who earns the dragon's trust.",
-    gender: 'female',
-    ageRange: 'teen',
-    matchedFrom: {
-      bookId: 'the-ember-year',
-      characterId: 'sparrow',
-      bookTitle: 'The Ember Year',
-      confidence: 0.96,
-    },
-    lines: 240,
-    scenes: 4,
-  },
-  {
-    id: 'master-oduvan',
-    name: 'Master Oduvan',
-    role: 'Dragon-keeper',
-    color: '#4A2C6B',
-    voiceState: 'generated',
-    ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-oduvan-v1' } },
-    tone: { warmth: 0.5, pace: 0.35, authority: 0.8, emotion: 0.3 },
-    description: 'Ancient keeper of the last bonded dragon; patient as cooling lava.',
-    gender: 'male',
-    ageRange: 'elderly',
-    lines: 175,
-    scenes: 4,
-  },
-  {
-    id: 'coalfall',
-    name: 'Coalfall',
-    role: 'Dragon',
-    color: '#B54E1A',
-    voiceState: 'generated',
-    ttsEngine: 'qwen',
-    overrideTtsVoices: {
-      qwen: {
-        name: 'qwen-coalfall-v1',
-        variants: {
-          angry: { name: 'qwen-coalfall-angry' },
-          whisper: { name: 'qwen-coalfall-whisper' },
-          excited: { name: 'qwen-coalfall-excited' },
-          sad: { name: 'qwen-coalfall-sad' },
-        },
-      },
-    },
-    tone: { warmth: 0.35, pace: 0.3, authority: 0.95, emotion: 0.65 },
-    description: 'The last bonded dragon — volcanic-voiced, ancient, and grieving.',
-    gender: 'neutral',
-    ageRange: 'elderly',
-    lines: 95,
-    scenes: 3,
-  },
-  {
-    id: 'brann-weir',
-    name: 'Brann Weir',
-    role: 'Commissioner',
-    color: '#2E4A6C',
-    voiceState: 'generated',
-    tone: { warmth: 0.3, pace: 0.45, authority: 0.85, emotion: 0.35 },
-    description: 'The city commissioner who ordered the investigation; pragmatic and cold.',
-    gender: 'male',
-    ageRange: 'adult',
-    lines: 88,
-    scenes: 3,
-  },
-  {
-    id: 'berrin-weir',
-    name: 'Berrin Weir',
-    role: "Commissioner's son",
-    color: '#3A6E8A',
-    voiceState: 'generated',
-    tone: { warmth: 0.5, pace: 0.6, authority: 0.35, emotion: 0.7 },
-    description: "Brann's idealistic son — caught between duty and conscience.",
-    gender: 'male',
-    ageRange: 'teen',
-    lines: 62,
-    scenes: 2,
-  },
-  {
-    id: 'father-lessom',
-    name: 'Father Lessom',
-    role: 'Priest',
-    color: '#4B4B72',
-    voiceState: 'generated',
-    tone: { warmth: 0.55, pace: 0.4, authority: 0.7, emotion: 0.4 },
-    description: 'Parish priest of the Ashwell chapel; keeper of uncomfortable truths.',
-    gender: 'male',
-    ageRange: 'adult',
-    lines: 54,
-    scenes: 2,
-  },
-  {
-    id: 'ivo',
-    name: 'Ivo',
-    role: 'Stablehand',
-    color: '#5A7A4A',
-    voiceState: 'generated',
-    tone: { warmth: 0.75, pace: 0.65, authority: 0.2, emotion: 0.6 },
-    description: 'Kindhearted stablehand who tends the dragon when no one else will.',
-    gender: 'male',
-    ageRange: 'teen',
-    lines: 41,
-    scenes: 2,
-  },
-  {
-    id: 'maerin',
-    name: 'Maerin',
-    role: 'Healer',
-    color: '#7A4A5A',
-    voiceState: 'generated',
-    ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-maerin-v1' } },
-    tone: { warmth: 0.8, pace: 0.45, authority: 0.5, emotion: 0.65 },
-    description: 'Village healer who suspects the poisoning was deliberate.',
-    gender: 'female',
-    ageRange: 'adult',
-    lines: 48,
-    scenes: 2,
-  },
-  {
-    id: 'hart',
-    name: 'Hart',
-    role: 'Guard captain',
-    color: '#4A3C28',
-    voiceState: 'generated',
-    tone: { warmth: 0.35, pace: 0.5, authority: 0.8, emotion: 0.25 },
-    description: 'Laconic guard captain who follows orders without question.',
-    gender: 'male',
-    ageRange: 'adult',
-    lines: 35,
-    scenes: 2,
-  },
-  {
-    id: 'sela',
-    name: 'Sela',
-    role: 'Innkeeper',
-    color: '#8C5E3A',
-    voiceState: 'generated',
-    tone: { warmth: 0.8, pace: 0.6, authority: 0.45, emotion: 0.55 },
-    description: 'Warm-hearted innkeeper who hears everything and forgets nothing.',
-    gender: 'female',
-    ageRange: 'adult',
-    lines: 30,
-    scenes: 1,
-  },
-  {
-    id: 'Pell-hollis',
-    name: 'Pell Hollis',
-    role: 'Messenger',
-    color: '#6E6E3A',
-    voiceState: 'generated',
-    tone: { warmth: 0.55, pace: 0.7, authority: 0.2, emotion: 0.5 },
-    description: 'Fleet-footed messenger who carries more dangerous news than he realises.',
-    gender: 'male',
-    ageRange: 'adult',
-    lines: 22,
-    scenes: 1,
-  },
+const COALFALL_CHAPTERS: BookStateResponse['state']['chapters'] = [
+  { id: 1, title: 'The Coalfall Commission', slug: '01-title', excluded: true },
+  { id: 2, title: 'The Coalfall Commission', slug: '02-credit', excluded: true },
+  { id: 3, title: 'Chapter One — The Knock', slug: '03-the-knock', duration: '41:12' },
+  { id: 4, title: 'Chapter Two — The Pour', slug: '04-the-pour', duration: '38:44' },
 ];
 
-/* Canonical manuscript sentences for Chapter 1 of The Coalfall Commission. */
-const coalfallSentences: Sentence[] = [
-  {
-    id: 1,
-    chapterId: 1,
-    characterId: 'narrator',
-    text: 'The smell of scorched stone reached the lower courtyard long before dawn, carried on a wind that tasted of old fire.',
-  },
-  {
-    id: 2,
-    chapterId: 1,
-    characterId: 'narrator',
-    text: "Wren had learned, in her first weeks under Master Oduvan's roof, that the dragon always knew when someone was afraid.",
-  },
-  {
-    id: 3,
-    chapterId: 1,
-    characterId: 'master-oduvan',
-    text: 'You will carry the morning pail yourself today, and you will not run, and you will not look away.',
-  },
-  {
-    id: 4,
-    chapterId: 1,
-    characterId: 'wren',
-    text: 'I know the rules.',
-    emotion: 'whisper',
-  },
-  {
-    id: 5,
-    chapterId: 1,
-    characterId: 'master-oduvan',
-    text: 'Knowing and doing are not the same country.',
-  },
-  {
-    id: 6,
-    chapterId: 1,
-    characterId: 'narrator',
-    text: "The keep's inner gate swung wide, and Wren stepped through into the heat.",
-  },
-  {
-    id: 7,
-    chapterId: 1,
-    characterId: 'coalfall',
-    text: "You smell of the commissioner's house.",
-    emotion: 'angry',
-  },
-  {
-    id: 8,
-    chapterId: 1,
-    characterId: 'wren',
-    text: 'I carried a letter through the lower district — it was the fastest route.',
-  },
-  {
-    id: 9,
-    chapterId: 1,
-    characterId: 'coalfall',
-    text: 'Weir does not send letters without a blade hidden inside them.',
-    confidence: 0.58,
-  },
-  {
-    id: 10,
-    chapterId: 1,
-    characterId: 'narrator',
-    text: 'The dragon lowered its great head until one amber eye was level with hers, the pupil narrowing to a slit in the torchlight.',
-  },
-  {
-    id: 11,
-    chapterId: 1,
-    characterId: 'master-oduvan',
-    text: 'Coalfall — enough. She is mine to instruct, not yours to interrogate.',
-  },
-  {
-    id: 12,
-    chapterId: 1,
-    characterId: 'coalfall',
-    text: 'Then instruct her to be careful.',
-    emotion: 'sad',
-  },
-  {
-    id: 13,
-    chapterId: 1,
-    characterId: 'wren',
-    text: 'What does the commission want with a bonded dragon, Master?',
-  },
-  {
-    id: 14,
-    chapterId: 1,
-    characterId: 'master-oduvan',
-    text: 'That is exactly the question that will keep us both alive long enough to find out.',
-  },
-];
+/* Real prod cast + manuscript (copied from samples/the-coalfall-commission/
+   .audiobook). 14-character canonical cast, all Qwen-designed with emotion
+   variants + Kokoro fallbacks. Wren carries the 'Sparrow' alias (Master
+   Oduvan's name for her) for the series-memory narrative. */
+const coalfallCast: Character[] = (coalfallCastJson.characters as unknown as Character[]).map(
+  (c) => (c.id === 'wren' ? { ...c, aliases: ['Sparrow'] } : c),
+);
+
+const coalfallSentences = coalfallManuscriptJson.sentences as unknown as Sentence[];
 
 const coalfallCommission = bookState({
   bookId: 'coalfall-commission',
