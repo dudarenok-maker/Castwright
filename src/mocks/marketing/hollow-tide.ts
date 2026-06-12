@@ -1,7 +1,9 @@
 /* Capture-only marketing fixtures (VITE_DEMO_CAPTURE=1). Additive — never
    served in normal mock mode, so this touches no existing spec. */
-import type { LibraryResponse, BookStateResponse, Character } from '../../lib/types';
+import type { LibraryResponse, BookStateResponse, Character, Sentence } from '../../lib/types';
 import type { CoverFraming } from '../../lib/cover-framing';
+import coalfallCastJson from './coalfall-cast.json';
+import coalfallManuscriptJson from './coalfall-manuscript.json';
 
 const COVER = (slug: string) => `/marketing-covers/${slug}.png`;
 
@@ -32,6 +34,8 @@ const inspCray = (): Character => ({
   voiceState: 'generated',
   tone: { warmth: 0.4, pace: 0.45, authority: 0.85, emotion: 0.5 },
   description: 'Dogged harbour-town inspector.',
+  ttsEngine: 'qwen',
+  overrideTtsVoices: { qwen: { name: 'qwen-cray-v1' } },
 });
 
 const drWren = (): Character => ({
@@ -43,6 +47,8 @@ const drWren = (): Character => ({
   voiceState: 'generated',
   tone: { warmth: 0.55, pace: 0.4, authority: 0.6, emotion: 0.45 },
   description: 'Precise, dryly humane coroner.',
+  ttsEngine: 'qwen',
+  overrideTtsVoices: { qwen: { name: 'qwen-wren-v1' } },
 });
 
 const reusedFromBook1 = (c: Character): Character => ({
@@ -148,6 +154,7 @@ function bookState(args: {
   chapters: BookStateResponse['state']['chapters'];
   cast: Character[] | null;
   completedSlugs: string[];
+  sentences?: Sentence[];
 }): BookStateResponse {
   return {
     state: {
@@ -168,7 +175,7 @@ function bookState(args: {
     },
     cast: args.cast ? { characters: args.cast } : null,
     manuscript: { wordCount: 84_000, format: 'epub' },
-    manuscriptEdits: null,
+    manuscriptEdits: args.sentences ? { sentences: args.sentences } : null,
     revisions: null,
     completedSlugs: args.completedSlugs,
     changeLog: null,
@@ -245,7 +252,22 @@ const tidewatcher = bookState({
 });
 
 /* ── Coalfall Commission — Standalone ── */
-const COALFALL_CHAPTERS = makeChapters(4, { withDuration: true });
+const COALFALL_CHAPTERS: BookStateResponse['state']['chapters'] = [
+  { id: 1, title: 'The Coalfall Commission', slug: '01-title', excluded: true },
+  { id: 2, title: 'The Coalfall Commission', slug: '02-credit', excluded: true },
+  { id: 3, title: 'Chapter One — The Knock', slug: '03-the-knock', duration: '41:12' },
+  { id: 4, title: 'Chapter Two — The Pour', slug: '04-the-pour', duration: '38:44' },
+];
+
+/* Real prod cast + manuscript (copied from samples/the-coalfall-commission/
+   .audiobook). 14-character canonical cast, all Qwen-designed with emotion
+   variants + Kokoro fallbacks. Wren carries the 'Sparrow' alias (Master
+   Oduvan's name for her) for the series-memory narrative. */
+const coalfallCast: Character[] = (coalfallCastJson.characters as unknown as Character[]).map(
+  (c) => (c.id === 'wren' ? { ...c, aliases: ['Sparrow'] } : c),
+);
+
+const coalfallSentences = coalfallManuscriptJson.sentences as unknown as Sentence[];
 
 const coalfallCommission = bookState({
   bookId: 'coalfall-commission',
@@ -257,7 +279,8 @@ const coalfallCommission = bookState({
   coverGradient: ['#3C194F', '#0F0E0D'],
   castConfirmed: true,
   chapters: COALFALL_CHAPTERS,
-  cast: null,
+  cast: coalfallCast,
+  sentences: coalfallSentences,
   completedSlugs: COALFALL_CHAPTERS.map((c) => c.slug),
 });
 
@@ -356,8 +379,8 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               status: 'complete',
               chapterCount: 4,
               completedChapters: 4,
-              characterCount: 11,
-              voiceCount: 11,
+              characterCount: 12,
+              voiceCount: 12,
               progress: 1,
               runtime: '2h 41m',
               lastWorkedOn: 'Last week',
@@ -530,8 +553,15 @@ export const HOLLOW_TIDE_POSED = {
     bookTitle: "The Tidewatcher's Oath",
     phaseId: 1,
     phaseLabel: 'Detecting characters',
-    phaseProgress: 0.45,
-    remainingMs: 9000,
+    phaseProgress: 0.55,
+    remainingMs: 42_000,
+    live: {
+      totalChapters: 8,
+      chapters: [
+        { chapterIndex: 3, chapterTitle: 'Chapter 3', elapsedMs: 4200, estMs: 7000 },
+        { chapterIndex: 4, chapterTitle: 'Chapter 4', elapsedMs: 1600, estMs: 6800 },
+      ],
+    },
   },
   generating: {
     bookId: 'hollow-tide-2',
