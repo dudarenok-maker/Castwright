@@ -53,7 +53,11 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
-import { HOLLOW_TIDE_LIBRARY, HOLLOW_TIDE_BOOK_STATES } from '../mocks/marketing/hollow-tide';
+import {
+  HOLLOW_TIDE_LIBRARY,
+  HOLLOW_TIDE_BOOK_STATES,
+  HOLLOW_TIDE_POSED,
+} from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
@@ -1154,6 +1158,12 @@ async function mockAnalyseManuscript(
   manuscriptId: string,
   { onPhase }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
+  if (DEMO_CAPTURE) {
+    const p = HOLLOW_TIDE_POSED.analysing;
+    onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress });
+    // Freeze on the analysing screen: never resolve, never advance.
+    return new Promise<never>(() => {});
+  }
   const res = ANALYSIS_NORTHERN_STAR;
   for (const ph of res.phaseTimings) {
     const start = Date.now();
@@ -1234,6 +1244,20 @@ function mockStreamGeneration({
   mockGenConcurrency,
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
+  if (DEMO_CAPTURE) {
+    const g = HOLLOW_TIDE_POSED.generating;
+    // One in-flight chapter at ~60%; the 7 completed chapters come from the
+    // book-state completedSlugs already hydrated into the queue.
+    onTick({
+      type: 'progress',
+      chapterId: g.chapterId,
+      characterId: null,
+      progress: 0.6,
+      currentLine: 360,
+      totalLines: 600,
+    });
+    return () => {};
+  }
   /* Mock the real server's parallel-chapter SSE cadence (plan 87 archive,
      `GEN_WORKERS`, default 1). The server keeps K chapters
      in-flight on a bounded worker pool, so progress / chapter_complete
