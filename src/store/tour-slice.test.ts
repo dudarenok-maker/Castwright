@@ -10,7 +10,9 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
-import { tourSlice, tourActions, fetchTourStatus, completeTour } from './tour-slice';
+import { tourSlice, tourActions, fetchTourStatus, completeTour, goToStep } from './tour-slice';
+import { uiSlice } from './ui-slice';
+import { uiActions } from './ui-slice';
 import { configureStore } from '@reduxjs/toolkit';
 
 const reducer = tourSlice.reducer;
@@ -60,5 +62,34 @@ describe('tour-slice reducers', () => {
     expect(s.completedAt).toBe('2026-06-12T00:00:00.000Z');
     expect(s.active).toBe(false);
     expect(s.tourId).toBeNull();
+  });
+});
+
+describe('tour navigation thunks', () => {
+  function mkStore() {
+    return configureStore({ reducer: { tour: tourSlice.reducer, ui: uiSlice.reducer } });
+  }
+
+  it('goToStep("manuscript" step) navigates ui to that view', async () => {
+    const store = mkStore();
+    store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
+    store.dispatch(tourActions.startTour({ tourId: 'linear', mode: 'linear' }));
+    await store.dispatch(goToStep(3)); // s4-line → manuscript
+    const stage = store.getState().ui.stage;
+    expect(stage.kind).toBe('ready');
+    if (stage.kind === 'ready') expect(stage.view).toBe('manuscript');
+    expect(store.getState().tour.stepIndex).toBe(3);
+  });
+
+  it('opensDrawer step sets openProfileId; stepping off it clears it', async () => {
+    const store = mkStore();
+    store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
+    store.dispatch(tourActions.startTour({ tourId: 'linear', mode: 'linear' }));
+    await store.dispatch(goToStep(6)); // s7-drawer
+    let stage = store.getState().ui.stage;
+    if (stage.kind === 'ready') expect(stage.openProfileId).toBe('wren');
+    await store.dispatch(goToStep(5)); // s6-roster
+    stage = store.getState().ui.stage;
+    if (stage.kind === 'ready') expect(stage.openProfileId).toBeNull();
   });
 });
