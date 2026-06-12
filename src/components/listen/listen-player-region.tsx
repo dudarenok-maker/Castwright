@@ -163,7 +163,7 @@ export function ListenPlayerRegion({
                 })}
               </div>
             ) : (
-              listenable.map((ch) => {
+              listenable.map((ch, listIndex) => {
                 const charsIn = Object.entries(ch.characters)
                   .filter(([, st]) => st !== 'skipped')
                   .map(([id]) => findChar(id))
@@ -179,6 +179,7 @@ export function ListenPlayerRegion({
                     onRegenerate={onRegenerate}
                     onShareClip={() => setShareClipChapter(ch)}
                     onRename={() => setRenameChapter(ch)}
+                    isFirstListenable={listIndex === 0}
                   />
                 );
               })
@@ -223,6 +224,7 @@ interface ChapterListenRowProps {
   /** Plan 78 — opens the rename modal for this chapter. Region-level
       modal mount; row only knows "open the rename modal for me". */
   onRename: () => void;
+  isFirstListenable?: boolean;
 }
 
 /* Module-level cache of fetched per-chapter loudness envelopes, keyed by
@@ -290,6 +292,7 @@ function ChapterListenRow({
   onRegenerate,
   onShareClip,
   onRename,
+  isFirstListenable,
 }: ChapterListenRowProps) {
   /* Plan 47 — read the per-book resume bookmark. The pill renders only
      when it points at THIS chapter and the user got past the first 5 s
@@ -347,6 +350,7 @@ function ChapterListenRow({
                   ? `Pause chapter ${chapter.id}`
                   : `Play chapter ${chapter.id}`
             }
+            {...(isFirstListenable ? { 'data-tour-id': 'chapter-1-play' } : {})}
             className={`shrink-0 w-11 h-11 md:w-9 md:h-9 rounded-full grid place-items-center transition-all ${
               !hasAudio
                 ? 'bg-canvas border border-ink/10 text-ink/30 opacity-50 cursor-not-allowed'

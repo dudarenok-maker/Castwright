@@ -33,6 +33,7 @@ import { type CoverFraming, computeCoverStyle } from '../../lib/cover-framing';
 import { useAppSelector } from '../../store';
 import { selectPausedSnapshotForBook } from '../../store/library-slice';
 import type { LibraryAuthor, LibraryBook } from '../../lib/types';
+import { SAMPLE } from '../../lib/tour-steps';
 import { STATUS_UI } from './library-status-ui';
 import { EmptyLibrary, LibrarySkeleton } from './library-empty-states';
 
@@ -57,6 +58,8 @@ interface Props {
   onCoverChanged?: (book: LibraryBook) => Promise<void> | void;
   onStartNew: () => void;
   onTrySample?: () => void | Promise<void>;
+  onStartTour?: () => void;
+  tourCompleted?: boolean;
 }
 
 export function LibraryGrid({
@@ -72,9 +75,11 @@ export function LibraryGrid({
   onCoverChanged,
   onStartNew,
   onTrySample,
+  onStartTour,
+  tourCompleted,
 }: Props) {
   if (!loaded) return <LibrarySkeleton />;
-  if (isLibraryEmpty) return <EmptyLibrary onStartNew={onStartNew} onTrySample={onTrySample} />;
+  if (isLibraryEmpty) return <EmptyLibrary onStartNew={onStartNew} onTrySample={onTrySample} onStartTour={onStartTour} tourCompleted={tourCompleted} />;
   return (
     <div className="space-y-10">
       {authors.map((author) => (
@@ -188,6 +193,7 @@ function BookCard({
     <article
       onClick={onOpen}
       className={`group relative bg-white rounded-3xl border shadow-card hover:shadow-float transition-all cursor-pointer overflow-hidden ${active ? 'border-peach ring-1 ring-peach/30' : 'border-ink/10 hover:border-ink/20'}`}
+      {...(book.bookId === SAMPLE.bookId ? { 'data-tour-id': 'book-card' } : {})}
     >
       <div className="aspect-16/10 relative overflow-hidden" style={{ background: grad }}>
         <svg viewBox="0 0 320 200" className="absolute inset-0 w-full h-full opacity-20">
@@ -523,6 +529,7 @@ function NewBookCard({ onStartNew }: { onStartNew: () => void }) {
   return (
     <button
       onClick={onStartNew}
+      data-tour-id="new-book-btn"
       className="group bg-canvas rounded-3xl border-2 border-dashed border-ink/15 hover:border-peach hover:bg-peach/4 transition-all min-h-[180px] grid place-items-center text-center p-8"
     >
       <div>

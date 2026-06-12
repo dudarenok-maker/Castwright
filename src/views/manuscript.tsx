@@ -1276,6 +1276,7 @@ function SegmentRow({
                   data-sentence-id={s.id}
                   data-sentence-idx={s.absIdx}
                   className={`inline transition-colors ${isCandidate ? 'sentence-candidate' : ''}`}
+                  {...(s.absIdx === 0 ? { 'data-tour-id': 'manuscript-line' } : {})}
                 >
                   {renderSentenceText(s.text)}
                 </span>
@@ -1321,6 +1322,7 @@ function BoundaryHandle({
            gesture for scrolling — we own the drag end-to-end. */
         style={{ touchAction: 'none' }}
         className={`absolute left-0 right-0 top-1/2 -translate-y-1/2 h-3 cursor-ns-resize transition-colors ${isThisDragging ? 'bg-peach/40' : 'bg-transparent group-hover:bg-peach/40'}`}
+        {...(boundaryIdx === 1 ? { 'data-tour-id': 'chapter-boundary' } : {})}
       />
       {/* Plan 81 wave 4 — `coarse:opacity-60` keeps the boundary-handle
           label faintly visible on touch devices that don't expose hover.

@@ -216,6 +216,10 @@ export const userSettingsSchema = z.object({
      Optional/absent on a fresh file. NOT user-editable: stripped from the
      general PUT via FORBIDDEN_KEYS and written only by writeSetupCompletedAt. */
   setupCompletedAt: z.string().nullable().optional(),
+  /* Guided tour — ISO timestamp stamped when the user finishes/exits the
+     tour. Suppresses the empty-library invitation. Kept out of the general
+     PUT via FORBIDDEN_KEYS and written only by writeTourCompletedAt. */
+  tourCompletedAt: z.string().nullable().optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -384,6 +388,8 @@ const FORBIDDEN_KEYS = new Set([
   'showWhatsNew',
   /* fs-21 first-run flow — written only by writeSetupCompletedAt. */
   'setupCompletedAt',
+  /* guided tour — written only by writeTourCompletedAt. */
+  'tourCompletedAt',
 ]);
 
 function stripForbiddenKeys(value: unknown): Record<string, unknown> {
@@ -640,6 +646,26 @@ export async function writeSetupCompletedAt(ts: string | null): Promise<UserSett
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, setupCompletedAt: ts };
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    cached = merged;
+    return merged;
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
+/** Guided tour — sync read off the in-process cache. */
+export function getResolvedTourCompletedAt(): string | null {
+  return cached?.tourCompletedAt ?? null;
+}
+
+/** Dedicated writer (mirrors writeSetupCompletedAt): bypasses the general
+    writeUserSettings strip path so the field persists, and refreshes the
+    sync `cached` the getter reads. */
+export async function writeTourCompletedAt(ts: string | null): Promise<UserSettings> {
+  const next = writeChain.then(async () => {
+    const current = await readUserSettings();
+    const merged: UserSettings = { ...current, tourCompletedAt: ts };
     await writeJsonAtomic(USER_SETTINGS_PATH, merged);
     cached = merged;
     return merged;
