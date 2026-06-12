@@ -5411,8 +5411,21 @@ async function mockGetModelInventory(): Promise<ModelInventoryResponse> {
         present: true,
         sizeBytes: 2_600_000_000,
         diskPath: null,
-        loaded: true,
+        loaded: MOCK_OLLAMA_RESIDENT.has('qwen3.5:4b'),
         isDefaultEngine: true,
+        isFallbackEngine: false,
+        removable: true,
+        updatable: true,
+      },
+      {
+        id: 'ollama:llama3.1:8b',
+        kind: 'analyzer',
+        label: 'llama3.1:8b',
+        present: true,
+        sizeBytes: 4_700_000_000,
+        diskPath: null,
+        loaded: MOCK_OLLAMA_RESIDENT.has('llama3.1:8b'),
+        isDefaultEngine: false,
         isFallbackEngine: false,
         removable: true,
         updatable: true,
@@ -5433,7 +5446,7 @@ async function mockRemoveModel(id: string): Promise<ModelRemovalResult> {
   if (id === 'kokoro') {
     return { ok: false, code: 'model-is-fallback', error: 'Kokoro is the fallback engine.' };
   }
-  if (id === 'ollama:qwen3.5:4b') {
+  if (id === 'ollama:qwen3.5:4b' && MOCK_OLLAMA_RESIDENT.has('qwen3.5:4b')) {
     return { ok: false, code: 'model-loaded', error: 'qwen3.5:4b is loaded.' };
   }
   MOCK_REMOVED_MODEL_IDS.add(id);
@@ -5455,7 +5468,10 @@ let MOCK_SIDECAR_QWEN_LOADED = false;
    the not-installed promo/warning stub getSidecarHealth directly. */
 const MOCK_SIDECAR_QWEN_INSTALL_STATE: 'not-installed' | 'weights-missing' | 'ready' | 'loaded' =
   'ready';
-let MOCK_OLLAMA_MODEL_LOADED = false;
+/* Per-model residency for the mock analyzer rows so the Model Manager's
+   Load/Stop pills round-trip independently under VITE_USE_MOCKS=true. Starts
+   with the default model resident, mirroring the inventory's loaded:true. */
+const MOCK_OLLAMA_RESIDENT = new Set<string>(['qwen3.5:4b']);
 
 async function realLoadSidecar(
   opts: { engine?: 'coqui' | 'kokoro' | 'qwen' } = {},
@@ -5488,15 +5504,23 @@ async function realUnloadSidecar(
     .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
 }
 
-async function realLoadAnalyzer(): Promise<ModelControlResult> {
-  const res = await fetch('/api/ollama/load', { method: 'POST' });
+async function realLoadAnalyzer(opts: { model?: string } = {}): Promise<ModelControlResult> {
+  const res = await fetch('/api/ollama/load', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts.model ? { model: opts.model } : {}),
+  });
   return (await res
     .json()
     .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
 }
 
-async function realUnloadAnalyzer(): Promise<ModelControlResult> {
-  const res = await fetch('/api/ollama/unload', { method: 'POST' });
+async function realUnloadAnalyzer(opts: { model?: string } = {}): Promise<ModelControlResult> {
+  const res = await fetch('/api/ollama/unload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts.model ? { model: opts.model } : {}),
+  });
   return (await res
     .json()
     .catch(() => ({ status: 'error', error: `HTTP ${res.status}` }))) as ModelControlResult;
@@ -5538,15 +5562,16 @@ async function mockUnloadSidecar(
   return { status: 'idle' };
 }
 
-async function mockLoadAnalyzer(): Promise<ModelControlResult> {
+async function mockLoadAnalyzer(opts: { model?: string } = {}): Promise<ModelControlResult> {
   await wait(60);
-  MOCK_OLLAMA_MODEL_LOADED = true;
+  MOCK_OLLAMA_RESIDENT.add(opts.model ?? 'qwen3.5:4b');
   return { status: 'ready' };
 }
 
-async function mockUnloadAnalyzer(): Promise<ModelControlResult> {
+async function mockUnloadAnalyzer(opts: { model?: string } = {}): Promise<ModelControlResult> {
   await wait(40);
-  MOCK_OLLAMA_MODEL_LOADED = false;
+  if (opts.model) MOCK_OLLAMA_RESIDENT.delete(opts.model);
+  else MOCK_OLLAMA_RESIDENT.clear();
   return { status: 'unloaded' };
 }
 
@@ -5555,11 +5580,11 @@ async function mockGetOllamaHealth(): Promise<OllamaHealth> {
   return {
     status: 'reachable',
     url: '(mock)',
-    models: ['qwen3.5:4b'],
+    models: ['qwen3.5:4b', 'llama3.1:8b'],
     expectedModel: 'qwen3.5:4b',
     modelPulled: true,
-    resident: MOCK_OLLAMA_MODEL_LOADED ? ['qwen3.5:4b'] : [],
-    modelResident: MOCK_OLLAMA_MODEL_LOADED,
+    resident: Array.from(MOCK_OLLAMA_RESIDENT),
+    modelResident: MOCK_OLLAMA_RESIDENT.has('qwen3.5:4b'),
   };
 }
 

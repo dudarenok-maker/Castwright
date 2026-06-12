@@ -113,7 +113,7 @@ async function prepareSidecar(
        emit `proxy`) — they're the more common failure mode now that
        :8080 is more stable than the Python sidecar's CUDA path. */
     throw new Error(
-      `TTS sidecar (:9000) is unreachable — restart it via scripts\\start-app.ps1 (or kill any stale process holding :9000). [${reason}]`,
+      `Voice engine (:9000) is unreachable — restart it via scripts\\start-app.ps1 (or kill any stale process holding :9000). [${reason}]`,
     );
   }
   if (health.modelLoaded) {
@@ -148,7 +148,7 @@ async function prepareSidecar(
   onStatus?.('loading-tts', { analyzerEvicted: analyzerResident });
   const result = await api.loadSidecar(engine ? { engine } : {});
   if (result.status === 'error') {
-    throw new Error(result.error ?? 'TTS sidecar failed to load.');
+    throw new Error(result.error ?? 'Voice engine failed to load.');
   }
   return { analyzerEvicted: analyzerResident };
 }

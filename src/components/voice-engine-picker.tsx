@@ -100,11 +100,11 @@ export function VoiceEnginePicker({
         className="block text-[11px] text-ink/60 font-medium mb-1.5"
         htmlFor="character-engine"
       >
-        TTS engine for this character
+        Voice engine for this character
       </label>
       <select
         id="character-engine"
-        aria-label="TTS engine for this character"
+        aria-label="Voice engine for this character"
         value={lockedToQwen ? 'qwen' : value}
         disabled={lockedToQwen}
         onChange={(e) => onChange(e.target.value as EngineChoice)}

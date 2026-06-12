@@ -14,8 +14,8 @@ export type FailureCode = components['schemas']['FailureCode'];
 
 const TITLES = {
   'vram-spill': 'GPU out of memory (VRAM)',
-  'recycle-storm': 'TTS engine keeps restarting',
-  'sidecar-unreachable': 'TTS sidecar not running',
+  'recycle-storm': 'Voice engine keeps restarting',
+  'sidecar-unreachable': 'Voice engine not running',
   'analyzer-rate-limit': 'Analyzer rate-limited',
   'analyzer-daily-quota': 'Analyzer daily quota exhausted',
   'analyzer-truncated': 'Analyzer reply cut short',
@@ -24,7 +24,7 @@ const TITLES = {
   'attribution-incomplete': 'Chapter attribution incomplete',
   oom: 'Computer ran out of memory',
   'disk-full': 'Disk full',
-  'model-not-loaded': 'TTS model not loaded yet',
+  'model-not-loaded': 'Voice engine not loaded yet',
   'synth-timeout': 'Chapter synthesis timed out',
   'xtts-speaker-desync': 'Voice catalog out of sync',
   'cuda-poisoned': 'GPU error (auto-recovering)',

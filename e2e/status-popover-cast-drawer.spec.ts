@@ -42,9 +42,9 @@ test.describe('Status popover ↔ cast drawer coexistence', () => {
     await expect(drawerOpen, 'drawer must stay open when the popover opens').toBeVisible();
 
     /* Click Stop on the Kokoro control INSIDE the popover (mock Kokoro is
-       preloaded → "Stop (tts model)" is present). This is the exact action
+       preloaded → "Stop (voice engine)" is present). This is the exact action
        that used to dismiss the drawer. */
-    const stopButton = page.getByRole('button', { name: /^stop \(tts model\)$/i }).first();
+    const stopButton = page.getByRole('button', { name: /^stop \(voice engine\)$/i }).first();
     await expect(stopButton).toBeVisible({ timeout: 5_000 });
     await stopButton.click();
 
@@ -53,7 +53,7 @@ test.describe('Status popover ↔ cast drawer coexistence', () => {
     await expect(popover, 'popover must stay open after clicking Stop').toBeVisible();
 
     /* And the control actually acted — it flipped to Load. */
-    await expect(page.getByRole('button', { name: /^load model \(tts model\)$/i }).first()).toBeVisible(
+    await expect(page.getByRole('button', { name: /^load model \(voice engine\)$/i }).first()).toBeVisible(
       { timeout: 5_000 },
     );
     await expect(drawerOpen, 'drawer still open after the engine flipped').toBeVisible();

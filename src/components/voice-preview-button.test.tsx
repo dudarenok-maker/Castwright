@@ -99,11 +99,11 @@ describe('VoicePreviewButton', () => {
 
   it('renders the helper error inline when the auto-load helper rejects', async () => {
     vi.mocked(playBaseVoiceSampleWithAutoLoad).mockRejectedValueOnce(
-      new Error('TTS sidecar (:9000) is unreachable — restart it via scripts/start-app.ps1.'),
+      new Error('Voice engine (:9000) is unreachable — restart it via scripts/start-app.ps1.'),
     );
     render(<VoicePreviewButton voice={asyaCoqui} modelKey="kokoro-v1" text="Hello." />);
     fireEvent.click(screen.getByRole('button', { name: /Play sample for Asya Anara/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(/sidecar.*unreachable/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/voice engine.*unreachable/i);
   });
 
   it('passes the optional aria-label override through', () => {

@@ -41,7 +41,7 @@ test.describe('cast view → profile drawer → per-character Qwen voice', () =>
     await expect(page.getByText(/Model voice/i).first()).toBeVisible({ timeout: 5_000 });
 
     /* Switch the per-character engine to Qwen. */
-    const engineSelect = page.getByLabel('TTS engine for this character');
+    const engineSelect = page.getByLabel('Voice engine for this character');
     await expect(engineSelect).toBeVisible();
     await engineSelect.selectOption('qwen');
 

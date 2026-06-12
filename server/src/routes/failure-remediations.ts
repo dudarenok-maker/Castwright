@@ -21,36 +21,36 @@ export interface FailureRemediationCopy {
 export const FAILURE_REMEDIATIONS = {
   'synth-timeout': {
     userMessage:
-      'TTS synthesis timed out for this chapter — the local engine stalled (often the ' +
-      'sidecar reclaiming memory mid-render). Skipped so the queue advances; click Retry to re-render.',
+      'Voice synthesis timed out for this chapter — the local engine stalled (often the ' +
+      'voice engine reclaiming memory mid-render). Skipped so the queue advances; click Retry to re-render.',
     remediation:
-      'Click Retry on this chapter. If it times out repeatedly, restart the TTS sidecar to clear ' +
+      'Click Retry on this chapter. If it times out repeatedly, restart the voice engine to clear ' +
       'a wedged GPU state, then retry.',
   },
   'sidecar-unreachable': {
-    userMessage: 'Local TTS sidecar not running — start it and resume.',
+    userMessage: 'Local voice engine not running — start it and resume.',
     remediation:
-      'Start the TTS sidecar (npm start launches it automatically), wait for the sidecar pill to ' +
+      'Start the voice engine (npm start launches it automatically), wait for the voice engine pill to ' +
       'go green, then resume the run.',
   },
   'recycle-storm': {
-    userMessage: 'The TTS engine kept restarting while rendering this chapter.',
+    userMessage: 'The voice engine kept restarting while rendering this chapter.',
     remediation:
-      'The sidecar is likely thrashing — the host-memory leak (side-11) or too little ' +
-      'VRAM/RAM headroom. Restart the TTS sidecar and/or lower generation concurrency, then Retry.',
+      'The voice engine is likely thrashing — the host-memory leak (side-11) or too little ' +
+      'VRAM/RAM headroom. Restart the voice engine and/or lower generation concurrency, then Retry.',
   },
   'vram-spill': {
     userMessage:
       'The GPU ran out of video memory (VRAM) mid-render — too many models were resident at once.',
     remediation:
-      'Unload any models you are not generating with (the analyzer Ollama, or a second TTS engine) ' +
-      'from the model pills, then retry. On an 8 GB card keep only one heavy TTS model loaded.',
+      'Unload any models you are not generating with (the analyzer Ollama, or a second voice engine) ' +
+      'from the model pills, then retry. On an 8 GB card keep only one heavy voice engine loaded.',
   },
   oom: {
     userMessage:
-      'The TTS sidecar was killed by the operating system — the machine ran out of host RAM.',
+      'The voice engine was killed by the operating system — the machine ran out of host RAM.',
     remediation:
-      'Close other memory-heavy apps and retry. If it recurs, the sidecar is leaking — restart it ' +
+      'Close other memory-heavy apps and retry. If it recurs, the voice engine is leaking — restart it ' +
       'to reset its host memory, then resume.',
   },
   'disk-full': {
@@ -121,25 +121,25 @@ export const FAILURE_REMEDIATIONS = {
   },
   'xtts-speaker-desync': {
     userMessage:
-      'Local TTS engine rejected a speaker — the voice catalog is out of sync with the loaded model. ' +
-      'Stop the sidecar, re-run the speaker manifest audit, and regenerate.',
+      'Local voice engine rejected a speaker — the voice catalog is out of sync with the loaded model. ' +
+      'Stop the voice engine, re-run the speaker manifest audit, and regenerate.',
     remediation:
-      'Stop the TTS sidecar, re-run the speaker-manifest audit, then restart the sidecar and ' +
+      'Stop the voice engine, re-run the speaker-manifest audit, then restart the voice engine and ' +
       'regenerate this chapter.',
   },
   'cuda-poisoned': {
     userMessage:
-      'Local TTS sidecar hit a CUDA error and is auto-restarting (the CUDA context is corrupted ' +
-      'process-wide; only a fresh Python process recovers). Wait ~10 seconds for the sidecar pill ' +
-      'to go green again, then click Retry on this chapter. The offending text is in the sidecar ' +
+      'Local voice engine hit a CUDA error and is auto-restarting (the CUDA context is corrupted ' +
+      'process-wide; only a fresh Python process recovers). Wait ~10 seconds for the voice engine pill ' +
+      'to go green again, then click Retry on this chapter. The offending text is in the voice engine ' +
       'log (text_preview=) — usually a stray zero-width or control char in the manuscript.',
     remediation:
-      'Wait ~10 seconds for the sidecar to respawn (the pill goes green), then click Retry. If it ' +
-      'recurs on the same chapter, check the sidecar log text_preview= for a stray control char.',
+      'Wait ~10 seconds for the voice engine to respawn (the pill goes green), then click Retry. If it ' +
+      'recurs on the same chapter, check the voice engine log text_preview= for a stray control char.',
   },
   'model-not-loaded': {
     userMessage:
-      'The TTS model is not loaded in the sidecar yet — synthesis was requested before the model ' +
+      'The voice engine is not loaded yet — synthesis was requested before the model ' +
       'finished loading.',
     remediation:
       'Load the engine from its model pill (or wait for the auto-load to finish — the pill turns ' +
@@ -150,7 +150,7 @@ export const FAILURE_REMEDIATIONS = {
     userMessage:
       'Something failed in a way the app does not recognise — the raw error message is shown in place of this line.',
     remediation:
-      'Click Retry on this chapter. If it keeps failing, check the server / sidecar logs for the full ' +
+      'Click Retry on this chapter. If it keeps failing, check the server / voice engine logs for the full ' +
       'error and report it.',
   },
 } as const satisfies Record<string, FailureRemediationCopy>;
