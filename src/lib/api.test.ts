@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mockGetSetupReadiness, mockCompleteSetup } from './api';
+import { mockGetSetupReadiness, mockCompleteSetup, mockRunSmokeTest } from './api';
 
 describe('mockGetSetupReadiness', () => {
   beforeEach(() => {
@@ -28,5 +28,14 @@ describe('mockCompleteSetup', () => {
     const r = await mockCompleteSetup();
     expect(typeof r.completedAt).toBe('string');
     expect(new Date(r.completedAt).toISOString()).toBe(r.completedAt);
+  });
+});
+
+describe('mockRunSmokeTest', () => {
+  it('resolves ok:true with an audio url', async () => {
+    const r = await mockRunSmokeTest();
+    expect(r.ok).toBe(true);
+    expect(typeof r.url).toBe('string');
+    expect(r.analyzerOk).toBe(true);
   });
 });
