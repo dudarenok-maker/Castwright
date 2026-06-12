@@ -149,6 +149,15 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('help (global) view', async ({ page }) => {
+    await page.goto('/#/help');
+    await expect(page.getByRole('heading', { name: 'Troubleshooting' })).toBeVisible({
+      timeout: 5_000,
+    });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
   test('release-notes (global) view', async ({ page }) => {
     await page.goto('/#/release-notes');
     /* The mock /api/info releaseNotes carries one bullet — its presence is the

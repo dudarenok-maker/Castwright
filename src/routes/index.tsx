@@ -80,6 +80,9 @@ const AdvancedView = lazy(() =>
 const ReleaseNotesView = lazy(() =>
   import('../views/release-notes').then((m) => ({ default: m.ReleaseNotesView })),
 );
+const HelpView = lazy(() =>
+  import('../views/help').then((m) => ({ default: m.HelpView })),
+);
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
@@ -433,6 +436,15 @@ function AdvancedRoute() {
 function ReleaseNotesRoute() {
   useHydrateStage({ kind: 'release-notes' }, []);
   return <ReleaseNotesView />;
+}
+
+/* fe-29 — offline help / troubleshooting, reached from the top-bar "?" +
+   Account; deep-linked per failure code via ?code=. */
+function HelpRoute() {
+  const [searchParams] = useSearchParams();
+  const focusCode = searchParams.get('code') ?? undefined;
+  useHydrateStage({ kind: 'help', focusCode }, [focusCode]);
+  return <HelpView />;
 }
 
 export function ChangelogRoute() {
@@ -1066,6 +1078,7 @@ export const router = createHashRouter([
       { path: 'models', element: <ModelManagerRoute /> },
       { path: 'setup', element: <SetupRoute /> },
       { path: 'about', element: <AboutRoute /> },
+      { path: 'help', element: <HelpRoute /> },
       { path: 'advanced', element: <AdvancedRoute /> },
       { path: 'release-notes', element: <ReleaseNotesRoute /> },
       { path: 'books/:bookId/analysing', element: <AnalysingRoute /> },

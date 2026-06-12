@@ -166,6 +166,11 @@ export const uiSlice = createSlice({
     openAbout: (s) => {
       s.stage = { kind: 'about' };
     },
+    /* fe-29 — offline Help / troubleshooting view, reached from the top-bar
+       "?" button and Account; deep-linked per failure code via ?code=. */
+    openHelp: (s, a: PayloadAction<{ focusCode?: string } | undefined>) => {
+      s.stage = { kind: 'help', focusCode: a.payload?.focusCode };
+    },
     /* Advanced configuration — tune model, generation, and QA knobs. */
     openAdvanced: (s) => {
       s.stage = { kind: 'advanced' };

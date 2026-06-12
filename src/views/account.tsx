@@ -469,6 +469,22 @@ export function AccountView() {
           </button>
         </section>
 
+        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">Help &amp; troubleshooting</h2>
+            <p className="mt-1 text-xs text-ink/55 max-w-prose">
+              FAQs, engine setup guides, and troubleshooting steps for common issues.
+            </p>
+          </div>
+          <a
+            href="#/help"
+            data-testid="account-help-pointer"
+            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
+          >
+            Open Help →
+          </a>
+        </section>
+
         <div className="flex items-center gap-4">
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
             {saving ? 'Saving…' : 'Save changes'}

@@ -320,3 +320,15 @@ describe('uiSlice — openSetup', () => {
     expect(s.stage).toEqual({ kind: 'setup' });
   });
 });
+
+describe('uiSlice — openHelp', () => {
+  it('openHelp with focusCode sets stage to { kind: help, focusCode }', () => {
+    const s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.openHelp({ focusCode: 'x' }));
+    expect(s.stage).toEqual({ kind: 'help', focusCode: 'x' });
+  });
+
+  it('openHelp with no payload sets stage to { kind: help, focusCode: undefined }', () => {
+    const s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.openHelp());
+    expect(s.stage).toEqual({ kind: 'help', focusCode: undefined });
+  });
+});

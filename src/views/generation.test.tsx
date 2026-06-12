@@ -2258,3 +2258,73 @@ describe('GenerationView — Wave 2 brand manifesto', () => {
     expect(screen.getByText('Many voices, one machine.')).toBeInTheDocument();
   });
 });
+
+describe('GenerationView — fe-29 More-help deep-link', () => {
+  function renderWithFailedChapter(overrides: Partial<Chapter>) {
+    const failedChapter: Chapter = {
+      id: 1,
+      title: 'Chapter 1',
+      duration: '00:00',
+      state: 'failed',
+      progress: 0,
+      characters: { narrator: 'failed', Marlow: 'failed' },
+      errorReason: 'Synthesis failed: VRAM exhausted.',
+      ...overrides,
+    };
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    store.dispatch(accountSlice.actions.setDefaultTtsModelKey('coqui-xtts-v2'));
+    store.dispatch(chaptersSlice.actions.setChapters([failedChapter]));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters,
+        chapters: [failedChapter],
+        sentences,
+      } as any),
+    );
+    return render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={[failedChapter]}
+          characters={characters}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('failed chapter row links to #/help?code= when a FailureCode is present (fe-29)', () => {
+    renderWithFailedChapter({
+      generationRemediation: 'Reduce batch size or free VRAM.',
+      generationErrorCode: 'vram-spill',
+    });
+    const link = screen.getByRole('link', { name: /more help/i });
+    expect(link).toHaveAttribute('href', '#/help?code=vram-spill');
+  });
+
+  it('suppresses the More-help link for unknown codes', () => {
+    renderWithFailedChapter({
+      generationRemediation: 'An unrecognised error occurred.',
+      generationErrorCode: 'unknown',
+    });
+    expect(screen.queryByRole('link', { name: /more help/i })).toBeNull();
+  });
+});

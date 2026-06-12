@@ -16,7 +16,9 @@ future visual concepts or HTML mockups there, not in a new tracked directory.
 npm packages: `castwright` (frontend) / `castwright-server`
 (backend). GitHub repo: `Castwright`. Release artifact: `castwright-vX.Y.Z.zip`.
 **Note: v1.6.0 cannot self-upgrade across the rename — alpha installs reinstall fresh.**
-App fonts: **General Sans** (sans) + **Lora** (serif). Next big
+App fonts: **General Sans** (sans) + **Lora** (serif) — self-hosted in
+`public/fonts/` (woff2, via `scripts/fetch-self-hosted-fonts.mjs`); no external
+font CDN at runtime (#698). Next big
 release = voice cloning (`fs-38`, plan `docs/features/194-voice-cloning.md`).
 
 ## Working principles
