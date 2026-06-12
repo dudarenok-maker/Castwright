@@ -515,14 +515,14 @@ function ResourceTrends() {
           <div className="px-4 py-3 border-b border-ink/5">
             <RtfSparkline records={records} />
           </div>
-          {/* Cap the rows at ~60% of the viewport and scroll inside with the
+          {/* Cap the rows at ~12 rows tall (~32rem) and scroll inside with the
               inset thin scrollbar — a long run records hundreds of chapters that
               would otherwise run off the page. The column header is sticky at the
               top of the scroller (so it shares the reserved gutter and aligns
               with the rows); each book's chapters sit under a sub-header that
               sticks just BELOW the column header. */}
           <div
-            className="max-h-[60vh] overflow-y-auto scrollbar-thin"
+            className="max-h-[32rem] overflow-y-auto scrollbar-thin"
             data-testid="resource-trends-scroll"
           >
             <div
