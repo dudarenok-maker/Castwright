@@ -151,11 +151,12 @@ language param.
 
 Run the synthesis paths against the real backend + sidecar (this feature is
 sidecar-bound). Canonical English fixture:
-`server/src/__fixtures__/the-coalfall-commission.md` (do not commit). Russian needs a
-**public-domain Pushkin / Chekhov fixture** (e.g. Chekhov «Хамелеон») saved
-locally, NOT committed (mirror the Marlow-fixture convention).
+`server/src/__fixtures__/the-coalfall-commission.md` (committed, owned). Russian
+uses the committed owned translation of Chapter One,
+`server/src/__fixtures__/the-coalfall-commission.ru.md` — the same passage the
+`e2e/language-detection.spec.ts` Cyrillic case pastes.
 
-1. **English regression** — import the Marlow fixture → confirm shows English (no
+1. **English regression** — import the Coalfall fixture → confirm shows English (no
    Russian chrome) → cast picker behaves as today (Kokoro narrator, no Qwen
    lock) → generate → audio is English. Nothing changes for English books.
 2. **Russian happy path** — import the Russian fixture → confirm-metadata

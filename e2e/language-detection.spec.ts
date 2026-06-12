@@ -38,9 +38,9 @@ test.describe('fs-2 language auto-detection on confirm', () => {
   }) => {
     await pasteAndConfirm(
       page,
-      '# Хамелеон\n\n' +
-        '# Глава 1\n\nЧерез базарную площадь идёт полицейский надзиратель Очумелов в новой шинели.\n\n' +
-        '# Глава 2\n\nВокруг него собралась толпа любопытных, и каждый что-то говорил.\n',
+      '# Дело о Коалфолле\n\n' +
+        '# Глава 1\n\nГорн остыл до цвета подёрнутого пеплом заката, и Рен выскребала последнюю окалину, когда раздался стук.\n\n' +
+        '# Глава 2\n\nДверь всё равно отворилась. Мэйрин, староста, просунула голову внутрь, и вместе с ней вошёл холод.\n',
     );
 
     const language = page.getByTestId('confirm-language');
@@ -56,9 +56,9 @@ test.describe('fs-2 language auto-detection on confirm', () => {
   test('an English manuscript stays English with no Russian chrome', async ({ page }) => {
     await pasteAndConfirm(
       page,
-      '# A Wizard of Earthsea\n\n' +
-        '# Chapter 1\n\nThe island of Gont, a single mountain that lifts its peak above the storm-racked sea.\n\n' +
-        '# Chapter 2\n\nHe learned the names of every herb and the use of every craft.\n',
+      '# The Coalfall Commission\n\n' +
+        '# Chapter 1\n\nThe forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when the knocking started.\n\n' +
+        '# Chapter 2\n\nThe door opened anyway. Maerin the reeve put her head in, and the cold came with her.\n',
     );
 
     const language = page.getByTestId('confirm-language');
