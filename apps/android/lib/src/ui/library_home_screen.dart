@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../data/companion_runtime.dart';
 import '../domain/home_shelf.dart';
+import '../domain/library_load.dart';
 import '../domain/library_tree.dart';
 import '../domain/listen_progress.dart';
 import '../domain/paired_server.dart';
@@ -40,6 +41,7 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
   String _query = '';
   bool _loading = true;
   bool _offline = false;
+  bool _connecting = false; // background server probe in flight
   String? _error;
 
   @override
@@ -48,31 +50,13 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
     _refresh();
   }
 
+  /// Local-first: paint the downloaded library immediately, then reconcile with
+  /// the server in the background. A connection failure never blocks the user —
+  /// they stay on the local library with an "Offline" retry chip. The state
+  /// machine lives in [loadLibraryLocalFirst] so its ordering is unit-tested.
   Future<void> _refresh() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    List<LibraryBook> books;
-    var offline = false;
-    try {
-      books = await widget.runtime.sync.loadLibrary(); // server index
-    } catch (_) {
-      // Server unreachable → fall back to the downloaded library on disk.
-      try {
-        books = await widget.runtime.sync.loadLocalLibrary();
-        offline = true;
-      } catch (e) {
-        if (mounted) {
-          setState(() {
-            _error = '$e';
-            _loading = false;
-          });
-        }
-        return;
-      }
-    }
-    // app-14: continue-listening rail from local lastPlayedAt.
+    setState(() => _error = null);
+    // app-14: continue-listening rail from local lastPlayedAt (always local).
     final shelf = buildContinueListening([
       for (final s in await widget.runtime.library.listBooks())
         ShelfBook(
@@ -83,15 +67,22 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
           updatedAt: '',
         ),
     ]);
-    if (!mounted) return;
-    setState(() {
-      _books = books;
-      _continue = shelf;
-      _offline = offline;
-      _loading = false;
-    });
-    _loadCovers(books);
-    _loadDurations(books);
+    await for (final s in loadLibraryLocalFirst(
+      loadLocal: widget.runtime.sync.loadLocalLibrary,
+      loadServer: widget.runtime.sync.loadLibrary,
+    )) {
+      if (!mounted) return;
+      setState(() {
+        _books = s.books;
+        _continue = shelf;
+        _offline = s.offline;
+        _connecting = s.connecting;
+        _loading = s.loading;
+        _error = s.error;
+      });
+      _loadCovers(s.books);
+      _loadDurations(s.books);
+    }
   }
 
   Future<void> _loadCovers(List<LibraryBook> books) async {
@@ -266,19 +257,19 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
                 key: const Key('offline-chip'),
                 avatar: Icon(Icons.cloud_off,
                     size: 18, color: Theme.of(context).colorScheme.onErrorContainer),
-                label: Text(_loading ? 'Connecting…' : 'Offline'),
+                label: const Text('Offline'),
                 backgroundColor: Theme.of(context).colorScheme.errorContainer,
                 labelStyle: TextStyle(
                     color: Theme.of(context).colorScheme.onErrorContainer),
-                onPressed: _loading ? null : _refresh, // tap to retry
+                onPressed: _refresh, // tap to retry
               ),
             )
           else
             IconButton(
               key: const Key('library-sync'),
-              tooltip: 'Sync',
+              tooltip: _connecting ? 'Connecting…' : 'Sync',
               icon: const Icon(Icons.sync),
-              onPressed: _loading ? null : _refresh,
+              onPressed: (_loading || _connecting) ? null : _refresh,
             ),
           IconButton(
             key: const Key('open-settings'),

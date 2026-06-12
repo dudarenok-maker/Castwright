@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/api_client.dart';
 import 'package:castwright/src/data/pairing_service.dart';
@@ -38,6 +40,21 @@ void main() {
         api.info(),
         throwsA(isA<ApiException>().having((e) => e.statusCode, 'status', 503)),
       );
+    });
+
+    // Regression (offline spinner): when the device is offline the real
+    // transport's connect hangs until the OS TCP timeout instead of failing
+    // fast, so every request — and the library/player UIs that await them —
+    // spins for tens of seconds before the offline fallback can run. A hanging
+    // send must abort with a TimeoutException so callers' catch-and-fall-back
+    // path fires promptly.
+    test('getJson aborts a hanging transport with TimeoutException', () async {
+      final api = ApiClient(
+        conn(),
+        requestTimeout: const Duration(milliseconds: 50),
+        send: (_, _, _) => Completer<HttpResult>().future, // never completes
+      );
+      await expectLater(api.info(), throwsA(isA<TimeoutException>()));
     });
   });
 }
