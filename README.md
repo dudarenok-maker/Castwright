@@ -44,7 +44,7 @@ or MP3.
   tap-to-assign, per-character overrides, and sample playback. Audition candidate
   voices in the profile drawer before committing, and compare two characters side
   by side — even across books.
-- **TTS engines** — Kokoro (fast, English, runs on a modest GPU), Coqui XTTS v2
+- **Voice engines** — Kokoro (fast, English, runs on a modest GPU), Coqui XTTS v2
   (zero-shot voice cloning, optional download), Qwen3-TTS (designs a unique voice
   per character from a persona and reuses it across the series), and Gemini cloud.
   A character keeps its voice when you switch engines.
@@ -74,13 +74,13 @@ or MP3.
 Download the latest `castwright-vX.Y.Z.zip` from
 [Releases](https://github.com/dudarenok-maker/Castwright/releases), extract it,
 and follow **[INSTALL.md](INSTALL.md)**. You'll end up with a single
-`npm run start:prod` command that brings up the server, the TTS sidecar, and the
+`npm run start:prod` command that brings up the server, the voice engine, and the
 web UI at <http://localhost:8080>.
 
 **Prerequisites** (full detail and per-OS steps in [INSTALL.md](INSTALL.md)):
 
 - Node.js 20.19+
-- Python 3.11 (for the TTS sidecar)
+- Python 3.11 (for the voice engine)
 - ffmpeg on `PATH`
 - ~3 GB free disk for the TTS weights
 - A GPU is strongly recommended (TTS on CPU is far slower): NVIDIA on Windows/Linux, or Apple Silicon (M-series) on macOS — used automatically via Metal, no drivers or setup
@@ -116,7 +116,7 @@ After the first public release, upgrading is one click inside the app
 ## How it's built
 
 Castwright is a Vite + React frontend, a Node/Express server, and a Python
-(FastAPI) TTS sidecar, with a native Flutter companion app. Building from source,
+(FastAPI) voice engine, with a native Flutter companion app. Building from source,
 the branching model, and the commit convention are documented in
 **[CONTRIBUTING.md](CONTRIBUTING.md)**.
 
