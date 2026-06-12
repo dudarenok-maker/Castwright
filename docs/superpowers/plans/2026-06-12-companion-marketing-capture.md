@@ -18,6 +18,14 @@
 - Pre-commit runs `verify:fast:scoped`; Dart files are out of its JS scope, so it skips — Dart correctness is gated by the `flutter test` step in each task. Do **not** use `--no-verify`.
 - After each task's tests pass, commit.
 
+**Subagent-driven execution notes (controller):**
+- Run **one subagent per task, strictly sequential** (1 → 9). Do **not** parallelize — Tasks 1 and 6 both edit `main.dart`, and 5→6→7 form a chain.
+- Each task is self-contained: paste the task's full text **plus** the "Conventions for every task" block above into the dispatch. No task requires the agent to have done a prior task in its own context — prior tasks' code is already on disk and committed.
+- **Scene-setting per task:** tell the agent the package is `castwright`, the working dir is `apps/android/`, and that it must only touch the files in that task's **Files** list. Most tasks add new files; the two `main.dart` edits (Tasks 1, 6) are additive and disjoint (Task 1 = `AudiobookCompanionApp` theme only; Task 6 = the `runtimeOverride` seam).
+- **Model guidance:** Tasks 2–5, 7 are mechanical (clear spec, 1–3 files) → cheap/standard model. Tasks 1, 6, 8 touch integration seams/scripts → standard model.
+- **Gate:** after Task 6, the agent runs the FULL `flutter test` (Task 6 Step 5) — treat a red run there as a blocker before Task 7.
+- Spec-compliance review each task against the design doc `docs/superpowers/specs/2026-06-12-companion-marketing-capture-design.md`; then code-quality review. The capture run itself (Task 8) is operator-executed on an emulator, so its "verify" is `flutter analyze` + the guard smoke test, not a live capture.
+
 ---
 
 ## File Structure
@@ -125,7 +133,6 @@ class AudiobookCompanionApp extends StatelessWidget {
       this.service,
       this.audioHandler,
       this.deepLinks,
-      this.runtimeOverride,
       this.themeMode = ThemeMode.system});
 
   final PairingStore store;
@@ -138,10 +145,6 @@ class AudiobookCompanionApp extends StatelessWidget {
 
   /// Injectable deep-link stream (null in production — uses App Links platform channel).
   final Stream<Uri>? deepLinks;
-
-  /// Injectable pre-built runtime — used by the marketing capture + widget tests
-  /// to skip pairing/connection and render posed screens. Null in production.
-  final CompanionRuntime? runtimeOverride;
 
   /// Light/dark selection. Defaults to following the system; the capture harness
   /// forces a value per pass.
@@ -166,22 +169,14 @@ class AudiobookCompanionApp extends StatelessWidget {
           store: store,
           service: service ?? PairingService(),
           audioHandler: audioHandler,
-          deepLinks: deepLinks,
-          runtimeOverride: runtimeOverride),
+          deepLinks: deepLinks),
     );
   }
 }
 ```
 
-Add the import near the other `src/...` imports in `main.dart`:
-```dart
-import 'src/data/companion_runtime.dart';
-```
-(`companion_runtime.dart` is already imported in `main.dart` — confirm; do not duplicate.)
-
-> Note: `HomePage` does not yet accept `runtimeOverride` — that parameter is added in Task 6. To keep this task compiling, **add the `runtimeOverride` field + constructor param to `HomePage` now but leave `_boot()` unchanged** (Task 6 wires the behaviour). Minimal `HomePage` change for this task:
-> - add `this.runtimeOverride` to the `HomePage` constructor,
-> - add `final CompanionRuntime? runtimeOverride;` field.
+> Task 1 touches **only** `AudiobookCompanionApp` (theme). Leave `HomePage` and
+> `_boot()` untouched — the `runtimeOverride` seam lands atomically in Task 6.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -998,7 +993,7 @@ git commit -m "feat(app): add buildDemoRuntime wiring fakes + seeded in-memory s
 ## Task 6: Wire `HomePage.runtimeOverride`
 
 **Files:**
-- Modify: `apps/android/lib/main.dart` (`_HomePageState._boot`)
+- Modify: `apps/android/lib/main.dart` (`AudiobookCompanionApp` field + pass-through, `HomePage` field, `_HomePageState._boot` short-circuit)
 - Test: `apps/android/test/ui/runtime_override_test.dart`
 
 - [ ] **Step 1: Write the failing test**
@@ -1041,11 +1036,52 @@ From `apps/android/`:
 ```
 flutter test test/ui/runtime_override_test.dart
 ```
-Expected: FAIL — `_boot()` ignores `runtimeOverride`, so it tries the real connection path and never shows "Library".
+Expected: FAIL — a compile error: `AudiobookCompanionApp` has no `runtimeOverride` parameter yet. (Step 3 adds it; once it compiles, the assertion that the library renders is what the seam must satisfy.)
 
-- [ ] **Step 3: Short-circuit `_boot()` on `runtimeOverride`**
+- [ ] **Step 3: Add the `runtimeOverride` seam to `main.dart` (atomic)**
 
-In `apps/android/lib/main.dart`, at the **very top** of `_HomePageState._boot()` (before `final server = await widget.store.load();`), insert:
+All three edits below live in `apps/android/lib/main.dart`. `companion_runtime.dart` is already imported there (it defines `CompanionRuntime`), so no new import is needed.
+
+**(a)** Add the field + constructor param to `AudiobookCompanionApp` and pass it down. Change the constructor to:
+
+```dart
+  const AudiobookCompanionApp(
+      {super.key,
+      required this.store,
+      this.service,
+      this.audioHandler,
+      this.deepLinks,
+      this.runtimeOverride,
+      this.themeMode = ThemeMode.system});
+```
+
+Add the field (next to the other fields):
+
+```dart
+  /// Injectable pre-built runtime — used by the marketing capture + widget tests
+  /// to skip pairing/connection and render posed screens. Null in production.
+  final CompanionRuntime? runtimeOverride;
+```
+
+And pass it to `HomePage` in `build`:
+
+```dart
+      home: HomePage(
+          store: store,
+          service: service ?? PairingService(),
+          audioHandler: audioHandler,
+          deepLinks: deepLinks,
+          runtimeOverride: runtimeOverride),
+```
+
+**(b)** Add the field + constructor param to `HomePage`. Change its constructor to include `this.runtimeOverride` and add the field:
+
+```dart
+  /// Injectable pre-built runtime (capture/tests). Null in production.
+  final CompanionRuntime? runtimeOverride;
+```
+
+**(c)** Short-circuit `_HomePageState._boot()` at the **very top** (before `final server = await widget.store.load();`):
 
 ```dart
     if (widget.runtimeOverride != null) {
@@ -1058,8 +1094,6 @@ In `apps/android/lib/main.dart`, at the **very top** of `_HomePageState._boot()`
       return;
     }
 ```
-
-(The `runtimeOverride` field + constructor param were added to `HomePage` in Task 1.)
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -1444,9 +1478,12 @@ In `docs/superpowers/specs/2026-06-12-companion-marketing-capture-design.md`, ch
 **Status:** delivered (2026-06-12) — see plan `docs/superpowers/plans/2026-06-12-companion-marketing-capture.md`
 ```
 
-- [ ] **Step 2: Decide INDEX placement**
+- [ ] **Step 2: INDEX placement — skip (deterministic)**
 
-This is capture/marketing tooling, not a product feature with a regression plan under `docs/features/`. Per the spec's Testing section, the coverage lives in the companion test suite. **Skip `docs/features/INDEX.md`** unless the repo already indexes tooling there — confirm by checking whether piece #1 (web capture) has an INDEX entry; match that decision. If piece #1 is indexed, add a sibling line; if not, do nothing.
+This is capture/marketing tooling (git-ignored output under `mockups/`), not a
+product feature with a regression plan under `docs/features/`. Like piece #1 (the
+web capture, which added no `docs/features/INDEX.md` entry), it gets **none** —
+the spec + the companion test suite are its record. Do nothing in this step.
 
 - [ ] **Step 3: Commit**
 
