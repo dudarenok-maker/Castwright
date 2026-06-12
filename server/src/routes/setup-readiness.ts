@@ -4,7 +4,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { buildDiagnostics, type CheckId, type DiagnosticsResponse } from './diagnostics.js';
-import { getResolvedAnalysisEngine, getResolvedSetupCompletedAt } from '../workspace/user-settings.js';
+import { getResolvedAnalysisEngine, getResolvedSetupCompletedAt, writeSetupCompletedAt } from '../workspace/user-settings.js';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { anyTtsEnginePresent } from '../tts/engine-presence.js';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,12 @@ export function buildSetupReadiness(input: {
 }
 
 export const setupReadinessRouter = Router();
+
+setupReadinessRouter.post('/complete', async (_req: Request, res: Response) => {
+  const ts = new Date().toISOString();
+  await writeSetupCompletedAt(ts);
+  res.json({ completedAt: ts });
+});
 
 setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
   const diagnostics = await buildDiagnostics();
