@@ -137,7 +137,7 @@ export const MOCK_VOICE_LIBRARY: VoiceLibraryResponse = {
       ttsVoice: tts('Aoede', 'Breezy'),
     }),
     withGradient({
-      id: 'v_boy',
+      id: 'v_fenny',
       character: 'The Boy on the Pier',
       bookTitle: 'Solway Bay',
       bookId: 'sb',

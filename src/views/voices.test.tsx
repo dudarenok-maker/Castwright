@@ -902,7 +902,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
      different book. Kept out of the default fixture because two
      "Wren" text matches would defeat plain getByText lookups in
      every other test. */
-  const sophieFromBookTwo: Voice = makeVoice({
+  const wrenFromBookTwo: Voice = makeVoice({
     id: 'wren-b2',
     character: 'Wren',
     bookId: 'b2',
@@ -986,18 +986,18 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       changeLog: null,
       analysis: undefined,
     });
-    renderMerge([...libraryB1, sophieFromBookTwo]);
+    renderMerge([...libraryB1, wrenFromBookTwo]);
     /* Two "Wren" labels exist (one per book) — disambiguate via closest
        book section. Wren-b1 stays the first match; Wren-b2 is the
        second. */
-    const sophieCards = screen.getAllByText('Wren');
+    const wrenCards = screen.getAllByText('Wren');
     fireEvent.click(
-      sophieCards[0]
+      wrenCards[0]
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
     fireEvent.click(
-      sophieCards[1]
+      wrenCards[1]
         .closest('div.group')!
         .querySelector('[aria-label="Select voice for compare"]')!,
     );
@@ -1669,7 +1669,7 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
     }),
     makeVoice({
       id: 'q_none',
-      character: 'Bo',
+      character: 'Fenn',
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
@@ -1788,7 +1788,7 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
   it('buckets an undesigned voice under "Needs a voice" and designed ones under "Designed voices"', () => {
     renderQwen();
     const needs = screen.getByRole('region', { name: 'Qwen · Needs a voice' });
-    expect(within(needs).getByText('Bo')).toBeInTheDocument();
+    expect(within(needs).getByText('Fenn')).toBeInTheDocument();
     const designed = screen.getByRole('region', { name: 'Qwen · Designed voices' });
     expect(within(designed).getByText('Marlow')).toBeInTheDocument();
     expect(within(designed).getByText('Oduvan')).toBeInTheDocument();

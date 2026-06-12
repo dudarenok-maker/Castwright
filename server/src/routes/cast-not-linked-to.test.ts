@@ -227,14 +227,14 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
       },
     });
 
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
       (c) => c.id === 'wren',
     );
-    const sophieExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
+    const wrenExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
       (c) => c.id === 'wren',
     );
-    expect(sophieKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
-    expect(sophieExile?.notLinkedTo).toEqual([{ bookId: keeperBookId, characterId: 'wren' }]);
+    expect(wrenKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
+    expect(wrenExile?.notLinkedTo).toEqual([{ bookId: keeperBookId, characterId: 'wren' }]);
   });
 
   it('is idempotent: a repeat call does not duplicate the array entries', async () => {
@@ -277,14 +277,14 @@ describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', ()
         b: { bookId: exileBookId, characterId: 'wren' },
       },
     });
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
       (c) => c.id === 'wren',
     );
-    const sophieExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
+    const wrenExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
       (c) => c.id === 'wren',
     );
-    expect(sophieKeeper?.notLinkedTo).toEqual([]);
-    expect(sophieExile?.notLinkedTo).toEqual([]);
+    expect(wrenKeeper?.notLinkedTo).toEqual([]);
+    expect(wrenExile?.notLinkedTo).toEqual([]);
   });
 
   it('is idempotent: deleting an absent pair is a 200 no-op', async () => {
@@ -293,11 +293,11 @@ describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', ()
       otherCharacterId: 'wren',
     });
     expect(res.status).toBe(200);
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
       (c) => c.id === 'wren',
     );
     /* No notLinkedTo written (never marked) — field absent or empty. */
-    expect(sophieKeeper?.notLinkedTo ?? []).toEqual([]);
+    expect(wrenKeeper?.notLinkedTo ?? []).toEqual([]);
   });
 
   it('removes the entry only on the side that has it (asymmetric on-disk start)', async () => {
@@ -314,10 +314,10 @@ describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', ()
       otherCharacterId: 'wren',
     });
     expect(res.status).toBe(200);
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
       (c) => c.id === 'wren',
     );
-    expect(sophieKeeper?.notLinkedTo).toEqual([]);
+    expect(wrenKeeper?.notLinkedTo).toEqual([]);
   });
 
   it('rejects same-bookId and self-pair', async () => {

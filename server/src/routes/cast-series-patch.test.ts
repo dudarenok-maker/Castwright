@@ -34,12 +34,12 @@ let workspaceRoot: string;
 let app: Express;
 let keeperBookId: string;
 let exileBookId: string;
-let everblazeBookId: string;
+let tidewatcherBookId: string;
 let aliasBookId: string;
 let otherSeriesBookId: string;
 let standaloneBookId: string;
 
-const sophieKeeper = {
+const wrenKeeper = {
   id: 'wren',
   name: 'Wren',
   role: 'character',
@@ -48,7 +48,7 @@ const sophieKeeper = {
   ageRange: 'teen',
   tone: { warmth: 50, pace: 50, authority: 50, emotion: 50 },
 };
-const sophieExile = {
+const wrenExile = {
   id: 'wren-sparrow',
   name: 'Wren',
   role: 'character',
@@ -56,7 +56,7 @@ const sophieExile = {
   gender: 'female',
   ageRange: 'teen',
 };
-const sophieEverblaze = {
+const wrenEverblaze = {
   id: 'wren-e',
   name: 'Wren',
   role: 'character',
@@ -64,14 +64,14 @@ const sophieEverblaze = {
 };
 /* In this book Wren is recorded as "Foster" (the surname-only nickname)
    with "Wren" as an alias — exercises the alias-match dedup branch. */
-const sophieAliasBook = {
+const wrenAliasBook = {
   id: 'foster',
   name: 'Foster',
   role: 'character',
   color: 'lilac',
   aliases: ['Wren'],
 };
-const dexKeeper = {
+const hartKeeper = {
   id: 'hart',
   name: 'Hart',
   role: 'character',
@@ -145,7 +145,7 @@ beforeAll(async () => {
   ]);
   keeperBookId = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
   exileBookId = makeBookId(AUTHOR, SERIES, EXILE_BOOK);
-  everblazeBookId = makeBookId(AUTHOR, SERIES, TIDEWATCHER_BOOK);
+  tidewatcherBookId = makeBookId(AUTHOR, SERIES, TIDEWATCHER_BOOK);
   aliasBookId = makeBookId(AUTHOR, SERIES, ALIAS_BOOK);
   otherSeriesBookId = makeBookId(AUTHOR, 'Different Series', OTHER_SERIES_BOOK);
   standaloneBookId = makeBookId(AUTHOR, SERIES, STANDALONE);
@@ -157,14 +157,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
-    sophieKeeper,
-    dexKeeper,
+    wrenKeeper,
+    hartKeeper,
   ]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK, exileBookId, [sophieExile]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, TIDEWATCHER_BOOK, everblazeBookId, [
-    sophieEverblaze,
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK, exileBookId, [wrenExile]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, TIDEWATCHER_BOOK, tidewatcherBookId, [
+    wrenEverblaze,
   ]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, ALIAS_BOOK, aliasBookId, [sophieAliasBook]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, ALIAS_BOOK, aliasBookId, [wrenAliasBook]);
   writeBookOnDisk(
     workspaceRoot,
     AUTHOR,
@@ -243,7 +243,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
     const updatedBookIds = (res.body.updated as Array<{ bookId: string }>).map((u) => u.bookId);
     expect(updatedBookIds).toContain(keeperBookId);
     expect(updatedBookIds).toContain(exileBookId);
-    expect(updatedBookIds).toContain(everblazeBookId);
+    expect(updatedBookIds).toContain(tidewatcherBookId);
     expect(updatedBookIds).toContain(aliasBookId);
     expect(updatedBookIds).not.toContain(otherSeriesBookId);
     expect(updatedBookIds).not.toContain(standaloneBookId);
@@ -252,7 +252,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
        cross-series Wren and the standalone are untouched. */
     const keeperCast = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK);
     const exileCast = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK);
-    const everblazeCast = readCast(workspaceRoot, AUTHOR, SERIES, TIDEWATCHER_BOOK);
+    const tidewatcherCast = readCast(workspaceRoot, AUTHOR, SERIES, TIDEWATCHER_BOOK);
     const aliasCast = readCast(workspaceRoot, AUTHOR, SERIES, ALIAS_BOOK);
     const otherCast = readCast(workspaceRoot, AUTHOR, 'Different Series', OTHER_SERIES_BOOK);
 
@@ -261,7 +261,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
        book that had them; only warmth changed. */
     expect((keeperCast.characters[0].tone as { pace: number }).pace).toBe(50);
     expect((exileCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
-    expect((everblazeCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
+    expect((tidewatcherCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
     /* Alias-match: the patch reaches the "Foster" row even though name
        differs — alias "Wren" provides the bridge. */
     expect((aliasCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
@@ -294,15 +294,15 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
   it('returns 207 with failed entries when one sibling write throws', async () => {
     /* Force writeJsonAtomic to fail on the The Tidewatcher’s Oath cast.json path so
        the sibling-iteration partial-failure branch executes. */
-    const { everblazeBookDirPath } = {
-      everblazeBookDirPath: join(workspaceRoot, 'books', AUTHOR, SERIES, TIDEWATCHER_BOOK),
+    const { tidewatcherBookDirPath } = {
+      tidewatcherBookDirPath: join(workspaceRoot, 'books', AUTHOR, SERIES, TIDEWATCHER_BOOK),
     };
     const stateIo = await import('../workspace/state-io.js');
     const original = stateIo.writeJsonAtomic;
     const spy = vi
       .spyOn(stateIo, 'writeJsonAtomic')
       .mockImplementation(async (path: string, data: unknown) => {
-        if (path.startsWith(everblazeBookDirPath)) {
+        if (path.startsWith(tidewatcherBookDirPath)) {
           throw new Error('simulated disk-full');
         }
         return original(path, data);
@@ -312,11 +312,11 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
       const res = await callPatch(keeperBookId, 'wren', { gender: 'female' });
       expect(res.status).toBe(207);
       const failedBookIds = (res.body.failed as Array<{ bookId: string }>).map((f) => f.bookId);
-      expect(failedBookIds).toContain(everblazeBookId);
+      expect(failedBookIds).toContain(tidewatcherBookId);
       const updatedBookIds = (res.body.updated as Array<{ bookId: string }>).map((u) => u.bookId);
       expect(updatedBookIds).toContain(keeperBookId);
       expect(updatedBookIds).toContain(exileBookId);
-      expect(updatedBookIds).not.toContain(everblazeBookId);
+      expect(updatedBookIds).not.toContain(tidewatcherBookId);
     } finally {
       spy.mockRestore();
     }

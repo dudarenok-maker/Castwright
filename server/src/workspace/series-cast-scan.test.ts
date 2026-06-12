@@ -80,7 +80,7 @@ beforeAll(async () => {
     confirmed: true,
     characters: [
       { id: 'marlow', name: 'Marlow' },
-      { id: 'ro', name: 'Ro' },
+      { id: 'nim', name: 'Nim' },
     ],
   });
   seed('Unlocked', {
@@ -113,7 +113,7 @@ describe('scanSeriesCharacters', () => {
     /* the Hollow Tide (3) + Bonus Marlow (2) = 5. Unlocked excluded (castConfirmed=false). */
     expect(records).toHaveLength(5);
     const ids = records.map((r) => r.character.id).sort();
-    expect(ids).toEqual(['marlow', 'marlow', 'narrator', 'ro', 'wren']);
+    expect(ids).toEqual(['marlow', 'marlow', 'narrator', 'nim', 'wren']);
   });
 
   it('excludes the supplied bookId from the result (book never seeds itself)', async () => {
@@ -123,7 +123,7 @@ describe('scanSeriesCharacters', () => {
     /* the Hollow Tide's 3 characters drop out; Bonus Marlow's 2 remain. */
     expect(records).toHaveLength(2);
     const ids = records.map((r) => r.character.id).sort();
-    expect(ids).toEqual(['marlow', 'ro']);
+    expect(ids).toEqual(['marlow', 'nim']);
   });
 
   it('excludes books in a different series even when the author matches', async () => {

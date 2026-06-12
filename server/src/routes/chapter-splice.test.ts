@@ -140,7 +140,7 @@ function parseSse(body: string): Array<Record<string, unknown>> {
 describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
   it('boosts the target character region and preserves the chapter', async () => {
     const before = await decodeAudioToPcm(readFileSync(join(audioRoot, `${SLUG}.mp3`)), SR);
-    const bronteBefore = avgAbsRange(before, 1.05, 1.95);
+    const castorBefore = avgAbsRange(before, 1.05, 1.95);
     const amyBefore = avgAbsRange(before, 0.05, 0.95);
 
     const res = await request(app)
@@ -157,12 +157,12 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
     expect(existsSync(join(audioRoot, `${SLUG}.previous.segments.json`))).toBe(true);
 
     const after = await decodeAudioToPcm(readFileSync(join(audioRoot, `${SLUG}.mp3`)), SR);
-    const bronteAfter = avgAbsRange(after, 1.05, 1.95);
+    const castorAfter = avgAbsRange(after, 1.05, 1.95);
     const amyAfter = avgAbsRange(after, 0.05, 0.95);
 
     // Castor got materially louder; her gain RELATIVE to Amy increased.
-    expect(bronteAfter).toBeGreaterThan(bronteBefore * 1.5);
-    expect(bronteAfter / amyAfter).toBeGreaterThan(bronteBefore / amyBefore);
+    expect(castorAfter).toBeGreaterThan(castorBefore * 1.5);
+    expect(castorAfter / amyAfter).toBeGreaterThan(castorBefore / amyBefore);
 
     // Duration unchanged by a pure gain (within a frame of MP3 slack).
     expect(Math.abs(after.length - before.length) / (SR * 2)).toBeLessThan(0.1);

@@ -91,8 +91,8 @@ describe('synthesiseChapter voice routing', () => {
   it('routes a female character to the female voice bucket when gender is set on the cast', async () => {
     const cast: CastCharacter[] = [
       {
-        id: 'ro',
-        name: 'Ro',
+        id: 'nim',
+        name: 'Nim',
         gender: 'female',
         ageRange: 'adult',
         attributes: ['sarcastic', 'blunt', 'intimidating'],
@@ -102,7 +102,7 @@ describe('synthesiseChapter voice routing', () => {
     const provider = makeProvider();
 
     await synthesiseChapter({
-      sentences: [sentence(1, 'ro')],
+      sentences: [sentence(1, 'nim')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -152,8 +152,8 @@ describe('synthesiseChapter voice routing', () => {
         attributes: ['caring', 'firm'],
       },
       {
-        id: 'ro',
-        name: 'Ro',
+        id: 'nim',
+        name: 'Nim',
         gender: 'female',
         ageRange: 'adult',
         attributes: ['sarcastic', 'blunt'],
@@ -165,7 +165,7 @@ describe('synthesiseChapter voice routing', () => {
       sentences: [
         sentence(1, 'narrator', 'And it made Marlow queasier.'),
         sentence(2, 'oduvan', 'Lifetime of pain if you do not listen.'),
-        sentence(3, 'ro', 'Moving from denial mode to sulky boy.'),
+        sentence(3, 'nim', 'Moving from denial mode to sulky boy.'),
       ],
       cast,
       provider,
@@ -174,15 +174,15 @@ describe('synthesiseChapter voice routing', () => {
     });
 
     expect(provider.calls).toHaveLength(3);
-    const [narratorVoice, elwinVoice, roVoice] = provider.calls.map((c) => c.voiceName);
+    const [narratorVoice, oduvanVoice, roVoice] = provider.calls.map((c) => c.voiceName);
 
     expect(GEMINI_NARRATOR_VOICES, `narrator → ${narratorVoice}`).toContain(narratorVoice);
-    expect(GEMINI_MALE_VOICES, `oduvan → ${elwinVoice}`).toContain(elwinVoice);
+    expect(GEMINI_MALE_VOICES, `oduvan → ${oduvanVoice}`).toContain(oduvanVoice);
     expect(GEMINI_FEMALE_VOICES, `ro → ${roVoice}`).toContain(roVoice);
 
     /* All three must be distinct — the original bug collapsed them onto the
        same narrator voice. */
-    expect(new Set([narratorVoice, elwinVoice, roVoice]).size).toBe(3);
+    expect(new Set([narratorVoice, oduvanVoice, roVoice]).size).toBe(3);
   });
 
   it('honours an abort signal between groups (per-bookId mutex regression)', async () => {
@@ -194,7 +194,7 @@ describe('synthesiseChapter voice routing', () => {
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
       { id: 'oduvan', name: 'Oduvan', gender: 'male', attributes: ['caring'] },
-      { id: 'ro', name: 'Ro', gender: 'female', attributes: ['blunt'] },
+      { id: 'nim', name: 'Nim', gender: 'female', attributes: ['blunt'] },
     ];
     const controller = new AbortController();
     const provider = makeProvider();
@@ -210,7 +210,7 @@ describe('synthesiseChapter voice routing', () => {
         sentences: [
           sentence(1, 'narrator', 'First group.'),
           sentence(2, 'oduvan', 'Second group.'),
-          sentence(3, 'ro', 'Third group.'),
+          sentence(3, 'nim', 'Third group.'),
         ],
         cast,
         provider,
@@ -302,7 +302,7 @@ describe('synthesiseChapter voice routing', () => {
   it('scrubs all-caps openers and em-dashes before handing text to the provider (chapter-2 regression)', async () => {
     /* The canonical The Hollow Tide chapter-2 opener fed XTTS
        a 3-sentence narrator group whose first sentence was all-caps
-       ("THE NEXT SECOND WAS A BLUR.") with two em-dashes in the
+       ("THE NEXT SECOND WAS A HAZE.") with two em-dashes in the
        follow-on. XTTS spelled the all-caps letter-by-letter and looped
        around the dashes, producing ~60s of garbled audio for what
        should have been ~13s of speech.
@@ -318,7 +318,7 @@ describe('synthesiseChapter voice routing', () => {
 
     await synthesiseChapter({
       sentences: [
-        sentence(1, 'narrator', 'THE NEXT SECOND WAS A BLUR.'),
+        sentence(1, 'narrator', 'THE NEXT SECOND WAS A HAZE.'),
         sentence(
           2,
           'narrator',
@@ -345,7 +345,7 @@ describe('synthesiseChapter voice routing', () => {
       expect(call.text, `provider received: ${call.text}`).not.toMatch(/[A-Z]{3,}/);
       expect(call.text, `provider received: ${call.text}`).not.toMatch(/[—–]/);
     }
-    expect(provider.calls[0].text).toBe('The Next Second Was A Blur.');
+    expect(provider.calls[0].text).toBe('The Next Second Was A Haze.');
     expect(provider.calls[1].text).toContain('Wren by inches, then');
   });
 

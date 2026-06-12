@@ -313,7 +313,7 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     };
   }
 
-  const sweeneyQwen: Character = {
+  const marrowQwen: Character = {
     ...marrow,
     ttsEngine: 'qwen',
     overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
@@ -321,7 +321,7 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
 
   it('routes a Qwen-pinned row through the Qwen model key + injects the designed voiceId', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
-    renderChars([sweeneyQwen]);
+    renderChars([marrowQwen]);
     const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
@@ -357,7 +357,7 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     /* The id is what tells the user *which* designed voice is assigned —
        previously the row only read "Qwen · Designed voice", forcing a
        drawer open to find it. */
-    renderChars([sweeneyQwen]);
+    renderChars([marrowQwen]);
     const row = rowFor('Mr. Marrow');
     expect(row.textContent).toContain('Qwen');
     expect(row.textContent).toContain('qwen-marrow');
@@ -400,7 +400,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     );
   }
 
-  const sweeneyQwen: Character = {
+  const marrowQwen: Character = {
     ...marrow,
     ttsEngine: 'qwen',
     overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
@@ -415,7 +415,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
 
   it('shows "Designed" for a designed Qwen voice that has not rendered audio', () => {
     /* The matched library voice (v_marrow) carries no `generated` flag. */
-    renderWithLibrary([sweeneyQwen], library);
+    renderWithLibrary([marrowQwen], library);
     const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Designed')).toBeInTheDocument();
     expect(within(row).queryByText('Generated')).toBeNull();
@@ -425,14 +425,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
     const generatedLib = library.map((v) =>
       v.id === 'v_marrow' ? { ...v, generated: true } : v,
     );
-    renderWithLibrary([sweeneyQwen], generatedLib);
+    renderWithLibrary([marrowQwen], generatedLib);
     const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Generated')).toBeInTheDocument();
   });
 
   it('shows "Sampled" for a designed Qwen voice whose matched library voice has a cached audition', () => {
     const sampledLib = library.map((v) => (v.id === 'v_marrow' ? { ...v, sampled: true } : v));
-    renderWithLibrary([sweeneyQwen], sampledLib);
+    renderWithLibrary([marrowQwen], sampledLib);
     const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Sampled')).toBeInTheDocument();
     expect(within(row).queryByText('Designed')).toBeNull();
@@ -484,7 +484,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     render(
       <Provider store={store}>
         <CastView
-          characters={[sweeneyQwen]}
+          characters={[marrowQwen]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -520,7 +520,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     render(
       <Provider store={store}>
         <CastView
-          characters={[sweeneyQwen]}
+          characters={[marrowQwen]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -545,9 +545,9 @@ describe('CastView Qwen status pill (plan 117)', () => {
        narrator: coqui voice, voiceState 'reused' + matchedFrom → "Matched"
        lifecycle pill AND a Reused provenance badge (they no longer collapse
        into a single "Reused" pill). */
-    const sweeneyRow = rowFor('Mr. Marrow');
-    expect(within(sweeneyRow).getByText('Matched')).toBeInTheDocument();
-    expect(within(sweeneyRow).queryByTestId('reused-badge')).toBeNull();
+    const marrowRow = rowFor('Mr. Marrow');
+    expect(within(marrowRow).getByText('Matched')).toBeInTheDocument();
+    expect(within(marrowRow).queryByTestId('reused-badge')).toBeNull();
 
     const narratorRow = rowFor('Narrator');
     expect(within(narratorRow).getByText('Matched')).toBeInTheDocument();
@@ -582,7 +582,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
   });
 
   it('renders a Qwen row without throwing when the library is empty (defensive)', () => {
-    renderWithLibrary([sweeneyQwen], []);
+    renderWithLibrary([marrowQwen], []);
     const row = rowFor('Mr. Marrow');
     /* No matched voice ⇒ generated unknown ⇒ conservative "Designed". */
     expect(within(row).getByText('Designed')).toBeInTheDocument();
@@ -687,8 +687,8 @@ describe('CastView responsive (phone 375x667)', () => {
     /* Both subtrees mount — Tailwind's hidden/visible switch is purely
        CSS, so the React DOM has 2x rows for each character. The test
        asserts the multiplicity directly. */
-    const sweeneyHits = screen.getAllByText('Mr. Marrow');
-    expect(sweeneyHits.length).toBeGreaterThanOrEqual(2);
+    const marrowHits = screen.getAllByText('Mr. Marrow');
+    expect(marrowHits.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -757,10 +757,10 @@ describe('CastView desktop drag-drop is intact', () => {
         dataTransfer: { effectAllowed: 'copy', setData: () => {} },
       });
     });
-    const sweeneyRow = rowFor('Mr. Marrow');
+    const marrowRow = rowFor('Mr. Marrow');
     act(() => {
-      fireEvent.dragOver(sweeneyRow);
-      fireEvent.drop(sweeneyRow);
+      fireEvent.dragOver(marrowRow);
+      fireEvent.drop(marrowRow);
     });
     expect(setCharacters).toHaveBeenCalled();
   });
@@ -1606,7 +1606,7 @@ describe('CastView — variant glyph strip in the Status column', () => {
       qwen: { name: 'qwen-wren', variants: { angry: { name: 'qwen-wren-angry' } } },
     },
   };
-  const sophieSentences: Sentence[] = [
+  const wrenSentences: Sentence[] = [
     { id: 1, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
     { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'wren', emotion: 'excited' },
   ];
@@ -1621,7 +1621,7 @@ describe('CastView — variant glyph strip in the Status column', () => {
           characters={[wren]}
           setCharacters={() => {}}
           library={library}
-          sentences={sophieSentences}
+          sentences={wrenSentences}
           title="The Northern Star"
           onOpenProfile={() => {}}
           onShowMatchDetail={() => {}}

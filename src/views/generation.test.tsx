@@ -543,13 +543,13 @@ describe('GenerationView — per-character progress is derived from the manuscri
   const cast: Character[] = [
     { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
     { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
-    { id: 'ro', name: 'Ro', role: 'Goblin', color: 'magenta' },
+    { id: 'nim', name: 'Nim', role: 'Goblin', color: 'magenta' },
     { id: 'oduvan', name: 'Oduvan', role: 'Physician', color: 'violet' },
   ];
 
   /* Day-One-shaped chapter: narrator dominates, the other three each speak
      once before line 13 AND have lines still to come after it — so at
-     currentLine=13 marlow/ro/oduvan should each show fractional progress,
+     currentLine=13 marlow/nim/oduvan should each show fractional progress,
      not "Done". Pre-fix the slice would have marked all three "done" the
      moment the next speaker took over. */
   const dayOne: Sentence[] = [
@@ -557,7 +557,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
     { id: 2, chapterId: 2, characterId: 'narrator', text: 'b' },
     { id: 3, chapterId: 2, characterId: 'marlow', text: 'k1' },
     { id: 4, chapterId: 2, characterId: 'narrator', text: 'c' },
-    { id: 5, chapterId: 2, characterId: 'ro', text: 'r1' },
+    { id: 5, chapterId: 2, characterId: 'nim', text: 'r1' },
     { id: 6, chapterId: 2, characterId: 'narrator', text: 'd' },
     { id: 7, chapterId: 2, characterId: 'oduvan', text: 'e1' },
     { id: 8, chapterId: 2, characterId: 'narrator', text: 'e' },
@@ -570,7 +570,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
        they appear as partial progress, not "Done". */
     { id: 14, chapterId: 2, characterId: 'marlow', text: 'k2' },
     { id: 15, chapterId: 2, characterId: 'oduvan', text: 'e2' },
-    { id: 16, chapterId: 2, characterId: 'ro', text: 'r2' },
+    { id: 16, chapterId: 2, characterId: 'nim', text: 'r2' },
     { id: 17, chapterId: 2, characterId: 'marlow', text: 'k3' },
     { id: 18, chapterId: 2, characterId: 'oduvan', text: 'e3' },
     { id: 19, chapterId: 2, characterId: 'oduvan', text: 'e4' },
@@ -592,7 +592,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
       characters: characterStatuses ?? {
         narrator: 'in_progress',
         marlow: 'queued',
-        ro: 'queued',
+        nim: 'queued',
         oduvan: 'queued',
       },
     };
@@ -659,9 +659,9 @@ describe('GenerationView — per-character progress is derived from the manuscri
     /* Regenerate-of-a-rendered-chapter case: a hydrate re-seeded every cast
        member as 'done' from the on-disk audio, and applyGenerationTick has so
        far only un-done'd the live narrator. The rows must still derive from
-       currentLine=13 + positions, not the stale 'done' — marlow/ro/oduvan show
+       currentLine=13 + positions, not the stale 'done' — marlow/nim/oduvan show
        fractional progress, never a full-green "Done". */
-    renderScenario({ narrator: 'in_progress', marlow: 'done', ro: 'done', oduvan: 'done' });
+    renderScenario({ narrator: 'in_progress', marlow: 'done', nim: 'done', oduvan: 'done' });
     fireEvent.click(screen.getByText('DAY ONE'));
     expect(screen.getByText('1/3 done')).toBeInTheDocument();
     expect(screen.getByText('1/2 done')).toBeInTheDocument();

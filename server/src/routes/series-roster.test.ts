@@ -95,7 +95,7 @@ beforeAll(async () => {
     confirmed: true,
     characters: [
       { id: 'marlow', name: 'Marlow', voiceId: 'v_marlow' },
-      { id: 'ro', name: 'Ro', voiceId: 'v_ro' },
+      { id: 'nim', name: 'Nim', voiceId: 'v_nim' },
     ],
   });
   unlockedBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Unlocked', {
@@ -129,7 +129,7 @@ describe('GET /api/books/:bookId/series-roster', () => {
     /* Keeper itself excluded → Bonus Marlow's 2 characters remain. */
     expect(res.body.characters).toHaveLength(2);
     const names = (res.body.characters as Array<{ name: string }>).map((c) => c.name).sort();
-    expect(names).toEqual(['Marlow', 'Ro']);
+    expect(names).toEqual(['Marlow', 'Nim']);
   });
 
   it('preserves voiceId, aliases, gender, ageRange on each entry', async () => {

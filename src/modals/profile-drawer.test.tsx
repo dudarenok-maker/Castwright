@@ -260,7 +260,7 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     lines: 5,
     scenes: 2,
   };
-  const sophieFoster: Character = {
+  const wrenFoster: Character = {
     id: 'wren-sparrow',
     name: 'Wren Sparrow',
     role: 'protagonist',
@@ -278,7 +278,7 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
   };
 
   it('renders aliases as chips when the character already has merge history', () => {
-    renderDrawer({ ...sophieFoster, aliases: ['Wren', 'Foster'] });
+    renderDrawer({ ...wrenFoster, aliases: ['Wren', 'Foster'] });
     /* "Also known as" header is shown plus a pill per alias. */
     expect(screen.getByText(/Also known as/i)).toBeTruthy();
     expect(screen.getByText('Wren')).toBeTruthy();
@@ -293,7 +293,7 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
 
   it('opens the picker, calls onMerge with (source, target), and surfaces errors', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(wren, { mergeCandidates: [sophieFoster, marlow], onMerge });
+    renderDrawer(wren, { mergeCandidates: [wrenFoster, marlow], onMerge });
 
     /* Toggle the merge card open. */
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
@@ -313,7 +313,7 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
 
   it('surfaces an error message when onMerge rejects', async () => {
     const onMerge = vi.fn().mockRejectedValueOnce(new Error('Server said no.'));
-    renderDrawer(wren, { mergeCandidates: [sophieFoster], onMerge });
+    renderDrawer(wren, { mergeCandidates: [wrenFoster], onMerge });
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/i }));
@@ -326,7 +326,7 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
 
   it('typeahead narrows the picker list to the searched character', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(wren, { mergeCandidates: [sophieFoster, marlow], onMerge });
+    renderDrawer(wren, { mergeCandidates: [wrenFoster, marlow], onMerge });
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     const searchInput = screen.getByPlaceholderText('Search character…');
@@ -707,7 +707,7 @@ describe('ProfileDrawer model-voice override picker', () => {
     ageRange: 'teen',
   };
 
-  const fitzVoice: Voice = {
+  const brannVoice: Voice = {
     id: 'v_brann',
     character: 'Brann',
     bookTitle: 'Book One',
@@ -726,7 +726,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   ];
 
   it('renders engine tabs (one per available engine) and labels the Auto trigger with the resolved voice', async () => {
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     /* The trigger button shows the Auto label until the user picks an
        explicit override — same content the legacy <select>'s auto
@@ -738,7 +738,7 @@ describe('ProfileDrawer model-voice override picker', () => {
 
   it('persists an override via api.setVoiceOverride when the user picks a base voice', async () => {
     setVoiceOverride.mockClear();
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('option', { name: /Asya Anara/ }));
@@ -753,7 +753,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   it('clears the override when the user picks "Auto"', async () => {
     setVoiceOverride.mockClear();
     const overridden: Voice = {
-      ...fitzVoice,
+      ...brannVoice,
       overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
     };
     renderDrawer(brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
@@ -772,7 +772,7 @@ describe('ProfileDrawer model-voice override picker', () => {
     /* The "dot" badge on a tab tells the user at a glance which engines
        have a manual assignment without having to click each tab. */
     const overridden: Voice = {
-      ...fitzVoice,
+      ...brannVoice,
       overrideTtsVoices: { gemini: { name: 'Charon' } },
     };
     renderDrawer(brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
@@ -783,7 +783,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   });
 
   it("switching tabs swaps which engine's catalog the picker shows", async () => {
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     /* Default tab (Coqui) — open the picker, only Coqui voices listed
        (besides Auto). */
     const coquiTrigger = await screen.findByRole('button', {
@@ -815,7 +815,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
     gender: 'male',
     ageRange: 'teen',
   };
-  const fitzVoice: Voice = {
+  const brannVoice: Voice = {
     id: 'v_brann',
     character: 'Brann',
     bookTitle: 'Book One',
@@ -833,7 +833,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   ];
 
   it('keeps the candidate-preview list collapsed by default; toggle expands it', async () => {
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     /* List + textarea are hidden until the user opens the section — keeps
        the drawer tidy on first open. */
     expect(screen.queryByTestId('voice-preview-candidates')).toBeNull();
@@ -849,7 +849,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
 
   it('clicking Play on a candidate row routes through playBaseVoiceSampleWithAutoLoad with the user-edited text', async () => {
     vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     /* User edits the sample line before auditioning. */
     fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
@@ -867,7 +867,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   it('clicking Play on a SECOND candidate forwards the new voice (read-only audition, no commit)', async () => {
     vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
     const onSave = vi.fn();
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
 
     fireEvent.click(screen.getByTestId('voice-preview-play-Asya Anara'));
@@ -888,7 +888,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   });
 
   it('switching the engine tab swaps which catalog the preview list shows', async () => {
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     /* Default tab (Coqui) lists Asya + Damien but not Charon. */
     expect(screen.getByTestId('voice-preview-row-Asya Anara')).toBeTruthy();
@@ -904,7 +904,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
     /* The drawer is the only consumer; jsdom backs localStorage with an
        in-memory map so the assertion is deterministic. */
     window.localStorage.removeItem('voice-preview-sample-text');
-    renderDrawer(brann, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
       target: { value: 'Bespoke preview line.' },
