@@ -9,9 +9,10 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const androidDir = resolve(repoRoot, 'apps/android');
-const APP_ID = 'ai.castwright'; // applicationId in apps/android/android/app/build.gradle
 const COVERS_SRC = resolve(repoRoot, 'brand/book-covers');
-const DEVICE_COVERS = `/sdcard/Android/data/${APP_ID}/files/demo-covers`;
+// adb-writable scratch dir: survives the app install/uninstall lifecycle (the
+// app's external dir is wiped on uninstall) and the app can still read it.
+const DEVICE_COVERS = '/data/local/tmp/demo-covers';
 
 const sh = (cmd, args, opts = {}) => {
   const r = spawnSync(cmd, args, { stdio: 'inherit', shell: true, ...opts });
