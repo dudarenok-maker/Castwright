@@ -17,6 +17,17 @@
 - After edits, the phase's **acceptance gate** is: (1) `git grep -i` for the the Hollow Tide names in that phase's scope returns **zero**, and (2) the relevant test battery passes.
 - Run server tests with `npm run test:server` (+ `test:server-slow` for the 6 routed files); frontend with `npm test`; e2e with `npm run test:e2e`.
 
+## Subagent-driven execution notes (controller reads this)
+
+- **One subagent per phase, strictly sequential (0 → 6).** Phases 1–6 all depend on Phase 0's codemod + mapping doc being on disk and correct, so Phase 0 cannot be parallelised or skipped.
+- **Scene-setting to paste into every dispatch:** package is `castwright` (frontend at repo root, server under `server/`); the codemod is `scripts/scrub-the Hollow Tide.mjs` and the canonical mapping is `docs/test-book/the Hollow Tide-to-coalfall-mapping.md` (both created in Phase 0); the phase's **Files** + **acceptance gate** define done; touch only files in the phase's scope.
+- **Two CONTROLLER CHECKPOINTS (do NOT delegate the sign-off):**
+  - **After Phase 0** — manually verify the mapping table has no target collisions, the codemod's guard tests pass (common words untouched, kebab forms handled), and the Russian fixture is a faithful translation. Everything downstream trusts this.
+  - **After Phase 4** — the ~62-file server re-fixture is the highest-risk change; review the diff + full `test:server`/`test:server-slow` before merge.
+- **Judgment steps carry explicit decision-RULES** (below) so a context-free subagent is deterministic. Where a step says **[controller]**, the subagent stops and hands back for a decision rather than guessing.
+- **Model guidance:** Phase 0 (codemod + translation) and Phase 4 (re-derivation) → most capable model; Phases 1, 3, 6 (mechanical codemod + small reconciliation) → standard; Phase 5 (docs, high volume but mechanical) → standard.
+- **Per phase = one branch + one PR**, verified, merged before the next phase starts (the next phase greps the post-merge tree).
+
 ---
 
 ## The mapping table (the linchpin — authored here, finalised in Phase 0)
@@ -103,7 +114,11 @@ Confirm it is original/owned prose (header reads "A Castwright original"). This 
 
 Produce an owned Russian translation of **Chapter One** of the Coalfall manuscript (the language-detection fixture only needs a non-English passage, not the whole book). Write it to `server/src/__fixtures__/the-coalfall-commission.ru.md`. Keep it clearly owned (translation of the owned text). This replaces the Russian *the Coalfall Commission* used by `e2e/language-detection.spec.ts` + fs-2 multilingual.
 
-> The translation content is authored by the implementer/maintainer; it must be a faithful Russian rendering of Coalfall Ch1, no third-party text.
+> **Subagent rule:** read the Chapter One text from the committed
+> `server/src/__fixtures__/the-coalfall-commission.md`, produce a faithful Russian
+> translation of it (proper Cyrillic prose, not transliteration), and write it to
+> the `.ru.md` path. **[controller]** signs off on translation faithfulness before
+> Phase 6 consumes it.
 
 - [ ] **Step 3: Write the mapping doc**
 
@@ -115,7 +130,12 @@ Run and append any names not already in the table:
 ```bash
 git grep -ohE "\b(Wren|Marlow|Oduvan|Garrow|Lessom|Casper|Hart|Brann|Maerin|Berrin|Vane|Sela|Singe|Linnet|Wick|Corvin|Bram|Edda|Hespa|Foster|The Hollow Tide|The Drowning Bell|Unlocked|Legacy|Saltgrave|Exile|The Tidewatcher's Oath|Flashback)\b" -- ':!node_modules' ':!docs/superpowers/plans' | sort | uniq -c | sort -rn
 ```
-Expected: the names already in the table. Add any stragglers (e.g. `Councillor X`, `Lord/Lady X`) with an owned mapping before proceeding.
+Expected: the names already in the table. **Rule for any straggler** (a the Hollow Tide name
+not yet mapped): assign an owned target by — (1) reuse a Coalfall cast member whose
+role fits, else (2) fabricate an original Hollow Tide-universe name; keep the
+`Lord X`/`Lady X`/`Councillor X` *title* and swap only the surname; never pick a
+near-homophone of any the Hollow Tide name; never reuse an owned target already in the table.
+**[controller]** approves added mappings before Step 5 bakes them into the codemod.
 
 - [ ] **Step 5: Write the codemod (TDD)**
 
@@ -251,35 +271,36 @@ Run: `npm test` (frontend) → green. `git grep -iE "Wren|Marlow|The Drowning Be
 
 **Files:** ~62 `server/src/**/*.test.ts` (enumerate with the **boundary-safe, unambiguous** token set — never bare `Hart`/`legacy`/`exile`, which match `index`/`legacy-format`/etc.: `git grep -ilE "\b(Wren|Marlow|The Drowning Bell|Oduvan|Garrow|Lessom|Casper|Brann|Maerin|Berrin|Sela|Saltgrave|The Tidewatcher's Oath|keeper of the lost)\b" -- 'server/src/**/*.test.ts'`).
 
-- [ ] **Step 1: Classify pure-rename vs. re-fixture**
+- [ ] **Step 1: Flag the position-sensitive subset (don't skip — just note them)**
 
-Position/length-sensitive tests break under rename (different name lengths shift char offsets). Find them:
+These assert a *numeric char offset* against fixture prose, which shifts when a name's length changes. Record the list for Step 3:
 ```bash
-git grep -lnE "pos(ition)?[: ]+[0-9]{3,}|charIndex|offset[: ]+[0-9]+|substring\(|slice\([0-9]" -- 'server/src/**/*.test.ts' | xargs git grep -lE "Wren|Marlow" 2>/dev/null
+git grep -lnE "pos(ition)?[: ]+[0-9]{3,}|charIndex|offset[: ]+[0-9]+|substring\(|slice\([0-9]" -- 'server/src/**/*.test.ts' | sort -u
 ```
-Mark these for **manual re-derivation** (Step 3). Everything else is pure-rename (Step 2).
+**Rule:** position-sensitive iff it hardcodes an integer offset/index tied (by the assertion or a comment) to a *position in the manuscript text*. Pure occurrence COUNTS (`toHaveLength(3)`, `toBe(10)` "lines spoken") are **not** position-sensitive — they survive the rename unchanged.
 
-- [ ] **Step 2: Codemod the bulk**
-
-Run the codemod across all Cat-4 test files EXCEPT the position-sensitive set:
+- [ ] **Step 2: Codemod ALL Cat-4 files (names everywhere, incl. the flagged ones)**
 ```bash
 node scripts/scrub-the Hollow Tide.mjs --write $(git grep -ilE "\b(Wren|Marlow|The Drowning Bell|Oduvan|Garrow|Lessom|Casper|Brann|Maerin|Berrin|Sela|Saltgrave|The Tidewatcher's Oath|keeper of the lost)\b" -- 'server/src/**/*.test.ts')
 ```
-Because the codemod renames inline fixture text AND the assertions consistently, count/occurrence-based expectations stay correct.
+The codemod renames inline fixture text AND assertions consistently, so count/occurrence expectations stay correct. The flagged files get their *names* fixed here too; only their *numeric offsets* remain for Step 3.
 
-- [ ] **Step 3: Re-derive position-sensitive tests**
+- [ ] **Step 3: Re-derive numeric offsets in the flagged files**
 
-For each file flagged in Step 1, after renaming, recompute the char offsets against the renamed fixture text (the name-length delta shifts them). Where feasible, prefer asserting on a substring/anchor rather than a hardcoded integer to avoid future fragility.
+For each file from Step 1: `cd server && npx vitest run src/<path>.test.ts`.
+**Rule:** the rename is semantics-neutral, so a failure that is *purely a shifted integer offset/index* is fixed by replacing the hardcoded number with the value the run reports as "received" — but **only** for offset/index assertions and **only** when the diff shows a renamed name is the cause. Prefer an anchor (`text.indexOf('Wren')`) over a magic number where trivial. Any failure that is **not** a shifted offset → **[controller]**, stop and surface it.
 
 - [ ] **Step 3b: Manual context-only pass (the ⚠️ common words)**
 
-The codemod left `Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster` untouched. Grep each in the Cat-4 files and rename **only** the occurrences that genuinely refer to the the Hollow Tide book/surname (almost always adjacent to other the Hollow Tide names):
+The codemod left `Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster` untouched.
 ```bash
-git grep -nE "\b(Exile|Unlocked|Flashback)\b" -- 'server/src/**/*.test.ts'   # review each
-git grep -nE "\bFoster\b" -- 'server/src/**/*.test.ts'                         # surname → Sparrow
+git grep -nE "\b(Exile|Unlocked|Legacy|Flashback|Foster)\b" -- 'server/src/**/*.test.ts'
 ```
-Do **not** touch lowercase `legacy`/`exile`/`unlocked` (code terms). `Legacy` the
-book is rare in tests; confirm by eye before any edit.
+**Rule:** rename a hit to its owned title (context-only table) **iff** the same
+`it(...)`/`describe(...)` block OR the same line contains another the Hollow Tide name, OR
+the token is in a `bookTitle`/`series`/`bookId` field. Otherwise leave it (code
+term). `Foster` capitalised-standalone = surname → `Sparrow`. **Never** touch
+lowercase `legacy`/`exile`/`unlocked`. Genuinely unsure on a hit → **[controller]**.
 
 - [ ] **Step 4: Verify**
 ```bash
