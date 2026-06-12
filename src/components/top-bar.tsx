@@ -343,6 +343,17 @@ export function TopBar({
           <span className="hidden sm:inline-flex">
             <VersionPill onClick={onOpenAccount} />
           </span>
+          <a
+            href="#/help"
+            aria-label="Help"
+            title="Help & troubleshooting"
+            data-testid="topbar-help"
+            className={`inline-flex items-center justify-center w-9 h-9 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 rounded-full text-sm font-semibold transition-colors ${
+              stage === 'help' ? 'bg-ink text-canvas' : 'text-ink/70 hover:bg-ink/10'
+            }`}
+          >
+            ?
+          </a>
           <ThemeToggleButton />
           <button
             type="button"
