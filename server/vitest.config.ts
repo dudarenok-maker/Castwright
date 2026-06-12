@@ -43,6 +43,9 @@ const SLOW_FILES_TO_EXCLUDE = [
   /* Integration test: makes a real 2s-timeout network probe to the sidecar.
      Slow/flaky under the parallel fast pool — serialised here (fs-21). */
   'src/routes/setup-readiness.route.test.ts',
+  /* Integration route test: supertest against a live Express instance
+     (kokoro install bootstrap, offline-stubbed). Serialised (fs-21). */
+  'src/routes/kokoro-install.route.test.ts',
 ];
 
 /* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or
