@@ -282,12 +282,7 @@ async function mockUnloadAnalyzer(opts: { model?: string } = {}): Promise<ModelC
 
 Also update `mockRemoveModel` (:5436): the loaded guard for `ollama:qwen3.5:4b` should read the Set so an unloaded default can be removed — change the hard-coded `model-loaded` return to `if (id === 'ollama:qwen3.5:4b' && MOCK_OLLAMA_RESIDENT.has('qwen3.5:4b')) return { ok:false, code:'model-loaded', error:'qwen3.5:4b is loaded.' };`
 
-- [ ] **Step 6: Update the `Api` interface** — find the `loadAnalyzer` / `unloadAnalyzer` signatures in the `Api`/`type` block and change to:
-
-```ts
-  loadAnalyzer: (opts?: { model?: string }) => Promise<ModelControlResult>;
-  unloadAnalyzer: (opts?: { model?: string }) => Promise<ModelControlResult>;
-```
+- [ ] **Step 6: (No interface to edit.)** The public type is `export type Api = typeof api` (`api.ts:6443`) — derived, not hand-written. There is **no `Api` interface** to update. The only requirement is that `realLoadAnalyzer`/`realUnloadAnalyzer` (Step 1) and `mockLoadAnalyzer`/`mockUnloadAnalyzer` (Step 3) share the identical `opts?: { model?: string }` signature, so `typeof api` resolves cleanly. Verify both pairs match before moving on.
 
 - [ ] **Step 7: Typecheck**
 
@@ -310,29 +305,42 @@ git commit -m "feat(frontend): analyzer load/unload accept a model; mock per-mod
 - Modify: `src/components/ModelControlPill.tsx:172` (button aria-label, A4)
 - Test: `src/views/model-manager.test.tsx`
 
-- [ ] **Step 1: Write the failing test** — add to `model-manager.test.tsx` (mirror the existing inventory-mocking pattern in that file; the helper that stubs `api.getModelInventory` returns an items array — include a non-default analyzer row):
+- [ ] **Step 1: Write the failing test** — add to `model-manager.test.tsx`. Use the file's existing `renderManager()` helper and the `mockInventory`/`vi.mocked` pattern (the api module is `vi.mock`-ed at the top of the file; `loadAnalyzer`/`unloadAnalyzer` are already stubbed there). **Do not mutate the shared `INVENTORY` const — build a one-off inventory inline** so other tests' row counts don't change:
 
 ```ts
-it('shows a Load/Unload pill on a NON-default Ollama row and calls the API with that model', async () => {
-  const loadSpy = vi.fn().mockResolvedValue({ status: 'ready' });
-  // stub api.getModelInventory to return a non-default, not-loaded ollama row
-  // (follow the file's existing mock-inventory helper) with:
-  //   { id: 'ollama:llama3.1:8b', kind: 'analyzer', label: 'llama3.1:8b',
-  //     present: true, loaded: false, isDefaultEngine: false, sizeBytes: 1,
-  //     diskPath: null, isFallbackEngine: false, removable: true, updatable: true }
-  // and api.loadAnalyzer = loadSpy, sidecarReachable: true.
-  renderModelManager();
+it('shows a Load pill on a NON-default Ollama row and calls loadAnalyzer with that model', async () => {
+  mockInventory.mockResolvedValue({
+    ...INVENTORY,
+    items: [
+      ...INVENTORY.items,
+      {
+        id: 'ollama:llama3.1:8b',
+        kind: 'analyzer',
+        label: 'llama3.1:8b',
+        present: true,
+        sizeBytes: 4_700_000_000,
+        diskPath: null,
+        loaded: false,
+        isDefaultEngine: false, // NON-default — the whole point
+        isFallbackEngine: false,
+        removable: true,
+        updatable: true,
+      },
+    ],
+  });
+  vi.mocked(api.loadAnalyzer).mockResolvedValue({ status: 'ready' });
+
+  renderManager();
   const row = await screen.findByTestId('model-row-ollama:llama3.1:8b');
-  const loadBtn = within(row).getByRole('button', { name: /load model/i });
-  fireEvent.click(loadBtn);
-  await waitFor(() => expect(loadSpy).toHaveBeenCalledWith({ model: 'llama3.1:8b' }));
+  within(row).getByRole('button', { name: /load model/i }).click();
+  await waitFor(() => expect(api.loadAnalyzer).toHaveBeenCalledWith({ model: 'llama3.1:8b' }));
 });
 ```
 
 - [ ] **Step 2: Run, verify failure**
 
 Run: `npx vitest run src/views/model-manager.test.tsx -t "NON-default Ollama row"`
-Expected: FAIL — no pill renders on a non-default analyzer row (`hasControl` is false), so the button query throws.
+Expected: FAIL — no pill renders on a non-default analyzer row (`hasControl` is false today), so the `getByRole('button', { name: /load model/i })` query throws.
 
 - [ ] **Step 3: Implement the gate + model threading** — in `ModelRow` (`model-manager.tsx`), replace lines 296-315:
 
@@ -395,19 +403,23 @@ git commit -m "feat(frontend): Load/Unload pill on every Ollama model in the Mod
 **Files:**
 - Modify: `e2e/model-manager-dual-model.spec.ts` (add a case) OR Create: `e2e/model-manager-ollama-load.spec.ts`
 
-- [ ] **Step 1: Write the spec** (model on the existing model-manager spec's navigation to `#/models`):
+- [ ] **Step 1: Write the spec.** Navigate exactly like `e2e/model-manager-dual-model.spec.ts` (it opens the Model Manager at `/#/models` and uses `waitForRouteReady` from `./helpers`). The 2nd mock Ollama model `llama3.1:8b` (added in Task 3) starts NOT resident; `ModelRow` already exposes `data-loaded` (`model-manager.tsx:321`). Because the mock api keeps `MOCK_OLLAMA_RESIDENT` in the same JS context, the `onAction`→refetch after each click flips `data-loaded`:
 
 ```ts
 import { test, expect } from '@playwright/test';
+import { waitForRouteReady } from './helpers';
 
 test('loads and unloads a non-default Ollama model from the Model Manager', async ({ page }) => {
   await page.goto('/#/models');
+  await waitForRouteReady(page);
+
   const row = page.getByTestId('model-row-ollama:llama3.1:8b');
   await expect(row).toBeVisible();
-  // starts not resident
   await expect(row).toHaveAttribute('data-loaded', 'false');
+
   await row.getByRole('button', { name: /load model/i }).click();
   await expect(row).toHaveAttribute('data-loaded', 'true');
+
   await row.getByRole('button', { name: /stop/i }).click();
   await expect(row).toHaveAttribute('data-loaded', 'false');
 });
@@ -416,7 +428,7 @@ test('loads and unloads a non-default Ollama model from the Model Manager', asyn
 - [ ] **Step 2: Run it**
 
 Run: `npm run test:e2e -- model-manager-ollama-load`
-Expected: PASS. (If the inventory poll cadence makes the assertion racy, the `onAction` refetch already runs after each click — assert on `data-loaded` which the row already exposes.)
+Expected: PASS.
 
 - [ ] **Step 3: Commit**
 
@@ -435,8 +447,10 @@ Apply the mapping by sense (see spec): "TTS sidecar"/"TTS engine"/"TTS model" �
 
 **Files (exact strings):**
 - `src/components/ModelControlPill.tsx:118` — `kindNoun`: `return kind === 'tts' ? 'TTS model' : 'Analyzer';` → `'Voice engine'`.
-- `src/modals/profile-drawer.tsx` — the `<label>` "TTS engine for this character" → "Voice engine for this character"; `:1733` `'Loading TTS model (~30s)…'` → `'Loading voice engine (~30s)…'`; `:1271` "…the TTS voice line above…" → "…the voice line above…".
+- `src/components/voice-engine-picker.tsx` — **`:103`** (visible `<label>`) AND **`:107`** (`aria-label`): "TTS engine for this character" → "Voice engine for this character" (both must change, or `getByLabelText` queries break). *(This label is here, NOT in profile-drawer.tsx — verified.)*
+- `src/modals/profile-drawer.tsx` — `:1733` `'Loading TTS model (~30s)…'` → `'Loading voice engine (~30s)…'`; `:1271` "…the TTS voice line above…" → "…the voice line above…".
 - `src/views/generation.tsx` — `:1421` "Recovering — restarting TTS engine…" → "Recovering — restarting voice engine…"; `:925` "The TTS engine may be synthesising…" → "The voice engine may be synthesising…"; `:935` "…current TTS model." → "…current voice engine."
+- `src/lib/play-sample-with-auto-load.ts:116` — `'TTS sidecar (:9000) is unreachable — restart it via scripts\\start-app.ps1 (or kill any stale process holding :9000). [...]'` → "Voice engine (:9000) is unreachable — …". **Preserve "is unreachable"** (matched downstream). Leave the sibling `:109` "Node server (:8080) is unreachable" string untouched (no "TTS").
 - `src/modals/queue-modal.tsx:549` — `'Mixes TTS engines. Turn on "Keep both TTS engines loaded"…'` → `'Mixes voice engines. Turn on "Keep both voice engines loaded"…'`.
 - `src/views/voices.tsx` — `:903`/`:927` `'Loading TTS…'` → `'Loading voice engine…'`; `:1944` "switch your TTS model to assign these" → "switch your voice engine to assign these".
 - `src/data/help-topics.ts` — `:16`/`:36`/`:38` "TTS sidecar" → "voice engine" (visible help copy).
@@ -445,7 +459,8 @@ Apply the mapping by sense (see spec): "TTS sidecar"/"TTS engine"/"TTS model" �
 
 **Paired test/fixture updates (same commit):**
 - `src/data/help-failures.test.ts` — the recycle-storm title pin.
-- `src/modals/profile-drawer.test.tsx:1047` — `getByLabelText('TTS engine for this character')` → `'Voice engine for this character'`.
+- `src/components/voice-engine-picker.test.tsx:29`/`:48` AND `src/modals/profile-drawer.test.tsx:1047` — `getByLabelText('TTS engine for this character')` → `'Voice engine for this character'`.
+- `src/lib/play-sample-with-auto-load.test.ts:137` (the "sidecar-specific recovery hint" assertion) and `src/components/voice-preview-button.test.tsx:102` (the error fixture text) — update to the new "Voice engine (:9000) is unreachable…" wording.
 - `src/views/generation.test.tsx:416` — `'Recovering — restarting TTS engine…'` → `'Recovering — restarting voice engine…'`.
 - `src/views/model-manager.test.tsx:274` — `describe('… — TTS sidecar preferences')` → "voice engine preferences" (cosmetic).
 - e2e: `e2e/cast.spec.ts:44`, `e2e/voice-design-progress.spec.ts:64`, `e2e/single-voice-design-background.spec.ts:57` — the `getByLabel('TTS engine for this character')` query.
@@ -481,12 +496,12 @@ git commit -m "refactor(frontend): rename user-facing TTS copy to 'voice engine'
 - `server/tts-sidecar/main.py` — `:2815`/`:3118`/`:3218`/`:3318` `"TTS sidecar is recycling to free memory; retry shortly."` → `"Voice engine is recycling to free memory; retry shortly."`; `:3102`/`:3209`/`:3303` `"TTS sidecar is in a poisoned CUDA state…"` → `"Voice engine is in a poisoned CUDA state…"` (keep the surrounding `"poisoned": true` JSON field untouched).
 - `server/src/routes/chapter-splice.ts:122` — "modelKey must be a supported TTS model id for a re-record." → "…supported voice-engine model id…".
 - `server/src/routes/chapter-qa-repair.ts:209` — "modelKey must be a supported TTS model id to repair." → "…supported voice-engine model id…".
-- Locate the "TTS sidecar (…) is unreachable" / "stopped responding to /health during voice design." producers (grep `server/src` for `is unreachable` / `stopped responding`); rename the "TTS sidecar" prefix → "Voice engine", **keeping** "unreachable"/"stopped responding".
+- The voice-design health-check producer behind `cast-design.test.ts:270`/`:304` throws `"TTS sidecar (<url>) is unreachable"` and `"TTS sidecar (<url>) stopped responding to /health during voice design."`. Find it with the grep in Step 1, rename the `"TTS sidecar"` prefix → `"Voice engine"`, **keeping** the `is unreachable` / `stopped responding` tokens (matched by `SIDECAR_DOWN_RE` at `cast-design.ts:94`).
 
 **Paired test updates (same commit):**
-- `server/src/routes/failure-taxonomy.test.ts:96` and `server/src/routes/generation-error.test.ts:143` and `server/src/tts/synthesise-chapter.test.ts:563` — the poisoned-state prose.
+- `server/src/routes/failure-taxonomy.test.ts:96` and `server/src/routes/generation-error.test.ts:143` and `server/src/tts/synthesise-chapter.test.ts:563` — the poisoned-state prose (keep the `"poisoned":true` JSON).
 - `server/src/tts/ensure-sidecar-loaded.test.ts:76` — the recycling prose.
-- `server/src/routes/cast-design.test.ts:270`/`:304` — the "TTS sidecar … unreachable / stopped responding" prose.
+- `server/src/routes/cast-design.test.ts:270`/`:304` — the simulated "TTS sidecar … unreachable / stopped responding" error fixtures → "Voice engine …".
 - `src/store/chapters-slice.test.ts:523` — the `errorReason: 'TTS sidecar timed out'` fixture → "Voice engine timed out".
 - Sidecar pytest: grep `server/tts-sidecar/tests` for the recycling/poisoned prose and update any exact-string assertions.
 
