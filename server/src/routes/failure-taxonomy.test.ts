@@ -7,8 +7,10 @@
    so a refactor can't silently regress them. */
 
 import { describe, it, expect } from 'vitest';
-import { classifyFailure, classifyAnalysisError } from './failure-taxonomy.js';
+import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
+import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
    like a sentence (starts uppercase, ends with punctuation, no "Traceback"
@@ -288,5 +290,52 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
       expect(copy.userMessage.length, code).toBeGreaterThan(0);
       expect(copy.remediation.length, code).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('classifyAnalysisFailure (run-level, ports describeError verbatim — spec A3)', () => {
+  it('AnalyzerTruncatedError → analyzer-truncated with dynamic message + structured detail', () => {
+    const err = new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', 8192, 4096);
+    const r = classifyAnalysisFailure(err, 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('analyzer-truncated');
+    expect(r.userMessage).toContain('Gemini (gemma-4-31b-it)');
+    expect(r.userMessage).toContain('MAX_TOKENS');
+    expect(r.detail).toContain('engine=gemini');
+    expect(r.remediation.length).toBeGreaterThan(0);
+  });
+  it('DailyQuotaExhaustedError → analyzer-daily-quota preserving the reset time', () => {
+    const resetAt = new Date('2026-06-13T07:00:00Z');
+    const err = new DailyQuotaExhaustedError('gemma-4-31b-it', resetAt);
+    const r = classifyAnalysisFailure(err, 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('analyzer-daily-quota');
+    expect(r.userMessage).toContain('2026-06-13T07:00:00.000Z');
+  });
+  it('Google envelope 429 free-tier → analyzer-daily-quota with trimmed message', () => {
+    const raw =
+      'got status: 429. {"error":{"code":429,"message":"You exceeded your current quota. Free tier limit, please check. More text that should be trimmed away entirely.","status":"RESOURCE_EXHAUSTED","details":[{"quotaValue":"250"}]}}';
+    const r = classifyAnalysisFailure(new Error(raw), 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('analyzer-daily-quota');
+    expect(r.userMessage).toContain('429');
+    expect(r.detail).toContain('RESOURCE_EXHAUSTED');
+  });
+  it('envelope 503 → analyzer-unreachable; 401 → auth; 400 → unknown', () => {
+    const env = (code: number, status: string) =>
+      new Error(`got status: ${code}. {"error":{"code":${code},"message":"boom","status":"${status}"}}`);
+    expect(classifyAnalysisFailure(env(503, 'UNAVAILABLE'), 'm').code).toBe('analyzer-unreachable');
+    expect(classifyAnalysisFailure(env(401, 'UNAUTHENTICATED'), 'm').code).toBe('auth');
+    expect(classifyAnalysisFailure(env(400, 'INVALID_ARGUMENT'), 'm').code).toBe('unknown');
+  });
+  it('bare status (no envelope) classifies too', () => {
+    const err = Object.assign(new Error('Service Unavailable'), { status: 503 });
+    expect(classifyAnalysisFailure(err, 'm').code).toBe('analyzer-unreachable');
+  });
+  it('non-envelope plain error falls through to the analysis table scan', () => {
+    const r = classifyAnalysisFailure(new Error('connect ECONNREFUSED 127.0.0.1:11434'), 'Ollama');
+    expect(r.code).toBe('analyzer-unreachable');
+  });
+  it('unmapped error → unknown with raw message preserved', () => {
+    const r = classifyAnalysisFailure(new Error('some novel failure'), 'm');
+    expect(r.code).toBe('unknown');
+    expect(r.userMessage).toContain('some novel failure');
   });
 });
