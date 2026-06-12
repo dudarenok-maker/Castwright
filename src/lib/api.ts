@@ -21,6 +21,7 @@ import type {
   VoiceSample,
   TtsModelKey,
   LibraryResponse,
+  LibraryBook,
   VoiceLibraryResponse,
   ImportResponse,
   ConfirmBookRequest,
@@ -608,10 +609,26 @@ export interface BaseVoiceSampleArgs {
 
 /* ── mock implementations ────────────────────────────────────────────── */
 
-async function mockGetLibrary(): Promise<LibraryResponse> {
+export async function mockGetLibrary(): Promise<LibraryResponse> {
   await wait(120);
   if (DEMO_CAPTURE) return HOLLOW_TIDE_LIBRARY;
-  return MOCK_LIBRARY;
+  if (!mockSampleLibraryEntry) return MOCK_LIBRARY;
+  /* Inject the seeded sample as a standalone under a synthetic "Castwright"
+     author so the library grid shows it without mutating the MOCK_LIBRARY const. */
+  return {
+    authors: [
+      ...MOCK_LIBRARY.authors,
+      {
+        name: 'Castwright',
+        series: [
+          {
+            name: 'Standalones',
+            books: [mockSampleLibraryEntry],
+          },
+        ],
+      },
+    ],
+  };
 }
 
 async function mockGetVoices(args?: { currentBookId?: string }): Promise<VoiceLibraryResponse> {
@@ -974,6 +991,19 @@ function seedDefaultMockBookStates(): void {
   MOCK_BOOK_STATES.set('cc', buildCarricksCompassMockState());
 }
 seedDefaultMockBookStates();
+
+/* ── Seeded sample overlay (Task 13) ───────────────────────────────────────
+   mockLoadSample seeds the Coalfall Commission into these variables so the
+   standard mock getters serve it under the canonical sample bookId without
+   mutating the MOCK_LIBRARY const or the default MOCK_BOOK_STATES entries.
+   _resetMockSample() clears both for test isolation (mirrors _resetMockTour). */
+const SAMPLE_BOOK_ID = 'castwright__standalones__the-coalfall-commission';
+let mockSampleLibraryEntry: LibraryBook | null = null;
+
+export function _resetMockSample(): void {
+  mockSampleLibraryEntry = null;
+  MOCK_BOOK_STATES.delete(SAMPLE_BOOK_ID);
+}
 
 function emptyBookStateResponse(bookId: string): BookStateResponse {
   const now = new Date().toISOString();
@@ -3064,9 +3094,78 @@ async function realLoadSample(slug: string): Promise<{ bookId: string }> {
   }
   return res.json();
 }
-async function mockLoadSample(_slug: string): Promise<{ bookId: string }> {
+export async function mockLoadSample(_slug: string): Promise<{ bookId: string }> {
   await wait(150);
-  return { bookId: 'castwright__standalones__the-coalfall-commission' };
+  /* Idempotent: skip seeding if already registered. */
+  if (!mockSampleLibraryEntry) {
+    /* Derive the sample's BookStateResponse from the marketing fixture.
+       The fixture uses bookId 'coalfall-commission'; we re-key it to the
+       canonical sample id that the real /api/samples/:slug/load would return.
+       completedSlugs is narrowed to only the first real story chapter
+       (id 3, slug '03-the-knock'; ids 1–2 are excluded title/credit pages)
+       so the guided tour opens to Generate with "Resume generation" and the
+       Listen view shows ch 1 playable + the rest pending. */
+    const base = HOLLOW_TIDE_BOOK_STATES.get('coalfall-commission');
+    const now = new Date().toISOString();
+    const bookState: BookStateResponse = base
+      ? {
+          ...base,
+          state: { ...base.state, bookId: SAMPLE_BOOK_ID, updatedAt: now },
+          completedSlugs: ['03-the-knock'],
+        }
+      : {
+          /* Fallback if the marketing fixture is ever restructured: minimal
+             navigable state so the tour doesn't crash. */
+          state: {
+            bookId: SAMPLE_BOOK_ID,
+            manuscriptId: 'mns_coalfall',
+            title: 'The Coalfall Commission',
+            author: 'Castwright',
+            series: 'Standalones',
+            seriesPosition: null,
+            isStandalone: true,
+            manuscriptFile: 'manuscript.epub',
+            castConfirmed: true,
+            chapters: [
+              { id: 1, title: 'The Coalfall Commission', slug: '01-title', excluded: true },
+              { id: 2, title: 'The Coalfall Commission', slug: '02-credit', excluded: true },
+              { id: 3, title: 'Chapter One — The Knock', slug: '03-the-knock', duration: '41:12' },
+              { id: 4, title: 'Chapter Two — The Pour', slug: '04-the-pour', duration: '38:44' },
+            ],
+            coverGradient: ['#3C194F', '#0F0E0D'],
+            createdAt: now,
+            updatedAt: now,
+            narratorCredit: null,
+          },
+          cast: null,
+          manuscript: { wordCount: 84_000, format: 'epub' },
+          manuscriptEdits: null,
+          revisions: null,
+          completedSlugs: ['03-the-knock'],
+          changeLog: null,
+        };
+
+    mockSampleLibraryEntry = {
+      bookId: SAMPLE_BOOK_ID,
+      title: 'The Coalfall Commission',
+      author: 'Castwright',
+      series: 'Standalones',
+      seriesPosition: null,
+      isStandalone: true,
+      status: 'generating',
+      chapterCount: 4,
+      completedChapters: 1,
+      characterCount: bookState.cast?.characters.length ?? 12,
+      voiceCount: bookState.cast?.characters.length ?? 12,
+      progress: 0.25,
+      runtime: '2h 41m',
+      lastWorkedOn: 'Just now',
+      coverGradient: ['#3C194F', '#0F0E0D'],
+      tags: [],
+    };
+    MOCK_BOOK_STATES.set(SAMPLE_BOOK_ID, bookState);
+  }
+  return { bookId: SAMPLE_BOOK_ID };
 }
 
 async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
