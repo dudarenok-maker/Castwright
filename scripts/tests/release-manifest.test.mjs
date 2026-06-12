@@ -46,6 +46,7 @@ const INCLUDED = [
   'server/tts-sidecar/start.ps1',
   'server/tts-sidecar/scripts/install-kokoro.ps1',
   'server/tts-sidecar/scripts/install-kokoro.sh',
+  'server/tts-sidecar/scripts/install-kokoro.mjs',
 
   // Runtime scripts the deployer invokes
   'scripts/start-app-prod.mjs',

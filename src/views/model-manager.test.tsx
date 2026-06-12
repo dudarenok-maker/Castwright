@@ -374,10 +374,10 @@ describe('ModelManagerView — per-row install (fs-23 follow-up)', () => {
     expect(within(qwen).getByTestId('model-install-toggle-qwen-base')).toHaveTextContent(/Update/);
   });
 
-  it('offers no install toggle for a release-bundled model (kokoro)', async () => {
+  it('shows an Install toggle for kokoro (fs-21: weights fetched at install time, not bundled)', async () => {
     renderManager();
     const kokoro = await screen.findByTestId('model-row-kokoro');
-    expect(within(kokoro).queryByTestId('model-install-toggle-kokoro')).toBeNull();
+    expect(within(kokoro).getByTestId('model-install-toggle-kokoro')).toBeInTheDocument();
   });
 
   it('reduces the bottom card to the Ollama analyzer only — no TTS/ASR installer headings', async () => {

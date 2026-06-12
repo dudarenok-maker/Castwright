@@ -42,6 +42,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
 # 3. Fetch the Kokoro TTS weights (~1.1 GB, one-time download).
+#    Option A — in-app: start the app first, then Admin → Model Manager → Kokoro → Install (no terminal needed).
+#    Option B — terminal:
 powershell -ExecutionPolicy Bypass -File scripts\install-kokoro.ps1
 cd ..\..
 
@@ -75,6 +77,8 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
 # 3. Fetch the Kokoro TTS weights (~1.1 GB).
+#    Option A — in-app: start the app first, then Admin → Model Manager → Kokoro → Install (no terminal needed).
+#    Option B — terminal:
 bash scripts/install-kokoro.sh
 cd ../..
 
@@ -113,6 +117,8 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
 # 3. Fetch the Kokoro TTS weights (~1.1 GB).
+#    Option A — in-app: start the app first, then Admin → Model Manager → Kokoro → Install (no terminal needed).
+#    Option B — terminal:
 bash scripts/install-kokoro.sh
 cd ../..
 
