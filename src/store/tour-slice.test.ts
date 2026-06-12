@@ -10,7 +10,7 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
-import { tourSlice, tourActions, fetchTourStatus } from './tour-slice';
+import { tourSlice, tourActions, fetchTourStatus, completeTour } from './tour-slice';
 import { configureStore } from '@reduxjs/toolkit';
 
 const reducer = tourSlice.reducer;
@@ -50,5 +50,15 @@ describe('tour-slice reducers', () => {
     const store = configureStore({ reducer: { tour: reducer } });
     await store.dispatch(fetchTourStatus());
     expect(store.getState().tour.completedAt).toBeNull();
+  });
+
+  it('completeTour.fulfilled stamps completedAt and deactivates', async () => {
+    const store = configureStore({ reducer: { tour: reducer } });
+    store.dispatch(tourActions.startTour({ tourId: 'linear', mode: 'linear' }));
+    await store.dispatch(completeTour());
+    const s = store.getState().tour;
+    expect(s.completedAt).toBe('2026-06-12T00:00:00.000Z');
+    expect(s.active).toBe(false);
+    expect(s.tourId).toBeNull();
   });
 });

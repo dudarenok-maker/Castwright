@@ -47,11 +47,15 @@ export const tourSlice = createSlice({
       s.active = false;
       s.tourId = null;
       s.stepIndex = 0;
+      s.mode = 'linear';
     },
+    /** Optimistic local stamp before/instead of the completeTour thunk's
+        server round-trip. Kept as a building block for the finish flow. */
     markCompletedLocally: (s, a: PayloadAction<string>) => {
       s.active = false;
       s.tourId = null;
       s.stepIndex = 0;
+      s.mode = 'linear';
       s.completedAt = a.payload;
     },
   },
@@ -64,6 +68,7 @@ export const tourSlice = createSlice({
       s.active = false;
       s.tourId = null;
       s.stepIndex = 0;
+      s.mode = 'linear';
     });
   },
 });
