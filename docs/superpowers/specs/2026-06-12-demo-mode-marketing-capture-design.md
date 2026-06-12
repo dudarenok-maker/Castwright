@@ -39,7 +39,9 @@ name/character scrub.
 - A runtime/production "demo mode" toggle. The user chose mock-mode capture; the
   app's production bundle gains no new demo surface.
 - Real manuscripts, real audio, or live generation for the fictional series.
-- The codebase-wide copyrighted-character ("Marlow") fixture rename — **piece #2**.
+- **Renaming the existing mock books/series or their slugs** — see F1 below; we
+  keep them and add Hollow Tide alongside.
+- The codebase-wide copyrighted-character ("Marlow") fixture scrub — **piece #2**.
 - The codebase-wide real-name scrub across legal/docs prose — **piece #3**.
 - Committing the rendered PNGs to git (they are regenerable; only the harness +
   fixtures are committed).
@@ -52,12 +54,15 @@ shows the product's range. Three books, posed to cover the pipeline stages, plus
 the real **The Coalfall Commission** sample as the standalone "real, finished"
 anchor:
 
-| Book | Stage posed | Notes |
-|---|---|---|
-| *The Drowning Bell* | **finished** | Origin of the recurring cast voices. |
-| *Saltgrave* | **generating** (~62%, 7/11 ch) | Progress bar scene. |
-| *The Tidewatcher's Oath* | **analysing** (ch 3/8, phase 2) | Live-analysis scene. |
-| *The Coalfall Commission* | finished (real sample) | Standalone anchor, already bundled. |
+| Book | Slug | Stage posed | Notes |
+|---|---|---|---|
+| *The Drowning Bell* | `hollow-tide-1` | **finished** | Origin of recurring cast voices. |
+| *Saltgrave* | `hollow-tide-2` | **generating** (~62%, 7/11 ch) | Progress-bar scene. |
+| *The Tidewatcher's Oath* | `hollow-tide-3` | **analysing** (ch 3/8, phase 2) | Live-analysis scene. |
+| *The Coalfall Commission* | (existing) | finished (real sample) | Standalone anchor. |
+
+New slugs are namespaced (`hollow-tide-*`) so they cannot collide with the
+existing prototype slugs (`sb`/`ns`/`cc`/`ts`).
 
 **Cast & reuse story.** An ensemble of ~10, with **3–4 recurring** characters
 (e.g. Narrator, Insp. Cray, Dr. Wren) carrying `voiceState: 'reused'` +
@@ -66,98 +71,122 @@ Bell*" and "new this book" badges. All cast/reuse data is **fixture-only** — i
 just needs to *look* right, not be a real cross-book computation. Names, titles,
 covers are all fixture data and trivially editable later.
 
-## Fixture dataset & how it replaces today's mock library
+## Dataset strategy (revised after adversarial review — F1)
 
-Today's mock library (`src/mocks/library.ts`) is a "Northern Coast Trilogy" by
-**"Mike Dudarenok"** with four books already spread across
-`complete / generating / cast_pending / analysing` (and one Russian book seeding
-the language filter). The real name is also the default account `displayName`
-(`src/lib/account-defaults.ts`).
+**Original spec proposed replacing the Northern Coast Trilogy outright. Rejected.**
+The old titles (`Solway Bay`, `The Northern Star`, `Carrick's Compass`,
+`Twilight Stations`, `Northern Coast Trilogy`) appear **319 times across 94
+files** — ~50 e2e specs, dozens of unit tests, the analysis fixtures, the mock
+manuscript, even parser fixtures. A rename is a 94-file blast radius, not a side
+note.
 
-**Decision (recommended): "The Hollow Tide" becomes the single canonical
-fictional mock dataset**, replacing the Northern Coast Trilogy in the default
-mock library — so dev mock mode, the e2e suite, and marketing capture all share
-one fictional universe and the maintainer's name leaves the mock data entirely.
-The handful of e2e/unit specs that assert old titles/author are updated in the
-same change.
+**Adopted approach — additive, capture-only Hollow Tide set:**
 
-*Lighter alternative (noted, not recommended):* keep the existing books and only
-swap the author string to a fictional name; author Hollow Tide as a *separate*
-marketing-only fixture set. Rejected because it leaves two fictional universes
-and more long-term drift.
-
-**Name scrub in scope for this piece:**
-- `src/mocks/library.ts`, `src/mocks/canned-data.ts`, `src/data/books.ts`,
-  `src/mocks/manuscripts/*.md` — author → **Marin Vale** (and the rebranded
-  series/titles where the dataset is replaced).
-- **Shipped default display name** — `src/lib/account-defaults.ts` `displayName`
-  + its server mirror `server/src/workspace/user-settings.ts`
-  `DEFAULT_USER_SETTINGS` — change from the maintainer's real name to a neutral
-  placeholder **"Castwright User"** (this is what a brand-new real workspace
-  shows before the user sets their own name, so it must not be a specific persona
-  or book author).
-- **Marketing-capture account name** — the demo fixtures override the account
-  display name to **"Marin Vale"** under `VITE_DEMO_CAPTURE=1`, giving the
-  Account-tab and top-bar screenshots a coherent persona (the author of *The
-  Hollow Tide* using Castwright to produce their own series). This override is
-  capture-only and never the shipped default.
-- All unit/e2e specs asserting the above (`top-bar.test.tsx`,
-  `account*.test.tsx`, `book-library.test.tsx`, `book-meta-slice.test.ts`,
-  `cross-book-duplicates.test.ts`, etc.) updated in lockstep.
+- The **default mock dataset keeps its titles and slugs** (`sb/ns/cc/ts`)
+  untouched, so all 319 references stay valid and the e2e/unit suites stay green.
+- The **name scrub on the default dataset is narrow**: author `Mike Dudarenok →
+  Marin Vale` in `src/mocks/library.ts`, `src/mocks/canned-data.ts`,
+  `src/data/books.ts`, `src/mocks/manuscripts/*.md`, and the **12 test files**
+  that assert the name (`top-bar.test.tsx`, `account.test.tsx`,
+  `account.backups.test.tsx`, `upload.test.tsx`, `a11y.test.tsx`,
+  `listen.test.tsx`, `listen-responsive.test.tsx`, `edit-book-meta.test.tsx`,
+  `book-meta-slice.test.ts`, `persistence-middleware.test.ts`,
+  `cross-book-duplicates.test.ts`, `server/.../user-settings.test.ts`).
+- **Default display name** — `src/lib/account-defaults.ts` `displayName` + its
+  server mirror `server/src/workspace/user-settings.ts` `DEFAULT_USER_SETTINGS`
+  — change from the maintainer's real name to a neutral placeholder
+  **"Castwright User"** (what a brand-new real workspace shows before the user
+  sets their own name; must not be a specific persona).
+- **The Hollow Tide series is a separate fixture module**, served by the mock
+  layer **only under the capture flag** (`VITE_DEMO_CAPTURE=1`). It is *additive*
+  — it does not alter the default dataset, so it carries **zero test blast
+  radius**. Under the flag the mock layer serves the Hollow Tide library, book
+  states, casts, and the marketing account name.
+- **F9 (open, minor):** the legacy dataset author also becomes "Marin Vale",
+  i.e. one fictional author spans both datasets. Acceptable; flip to a distinct
+  legacy author if a cleaner separation is wanted.
 
 ## Capture harness
 
-Built on the existing Playwright mock-mode spine (`playwright.config.ts` already
-runs Vite in mock mode and defines desktop/Pixel 7/iPad Pro 11 projects with
+Built on the existing Playwright mock-mode spine (`playwright.config.ts` runs
+Vite in mock mode and defines desktop / Pixel 7 / iPad Pro 11 projects with
 `animations: 'disabled'`).
 
 - **Selecting the demo fixtures deterministically.** A new Vite mode
-  `--mode marketing` loads `.env.marketing` setting `VITE_USE_MOCKS=true` plus a
-  `VITE_DEMO_CAPTURE=1` flag. The mock layer reads the flag to (a) serve the
-  posed/frozen Hollow Tide states and (b) enable the determinism shim. The
-  default `--mode e2e` path is unaffected, so the existing e2e battery is
-  untouched by capture-only behaviour.
-- **Scene registry (dedicated file, committed)** — e.g. `e2e/marketing/scenes.ts`.
-  Each scene:
+  `--mode marketing` loads a new `.env.marketing` setting `VITE_USE_MOCKS=true` +
+  `VITE_DEMO_CAPTURE=1`. The mock layer reads the flag to (a) serve the posed
+  Hollow Tide states + marketing account name and (b) enable the determinism
+  shim (below). The default `--mode e2e` / `--mode development` paths are
+  unaffected.
+- **Dedicated Playwright config (F4).** `playwright.config.ts` hardcodes
+  `--mode e2e` in its `webServer.command`, so capture needs its **own**
+  `playwright.marketing.config.ts` that extends the base: override `webServer` to
+  `vite --mode marketing`, point `testDir` at `e2e/marketing/`, and reuse the
+  three viewport projects + `animations: 'disabled'`.
+- **Scene registry (dedicated file, committed)** — `e2e/marketing/scenes.ts`.
+  Hashes follow the verified `router.ts` grammar (F3): `#/` (library),
+  `#/books/:bookId/analysing`, `#/books/:bookId/confirm`,
+  `#/books/:bookId/:view` (e.g. `cast`, `generate`, `listen`), `#/account`,
+  `#/voices`. Each scene:
   ```ts
   {
     id: 'cast-reuse',
-    hash: '#/book/drowning-bell/cast',
+    hash: '#/books/hollow-tide-1/cast',
     viewports: ['desktop', 'phone', 'tablet'],   // default: ['desktop']
-    setup?: (page) => Promise<void>,             // seed/select book state
-    actions?: (page) => Promise<void>,           // e.g. open profile drawer
-    waitFor?: string,                            // selector to await before shot
+    actions?: (page) => Promise<void>,            // e.g. open profile drawer
+    waitFor?: string,                             // selector to await before shot
   }
   ```
-- **Capture runner (committed)** — a Playwright spec/script that iterates the
-  registry × requested viewports, navigates, runs `actions`, and writes
-  `mockups/marketing-screens/<scene-id>.<viewport>.png` (and `.<lang>.png` for
-  language variants). Reuses the config's viewport projects so the phone/tablet
-  device metrics match the responsive suite.
+- **Capture runner (committed).** A Playwright spec under `e2e/marketing/` that
+  iterates the registry × requested viewports, navigates, runs `actions`, and
+  writes `mockups/marketing-screens/<scene-id>.<viewport>.png` (+ `.<lang>.png`
+  for language variants). It `mkdir -p`s the output dir first — `mockups/` is
+  git-ignored and may be absent on a fresh checkout (F8).
 - **Commands (dedicated)** —
-  - `npm run capture:marketing` — capture the full set (all scenes, default
-    viewports).
+  - `npm run capture:marketing` — full set (all scenes, default viewports).
   - `npm run capture:marketing -- --scene=<id>` — one scene.
   - `npm run capture:marketing -- --viewport=phone,tablet` — viewport subset.
   - A short **README** in `e2e/marketing/` documents the commands, the output
-    location, and how to add a scene/variant (the "canonical screenshot recipe"
-    the user asked for).
+    location, and how to add a scene/variant — the "canonical screenshot recipe."
 
-## Determinism (the hard part)
+## Determinism (revised — F2)
 
 Pixel-stable, re-runnable captures require freezing everything time- or
-animation-dependent. Under `VITE_DEMO_CAPTURE=1`:
+animation-dependent. Disabling CSS animations is necessary but **not
+sufficient**: the mock layer advances state via real timers —
+`src/lib/api.ts:1152` (analysis phase progress, `Date.now()`-based),
+`src/lib/api.ts:1329` (`setInterval(tick, 1200)`, generation progress), and
+`src/lib/api.ts:4967` (export-job ticks). Under `VITE_DEMO_CAPTURE=1` the mock
+layer must **short-circuit these tickers to the fixture's static posed values**
+(analysing phase/chapter, generating %/chapter count) instead of running the
+live progression. Plus:
 
-- **Animations/transitions disabled** (reuse `toHaveScreenshot`'s
-  `animations: 'disabled'` + a capture-mode CSS reset for CSS animations the
-  app drives itself — waveforms, progress fills, spinners).
-- **Progress/ETA pinned** to the fixture's exact numbers (analysing phase/chapter,
-  generating %/chapter count) rather than any live-advancing mock timer.
-- **Relative timestamps frozen** ("2 min ago", "Just now") to fixed strings.
+- **Animations/transitions disabled** (`toHaveScreenshot` `animations: 'disabled'`
+  + a capture-mode CSS reset for app-driven CSS animations — waveforms, progress
+  fills, spinners).
+- **Relative timestamps** — library `lastWorkedOn` values are already static
+  fixture strings; any *computed* relative time in a posed view is pinned.
 - **Fonts** already self-hosted (#698), removing font-CDN/hinting flakiness.
 
-Determinism lives behind the capture flag so normal dev mock mode keeps its
-"live-feeling" animated mocks.
+The determinism shim lives behind the capture flag so normal dev mock mode keeps
+its "live-feeling" animated mocks.
+
+## Cover art (new — F6)
+
+The app renders a book cover at **three** aspect ratios from one stored JPEG with
+CSS pan/zoom framing: **1:1** in the Listen `CoverArt` (`listen-header.tsx:78`),
+**16:10** in the library grid card (`library-grid.tsx:192`), **2:3** in the
+library-table thumb. Marketing covers must therefore be **square masters with the
+title/author safe inside the central 16:10 band** so every crop reads.
+
+- **Format/size:** square `1:1`, 2048×2048 (or 1536×1536 if the generator caps
+  there; upscale to 2400×2400 for Audible/ACX parity if needed), JPEG, sRGB.
+- **Files (local-only, not committed):** drop into a git-ignored
+  `public/marketing-covers/<slug>.jpg` so Vite serves them at
+  `/marketing-covers/<slug>.jpg` during capture; the Hollow Tide fixtures point
+  each book's cover URL there. (Add `public/marketing-covers/` to `.gitignore`.)
+- Image-generation prompts for the three Hollow Tide covers (+ optional Coalfall)
+  are produced alongside this spec for the user to run.
 
 ## Scene set (v1)
 
@@ -170,17 +199,16 @@ core scenes.
 4. **Cast view** — full table, voices + tone controls, **series-reuse badges**.
 5. **Generating** — *Saltgrave* chapter queue + progress + model picker.
 6. **Listen** — *The Drowning Bell* finished: playback, loudness card, downloads.
-7. **Account tab** — settings, posed with fictional account data.
+7. **Account tab** — settings, posed with fictional account data (F7: confirm the
+   sub-cards — backups, model inventory, updates, apiKeyStatus — all mock-served).
 8. **Profile drawer** — one character's deep profile (tone sliders, evidence).
 9. **Voice library / A-B compare** — global voice library + compare modal.
 
 ## Extensibility
 
 - **Multilingual** (fs-2): a scene gains a `langs: ['en', 'ru', …]` field; the
-  runner emits `<scene-id>.<lang>.png`. The mock layer already seeds a non-English
-  book, so the language filter renders under mocks.
-- **Responsive**: per-scene `viewports` reuse the existing device projects; new
-  viewports are a config addition.
+  runner emits `<scene-id>.<lang>.png`.
+- **Responsive**: per-scene `viewports` reuse the existing device projects.
 - **Future features**: new surface ⇒ one registry row (+ any fixture state it
   needs). The README documents the pattern.
 
@@ -190,37 +218,39 @@ core scenes.
   produces the expected file set for one viewport (no pixel baseline — this is a
   marketing tool, not a regression gate). Kept **out of** the blocking `verify`
   battery; run on demand.
-- Existing e2e/unit specs touched by the mock-library replacement + name scrub
-  stay green (updated in lockstep).
+- The narrow name-scrub touches 12 asserting specs — updated in lockstep and
+  kept green. The additive Hollow Tide module touches no existing spec.
 
 ## v1 Definition of Done
 
-- [ ] Hollow Tide fixture dataset (library + per-book posed state + cast/reuse),
-      replacing the Northern Coast Trilogy in the default mock library.
-- [ ] Maintainer's real name gone from mock/fixture data and the default account
-      display name; all asserting specs updated and green.
-- [ ] Account-tab fixture data present and screenshot-able.
-- [ ] Scene registry + capture runner + `.env.marketing` + `npm run
-      capture:marketing` commands.
-- [ ] Determinism shim behind `VITE_DEMO_CAPTURE=1`.
+- [ ] Default mock dataset: author name scrubbed to "Marin Vale"; default display
+      name → "Castwright User"; all 12 asserting specs updated and green.
+- [ ] Hollow Tide capture-only fixture module (library + per-book posed state +
+      cast/reuse + analysing-in-progress fixture), served under `VITE_DEMO_CAPTURE=1`.
+- [ ] Square cover JPEGs generated + placed in git-ignored
+      `public/marketing-covers/`; fixtures reference them.
+- [ ] `.env.marketing`, `playwright.marketing.config.ts`, `e2e/marketing/scenes.ts`,
+      capture runner, `npm run capture:marketing` commands.
+- [ ] Determinism shim behind `VITE_DEMO_CAPTURE=1` (short-circuits the three
+      timer sites + CSS animations).
 - [ ] All v1 scenes capture cleanly at desktop; core scenes at phone + tablet.
-- [ ] `e2e/marketing/README.md` documents the recipe (commands, output, adding a
-      scene/variant).
+- [ ] `e2e/marketing/README.md` documents the recipe.
 - [ ] Output lands in git-ignored `mockups/marketing-screens/`.
-- [ ] `npm run verify` green (the capture harness is not in the gate, but the
-      mock/name changes must not break it).
+- [ ] `npm run verify` green (capture harness not in the gate; the name scrub +
+      additive module must not break it).
 
 ## Delivery roadmap
 
-- **Wave A — fixtures & name scrub.** Author the Hollow Tide dataset; replace the
-  mock library; scrub the name from mocks + account defaults; update asserting
-  specs. *Gate:* `npm run verify` green.
-- **Wave B — capture harness.** `.env.marketing` + determinism shim + scene
-  registry + runner + commands + README. *Gate:* full set captures cleanly;
-  smoke test passes.
-- **Wave C — scene coverage & polish.** Account tab, profile drawer, voice-library
-  scenes; phone/tablet variants; review the actual PNGs for marketing quality.
-  *Gate:* visual review of the output set.
+- **Wave A — name scrub.** Default dataset author → Marin Vale; default display
+  name → "Castwright User"; update the 12 asserting specs. *Gate:* `npm run
+  verify` green.
+- **Wave B — Hollow Tide fixtures + capture plumbing.** `.env.marketing`,
+  `playwright.marketing.config.ts`, the additive fixture module + determinism
+  shim, scene registry + runner + commands + README. *Gate:* full set captures
+  cleanly; smoke test passes.
+- **Wave C — scene coverage & polish.** Cover art wired; Account tab (F7),
+  profile drawer, voice-library scenes; phone/tablet variants; review the actual
+  PNGs for marketing quality. *Gate:* visual review of the output set.
 
 ## Separate follow-up pieces (out of scope here, tracked for later)
 
@@ -230,13 +260,33 @@ core scenes.
   (`CLAUDE.md`, plan docs) away from the copyrighted "the Coalfall Commission.txt" to
   an owned book. Large, mechanical, risky — its own spec.
 - **Piece #3 — real-name scrub across legal/docs.** Per the user's call:
-  **copyright + licence (`LICENSE`, `NOTICE`) keep the real name** (it is the
-  actual legal holder); everywhere else non-legal — `User-Agent` strings in
+  **copyright + licence (`LICENSE`, `NOTICE`) keep the real name** (the actual
+  legal holder); everywhere else non-legal — `User-Agent` strings in
   `server/src/cover/sources/`, doc/plan prose, the personal writing-style-guide
   doc — substitute the brand entity **"Castwright."** Its own spec.
 
+## Adversarial review log (2026-06-12)
+
+Verified against code; corrections folded in above.
+
+- **F1 🔴** Full mock-library replacement under-scoped (319 hits / 94 files) →
+  flipped to additive capture-only Hollow Tide set + narrow 12-file name scrub.
+- **F2 🔴** Mock progress is live timer-driven (`api.ts:1152/1329/4967`) →
+  determinism shim must short-circuit tickers, not just CSS.
+- **F3 🟠** Hash grammar corrected to `#/books/:bookId/...` (plural; chapter=3
+  omitted).
+- **F4 🟠** `webServer` hardcodes `--mode e2e` → dedicated
+  `playwright.marketing.config.ts`.
+- **F5 🟠** Analysing scene coupled to `ns` fixtures → Hollow Tide needs its own
+  analysing-in-progress fixture.
+- **F6 🟠** Covers render at 1:1 / 16:10 / 2:3 → square masters, title in central
+  16:10-safe band; new Cover-art section.
+- **F7 🟡** Account-tab sub-card mock coverage to confirm at plan time.
+- **F8 🟡** Runner must `mkdir -p` the git-ignored output dir.
+- **F9 🟡** One fictional author spans both datasets — acceptable; flip if
+  cleaner separation wanted.
+
 ## Open questions
 
-- None blocking. The canonical-mock-replacement decision (vs. the lighter
-  author-only swap) is the one judgement call flagged inline above; recommended
-  path is full replacement.
+- None blocking. F7 (account sub-card mock coverage) and F9 (single vs distinct
+  fictional author) are confirm-at-plan-time, not blockers.
