@@ -125,7 +125,7 @@ Wave-structured, each independently reviewable with its own gate. Default dispos
 - Owning Python/CUDA provisioning on every OS (Z bootstraps the venv only when Python 3.11 is already present).
 - Tier-2 "re-analyze" is opt-in, not default.
 - Whisper ASR never blocks.
-- Installer packaging (`ops-1` / `ops-15` / `ops-2`) — separate work that *hands off* to this wizard.
+- Installer packaging (`ops-1` / `ops-15` / `ops-2`) — separate work that *hands off* to this wizard. **Updated 2026-06-12 with the Z venv-ownership note:** native installers (`ops-1` #432 / `ops-15` #735) pre-build the sidecar venv (Python 3.11 stays the only hard prereq; the wizard's one-click bootstrap is the fallback); Docker (`ops-2` #433) bakes the venv into the image (wizard venv step = no-op there; venv is an image layer, not a mounted volume).
 - Wizard-copy i18n (defers to `fs-14`).
 - Intended-destination restore after gating.
 
