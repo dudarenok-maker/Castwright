@@ -67,7 +67,7 @@ function makeProps(
     onOpenChangelog: vi.fn(),
     onOpenAccount: vi.fn(),
     onOpenAdmin: vi.fn(),
-    userDisplayName: 'Mike Dudarenok',
+    userDisplayName: 'Castwright',
     statusSummary: IDLE_SUMMARY,
     statusDetail: STATUS_DETAIL,
     ...overrides,
@@ -133,7 +133,7 @@ describe('TopBar — avatar entry to account', () => {
   it('fires onOpenAccount when the avatar is clicked', () => {
     const onOpenAccount = vi.fn();
     renderWithStore(<TopBar {...makeProps({ onOpenAccount })} />);
-    fireEvent.click(screen.getByRole('button', { name: /account.*mike dudarenok/i }));
+    fireEvent.click(screen.getByRole('button', { name: /account.*castwright/i }));
     expect(onOpenAccount).toHaveBeenCalledTimes(1);
   });
 

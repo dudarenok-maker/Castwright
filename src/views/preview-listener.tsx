@@ -41,7 +41,7 @@ export function PreviewListenerView({
         <div className="absolute inset-0 bg-gradient-cta opacity-95 pointer-events-none" />
         <div className="relative max-w-4xl mx-auto px-6 pt-16 pb-20 text-center">
           <p className="text-[11px] uppercase tracking-[0.2em] text-white/70 font-semibold mb-6">
-            An audiobook by Mike Dudarenok
+            An audiobook by Marin Vale
           </p>
           <h1 className="font-serif text-5xl md:text-7xl font-bold text-white leading-[1.05]">
             The Northern Star
@@ -152,7 +152,7 @@ export function PreviewListenerView({
           </div>
         </div>
         <p className="text-center text-xs text-ink/40 mt-6">
-          © 2026 Mike Dudarenok. Listening preview generated 9 May 2026.
+          © 2026 Marin Vale. Listening preview generated 9 May 2026.
         </p>
       </section>
     </div>

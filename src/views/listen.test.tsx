@@ -54,7 +54,7 @@ const voices: Voice[] = [];
 
 const baseMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
   title: 'Bonus Keefe Story',
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Keefe Side-Stories',
   narratorCredit: 'Anders Vale',
   genre: 'Fantasy',

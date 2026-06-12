@@ -53,6 +53,12 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
+import {
+  HOLLOW_TIDE_LIBRARY,
+  HOLLOW_TIDE_BOOK_STATES,
+  HOLLOW_TIDE_POSED,
+  HOLLOW_TIDE_VOICES,
+} from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
@@ -68,6 +74,10 @@ import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
+/* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
+   When set, the mock layer serves the additive "Hollow Tide" demo fixtures.
+   Off in dev / e2e / prod. */
+const DEMO_CAPTURE = import.meta.env.VITE_DEMO_CAPTURE === '1';
 
 /* ── shared helpers ──────────────────────────────────────────────────── */
 
@@ -599,11 +609,13 @@ export interface BaseVoiceSampleArgs {
 
 async function mockGetLibrary(): Promise<LibraryResponse> {
   await wait(120);
+  if (DEMO_CAPTURE) return HOLLOW_TIDE_LIBRARY;
   return MOCK_LIBRARY;
 }
 
 async function mockGetVoices(_args?: { currentBookId?: string }): Promise<VoiceLibraryResponse> {
   await wait(80);
+  if (DEMO_CAPTURE) return HOLLOW_TIDE_VOICES;
   return MOCK_VOICE_LIBRARY;
 }
 
@@ -800,7 +812,7 @@ function buildSolwayBayMockState(): BookStateResponse {
       bookId: 'sb',
       manuscriptId: 'mns_sb',
       title: 'Solway Bay',
-      author: 'Mike Dudarenok',
+      author: 'Marin Vale',
       series: 'Northern Coast Trilogy',
       seriesPosition: 1,
       isStandalone: false,
@@ -849,7 +861,7 @@ function buildNorthernStarMockState(): BookStateResponse {
       bookId: 'ns',
       manuscriptId: 'mns_ns',
       title: 'The Northern Star',
-      author: 'Mike Dudarenok',
+      author: 'Marin Vale',
       series: 'Northern Coast Trilogy',
       seriesPosition: 2,
       isStandalone: false,
@@ -903,7 +915,7 @@ function buildCarricksCompassMockState(): BookStateResponse {
       bookId: 'cc',
       manuscriptId: 'mns_cc',
       title: "Carrick's Compass",
-      author: 'Mike Dudarenok',
+      author: 'Marin Vale',
       series: 'Northern Coast Trilogy',
       seriesPosition: 3,
       isStandalone: false,
@@ -1043,6 +1055,9 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
    time — flipping the env in a test file is too late). */
 export async function mockGetBookState(bookId: string): Promise<BookStateResponse | null> {
   await wait(60);
+  if (DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)) {
+    return HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null;
+  }
   return MOCK_BOOK_STATES.get(bookId) ?? null;
 }
 
@@ -1145,6 +1160,12 @@ async function mockAnalyseManuscript(
   manuscriptId: string,
   { onPhase }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
+  if (DEMO_CAPTURE) {
+    const p = HOLLOW_TIDE_POSED.analysing;
+    onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress });
+    // Freeze on the analysing screen: never resolve, never advance.
+    return new Promise<never>(() => {});
+  }
   const res = ANALYSIS_NORTHERN_STAR;
   for (const ph of res.phaseTimings) {
     const start = Date.now();
@@ -1225,6 +1246,20 @@ function mockStreamGeneration({
   mockGenConcurrency,
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
+  if (DEMO_CAPTURE) {
+    const g = HOLLOW_TIDE_POSED.generating;
+    // One in-flight chapter at ~60%; the 7 completed chapters come from the
+    // book-state completedSlugs already hydrated into the queue.
+    onTick({
+      type: 'progress',
+      chapterId: g.chapterId,
+      characterId: null,
+      progress: 0.6,
+      currentLine: 360,
+      totalLines: 600,
+    });
+    return () => {};
+  }
   /* Mock the real server's parallel-chapter SSE cadence (plan 87 archive,
      `GEN_WORKERS`, default 1). The server keeps K chapters
      in-flight on a bounded worker pool, so progress / chapter_complete

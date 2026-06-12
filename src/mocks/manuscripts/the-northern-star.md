@@ -1,7 +1,7 @@
 # The Northern Star
 
 _Northern Coast Trilogy · Book 2_
-By Mike Dudarenok
+By Marin Vale
 
 ---
 

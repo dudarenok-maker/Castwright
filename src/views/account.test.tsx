@@ -25,7 +25,7 @@ vi.mock('../lib/api', () => ({
 import { api } from '../lib/api';
 
 const SERVER_FIXTURE: UserSettings = {
-  displayName: 'Mike Dudarenok',
+  displayName: 'Castwright',
   defaultAnalysisModel: 'gemma-4-31b-it',
   defaultTtsEngine: 'local',
   defaultTtsModelKey: 'coqui-xtts-v2',
