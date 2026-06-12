@@ -44,10 +44,18 @@ export interface FailureContext {
   engine?: string;
 }
 
+export type FailureSource = 'generation' | 'analysis' | 'both';
+
 export interface FailureSignature {
   code: FailureCode;
   fatal: boolean;
-  /** First match wins — order in FAILURE_SIGNATURES is significant. */
+  /** Which classification path may match this signature. Generation keeps its
+      exact historical order/sequence (plan 154); analysis-only entries are
+      invisible to classifyFailure and vice versa. */
+  source: FailureSource;
+  /** Optional typed-error matcher, tested against err.name BEFORE the regex —
+      survives message rewording. */
+  matchName?: string;
   match: (raw: string, ctx: FailureContext) => boolean;
 }
 
@@ -72,11 +80,13 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
   {
     code: 'synth-timeout',
     fatal: false,
+    source: 'generation',
     match: (_raw, ctx) => ctx.name === 'ChapterSynthTimeoutError',
   },
   {
     code: 'sidecar-unreachable',
     fatal: true,
+    source: 'generation',
     match: (raw) => /sidecar not reachable|ECONNREFUSED|fetch failed/i.test(raw),
   },
   /* C3 (Wave 3) — the named recycle-storm signal from synthesise-chapter.ts
@@ -94,6 +104,7 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
   {
     code: 'recycle-storm',
     fatal: false,
+    source: 'generation',
     match: (raw, ctx) =>
       ctx.name === 'RecycleStormError' || /recycled \d+× while rendering/.test(raw),
   },
@@ -104,6 +115,7 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
   {
     code: 'vram-spill',
     fatal: true,
+    source: 'generation',
     match: (raw) => /CUDA out of memory|VRAM/i.test(raw),
   },
   /* Host-process OOM kill — the OS killed the sidecar (exit 137 / SIGKILL).
@@ -112,11 +124,13 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
   {
     code: 'oom',
     fatal: true,
+    source: 'generation',
     match: (raw) => /\bkilled\b|exit code 137|SIGKILL|out of memory: killed/i.test(raw),
   },
   {
     code: 'disk-full',
     fatal: true,
+    source: 'both',
     match: (raw) => /ENOSPC|no space left/i.test(raw),
   },
   /* Upstream rate-limit / quota. STRICT match — a real HTTP 429 or an
@@ -131,6 +145,7 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
   {
     code: 'analyzer-rate-limit',
     fatal: true,
+    source: 'both',
     match: (raw, ctx) => {
       const isHttp429 = ctx.status === 429;
       const looksRateLimited =
@@ -149,18 +164,21 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
   {
     code: 'auth',
     fatal: true,
+    source: 'both',
     match: (raw, ctx) =>
       ctx.status === 401 || ctx.status === 403 || /invalid[_ ]?key|API key/i.test(raw),
   },
   {
     code: 'xtts-speaker-desync',
     fatal: true,
+    source: 'generation',
     match: (raw) =>
       /index out of range in self|IndexError|out of range \(expected to be in range/i.test(raw),
   },
   {
     code: 'cuda-poisoned',
     fatal: true,
+    source: 'generation',
     match: (raw) =>
       /device-side assert|CUDA error|CUDA kernel errors|"poisoned":\s*true/i.test(raw),
   },
@@ -170,6 +188,7 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
   {
     code: 'model-not-loaded',
     fatal: true,
+    source: 'generation',
     match: (raw) => /model not loaded|503.*loading|loading.*model/i.test(raw),
   },
 ];
@@ -184,11 +203,11 @@ function trimRaw(raw: string): string {
   return raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
 }
 
-/** Classify a synthesis/analysis error into the structured taxonomy. First
-    matching signature wins; an unmapped error returns `code: 'unknown'` with
-    the (trimmed) raw message as `userMessage` and a generic remediation,
-    `fatal: false`. */
-export function classifyFailure(err: unknown, engine?: string): ClassifiedFailure {
+function scanSignatures(
+  err: unknown,
+  sources: ReadonlySet<FailureSource>,
+  engine?: string,
+): ClassifiedFailure | null {
   const raw = rawOf(err);
   const ctx: FailureContext = {
     status: (err as { status?: number })?.status,
@@ -196,7 +215,8 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
     engine,
   };
   for (const sig of FAILURE_SIGNATURES) {
-    if (sig.match(raw, ctx)) {
+    if (!sources.has(sig.source)) continue;
+    if ((sig.matchName != null && sig.matchName === ctx.name) || sig.match(raw, ctx)) {
       const copy = FAILURE_REMEDIATIONS[sig.code];
       return {
         code: sig.code,
@@ -207,6 +227,37 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
       };
     }
   }
+  return null;
+}
+
+const GENERATION_SOURCES: ReadonlySet<FailureSource> = new Set(['generation', 'both']);
+const ANALYSIS_SOURCES: ReadonlySet<FailureSource> = new Set(['analysis', 'both']);
+
+/** Classify a synthesis/analysis error into the structured taxonomy. First
+    matching signature wins; an unmapped error returns `code: 'unknown'` with
+    the (trimmed) raw message as `userMessage` and a generic remediation,
+    `fatal: false`. */
+export function classifyFailure(err: unknown, engine?: string): ClassifiedFailure {
+  const hit = scanSignatures(err, GENERATION_SOURCES, engine);
+  if (hit) return hit;
+  const raw = rawOf(err);
+  return {
+    code: 'unknown',
+    userMessage: trimRaw(raw),
+    remediation: FAILURE_REMEDIATIONS.unknown.remediation,
+    fatal: false,
+    raw,
+  };
+}
+
+/** Bare signature-table scan for the analysis path. Production callers use
+    classifyAnalysisFailure (added by a later task) — which layers the ported
+    describeError envelope parsing on top and falls back to this scan; exported
+    for that fallback and for direct unit tests. */
+export function classifyAnalysisError(err: unknown): ClassifiedFailure {
+  const hit = scanSignatures(err, ANALYSIS_SOURCES);
+  if (hit) return hit;
+  const raw = rawOf(err);
   return {
     code: 'unknown',
     userMessage: trimRaw(raw),
