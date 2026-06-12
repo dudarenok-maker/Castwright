@@ -30,7 +30,7 @@
 
 ## Task C1: `POST /api/setup/complete` route
 
-**Files:** Modify `server/src/routes/setup-readiness.ts` (add the POST handler to the same `setupReadinessRouter` — it's already mounted at `/api/setup`, so `POST /complete` → `/api/setup/complete`); Test: extend `server/src/routes/setup-readiness.test.ts` (the pure/unit one — this handler is trivial, no live probe) OR a small new unit test.
+**Files:** Modify `server/src/routes/setup-readiness.ts` (add the POST handler to the same `setupReadinessRouter` — already mounted at `/api/setup`, so `POST /complete` → `/api/setup/complete`); Test: extend the EXISTING slow-pool route test `server/src/routes/setup-readiness.route.test.ts` (created in Wave 0, already pinned in both vitest configs) — NOT the pure `setup-readiness.test.ts`. A supertest mount belongs in the slow pool per the documented mirror invariant.
 
 - [ ] **Step 1: Failing test** — POST `/api/setup/complete` returns 200 `{ completedAt: <ISO string> }` and calls the settings writer. Inject/stub `writeSetupCompletedAt` if the route imports it directly (mirror how setup-readiness injects deps), else use a temp settings file + assert `getResolvedSetupCompletedAt()` is non-null after.
 
@@ -88,15 +88,15 @@ setupReadinessRouter.post('/complete', async (_req, res) => {
 
 **Files:** Create `src/components/setup/step-environment.tsx`, `step-ffmpeg.tsx`, `step-models.tsx`, `step-defaults.tsx`, `step-finish.tsx` + a test per non-trivial one.
 
-Each step component takes `{ readiness: SetupReadiness; onRefetch: () => void }` (and `step-finish` also `{ onFinish: () => void }`). They are presentational + reuse existing components.
+Each step component takes `{ readiness: SetupReadiness; onRefetch: () => void }` (and `step-finish` also `{ onFinish: () => void }`). They are presentational + reuse existing components. **Dispatch as THREE separate subagent tasks** (per the per-group commits): C4a = Step E + Step F; C4b = Step M; C4c = Step D + Step Finish. (One task for all five is too large.)
 
 - [ ] **Step E (environment):** `StepEnvironment` renders `<DevicePanel />` + a line showing `readiness.info.gpu`. Non-blocking; always "ok". Test: renders DevicePanel + the gpu string.
 - [ ] **Step F (ffmpeg):** `StepFfmpeg` — if `readiness.blockers.ffmpeg === 'pass'` → green "ffmpeg found"; else → an instruct card with per-OS commands (`winget install ffmpeg` / `brew install ffmpeg` / `sudo apt install ffmpeg`) + a "Re-check" button calling `onRefetch`. (Mirror `venv-bootstrap.tsx`'s degrade/instruction block style.) Test: pass → green; fail → instructions + Re-check calls onRefetch.
 - [ ] **Step M (models):** `StepModels` — two required sub-sections:
   - *TTS runtime + engine:* `<VenvBootstrap onBootstrapped={onRefetch} />` then `<KokoroInstall onInstalled={onRefetch} />` (with Qwen/Coqui offered as collapsible alternates). Show `readiness.blockers.tts`/`sidecar` status.
-  - *Analyzer:* recommended `<GeminiKeyField status={account.apiKeyStatus} onSave={(k)=>dispatch(saveGeminiApiKey(k)).then(onRefetch)} />`; OR (collapsible "use a local analyzer") `<OllamaInstall onInstalled={onRefetch} />` + `<ModelPullStatus .../>`. Show `readiness.blockers.analyzer` status.
+  - *Analyzer:* recommended `<GeminiKeyField status={account.apiKeyStatus} onSave={(k)=>dispatch(saveGeminiApiKey(k)).then(onRefetch)} />`; OR (collapsible "use a local analyzer") `<OllamaInstall onInstalled={onRefetch} />`. **DROP `ModelPullStatus`** (the review found its props need the inline-only `PULLABLE_MODELS` const + a parallel ollama-health probe; the `analyzer` blocker passes on a Gemini key OR Ollama-daemon-reachable, so pulling a specific tag isn't needed to clear the gate — leave model-pull to the Model Manager). Show `readiness.blockers.analyzer` status.
   Test: renders the venv + kokoro + analyzer sub-sections; install callbacks call onRefetch (mock the children or assert presence).
-- [ ] **Step D (defaults):** `StepDefaults` — a 4-field inline form: default engine (`defaultTtsEngine`), default TTS model key (`defaultTtsModelKey`), default analysis model (`defaultAnalysisModel`), theme (`defaultThemePreference`). Pre-fill from the account slice; on change `dispatch(saveAccountSettings({...}))`. Skippable (auto-picks valid). READ `src/components/model-settings-form.tsx` for the exact field option lists + the `saveAccountSettings` patch shape; inline only these 4 fields (do not embed the whole form). Test: renders 4 selects, changing one dispatches saveAccountSettings with that field.
+- [ ] **Step D (defaults):** `StepDefaults` — a 4-field inline form: default engine (`defaultTtsEngine`), default TTS model key (`defaultTtsModelKey`), default analysis model (`defaultAnalysisModel`), theme (`defaultThemePreference`). Pre-fill from the account slice; on change build a `UserSettingsPatch` and `dispatch(saveAccountSettings(patch))`. Skippable (auto-picks valid). **Field provenance (review):** engine/model option lists + the engine→model reset idiom come from `src/lib/tts-models.ts` (`TTS_ENGINES`) and are used in `src/components/model-settings-form.tsx`; analysis-model options from `MODEL_OPTION_GROUPS` in `src/lib/models.ts`; **`defaultThemePreference` is managed in `src/views/account.tsx` (a `'light'|'dark'|'system'` `ThemePreference`), NOT in model-settings-form** — read account.tsx for that one. When the user actively changes the TTS model, also send `defaultTtsModelKeyExplicit: true` (mirrors model-settings-form so a Qwen-installed box isn't silently pinned). Inline only these 4 fields (do not embed the whole form). Test: renders 4 selects, changing one dispatches saveAccountSettings with that field.
 - [ ] **Step Fin (finish):** `StepFinish` — a placeholder card: "Smoke test (coming soon)" disabled affordance + copy that the full audible end-to-end test arrives next release; a **"Finish setup"** PrimaryButton calling `onFinish`. Test: renders the placeholder + Finish calls onFinish.
 - [ ] **Commit per logical group** (e.g. one commit for steps E+F, one for M, one for D+Fin) with `feat(frontend): setup wizard step components (fs-21 wave 2)`. Run `npx vitest run src/components/setup/` green + typecheck before each commit.
 
@@ -104,12 +104,12 @@ Each step component takes `{ readiness: SetupReadiness; onRefetch: () => void }`
 
 ## Task C5: `SetupWizard` orchestrator + `SetupView` rewrite
 
-**Files:** Create `src/components/setup/setup-wizard.tsx` + test; modify `src/views/setup.tsx`.
+**Files:** Create `src/components/setup/setup-wizard.tsx` + test; modify `src/views/setup.tsx` AND `src/views/setup.test.tsx` (the Wave 0 stub test — widening `SetupView`'s props breaks it; update it to the wizard-era assertion, OR make the new props optional with defaults so it still compiles, then update its body assertion off the removed stub list).
 
 - [ ] **Step 1: Failing test** for `SetupWizard` — props `{ readiness: SetupReadiness; mode: 'guided' | 'checklist'; onRefetch: () => void; onFinish: () => void }`:
-  - guided mode: shows ONE step at a time with Back/Next + progress dots; Next disabled on a *blocking* step whose blocker is still `fail` (ffmpeg, tts, analyzer); Step 5 reachable only when blockers pass.
+  - guided mode: shows ONE step at a time with Back/Next + progress dots. **Next is ALWAYS enabled (simpler model, per review)** — the wizard does NOT gate Next on blocker status; the derived Wave 0 boot gate (`layout.tsx`) already keeps the app locked behind `#/setup` until all blockers pass, so in-wizard gating is redundant and bug-prone (stale-readiness traps). Each blocking step still SHOWS its `readiness.blockers` status so the user knows what's left.
   - checklist mode: all 5 steps rendered stacked, each with its status; no Back/Next.
-  - both: hard-blocker statuses come from `readiness.blockers`; `info`/defaults steps never block.
+  - both: blocker statuses come from `readiness.blockers`; `info`/defaults steps are informational.
 - [ ] **Step 2: Run → FAIL.**
 - [ ] **Step 3: Implement** the orchestrator: a `STEPS` array (id, title, component, `blocking: boolean`), step index state (guided), render the matching step(s), wire `onRefetch`/`onFinish` down. Use `MixedHeading`/`PrimaryButton`/`SectionLabel` primitives + the `max-w-[960px] mx-auto px-4 sm:px-6 py-10` shell (match ModelManagerView). Then rewrite `src/views/setup.tsx` `SetupView` to render `<SetupWizard readiness={readiness} mode={mode} onRefetch={onRefetch} onFinish={onFinish} />` (props threaded from SetupRoute in C6). Keep `SetupView`'s `readiness: SetupReadiness | null` prop; render a light "checking…" state when null.
 - [ ] **Step 4: Run → PASS + typecheck.**
@@ -132,7 +132,7 @@ Each step component takes `{ readiness: SetupReadiness; onRefetch: () => void }`
 
 **Files:** Create `e2e/setup-wizard.spec.ts`; extend `e2e/responsive/coverage.spec.ts`.
 
-- [ ] **Step 1:** `setup-wizard.spec.ts` (mock mode): navigate `/#/?setup=notready` → the wizard renders with step UI (heading "Set up Castwright", a blocking step visible); assert the ffmpeg/models steps show status from the mock readiness; the "Finish setup" affordance exists. (The mock readiness's blockers drive the UI; in not-ready mock, tts/analyzer are `fail` so guided Next is gated — assert that.) Then a ready-mock path: navigate `/#/` (ready) → no redirect (gate stays out). Keep assertions resilient (role/text), not pixel.
+- [ ] **Step 1:** `setup-wizard.spec.ts` (mock mode): navigate `/#/?setup=notready` → the wizard renders with step UI (heading "Set up Castwright", step navigation visible); assert the ffmpeg/models steps show status from the mock readiness (tts/analyzer `fail` → "needs attention"-style status text). Do NOT assert Next-gating (the simpler model always allows Next). Then a ready-mock path: navigate `/#/` (ready) → no redirect (gate stays out). Keep assertions resilient (role/text), not pixel.
 - [ ] **Step 2:** Update the `e2e/responsive/coverage.spec.ts` setup case if the heading/layout changed (it shouldn't — heading stays "Set up Castwright").
 - [ ] **Step 3:** `npm run test:e2e -- setup` → PASS.
 - [ ] **Step 4: Commit** `test(e2e): setup wizard step flow (fs-21 wave 2)`.
