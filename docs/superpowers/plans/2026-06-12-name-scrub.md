@@ -46,7 +46,7 @@
 | Hespa | Hespa | owned (mother) |
 | Bram | Bram | owned |
 
-**Books / series:**
+**Books / series — UNAMBIGUOUS (safe for the blanket codemod):**
 
 | the Hollow Tide | Owned |
 |---|---|
@@ -54,15 +54,30 @@
 | The Drowning Bell | The Drowning Bell |
 | The Tidewatcher's Oath | The Tidewatcher's Oath |
 | Saltgrave | Saltgrave |
-| Exile | The Ebb |
-| Unlocked | The Floodmark |
-| Legacy | The Lantern Tide |
-| Flashback | The Undertow |
-| Lodestar / Nightfall (if present) | The Lodestone / The Nightwater |
 
+**Books — CONTEXT-ONLY (⚠️ common English / code words — NOT in the codemod):**
+
+| the Hollow Tide | Owned | Why manual |
+|---|---|---|
+| Exile | The Ebb | "exile" is a common word |
+| Unlocked | The Floodmark | UI/state term |
+| Legacy | The Lantern Tide | **114 code files** use "legacy" for legacy format/pairing — must NOT blanket-rename |
+| Flashback | The Undertow | common word |
+| Foster (surname) | Sparrow | "foster" is also a verb — capitalised-standalone only |
+
+> These are renamed **only by the reviewed manual pass** (Phase 4 Step 3b / Phase 5
+> Step 1b), where a human confirms each occurrence genuinely refers to the the Hollow Tide
+> book/surname. The codemod must **exclude** them.
+>
 > All owned names above are original (no third-party IP). Coalfall cast names come
 > from `brand/test-book/the-coalfall-commission-cast-sheet.md`; the rest are
 > fabricated Hollow Tide-universe names.
+
+**Unambiguous CHARACTER tokens** (safe for the codemod): Wren, Marlow, Oduvan,
+Garrow, Lessom, Casper, Brann, Maerin, Berrin, Sela, Edda, Hespa,
+Singe, Vane, Wick, The Drowning Bell, The Tidewatcher's Oath, Saltgrave. (`Hart`, `Linnet`,
+`Corvin`, `Bram` are short/common enough to **spot-check** the diff, but `\b`
++ capitalisation makes them low-risk.)
 
 ---
 
@@ -104,7 +119,24 @@ Expected: the names already in the table. Add any stragglers (e.g. `Councillor X
 
 - [ ] **Step 5: Write the codemod (TDD)**
 
-Create `scripts/scrub-the Hollow Tide.mjs` exporting `scrubText(s)` that applies the mapping with **word boundaries** and **case preservation** (`Wren`→`Wren`, `Wren`→`wren`, `Wren`→`WREN`; longest-key-first so `Wren Sparrow`/`Marlow Halden`/`Lord Vane` match before the single tokens; `Foster`→`Sparrow` only as a standalone word). The map (inline const — single source) also includes the **manuscript-path** entries (`…\the Coalfall Commission.txt` and `~/Downloads/the Coalfall Commission.txt` → `server/src/__fixtures__/the-coalfall-commission.md`). The module also implements a `--write <files...>` CLI that scrubs each given file in place (used by every later phase).
+Create `scripts/scrub-the Hollow Tide.mjs` exporting `scrubText(s)`. Requirements:
+
+- **Only the UNAMBIGUOUS map** (the safe character + book lists above). The
+  context-only words (`Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster`) are
+  **explicitly excluded** — a guard test asserts `scrubText('legacy pairing')` is
+  unchanged.
+- **Word boundaries + case preservation**: `Wren`→`Wren`, `Wren`→`wren`,
+  `Wren`→`WREN`.
+- **Longest-key-first**: `Wren Sparrow`/`Marlow Halden`/`Lord Vane` before the
+  single tokens.
+- **Kebab/slug forms**: for each mapping, also match the hyphen-joined lowercase
+  form — `Wren-foster`→`wren-sparrow`, `Marlow-Halden`→`Pell-hollis`,
+  `mock-book-The Drowning Bell`→`mock-book-the-drowning-bell`. Implement by, for each
+  `[from,to]`, registering both the spaced form AND `kebab(from)→kebab(to)`
+  (`from.toLowerCase().replace(/ /g,'-')`).
+- **Manuscript-path** entries: `…\the Coalfall Commission.txt` and
+  `~/Downloads/the Coalfall Commission.txt` → `server/src/__fixtures__/the-coalfall-commission.md`.
+- A `--write <files...>` CLI that scrubs each file in place (used by every later phase).
 
 Write `scripts/tests/scrub-the Hollow Tide.test.mjs` first:
 ```js
@@ -125,6 +157,15 @@ test('word boundaries — no mid-word hits', () => {
 test('books', () => {
   assert.equal(scrubText('The Hollow Tide: The Drowning Bell'),
     'The Hollow Tide: The Drowning Bell');
+});
+test('kebab/slug forms', () => {
+  assert.equal(scrubText("id: 'Wren-foster'"), "id: 'wren-sparrow'");
+  assert.equal(scrubText('mock-book-The Drowning Bell'), 'mock-book-the-drowning-bell');
+});
+test('common words are LEFT ALONE (context-only, not codemod)', () => {
+  assert.equal(scrubText('the legacy pairing format'), 'the legacy pairing format');
+  assert.equal(scrubText('exile the chapter'), 'exile the chapter');
+  assert.equal(scrubText('foster a connection'), 'foster a connection');
 });
 ```
 Run: `node --test scripts/tests/scrub-the Hollow Tide.test.mjs` → FAIL, then implement `scrubText` until PASS.
@@ -230,12 +271,24 @@ Because the codemod renames inline fixture text AND the assertions consistently,
 
 For each file flagged in Step 1, after renaming, recompute the char offsets against the renamed fixture text (the name-length delta shifts them). Where feasible, prefer asserting on a substring/anchor rather than a hardcoded integer to avoid future fragility.
 
+- [ ] **Step 3b: Manual context-only pass (the ⚠️ common words)**
+
+The codemod left `Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster` untouched. Grep each in the Cat-4 files and rename **only** the occurrences that genuinely refer to the the Hollow Tide book/surname (almost always adjacent to other the Hollow Tide names):
+```bash
+git grep -nE "\b(Exile|Unlocked|Flashback)\b" -- 'server/src/**/*.test.ts'   # review each
+git grep -nE "\bFoster\b" -- 'server/src/**/*.test.ts'                         # surname → Sparrow
+```
+Do **not** touch lowercase `legacy`/`exile`/`unlocked` (code terms). `Legacy` the
+book is rare in tests; confirm by eye before any edit.
+
 - [ ] **Step 4: Verify**
 ```bash
 npm run test:server && npm run test:server-slow
-git grep -iE "Wren|Marlow|Oduvan|Garrow|Lessom|Casper|Hart|Brann|Maerin|The Drowning Bell|The Tidewatcher's Oath|Saltgrave|exile|unlocked|legacy|keeper of the lost" -- 'server/src/**/*.test.ts'
+# Gate greps the UNAMBIGUOUS tokens only (common words excluded by design):
+git grep -iE "\b(Wren|Marlow|Oduvan|Garrow|Lessom|Casper|Brann|Maerin|Berrin|Sela|Edda|Hespa|Singe|Vane|Wick|The Drowning Bell|The Tidewatcher's Oath|Saltgrave|keeper of the lost)\b" -- 'server/src/**/*.test.ts'
 ```
-Expected: all server tests green; grep returns **no matches**. Commit `test(server): re-fixture the server suite onto owned Coalfall/Hollow Tide content`.
+Expected: all server tests green; gate grep returns **no matches**. (Eyeball the
+remaining `Exile`/`Legacy`/`Foster` hits are all non-the Hollow Tide.) Commit `test(server): re-fixture the server suite onto owned Coalfall/Hollow Tide content`.
 
 > This phase may warrant splitting into 2–3 PRs by directory (`analyzer`+`routes`, `tts`+`store`, `workspace`+`audio`+`export`+`parsers`+`handoff`) to keep each review tractable. The acceptance gate per PR is the same (scoped grep clean + that subtree's tests green).
 
@@ -260,9 +313,12 @@ Then hand-edit CLAUDE.md's "Canonical end-to-end manuscript" block prose (it is 
 
 Per the convention: in archived plans recording real past runs (observed char lists, "Ch44 pos 37588"), the codemod replaces the *name* — review the diff and **do not** invent Coalfall-specific numbers. Where a sentence would read as a fabricated Coalfall run, soften to "(historical run against the prior test manuscript)" rather than asserting it happened against Coalfall.
 
+Also do the **context-only book pass** here (the codemod skipped `Exile`/`Unlocked`/`Legacy`/`Flashback`): in *docs prose* these usually DO mean the the Hollow Tide book (e.g. "Exile ch56", "The Drowning Bell reusing The Tidewatcher's Oath"). Rename those occurrences by hand to the owned titles; still leave lowercase code-term `legacy` alone if any appears in docs.
+
 - [ ] **Step 3: Verify**
 ```bash
-git grep -iE "Marlow|Wren|bonus Marlow story|The Drowning Bell|keeper of the lost|Saltgrave|exile|The Tidewatcher's Oath|unlocked|Oduvan" -- 'CLAUDE.md' 'docs/**/*.md'
+# Unambiguous tokens must be zero; eyeball remaining Exile/Legacy hits are non-the Hollow Tide.
+git grep -iE "\b(Marlow|Wren|bonus Marlow story|The Drowning Bell|keeper of the lost|Saltgrave|The Tidewatcher's Oath|Oduvan|Garrow|Lessom|Casper)\b" -- 'CLAUDE.md' 'docs/**/*.md'
 ```
 Expected: **no matches**. (Docs-only PR → CI doc-fast-path applies.) Commit `docs(docs): repoint canonical manuscript + scrub the Hollow Tide from all docs`.
 
@@ -287,11 +343,12 @@ Expected: language-detection e2e green; no the Hollow Tide matches. Commit `e2e(
 
 ## Final verification (after all phases)
 
-- [ ] **Repo-wide grep is clean:**
+- [ ] **Repo-wide grep is clean (UNAMBIGUOUS tokens):**
 ```bash
-git grep -iE "\b(Wren|Marlow|Oduvan|Garrow|Lessom|Casper|Brann|Maerin|Berrin|Sela|The Drowning Bell|The Tidewatcher's Oath|Saltgrave|exile|unlocked|legacy|keeper of the lost|bonus Marlow story)\b" -- ':!node_modules' ':!docs/superpowers/plans/2026-06-12-Marlow-scrub.md' ':!docs/test-book/the Hollow Tide-to-coalfall-mapping.md'
+git grep -iE "\b(Wren|Marlow|Oduvan|Garrow|Lessom|Casper|Brann|Maerin|Berrin|Sela|Edda|Hespa|Singe|Vane|Wick|The Drowning Bell|The Tidewatcher's Oath|Saltgrave|keeper of the lost|bonus Marlow story)\b" -- ':!node_modules' ':!docs/superpowers/plans/2026-06-12-Marlow-scrub.md' ':!docs/test-book/the Hollow Tide-to-coalfall-mapping.md'
 ```
-Expected: **no matches** anywhere in the tracked tree (except this plan + the mapping doc, which name them deliberately).
+Expected: **no matches** (except this plan + the mapping doc, which name them deliberately).
+- [ ] **Context-only words audited:** the remaining `Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster` hits are each confirmed non-the Hollow Tide (code terms / the verb), per Phase 4 Step 3b + Phase 5 Step 2.
 - [ ] **Full battery:** `npm run verify` green.
 - [ ] **Spec status → delivered;** move the scope doc note. Update `CLAUDE.md` testing section already done in Phase 5.
 
