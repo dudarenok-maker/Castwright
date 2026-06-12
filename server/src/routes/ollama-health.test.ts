@@ -192,30 +192,56 @@ describe('POST /api/ollama/load', () => {
 });
 
 describe('POST /api/ollama/unload', () => {
-  it('POSTs /api/generate with keep_alive: 0 and returns {status: unloaded}', async () => {
+  it('evicts a single model with keep_alive: 0 when one is named in the body', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
 
-    const res = await request(makeApp()).post('/api/ollama/unload');
+    const res = await request(makeApp()).post('/api/ollama/unload').send({ model: 'llama3.1:8b' });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ status: 'unloaded' });
     /* keep_alive: 0 is the documented Ollama idiom for "drop this model from
        VRAM now" — see analyzer/ollama.ts:92 for the equivalent on real chat
        calls. If the literal 0 changes (e.g. to "0s") the eviction stops
        being immediate, which silently breaks auto-evict-before-TTS. */
-    const init = fetchMock.mock.calls[0][1];
-    const body = JSON.parse(init.body);
+    const genCalls = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/api/generate'));
+    expect(genCalls).toHaveLength(1);
+    const body = JSON.parse(genCalls[0][1].body);
+    expect(body.model).toBe('llama3.1:8b');
     expect(body.keep_alive).toBe(0);
     expect(body.prompt).toBe('');
   });
 
-  it('returns 503 when Ollama is unreachable', async () => {
+  it('with no model, evicts EVERY resident model reported by /api/ps', async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).endsWith('/api/tags')) {
+        return Promise.resolve(new Response(JSON.stringify({ models: [] }), { status: 200 }));
+      }
+      if (String(url).endsWith('/api/ps')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ models: [{ name: 'qwen3.5:4b' }, { name: 'llama3.1:8b' }] }),
+            { status: 200 },
+          ),
+        );
+      }
+      return Promise.resolve(new Response('', { status: 200 })); // /api/generate
+    });
+
+    const res = await request(makeApp()).post('/api/ollama/unload');
+
+    expect(res.status).toBe(200);
+    const evicted = fetchMock.mock.calls
+      .filter((c) => String(c[0]).endsWith('/api/generate'))
+      .map((c) => JSON.parse(c[1].body).model);
+    expect(evicted.sort()).toEqual(['llama3.1:8b', 'qwen3.5:4b']);
+  });
+
+  it('returns the upstream error when an explicit model eviction fails', async () => {
     fetchMock.mockRejectedValue(
       Object.assign(new TypeError('fetch failed'), {
         cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
       }),
     );
-    const res = await request(makeApp()).post('/api/ollama/unload');
+    const res = await request(makeApp()).post('/api/ollama/unload').send({ model: 'qwen3.5:4b' });
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
   });

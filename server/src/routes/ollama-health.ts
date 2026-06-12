@@ -247,18 +247,25 @@ ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
 /* POST /api/ollama/unload — evict the configured analyzer model from VRAM.
    Used by both the Analysing-screen Stop button and the Generate-screen
    auto-evict flow (loading TTS calls this first to free GPU memory). */
-ollamaHealthRouter.post('/unload', async (_req: Request, res: Response) => {
+ollamaHealthRouter.post('/unload', async (req: Request, res: Response) => {
   const url = getResolvedOllamaUrl();
-  const model = getResolvedOllamaModel();
-  const result = await callOllamaGenerate(
-    url,
-    { model, prompt: '', keep_alive: 0, stream: false },
-    PROBE_TIMEOUT_MS,
-  );
-  if (!result.ok) {
-    return res.status(result.status).json({ status: 'error', error: result.error });
+  const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  /* Explicit model → evict just that one. No model → evict every resident
+     model (so the TTS auto-evict path frees ALL analyzer VRAM, not just the
+     configured default — a manually-warmed non-default model would otherwise
+     stay co-resident with the voice engine and OOM the GPU). */
+  const targets = requested ? [requested] : (await probeOllamaHealth()).resident ?? [];
+  for (const model of targets) {
+    const result = await callOllamaGenerate(
+      url,
+      { model, prompt: '', keep_alive: 0, stream: false },
+      PROBE_TIMEOUT_MS,
+    );
+    if (!result.ok) {
+      return res.status(result.status).json({ status: 'error', error: result.error });
+    }
   }
-  return res.json({ status: 'unloaded' });
+  return res.json({ status: 'unloaded', unloaded: targets });
 });
 
 /* ============================================================
