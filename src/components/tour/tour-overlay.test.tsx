@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { stepsForScreen, TOUR_STEPS } from '../../lib/tour-steps';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Provider } from 'react-redux';
@@ -49,6 +49,25 @@ describe('TourOverlay', () => {
   it('shows Done on the last step', () => {
     render(<Provider store={mkStore(TOUR_STEPS.length - 1)}><TourOverlay /></Provider>);
     expect(screen.getByRole('button', { name: /done/i })).toBeInTheDocument();
+  });
+
+  it('scrolls the step anchor into view so its highlight ring is on-screen', () => {
+    const el = document.createElement('div');
+    el.setAttribute('data-tour-id', 'book-card'); // step index 1 = s2-card
+    const scrollIntoView = vi.fn();
+    el.scrollIntoView = scrollIntoView;
+    document.body.appendChild(el);
+    render(<Provider store={mkStore(1)}><TourOverlay /></Provider>);
+    expect(scrollIntoView).toHaveBeenCalled();
+    el.remove();
+  });
+
+  it('marks the active progress dot with a higher-contrast (peach + ring) style', () => {
+    render(<Provider store={mkStore(0)}><TourOverlay /></Provider>);
+    const dots = screen.getByTestId('tour-bubble').querySelectorAll('span.rounded-full');
+    expect(dots[0].className).toContain('bg-peach');
+    expect(dots[0].className).toContain('ring');
+    expect(dots[1].className).not.toContain('bg-peach');
   });
 
   it('screen-mode shows slice-scoped dots and Done on the slice last step', () => {
