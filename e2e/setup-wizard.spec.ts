@@ -59,6 +59,30 @@ test('wizard reaches the last step and shows Finish setup', async ({ page }) => 
   await expect(page.getByRole('button', { name: /finish setup/i })).toBeVisible();
 });
 
+test('Tier-1 smoke test runs and renders audio (mock)', async ({ page }) => {
+  await page.goto('/#/?setup=notready');
+  await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
+
+  // Advance through steps 1 → 2 → 3 → 4 → 5 (Finish) via Next ×4.
+  // On step 5 the wizard's Next is gone; StepFinish owns "Finish setup".
+  const next = page.getByRole('button', { name: /^next$/i });
+  for (let i = 0; i < 4; i++) {
+    await next.click();
+  }
+  await expect(page.getByText(/step 5 of 5/i)).toBeVisible();
+
+  // On the Finish step: run the smoke test.
+  const smoke = page.getByTestId('smoke-test-placeholder');
+  await expect(smoke).toBeVisible();
+  await smoke.click();
+
+  // Mock api.runSmokeTest returns stub-a.mp3 → audio element appears.
+  await expect(page.getByTestId('smoke-audio')).toBeVisible();
+
+  // Finish setup button is also present.
+  await expect(page.getByRole('button', { name: /finish setup/i })).toBeVisible();
+});
+
 test('boot gate stays out of the way when ready', async ({ page }) => {
   await page.goto('/#/');
   await expect(page).not.toHaveURL(/#\/setup/);

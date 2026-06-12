@@ -411,6 +411,7 @@ function ModelManagerRoute() {
    re-fetch, guided/checklist mode, and onFinish navigation. */
 function SetupRoute() {
   useHydrateStage({ kind: 'setup' }, []);
+  const dispatch = useAppDispatch();
   const navigate = useNavigate();
   const [readiness, setReadiness] = useState<Awaited<ReturnType<typeof api.getSetupReadiness>> | null>(null);
 
@@ -437,7 +438,17 @@ function SetupRoute() {
     navigate('/');
   };
 
-  return <SetupView readiness={readiness} mode={mode} onRefetch={refetch} onFinish={onFinish} />;
+  const onTryDemoBook = async () => {
+    try {
+      const result = await api.loadSample('the-coalfall-commission');
+      const refreshed = await api.getLibrary().catch(() => null);
+      if (refreshed) dispatch(libraryActions.hydrate(refreshed));
+      const book = refreshed?.authors.flatMap((a) => a.series.flatMap((s) => s.books)).find((b) => b.bookId === result.bookId);
+      if (book) dispatch(uiActions.openBook({ id: book.bookId, status: book.status, manuscriptId: book.manuscriptId }));
+    } catch { /* non-fatal */ }
+  };
+
+  return <SetupView readiness={readiness} mode={mode} onRefetch={refetch} onFinish={onFinish} onTryDemoBook={onTryDemoBook} />;
 }
 
 /* Wave 3 — /about brand page, reached from the Admin view. */

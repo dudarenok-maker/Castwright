@@ -38,6 +38,7 @@ interface Props {
   mode: 'guided' | 'checklist';
   onRefetch: () => void;
   onFinish: () => void;
+  onTryDemoBook?: () => void;
 }
 
 /* Render a single step by id, passing ONLY the props its type declares. */
@@ -46,6 +47,7 @@ function renderStep(
   readiness: SetupReadiness,
   onRefetch: () => void,
   onFinish: () => void,
+  onTryDemoBook?: () => void,
 ) {
   switch (id) {
     case 'environment':
@@ -57,11 +59,11 @@ function renderStep(
     case 'defaults':
       return <StepDefaults readiness={readiness} />;
     case 'finish':
-      return <StepFinish readiness={readiness} onFinish={onFinish} />;
+      return <StepFinish readiness={readiness} onFinish={onFinish} onTryDemoBook={onTryDemoBook} />;
   }
 }
 
-export function SetupWizard({ readiness, mode, onRefetch, onFinish }: Props) {
+export function SetupWizard({ readiness, mode, onRefetch, onFinish, onTryDemoBook }: Props) {
   const [stepIndex, setStepIndex] = useState(0);
 
   return (
@@ -80,9 +82,10 @@ export function SetupWizard({ readiness, mode, onRefetch, onFinish }: Props) {
           onStepChange={setStepIndex}
           onRefetch={onRefetch}
           onFinish={onFinish}
+          onTryDemoBook={onTryDemoBook}
         />
       ) : (
-        <ChecklistWizard readiness={readiness} onRefetch={onRefetch} onFinish={onFinish} />
+        <ChecklistWizard readiness={readiness} onRefetch={onRefetch} onFinish={onFinish} onTryDemoBook={onTryDemoBook} />
       )}
     </div>
   );
@@ -96,12 +99,14 @@ function GuidedWizard({
   onStepChange,
   onRefetch,
   onFinish,
+  onTryDemoBook,
 }: {
   readiness: SetupReadiness;
   stepIndex: number;
   onStepChange: (next: number) => void;
   onRefetch: () => void;
   onFinish: () => void;
+  onTryDemoBook?: () => void;
 }) {
   const step = STEPS[stepIndex];
   const isFirst = stepIndex === 0;
@@ -128,7 +133,7 @@ function GuidedWizard({
       </div>
 
       <div className="rounded-2xl border border-ink/10 bg-white p-5 sm:p-6 shadow-card">
-        {renderStep(step.id, readiness, onRefetch, onFinish)}
+        {renderStep(step.id, readiness, onRefetch, onFinish, onTryDemoBook)}
       </div>
 
       <div className="flex items-center justify-between">
@@ -163,10 +168,12 @@ function ChecklistWizard({
   readiness,
   onRefetch,
   onFinish,
+  onTryDemoBook,
 }: {
   readiness: SetupReadiness;
   onRefetch: () => void;
   onFinish: () => void;
+  onTryDemoBook?: () => void;
 }) {
   return (
     <div className="space-y-6">
@@ -175,7 +182,7 @@ function ChecklistWizard({
           key={s.id}
           className="rounded-2xl border border-ink/10 bg-white p-5 sm:p-6 shadow-card"
         >
-          {renderStep(s.id, readiness, onRefetch, onFinish)}
+          {renderStep(s.id, readiness, onRefetch, onFinish, onTryDemoBook)}
         </section>
       ))}
     </div>
