@@ -3672,6 +3672,18 @@ export interface components {
             /** @description Persistent analysis state for the analysing view's per-chapter Retry buttons. */
             analysis?: {
                 failedChapterIds?: number[];
+                /**
+                 * @description fs-19 (analysis half) — per-chapter classified failure, keyed by
+                 *     chapterId as a string. Lets the analysing view show the real
+                 *     message + remediation after a reload instead of a generic line.
+                 */
+                failedChapterErrors?: {
+                    [key: string]: {
+                        code: components["schemas"]["FailureCode"];
+                        message: string;
+                        remediation: string;
+                    };
+                };
             };
         };
     };

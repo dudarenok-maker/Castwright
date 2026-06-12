@@ -82,6 +82,12 @@ export interface AnalysisCache {
       genuinely had no cast" and surface a per-chapter retry affordance
       that survives reload. Subset re-runs remove the id on success. */
   failedChapterIds?: number[];
+  /** fs-19 (analysis half) — per-chapter structured failure record, keyed by
+      chapterId-as-string (JSON object keys). Additive sibling of
+      failedChapterIds: ids stay the durable retry list; this carries the
+      classified code + copy so the analysing view shows a real message +
+      remediation after reload instead of the generic fallback. */
+  failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
   updatedAt?: string;
 }
 
@@ -106,6 +112,7 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
     castDurations: cache.castDurations ?? undefined,
     stage2Durations: cache.stage2Durations ?? undefined,
     failedChapterIds: cache.failedChapterIds ?? undefined,
+    failedChapterErrors: cache.failedChapterErrors ?? undefined,
     updatedAt: cache.updatedAt,
   };
 }

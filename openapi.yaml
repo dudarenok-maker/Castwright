@@ -4911,3 +4911,16 @@ components:
             failedChapterIds:
               type: array
               items: { type: integer }
+            failedChapterErrors:
+              type: object
+              description: |
+                fs-19 (analysis half) — per-chapter classified failure, keyed by
+                chapterId as a string. Lets the analysing view show the real
+                message + remediation after a reload instead of a generic line.
+              additionalProperties:
+                type: object
+                required: [code, message, remediation]
+                properties:
+                  code: { $ref: '#/components/schemas/FailureCode' }
+                  message: { type: string }
+                  remediation: { type: string }

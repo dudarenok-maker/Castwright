@@ -95,7 +95,7 @@ import {
   type DroppedQuotesBatch,
 } from '../store/dropped-quotes.js';
 import { configValue } from '../config/resolver.js';
-import { classifyAnalysisFailure, tryParseApiError } from './failure-taxonomy.js';
+import { classifyAnalysisFailure, tryParseApiError, FAILURE_REMEDIATIONS } from './failure-taxonomy.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -779,14 +779,42 @@ function clampEst(ms: number): number {
    for the same id is a no-op and returns false. Exported for unit
    testing. */
 export function clearFailedChapterId(
-  cache: { failedChapterIds?: number[] },
+  cache: {
+    failedChapterIds?: number[];
+    failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
+  },
   chapterId: number,
 ): boolean {
   const wasFailed = cache.failedChapterIds?.includes(chapterId) === true;
   if (wasFailed) {
     cache.failedChapterIds = cache.failedChapterIds!.filter((id) => id !== chapterId);
+    if (cache.failedChapterErrors) delete cache.failedChapterErrors[String(chapterId)];
   }
   return wasFailed;
+}
+
+/* fs-19 (analysis half) — promote a classified per-chapter failure to durable
+   cache state: the id keeps driving the Retry list; the record carries the
+   structured code/message/remediation for the post-reload display. */
+export function recordFailedChapter(
+  cache: {
+    failedChapterIds?: number[];
+    failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
+  },
+  chapterId: number,
+  classified: { code: string; userMessage: string; remediation: string },
+): void {
+  const failedSet = new Set(cache.failedChapterIds ?? []);
+  failedSet.add(chapterId);
+  cache.failedChapterIds = Array.from(failedSet);
+  cache.failedChapterErrors = {
+    ...cache.failedChapterErrors,
+    [String(chapterId)]: {
+      code: classified.code,
+      message: classified.userMessage,
+      remediation: classified.remediation,
+    },
+  };
 }
 
 /* Phase 0a coverage check — every non-excluded chapter must have a
@@ -1353,7 +1381,7 @@ export interface AnalysisJobReplayState {
   /** Active failed-chapter records, keyed by chapterId. chapter-failed
       adds entries; chapter-resolved removes them. Replayed so a
       reconnecting client sees the right set of Retry rows. */
-  failedByChapterId: Map<number, { kind: 'chapter-failed'; chapterId: number; message: string }>;
+  failedByChapterId: Map<number, { kind: 'chapter-failed'; chapterId: number; message: string; code?: string; remediation?: string }>;
   /** One-shot series-cast prior event emitted at Phase 0 entry. Cached
       here so a subscriber that attaches AFTER Phase 0 entry receives
       the carry-over surface in its catch-up replay (otherwise the
@@ -1565,12 +1593,14 @@ function trackForReplay(job: AnalysisJob, payload: unknown): void {
       job.replay.lastCastUpdate = ev as AnalysisJobReplayState['lastCastUpdate'];
       break;
     case 'chapter-failed': {
-      const e = ev as { chapterId?: number; message?: string };
+      const e = ev as { chapterId?: number; message?: string; code?: string; remediation?: string };
       if (typeof e.chapterId === 'number' && typeof e.message === 'string') {
         job.replay.failedByChapterId.set(e.chapterId, {
           kind: 'chapter-failed',
           chapterId: e.chapterId,
           message: e.message,
+          code: e.code,
+          remediation: e.remediation,
         });
       }
       break;
@@ -2550,16 +2580,16 @@ export async function runMainAnalyzerJob(
              skips it and the cache key is taken. */
           chapterCast[ch.id] = [];
           cache.chapterCast = chapterCast;
-          /* Promote the failure to durable cache state so the analysing
-             view can surface a per-chapter Retry button after reload.
-             The set is in-memory only; without this, the failed-id list
-             disappears the moment the SSE ends. Dedup via Set so a
-             second-chance retry inside the same run doesn't double up. */
-          const failedSet = new Set(cache.failedChapterIds ?? []);
-          failedSet.add(ch.id);
-          cache.failedChapterIds = Array.from(failedSet);
+          const classified = classifyAnalysisFailure(chErr, analyzerLabel);
+          recordFailedChapter(cache, ch.id, classified);
           await saveAnalysisCache(manuscriptId, cache);
-          send({ kind: 'chapter-failed', chapterId: ch.id, message: (chErr as Error).message });
+          send({
+            kind: 'chapter-failed',
+            chapterId: ch.id,
+            message: classified.userMessage,
+            code: classified.code,
+            remediation: classified.remediation,
+          });
           sendCastLiveTick();
           send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
           return;
@@ -3205,9 +3235,19 @@ export async function runMainAnalyzerJob(
             coverageVerdict.issues[0] ?? 'low coverage'
           }); kept the best take and flagged the chapter for retry.`,
         );
-        const failedSet = new Set(cache.failedChapterIds ?? []);
-        failedSet.add(ch.id);
-        cache.failedChapterIds = Array.from(failedSet);
+        const copy = FAILURE_REMEDIATIONS['attribution-incomplete'];
+        recordFailedChapter(cache, ch.id, {
+          code: 'attribution-incomplete',
+          userMessage: copy.userMessage,
+          remediation: copy.remediation,
+        });
+        send({
+          kind: 'chapter-failed',
+          chapterId: ch.id,
+          message: copy.userMessage,
+          code: 'attribution-incomplete',
+          remediation: copy.remediation,
+        });
       }
       for (const s of stage2Sentences) s.chapterId = ch.id;
       sentencesByChapter.set(ch.id, stage2Sentences);
@@ -4063,12 +4103,17 @@ async function runSubsetAnalyzerJob(
         if (chErr instanceof AnalysisAbortedError) throw chErr;
         chapterCast[ch.id] = [];
         cache.chapterCast = chapterCast;
-        const failedSet = new Set(cache.failedChapterIds ?? []);
-        failedSet.add(ch.id);
-        cache.failedChapterIds = Array.from(failedSet);
+        const classified = classifyAnalysisFailure(chErr, analyzerLabel);
+        recordFailedChapter(cache, ch.id, classified);
         await saveAnalysisCache(manuscriptId, cache);
         log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
-        send({ kind: 'chapter-failed', chapterId: ch.id, message: (chErr as Error).message });
+        send({
+          kind: 'chapter-failed',
+          chapterId: ch.id,
+          message: classified.userMessage,
+          code: classified.code,
+          remediation: classified.remediation,
+        });
         emitCastUpdate();
       }
       send({
