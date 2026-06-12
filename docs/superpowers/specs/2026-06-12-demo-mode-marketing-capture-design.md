@@ -95,7 +95,7 @@ note.
 - **Default display name** — `src/lib/account-defaults.ts` `displayName` + its
   server mirror `server/src/workspace/user-settings.ts` `DEFAULT_USER_SETTINGS`
   — change from the maintainer's real name to a neutral placeholder
-  **"Castwright User"** (what a brand-new real workspace shows before the user
+  **"Castwright"** (what a brand-new real workspace shows before the user
   sets their own name; must not be a specific persona).
 - **The Hollow Tide series is a separate fixture module**, served by the mock
   layer **only under the capture flag** (`VITE_DEMO_CAPTURE=1`). It is *additive*
@@ -227,7 +227,7 @@ core scenes.
 ## v1 Definition of Done
 
 - [ ] Default mock dataset: author name scrubbed to "Marin Vale"; default display
-      name → "Castwright User"; all 12 asserting specs updated and green.
+      name → "Castwright"; all 12 asserting specs updated and green.
 - [ ] Hollow Tide capture-only fixture module (library + per-book posed state +
       cast/reuse + analysing-in-progress fixture), served under `VITE_DEMO_CAPTURE=1`.
 - [ ] Square cover JPEGs generated + placed in git-ignored
@@ -245,7 +245,7 @@ core scenes.
 ## Delivery roadmap
 
 - **Wave A — name scrub.** Default dataset author → Marin Vale; default display
-  name → "Castwright User"; update the 12 asserting specs. *Gate:* `npm run
+  name → "Castwright"; update the 12 asserting specs. *Gate:* `npm run
   verify` green.
 - **Wave B — Hollow Tide fixtures + capture plumbing.** `.env.marketing`,
   `playwright.marketing.config.ts`, the additive fixture module + determinism
