@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-13
 owner: null
 ---
 
 # fs-21 — First-run setup wizard (cross-platform setup owner)
 
-> Status: active — code-complete + CI-green across all five waves; on-box acceptance OWED (see below).
+> Status: stable — shipped 2026-06-13 (five waves + post-ship UX polish, all CI-green). Real-hardware on-box acceptance across Mac/Linux is a separate residual tracked by the backlog item `fs-21` ([#752](https://github.com/dudarenok-maker/Castwright/issues/752)) — see the OWED matrix below.
 > Key files: `server/src/routes/setup-readiness.ts` (readiness + complete + smoke), `server/src/routes/kokoro-install.ts`, `server/src/routes/venv-bootstrap.ts`; `server/src/tts/kokoro-install-bootstrap.ts`, `server/src/tts/venv-bootstrap.ts`; `server/tts-sidecar/scripts/install-kokoro.mjs`, `server/tts-sidecar/scripts/bootstrap-venv.mjs`; `server/src/tts/python-discovery.ts`, `server/src/tts/engine-presence.ts`, `server/src/tts/kokoro-install-detect.ts`, `server/src/diagnostics/venv.ts`; `src/views/setup.tsx`, `src/components/setup/` (setup-wizard + 5 steps), `src/components/kokoro-install.tsx`, `src/components/venv-bootstrap.tsx`, `src/components/ollama-install.tsx`; `src/routes/index.tsx` (SetupRoute + boot gate), `src/components/layout.tsx` (boot-splash gate), `src/lib/api.ts` (`getSetupReadiness` / `completeSetup` / `runSmokeTest`); `setupCompletedAt` user-setting.
 > URL surface: `#/setup`
 > OpenAPI ops: `GET /api/setup/readiness`, `POST /api/setup/complete`, `POST /api/setup/smoke`, `GET /api/kokoro/status`, `POST /api/kokoro/install`, `GET /api/setup/venv`, `POST /api/setup/venv`
@@ -141,3 +141,5 @@ First on-box look surfaced four UX issues; all fixed on this branch (frontend-on
 4. **Finish button misaligned + flat copy.** The `PrimaryButton icon={false}` asymmetric padding off-centred the label; restored the default arrow icon (centres it + reads as a primary CTA) and rewrote the Finish-step copy ("Ready to perform", "Hear a test line", "Play the demo book", "Finish & open my library"). `step-finish.tsx`.
 
 > Known follow-up (not in this branch): the `PrimaryButton icon={false}` asymmetric padding (`pl-5 pr-1.5`) off-centres labels on ~22 buttons app-wide. Fixed only the Finish button here (surgical); a global fix to symmetrise padding when `!icon` is a candidate cleanup (would touch visual baselines).
+
+Shipped via **PR #773** (merge into `main`). With this polish landed and the automated regression net real + green, the plan is marked `stable` and archived. The only remaining fs-21 work is real-hardware on-box acceptance (`#752`, OWED matrix above) — that is hardware verification, not a code gate.
