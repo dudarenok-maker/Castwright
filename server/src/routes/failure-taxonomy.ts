@@ -23,6 +23,10 @@ export type FailureCode =
   | 'recycle-storm'
   | 'sidecar-unreachable'
   | 'analyzer-rate-limit'
+  | 'analyzer-daily-quota'
+  | 'analyzer-truncated'
+  | 'analyzer-unreachable'
+  | 'attribution-incomplete'
   | 'oom'
   | 'disk-full'
   | 'model-not-loaded'
@@ -77,6 +81,35 @@ export interface ClassifiedFailure {
    contains "dege·nerate", whose "rate" substring used to match the quota regex
    and stop the whole run (2026-05-31). Pinning it first keeps that locked. */
 export const FAILURE_SIGNATURES: FailureSignature[] = [
+  /* ---- analysis-only entries (source-gated; invisible to classifyFailure).
+     Name-driven first: typed analyzer errors survive message rewording.
+     analyzer-daily-quota MUST precede the 'both' analyzer-rate-limit entry —
+     a daily-quota 429 would otherwise classify as a plain rate-limit. ---- */
+  {
+    code: 'analyzer-truncated',
+    fatal: false,
+    source: 'analysis',
+    matchName: 'AnalyzerTruncatedError',
+    match: () => false,
+  },
+  {
+    code: 'analyzer-daily-quota',
+    fatal: true,
+    source: 'analysis',
+    matchName: 'DailyQuotaExhaustedError',
+    match: (raw, ctx) =>
+      ctx.status === 429 && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(raw),
+  },
+  {
+    code: 'analyzer-unreachable',
+    fatal: true,
+    source: 'analysis',
+    matchName: 'GeminiStreamIdleError',
+    match: (raw, ctx) =>
+      ctx.status === 503 ||
+      ctx.status === 500 ||
+      /ECONNREFUSED|fetch failed|EAI_AGAIN|socket hang up/i.test(raw),
+  },
   {
     code: 'synth-timeout',
     fatal: false,

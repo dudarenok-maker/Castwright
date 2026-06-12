@@ -229,11 +229,46 @@ describe('source gating (spec A2)', () => {
   });
 });
 
+describe('analysis-side codes (spec A2)', () => {
+  it('classifies AnalyzerTruncatedError by name', () => {
+    const err = Object.assign(new Error('gemini truncated the response'), {
+      name: 'AnalyzerTruncatedError',
+    });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-truncated');
+  });
+  it('classifies DailyQuotaExhaustedError by name, before the rate-limit signature', () => {
+    const err = Object.assign(new Error('daily quota exhausted — resets later'), {
+      name: 'DailyQuotaExhaustedError',
+    });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-daily-quota');
+  });
+  it('classifies an unreachable analyzer (connection refused) as analyzer-unreachable', () => {
+    expect(
+      classifyAnalysisError(new Error('connect ECONNREFUSED 127.0.0.1:11434')).code,
+    ).toBe('analyzer-unreachable');
+  });
+  it('classifies GeminiStreamIdleError (retry-exhausted) as analyzer-unreachable', () => {
+    const err = Object.assign(new Error('stream idle'), { name: 'GeminiStreamIdleError' });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-unreachable');
+  });
+  it('generation path never sees the analysis-only entries', () => {
+    const err = Object.assign(new Error('whatever'), { name: 'AnalyzerTruncatedError' });
+    expect(classifyFailure(err).code).toBe('unknown');
+  });
+  it('attribution-incomplete has copy (synthetic code, no signature)', () => {
+    expect(FAILURE_REMEDIATIONS['attribution-incomplete'].remediation.length).toBeGreaterThan(0);
+  });
+});
+
 describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
   it('has exactly one entry per FailureCode', () => {
     expect(Object.keys(FAILURE_REMEDIATIONS).sort()).toEqual(
       [
+        'analyzer-daily-quota',
         'analyzer-rate-limit',
+        'analyzer-truncated',
+        'analyzer-unreachable',
+        'attribution-incomplete',
         'auth',
         'cuda-poisoned',
         'disk-full',
