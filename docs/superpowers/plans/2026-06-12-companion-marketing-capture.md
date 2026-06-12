@@ -883,10 +883,12 @@ Future<CompanionRuntime> buildDemoRuntime({
   final library = DriftLocalLibrary(LibraryDatabase(NativeDatabase.memory()), fileStore,
       root: root);
 
-  // Seed the store: book metadata, chapters (→ downloaded), resume points,
-  // cover paths. "Not downloaded" books get metadata only; "update available"
-  // books get an OLDER local updatedAt than the manifest.
+  // Seed ONLY downloaded books into Drift. A not-downloaded book lives solely in
+  // the manifest — so online it shows "Not downloaded", and it is correctly
+  // ABSENT from the offline shelf (`loadLocalLibrary` returns every `books` row,
+  // so seeding its metadata would wrongly surface it — and with an empty title).
   for (final b in demoBooks) {
+    if (!b.downloaded) continue;
     await library.upsertBookMeta(
       bookId: b.bookId,
       title: b.title,
@@ -897,23 +899,21 @@ Future<CompanionRuntime> buildDemoRuntime({
     if (coversDir.isNotEmpty) {
       await library.setCoverThumbPath(b.bookId, '$coversDir/${b.bookId}.png');
     }
-    if (b.downloaded) {
-      for (final c in b.chapters) {
-        await library.recordChapterMeta(
-          bookId: b.bookId,
-          uuid: c.uuid,
-          chapterId: c.id,
-          title: c.title,
-          fingerprint: c.fingerprint,
-          urlSuffix: c.urlSuffix,
-          durationSec: c.durationSec,
-        );
-      }
-      // Stamp the synced updatedAt: equal to the manifest = "downloaded";
-      // older = "update available".
-      await library.setBookUpdatedAt(
-          b.bookId, b.updateAvailable ? '2000-01-01T00:00:00Z' : b.updatedAt);
+    for (final c in b.chapters) {
+      await library.recordChapterMeta(
+        bookId: b.bookId,
+        uuid: c.uuid,
+        chapterId: c.id,
+        title: c.title,
+        fingerprint: c.fingerprint,
+        urlSuffix: c.urlSuffix,
+        durationSec: c.durationSec,
+      );
     }
+    // Stamp the synced updatedAt: equal to the manifest = "downloaded";
+    // older = "update available".
+    await library.setBookUpdatedAt(
+        b.bookId, b.updateAvailable ? '2000-01-01T00:00:00Z' : b.updatedAt);
     if (b.resume != null) {
       await library.savePlayback(b.bookId, b.resume!.chapterUuid,
           b.resume!.positionMs, b.resume!.lastPlayedAt);
@@ -1311,10 +1311,12 @@ const sh = (cmd, args, opts = {}) => {
   }
 };
 
-// 1. An emulator must be up.
+// 1. An emulator/device must be up. `adb devices` prints one `<serial>\tdevice`
+//    line per online device (after a header line); match that exactly.
 const devices = spawnSync('adb', ['devices'], { encoding: 'utf8', shell: true }).stdout ?? '';
-if (!/\bemulator-\d+\s+device\b/.test(devices) && !/\bdevice\b/.test(devices.split('\n').slice(1).join('\n'))) {
-  console.error('✖ No running emulator/device. Boot an AVD first (see integration_test/marketing/README.md).');
+const online = devices.split('\n').some((line) => /\tdevice$/.test(line.trimEnd()));
+if (!online) {
+  console.error('✖ No running emulator/device (none shown as "device" by `adb devices`). Boot an AVD first — see integration_test/marketing/README.md.');
   process.exit(1);
 }
 
