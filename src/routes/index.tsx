@@ -407,17 +407,37 @@ function ModelManagerRoute() {
   return <ModelManagerView />;
 }
 
-/* fs-21 — first-run setup wizard. Fetches readiness on mount; Wave 2 fleshes
-   the steps. */
+/* fs-21 — first-run setup wizard. Fetches readiness on mount; Wave 2 adds
+   re-fetch, guided/checklist mode, and onFinish navigation. */
 function SetupRoute() {
   useHydrateStage({ kind: 'setup' }, []);
+  const navigate = useNavigate();
   const [readiness, setReadiness] = useState<Awaited<ReturnType<typeof api.getSetupReadiness>> | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     api.getSetupReadiness().then((r) => { if (!cancelled) setReadiness(r); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
-  return <SetupView readiness={readiness} />;
+
+  const refetch = () => {
+    let cancelled = false;
+    api.getSetupReadiness().then((r) => { if (!cancelled) setReadiness(r); }).catch(() => {});
+    return () => { cancelled = true; };
+  };
+
+  const mode: 'guided' | 'checklist' = readiness?.completedAt ? 'checklist' : 'guided';
+
+  const onFinish = async () => {
+    try {
+      await api.completeSetup();
+    } catch {
+      /* non-fatal */
+    }
+    navigate('/');
+  };
+
+  return <SetupView readiness={readiness} mode={mode} onRefetch={refetch} onFinish={onFinish} />;
 }
 
 /* Wave 3 — /about brand page, reached from the Admin view. */

@@ -1,29 +1,41 @@
-/* fs-21 Wave 0 — SetupView STUB. Renders the readiness summary so the gated
-   #/setup route is real and testable. Wave 2 replaces this body with the
-   five-step guided/checklist wizard; the props contract (readiness) stays. */
-import type { SetupReadiness } from '../lib/api';
+/* fs-21 — SetupView. Thin wrapper that renders the five-step first-run wizard
+   (SetupWizard) once readiness has loaded. The route owner (SetupRoute, C6)
+   supplies mode (guided for a fresh setup, checklist for re-entry), onRefetch
+   (re-probe readiness), and onFinish (completeSetup + navigate home).
 
-export function SetupView({ readiness }: { readiness: SetupReadiness | null }) {
+   mode/onRefetch/onFinish carry safe defaults so the Wave 0 callers that pass
+   only `readiness` keep compiling. */
+import type { SetupReadiness } from '../lib/api';
+import { SetupWizard } from '../components/setup/setup-wizard';
+
+export function SetupView({
+  readiness,
+  mode = 'guided',
+  onRefetch = () => {},
+  onFinish = () => {},
+}: {
+  readiness: SetupReadiness | null;
+  mode?: 'guided' | 'checklist';
+  onRefetch?: () => void;
+  onFinish?: () => void;
+}) {
+  if (readiness == null) {
+    return (
+      <main className="mx-auto max-w-2xl p-6">
+        <h1 className="text-2xl font-semibold text-ink">Set up Castwright</h1>
+        <p className="mt-2 text-ink/60 text-sm" data-testid="setup-checking">
+          Checking…
+        </p>
+      </main>
+    );
+  }
+
   return (
-    <main className="mx-auto max-w-2xl p-6">
-      <h1 className="text-2xl font-semibold text-ink">Set up Castwright</h1>
-      <p className="mt-2 text-ink/60 text-sm">
-        We're checking that everything needed to produce an audiobook is in place.
-      </p>
-      <ul className="mt-6 space-y-2">
-        {readiness &&
-          Object.entries(readiness.blockers).map(([id, status]) => (
-            <li
-              key={id}
-              className="flex items-center justify-between rounded-2xl border border-ink/10 bg-canvas px-4 py-3"
-            >
-              <span className="text-sm font-medium text-ink uppercase">{id}</span>
-              <span className={status === 'pass' ? 'text-emerald-600' : 'text-amber-600'}>
-                {status === 'pass' ? 'Ready' : 'Needs attention'}
-              </span>
-            </li>
-          ))}
-      </ul>
-    </main>
+    <SetupWizard
+      readiness={readiness}
+      mode={mode}
+      onRefetch={onRefetch}
+      onFinish={onFinish}
+    />
   );
 }

@@ -14,3 +14,14 @@ describe('GET /api/setup/readiness route (integration — live probe)', () => {
     expect(res.body).toHaveProperty('info.gpu');
   });
 });
+
+describe('POST /api/setup/complete route', () => {
+  it('POST /complete stamps setupCompletedAt and returns it', async () => {
+    const app = express();
+    app.use('/api/setup', setupReadinessRouter);
+    const res = await request(app).post('/api/setup/complete');
+    expect(res.status).toBe(200);
+    expect(typeof res.body.completedAt).toBe('string');
+    expect(new Date(res.body.completedAt).toISOString()).toBe(res.body.completedAt);
+  });
+});
