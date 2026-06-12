@@ -831,4 +831,7 @@ export type Stage =
   | { kind: 'advanced' }
   /* fe-37 — in-app multi-version release-notes history, reached from /about and
      Account → Application updates. */
-  | { kind: 'release-notes' };
+  | { kind: 'release-notes' }
+  /* fe-29 — offline Help / troubleshooting view. focusCode is an untrusted
+     string round-tripped from the URL hash; the view validates it. */
+  | { kind: 'help'; focusCode?: string };

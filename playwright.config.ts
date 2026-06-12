@@ -34,7 +34,13 @@ export default defineConfig({
      contention isn't a factor there; locally we leave parallelism on so
      the suite stays under 2 min. */
   retries: 2,
-  workers: process.env.CI ? 1 : undefined,
+  /* #698 — local worker cap. Unbounded (Playwright default ≈ cpus/2 ⇒ 8 on a
+     16-core box) makes the first specs to run cold-load the heavy SPA all at
+     once: N Chromium instances saturate CPU and each page's `load` stalls past
+     budget. The `warmup` setup project warms the server transform cache; a
+     moderate cap bounds the client-side cold-load herd. Together they keep the
+     parallel battery green. CI stays at 1 (no herd there). */
+  workers: process.env.CI ? 1 : 4,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
   /* Per-platform AND per-project visual-regression baselines. {platform}
      resolves to 'win32' | 'linux' | 'darwin' under Node's process.platform.
@@ -45,6 +51,9 @@ export default defineConfig({
      against the desktop chromium baseline and always fail. Documented in
      docs/features/archive/37-e2e-playwright.md under "Visual baselines". */
   snapshotPathTemplate: '{snapshotDir}/{platform}/{testFilePath}/{projectName}/{arg}{ext}',
+  /* #698 — sweep orphaned ms-playwright browser processes after each run; on
+     Windows they leak (~52/run) and degrade later runs. See e2e/global-teardown.ts. */
+  globalTeardown: './e2e/global-teardown.ts',
   expect: {
     /* Default per-assertion budget. Playwright's stock default is 5 s;
        under sustained local contention (80+ specs sharing one Vite dev
@@ -84,7 +93,21 @@ export default defineConfig({
 
      Filter locally with `npm run test:e2e -- --project=chromium`. */
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    {
+      /* #698 — transform-cache warm-up. Runs once before `chromium` (see its
+         `dependencies`) so the parallel battery doesn't cold-start a thundering
+         herd against the single-threaded Vite dev server. See e2e/warmup.setup.ts. */
+      name: 'warmup',
+      testMatch: /warmup\.setup\.ts$/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+      /* Don't run the warm-up file as a normal spec — it runs as a dependency. */
+      testIgnore: /warmup\.setup\.ts$/,
+      dependencies: ['warmup'],
+    },
     {
       /* Phone viewport. We pin the engine to Chromium (already installed
          via `npx playwright install chromium`) and pull only the viewport +

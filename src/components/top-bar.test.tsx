@@ -116,6 +116,14 @@ describe('TopBar — global nav', () => {
   });
 });
 
+describe('TopBar — persistent Help affordance (fe-29)', () => {
+  it('renders the persistent Help affordance linking to #/help (fe-29)', () => {
+    renderWithStore(<TopBar {...makeProps()} />);
+    const help = screen.getByRole('link', { name: /^help$/i });
+    expect(help).toHaveAttribute('href', '#/help');
+  });
+});
+
 describe('TopBar — avatar entry to account', () => {
   it('renders the avatar as a button labelled with the display name', () => {
     renderWithStore(<TopBar {...makeProps({ userDisplayName: 'Captain Picard' })} />);
