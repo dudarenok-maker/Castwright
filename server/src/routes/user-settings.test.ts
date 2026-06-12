@@ -71,7 +71,7 @@ describe('user-settings router', () => {
   it('GET returns built-in defaults when no file exists', async () => {
     const res = await request(app).get('/api/user/settings');
     expect(res.status).toBe(200);
-    expect(res.body.displayName).toBe('Mike Dudarenok');
+    expect(res.body.displayName).toBe('Castwright');
     /* Default flipped to Gemini (was qwen3.5:4b). The analysis-model
        and analysis-engine defaults must travel together so a fresh
        install routes the first analysis through the Gemini API rather
