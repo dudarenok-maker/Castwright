@@ -152,7 +152,7 @@ Source: `"Look! I'm all better!" Marlow promised, waving his arms.`
 
 Two entries — the exclamation makes the spoken split `excited`:
 
-- `"Look! I'm all better!"` → `Marlow`, `emotion: "excited"`
+- `"Look! I'm all better!"` → `marlow`, `emotion: "excited"`
 - `Marlow promised, waving his arms.` → `narrator`
 
 Source: `"Hard to starboard," he said, "before the rocks."`

@@ -71,7 +71,7 @@ one **verbatim utterance** that is theirs — either:
 2. **First-person prose by an identifiable author** — a journal entry,
    medical log, registry filing, letter, diary, transcript, or bio
    page **whose author is named or strongly implied** (header
-   `FILED BY: Oduvan`, signature `—Marlow`, chapter title `Wren's
+   `FILED BY: ODUVAN`, signature `—Marlow`, chapter title `Wren's
 Registry File`, the surrounding bio block, etc.). The author of
    such text is a character whose `id` is their name, NOT `narrator`.
 
@@ -144,7 +144,7 @@ Worked examples:
 - Chapter narration includes "He's now under the protection of Sela,
   who volunteered for the position." and later "Sela and Garrow were
   also injured during this incident." → emit
-  `{ id: "Sela", name: "Sela", role: "Bodyguard",
+  `{ id: "sela", name: "Sela", role: "Bodyguard",
 detectionSource: "narrator-mention", evidence: [] }`. The narrator
   still covers the narration text; this entry exists so the cast has a
   voice slot for Sela that the user can fill later.
@@ -185,10 +185,10 @@ When a chapter is one of these formats:
 - The **author** of the document is the character whose voice should
   speak the text. Identify them from the strongest available signal:
   chapter title (`Wren's Memory Log — Day 4`), document header
-  (`FILED BY: Oduvan`, `Author: Marlow Halden`), closing signature
+  (`FILED BY: ODUVAN`, `Author: Marlow Halden`), closing signature
   (`—Marlow`), surrounding bio block, or running-roster context (if
-  the roster has `Marlow` and this chapter is unmistakably Marlow's
-  diary, use `Marlow`).
+  the roster has `marlow` and this chapter is unmistakably Marlow's
+  diary, use `marlow`).
 - The evidence quotes for that character should be excerpts of the
   document's prose — they don't need to be dialogue. Pick a long,
   representative sentence and a short, characterising one.
@@ -203,18 +203,18 @@ When a chapter is one of these formats:
 
 Worked examples:
 
-- **Chapter "Oduvan's Medical Log"** opens with `FILED BY: Oduvan ·
-PATIENT: Wren Sparrow` and the body is `I'd just settled into bed
+- **Chapter "Oduvan's Medical Log"** opens with `FILED BY: ODUVAN ·
+PATIENT: WREN SPARROW` and the body is `I'd just settled into bed
 when Wren hailed me. I figured she wouldn't want to know that her
 hands were covered in yeti pee.` → roster entry
-  `{ id: "Oduvan", name: "Oduvan", role: "Healer / journal author",
+  `{ id: "oduvan", name: "Oduvan", role: "Healer / journal author",
 evidence: [{ quote: "I'd just settled into bed when Wren hailed
 me." }, { quote: "I figured she wouldn't want to know that her hands
 were covered in yeti pee." }] }`. **Not** narrator.
 - **Chapter "Marlow's Diary — Day Three"** signs off with `—Marlow`. The
-  body is `Foster's still mad at me. I've been working on the perfect
+  body is `Sparrow's still mad at me. I've been working on the perfect
 apology. It hasn't been going well.` → roster entry
-  `{ id: "Marlow", name: "Marlow Halden", evidence: [...] }`. **Not**
+  `{ id: "marlow", name: "Marlow Halden", evidence: [...] }`. **Not**
   narrator.
 
 ### Reusing known series characters (when the prompt carries a prior)
@@ -236,7 +236,7 @@ still get fresh kebab-case ids.
 - If a character in this chapter is **already in the running roster**,
   reuse the existing `id` **verbatim**. The server matches characters
   across chapters by `id`; a typo or stylistic variation
-  (`Wren-foster` vs `Wren`) creates a duplicate entry.
+  (`wren-sparrow` vs `wren`) creates a duplicate entry.
 - For recurring characters you may still emit fresh `evidence`, refined
   `description`, updated `tone`, etc. — the server merges fields
   intelligently. But the `id` MUST match the roster's entry.
@@ -292,7 +292,7 @@ verbatim. Common mistakes that fail validation:
 - Missing required field (`id`, `name`, `role`, `color`).
 - Trailing commas or comments in the JSON (use strict JSON).
 - Character with an id that drifted from the running roster (e.g.
-  `Wren` in earlier chapters becoming `Wren-foster` here).
+  `wren` in earlier chapters becoming `wren-sparrow` here).
 
 ## Reference
 
