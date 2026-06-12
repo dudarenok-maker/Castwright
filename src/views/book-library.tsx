@@ -22,7 +22,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, type WorkspaceInfo } from '../lib/api';
 import { parseRuntime } from '../lib/time';
-import { useAppSelector } from '../store';
+import { useAppSelector, useAppDispatch } from '../store';
+import { startLinearTour } from '../store/tour-slice';
 import { useDebouncedValue } from '../lib/use-debounced-value';
 import {
   LibraryChrome,
@@ -112,6 +113,8 @@ export function BookLibraryView({
   onTrySample,
   onImportPortable,
 }: Props) {
+  const dispatch = useAppDispatch();
+  const tourCompleted = useAppSelector((s) => s.tour.completedAt != null);
   const [filter, setFilter] = useState<Filter>('all');
   /* Plan 73 — raw input fires every keystroke, debouncedSearch lags by
      ~150ms so the filter chain doesn't re-run mid-word. activeTags is
@@ -305,6 +308,8 @@ export function BookLibraryView({
           onCoverChanged={onCoverChanged}
           onStartNew={onStartNew}
           onTrySample={onTrySample}
+          onStartTour={() => dispatch(startLinearTour())}
+          tourCompleted={tourCompleted}
         />
       ) : (
         /* Plan 81 (Wave 3, books) — wrap the dense table in an
