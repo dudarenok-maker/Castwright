@@ -205,4 +205,16 @@ describe('stageEqual', () => {
     ).toBe(true);
     expect(stageEqual({ kind: 'books' }, { kind: 'books' })).toBe(true);
   });
+
+  it('stageEqual distinguishes help focusCode', () => {
+    expect(stageEqual({ kind: 'help' }, { kind: 'help' })).toBe(true);
+    expect(stageEqual({ kind: 'help', focusCode: 'a' }, { kind: 'help', focusCode: 'b' })).toBe(false);
+  });
+});
+
+describe('stageToHash — fe-29 help route', () => {
+  it('serialises the help stage', () => {
+    expect(stageToHash({ kind: 'help' })).toBe('#/help');
+    expect(stageToHash({ kind: 'help', focusCode: 'vram-spill' })).toBe('#/help?code=vram-spill');
+  });
 });
