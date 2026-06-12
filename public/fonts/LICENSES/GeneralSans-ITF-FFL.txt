@@ -1,0 +1,19 @@
+General Sans
+Copyright © Indian Type Foundry (ITF).
+
+General Sans is distributed by Fontshare (https://www.fontshare.com) under the
+ITF Free Font License (ITF FFL).
+
+Summary of the grant (the canonical license text governs):
+  - Free for personal AND commercial use.
+  - May be embedded in websites and applications, including self-hosting the
+    web font files (woff2/woff) as done here in public/fonts/.
+  - May not be sold on its own, and the font software may not be redistributed
+    as a standalone font product.
+  - The font is provided "as is", without warranty of any kind.
+
+The full, authoritative ITF Free Font License is available at:
+  https://www.fontshare.com/licenses/itf-ffl
+
+The web font files in this directory were obtained from the official Fontshare
+distribution via scripts/fetch-self-hosted-fonts.mjs.
