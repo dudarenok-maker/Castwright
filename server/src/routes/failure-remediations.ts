@@ -65,6 +65,40 @@ export const FAILURE_REMEDIATIONS = {
       'Wait for the quota window to reset (Gemini free-tier resets daily), or switch to a local ' +
       'engine (Kokoro / Qwen) in the engine picker, then resume.',
   },
+  'analyzer-unreachable': {
+    userMessage:
+      'The analyzer could not be reached or stopped responding — the local Ollama daemon is down, ' +
+      'or the analyzer service returned a server error.',
+    remediation:
+      'Check that Ollama is running (ollama serve), or switch the analyzer in server/.env ' +
+      '(ANALYZER=gemini with a GEMINI_API_KEY). Then retry the chapter or resume the run.',
+    helpDetail:
+      'When GEMINI_API_KEY is set, an unreachable Ollama silently retries against Gemini, so this ' +
+      'error usually means no fallback was configured — or both engines failed.',
+  },
+  'analyzer-truncated': {
+    userMessage:
+      'The analyzer model cut its reply short — a chapter section was too large for one ' +
+      'attribution call, even after automatic re-splitting.',
+    remediation:
+      'Retry the chapter. If it recurs, lower STAGE2_CHUNK_CHAR_BUDGET in server/.env (or Advanced ' +
+      'Settings) or switch to a stronger analyzer model.',
+  },
+  'analyzer-daily-quota': {
+    userMessage: "The analyzer's free-tier daily quota is exhausted.",
+    remediation:
+      'Switch to a different analyzer model (GEMINI_MODEL in server/.env or Advanced Settings — ' +
+      'each model has its own daily bucket), use the local Ollama analyzer, or wait for the quota ' +
+      'reset shown in the error.',
+  },
+  'attribution-incomplete': {
+    userMessage:
+      "Some lines in this chapter may be unattributed — the analyzer's answer did not cover every " +
+      'sentence, so the best take was kept and the chapter was flagged.',
+    remediation:
+      'Click Retry on this chapter to re-run attribution. Already-attributed lines are kept; a ' +
+      'retry usually fills the gaps.',
+  },
   auth: {
     userMessage: 'Gemini TTS authentication failed — check GEMINI_API_KEY.',
     remediation:
@@ -97,6 +131,7 @@ export const FAILURE_REMEDIATIONS = {
       'green), then retry the chapter.',
   },
   unknown: {
+    /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */
     userMessage:
       'Something failed in a way the app does not recognise — the raw error message is shown in place of this line.',
     remediation:
