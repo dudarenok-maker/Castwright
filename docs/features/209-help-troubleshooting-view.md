@@ -51,14 +51,15 @@ owner: null
   code anchor, unknown-code query param is a no-op, live + rebound keybindings surface.
 - Vitest unit (`src/data/help-failures.test.ts`) — copy completeness: every `FailureCode`
   has a non-empty title entry in `help-failures.ts`.
-- Vitest unit (`src/lib/router.test.ts`) — round-trip `stageToHash`/`parseHash` for the
-  new `help` stage; `helpHrefForFailureCode` returns correct anchor for known codes,
-  `null` for `unknown`.
+- Vitest unit (`src/lib/router.test.ts`) — `stageToHash` serialisation + `stageEqual`
+  focusCode discrimination for the new `help` stage (URL parsing is react-router's
+  `HelpRoute`, covered via the view/e2e tiers); `helpHrefForFailureCode` returns the
+  correct anchor for known codes, `null` for `unknown`.
 - Vitest unit (top-bar affordance) — "?" button renders and links to `#/help`.
 - Vitest unit (generation/analysing More-help links) — link href matches
   `helpHrefForFailureCode(code)` for a known code; link absent when `isHelpLinkable` is false.
 - Playwright e2e (`e2e/help.spec.ts`) — top-bar "?" entry opens `#/help`; deep-link
-  `#/help?code=sidecar-unreachable` scrolls the matching section into view.
+  `#/help?code=vram-spill` lands on the matching entry (`data-focused` + in viewport).
 - Playwright responsive coverage case (`e2e/responsive/coverage.spec.ts`) — Help view
   appended as a case.
 
