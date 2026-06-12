@@ -31,6 +31,9 @@ owner: null
 2. `describeSynthesisError` keeps returning `{ errorReason, fatal }`; `errorReason === classifyFailure(...).userMessage`.
 3. Unknown errors never throw and never mark `fatal:true`.
 4. Engine-gating: a local-engine failure is never blamed on Gemini.
+5. Analysis-side signatures are `source: 'analysis'` — the generation scan never
+   sees them and its match ORDER is byte-identical to the pre-split table.
+6. `failure-remediations.ts` imports nothing (the frontend bundles it directly).
 
 ## Test plan
 
@@ -39,4 +42,10 @@ owner: null
 
 ## Ship notes
 
-Shipped on `feat/server-generation-quality` (integration round 2026-06-03), commit `affa489`. Closes #469. Automated server + frontend coverage green via `npm run verify`. **Owed:** live acceptance across ≥2 distinct real failure modes. Analysis-path classification was deferred (analysis failures use a separate `analysis.failedChapterIds` mechanism with no `generationError` writer) — see PR notes.
+Shipped on `feat/server-generation-quality` (integration round 2026-06-03), commit `affa489`. Closes #469. Automated server + frontend coverage green via `npm run verify`. **Owed:** live acceptance across ≥2 distinct real failure modes. Analysis-path classification shipped in the fe-29/fs-19 completion round
+(spec `docs/superpowers/specs/2026-06-12-help-troubleshooting-fs19-completion-design.md`):
+the run-level describeError() unified into `classifyAnalysisFailure` (old codes
+truncated/daily_quota/rate_limit/unavailable/internal/invalid_key/bad_request →
+FailureCode), per-chapter cast failures + the stage-2 coverage-suspect path now
+persist `failedChapterErrors` records, and the analysing view renders
+message + remediation live and after reload.
