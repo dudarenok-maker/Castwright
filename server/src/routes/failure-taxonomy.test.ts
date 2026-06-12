@@ -7,7 +7,7 @@
    so a refactor can't silently regress them. */
 
 import { describe, it, expect } from 'vitest';
-import { classifyFailure } from './failure-taxonomy.js';
+import { classifyFailure, classifyAnalysisError } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
@@ -208,6 +208,24 @@ describe('classifyFailure', () => {
     expect(out.code).toBe('unknown');
     expect(out.userMessage.length).toBeLessThanOrEqual(241);
     expect(out.userMessage.endsWith('…')).toBe(true);
+  });
+});
+
+describe('source gating (spec A2)', () => {
+  it('classifyFailure (generation) still matches sidecar-unreachable on ECONNREFUSED', () => {
+    const r = classifyFailure(new Error('connect ECONNREFUSED 127.0.0.1:8001'));
+    expect(r.code).toBe('sidecar-unreachable');
+  });
+  it('classifyAnalysisError never blames the sidecar for an analysis failure', () => {
+    const r = classifyAnalysisError(new Error('connect ECONNREFUSED 127.0.0.1:11434'));
+    expect(r.code).not.toBe('sidecar-unreachable');
+  });
+  it('analysis path still sees the both-gated quota signature', () => {
+    const err = Object.assign(new Error('429 Too Many Requests: quota exceeded'), { status: 429 });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-rate-limit');
+  });
+  it('analysis path still sees the both-gated disk-full signature', () => {
+    expect(classifyAnalysisError(new Error('ENOSPC: no space left on device')).code).toBe('disk-full');
   });
 });
 
