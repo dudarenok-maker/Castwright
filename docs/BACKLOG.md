@@ -69,11 +69,11 @@ _Full detail + acceptance:_ [#472](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ closes the distribution loop so testers actually know to upgrade.
 _Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471).
 
-#### `fs-21` — First-run setup wizard (cross-platform setup owner) ([#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474))
+#### `fs-21` — on-box acceptance for the first-run wizard ([#752](https://github.com/dudarenok-maker/Castwright/issues/752))
 
-- _What:_ A guided **cross-platform (Windows + macOS + Linux)** first-run flow, run in-app on first launch — the **single owner of post-install setup for every platform**: detect GPU, check/install the required models (Kokoro, Qwen, the Ollama analyzer) via the existing in-app Model Manager backends, verify ffmpeg, pick defaults (engine, analysis model, theme), then run a one-sentence smoke synth to prove the whole stack end to end before the user uploads anything. Both installers (`ops-1` Windows `.exe`, `ops-15` macOS `.dmg`) and the Docker deploy (`ops-2`) deliver only the app + runtime prereqs and hand off here — so model install + setup is identical across OSes rather than reimplemented per-installer.
-- _Benefit (user):_ turns a multi-step manual bootstrap into one guided path — the biggest adoption lever for non-technical deployers — and gives every platform the same setup experience. (Large; owes its own plan — pairs with `fs-1`/`ops-1`/`ops-15`/`ops-2`.)
-_Full detail + acceptance:_ [#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474).
+- _What:_ The fs-21 first-run wizard shipped code-complete + CI-green (Waves 0/1/1b/2/3, merged 2026-06-12; regression plan [210](features/210-fs21-first-run-wizard.md)). This residual tracks the acceptance that can't run in CI / on the Windows dev box: real Kokoro install on Mac+Linux, a fresh venv bootstrap (decision Z), the no-Python degrade, audible Tier-1 smoke + Tier-2 demo generation, and a `cross-os.yml` run before release.
+- _Benefit (user):_ confirms the one-click cross-platform setup actually works on every deployer OS before it ships.
+_Full detail + acceptance:_ [#752](https://github.com/dudarenok-maker/Castwright/issues/752).
 
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
 
