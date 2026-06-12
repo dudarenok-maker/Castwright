@@ -249,7 +249,7 @@ Run: `npm test` (frontend) → green. `git grep -iE "Wren|Marlow|The Drowning Be
 
 ## Phase 4: Server test fixtures (Cat 4 — the big one, ~62 files)
 
-**Files:** ~62 `server/src/**/*.test.ts` (enumerate: `git grep -il "Wren\|Marlow\|The Drowning Bell\|Oduvan\|Lessom\|Casper\|Hart\|Brann\|Maerin\|Saltgrave\|exile\|The Tidewatcher's Oath\|unlocked\|legacy" -- 'server/src/**/*.test.ts'`).
+**Files:** ~62 `server/src/**/*.test.ts` (enumerate with the **boundary-safe, unambiguous** token set — never bare `Hart`/`legacy`/`exile`, which match `index`/`legacy-format`/etc.: `git grep -ilE "\b(Wren|Marlow|The Drowning Bell|Oduvan|Garrow|Lessom|Casper|Brann|Maerin|Berrin|Sela|Saltgrave|The Tidewatcher's Oath|keeper of the lost)\b" -- 'server/src/**/*.test.ts'`).
 
 - [ ] **Step 1: Classify pure-rename vs. re-fixture**
 
@@ -263,7 +263,7 @@ Mark these for **manual re-derivation** (Step 3). Everything else is pure-rename
 
 Run the codemod across all Cat-4 test files EXCEPT the position-sensitive set:
 ```bash
-node scripts/scrub-the Hollow Tide.mjs --write $(git grep -il "Wren\|Marlow\|The Drowning Bell\|Oduvan\|Lessom\|Casper\|Hart\|Brann\|Maerin\|Saltgrave\|exile\|The Tidewatcher's Oath\|unlocked\|legacy" -- 'server/src/**/*.test.ts')
+node scripts/scrub-the Hollow Tide.mjs --write $(git grep -ilE "\b(Wren|Marlow|The Drowning Bell|Oduvan|Garrow|Lessom|Casper|Brann|Maerin|Berrin|Sela|Saltgrave|The Tidewatcher's Oath|keeper of the lost)\b" -- 'server/src/**/*.test.ts')
 ```
 Because the codemod renames inline fixture text AND the assertions consistently, count/occurrence-based expectations stay correct.
 
@@ -305,7 +305,7 @@ The manuscript-path replacement is **a mapping entry** (added in Phase 0): both
 → `server/src/__fixtures__/the-coalfall-commission.md`. So the same `--write`
 codemod handles names, books, AND the path:
 ```bash
-node scripts/scrub-the Hollow Tide.mjs --write CLAUDE.md $(git grep -il "Marlow\|Wren\|bonus Marlow\|The Drowning Bell\|keeper of the lost\|Saltgrave\|exile\|The Tidewatcher's Oath\|unlocked" -- 'docs/**/*.md')
+node scripts/scrub-the Hollow Tide.mjs --write CLAUDE.md $(git grep -ilE "\b(Marlow|Wren|bonus Marlow|The Drowning Bell|keeper of the lost|Saltgrave|The Tidewatcher's Oath|Oduvan|Garrow|Lessom|Casper)\b" -- 'docs/**/*.md')
 ```
 Then hand-edit CLAUDE.md's "Canonical end-to-end manuscript" block prose (it is now committed + owned; drop the "do not commit — copyrighted" caveat).
 
