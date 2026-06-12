@@ -185,8 +185,11 @@ title/author safe inside the central 16:10 band** so every crop reads.
   `public/marketing-covers/<slug>.jpg` so Vite serves them at
   `/marketing-covers/<slug>.jpg` during capture; the Hollow Tide fixtures point
   each book's cover URL there. (Add `public/marketing-covers/` to `.gitignore`.)
-- Image-generation prompts for the three Hollow Tide covers (+ optional Coalfall)
-  are produced alongside this spec for the user to run.
+- **Three Hollow Tide covers are generated** from image prompts produced
+  alongside this spec. **Coalfall already has cover art** at
+  `brand/test-book/the-coalfall-commission-cover-final.png` (git-ignored,
+  local-only) — copy it into `public/marketing-covers/coalfall-commission.jpg`;
+  no generation needed.
 
 ## Scene set (v1)
 
@@ -254,6 +257,19 @@ core scenes.
 
 ## Separate follow-up pieces (out of scope here, tracked for later)
 
+- **Piece #1b — companion-app marketing capture (sibling, shares content).** The
+  Flutter Android companion (`apps/android`) also needs marketing screenshots
+  (library cover-grid, per-book download, offline player with chapters/speed). It
+  is a **different toolchain** (Flutter/Dart/emulator — Playwright can't drive
+  it) with **no existing demo/screenshot tooling**, so it warrants its own spec.
+  Recommended approach (from exploration): a local **demo-seed builder**
+  (`lib/src/data/demo_data.dart`) hydrating the Drift DB + a fake `PairingStore`
+  (skip the pair/sync flow), gated by `--dart-define DEMO_MODE=true`, captured on
+  an emulator via `adb screencap` (or `integration_test`). It **reuses the same
+  fictional content** — the Hollow Tide series + the three generated covers
+  (downscaled to the companion's 250×250 thumbs) + the existing Coalfall art — so
+  the two surfaces stay visually consistent. Treat the Hollow Tide content
+  (metadata + cast + covers) as a **shared content pack** both pieces consume.
 - **Piece #2 — copyrighted-character fixture scrub.** Rename the "Marlow"-family
   copyrighted character names baked into ~122 test-fixture files to the owned
   Castwright cast, and re-point the canonical regression-manuscript reference
