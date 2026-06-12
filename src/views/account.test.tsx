@@ -431,6 +431,24 @@ describe('AccountView â€” Advanced (power-user) card (fe-2)', () => {
   });
 });
 
+describe('AccountView — Re-run setup pointer (fs-21)', () => {
+  it('renders the Re-run setup button with the theme-safe ink/canvas token', () => {
+    renderView();
+    const button = screen.getByTestId('account-rerun-setup');
+    expect(button.className).toContain('bg-ink');
+    expect(button.className).toContain('text-canvas');
+    expect(button.className).not.toContain('text-white');
+  });
+
+  it('clicking Re-run setup dispatches openSetup and transitions ui.stage to setup', async () => {
+    const user = userEvent.setup();
+    const { store } = renderView();
+    const button = screen.getByTestId('account-rerun-setup');
+    await user.click(button);
+    expect(store.getState().ui.stage.kind).toBe('setup');
+  });
+});
+
 describe('AccountView — settings-accordion shell', () => {
   it('renders server-persisted sections as collapsible accordion sections and Save still dispatches', async () => {
     (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(SERVER_FIXTURE);
