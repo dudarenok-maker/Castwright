@@ -15,6 +15,9 @@
    `describeSynthesisError` now delegates here and maps back to its legacy
    `{ errorReason, fatal }` shape so existing callers keep working. */
 
+import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
+export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
+
 export type FailureCode =
   | 'vram-spill'
   | 'recycle-storm'
@@ -29,6 +32,12 @@ export type FailureCode =
   | 'auth'
   | 'unknown';
 
+/* Compile-time pin: every FailureCode has copy. (The reverse — no extra keys —
+   is asserted by the key-parity test in failure-taxonomy.test.ts.) */
+const _copyComplete: Record<FailureCode, { userMessage: string; remediation: string }> =
+  FAILURE_REMEDIATIONS;
+void _copyComplete;
+
 export interface FailureContext {
   status?: number;
   name?: string;
@@ -40,8 +49,6 @@ export interface FailureSignature {
   fatal: boolean;
   /** First match wins — order in FAILURE_SIGNATURES is significant. */
   match: (raw: string, ctx: FailureContext) => boolean;
-  userMessage: string;
-  remediation: string;
 }
 
 export interface ClassifiedFailure {
@@ -66,21 +73,11 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     code: 'synth-timeout',
     fatal: false,
     match: (_raw, ctx) => ctx.name === 'ChapterSynthTimeoutError',
-    userMessage:
-      'TTS synthesis timed out for this chapter — the local engine stalled (often the ' +
-      'sidecar reclaiming memory mid-render). Skipped so the queue advances; click Retry to re-render.',
-    remediation:
-      'Click Retry on this chapter. If it times out repeatedly, restart the TTS sidecar to clear ' +
-      'a wedged GPU state, then retry.',
   },
   {
     code: 'sidecar-unreachable',
     fatal: true,
     match: (raw) => /sidecar not reachable|ECONNREFUSED|fetch failed/i.test(raw),
-    userMessage: 'Local TTS sidecar not running — start it and resume.',
-    remediation:
-      'Start the TTS sidecar (npm start launches it automatically), wait for the sidecar pill to ' +
-      'go green, then resume the run.',
   },
   /* C3 (Wave 3) — the named recycle-storm signal from synthesise-chapter.ts
      (`RecycleStormError`): the sidecar recycled/respawned more times than the
@@ -99,10 +96,6 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     fatal: false,
     match: (raw, ctx) =>
       ctx.name === 'RecycleStormError' || /recycled \d+× while rendering/.test(raw),
-    userMessage: 'The TTS engine kept restarting while rendering this chapter.',
-    remediation:
-      'The sidecar is likely thrashing — the host-memory leak (side-11) or too little ' +
-      'VRAM/RAM headroom. Restart the TTS sidecar and/or lower generation concurrency, then Retry.',
   },
   /* CUDA out-of-memory — the GPU allocator itself refused. Distinct from the
      host-RAM OOM kill below. Comes BEFORE the cuda-poisoned check because an
@@ -112,11 +105,6 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     code: 'vram-spill',
     fatal: true,
     match: (raw) => /CUDA out of memory|VRAM/i.test(raw),
-    userMessage:
-      'The GPU ran out of video memory (VRAM) mid-render — too many models were resident at once.',
-    remediation:
-      'Unload any models you are not generating with (the analyzer Ollama, or a second TTS engine) ' +
-      'from the model pills, then retry. On an 8 GB card keep only one heavy TTS model loaded.',
   },
   /* Host-process OOM kill — the OS killed the sidecar (exit 137 / SIGKILL).
      Matched on the kill signal, NOT on the word "memory" (which would collide
@@ -125,20 +113,11 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     code: 'oom',
     fatal: true,
     match: (raw) => /\bkilled\b|exit code 137|SIGKILL|out of memory: killed/i.test(raw),
-    userMessage:
-      'The TTS sidecar was killed by the operating system — the machine ran out of host RAM.',
-    remediation:
-      'Close other memory-heavy apps and retry. If it recurs, the sidecar is leaking — restart it ' +
-      'to reset its host memory, then resume.',
   },
   {
     code: 'disk-full',
     fatal: true,
     match: (raw) => /ENOSPC|no space left/i.test(raw),
-    userMessage: 'The workspace volume is out of disk space — the chapter audio could not be written.',
-    remediation:
-      'Free up disk space on the workspace volume (delete old exports, or move the workspace to a ' +
-      'larger drive), then retry the chapter.',
   },
   /* Upstream rate-limit / quota. STRICT match — a real HTTP 429 or an
      unambiguous quota phrase. The bare token "rate" is NOT enough (it matches
@@ -166,45 +145,24 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
       const localEngine = ctx.engine != null && ctx.engine !== 'gemini';
       return isHttp429 || !localEngine;
     },
-    userMessage: 'Gemini TTS rate-limited — stopped run; resume later or switch to a local engine.',
-    remediation:
-      'Wait for the quota window to reset (Gemini free-tier resets daily), or switch to a local ' +
-      'engine (Kokoro / Qwen) in the engine picker, then resume.',
   },
   {
     code: 'auth',
     fatal: true,
     match: (raw, ctx) =>
       ctx.status === 401 || ctx.status === 403 || /invalid[_ ]?key|API key/i.test(raw),
-    userMessage: 'Gemini TTS authentication failed — check GEMINI_API_KEY.',
-    remediation:
-      'Verify GEMINI_API_KEY in server/.env is set and valid, restart the server, then retry.',
   },
   {
     code: 'xtts-speaker-desync',
     fatal: true,
     match: (raw) =>
       /index out of range in self|IndexError|out of range \(expected to be in range/i.test(raw),
-    userMessage:
-      'Local TTS engine rejected a speaker — the voice catalog is out of sync with the loaded model. ' +
-      'Stop the sidecar, re-run the speaker manifest audit, and regenerate.',
-    remediation:
-      'Stop the TTS sidecar, re-run the speaker-manifest audit, then restart the sidecar and ' +
-      'regenerate this chapter.',
   },
   {
     code: 'cuda-poisoned',
     fatal: true,
     match: (raw) =>
       /device-side assert|CUDA error|CUDA kernel errors|"poisoned":\s*true/i.test(raw),
-    userMessage:
-      'Local TTS sidecar hit a CUDA error and is auto-restarting (the CUDA context is corrupted ' +
-      'process-wide; only a fresh Python process recovers). Wait ~10 seconds for the sidecar pill ' +
-      'to go green again, then click Retry on this chapter. The offending text is in the sidecar ' +
-      'log (text_preview=) — usually a stray zero-width or control char in the manuscript.',
-    remediation:
-      'Wait ~10 seconds for the sidecar to respawn (the pill goes green), then click Retry. If it ' +
-      'recurs on the same chapter, check the sidecar log text_preview= for a stray control char.',
   },
   /* Placed LAST among the specific signatures: "model not loaded" / a 503 while
      loading. After the sidecar-unreachable check (a down sidecar is the more
@@ -213,18 +171,8 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     code: 'model-not-loaded',
     fatal: true,
     match: (raw) => /model not loaded|503.*loading|loading.*model/i.test(raw),
-    userMessage:
-      'The TTS model is not loaded in the sidecar yet — synthesis was requested before the model ' +
-      'finished loading.',
-    remediation:
-      'Load the engine from its model pill (or wait for the auto-load to finish — the pill turns ' +
-      'green), then retry the chapter.',
   },
 ];
-
-const UNKNOWN_REMEDIATION =
-  'Click Retry on this chapter. If it keeps failing, check the server / sidecar logs for the full ' +
-  'error and report it.';
 
 function rawOf(err: unknown): string {
   return (err as Error)?.message ?? String(err);
@@ -249,10 +197,11 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
   };
   for (const sig of FAILURE_SIGNATURES) {
     if (sig.match(raw, ctx)) {
+      const copy = FAILURE_REMEDIATIONS[sig.code];
       return {
         code: sig.code,
-        userMessage: sig.userMessage,
-        remediation: sig.remediation,
+        userMessage: copy.userMessage,
+        remediation: copy.remediation,
         fatal: sig.fatal,
         raw,
       };
@@ -261,7 +210,7 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
   return {
     code: 'unknown',
     userMessage: trimRaw(raw),
-    remediation: UNKNOWN_REMEDIATION,
+    remediation: FAILURE_REMEDIATIONS.unknown.remediation,
     fatal: false,
     raw,
   };
