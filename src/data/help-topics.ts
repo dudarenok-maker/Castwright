@@ -12,10 +12,11 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: 'app-wont-start',
     title: "The app won't start",
     body:
-      'Run `npm start` from the install folder — it launches the web app, the server, and the ' +
-      'TTS sidecar together. If the browser tab opens but stays blank, hard-refresh (Ctrl+Shift+R). ' +
-      'If the terminal shows a port-in-use error, another copy is already running — close it first. ' +
-      'On a fresh install, run `npm install` once before the first start.',
+      'One command starts everything: run `npm start` from the install folder and it brings up ' +
+      'the web app, the server, and the TTS sidecar together. If the browser tab opens but stays ' +
+      'blank, hard-refresh (Ctrl+Shift+R). If the terminal shows a port-in-use error, another ' +
+      'copy is already running — close it first. On a fresh install, run `npm install` once ' +
+      'before the first start.',
   },
   {
     id: 'models-missing',
@@ -31,10 +32,11 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: 'generation-slow',
     title: 'Generation is much slower than usual',
     body:
-      "Check the GPU isn't shared with something heavy (games, a second model). Keep only one heavy " +
-      'TTS model loaded — unload the analyzer Ollama or a second engine from the model pills. If it ' +
-      'started after hours of generating, restart the TTS sidecar (it reclaims leaked memory). The ' +
-      "Admin view's Resource trends panel shows the per-chapter speed history.",
+      "The usual culprit is a crowded GPU. Check it isn't sharing the card with something heavy " +
+      '(games, a second model), and keep only one heavy TTS model loaded — unload the analyzer ' +
+      'Ollama or a second engine from the model pills. If the slowdown crept in after hours of ' +
+      "generating, restart the TTS sidecar (it reclaims leaked memory). The Admin view's " +
+      'Resource trends panel shows the per-chapter speed history.',
   },
   {
     id: 'phone-cant-reach',
@@ -49,9 +51,10 @@ export const HELP_TOPICS: HelpTopic[] = [
     id: 'where-files-live',
     title: 'Where are my books and audio on disk?',
     body:
-      'Each book lives in its own folder under the workspace directory (the castwright-workspace ' +
-      'folder next to the install, by default): the manuscript, the cast (cast.json), per-chapter ' +
-      'audio, and exports. Deleting a book folder removes that book; back up the workspace folder ' +
-      'to keep everything.',
+      'On your machine, in the open — nothing is hidden in a database. Each book lives in its ' +
+      'own folder under the workspace directory (the castwright-workspace folder next to the ' +
+      'install, by default): the manuscript, the cast (cast.json), per-chapter audio, and ' +
+      'exports. Deleting a book folder removes that book; back up the workspace folder and ' +
+      "you've backed up your whole library.",
   },
 ];
