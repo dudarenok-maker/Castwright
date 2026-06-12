@@ -75,7 +75,15 @@ export const SCENES: Scene[] = [
   },
   {
     id: 'coalfall-manuscript',
-    hash: '#/books/coalfall-commission/manuscript?chapter=1',
+    hash: '#/books/coalfall-commission/manuscript?chapter=3',
     viewports: ['desktop'],
+  },
+  {
+    /* Series-memory narrative: Wren is called "Sparrow" by Master Oduvan — the
+       profile drawer shows the alias ("two names, one voice"). */
+    id: 'coalfall-wren-drawer',
+    hash: '#/books/coalfall-commission/cast?profile=wren',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="cast-row-wren"]',
   },
 ];

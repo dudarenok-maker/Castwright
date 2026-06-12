@@ -1,0 +1,2057 @@
+{
+  "sentences": [
+    {
+      "id": 1,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "The forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when the knocking started.",
+      "confidence": 0.98
+    },
+    {
+      "id": 2,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“Leave it,”",
+      "confidence": 0.92
+    },
+    {
+      "id": 3,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "said Master Oduvan, without looking up.",
+      "confidence": 0.97
+    },
+    {
+      "id": 4,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Seventy winters had worn his voice down to gravel and patience.",
+      "confidence": 0.96
+    },
+    {
+      "id": 5,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“Whoever it is can knock.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 6,
+      "chapterId": 3,
+      "characterId": "wren",
+      "text": "“It might be a customer.”",
+      "confidence": 0.88
+    },
+    {
+      "id": 7,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“At this hour it’s either a drunk or a debt. Neither pays better for being let in quickly.”",
+      "confidence": 0.92
+    },
+    {
+      "id": 8,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "The door opened anyway.",
+      "confidence": 0.98
+    },
+    {
+      "id": 9,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Maerin the reeve put her head in, and the cold came with her.",
+      "confidence": 0.97
+    },
+    {
+      "id": 10,
+      "chapterId": 3,
+      "characterId": "maerin",
+      "text": "“Oduvan. Bar the shutters and douse the coals.”",
+      "confidence": 0.94
+    },
+    {
+      "id": 11,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Her words were clipped, the way they always were when she had run.",
+      "confidence": 0.96
+    },
+    {
+      "id": 12,
+      "chapterId": 3,
+      "characterId": "maerin",
+      "text": "“There’s a dragon on the Coalfall road. Big as a barn. It’s coming down the lane.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 13,
+      "chapterId": 3,
+      "characterId": "wren",
+      "text": "“A real one?”",
+      "confidence": 0.92
+    },
+    {
+      "id": 14,
+      "chapterId": 3,
+      "characterId": "maerin",
+      "text": "“No, child, a painted one.”",
+      "confidence": 0.82
+    },
+    {
+      "id": 15,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Maerin did not smile.",
+      "confidence": 0.98
+    },
+    {
+      "id": 16,
+      "chapterId": 3,
+      "characterId": "maerin",
+      "text": "“Real. And making straight for the only lit window in the valley, which is yours. Douse the fire.”",
+      "confidence": 0.94
+    },
+    {
+      "id": 17,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“If I douse the fire,”",
+      "confidence": 0.91
+    },
+    {
+      "id": 18,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Oduvan said,",
+      "confidence": 0.97
+    },
+    {
+      "id": 19,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“I lose the weld I’ve been nursing since noon. A dragon can wait the length of a weld or it can’t, and either way I’d rather meet it warm.”",
+      "confidence": 0.88
+    },
+    {
+      "id": 20,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "He set down his tongs.",
+      "confidence": 0.98
+    },
+    {
+      "id": 21,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“Sparrow. Open the big door.”",
+      "confidence": 0.93
+    },
+    {
+      "id": 22,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Wren — Sparrow only to him, and only when he had forgotten to be stern — went to the great door and hauled it wide.",
+      "confidence": 0.97
+    },
+    {
+      "id": 23,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "The dragon filled the dark beyond it the way water fills a cup.",
+      "confidence": 0.98
+    },
+    {
+      "id": 24,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "One eye, gold and slow, came level with the doorway and stopped there, considering the small heat of the place.",
+      "confidence": 0.98
+    },
+    {
+      "id": 25,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "From somewhere down the lane, a voice cracked out of the dark:",
+      "confidence": 0.95
+    },
+    {
+      "id": 26,
+      "chapterId": 3,
+      "characterId": "tam-hollis",
+      "text": "“Run, you fools — it’ll have the lot of you!”",
+      "confidence": 0.65,
+      "emotion": "excited"
+    },
+    {
+      "id": 27,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Nobody ran.",
+      "confidence": 0.98
+    },
+    {
+      "id": 28,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "“I have come a long way,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 29,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "the dragon said.",
+      "confidence": 0.97
+    },
+    {
+      "id": 30,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Its voice was not loud.",
+      "confidence": 0.97
+    },
+    {
+      "id": 31,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "It was the sound a mountain might make if a mountain were tired, and each word arrived a moment after you expected it.",
+      "confidence": 0.97
+    },
+    {
+      "id": 32,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "“The villages call me Coalfall. That is not my name, but it will do. I am told the best smith in the valley keeps this forge.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 33,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“You’re told wrong,”",
+      "confidence": 0.92
+    },
+    {
+      "id": 34,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "said Oduvan.",
+      "confidence": 0.97
+    },
+    {
+      "id": 35,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“The best smith in the valley died nine years back. You’ll have to make do with the second.”",
+      "confidence": 0.92
+    },
+    {
+      "id": 36,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "“Modesty, or a sales tactic?”",
+      "confidence": 0.94
+    },
+    {
+      "id": 37,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“At my age, the same thing.”",
+      "confidence": 0.91
+    },
+    {
+      "id": 38,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "The gold eye moved to Wren, and she felt it the way you feel sun through a window.",
+      "confidence": 0.97
+    },
+    {
+      "id": 39,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "“And the small one?”",
+      "confidence": 0.93
+    },
+    {
+      "id": 40,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“My apprentice. She’s thirteen and she thinks I can’t hear her sighing. She’ll be better than me before she’s twenty, which is the only reason I keep her.”",
+      "confidence": 0.91
+    },
+    {
+      "id": 41,
+      "chapterId": 3,
+      "characterId": "wren",
+      "text": "“I never sigh,”",
+      "confidence": 0.85
+    },
+    {
+      "id": 42,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "said Wren, who sighed.",
+      "confidence": 0.96
+    },
+    {
+      "id": 43,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "The dragon lowered itself until its breath stirred the coals, and they brightened without being asked.",
+      "confidence": 0.98
+    },
+    {
+      "id": 44,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "“I do not want a sword,”",
+      "confidence": 0.94
+    },
+    {
+      "id": 45,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "it said.",
+      "confidence": 0.97
+    },
+    {
+      "id": 46,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "“Everyone wants me dead, and a sword would only encourage them. I want a bell. Small enough to hang from a claw. I am the last of mine, and when I go there will be no one to mark it. I should like to mark it myself, in advance — while there is still someone who knows how to cast a true note.”",
+      "confidence": 0.93
+    },
+    {
+      "id": 47,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "For a while the only sound was the fire.",
+      "confidence": 0.98
+    },
+    {
+      "id": 48,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "Then Oduvan picked up his tongs again.",
+      "confidence": 0.98
+    },
+    {
+      "id": 49,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“A bell,”",
+      "confidence": 0.91
+    },
+    {
+      "id": 50,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "he said, as if dragons asked for them every Tuesday.",
+      "confidence": 0.95
+    },
+    {
+      "id": 51,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“Bronze, then, not iron. Sparrow — the good tin, the crucible, and stop crying on the moulding sand, it will spoil the cast.”",
+      "confidence": 0.89
+    },
+    {
+      "id": 52,
+      "chapterId": 3,
+      "characterId": "wren",
+      "text": "“I’m not crying.”",
+      "confidence": 0.87
+    },
+    {
+      "id": 53,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“Of course not.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 54,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "He squinted at the dragon, measuring it the way he measured everything.",
+      "confidence": 0.97
+    },
+    {
+      "id": 55,
+      "chapterId": 3,
+      "characterId": "master-oduvan",
+      "text": "“It’ll take till morning. You’ll have to keep the fire company while we work.”",
+      "confidence": 0.92
+    },
+    {
+      "id": 56,
+      "chapterId": 3,
+      "characterId": "narrator",
+      "text": "The dragon settled into the doorway, one eye half-closed against the warmth, and said, in the voice of a tired mountain that had not, for a very long time, been asked to wait somewhere kind:",
+      "confidence": 0.96
+    },
+    {
+      "id": 57,
+      "chapterId": 3,
+      "characterId": "coalfall-dragon",
+      "text": "“I have nothing but time. Begin.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 1,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Chapter Two — The Pour",
+      "confidence": 1
+    },
+    {
+      "id": 2,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "News travels two ways in a valley: slowly, by the road, and all at once, by the smell of a lit forge after dark.",
+      "confidence": 1
+    },
+    {
+      "id": 3,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Wren had the good tin out of its cloth and was weighing it like it might argue.",
+      "confidence": 1
+    },
+    {
+      "id": 4,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Oduvan stood a moment over the blade he had been welding since noon — the work he had refused to lose — looked at it once, and set it in the slack tub unfinished.",
+      "confidence": 1
+    },
+    {
+      "id": 5,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Some things you pay for a bell.",
+      "confidence": 1
+    },
+    {
+      "id": 6,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The dragon’s eye followed the gesture and said nothing about it, which was its own kind of thanks.",
+      "confidence": 1
+    },
+    {
+      "id": 7,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The first arrival came before the crucible was warm.",
+      "confidence": 1
+    },
+    {
+      "id": 8,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“That was me shouting,”",
+      "confidence": 0.98,
+      "emotion": "excited"
+    },
+    {
+      "id": 9,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said the man in the doorway, who had clearly run there and clearly wished he hadn’t.",
+      "confidence": 1
+    },
+    {
+      "id": 10,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "He was thirty-odd, all elbows, with feathers on his coat that suggested the hens had objected to being locked up early.",
+      "confidence": 1
+    },
+    {
+      "id": 11,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“Down the lane. The running, the fools, all of that. I’d shout it again.”",
+      "confidence": 0.95,
+      "emotion": "angry"
+    },
+    {
+      "id": 12,
+      "chapterId": 4,
+      "characterId": "maerin",
+      "text": "“Tam Hollis,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 13,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Maerin, who had never left,",
+      "confidence": 1
+    },
+    {
+      "id": 14,
+      "chapterId": 4,
+      "characterId": "maerin",
+      "text": "“you woke half the valley over a hay wagon in the dark last Lammas.”",
+      "confidence": 0.92
+    },
+    {
+      "id": 15,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“A wagon moves wrong in the dark, you say so.”",
+      "confidence": 0.92
+    },
+    {
+      "id": 16,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Tam edged inside, keeping the anvil between himself and the doorway.",
+      "confidence": 1
+    },
+    {
+      "id": 17,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The doorway watched him with one gold eye.",
+      "confidence": 1
+    },
+    {
+      "id": 18,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“I’ll just — I’ll stand here. By the hammers. In case.”",
+      "confidence": 0.88
+    },
+    {
+      "id": 19,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“In case of what?”",
+      "confidence": 0.9
+    },
+    {
+      "id": 20,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "asked Wren.",
+      "confidence": 1
+    },
+    {
+      "id": 21,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“I’ll know it when it happens.”",
+      "confidence": 0.9
+    },
+    {
+      "id": 22,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The dragon exhaled, slow, and the coals brightened.",
+      "confidence": 1
+    },
+    {
+      "id": 23,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Tam went the colour of the moulding sand and then, when nothing further occurred, a more ordinary colour.",
+      "confidence": 1
+    },
+    {
+      "id": 24,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "By the time the tin went into the crucible he had drifted two steps closer and was offering opinions about heat.",
+      "confidence": 1
+    },
+    {
+      "id": 25,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Widow Casper came next, because her cottage shared a wall with the lane and her curiosity shared a wall with nothing.",
+      "confidence": 1
+    },
+    {
+      "id": 26,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "She was eighty-some and built like a question mark, and she looked the dragon over the way you look over a pedlar’s cart.",
+      "confidence": 1
+    },
+    {
+      "id": 27,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“Smaller than the stories,”",
+      "confidence": 0.9
+    },
+    {
+      "id": 28,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "she said.",
+      "confidence": 1
+    },
+    {
+      "id": 29,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“The stories were about my grandmother,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 30,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said the dragon.",
+      "confidence": 1
+    },
+    {
+      "id": 31,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“So were mine.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 32,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The widow lowered herself onto the bench by the wall, uninvited, comfortable.",
+      "confidence": 1
+    },
+    {
+      "id": 33,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“My gran said the sky over the quarry used to go dark at noon with the wings of you. She was a liar in most weathers, but she cried when she said it, so I believed that one.”",
+      "confidence": 0.88
+    },
+    {
+      "id": 34,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Believe it,”",
+      "confidence": 0.9
+    },
+    {
+      "id": 35,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Coalfall, and it was quiet for a while after that.",
+      "confidence": 1
+    },
+    {
+      "id": 36,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The twins arrived together, as they did everything, and disagreeing, as they did everything.",
+      "confidence": 1
+    },
+    {
+      "id": 37,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Brann and Berrin Weir cut stone up at the quarry, and forty-five years of standing next to each other had worn them as alike as two thumbs — same shoulders, same grey stubble, same way of filling a door.",
+      "confidence": 1
+    },
+    {
+      "id": 38,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The valley told them apart by ear.",
+      "confidence": 1
+    },
+    {
+      "id": 39,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Brann talked in questions.",
+      "confidence": 1
+    },
+    {
+      "id": 40,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Berrin had never met one he couldn’t flatten into a statement.",
+      "confidence": 1
+    },
+    {
+      "id": 41,
+      "chapterId": 4,
+      "characterId": "brann-weir",
+      "text": "“Is that the dragon, then?”",
+      "confidence": 0.85
+    },
+    {
+      "id": 42,
+      "chapterId": 4,
+      "characterId": "berrin-weir",
+      "text": "“It’s the dragon.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 43,
+      "chapterId": 4,
+      "characterId": "brann-weir",
+      "text": "“And we’re casting it a bell? Out of what, the church roof?”",
+      "confidence": 0.85
+    },
+    {
+      "id": 44,
+      "chapterId": 4,
+      "characterId": "berrin-weir",
+      "text": "“Out of bronze. The smith has bronze.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 45,
+      "chapterId": 4,
+      "characterId": "brann-weir",
+      "text": "“Since when does the smith have bell-bronze just lying about?”",
+      "confidence": 0.85
+    },
+    {
+      "id": 46,
+      "chapterId": 4,
+      "characterId": "berrin-weir",
+      "text": "“Since he does. Look at the crucible.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 47,
+      "chapterId": 4,
+      "characterId": "brann-weir",
+      "text": "“I’m looking at the crucible. Am I not allowed to ask about the crucible?”",
+      "confidence": 0.85
+    },
+    {
+      "id": 48,
+      "chapterId": 4,
+      "characterId": "berrin-weir",
+      "text": "“You’re allowed. You’re just loud.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 49,
+      "chapterId": 4,
+      "characterId": "brann-weir",
+      "text": "“Loud, am I —”",
+      "confidence": 0.85
+    },
+    {
+      "id": 50,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“Gentlemen,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 51,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Oduvan, in the voice he kept for cracked iron,",
+      "confidence": 1
+    },
+    {
+      "id": 52,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“it’s a small bell. It needs a small audience.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 53,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The twins shut up in unison, which was the other way you could tell them apart from everyone else.",
+      "confidence": 1
+    },
+    {
+      "id": 54,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Father Lessom appeared at the threshold with his hat in his hands, which for Lessom was full ceremony.",
+      "confidence": 1
+    },
+    {
+      "id": 55,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "He was past sixty, soft-spoken, and he had clearly rehearsed something on the walk over and lost it at the door, because what came out, half-whispered, was:",
+      "confidence": 1,
+      "emotion": "whisper"
+    },
+    {
+      "id": 56,
+      "chapterId": 4,
+      "characterId": "father-lessom",
+      "text": "“Is it right, do you think? Bells are for souls. I don’t know the ruling on—”",
+      "confidence": 0.75,
+      "emotion": "whisper"
+    },
+    {
+      "id": 57,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "he gestured at the doorway, at all of it,",
+      "confidence": 1
+    },
+    {
+      "id": 58,
+      "chapterId": 4,
+      "characterId": "father-lessom",
+      "text": "“—this.”",
+      "confidence": 0.75,
+      "emotion": "whisper"
+    },
+    {
+      "id": 59,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“Then make one up,”",
+      "confidence": 0.9
+    },
+    {
+      "id": 60,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Widow Casper.",
+      "confidence": 1
+    },
+    {
+      "id": 61,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“It’s what your lot do, and tonight it’s wanted.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 62,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Lessom came in.",
+      "confidence": 1
+    },
+    {
+      "id": 63,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "He kept along the wall, and his lips moved now and then, and whether it was prayer or the rehearsing of better sentences, nobody asked.",
+      "confidence": 1
+    },
+    {
+      "id": 64,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "But when the dragon’s breath stirred the fire he made a small sign over it — quickly, like a man slipping a coin to a beggar while pretending he hadn’t — and after that he stood easier.",
+      "confidence": 1
+    },
+    {
+      "id": 65,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The pedlar Ivo had been sleeping in Maerin’s barn on account of a thrown horseshoe, and came in already talking, in that up-ended way he had that no one in the valley could place on a map.",
+      "confidence": 0.98
+    },
+    {
+      "id": 66,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "“A bell he wants.",
+      "confidence": 0.95
+    },
+    {
+      "id": 67,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "For himself, the bell.",
+      "confidence": 0.85
+    },
+    {
+      "id": 68,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "In my country, for the dead we plant a tree — but a tree on a claw you cannot carry, and so: a bell.",
+      "confidence": 0.85
+    },
+    {
+      "id": 69,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "Sensible.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 70,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "He set his pack down with the air of a man opening a shop.",
+      "confidence": 0.98
+    },
+    {
+      "id": 71,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "“I have rope, if rope is wanted.",
+      "confidence": 0.95
+    },
+    {
+      "id": 72,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "Wax also.",
+      "confidence": 0.85
+    },
+    {
+      "id": 73,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "For nothing, tonight.",
+      "confidence": 0.85
+    },
+    {
+      "id": 74,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "Tomorrow, prices.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 75,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“There’s the morality of commerce,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 76,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Oduvan,",
+      "confidence": 0.98
+    },
+    {
+      "id": 77,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“in one breath.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 78,
+      "chapterId": 4,
+      "characterId": "ivo",
+      "text": "“In my country we call it Tuesday.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 79,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "It was somewhere past the middle of the night when Maerin discovered her daughter.",
+      "confidence": 0.98
+    },
+    {
+      "id": 80,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Sela was eight, and she had come the way eight-year-olds come — invisibly, in the shadow of someone taller, and then suddenly in the middle of the room as if delivered there.",
+      "confidence": 0.97
+    },
+    {
+      "id": 81,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "She was standing in front of the doorway.",
+      "confidence": 0.97
+    },
+    {
+      "id": 82,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "In front of the eye.",
+      "confidence": 0.97
+    },
+    {
+      "id": 83,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The room went quiet in the way a held breath is quiet.",
+      "confidence": 0.97
+    },
+    {
+      "id": 84,
+      "chapterId": 4,
+      "characterId": "maerin",
+      "text": "“Sela,”",
+      "confidence": 0.97
+    },
+    {
+      "id": 85,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Maerin, very level, very slow,",
+      "confidence": 0.98
+    },
+    {
+      "id": 86,
+      "chapterId": 4,
+      "characterId": "maerin",
+      "text": "“come here to me.”",
+      "confidence": 0.92
+    },
+    {
+      "id": 87,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“In a moment,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 88,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Sela, which was Maerin’s own voice in miniature, and the widow laughed before she could stop herself.",
+      "confidence": 0.97
+    },
+    {
+      "id": 89,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The great eye lowered.",
+      "confidence": 0.98
+    },
+    {
+      "id": 90,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "It came down and down until it was level with the child, and the gold of it lit her face like a lamp.",
+      "confidence": 0.97
+    },
+    {
+      "id": 91,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The murmur ran around the forge in pieces:",
+      "confidence": 0.98
+    },
+    {
+      "id": 92,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“Steady—”",
+      "confidence": 0.85
+    },
+    {
+      "id": 93,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Tam.",
+      "confidence": 0.98
+    },
+    {
+      "id": 94,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“Let her be,”",
+      "confidence": 0.85
+    },
+    {
+      "id": 95,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Widow Casper.",
+      "confidence": 0.98
+    },
+    {
+      "id": 96,
+      "chapterId": 4,
+      "characterId": "brann-weir",
+      "text": "“Maerin—”",
+      "confidence": 0.85
+    },
+    {
+      "id": 97,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Brann.",
+      "confidence": 0.98
+    },
+    {
+      "id": 98,
+      "chapterId": 4,
+      "characterId": "berrin-weir",
+      "text": "“She’s all right,”",
+      "confidence": 0.85
+    },
+    {
+      "id": 99,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Berrin, flat as a shelf, and was, as usual, right.",
+      "confidence": 0.98
+    },
+    {
+      "id": 100,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“You’re the last one,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 101,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Sela.",
+      "confidence": 0.98
+    },
+    {
+      "id": 102,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Not a question.",
+      "confidence": 0.98
+    },
+    {
+      "id": 103,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Children don’t waste them.",
+      "confidence": 0.98
+    },
+    {
+      "id": 104,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Yes,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 105,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said the dragon.",
+      "confidence": 0.98
+    },
+    {
+      "id": 106,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“And the bell’s for when you die.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 107,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“Sela!”",
+      "confidence": 0.95,
+      "emotion": "excited"
+    },
+    {
+      "id": 108,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Maerin’s voice cracked in the middle.",
+      "confidence": 0.98
+    },
+    {
+      "id": 109,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“It is an honest question,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 110,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said the dragon,",
+      "confidence": 0.98
+    },
+    {
+      "id": 111,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“and it is having an honest evening.”",
+      "confidence": 0.92
+    },
+    {
+      "id": 112,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The eye blinked, slow as a door closing.",
+      "confidence": 0.98
+    },
+    {
+      "id": 113,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Yes.",
+      "confidence": 0.96
+    },
+    {
+      "id": 114,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "The bell is for then.”",
+      "confidence": 0.96
+    },
+    {
+      "id": 115,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“But if you’re the last,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 116,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "she said,",
+      "confidence": 0.98
+    },
+    {
+      "id": 117,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“who will ring it for you?",
+      "confidence": 0.95
+    },
+    {
+      "id": 118,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "After?”",
+      "confidence": 0.95
+    },
+    {
+      "id": 119,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The fire spat.",
+      "confidence": 0.98
+    },
+    {
+      "id": 120,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Nobody moved.",
+      "confidence": 0.98
+    },
+    {
+      "id": 121,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Even the twins had nothing, and Wren, who had been pretending very hard to be busy with the wax, stopped pretending.",
+      "confidence": 0.98
+    },
+    {
+      "id": 122,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "When the dragon finally answered, the words came further apart than usual, the way stones come further apart near the top of a mountain.",
+      "confidence": 0.98
+    },
+    {
+      "id": 123,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“I had not,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 124,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "it said,",
+      "confidence": 0.98
+    },
+    {
+      "id": 125,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“thought that far.”",
+      "confidence": 0.96
+    },
+    {
+      "id": 126,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“I’ll do it,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 127,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Sela.",
+      "confidence": 0.98
+    },
+    {
+      "id": 128,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“I’m going to live for ages.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 129,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "There are things said in the middle of the night by children that bend the rest of a life around them, and everyone in the forge knew they had just heard one.",
+      "confidence": 0.98
+    },
+    {
+      "id": 130,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The dragon looked at the small girl for a long time.",
+      "confidence": 0.98
+    },
+    {
+      "id": 131,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Then it is yours when I am done with it,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 132,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "it said at last.",
+      "confidence": 0.98
+    },
+    {
+      "id": 133,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Keep it somewhere high.”",
+      "confidence": 0.96
+    },
+    {
+      "id": 134,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“Mum keeps the good cups on the top shelf.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 135,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“That will do.”",
+      "confidence": 0.96
+    },
+    {
+      "id": 136,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Maerin gathered her daughter in and held on, and didn’t trust herself to add anything.",
+      "confidence": 0.98
+    },
+    {
+      "id": 137,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Hart the charcoal-burner — who had arrived at some point without anyone noticing, the way a wall arrives, and had been quietly feeding the fire from his own sacks for an hour — looked up.",
+      "confidence": 0.98
+    },
+    {
+      "id": 138,
+      "chapterId": 4,
+      "characterId": "hart",
+      "text": "“Fire wants feeding,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 139,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "he said, barely above the coals.",
+      "confidence": 0.98
+    },
+    {
+      "id": 140,
+      "chapterId": 4,
+      "characterId": "hart",
+      "text": "“If we’re doing this.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 141,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“We’re doing this,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 142,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Oduvan.",
+      "confidence": 0.98
+    },
+    {
+      "id": 143,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "What followed, the forge did mostly in silence, and the narrator will tell it, because the people in it were too busy to.",
+      "confidence": 0.98
+    },
+    {
+      "id": 144,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The mould was sand and clay and an old bell-gauge Oduvan had not touched in nine years, since the man who taught him the gauge stopped needing tools.",
+      "confidence": 0.98
+    },
+    {
+      "id": 145,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Wren cut the channels.",
+      "confidence": 0.98
+    },
+    {
+      "id": 146,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Tam fetched and was, to general surprise including his own, useful.",
+      "confidence": 0.98
+    },
+    {
+      "id": 147,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The widow advised, accurately and without mercy.",
+      "confidence": 0.98
+    },
+    {
+      "id": 148,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The twins held the crucible cradle as one creature with four arms — there is no argument left in two men lifting a thing that cannot be set down — and Ivo’s wax and Ivo’s rope turned out to be exactly what was wanted, for nothing, tonight.",
+      "confidence": 0.98
+    },
+    {
+      "id": 149,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The pour, when it came, was the colour of the morning that hadn’t arrived yet.",
+      "confidence": 0.98
+    },
+    {
+      "id": 150,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Bronze went down the channel with a sound like a long word in a language one syllable wide.",
+      "confidence": 0.98
+    },
+    {
+      "id": 151,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“Steady — steady — there.”",
+      "confidence": 0.96,
+      "emotion": "excited"
+    },
+    {
+      "id": 152,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Oduvan’s hand on Wren’s shoulder as she leaned in too far over the steam.",
+      "confidence": 0.98
+    },
+    {
+      "id": 153,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“Sparrow. Back.”",
+      "confidence": 0.96
+    },
+    {
+      "id": 154,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "She stepped back.",
+      "confidence": 0.98
+    },
+    {
+      "id": 155,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "He had not called her that twice in one season, and she knew better than to look at his face about it, so they both watched the mould instead.",
+      "confidence": 0.98
+    },
+    {
+      "id": 156,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“Why does she get a bird name?”",
+      "confidence": 0.95
+    },
+    {
+      "id": 157,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Sela asked, from inside her mother’s arm.",
+      "confidence": 0.98
+    },
+    {
+      "id": 158,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“Because he forgets to be stern,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 159,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Wren.",
+      "confidence": 0.98
+    },
+    {
+      "id": 160,
+      "chapterId": 4,
+      "characterId": "sela",
+      "text": "“Can I be a bird?”",
+      "confidence": 0.95
+    },
+    {
+      "id": 161,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“No,”",
+      "confidence": 0.95
+    },
+    {
+      "id": 162,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Wren.",
+      "confidence": 0.98
+    },
+    {
+      "id": 163,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“Sparrow’s taken.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 164,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The hour between the pour and the breaking is the longest in the smithing trade, and it cannot be hurried, and so the forge filled with the particular conversation of people who have done a thing together and are waiting to find out whether it worked.",
+      "confidence": 0.98
+    },
+    {
+      "id": 165,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Hart fed the fire down slowly, the way you let a horse cool.",
+      "confidence": 0.96
+    },
+    {
+      "id": 166,
+      "chapterId": 4,
+      "characterId": "hart",
+      "text": "“Cools wrong if you rush it,”",
+      "confidence": 0.94
+    },
+    {
+      "id": 167,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "he said, to the coals more than to anyone.",
+      "confidence": 0.95
+    },
+    {
+      "id": 168,
+      "chapterId": 4,
+      "characterId": "hart",
+      "text": "“A bell’s like a loaf. The inside has to agree with the outside.”",
+      "confidence": 0.88
+    },
+    {
+      "id": 169,
+      "chapterId": 4,
+      "characterId": "brann-weir",
+      "text": "“How would you know?”",
+      "confidence": 0.92
+    },
+    {
+      "id": 170,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "asked Brann, who could not help it.",
+      "confidence": 0.97
+    },
+    {
+      "id": 171,
+      "chapterId": 4,
+      "characterId": "hart",
+      "text": "“Burned charcoal thirty years,”",
+      "confidence": 0.98
+    },
+    {
+      "id": 172,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Hart.",
+      "confidence": 0.98
+    },
+    {
+      "id": 173,
+      "chapterId": 4,
+      "characterId": "hart",
+      "text": "“Everything’s a loaf.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 174,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Father Lessom had found his sentences at last.",
+      "confidence": 0.98
+    },
+    {
+      "id": 175,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "He came as near the mould as the heat allowed and stood with his hat still in his hands.",
+      "confidence": 0.98
+    },
+    {
+      "id": 176,
+      "chapterId": 4,
+      "characterId": "father-lessom",
+      "text": "“I made one up,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 177,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "he said to the widow, almost defiant.",
+      "confidence": 0.98
+    },
+    {
+      "id": 178,
+      "chapterId": 4,
+      "characterId": "father-lessom",
+      "text": "“The ruling.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 179,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“And?”",
+      "confidence": 0.65
+    },
+    {
+      "id": 180,
+      "chapterId": 4,
+      "characterId": "father-lessom",
+      "text": "“A bell rung for the last of anything is rung for all of it.”",
+      "confidence": 0.95
+    },
+    {
+      "id": 181,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "He said it in his pulpit voice, then looked embarrassed and put his hat back on.",
+      "confidence": 0.98
+    },
+    {
+      "id": 182,
+      "chapterId": 4,
+      "characterId": "father-lessom",
+      "text": "“I’ll say it properly on Sunday.”",
+      "confidence": 0.78
+    },
+    {
+      "id": 183,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Say it like that,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 184,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said the dragon, from the doorway.",
+      "confidence": 0.98
+    },
+    {
+      "id": 185,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“It will not improve with handling.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 186,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Wren had drifted to the great door with the wax still under her nails.",
+      "confidence": 0.98
+    },
+    {
+      "id": 187,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Up close the dragon smelled like rain on hot stone.",
+      "confidence": 0.98
+    },
+    {
+      "id": 188,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“Did you really cross the whole world?”",
+      "confidence": 0.96
+    },
+    {
+      "id": 189,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "she asked.",
+      "confidence": 0.98
+    },
+    {
+      "id": 190,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“For this?”",
+      "confidence": 0.85
+    },
+    {
+      "id": 191,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“For a true note.",
+      "confidence": 0.95
+    },
+    {
+      "id": 192,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "Your master is the fourth smith I have asked.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 193,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“What happened to the other three?”",
+      "confidence": 0.95
+    },
+    {
+      "id": 194,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Nothing,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 195,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Coalfall.",
+      "confidence": 0.98
+    },
+    {
+      "id": 196,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“They said no.",
+      "confidence": 0.85
+    },
+    {
+      "id": 197,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "People imagine my disappointments are dramatic.",
+      "confidence": 0.85
+    },
+    {
+      "id": 198,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "Mostly they are like everyone’s.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 199,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The eye slid to her sideways, and there was something in it that, on a smaller face, might have been called mischief.",
+      "confidence": 0.98
+    },
+    {
+      "id": 200,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“He said yes before I had finished asking.",
+      "confidence": 0.85
+    },
+    {
+      "id": 201,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "You should know that about him, Sparrow.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 202,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“It’s Wren,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 203,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Wren, going red,",
+      "confidence": 0.98
+    },
+    {
+      "id": 204,
+      "chapterId": 4,
+      "characterId": "wren",
+      "text": "“to everyone but him.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 205,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“I know,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 206,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said the dragon.",
+      "confidence": 0.98
+    },
+    {
+      "id": 207,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“I wanted to hear it refused.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 208,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "“My gran would not believe me, you know.",
+      "confidence": 0.95
+    },
+    {
+      "id": 209,
+      "chapterId": 4,
+      "characterId": "widow-casper",
+      "text": "That I sat a night with one of you and the only fire was in the hearth.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 210,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Then tell it the way she told hers,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 211,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Coalfall.",
+      "confidence": 0.98
+    },
+    {
+      "id": 212,
+      "chapterId": 4,
+      "characterId": "coalfall-dragon",
+      "text": "“Badly, and often.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 213,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "That got the laugh the night had been saving up — even Maerin’s, even Lessom’s — and Tam laughed loudest of all and then looked around to check whether laughing was allowed.",
+      "confidence": 0.98
+    },
+    {
+      "id": 214,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "They broke the mould as the sky went from coal to ash.",
+      "confidence": 0.98
+    },
+    {
+      "id": 215,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The bell came out of the sand the way the dragon had come out of the dark — all at once, and smaller than the stories, and exactly the right size.",
+      "confidence": 0.98
+    },
+    {
+      "id": 216,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Small enough to hang from a claw.",
+      "confidence": 0.98
+    },
+    {
+      "id": 217,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Oduvan filed the lip, struck it once with a knuckle, listened with his eyes shut, and filed again.",
+      "confidence": 0.98
+    },
+    {
+      "id": 218,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The third time he didn’t reach for the file.",
+      "confidence": 0.98
+    },
+    {
+      "id": 219,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“There’s your true note,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 220,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "he said.",
+      "confidence": 0.98
+    },
+    {
+      "id": 221,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“Such as the second-best smith makes.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 222,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“It’s the best in the valley,”",
+      "confidence": 0.96
+    },
+    {
+      "id": 223,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "said Tam, who had decided sometime in the dark that this was his adventure too,",
+      "confidence": 0.98
+    },
+    {
+      "id": 224,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "“and I’ll shout down anyone who says otherwise.",
+      "confidence": 0.85,
+      "emotion": "angry"
+    },
+    {
+      "id": 225,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "I’m known for it.",
+      "confidence": 0.85
+    },
+    {
+      "id": 226,
+      "chapterId": 4,
+      "characterId": "tam-hollis",
+      "text": "The shouting.”",
+      "confidence": 0.85
+    },
+    {
+      "id": 227,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "They hung it from the dragon’s claw with Ivo’s rope, there in the great doorway with the whole valley’s worth of night-gathered faces watching.",
+      "confidence": 0.98
+    },
+    {
+      "id": 228,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Coalfall raised its claw, careful as a man carrying full cups, and turned it, and looked a long time at the small bright thing it had crossed the world to be sure of.",
+      "confidence": 0.98
+    },
+    {
+      "id": 229,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Then it flicked the bell, once, with the tip of one black talon.",
+      "confidence": 0.98
+    },
+    {
+      "id": 230,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The note went out the door and up the lane and over the roofs, even-handed, unhurried, the kind of sound that doesn’t ask permission.",
+      "confidence": 0.98
+    },
+    {
+      "id": 231,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "Hens woke.",
+      "confidence": 0.98
+    },
+    {
+      "id": 232,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "A dog answered, was wrong, and gave up.",
+      "confidence": 0.98
+    },
+    {
+      "id": 233,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "And in the doorway of the forge, in the first grey of morning, the bell swung itself small and smaller and said the one word it had been taught all night, which is the only word a true bell knows:",
+      "confidence": 0.98
+    },
+    {
+      "id": 234,
+      "chapterId": 4,
+      "characterId": "master-oduvan",
+      "text": "“Remember.”",
+      "confidence": 0.75
+    },
+    {
+      "id": 235,
+      "chapterId": 4,
+      "characterId": "narrator",
+      "text": "The End.",
+      "confidence": 0.98
+    }
+  ]
+}
