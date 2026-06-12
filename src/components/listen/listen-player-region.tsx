@@ -347,6 +347,7 @@ function ChapterListenRow({
                   ? `Pause chapter ${chapter.id}`
                   : `Play chapter ${chapter.id}`
             }
+            {...(chapter.id === 1 ? { 'data-tour-id': 'chapter-1-play' } : {})}
             className={`shrink-0 w-11 h-11 md:w-9 md:h-9 rounded-full grid place-items-center transition-all ${
               !hasAudio
                 ? 'bg-canvas border border-ink/10 text-ink/30 opacity-50 cursor-not-allowed'

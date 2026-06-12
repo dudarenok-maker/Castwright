@@ -188,6 +188,7 @@ function BookCard({
     <article
       onClick={onOpen}
       className={`group relative bg-white rounded-3xl border shadow-card hover:shadow-float transition-all cursor-pointer overflow-hidden ${active ? 'border-peach ring-1 ring-peach/30' : 'border-ink/10 hover:border-ink/20'}`}
+      {...(book.bookId === 'castwright__standalones__the-coalfall-commission' ? { 'data-tour-id': 'book-card' } : {})}
     >
       <div className="aspect-16/10 relative overflow-hidden" style={{ background: grad }}>
         <svg viewBox="0 0 320 200" className="absolute inset-0 w-full h-full opacity-20">
@@ -523,6 +524,7 @@ function NewBookCard({ onStartNew }: { onStartNew: () => void }) {
   return (
     <button
       onClick={onStartNew}
+      data-tour-id="new-book-btn"
       className="group bg-canvas rounded-3xl border-2 border-dashed border-ink/15 hover:border-peach hover:bg-peach/4 transition-all min-h-[180px] grid place-items-center text-center p-8"
     >
       <div>
