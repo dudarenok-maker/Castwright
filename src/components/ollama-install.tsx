@@ -48,7 +48,7 @@ function formatMB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-export function OllamaInstall() {
+export function OllamaInstall({ onInstalled }: { onInstalled?: () => void } = {}) {
   const [detect, setDetect] = useState<DetectResp | null>(null);
   const [job, setJob] = useState<InstallJob | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +87,7 @@ export function OllamaInstall() {
            the new version string. */
         if (body.status === 'installed') {
           void doDetect();
+          onInstalled?.();
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -95,7 +96,7 @@ export function OllamaInstall() {
     return () => {
       if (pollRef.current) clearTimeout(pollRef.current);
     };
-  }, [job, doDetect]);
+  }, [job, doDetect, onInstalled]);
 
   const startInstall = async () => {
     setError(null);

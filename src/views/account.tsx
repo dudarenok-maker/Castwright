@@ -485,6 +485,23 @@ export function AccountView() {
           </a>
         </section>
 
+        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-ink">First-run setup</h2>
+            <p className="mt-1 text-xs text-ink/55 max-w-prose">
+              Re-open the setup wizard to check model installation, workspace, and engine readiness.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => dispatch(uiActions.openSetup())}
+            data-testid="account-rerun-setup"
+            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+          >
+            Re-run setup →
+          </button>
+        </section>
+
         <div className="flex items-center gap-4">
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
             {saving ? 'Saving…' : 'Save changes'}

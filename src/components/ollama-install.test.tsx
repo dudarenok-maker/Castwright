@@ -167,4 +167,55 @@ describe('OllamaInstall — not detected', () => {
     expect(screen.getByText(/HTTP 502/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
   });
+
+  it('calls onInstalled when a poll flips status to installed', async () => {
+    const onInstalled = vi.fn();
+    fetchMock.mockImplementation((url: string, init: RequestInit | undefined) => {
+      if (url.includes('/detect')) {
+        return Promise.resolve(jsonResponse({ installed: false, version: null }));
+      }
+      if (url.endsWith('/install') && init?.method === 'POST') {
+        return Promise.resolve(
+          jsonResponse(
+            {
+              id: '42',
+              status: 'downloading',
+              platform: 'linux',
+              arch: 'x64',
+              bytesReceived: 0,
+              bytesTotal: 50_000_000,
+              manualInstallerPath: null,
+              error: null,
+              startedAt: 0,
+              updatedAt: 0,
+            },
+            { status: 202 },
+          ),
+        );
+      }
+      if (url.includes('/install/42')) {
+        return Promise.resolve(
+          jsonResponse({
+            id: '42',
+            status: 'installed',
+            platform: 'linux',
+            arch: 'x64',
+            bytesReceived: 50_000_000,
+            bytesTotal: 50_000_000,
+            manualInstallerPath: null,
+            error: null,
+            startedAt: 0,
+            updatedAt: 0,
+          }),
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    render(<OllamaInstall onInstalled={onInstalled} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('ollama-install-not-detected')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /install ollama/i }));
+    await waitFor(() => expect(onInstalled).toHaveBeenCalledTimes(1), { timeout: 5000 });
+  });
 });
