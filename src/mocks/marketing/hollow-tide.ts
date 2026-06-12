@@ -32,6 +32,8 @@ const inspCray = (): Character => ({
   voiceState: 'generated',
   tone: { warmth: 0.4, pace: 0.45, authority: 0.85, emotion: 0.5 },
   description: 'Dogged harbour-town inspector.',
+  ttsEngine: 'qwen',
+  overrideTtsVoices: { qwen: { name: 'qwen-cray-v1' } },
 });
 
 const drWren = (): Character => ({
@@ -43,6 +45,8 @@ const drWren = (): Character => ({
   voiceState: 'generated',
   tone: { warmth: 0.55, pace: 0.4, authority: 0.6, emotion: 0.45 },
   description: 'Precise, dryly humane coroner.',
+  ttsEngine: 'qwen',
+  overrideTtsVoices: { qwen: { name: 'qwen-wren-v1' } },
 });
 
 const reusedFromBook1 = (c: Character): Character => ({
@@ -530,8 +534,15 @@ export const HOLLOW_TIDE_POSED = {
     bookTitle: "The Tidewatcher's Oath",
     phaseId: 1,
     phaseLabel: 'Detecting characters',
-    phaseProgress: 0.45,
-    remainingMs: 9000,
+    phaseProgress: 0.55,
+    remainingMs: 42_000,
+    live: {
+      totalChapters: 8,
+      chapters: [
+        { chapterIndex: 3, chapterTitle: 'Chapter 3', elapsedMs: 4200, estMs: 7000 },
+        { chapterIndex: 4, chapterTitle: 'Chapter 4', elapsedMs: 1600, estMs: 6800 },
+      ],
+    },
   },
   generating: {
     bookId: 'hollow-tide-2',

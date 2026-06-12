@@ -209,6 +209,15 @@ export function AnalysingView({
      and the server log shows exactly one [analysis] entry per click. */
   const [analysisStarted, setAnalysisStarted] = useState(false);
 
+  /* Marketing capture (VITE_DEMO_CAPTURE): auto-start so a deep-link to the
+     analysing screen poses a live run. The analyzer is Gemini in mock mode
+     (isAnalyzerReady === true), and the mock analyse stream emits one posed
+     frame then hangs (src/lib/api.ts), so the screen freezes mid-analysis
+     with phase progress + live cast instead of the idle Start state. */
+  useEffect(() => {
+    if (import.meta.env.VITE_DEMO_CAPTURE === '1') setAnalysisStarted(true);
+  }, []);
+
   /* Cold-boot rehydration of the view's local "have we started?" state
      from the cross-navigation analysis slice. Without this, a browser
      reload during an in-flight run lands the user on Analysing with
