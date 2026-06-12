@@ -3,7 +3,7 @@
    lacks: venv-on-disk and per-engine TTS weights. Drives the adaptive gate. */
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { buildDiagnostics, type DiagnosticsResponse } from './diagnostics.js';
+import { buildDiagnostics, type CheckId, type DiagnosticsResponse } from './diagnostics.js';
 import { getResolvedAnalysisEngine, getResolvedSetupCompletedAt } from '../workspace/user-settings.js';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { anyTtsEnginePresent } from '../tts/engine-presence.js';
@@ -24,10 +24,10 @@ export interface SetupReadiness {
   info: { gpu: string };
 }
 
-function checkOk(d: DiagnosticsResponse, id: string): boolean {
+function checkOk(d: DiagnosticsResponse, id: CheckId): boolean {
   return d.checks.find((c) => c.id === id)?.status === 'ok';
 }
-function detail(d: DiagnosticsResponse, id: string): string {
+function detail(d: DiagnosticsResponse, id: CheckId): string {
   return d.checks.find((c) => c.id === id)?.detail ?? '';
 }
 

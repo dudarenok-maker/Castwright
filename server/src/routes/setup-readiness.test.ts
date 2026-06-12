@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildSetupReadiness } from './setup-readiness.js';
-import type { DiagnosticsResponse } from './diagnostics.js';
+import type { CheckId, DiagnosticsResponse } from './diagnostics.js';
 
 function diag(over: Partial<Record<string, 'ok' | 'warn' | 'fail'>>): DiagnosticsResponse {
   const def: Record<string, 'ok' | 'warn' | 'fail'> = {
@@ -11,7 +11,7 @@ function diag(over: Partial<Record<string, 'ok' | 'warn' | 'fail'>>): Diagnostic
     ts: 'T',
     overall: 'ok',
     checks: Object.entries(merged).map(([id, status]) => ({
-      id: id as never, label: id, status: status as 'ok' | 'warn' | 'fail', detail: `${id}:${status}`,
+      id: id as CheckId, label: id, status: status as 'ok' | 'warn' | 'fail', detail: `${id}:${status}`,
     })),
   };
 }
@@ -40,5 +40,10 @@ describe('buildSetupReadiness', () => {
     const r = buildSetupReadiness({ diagnostics: diag({ gpu: 'fail' }), engine: 'local', venvPresent: true, ttsEnginePresent: true });
     expect(r.ready).toBe(true);
     expect(r.info.gpu).toBe('gpu:fail');
+  });
+  it('fails ffmpeg when the ffmpeg check is not ok', () => {
+    const r = buildSetupReadiness({ diagnostics: diag({ ffmpeg: 'fail' }), engine: 'local', venvPresent: true, ttsEnginePresent: true });
+    expect(r.blockers.ffmpeg).toBe('fail');
+    expect(r.ready).toBe(false);
   });
 });
