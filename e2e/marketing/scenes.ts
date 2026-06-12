@@ -67,4 +67,15 @@ export const SCENES: Scene[] = [
     hash: '#/voices',
     viewports: ['desktop'],
   },
+  {
+    id: 'coalfall-cast',
+    hash: '#/books/coalfall-commission/cast',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="cast-row-wren"]',
+  },
+  {
+    id: 'coalfall-manuscript',
+    hash: '#/books/coalfall-commission/manuscript?chapter=1',
+    viewports: ['desktop'],
+  },
 ];
