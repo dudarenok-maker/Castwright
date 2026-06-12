@@ -67,6 +67,9 @@ for (const scene of SCENES) {
     await waitForImages(page);
     // Short settle for fonts + the posed frame to paint.
     await page.waitForTimeout(500);
-    await page.screenshot({ path: resolve(OUT, `${scene.id}.${vp}.png`), fullPage: false });
+    await page.screenshot({
+      path: resolve(OUT, `${scene.id}.${vp}.png`),
+      fullPage: process.env.CAPTURE_FULLPAGE === '1',
+    });
   });
 }
