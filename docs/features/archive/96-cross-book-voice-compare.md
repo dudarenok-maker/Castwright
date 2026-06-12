@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** the Compare button now works for cast-member pairs from different books in the same series — e.g. comparing Maelor in *Exile* against Mr. Marrow in *The Hollow Tide*. Saves on either side propagate to every book in the series whose cast contains that same character (matched by name or alias). Dark-mode contrast on the floating toolbar's "same / different base voice" badges is also fixed so the pill is actually readable.
+- **User:** the Compare button now works for cast-member pairs from different books in the same series — e.g. comparing Maelor in *The Ebb* against Mr. Marrow in *The Hollow Tide*. Saves on either side propagate to every book in the series whose cast contains that same character (matched by name or alias). Dark-mode contrast on the floating toolbar's "same / different base voice" badges is also fixed so the pill is actually readable.
 - **Technical:** drops the cross-book guard at `voices.tsx` and the silent fallback that only saved to redux for the open book. Saves now route through a single new endpoint that resolves the series via the existing dedup primitive (`dedupSeriesPrior`) and writes to each matched `cast.json` atomically.
 - **Architectural:** reuses plan-94's normalisation rule (`lowercase + strip non-alphanum`) as the canonical "is this the same character?" predicate across both Phase-0a prompt rendering and the cross-book save path. No new matching predicate — drift between save propagation and prompt rendering is impossible by construction.
 
@@ -53,7 +53,7 @@ owner: null
 ### Manual acceptance walkthrough
 
 1. **Dark mode, `#/voices`** → toggle dark mode in the appearance panel. Floating toolbar pill at the bottom of the view shows readable text on a dark background (was unreadable cream-on-cream pre-fix).
-2. **Select two cross-book same-series characters** → e.g. Maelor (Exile) + Mr. Marrow (The Hollow Tide). Toolbar shows "same base voice ✓" badge (both routed to `am_adam`); text is legible. Compare button is enabled.
+2. **Select two cross-book same-series characters** → e.g. Maelor (The Ebb) + Mr. Marrow (The Hollow Tide). Toolbar shows "same base voice ✓" badge (both routed to `am_adam`); text is legible. Compare button is enabled.
 3. **Click Compare** → modal mounts with both characters as Side A / Side B. Each side renders the inline hint "Saves propagate to every book in this series where this character appears."
 4. **Edit a tone slider on Side A** → Side A's Save button enables.
 5. **Click Save on Side A** → toast appears at the bottom of the screen: "Saved to N books in this series." where N is the number of books in the series that contain Maelor by name or alias.

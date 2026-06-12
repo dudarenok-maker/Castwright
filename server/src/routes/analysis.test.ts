@@ -181,7 +181,7 @@ describe('verifyEvidenceAgainstSource', () => {
   });
 
   it('keeps stitched same-speaker quotes via the segment tier when every segment is in source', () => {
-    /* Regression for the the Hollow Tide false-positive class: the model joins two
+    /* Regression for the Hollow Tide false-positive class: the model joins two
        consecutive same-speaker utterances and drops the narration tag
        between them. The pure-substring check used to drop these; the
        three-tier match now keeps them as `segments`. */
@@ -213,7 +213,7 @@ describe('verifyEvidenceAgainstSource', () => {
   });
 
   it('keeps quotes whose only difference is terminal-punct drift (period for comma before a dialogue tag)', () => {
-    /* The other half of the the Hollow Tide false-positive class. Source punctuates
+    /* The other half of the Hollow Tide false-positive class. Source punctuates
        the utterance with `,` because a dialogue tag follows; the model
        emits `.` because it treats the line as a complete sentence. */
     const src = '"Mammoths are extinct," she interrupted. The dog barked.';
@@ -852,7 +852,7 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
 /* isPhase0aCoverageComplete gates stage1 finalisation in the subset-retry
    path. Without it, a sparse chapterCast (only some chapters run) plus
    failedChapterIds=[] would let rebuildRoster() write a partial roster
-   over an existing richer one — see the regression on "Unlocked" cited
+   over an existing richer one — see the regression on "The Floodmark" cited
    in the helper's comment. */
 describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finalisation', () => {
   const makeChar = (id: string): CharacterOutput => ({
@@ -873,7 +873,7 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
     expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 3 });
   });
 
-  it('flags missing chapters when chapterCast is sparse (Unlocked-style regression)', () => {
+  it('flags missing chapters when chapterCast is sparse (The Floodmark-style regression)', () => {
     /* 5 chapters required, only 2 covered. */
     const chapterCast: Record<number, CharacterOutput[]> = {
       1: [makeChar('narrator')],
@@ -936,7 +936,7 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
 
 /* reconcileSentenceCharacterIds is the Phase 1 disk-write safety net for
    orphan characterIds. Without it, manuscript-edits.json can carry IDs
-   that don't exist in cast.json — exactly what we found on "Unlocked"
+   that don't exist in cast.json — exactly what we found on "The Floodmark"
    where 153 sentences referenced marlow/oduvan/maerin/linnet/wren after
    cast.json had been collapsed to Narrator-only by the partial-cache bug
    fixed in A1. */
@@ -969,7 +969,7 @@ describe('reconcileSentenceCharacterIds — Phase 1 orphan id demoter', () => {
   });
 
   it('demotes sentences whose characterId is missing from validIds to narrator (default fallback)', () => {
-    /* Unlocked-style regression: stage1 has [narrator] only, but Phase 1
+    /* The Floodmark-style regression: stage1 has [narrator] only, but Phase 1
        attributed to marlow/oduvan/maerin. Those ids become narrator at
        write time, preserving the rest of the sentence shape. */
     const sentences = [
@@ -1064,7 +1064,7 @@ describe('attributionDriftExceeded — threshold gate for blocking confirm advan
     expect(attributionDriftExceeded(99, 49, 0.01, 50)).toBe(false);
   });
 
-  it('Unlocked-shaped sample (153 demoted of 4192) stays below 5% — handled by demotion, no escalation', () => {
+  it('The Floodmark-shaped sample (153 demoted of 4192) stays below 5% — handled by demotion, no escalation', () => {
     /* The real regression numbers: marlow(134) + oduvan(9) + maerin(8) +
        linnet(1) + wren(1) = 153 orphan attributions out of 4192 total
        sentences. 153/4192 ≈ 3.65%. Demotion runs but the route still
@@ -1084,11 +1084,11 @@ describe('attributionDriftExceeded — threshold gate for blocking confirm advan
 /* stage1ShrinkRefused is the data-loss guard for stage1 rewrites. When a
    well-populated existing roster would be replaced by a much smaller new
    roster, the route refuses the write and surfaces the choice to the
-   user via `stage1_shrink_refused`. Without this guard the Unlocked
+   user via `stage1_shrink_refused`. Without this guard The Floodmark
    regression (6 characters silently → 1) happens with no warning. */
 describe('stage1ShrinkRefused — data-loss guard for stage1 rewrites', () => {
   it('refuses when next is less than half of prev on a non-trivial prior roster', () => {
-    /* Unlocked regression: prior had 6 characters, new run produces 1.
+    /* The Floodmark regression: prior had 6 characters, new run produces 1.
        1 < 6 * 0.5 = 3 → refused. */
     expect(stage1ShrinkRefused(6, 1)).toBe(true);
     expect(stage1ShrinkRefused(6, 2)).toBe(true);
@@ -1139,12 +1139,12 @@ describe('stage1ShrinkRefused — data-loss guard for stage1 rewrites', () => {
 /* The per-chapter inbox template feeds the detection skill. Verify it
    broadcasts the broadened inclusion rules so journal/registry/log
    chapters get the right guidance — without these, Gemini collapses
-   Unlocked-style first-person chapters to Narrator-only. */
+   The Floodmark-style first-person chapters to Narrator-only. */
 describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
   it('includes manuscript metadata + chapter body verbatim', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',
-      'Unlocked',
+      'The Floodmark',
       {
         id: 7,
         title: "Oduvan's Medical Log",
@@ -1153,15 +1153,15 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
       [],
     );
     expect(inbox).toContain('manuscriptId: mns_test');
-    expect(inbox).toContain('Title: Unlocked');
+    expect(inbox).toContain('Title: The Floodmark');
     expect(inbox).toContain("Chapter: 7 — Oduvan's Medical Log");
     expect(inbox).toContain("I'd just settled into bed when Wren hailed me.");
   });
 
-  it('renders the broadened first-person guidance so journal/registry chapters detect their author (regression for Unlocked)', () => {
+  it('renders the broadened first-person guidance so journal/registry chapters detect their author (regression for The Floodmark)', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',
-      'Unlocked',
+      'The Floodmark',
       { id: 7, title: "Oduvan's Medical Log", body: 'Body text.' },
       [],
     );
@@ -1179,7 +1179,7 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
   it('renders the running-roster section with the supplied ids when non-empty', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',
-      'Unlocked',
+      'The Floodmark',
       { id: 7, title: 'X', body: 'Y.' },
       [
         {
@@ -1207,7 +1207,7 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
   it('renders the empty-roster fallback line when no characters have been detected yet (first chapter)', () => {
     const inbox = buildStage1ChapterInbox(
       'mns_test',
-      'Unlocked',
+      'The Floodmark',
       { id: 1, title: 'Chapter 1', body: 'Body.' },
       [],
     );
@@ -1215,13 +1215,13 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
   });
 
   it('renders the series-cast prior section when sibling-book characters are supplied (C2 carry-over)', () => {
-    /* The Unlocked-shaped regression motivator: the Hollow Tide + Bonus Marlow
+    /* The Floodmark-shaped regression motivator: the Hollow Tide + Bonus Marlow
        between them have Wren / Marlow / Oduvan already confirmed.
-       Carrying them into Unlocked's per-chapter prompt means the
+       Carrying them into The Floodmark's per-chapter prompt means the
        detector recognises them by name rather than inventing new ids. */
     const inbox = buildStage1ChapterInbox(
       'mns_unlocked',
-      'Unlocked',
+      'The Floodmark',
       { id: 1, title: 'Chapter 1', body: 'I settled into bed.' },
       [],
       [
@@ -1231,7 +1231,7 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
           aliases: ['Foster'],
           /* Deduped roster: Wren appears in two prior books, so the
              array carries both titles. */
-          fromBookTitles: ['The Hollow Tide', 'Exile'],
+          fromBookTitles: ['The Hollow Tide', 'The Ebb'],
         },
         { id: 'marlow', name: 'Marlow', fromBookTitles: ['the Coalfall Commission'] },
         {
@@ -1252,7 +1252,7 @@ describe('buildStage1ChapterInbox — Phase 0a per-chapter prompt', () => {
     expect(inbox).toContain('the Coalfall Commission');
     /* The plural fromBookTitles renders as an array — important so the
        model sees that Wren spans two volumes, not just one. */
-    expect(inbox).toMatch(/"fromBookTitles":\s*\[\s*"The Hollow Tide",\s*"Exile"\s*\]/);
+    expect(inbox).toMatch(/"fromBookTitles":\s*\[\s*"The Hollow Tide",\s*"The Ebb"\s*\]/);
     /* Singular legacy field must NOT appear in the rendered JSON. */
     expect(inbox).not.toMatch(/"fromBookTitle":/);
     /* And the reuse-verbatim guidance is rendered so the model knows
@@ -1434,7 +1434,7 @@ describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiabl
     const chars: CharacterOutput[] = [
       makeChar('narrator', 'Narrator', []), // narrator is exempt
       makeChar('wren', 'Wren', [{ quote: 'Real line' }]), // kept
-      makeChar('Pib', 'Pib', []), // pet — verifier killed everything
+      makeChar('pib', 'Pib', []), // pet — verifier killed everything
       makeChar('rescuer', 'Rescuer'), // never had evidence
     ];
 
@@ -1497,7 +1497,7 @@ describe('dropEvidencelessCast — Phase 0b drop of characters with no verifiabl
       makeChar('narrator', 'Narrator', []),
       makeChar('wren', 'Wren', [{ quote: 'Real line' }]),
       makeChar('master-oduvan', 'Master Oduvan', []), // verifier killed all his quotes — but he's tagged
-      makeChar('Pib', 'Pib', []), // pet — never tagged as a speaker in the prose
+      makeChar('pib', 'Pib', []), // pet — never tagged as a speaker in the prose
     ];
 
     const kept = dropEvidencelessCast(chars, (msg) => logs.push(msg), source);

@@ -16,7 +16,7 @@ let workspaceRoot: string;
 let app: Express;
 let makeBookIdFn: (a: string, s: string, t: string) => string;
 /* The "current book" we're analysing. It must be a REAL on-disk book in the
-   Keeper series so the (author, series)-scoped matcher resolves its
+   The Hollow Tide series so the (author, series)-scoped matcher resolves its
    series-mates (Book One / Book Two) as eligible candidates. Assigned in
    beforeAll once makeBookId is imported. */
 let CURRENT_BOOK_ID: string;
@@ -107,7 +107,7 @@ beforeAll(async () => {
         ageRange: 'teen',
       },
       /* Same-series narrator — the legitimate reuse target for a later
-         Keeper book's narrator. */
+         The Hollow Tide book's narrator. */
       { id: 'narrator', name: 'Narrator', voiceId: 'v_narr_the Hollow Tide', gender: 'neutral' },
     ],
     true,
@@ -156,7 +156,7 @@ beforeAll(async () => {
   /* A DIFFERENT author + series, confirmed, with its own narrator. Every
      book's narrator shares the deterministic id/name "narrator", so a
      library-wide exact-name match would let this unrelated-series narrator
-     surface as a candidate for a Keeper book's narrator. It must not. */
+     surface as a candidate for a The Hollow Tide book's narrator. It must not. */
   writeBookOnDisk(
     workspaceRoot,
     'Derek Landy',
@@ -167,7 +167,7 @@ beforeAll(async () => {
     true,
   );
 
-  /* The current book being analysed — a real Keeper-series book on disk so the
+  /* The current book being analysed — a real The Hollow Tide-series book on disk so the
      (author, series) matcher resolves Book One / Book Two as its series-mates.
      Its own cast is empty (and it's excluded as a self-candidate anyway). */
   CURRENT_BOOK_ID = makeBookId(AUTHOR, SERIES, 'Current Book');
@@ -402,7 +402,7 @@ describe('voice-match router', () => {
   it('a real named character does NOT match across a different author/series', async () => {
     /* Auto-match is scoped to the current book's same-author + same-series
        mates — for EVERY character, not just generic role-names. A
-       Skulduggery-series "Marlow" must NOT grab the Keeper-series Marlow's
+       Skulduggery-series "Marlow" must NOT grab The Hollow Tide-series Marlow's
        designed voice: an unrelated author's same-named character is a
        coincidence, not a recurring character. (Cross-series reuse stays
        possible as an explicit Voice-library assignment, just never as a
@@ -420,7 +420,7 @@ describe('voice-match router', () => {
   it('a real named character STILL matches a same-series sibling book', async () => {
     /* The scope tightening must not break legitimate within-series reuse:
        calling as Book Three (The Hollow Tide), "Marlow" still
-       matches the Keeper-series Marlow designed in Book One / Book Two. */
+       matches The Hollow Tide-series Marlow designed in Book One / Book Two. */
     const bookThreeId = makeBookIdFn(AUTHOR, SERIES, 'Book Three Unconfirmed');
     const res = await callMatch(bookThreeId, {
       characters: [{ id: 'marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],

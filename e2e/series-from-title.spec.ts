@@ -32,13 +32,13 @@ test.describe('series-from-title heuristic + chip', () => {
     /* Paste a markdown manuscript whose H1 carries the series in a
        trailing parenthetical. The mock importManuscript mirrors the
        server's parseSeriesFromTitle so the candidate lands with
-       title='The Tidewatcher's Oath', series='The Hollow Tide',
+       title='Saltgrave', series='The Hollow Tide',
        seriesPosition=3, seriesFromTitle=true. */
     await page.getByRole('button', { name: /Paste text/i }).click();
     await page
       .locator('textarea')
       .fill(
-        '# The Tidewatcher's Oath (The Hollow Tide Book 3)\n\n' +
+        '# Saltgrave (The Hollow Tide Book 3)\n\n' +
           '# Chapter 1\n\nThe flame was tinged with blue.\n\n' +
           '# Chapter 2\n\nIt grew.\n',
       );
@@ -62,7 +62,7 @@ test.describe('series-from-title heuristic + chip', () => {
 
     /* Title was stripped of the parenthetical. */
     const titleInput = page.getByPlaceholder(/Wizard of Earthsea/i);
-    await expect(titleInput).toHaveValue('The Tidewatcher's Oath');
+    await expect(titleInput).toHaveValue('Saltgrave');
 
     /* The "auto-extracted from title" chip is visible. */
     const chip = page.getByText(/Auto-extracted from title/i);

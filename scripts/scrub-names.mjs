@@ -29,6 +29,7 @@ const MAP = [
   ['Wren Sparrow', 'Wren Sparrow'],
   ['Marlow Halden', 'Marlow Halden'],
   ['Pell Marsh', 'Pell Marsh'],
+  ['Hartwell Brennan Vale', 'Hartwell Brennan Vale'],
   ['Sir Singe', 'Sir Singe'],
   ['Lord Vane', 'Lord Vane'],
   ['Lady Wick', 'Lady Wick'],
@@ -64,6 +65,9 @@ const MAP = [
   ['Wick', 'Wick'],
   ['Singe', 'Singe'],
   // long-tail minor characters
+  ['Hartwell', 'Hartwell'], // Hart's analyzer-named long form (Hart→Hart elsewhere)
+  ['Hartie', 'Hartie'],
+  ['Bren', 'Bren'],
   ['Marrow', 'Marrow'],
   ['Castor', 'Castor'],
   ['Aldous', 'Aldous'],
@@ -74,6 +78,17 @@ const MAP = [
   ['Blur', 'Haze'],
   ['Quill', 'Quill'],
   ['Senna', 'Senna'],
+  // family surnames + pets + places (the long tail the early phases missed)
+  ['Vell', 'Vell'],
+  ['Vale', 'Vale'],
+  ['Vale', 'Vale'],
+  ['Reeve', 'Reeve'],
+  ['Varek', 'Varek'],
+  ['Pib', 'Pib'],
+  ['Rufus', 'Rufus'],
+  ['Lumen', 'Lumen'],
+  ['Saltmoor', 'Saltmoor'],
+  ['Tidehaven', 'Tidehaven'],
   // NOTE: Blur/Ro/Bo are the Hollow Tide chars but ALSO common words (the `blur` DOM
   // event, `ro`/`bo` abbreviations) — context-only, handled by a manual pass,
   // NEVER blanket-renamed.

@@ -28,31 +28,31 @@ Describe 'Get-CastReconciliationSummary' {
     }
 
     It 'tallies cast.json characters and surfaces them as a sorted unique list' {
-        $state = @{ bookId = 'b1'; manuscriptId = 'm1'; title = 'Unlocked' } | ConvertTo-Json -Depth 5
+        $state = @{ bookId = 'b1'; manuscriptId = 'm1'; title = 'The Floodmark' } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $script:audiobookDir 'state.json') -Value $state -Encoding utf8
 
         $cast = @{ characters = @(
             @{ id = 'narrator'; name = 'Narrator' },
-            @{ id = 'Wren';   name = 'Wren' },
-            @{ id = 'Marlow';    name = 'Marlow' }
+            @{ id = 'wren';   name = 'Wren' },
+            @{ id = 'marlow';    name = 'Marlow' }
         ) } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $script:audiobookDir 'cast.json') -Value $cast -Encoding utf8
 
         $summary = Get-CastReconciliationSummary -BookDir $script:tempDir
         $summary.BookId | Should -Be 'b1'
         $summary.ManuscriptId | Should -Be 'm1'
-        $summary.Title | Should -Be 'Unlocked'
+        $summary.Title | Should -Be 'The Floodmark'
         $summary.CastCharacterCount | Should -Be 3
         $summary.CastCharacterIds | Should -Contain 'narrator'
-        $summary.CastCharacterIds | Should -Contain 'Wren'
-        $summary.CastCharacterIds | Should -Contain 'Marlow'
+        $summary.CastCharacterIds | Should -Contain 'wren'
+        $summary.CastCharacterIds | Should -Contain 'marlow'
     }
 
-    It 'identifies orphan characterIds -- sentences referencing ids absent from cast.json (Unlocked regression)' {
-        $state = @{ bookId = 'b1'; manuscriptId = 'm1'; title = 'Unlocked' } | ConvertTo-Json -Depth 5
+    It 'identifies orphan characterIds -- sentences referencing ids absent from cast.json (The Floodmark regression)' {
+        $state = @{ bookId = 'b1'; manuscriptId = 'm1'; title = 'The Floodmark' } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $script:audiobookDir 'state.json') -Value $state -Encoding utf8
 
-        # cast.json has only narrator -- the Unlocked-style corrupted state.
+        # cast.json has only narrator -- the The Floodmark-style corrupted state.
         $cast = @{ characters = @(@{ id = 'narrator'; name = 'Narrator' }) } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $script:audiobookDir 'cast.json') -Value $cast -Encoding utf8
 
@@ -60,9 +60,9 @@ Describe 'Get-CastReconciliationSummary' {
         # 3 orphans that A5's wipe must surface to the user.
         $edits = @{ sentences = @(
             @{ id = 1; chapterId = 1; characterId = 'narrator'; text = 'a' },
-            @{ id = 2; chapterId = 1; characterId = 'Marlow';    text = 'b' },
-            @{ id = 3; chapterId = 2; characterId = 'Oduvan';    text = 'c' },
-            @{ id = 4; chapterId = 2; characterId = 'Wren';   text = 'd' }
+            @{ id = 2; chapterId = 1; characterId = 'marlow';    text = 'b' },
+            @{ id = 3; chapterId = 2; characterId = 'oduvan';    text = 'c' },
+            @{ id = 4; chapterId = 2; characterId = 'wren';   text = 'd' }
         ) } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $script:audiobookDir 'manuscript-edits.json') -Value $edits -Encoding utf8
 
@@ -70,9 +70,9 @@ Describe 'Get-CastReconciliationSummary' {
         $summary.EditsSentenceCount | Should -Be 4
         @($summary.EditsCharacterIds).Count | Should -Be 4
         @($summary.OrphanCharacterIds).Count | Should -Be 3
-        $summary.OrphanCharacterIds | Should -Contain 'Marlow'
-        $summary.OrphanCharacterIds | Should -Contain 'Oduvan'
-        $summary.OrphanCharacterIds | Should -Contain 'Wren'
+        $summary.OrphanCharacterIds | Should -Contain 'marlow'
+        $summary.OrphanCharacterIds | Should -Contain 'oduvan'
+        $summary.OrphanCharacterIds | Should -Contain 'wren'
         $summary.OrphanCharacterIds | Should -Not -Contain 'narrator'
     }
 

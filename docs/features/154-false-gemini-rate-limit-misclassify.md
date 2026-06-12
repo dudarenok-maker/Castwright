@@ -6,7 +6,7 @@ owner: null
 
 # 154 — A local Qwen timeout no longer reports "Gemini TTS rate-limited" (and no longer stops the run)
 
-> Status: active — code + tests landed; live acceptance (regenerate the The Drowning Bell tail across a recycle) pending.
+> Status: active — code + tests landed; live acceptance (regenerate the Drowning Bell tail across a recycle) pending.
 > Key files: `server/src/routes/generation-error.ts` (classifier), `server/src/routes/generation.ts` (classifier callsite + srv-17c recovery trigger)
 > URL surface: indirect (generation SSE `chapter_failed` reason + queue paused-on-fatal)
 > OpenAPI ops: none
@@ -78,7 +78,7 @@ Automated (`server/src/routes/generation-error.test.ts`, all green):
 - The word `generated` in an unmapped error is non-fatal, not a rate-limit.
 
 Manual acceptance (pending live run): with a clean VRAM baseline (reboot), resume
-the The Drowning Bell queue from CH24 on Qwen and force a recycle mid-chapter — the
+the Drowning Bell queue from CH24 on Qwen and force a recycle mid-chapter — the
 chapter re-renders rather than failing, and no run shows the Gemini banner.
 
 ## Out of scope (tracked separately)

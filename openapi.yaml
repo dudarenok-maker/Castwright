@@ -3793,9 +3793,9 @@ components:
             coqui: { name: 'Asya Anara' }
             kokoro: { name: 'am_onyx' }
             qwen:
-              name: 'qwen-Wren'
+              name: 'qwen-wren'
               variants:
-                angry: { name: 'qwen-Wren__angry' }
+                angry: { name: 'qwen-wren__angry' }
         overrideTtsVoice:
           deprecated: true
           allOf:

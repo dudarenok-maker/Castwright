@@ -165,7 +165,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
   /* Stable-key continuity — the narrator (and any character that keeps its
      deterministic voiceId/id across books) must link even when the analyzer
      renames it to something with ZERO name-token overlap with the prior. This
-     is the Unraveled narrator regression: prior books call it "Narrator", this
+     is the The Riptide narrator regression: prior books call it "Narrator", this
      book's analysis named it "Author" → the name scorer's 0.34 floor drops it,
      so the bespoke qwen voice silently fails to carry over. */
   it('links by stable voiceId even when the name has no token overlap (narrator rename)', async () => {
@@ -291,9 +291,9 @@ describe('pruneStaleReuseLinks', () => {
   const KEEPER2 = 'shannon__keeper__book2';
   const META: Record<string, { author: string; series: string } | null> = {
     [COALFALL]: { author: 'Castwright', series: 'Standalones' },
-    [BONUS]: { author: 'Della Renwick', series: 'Keeper' },
-    [KEEPER1]: { author: 'Della Renwick', series: 'Keeper' },
-    [KEEPER2]: { author: 'Della Renwick', series: 'Keeper' },
+    [BONUS]: { author: 'Della Renwick', series: 'The Hollow Tide' },
+    [KEEPER1]: { author: 'Della Renwick', series: 'The Hollow Tide' },
+    [KEEPER2]: { author: 'Della Renwick', series: 'The Hollow Tide' },
   };
   const opts = (): LinkSeriesReuseOptions => ({
     resolveAuthorSeries: async (id) => META[id] ?? null,

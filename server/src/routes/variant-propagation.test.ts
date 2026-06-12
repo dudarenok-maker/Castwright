@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const AUTHOR = 'Della Renwick';
-const SERIES = 'Keeper';
+const SERIES = 'The Hollow Tide';
 const OTHER_SERIES = 'Unrelated';
 
 let workspaceRoot: string;

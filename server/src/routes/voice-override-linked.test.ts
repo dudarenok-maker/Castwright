@@ -18,7 +18,7 @@ import request from 'supertest';
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK_A = 'The Hollow Tide';
-const BOOK_B = 'Exile';
+const BOOK_B = 'The Ebb';
 const BOOK_C = 'The Tidewatcher’s Oath';
 const OTHER_BOOK = 'A Different Saga';
 const STANDALONE = 'A Standalone';

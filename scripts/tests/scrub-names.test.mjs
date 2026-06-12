@@ -83,3 +83,19 @@ test('Pell (the Hollow Tide Pell Marsh) maps to Pell — no collision with Marlo
   assert.equal(scrubText('Marlow and Pell'), 'Marlow and Pell');
   assert.equal(scrubText('Pell Marsh'), 'Pell Marsh');
 });
+
+test('Hart long-form (Hartwell Brennan Vale) + derived forms map consistently', () => {
+  assert.equal(scrubText('Hartwell Brennan Vale'), 'Hartwell Brennan Vale');
+  assert.equal(scrubText("id: 'Hartwell-alvin-Vale'"), "id: 'hartwell-brennan-vale'");
+  assert.equal(scrubText('Hartwell and Hartie and Bren'), 'Hartwell and Hartie and Bren');
+});
+
+test('long-tail surnames / pets / places', () => {
+  assert.equal(scrubText('Maerin Vell'), 'Maerin Vell');
+  assert.equal(scrubText('Hart Vale'), 'Hart Vale');
+  assert.equal(scrubText('Corvin Reeve'), 'Corvin Reeve');
+  assert.equal(scrubText('Pib and Rufus at Saltmoor near Tidehaven'),
+    'Pib and Rufus at Saltmoor near Tidehaven');
+  // common-word neighbours stay intact (bounded source tokens)
+  assert.equal(scrubText('the verdict and the index'), 'the verdict and the index');
+});

@@ -229,7 +229,7 @@ describe('castSlice — hydrateFromAnalysis', () => {
             name: 'Newcomer',
             role: 'Peer',
             color: 'slot-9',
-            matchedFrom: { bookTitle: 'Exile', confidence: 0.88 },
+            matchedFrom: { bookTitle: 'The Ebb', confidence: 0.88 },
           } as Character,
         ]),
       ),
@@ -239,7 +239,7 @@ describe('castSlice — hydrateFromAnalysis', () => {
     expect(vane.voiceState).toBe('reused');
     expect(vane.matchedFrom).toEqual({ bookTitle: 'The Tidewatcher’s Oath', confidence: 0.9 });
     const newcomer = next.characters.find((c) => c.id === 'newcomer')!;
-    expect(newcomer.matchedFrom).toEqual({ bookTitle: 'Exile', confidence: 0.88 });
+    expect(newcomer.matchedFrom).toEqual({ bookTitle: 'The Ebb', confidence: 0.88 });
   });
 });
 
@@ -465,29 +465,29 @@ describe('castSlice — addCharacter (POST /cast/add-from-roster response)', () 
 describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () => {
   it('writes matchedFrom + voiceId + reused state on the targeted character', () => {
     const start = baseState([
-      makeChar('Hartwell-alvin-Vale', { voiceState: 'generated' }),
+      makeChar('hartwell-brennan-vale', { voiceState: 'generated' }),
       makeChar('wren', { voiceState: 'generated' }),
     ]);
     const next = castSlice.reducer(
       start,
       castActions.applyManualMatch({
-        characterId: 'Hartwell-alvin-Vale',
+        characterId: 'hartwell-brennan-vale',
         matchedFrom: {
           bookId: 'the Hollow Tide_1',
           characterId: 'hart',
-          bookTitle: 'Keeper #1',
+          bookTitle: 'The Hollow Tide #1',
           confidence: 1,
         },
         voiceId: 'v_hart',
       }),
     );
-    const hart = next.characters.find((c) => c.id === 'Hartwell-alvin-Vale')!;
+    const hart = next.characters.find((c) => c.id === 'hartwell-brennan-vale')!;
     expect(hart.voiceId).toBe('v_hart');
     expect(hart.voiceState).toBe('reused');
     expect(hart.matchedFrom).toEqual({
       bookId: 'the Hollow Tide_1',
       characterId: 'hart',
-      bookTitle: 'Keeper #1',
+      bookTitle: 'The Hollow Tide #1',
       confidence: 1,
     });
     /* Untouched character is untouched. */
@@ -499,26 +499,26 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
        to the prior should record the continuity link without overwriting
        the tuned voiceId or downgrading voiceState. */
     const start = baseState([
-      makeChar('Hartwell-alvin-Vale', {
+      makeChar('hartwell-brennan-vale', {
         voiceState: 'tuned',
-        voiceId: 'v_Hartwell_tuned',
+        voiceId: 'v_hartwell_tuned',
       }),
     ]);
     const next = castSlice.reducer(
       start,
       castActions.applyManualMatch({
-        characterId: 'Hartwell-alvin-Vale',
+        characterId: 'hartwell-brennan-vale',
         matchedFrom: {
           bookId: 'the Hollow Tide_1',
           characterId: 'hart',
-          bookTitle: 'Keeper #1',
+          bookTitle: 'The Hollow Tide #1',
           confidence: 1,
         },
         voiceId: 'v_hart_from_prior',
       }),
     );
     const hart = next.characters[0];
-    expect(hart.voiceId).toBe('v_Hartwell_tuned');
+    expect(hart.voiceId).toBe('v_hartwell_tuned');
     expect(hart.voiceState).toBe('tuned');
     expect(hart.matchedFrom?.characterId).toBe('hart');
   });
@@ -565,13 +565,13 @@ describe('castSlice — applyManualMatch (POST /cast/link-prior response)', () =
 
   it('leaves the profile untouched when the response carries none', () => {
     const start = baseState([
-      makeChar('Hartwell-alvin-Vale', { voiceState: 'generated', attributes: ['original'] }),
+      makeChar('hartwell-brennan-vale', { voiceState: 'generated', attributes: ['original'] }),
     ]);
     const next = castSlice.reducer(
       start,
       castActions.applyManualMatch({
-        characterId: 'Hartwell-alvin-Vale',
-        matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'hart', bookTitle: 'Keeper #1', confidence: 1 },
+        characterId: 'hartwell-brennan-vale',
+        matchedFrom: { bookId: 'the Hollow Tide_1', characterId: 'hart', bookTitle: 'The Hollow Tide #1', confidence: 1 },
         voiceId: 'v_hart',
       }),
     );

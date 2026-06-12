@@ -359,9 +359,10 @@ release archive bundles nothing whose licence is unverified.
 - [ ] **Git history scrub — DESTRUCTIVE, force-push.** Audit history for
       committed secrets and copyrighted fixtures, then rewrite if found:
   - Audit: `git log --all --full-history -- '**/.env' 'server/.env'` and a
-    secret scan (e.g. `gitleaks detect`, `trufflehog`). Also check the canonical
-    copyrighted manuscript fixture never entered history:
-    `git log --all --full-history --oneline -- '**/*Marlow*'`.
+    secret scan (e.g. `gitleaks detect`, `trufflehog`). Also check no copyrighted
+    manuscript fixture ever entered history (search by the legacy external
+    bonus-story filename, plus the fixtures path):
+    `git log --all --full-history --oneline -- 'server/src/__fixtures__/**'`.
   - If anything is found: back up the repo, rewrite with
     `git filter-repo --invert-paths --path <file>` (or BFG), force-push, and
     have every clone re-clone. Do **not** run casually.

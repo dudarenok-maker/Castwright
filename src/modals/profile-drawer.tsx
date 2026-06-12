@@ -804,7 +804,7 @@ export function ProfileDrawer({
         className="fixed top-16 right-0 bottom-0 w-full max-w-[520px] bg-white shadow-drawer z-50 overflow-y-auto scrollbar-thin slide-in-right"
         style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
       >
-        <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
+        <div className="sticky top-0 bg-white/95 backdrop-haze-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
           <Avatar name={character.name} color={character.color as CharColor} size={40} />
           <div className="flex-1 min-w-0">
             {editingName ? (

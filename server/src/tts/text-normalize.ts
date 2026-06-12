@@ -5,7 +5,7 @@
    anchored to an observed failure mode:
 
    - Long all-caps runs are spelled letter-by-letter or trigger hallucinations
-     / repetition loops. Chapter 1 of the Keeper book opens with the literal
+     / repetition loops. Chapter 1 of The Hollow Tide book opens with the literal
      word "ONE" and the model emits "oh — en — ee" in 1.15 s. Chapter 2 opens
      with "THE NEXT SECOND WAS A BLUR." and the model emitted ~60 s of garbled
      audio in front of the real narration.

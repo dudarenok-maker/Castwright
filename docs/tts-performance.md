@@ -72,7 +72,7 @@ _Settings:_ `QWEN_ATTN_IMPL=sdpa` (**confirmed** from the model-load log), `dtyp
 | serial `/synthesize` (warm) | 10× `qwen-narrator` | 58.6 | 384.5 | **6.63** | warm barely beats cold — cost is the AR decode, not load |
 | serial `/synthesize` (real prose) | 8 "DAY ONE" sentences | 30.4 | 251.9 | **8.29** | real Marlow prose, single voice |
 | **batch `/synthesize-batch`** | 8 same-voice items, 1 call | 30.2 | 78.8 | **2.61** | **3.2× faster than serial** — clean single-voice batch |
-| **full pipeline, mixed cast** | "the Coalfall Commission" ch.2 "DAY ONE", 4 voices | 296.3 | 1221.8 | **4.12** | real per-character gen (Narrator/Marlow/Oduvan/Ro); MP3 ffprobe-confirmed (296.28 s, mono 24 kHz, ~67 kbps) |
+| **full pipeline, mixed cast** | "the Coalfall Commission" ch.2 "DAY ONE", 4 voices | 296.3 | 1221.8 | **4.12** | real per-character gen (Narrator/Marlow/Oduvan/Nim); MP3 ffprobe-confirmed (296.28 s, mono 24 kHz, ~67 kbps) |
 
 **Observations:**
 

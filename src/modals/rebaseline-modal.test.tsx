@@ -296,7 +296,7 @@ describe('RebaselineModal — whole-series aggregation', () => {
        Name/alias collapse must fold her into the single anchor row, NOT render
        a second "Maerin Vell" row. */
     getSeriesCast.mockResolvedValue({
-      characters: [{ ...char('maerin-Vell', 'Maerin Vell', 200), sourceBookId: 'book-2' } as Character],
+      characters: [{ ...char('maerin-vell', 'Maerin Vell', 200), sourceBookId: 'book-2' } as Character],
     });
     const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
     render(
@@ -315,7 +315,7 @@ describe('RebaselineModal — whole-series aggregation', () => {
     getSeriesCast.mockResolvedValue({
       characters: [
         {
-          ...char('maerin-Vell', 'Maerin Vell', 200),
+          ...char('maerin-vell', 'Maerin Vell', 200),
           sourceBookId: 'book-2',
           notLinkedTo: [{ bookId: 'book-1', characterId: 'maerin' }],
         } as Character,

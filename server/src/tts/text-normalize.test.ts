@@ -170,7 +170,7 @@ describe('normaliseForTts (composed)', () => {
   it('strips the analyzer vocabulary tags so Kokoro / Coqui do not read them aloud', () => {
     /* No current engine in this app interprets bracket markup as prosody.
        The user reported "[emphatic] is being read not being used in voice"
-       on the canonical Keeper book — this is the regression. */
+       on the canonical The Hollow Tide book — this is the regression. */
     expect(normaliseForTts('She said [emphatic] hello.')).toBe('She said hello.');
     expect(normaliseForTts('[shouting] HELP!')).toBe('Help!');
     expect(normaliseForTts('Stay still, [whispers] he murmured.')).toBe(

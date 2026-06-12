@@ -43,10 +43,10 @@ describe('computeQwenKokoroFallbackSet', () => {
   });
 
   it('returns a stable id-sorted list across multiple fallbacks', () => {
-    const cast = [qwenChar('zelda'), qwenChar('Varek'), qwenChar('edda')];
+    const cast = [qwenChar('zelda'), qwenChar('varek'), qwenChar('edda')];
     expect(computeQwenKokoroFallbackSet(cast, 'qwen').map((c) => c.id)).toEqual([
-      'Varek',
       'edda',
+      'varek',
       'zelda',
     ]);
   });

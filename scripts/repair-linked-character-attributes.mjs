@@ -6,7 +6,7 @@
  * some books" gap — the data side of the cross-book link carry-over fix.
  *
  * Symptom: the SAME person appears across several series books, but in one or
- * more of them the row is thin or empty — e.g. Unlocked's "Dame Linnet" was
+ * more of them the row is thin or empty — e.g. The Floodmark's "Dame Linnet" was
  * carried in from the roster with 0 of its own detected lines, so its profile
  * (representative quotes, attributes, description, tone) is blank even though
  * the canonical character in earlier books is rich. Cause: until

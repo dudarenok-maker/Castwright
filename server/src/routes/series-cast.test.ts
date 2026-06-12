@@ -96,7 +96,7 @@ beforeAll(async () => {
       { id: 'nim', name: 'Nim', voiceId: 'v_nim', lines: 15 },
     ],
   });
-  unlockedBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Unlocked', {
+  unlockedBookId = seed(workspaceRoot, AUTHOR, SERIES, 'The Floodmark', {
     confirmed: false,
     characters: [{ id: 'narrator', name: 'Narrator', lines: 10 }],
   });
@@ -124,13 +124,13 @@ describe('GET /api/books/:bookId/series-cast', () => {
   it('returns the full cast of every OTHER confirmed series book, excluding itself', async () => {
     const res = await request(app).get(`/api/books/${keeperBookId}/series-cast`);
     expect(res.status).toBe(200);
-    /* Keeper itself excluded → Bonus Marlow's 2 characters remain. */
+    /* The Hollow Tide itself excluded → Bonus Marlow's 2 characters remain. */
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();
     expect(ids).toEqual(['marlow', 'nim']);
   });
 
   it('passes through full cast.json fidelity (lines / voiceStyle / overrideTtsVoices / ttsEngine)', async () => {
-    /* Query from Unlocked's vantage so Keeper #1 + Bonus surface. */
+    /* Query from The Floodmark's vantage so The Hollow Tide #1 + Bonus surface. */
     const res = await request(app).get(`/api/books/${unlockedBookId}/series-cast`);
     expect(res.status).toBe(200);
     const marlow = (res.body.characters as Array<Record<string, unknown>>).find(
@@ -152,7 +152,7 @@ describe('GET /api/books/:bookId/series-cast', () => {
     const res = await request(app).get(`/api/books/${bonusBookId}/series-cast`);
     expect(res.status).toBe(200);
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();
-    /* Bonus excluded itself. Keeper #1 surfaces 3. Unlocked unconfirmed,
+    /* Bonus excluded itself. The Hollow Tide #1 surfaces 3. The Floodmark unconfirmed,
        Standalone isStandalone, Sibling different-series — all excluded. */
     expect(ids).toEqual(['hart', 'narrator', 'wren']);
   });
@@ -168,7 +168,7 @@ describe('GET /api/books/:bookId/series-cast', () => {
     /* Matches the series-roster convention: a standalone sitting under a
        series folder can still aggregate that series' regulars — the thing
        that doesn't flow back is the standalone's OWN cast. Some Standalone
-       sees Keeper #1 (3) + Bonus (2) = 5; its own "lonely" is excluded. */
+       sees The Hollow Tide #1 (3) + Bonus (2) = 5; its own "lonely" is excluded. */
     const res = await request(app).get(`/api/books/${standaloneBookId}/series-cast`);
     expect(res.status).toBe(200);
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();

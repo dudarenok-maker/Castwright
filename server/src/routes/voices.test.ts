@@ -20,7 +20,7 @@ const BOOK_TWO = 'Book Two';
 /* A SECOND series under the same author, sharing the v_brann voiceId, used
    to prove a series-scoped override only touches the anchor book's
    series (plan 108). */
-const OTHER_SERIES = 'Unlocked';
+const OTHER_SERIES = 'The Undertow';
 const OTHER_BOOK = 'Other Book';
 
 let workspaceRoot: string;

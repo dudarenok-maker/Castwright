@@ -28,7 +28,7 @@ beforeAll(async () => {
   /* Three books in the same series:
        - the Hollow Tide #1 (confirmed) -- contributes 3 characters
        - Bonus Marlow (confirmed) -- contributes 2 characters
-       - Unlocked (NOT confirmed) -- excluded by library-cast-scan
+       - The Floodmark (NOT confirmed) -- excluded by library-cast-scan
      Plus one book in a different series to prove the series scope. */
   const seed = (
     title: string,
@@ -83,7 +83,7 @@ beforeAll(async () => {
       { id: 'nim', name: 'Nim' },
     ],
   });
-  seed('Unlocked', {
+  seed('The Floodmark', {
     confirmed: false, // analyzing now, no cast on disk yet
     characters: [{ id: 'narrator', name: 'Narrator' }],
   });
@@ -110,7 +110,7 @@ afterAll(() => {
 describe('scanSeriesCharacters', () => {
   it('returns confirmed characters across all books in the target series', async () => {
     const records = await scan.scanSeriesCharacters(AUTHOR, SERIES);
-    /* the Hollow Tide (3) + Bonus Marlow (2) = 5. Unlocked excluded (castConfirmed=false). */
+    /* the Hollow Tide (3) + Bonus Marlow (2) = 5. The Floodmark excluded (castConfirmed=false). */
     expect(records).toHaveLength(5);
     const ids = records.map((r) => r.character.id).sort();
     expect(ids).toEqual(['marlow', 'marlow', 'narrator', 'nim', 'wren']);
@@ -118,7 +118,7 @@ describe('scanSeriesCharacters', () => {
 
   it('excludes the supplied bookId from the result (book never seeds itself)', async () => {
     const records = await scan.scanSeriesCharacters(AUTHOR, SERIES, {
-      excludeBookId: 'shannon-messenger__the-hollow-tide__the-hollow-tide',
+      excludeBookId: 'della-renwick__the-hollow-tide__the-hollow-tide',
     });
     /* the Hollow Tide's 3 characters drop out; Bonus Marlow's 2 remain. */
     expect(records).toHaveLength(2);
@@ -147,9 +147,9 @@ describe('scanSeriesCharacters', () => {
 describe('scanSeriesCharactersForBookId', () => {
   it('resolves (author, series) from a bookId and returns its series-mates', async () => {
     const records = await scan.scanSeriesCharactersForBookId(
-      'shannon-messenger__the-hollow-tide__unlocked',
+      'della-renwick__the-hollow-tide__the-floodmark',
     );
-    /* Unlocked sits in the Hollow Tide series. Its OWN cast (narrator only, not
+    /* The Floodmark sits in the Hollow Tide series. Its OWN cast (narrator only, not
        confirmed) is excluded by both excludeBookId AND the
        castConfirmed gate. the Hollow Tide's 3 + Bonus Marlow's 2 = 5. */
     expect(records).toHaveLength(5);
@@ -162,7 +162,7 @@ describe('scanSeriesCharactersForBookId', () => {
 
   it('returns [] for a standalone book (its own cast is NOT part of any series)', async () => {
     const records = await scan.scanSeriesCharactersForBookId(
-      'shannon-messenger__the-hollow-tide__some-standalone',
+      'della-renwick__the-hollow-tide__some-standalone',
     );
     /* The standalone's series field resolves to the Hollow Tide, BUT the scan's
        isStandalone filter excludes every other book from the result.
