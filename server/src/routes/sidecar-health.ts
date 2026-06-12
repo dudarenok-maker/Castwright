@@ -30,6 +30,20 @@ const PROBE_TIMEOUT_MS = 2_000;
    leaving the UI with a phantom error and a model that's about to be ready. */
 const LOAD_TIMEOUT_MS = 90_000;
 
+/* When the sidecar PROCESS is down, Node's fetch rejects with the opaque
+   `TypeError: fetch failed` (the real reason — ECONNREFUSED — hides in
+   `.cause.code`). That bare "fetch failed" was leaking straight into the
+   voice-engine pill's error banner when a user clicked Load before the
+   sidecar had finished launching. Map any non-timeout proxy failure to copy
+   the user can act on, with the technical code kept in parens for support. */
+function friendlyUnreachableError(err: { message?: string; cause?: unknown }): string {
+  const code = (err.cause as { code?: string } | undefined)?.code;
+  const detail = code ?? err.message;
+  return `Couldn't reach the voice engine — it may still be starting up, or it isn't running yet. Try again in a moment.${
+    detail ? ` (${detail})` : ''
+  }`;
+}
+
 interface SidecarHealthBody {
   engines?: string[];
   /* fs-1 — sidecar app version (server/tts-sidecar/version.py), surfaced by
@@ -307,13 +321,13 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
     return res.json(body);
   } catch (e) {
     clearTimeout(timer);
-    const err = e as { name?: string; message?: string };
+    const err = e as { name?: string; message?: string; cause?: unknown };
     const isTimeout = err.name === 'AbortError';
     return res.status(503).json({
       status: 'error',
       error: isTimeout
         ? `Sidecar /load did not complete within ${LOAD_TIMEOUT_MS}ms — model load is unusually slow or the process is stuck.`
-        : err.message || 'Sidecar /load request failed.',
+        : friendlyUnreachableError(err),
     });
   }
 });
@@ -349,13 +363,13 @@ sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
     return res.json(body);
   } catch (e) {
     clearTimeout(timer);
-    const err = e as { name?: string; message?: string };
+    const err = e as { name?: string; message?: string; cause?: unknown };
     const isTimeout = err.name === 'AbortError';
     return res.status(503).json({
       status: 'error',
       error: isTimeout
         ? `Sidecar /unload did not respond within ${PROBE_TIMEOUT_MS}ms.`
-        : err.message || 'Sidecar /unload request failed.',
+        : friendlyUnreachableError(err),
     });
   }
 });
