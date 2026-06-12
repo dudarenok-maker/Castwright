@@ -224,9 +224,9 @@ class _LibraryHomeScreenState extends State<LibraryHomeScreen> {
                       ? Image.file(File(path),
                           fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => const Icon(Icons.menu_book))
-                      : const ColoredBox(
-                          color: Color(0x22000000),
-                          child: Icon(Icons.menu_book)),
+                      : ColoredBox(
+                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                          child: const Icon(Icons.menu_book)),
                 ),
               ),
               const SizedBox(height: 4),
