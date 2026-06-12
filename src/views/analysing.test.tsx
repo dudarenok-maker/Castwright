@@ -1659,6 +1659,92 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
     expect(screen.queryByText(/What to do:/)).not.toBeInTheDocument();
   });
 
+  it('failed-row with known code renders More-help link (fe-29)', async () => {
+    getBookStateImpl = () =>
+      Promise.resolve(makeBookStateWithErrors([2], {}));
+
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="Bonus Keefe Story"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+
+    await act(async () => {
+      capturedOpts!.onChapterFailed!({
+        chapterId: 2,
+        message: 'Ollama not reachable.',
+        code: 'analyzer-unreachable',
+        remediation: 'Check that Ollama is running.',
+      });
+    });
+
+    const link = await screen.findByRole('link', { name: /more help/i });
+    expect(link).toHaveAttribute('href', '#/help?code=analyzer-unreachable');
+  });
+
+  it('failed-row with remediation but no code suppresses More-help link (fe-29)', async () => {
+    getBookStateImpl = () =>
+      Promise.resolve(makeBookStateWithErrors([2], {}));
+
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="Bonus Keefe Story"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+
+    await act(async () => {
+      capturedOpts!.onChapterFailed!({
+        chapterId: 2,
+        message: 'Something went wrong.',
+        remediation: 'Try again later.',
+        /* no code */
+      });
+    });
+
+    await screen.findByText(/Try again later\./);
+    expect(screen.queryByRole('link', { name: /more help/i })).toBeNull();
+  });
+
   it('keeps failure classification (code + remediation) when a retried chapter re-fails', async () => {
     /* Regression: handleRetryChapter's onChapterFailed only forwarded
        `message`, dropping `code` and `remediation`, so the "What to do:"

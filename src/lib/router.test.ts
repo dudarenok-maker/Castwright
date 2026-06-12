@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/01-hash-router.md
 
 import { describe, expect, it } from 'vitest';
-import { stageToHash, stageEqual } from './router';
+import { stageToHash, stageEqual, helpHrefForFailureCode } from './router';
 import type { Stage } from './types';
 
 describe('stageToHash', () => {
@@ -204,5 +204,25 @@ describe('stageEqual', () => {
       ),
     ).toBe(true);
     expect(stageEqual({ kind: 'books' }, { kind: 'books' })).toBe(true);
+  });
+
+  it('stageEqual distinguishes help focusCode', () => {
+    expect(stageEqual({ kind: 'help' }, { kind: 'help' })).toBe(true);
+    expect(stageEqual({ kind: 'help', focusCode: 'a' }, { kind: 'help', focusCode: 'b' })).toBe(false);
+  });
+});
+
+describe('stageToHash — fe-29 help route', () => {
+  it('serialises the help stage', () => {
+    expect(stageToHash({ kind: 'help' })).toBe('#/help');
+    expect(stageToHash({ kind: 'help', focusCode: 'vram-spill' })).toBe('#/help?code=vram-spill');
+  });
+});
+
+describe('helpHrefForFailureCode — fe-29', () => {
+  it('helpHrefForFailureCode maps codes to help anchors', () => {
+    expect(helpHrefForFailureCode('vram-spill')).toBe('#/help?code=vram-spill');
+    expect(helpHrefForFailureCode('unknown')).toBeNull();
+    expect(helpHrefForFailureCode(undefined)).toBeNull();
   });
 });

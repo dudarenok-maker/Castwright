@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconClose, IconRefresh } from '../lib/icons';
+import { helpHrefForFailureCode } from '../lib/router';
+import { HELP_FAILURE_ENTRIES } from '../data/help-failures';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { MANIFESTO } from '../lib/brand';
 import {
@@ -27,6 +29,13 @@ import { selectAnalyzerSplitIsActive } from '../store/account-slice';
    character on gemini-2.5-flash). Average word ≈ 5.5 characters → ~22 ms
    per word total. */
 const MS_PER_WORD = 22;
+
+/** fe-29 — true when `code` maps to a known Help entry (not just 'unknown').
+    Used alongside helpHrefForFailureCode to guard anchor rendering: control-flow
+    codes like 'aborted'/'stage1_shrink_refused' never appear in HELP_FAILURE_ENTRIES
+    and must not produce a dangling link. */
+const isHelpLinkable = (code: string | undefined): boolean =>
+  code != null && HELP_FAILURE_ENTRIES.some((e) => e.code === code);
 
 /* PhaseCard, plus the per-phase helpers (HeartbeatRow / ThrottleRow /
    LiveCastPreview / SeriesPriorPill / DroppedQuotesPanel / ActivePhaseLog),
@@ -1140,6 +1149,17 @@ export function AnalysingView({
               {error.remediation && (
                 <p className="mt-1 text-sm text-red-800/90 wrap-break-word">
                   <span className="font-semibold">What to do:</span> {error.remediation}
+                  {isHelpLinkable(error.code) && helpHrefForFailureCode(error.code) && (
+                    <>
+                      {' '}
+                      <a
+                        href={helpHrefForFailureCode(error.code)!}
+                        className="underline font-semibold text-magenta hover:text-magenta/80"
+                      >
+                        More help
+                      </a>
+                    </>
+                  )}
                 </p>
               )}
               {error.detail && (
@@ -1329,6 +1349,17 @@ export function AnalysingView({
                       {f.remediation && (
                         <p className="mt-1 text-xs text-amber-900/90 wrap-break-word">
                           <span className="font-semibold">What to do:</span> {f.remediation}
+                          {isHelpLinkable(f.code) && helpHrefForFailureCode(f.code) && (
+                            <>
+                              {' '}
+                              <a
+                                href={helpHrefForFailureCode(f.code)!}
+                                className="underline font-semibold text-magenta hover:text-magenta/80"
+                              >
+                                More help
+                              </a>
+                            </>
+                          )}
                         </p>
                       )}
                     </div>

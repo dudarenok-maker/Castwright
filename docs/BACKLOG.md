@@ -69,12 +69,6 @@ _Full detail + acceptance:_ [#472](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ closes the distribution loop so testers actually know to upgrade.
 _Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471).
 
-#### `fe-29` — In-app help / troubleshooting panel ([#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473))
-
-- _What:_ A Help surface covering core workflows, keyboard shortcuts (from the keybindings registry), and the common-failure remediations (shares copy with `fs-19`). Works offline.
-- _Benefit (user):_ support deflection; the answers live where the user already is.
-_Full detail + acceptance:_ [#473](https://github.com/dudarenok-maker/AudioBook-Generator/issues/473).
-
 #### `fs-21` — First-run setup wizard (cross-platform setup owner) ([#474](https://github.com/dudarenok-maker/AudioBook-Generator/issues/474))
 
 - _What:_ A guided **cross-platform (Windows + macOS + Linux)** first-run flow, run in-app on first launch — the **single owner of post-install setup for every platform**: detect GPU, check/install the required models (Kokoro, Qwen, the Ollama analyzer) via the existing in-app Model Manager backends, verify ffmpeg, pick defaults (engine, analysis model, theme), then run a one-sentence smoke synth to prove the whole stack end to end before the user uploads anything. Both installers (`ops-1` Windows `.exe`, `ops-15` macOS `.dmg`) and the Docker deploy (`ops-2`) deliver only the app + runtime prereqs and hand off here — so model install + setup is identical across OSes rather than reimplemented per-installer.
