@@ -4,9 +4,23 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { buildDiagnostics, type CheckId, type DiagnosticsResponse } from './diagnostics.js';
-import { getResolvedAnalysisEngine, getResolvedSetupCompletedAt, writeSetupCompletedAt } from '../workspace/user-settings.js';
+import {
+  getResolvedAnalysisEngine,
+  getResolvedGeminiApiKey,
+  getResolvedSetupCompletedAt,
+  writeSetupCompletedAt,
+} from '../workspace/user-settings.js';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { anyTtsEnginePresent } from '../tts/engine-presence.js';
+import { selectTtsProvider } from '../tts/index.js';
+import { encodePcmToAudio } from '../tts/mp3.js';
+import {
+  voiceSampleAudioDir,
+  voiceSampleFilePath,
+  voiceSamplePublicUrl,
+} from '../tts/voice-sample-cache.js';
+import { probeOllamaHealth } from './ollama-health.js';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -72,4 +86,46 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
       completedAt: getResolvedSetupCompletedAt(),
     }),
   );
+});
+
+/* POST /api/setup/smoke — Tier-1 light smoke test (fs-21 wave 3).
+   Synthesises a fixed sentence via Kokoro (the always-present fallback),
+   encodes to MP3, writes to the voice-sample cache dir, and pings the
+   analyzer. Returns ok:false (never 500) on sidecar/ffmpeg failure so the
+   setup UI can surface a user-readable diagnosis rather than an error page. */
+setupReadinessRouter.post('/smoke', async (_req: Request, res: Response) => {
+  const modelKey = 'kokoro-v1';
+  const voiceName = 'af_heart';
+  const text = 'The lighthouse keeper watched the grey sea roll in.';
+
+  let url: string | undefined;
+  let durationSec: number | undefined;
+  try {
+    const provider = selectTtsProvider(modelKey);
+    const { pcm, sampleRate } = await provider.synthesize({ text, voiceName, modelKey });
+    const mp3 = await encodePcmToAudio(pcm, sampleRate);
+    await mkdir(voiceSampleAudioDir(), { recursive: true });
+    await writeFile(voiceSampleFilePath('setup-smoke.mp3'), mp3);
+    url = voiceSamplePublicUrl('setup-smoke.mp3');
+    durationSec = pcm.length / 2 / sampleRate; // 16-bit mono
+  } catch (e) {
+    return res.json({ ok: false, stage: 'synth', error: (e as Error).message });
+  }
+
+  let analyzerOk = false;
+  let analyzerDetail = '';
+  try {
+    if (getResolvedAnalysisEngine() === 'gemini') {
+      analyzerOk = getResolvedGeminiApiKey() != null;
+      analyzerDetail = analyzerOk ? 'API key set' : 'no key';
+    } else {
+      const o = await probeOllamaHealth();
+      analyzerOk = o.status === 'reachable';
+      analyzerDetail = o.error ?? (o.modelPulled ? 'model pulled' : 'reachable');
+    }
+  } catch (e) {
+    analyzerDetail = (e as Error).message;
+  }
+
+  res.json({ ok: true, url, durationSec, analyzerOk, analyzerDetail });
 });
