@@ -13,11 +13,13 @@ export function SetupView({
   mode = 'guided',
   onRefetch = () => {},
   onFinish = () => {},
+  onTryDemoBook,
 }: {
   readiness: SetupReadiness | null;
   mode?: 'guided' | 'checklist';
   onRefetch?: () => void;
   onFinish?: () => void;
+  onTryDemoBook?: () => void;
 }) {
   if (readiness == null) {
     return (
@@ -36,6 +38,7 @@ export function SetupView({
       mode={mode}
       onRefetch={onRefetch}
       onFinish={onFinish}
+      onTryDemoBook={onTryDemoBook}
     />
   );
 }
