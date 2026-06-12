@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -30,18 +31,24 @@ class ApiException implements Exception {
 /// request validates the server cert against the pinned CA (from pairing) and
 /// carries the Bearer token. The transport is injectable for tests.
 class ApiClient {
-  ApiClient(this.connection, {HttpSend? send})
+  ApiClient(this.connection,
+      {HttpSend? send, this.requestTimeout = const Duration(seconds: 4)})
       : _send = send ?? _pinnedSend(connection);
 
   final Connection connection;
   final HttpSend _send;
+
+  /// Upper bound on a single JSON request. Offline, the connect fails fast via
+  /// [_connectTimeout]; this is the backstop for a connection that opens but
+  /// then stalls, so callers never spin indefinitely on a wedged server.
+  final Duration requestTimeout;
 
   Uri _u(String path) => Uri.parse('${connection.server.url}$path');
 
   Future<Map<String, dynamic>> getJson(String path) async {
     final res = await _send('GET', _u(path), {
       HttpHeaders.authorizationHeader: 'Bearer ${connection.server.token}',
-    });
+    }).timeout(requestTimeout);
     if (res.statusCode == 401 || res.statusCode == 403) {
       throw ApiException(res.statusCode, 'Not authorised — re-pair the device.');
     }
@@ -134,9 +141,7 @@ class ApiClient {
     required double currentSec,
     required String listenedAt,
   }) async {
-    final ctx = SecurityContext(withTrustedRoots: false)
-      ..setTrustedCertificatesBytes(utf8.encode(connection.caPem));
-    final client = HttpClient(context: ctx);
+    final client = _pinnedHttpClient(connection);
     try {
       final req = await client.putUrl(_u('/api/books/$bookId/listen-progress'));
       req.headers.set(HttpHeaders.authorizationHeader,
@@ -162,9 +167,7 @@ class ApiClient {
   /// large chapters never buffer fully in memory; the `Range` header (set by the
   /// downloader on a resume) is forwarded verbatim.
   RangeFetch pinnedRangeFetch() {
-    final ctx = SecurityContext(withTrustedRoots: false)
-      ..setTrustedCertificatesBytes(utf8.encode(connection.caPem));
-    final client = HttpClient(context: ctx);
+    final client = _pinnedHttpClient(connection);
     final token = connection.server.token;
     return (Uri url, Map<String, String> headers) async {
       final req = await client.getUrl(url);
@@ -208,12 +211,25 @@ class _ApiListenProgressApi implements ListenProgressApi {
           chapterId: chapterId, currentSec: currentSec, listenedAt: listenedAt);
 }
 
+/// How long to wait for the TCP/TLS connection to the paired server before
+/// giving up. Offline (server unreachable on the LAN) the connect would
+/// otherwise hang until the OS-default timeout — tens of seconds — leaving the
+/// library/player UIs spinning before their offline fallback can run. Bounding
+/// it makes "server is gone" surface fast so the local-library path takes over.
+const Duration _connectTimeout = Duration(seconds: 2);
+
+/// Build the CA-pinned HttpClient shared by every real transport, with the
+/// fast-fail [_connectTimeout] applied so offline connects don't hang.
+HttpClient _pinnedHttpClient(Connection connection) {
+  final ctx = SecurityContext(withTrustedRoots: false)
+    ..setTrustedCertificatesBytes(utf8.encode(connection.caPem));
+  return HttpClient(context: ctx)..connectionTimeout = _connectTimeout;
+}
+
 /// Real transport: a `dart:io` HttpClient that trusts ONLY the pinned CA and
 /// reuses one connection pool for the paired server's lifetime.
 HttpSend _pinnedSend(Connection connection) {
-  final ctx = SecurityContext(withTrustedRoots: false)
-    ..setTrustedCertificatesBytes(utf8.encode(connection.caPem));
-  final client = HttpClient(context: ctx);
+  final client = _pinnedHttpClient(connection);
   return (method, url, headers) async {
     final req = await client.openUrl(method, url);
     headers.forEach(req.headers.set);
