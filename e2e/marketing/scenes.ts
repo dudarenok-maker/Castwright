@@ -55,4 +55,20 @@ export const SCENES: Scene[] = [
     viewports: ['desktop', 'phone', 'tablet'],
     waitFor: '[data-testid="listen-cover-art"]',
   },
+  {
+    id: 'account',
+    hash: '#/account',
+    viewports: ['desktop', 'phone'],
+  },
+  {
+    id: 'profile-drawer',
+    hash: '#/books/hollow-tide-2/cast?profile=insp-cray',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="cast-row-insp-cray"]',
+  },
+  {
+    id: 'voice-library',
+    hash: '#/voices',
+    viewports: ['desktop'],
+  },
 ];
