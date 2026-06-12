@@ -53,6 +53,7 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
 import { ANALYSIS_NORTHERN_STAR } from '../mocks/canned-data';
 import { MOCK_LIBRARY } from '../mocks/library';
+import { HOLLOW_TIDE_LIBRARY, HOLLOW_TIDE_BOOK_STATES } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
@@ -68,6 +69,10 @@ import stubAudioA from '../mocks/audio/stub-a.mp3?url';
 import stubAudioB from '../mocks/audio/stub-b.mp3?url';
 
 const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === 'true';
+/* Marketing screenshot capture flag (.env.marketing → `--mode marketing`).
+   When set, the mock layer serves the additive "Hollow Tide" demo fixtures.
+   Off in dev / e2e / prod. */
+const DEMO_CAPTURE = import.meta.env.VITE_DEMO_CAPTURE === '1';
 
 /* ── shared helpers ──────────────────────────────────────────────────── */
 
@@ -599,6 +604,7 @@ export interface BaseVoiceSampleArgs {
 
 async function mockGetLibrary(): Promise<LibraryResponse> {
   await wait(120);
+  if (DEMO_CAPTURE) return HOLLOW_TIDE_LIBRARY;
   return MOCK_LIBRARY;
 }
 
@@ -1043,6 +1049,9 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
    time — flipping the env in a test file is too late). */
 export async function mockGetBookState(bookId: string): Promise<BookStateResponse | null> {
   await wait(60);
+  if (DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)) {
+    return HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null;
+  }
   return MOCK_BOOK_STATES.get(bookId) ?? null;
 }
 
