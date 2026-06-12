@@ -82,6 +82,7 @@ import { modelsInventoryRouter } from './routes/models-inventory.js';
 import { whisperInstallRouter } from './routes/whisper-install.js';
 import { coquiInstallRouter } from './routes/coqui-install.js';
 import { kokoroInstallRouter } from './routes/kokoro-install.js';
+import { venvBootstrapRouter } from './routes/venv-bootstrap.js';
 import { gpuQueueRouter } from './routes/gpu-queue.js';
 import { diagnosticsRouter } from './routes/diagnostics.js';
 import { setupReadinessRouter } from './routes/setup-readiness.js';
@@ -253,6 +254,7 @@ app.use('/api/models', modelsInventoryRouter); // fs-23 — in-app Model Manager
 app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inFlight for the top-bar pill)
 app.use('/api/diagnostics', diagnosticsRouter); // fs-18 — GET / one-shot health board (admin console)
 app.use('/api/setup', setupReadinessRouter); // fs-21 — first-run readiness probe
+app.use('/api/setup/venv', venvBootstrapRouter); // fs-21 wave 1b — venv bootstrap (decision Z)
 
 /* Production-mode frontend serving. Helper resolves whether to mount based
    on NODE_ENV=production OR the existence of dist/index.html. Mounted AFTER

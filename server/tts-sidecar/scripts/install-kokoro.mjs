@@ -28,7 +28,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> tts-sidecar/ -> server/ -> repo root
-const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
+const REPO_ROOT = resolve(__dirname, '..', '..', '..');
 
 const KOKORO_URL_BASE =
   'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/';
