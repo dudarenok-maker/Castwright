@@ -17,6 +17,8 @@
 
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
+import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 
 export type FailureCode =
   | 'vram-spill'
@@ -298,4 +300,146 @@ export function classifyAnalysisError(err: unknown): ClassifiedFailure {
     fatal: false,
     raw,
   };
+}
+
+/* ── Run-level analysis classifier — ported from analysis.ts describeError ── */
+
+export interface AnalysisFailure {
+  code: FailureCode;
+  userMessage: string;
+  remediation: string;
+  detail?: string;
+}
+
+/* Build the detail blob shown in the UI's collapsible. Prefer the
+   structured details[] from the upstream envelope; fall back to the raw
+   error body so debugging never has to round-trip to the server log. */
+function formatErrorDetail(
+  parsed: { status?: string; details?: unknown[] },
+  raw: string,
+): string | undefined {
+  const lines: string[] = [];
+  if (parsed.status) lines.push(`status: ${parsed.status}`);
+  if (parsed.details && parsed.details.length > 0) {
+    lines.push('details:');
+    lines.push(JSON.stringify(parsed.details, null, 2));
+  }
+  if (lines.length === 0) {
+    /* No structured details — fall back to the raw SDK message, trimmed.
+       Useful when the error wasn't a Google API envelope (e.g. network). */
+    const trimmed = raw.length > 1500 ? `${raw.slice(0, 1500)}…` : raw;
+    return trimmed.trim() || undefined;
+  }
+  return lines.join('\n');
+}
+
+/* Google's 429 body is wall-of-text — strip everything after the first
+   sentence so the UI alert stays tractable. The full text still lives in
+   the server console (and the `detail` blob) for debugging. */
+function trimQuotaMessage(message: string): string {
+  const firstStop = message.search(/[.\n]/);
+  if (firstStop > 0 && firstStop < 240) return message.slice(0, firstStop + 1).trim();
+  return message.slice(0, 240) + (message.length > 240 ? '…' : '');
+}
+
+export function tryParseApiError(
+  raw: string,
+): { code?: number; message: string; status?: string; details?: unknown[] } | null {
+  /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
+     Find the first '{' and try to parse from there. */
+  const start = raw.indexOf('{');
+  if (start < 0) return null;
+  try {
+    const obj = JSON.parse(raw.slice(start)) as {
+      error?: { code?: number; message?: string; status?: string; details?: unknown[] };
+    };
+    if (obj?.error?.message) {
+      return {
+        code: obj.error.code,
+        message: obj.error.message,
+        status: obj.error.status,
+        details: obj.error.details,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/* classifyStatus, ported from analysis.ts — now emits FailureCode per the
+   spec-A2 mapping (rate_limit→analyzer-rate-limit, daily_quota→analyzer-daily-quota,
+   unavailable/internal→analyzer-unreachable, invalid_key→auth, bad_request→unknown). */
+function statusToFailureCode(status: number | undefined, message?: string): FailureCode {
+  if (!status) return 'unknown';
+  if (status === 429) {
+    if (message && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) return 'analyzer-daily-quota';
+    return 'analyzer-rate-limit';
+  }
+  if (status === 503 || status === 500) return 'analyzer-unreachable';
+  if (status === 401 || status === 403) return 'auth';
+  return 'unknown';
+}
+
+function withCopy(code: FailureCode, userMessage: string, detail?: string): AnalysisFailure {
+  return { code, userMessage, remediation: FAILURE_REMEDIATIONS[code].remediation, detail };
+}
+
+/** Run-level analysis classifier — the unified replacement for analysis.ts's
+    describeError(). Typed-error checks and the Google-envelope/status parsing
+    are PORTED VERBATIM (same precedence, same message construction: model
+    label, status suffix, quota trimming, detail blob); only the code
+    vocabulary changes to FailureCode and a remediation is attached. Plain
+    unmatched errors additionally fall through to the analysis signature scan
+    (so ECONNREFUSED etc. classify here too). */
+export function classifyAnalysisFailure(err: unknown, modelLabel: string): AnalysisFailure {
+  if (err instanceof AnalyzerTruncatedError) {
+    return withCopy(
+      'analyzer-truncated',
+      `${modelLabel} truncated the response (${err.reason}) — a chapter section is too large for one attribution call. Lower STAGE2_CHUNK_CHAR_BUDGET and retry.`,
+      `engine=${err.engine} reason=${err.reason} bytes=${err.receivedBytes}${
+        err.outputTokens ? ` tokens=${err.outputTokens}` : ''
+      }`,
+    );
+  }
+  if (err instanceof DailyQuotaExhaustedError) {
+    return withCopy(
+      'analyzer-daily-quota',
+      `${modelLabel} daily quota exhausted — resets at ${err.resetAt.toISOString()}.`,
+      `resetAt: ${err.resetAt.toISOString()}`,
+    );
+  }
+  const raw = (err as Error)?.message ?? String(err);
+  const status = (err as { status?: number })?.status;
+
+  const parsed = tryParseApiError(raw);
+  if (parsed) {
+    /* Pass the full raw string to the quota check so `quotaValue` in the
+       details[] array (not just the extracted message) triggers daily-quota
+       detection. The parsed.message is used for display trimming only. */
+    const code = statusToFailureCode(parsed.code ?? status, raw);
+    /* Only trim quota messages — 4xx/5xx bodies are usually short and
+       informative (an INVALID_ARGUMENT body names the failed field), so
+       trimming them throws away the only useful diagnostic. */
+    const trimmed =
+      code === 'analyzer-rate-limit' || code === 'analyzer-daily-quota'
+        ? trimQuotaMessage(parsed.message)
+        : parsed.message;
+    const statusSuffix = parsed.status ? ` (${parsed.status})` : '';
+    return withCopy(
+      code,
+      `${modelLabel} returned ${parsed.code ?? status ?? '???'}${statusSuffix}: ${trimmed}`,
+      formatErrorDetail(parsed, raw),
+    );
+  }
+  if (status) {
+    return withCopy(statusToFailureCode(status, raw), `${modelLabel} returned ${status}: ${raw}`);
+  }
+  /* Not an API envelope — give the signature table a chance (catches the
+     connection-refused / fetch-failed family) before the unknown fallback. */
+  const scanned = classifyAnalysisError(err);
+  if (scanned.code !== 'unknown') {
+    return { code: scanned.code, userMessage: scanned.userMessage, remediation: scanned.remediation };
+  }
+  return withCopy('unknown', raw || 'Analysis failed.');
 }
