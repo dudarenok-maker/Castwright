@@ -8,6 +8,7 @@ import {
   projectRemainingMs,
   buildInterimCast,
   clearFailedChapterId,
+  recordFailedChapter,
   dropEvidencelessCast,
   isPhase0aCoverageComplete,
   reconcileSentenceCharacterIds,
@@ -784,6 +785,35 @@ describe('clearFailedChapterId — recovery detection helper', () => {
     expect(clearFailedChapterId(cache, 44)).toBe(true);
     expect(clearFailedChapterId(cache, 44)).toBe(false);
     expect(cache.failedChapterIds).toEqual([]);
+  });
+});
+
+describe('failedChapterErrors records (spec A4)', () => {
+  it('recordFailedChapter writes id + error record', () => {
+    const cache: {
+      failedChapterIds?: number[];
+      failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
+    } = {};
+    recordFailedChapter(cache, 7, {
+      code: 'analyzer-unreachable',
+      userMessage: 'msg',
+      remediation: 'fix',
+    });
+    expect(cache.failedChapterIds).toEqual([7]);
+    expect(cache.failedChapterErrors?.['7']).toEqual({
+      code: 'analyzer-unreachable',
+      message: 'msg',
+      remediation: 'fix',
+    });
+  });
+  it('clearFailedChapterId clears the record alongside the id', () => {
+    const cache = {
+      failedChapterIds: [7],
+      failedChapterErrors: { '7': { code: 'unknown', message: 'm', remediation: 'r' } },
+    };
+    expect(clearFailedChapterId(cache, 7)).toBe(true);
+    expect(cache.failedChapterIds).toEqual([]);
+    expect(cache.failedChapterErrors['7']).toBeUndefined();
   });
 });
 
