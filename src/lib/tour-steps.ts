@@ -34,7 +34,7 @@ export const TOUR_STEPS: ReadonlyArray<TourStep> = [
   // 2 · Manuscript
   { id: 's4-line', screen: 'manuscript', anchor: 'manuscript-line', kind: 'real',
     title: 'Who says each line',
-    body: 'The whole book, line by line, colour-coded by speaker. Tap a line to reassign the speaker, or set a quote\'s emotion.' },
+    body: "The whole book, line by line, colour-coded by speaker. Tap a line to reassign the speaker, or set a quote's emotion." },
   { id: 's5-boundary', screen: 'manuscript', anchor: 'chapter-boundary', kind: 'real',
     title: 'Chapters & paragraphs',
     body: 'Adjust where chapters begin and end, and merge or split paragraphs — drag the boundary handle (touch works too).' },
@@ -55,7 +55,7 @@ export const TOUR_STEPS: ReadonlyArray<TourStep> = [
   // 5 · Listen, pair & export
   { id: 's10-play', screen: 'listen', anchor: 'chapter-1-play', kind: 'real',
     title: 'Press play',
-    body: 'Here\'s the finished chapter 1 — the full cast, on Qwen voices. Press play. (The other chapters render once you generate them.)' },
+    body: "Here's the finished chapter 1 — the full cast, on Qwen voices. Press play. (The other chapters render once you generate them.)" },
   { id: 's11-companion', screen: 'listen', anchor: 'companion-app-banner', kind: 'real',
     title: 'Listen on your phone',
     body: 'Pair the Castwright Companion app with a quick QR scan and your library follows you to your phone.' },
@@ -64,7 +64,7 @@ export const TOUR_STEPS: ReadonlyArray<TourStep> = [
     body: 'Prefer your own app? Export the audiobook (M4B here) and drop it into any player. Nothing locks you in.' },
   { id: 's13-finish', screen: 'listen', anchor: null, kind: 'real',
     title: "That's the whole journey",
-    body: 'Add your own book whenever you\'re ready.' },
+    body: "Add your own book whenever you're ready." },
 ];
 
 export function stepsForScreen(screen: TourScreen): TourStep[] {
