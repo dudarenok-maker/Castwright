@@ -32,11 +32,11 @@ let novelBookId: string;
    crucial bit — the novella's chapter audio is bound to it and must
    survive the override. */
 const leanOduvan = {
-  id: 'Oduvan',
+  id: 'oduvan',
   name: 'Oduvan',
   role: 'minor character',
   color: 'eliza',
-  voiceId: 'v_Oduvan_novella',
+  voiceId: 'v_oduvan_novella',
   gender: 'male',
   lines: 4,
   scenes: 1,
@@ -52,11 +52,11 @@ const leanOduvan = {
    into target.aliases so future matches across the series recognise
    either form. */
 const richOduvan = {
-  id: 'Oduvan',
+  id: 'oduvan',
   name: 'Oduvan Heks',
   role: 'Physician',
   color: 'damien',
-  voiceId: 'v_Oduvan_novel',
+  voiceId: 'v_oduvan_novel',
   gender: 'male',
   ageRange: 'adult',
   attributes: ['eccentric', 'reassuring', 'humorous'],
@@ -139,7 +139,7 @@ function callOverride(body: object) {
 
 describe('library-cast override router', () => {
   it('rejects when any of the four ids are missing', async () => {
-    const res = await callOverride({ sourceBookId: novelBookId, sourceCharacterId: 'Oduvan' });
+    const res = await callOverride({ sourceBookId: novelBookId, sourceCharacterId: 'oduvan' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
   });
@@ -147,9 +147,9 @@ describe('library-cast override router', () => {
   it('rejects when source === target', async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'Oduvan',
+      sourceCharacterId: 'oduvan',
       targetBookId: novelBookId,
-      targetCharacterId: 'Oduvan',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/differ/i);
@@ -158,9 +158,9 @@ describe('library-cast override router', () => {
   it('returns 404 when the source book id is unknown', async () => {
     const res = await callOverride({
       sourceBookId: 'nope',
-      sourceCharacterId: 'Oduvan',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
-      targetCharacterId: 'Oduvan',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source book/i);
@@ -171,7 +171,7 @@ describe('library-cast override router', () => {
       sourceBookId: novelBookId,
       sourceCharacterId: 'missing',
       targetBookId: novellaBookId,
-      targetCharacterId: 'Oduvan',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source character/i);
@@ -180,7 +180,7 @@ describe('library-cast override router', () => {
   it('returns 404 when the target character id is unknown', async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'Oduvan',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
       targetCharacterId: 'missing',
     });
@@ -191,9 +191,9 @@ describe('library-cast override router', () => {
   it("writes the merged profile to BOTH books while preserving each side's audio identity", async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'Oduvan',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
-      targetCharacterId: 'Oduvan',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(200);
 
@@ -201,13 +201,13 @@ describe('library-cast override router', () => {
     const sourceOnDisk = readCast(FULL_NOVEL).characters[0];
 
     /* Audio identity preserved per-side — id, voiceId, name, color stay
-       with their own book. The novella keeps v_Oduvan_novella so its
-       chapter audio still plays; the full novel keeps v_Oduvan_novel. */
-    expect(targetOnDisk.id).toBe('Oduvan');
-    expect(targetOnDisk.voiceId).toBe('v_Oduvan_novella');
+       with their own book. The novella keeps v_oduvan_novella so its
+       chapter audio still plays; the full novel keeps v_oduvan_novel. */
+    expect(targetOnDisk.id).toBe('oduvan');
+    expect(targetOnDisk.voiceId).toBe('v_oduvan_novella');
     expect(targetOnDisk.name).toBe('Oduvan');
-    expect(sourceOnDisk.id).toBe('Oduvan');
-    expect(sourceOnDisk.voiceId).toBe('v_Oduvan_novel');
+    expect(sourceOnDisk.id).toBe('oduvan');
+    expect(sourceOnDisk.voiceId).toBe('v_oduvan_novel');
     expect(sourceOnDisk.name).toBe('Oduvan Heks');
 
     /* Per-book metrics + per-book evidence don't cross over. */
@@ -251,21 +251,21 @@ describe('library-cast override router', () => {
   it('returns both merged records in the response body', async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'Oduvan',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
-      targetCharacterId: 'Oduvan',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(200);
     expect(res.body.source).toMatchObject({
-      id: 'Oduvan',
-      voiceId: 'v_Oduvan_novel',
+      id: 'oduvan',
+      voiceId: 'v_oduvan_novel',
       name: 'Oduvan Heks',
       description: richOduvan.description,
       role: 'Physician',
     });
     expect(res.body.target).toMatchObject({
-      id: 'Oduvan',
-      voiceId: 'v_Oduvan_novella',
+      id: 'oduvan',
+      voiceId: 'v_oduvan_novella',
       name: 'Oduvan',
       description: richOduvan.description,
       role: 'Physician',

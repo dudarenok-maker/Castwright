@@ -203,7 +203,7 @@ export function qwenVoicesDir(): string {
 }
 
 /** Path to a single designed Qwen voice's JSON sidecar (its `instruct`
-    persona + ref text). `name` is the designed voiceId, e.g. `qwen-Wren`. */
+    persona + ref text). `name` is the designed voiceId, e.g. `qwen-wren`. */
 export function qwenVoiceSidecarPath(name: string): string {
   return join(qwenVoicesDir(), `${name}.json`);
 }

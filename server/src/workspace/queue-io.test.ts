@@ -391,7 +391,7 @@ describe('queue-io.pruneByBook', () => {
 });
 
 describe('queue-io loud-fallback gate', () => {
-  const chars = [{ id: 'Oduvan', name: 'Oduvan' }];
+  const chars = [{ id: 'oduvan', name: 'Oduvan' }];
 
   describe('markAwaitingConfirm', () => {
     it('parks an in_progress entry, stamping the fallback characters', () => {

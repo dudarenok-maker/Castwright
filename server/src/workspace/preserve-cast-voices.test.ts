@@ -20,18 +20,18 @@ type C = Record<string, unknown> & { id: string };
 describe('preserveDesignedVoicesOnCastWrite', () => {
   it('fills a dropped overrideTtsVoices from the existing cast (the strip fix)', () => {
     const existing: C[] = [
-      { id: 'Berrin', name: 'Berrin', voiceState: 'generated', overrideTtsVoices: { qwen: { name: 'qwen-Berrin' } } },
+      { id: 'berrin', name: 'Berrin', voiceState: 'generated', overrideTtsVoices: { qwen: { name: 'qwen-berrin' } } },
     ];
-    const incoming: C[] = [{ id: 'Berrin', name: 'Berrin', voiceState: 'generated' }]; // voiceless
+    const incoming: C[] = [{ id: 'berrin', name: 'Berrin', voiceState: 'generated' }]; // voiceless
     const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
-    expect(out[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Berrin' } });
+    expect(out[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin' } });
   });
 
   it('lets a deliberate re-design win (incoming overrideTtsVoices present)', () => {
-    const existing: C[] = [{ id: 'Berrin', overrideTtsVoices: { qwen: { name: 'qwen-Berrin' } } }];
-    const incoming: C[] = [{ id: 'Berrin', overrideTtsVoices: { qwen: { name: 'qwen-Berrin-v2' } } }];
+    const existing: C[] = [{ id: 'berrin', overrideTtsVoices: { qwen: { name: 'qwen-berrin' } } }];
+    const incoming: C[] = [{ id: 'berrin', overrideTtsVoices: { qwen: { name: 'qwen-berrin-v2' } } }];
     const out = preserveDesignedVoicesOnCastWrite(existing, incoming);
-    expect(out[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Berrin-v2' } });
+    expect(out[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin-v2' } });
   });
 
   it('preserves ttsEngine and voiceStyle the same way', () => {

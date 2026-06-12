@@ -114,13 +114,13 @@ beforeAll(async () => {
   writeFileSync(
     join(bookDir, '.audiobook', 'cast.json'),
     JSON.stringify({
-      characters: [{ id: 'Wren', name: 'Wren', ttsEngine: 'qwen' }],
+      characters: [{ id: 'wren', name: 'Wren', ttsEngine: 'qwen' }],
     }),
   );
 
   await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
     chapters: {
-      1: [{ id: 1, chapterId: 1, characterId: 'Wren', text: 'Hello.' }],
+      1: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Hello.' }],
     },
   });
 
@@ -152,7 +152,7 @@ beforeEach(async () => {
     pcm: Buffer.alloc(2),
     sampleRate: 24000,
     durationSec: 1,
-    segments: [{ characterId: 'Wren', sentenceIds: [1] }],
+    segments: [{ characterId: 'wren', sentenceIds: [1] }],
   });
   await writeQueueFile(queuePath, {
     entries: [
@@ -205,13 +205,13 @@ describe('per-chapter loud Qwen→Kokoro fallback gate', () => {
     const body = await runStream();
 
     expect(body).toContain('chapter_awaiting_fallback_confirm');
-    expect(body).toContain('Wren'); // the affected character is named
+    expect(body).toContain('wren'); // the affected character is named
     expect(body).not.toContain('chapter_complete');
     expect(synthCalled).toBe(false); // never rendered
 
     const entry = await readEntry();
     expect(entry?.status).toBe('awaiting_confirm');
-    expect(entry?.fallbackCharacters?.map((c) => c.id)).toEqual(['Wren']);
+    expect(entry?.fallbackCharacters?.map((c) => c.id)).toEqual(['wren']);
   }, 10_000);
 
   it('renders straight through when the re-dispatch carries fallbackConfirmed', async () => {

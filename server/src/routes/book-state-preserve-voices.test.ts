@@ -73,13 +73,13 @@ beforeAll(async () => {
      only in overrideTtsVoices.qwen. */
   writeBook(bookDir, bookId, [
     {
-      id: 'Berrin',
+      id: 'berrin',
       name: 'Berrin',
       role: 'minor',
       color: '#abc',
       voiceState: 'generated',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'qwen-Berrin' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-berrin' } },
       voiceStyle: 'a wry, steady woman',
     },
   ]);
@@ -101,7 +101,7 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
     const incoming = {
       slice: 'cast',
       patch: {
-        characters: [{ id: 'Berrin', name: 'Berrin', role: 'minor', color: '#abc', voiceState: 'generated' }],
+        characters: [{ id: 'berrin', name: 'Berrin', role: 'minor', color: '#abc', voiceState: 'generated' }],
       },
     };
     const res = await request(app)
@@ -110,10 +110,10 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       .send(incoming);
     expect(res.status).toBe(204);
 
-    const Berrin = onDiskCast().characters.find((c) => c.id === 'Berrin')!;
-    expect(Berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Berrin' } });
-    expect(Berrin.ttsEngine).toBe('qwen');
-    expect(Berrin.voiceStyle).toBe('a wry, steady woman');
+    const berrin = onDiskCast().characters.find((c) => c.id === 'berrin')!;
+    expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin' } });
+    expect(berrin.ttsEngine).toBe('qwen');
+    expect(berrin.voiceStyle).toBe('a wry, steady woman');
   });
 
   it('lets a deliberate re-design overwrite the on-disk voice (incoming wins)', async () => {
@@ -122,13 +122,13 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       patch: {
         characters: [
           {
-            id: 'Berrin',
+            id: 'berrin',
             name: 'Berrin',
             role: 'minor',
             color: '#abc',
             voiceState: 'generated',
             ttsEngine: 'qwen',
-            overrideTtsVoices: { qwen: { name: 'qwen-Berrin-v2' } },
+            overrideTtsVoices: { qwen: { name: 'qwen-berrin-v2' } },
           },
         ],
       },
@@ -139,7 +139,7 @@ describe('book-state PUT cast — designed-voice preservation (durable strip gua
       .send(incoming);
     expect(res.status).toBe(204);
 
-    const Berrin = onDiskCast().characters.find((c) => c.id === 'Berrin')!;
-    expect(Berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-Berrin-v2' } });
+    const berrin = onDiskCast().characters.find((c) => c.id === 'berrin')!;
+    expect(berrin.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin-v2' } });
   });
 });

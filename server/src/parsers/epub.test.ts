@@ -43,7 +43,7 @@ describe('parseEpub', () => {
     expect(out.seriesFromTitle).toBe(false);
   });
 
-  /* Bug B regression: EPUB with `dc:title` = "The Tidewatcher's Oath (Keeper of the
+  /* Bug B regression: EPUB with `dc:title` = "The Tidewatcher’s Oath (Keeper of the
      Lost Cities Book 3)" and NO Calibre series tags. The parser should
      split the parenthetical off and populate series + seriesPosition
      from the heuristic, and mark `seriesFromTitle: true`. */
@@ -51,7 +51,7 @@ describe('parseEpub', () => {
     it('extracts series + position from the dc:title parenthetical', async () => {
       const buf = await readFile(seriesFromTitleFixturePath);
       const out = await parseEpub(buf, { fileName: 'sample-title-no-calibre.epub' });
-      expect(out.title).toBe('The Tidewatcher's Oath');
+      expect(out.title).toBe('The Tidewatcher’s Oath');
       expect(out.series).toBe('The Hollow Tide');
       expect(out.seriesPosition).toBe(3);
       expect(out.seriesFromTitle).toBe(true);

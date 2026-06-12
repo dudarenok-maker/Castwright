@@ -229,7 +229,7 @@ describe('POST /api/books/:bookId/generation', () => {
         }) => void;
       };
       opts.onGroupComplete?.({
-        group: { index: 7, characterId: 'Wren', sentenceIds: [14, 15] },
+        group: { index: 7, characterId: 'wren', sentenceIds: [14, 15] },
         totalGroups: 10,
         accumulatedSec: 0,
         completed: 1,
@@ -265,7 +265,7 @@ describe('POST /api/books/:bookId/generation', () => {
     ) as Array<ParsedTick & { completedSentenceIds: number[]; characterId: string; currentLine: number }>;
     /* Each completed group surfaces its own sentence ids + character. */
     expect(
-      completed.some((t) => t.characterId === 'Wren' && t.completedSentenceIds.join(',') === '14,15'),
+      completed.some((t) => t.characterId === 'wren' && t.completedSentenceIds.join(',') === '14,15'),
     ).toBe(true);
     expect(
       completed.some((t) => t.characterId === 'narrator' && t.completedSentenceIds.join(',') === '1'),

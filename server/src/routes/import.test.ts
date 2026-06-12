@@ -380,7 +380,7 @@ describe('POST /api/import — seriesFromTitle plumbing', () => {
       contentType: 'application/epub+zip',
     });
     expect(res.status).toBe(200);
-    expect(res.body.candidate.title).toBe('The Tidewatcher's Oath');
+    expect(res.body.candidate.title).toBe('The Tidewatcher’s Oath');
     expect(res.body.candidate.series).toBe('The Hollow Tide');
     expect(res.body.candidate.seriesPosition).toBe(3);
     expect(res.body.candidate.seriesFromTitle).toBe(true);

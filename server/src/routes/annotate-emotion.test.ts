@@ -93,8 +93,8 @@ function parseSse(body: string): Array<Record<string, unknown>> {
 
 const SENTENCES = [
   { id: 1, chapterId: 1, characterId: 'narrator', text: 'The room was quiet.' },
-  { id: 2, chapterId: 1, characterId: 'Wren', text: '“Get down!”' },
-  { id: 3, chapterId: 2, characterId: 'Marlow', text: '“It will be okay,” he whispered.' },
+  { id: 2, chapterId: 1, characterId: 'wren', text: '“Get down!”' },
+  { id: 3, chapterId: 2, characterId: 'marlow', text: '“It will be okay,” he whispered.' },
 ];
 
 beforeAll(async () => {
@@ -155,7 +155,7 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     const prompt = ch1Call![2] as string;
     expect(prompt).toContain('"sentenceId": 1');
     expect(prompt).toContain('"sentenceId": 2');
-    expect(prompt).toContain('"characterId": "Wren"');
+    expect(prompt).toContain('"characterId": "wren"');
     // The output contract carries no characterId — re-attribution is impossible.
     const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
     for (const e of parseSse(res.text).filter((e) => e.kind === 'annotation')) {

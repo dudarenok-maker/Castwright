@@ -113,7 +113,7 @@ export class ChapterSynthTimeoutError extends Error {
     (encode / ffmpeg loudnorm / disk), which has no per-call timeout. It is NOT
     an AbortError, so the generation loop records it as a durable
     `generationError` instead of silently swallowing it as a pause. The
-    2026-06-02 The Drowning Bell ch52 stall was exactly this: no progress, no error,
+    2026-06-02 the drowning bell ch52 stall was exactly this: no progress, no error,
     no breadcrumb. */
 export class ChapterStallError extends Error {
   constructor(ms: number, phase: 'synthesis' | 'assembly') {

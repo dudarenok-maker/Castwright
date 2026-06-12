@@ -62,7 +62,7 @@ beforeAll(async () => {
     JSON.stringify({
       characters: [
         { id: 'narrator', name: 'Narrator' },
-        { id: 'Maerin', name: 'Maerin', ttsEngine: 'qwen' },
+        { id: 'maerin', name: 'Maerin', ttsEngine: 'qwen' },
       ],
     }),
   );
@@ -71,7 +71,7 @@ beforeAll(async () => {
       1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
       2: [
         { id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' },
-        { id: 3, chapterId: 2, characterId: 'Maerin', text: 'Hi there.' },
+        { id: 3, chapterId: 2, characterId: 'maerin', text: 'Hi there.' },
       ],
     },
   });
@@ -464,7 +464,7 @@ describe('loud-fallback gate endpoints', () => {
           addedAt: '2026-05-23T00:00:00.000Z',
           status: 'awaiting_confirm',
           order: 0,
-          fallbackCharacters: [{ id: 'Wren', name: 'Wren' }],
+          fallbackCharacters: [{ id: 'wren', name: 'Wren' }],
         },
       ],
       paused: false,

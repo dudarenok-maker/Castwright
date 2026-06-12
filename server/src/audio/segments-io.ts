@@ -24,7 +24,7 @@ export interface CharacterSnapshot {
   voiceId?: string;
   voiceEngine?: string;
   /** The voice NAME resolved at render time (plan 108 Wave 2b) — for a
-      bespoke Qwen render this is the designed voiceId (e.g. `qwen-Oduvan`).
+      bespoke Qwen render this is the designed voiceId (e.g. `qwen-oduvan`).
       Absent on pre-108 segments. */
   resolvedVoiceName?: string;
   /** Engine this character ACTUALLY rendered in when it differs from its

@@ -49,7 +49,7 @@ describe('appendBatch', () => {
       affectedCharacters: 1,
       entries: [
         {
-          characterId: 'Wren',
+          characterId: 'wren',
           characterName: 'Wren',
           quote: 'fabricated',
           truncated: false,
@@ -130,7 +130,7 @@ describe('loadDroppedQuotes / saveDroppedQuotes', () => {
       affectedCharacters: 1,
       entries: [
         {
-          characterId: 'Marlow',
+          characterId: 'marlow',
           characterName: 'Marlow',
           quote: 'stitched dialogue',
           truncated: false,

@@ -51,17 +51,17 @@ const characters = [
     evidence: [{ quote: '“We have to tell the Council before the others wake.”' }],
   },
   {
-    id: 'Brann',
+    id: 'brann',
     name: 'Brann',
     role: 'supporting',
     color: 'teal',
-    voiceId: 'v_Brann',
+    voiceId: 'v_brann',
     voiceStyle: 'a calm, assured young man, steady and warm',
     evidence: [{ quote: '“Trust me — we can do this together.”' }],
   },
   /* No persona → exercises the Gemini fallback. */
   {
-    id: 'Hart',
+    id: 'hart',
     name: 'Hart',
     role: 'supporting',
     color: 'amber',
@@ -69,13 +69,13 @@ const characters = [
   },
   /* Already designed → freshness-skip. */
   {
-    id: 'Wren',
+    id: 'wren',
     name: 'Wren',
     role: 'lead',
     color: 'rose',
-    voiceId: 'v_Wren',
+    voiceId: 'v_wren',
     voiceStyle: 'a determined, earnest teenage girl',
-    overrideTtsVoices: { qwen: { name: 'qwen-v_Wren' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-v_wren' } },
   },
 ];
 
@@ -200,39 +200,39 @@ describe('POST /api/books/:bookId/cast/design', () => {
   it('designs each character in order and persists the qwen override (series scope)', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)
-      .send({ characterIds: ['aria', 'Brann'], modelKey: QWEN_KEY });
+      .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
     const designed = events.filter((e) => e.type === 'character_designed').map((e) => e.characterId);
-    expect(designed).toEqual(['aria', 'Brann']);
+    expect(designed).toEqual(['aria', 'brann']);
     const idle = events.find((e) => e.type === 'idle');
     expect(idle).toMatchObject({ done: 2, total: 2, skipped: 0 });
     expect(idle?.failures).toEqual([]);
 
     expect(charById('aria')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_aria');
-    expect(charById('Brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_Brann');
+    expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('persona fallback: a persona-less character gets a Gemini persona persisted + designed', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)
-      .send({ characterIds: ['Hart'], modelKey: QWEN_KEY });
+      .send({ characterIds: ['hart'], modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     expect(personaMock).toHaveBeenCalledTimes(1);
-    expect(charById('Hart')?.voiceStyle).toBe('a bright, quick-witted teenage boy');
-    expect(charById('Hart')?.overrideTtsVoices?.qwen?.name).toBe('qwen-Hart');
+    expect(charById('hart')?.voiceStyle).toBe('a bright, quick-witted teenage boy');
+    expect(charById('hart')?.overrideTtsVoices?.qwen?.name).toBe('qwen-hart');
   });
 
   it('freshness-skip: an already-designed character is skipped (no sidecar call)', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)
-      .send({ characterIds: ['Wren'], modelKey: QWEN_KEY });
+      .send({ characterIds: ['wren'], modelKey: QWEN_KEY });
 
     const events = parseSse(res.text);
-    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'Wren')).toBe(true);
+    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'wren')).toBe(true);
     expect(events.some((e) => e.type === 'character_designed')).toBe(false);
     expect(events.find((e) => e.type === 'idle')).toMatchObject({ done: 0, skipped: 1 });
     expect(fetchMock).not.toHaveBeenCalled();
@@ -241,19 +241,19 @@ describe('POST /api/books/:bookId/cast/design', () => {
   it('a per-character failure is recorded and the loop continues', async () => {
     fetchMock.mockReset();
     fetchMock.mockResolvedValueOnce(badSidecarResponse()); // aria fails
-    fetchMock.mockResolvedValue(okSidecarResponse()); // Brann ok
+    fetchMock.mockResolvedValue(okSidecarResponse()); // brann ok
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)
-      .send({ characterIds: ['aria', 'Brann'], modelKey: QWEN_KEY });
+      .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
 
     const events = parseSse(res.text);
     expect(events.some((e) => e.type === 'character_failed' && e.characterId === 'aria')).toBe(true);
-    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'Brann')).toBe(true);
+    expect(events.some((e) => e.type === 'character_designed' && e.characterId === 'brann')).toBe(true);
     const idle = events.find((e) => e.type === 'idle');
     expect(idle).toMatchObject({ done: 1, total: 2 });
     expect(idle?.failures).toHaveLength(1);
-    expect(charById('Brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_Brann');
+    expect(charById('brann')?.overrideTtsVoices?.qwen?.name).toBe('qwen-v_brann');
   });
 
   it('rides out a mid-bulk sidecar recycle: waits for respawn, retries the character, and completes', async () => {
@@ -307,7 +307,7 @@ describe('POST /api/books/:bookId/cast/design', () => {
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/design`)
-      .send({ characterIds: ['aria', 'Brann'], modelKey: QWEN_KEY });
+      .send({ characterIds: ['aria', 'brann'], modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
@@ -315,7 +315,7 @@ describe('POST /api/books/:bookId/cast/design', () => {
     expect(errorEvent?.code).toBe('sidecar_unavailable');
     expect(events.some((e) => e.type === 'character_designed')).toBe(false);
     /* One initial attempt + the bounded ride-out retries, then halt — and it
-       gave up on the FIRST character (didn't grind through Brann too). */
+       gave up on the FIRST character (didn't grind through brann too). */
     expect(designSpy).toHaveBeenCalledTimes(1 + MAX_RECYCLE_RIDEOUTS);
     expect(ensureSpy).toHaveBeenCalledTimes(MAX_RECYCLE_RIDEOUTS);
 
@@ -375,22 +375,22 @@ describe('single-design mutual exclusion', () => {
 describe('scope + variantTasks (fs-25)', () => {
   /* Seed a character that already has a base Qwen voice — ready for variant design. */
   const charWithBase = {
-    id: 'Marlow',
+    id: 'marlow',
     name: 'Marlow',
     role: 'supporting',
     color: 'sky',
-    voiceId: 'v_Marlow',
+    voiceId: 'v_marlow',
     voiceStyle: 'a charismatic, quick-witted young man, playful with an undercurrent of emotion',
-    overrideTtsVoices: { qwen: { name: 'qwen-v_Marlow' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } },
   };
 
   /* Seed a character that has NO base Qwen voice yet. */
   const charNoBase = {
-    id: 'Maerin',
+    id: 'maerin',
     name: 'Maerin',
     role: 'supporting',
     color: 'pink',
-    voiceId: 'v_Maerin',
+    voiceId: 'v_maerin',
     voiceStyle: 'a graceful, perceptive young woman, polished but warm',
   };
 
@@ -402,8 +402,8 @@ describe('scope + variantTasks (fs-25)', () => {
 
   it('scope:variants designs the requested emotion and persists the variant slot', async () => {
     const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
-      voiceId: 'qwen-v_Marlow__angry',
-      url: '/voice-samples/qwen-v_Marlow__angry.mp3',
+      voiceId: 'qwen-v_marlow__angry',
+      url: '/voice-samples/qwen-v_marlow__angry.mp3',
     });
 
     const res = await request(app)
@@ -412,26 +412,26 @@ describe('scope + variantTasks (fs-25)', () => {
         modelKey: QWEN_KEY,
         scope: 'variants',
         characterIds: [],
-        variantTasks: [{ characterId: 'Marlow', emotions: ['angry'] }],
+        variantTasks: [{ characterId: 'marlow', emotions: ['angry'] }],
       });
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
     const variantEvent = events.find((e) => e.type === 'variant_designed');
     expect(variantEvent).toBeDefined();
-    expect(variantEvent).toMatchObject({ characterId: 'Marlow', emotion: 'angry' });
+    expect(variantEvent).toMatchObject({ characterId: 'marlow', emotion: 'angry' });
 
     const cast = readCast();
-    const Marlow = cast.characters.find((c) => c.id === 'Marlow');
-    expect(Marlow?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
+    const marlow = cast.characters.find((c) => c.id === 'marlow');
+    expect(marlow?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
 
     spy.mockRestore();
   });
 
   it('scope:variants skips a variant whose base voice is missing', async () => {
     const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockResolvedValue({
-      voiceId: 'qwen-v_Maerin__angry',
-      url: '/voice-samples/qwen-v_Maerin__angry.mp3',
+      voiceId: 'qwen-v_maerin__angry',
+      url: '/voice-samples/qwen-v_maerin__angry.mp3',
     });
 
     const res = await request(app)
@@ -440,12 +440,12 @@ describe('scope + variantTasks (fs-25)', () => {
         modelKey: QWEN_KEY,
         scope: 'variants',
         characterIds: [],
-        variantTasks: [{ characterId: 'Maerin', emotions: ['angry'] }],
+        variantTasks: [{ characterId: 'maerin', emotions: ['angry'] }],
       });
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
-    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'Maerin')).toBe(true);
+    expect(events.some((e) => e.type === 'character_skipped' && e.characterId === 'maerin')).toBe(true);
     expect(events.some((e) => e.type === 'variant_designed')).toBe(false);
     expect(spy).not.toHaveBeenCalled();
 
@@ -453,20 +453,20 @@ describe('scope + variantTasks (fs-25)', () => {
   });
 
   it('scope:both designs base then its variants in order for one character', async () => {
-    /* Maerin has no base yet — scope:both should design the base first, then the variant. */
+    /* maerin has no base yet — scope:both should design the base first, then the variant. */
     const designedIds: string[] = [];
     const spy = vi.spyOn(qwenVoiceMod, 'designQwenVoiceForCharacter').mockImplementation(
       async (p) => {
-        const id = p.emotion ? `qwen-v_Maerin__${p.emotion}` : 'qwen-v_Maerin';
+        const id = p.emotion ? `qwen-v_maerin__${p.emotion}` : 'qwen-v_maerin';
         designedIds.push(id);
         /* Simulate a base voice being persisted so the variant skip-check passes. */
         if (!p.emotion) {
           /* Manually write the base into cast.json so the variant freshness check
              sees it (mirrors what applyOverrideToCastFiles would do). */
           const cast = readCast();
-          const ch = cast.characters.find((c) => c.id === 'Maerin');
+          const ch = cast.characters.find((c) => c.id === 'maerin');
           if (ch) {
-            ch.overrideTtsVoices = { ...(ch.overrideTtsVoices ?? {}), qwen: { name: 'qwen-v_Maerin' } };
+            ch.overrideTtsVoices = { ...(ch.overrideTtsVoices ?? {}), qwen: { name: 'qwen-v_maerin' } };
             writeFileSync(
               join(bookDir, '.audiobook', 'cast.json'),
               JSON.stringify(cast),
@@ -482,15 +482,15 @@ describe('scope + variantTasks (fs-25)', () => {
       .send({
         modelKey: QWEN_KEY,
         scope: 'both',
-        characterIds: ['Maerin'],
-        variantTasks: [{ characterId: 'Maerin', emotions: ['whisper'] }],
+        characterIds: ['maerin'],
+        variantTasks: [{ characterId: 'maerin', emotions: ['whisper'] }],
       });
 
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
 
-    const baseIdx = events.findIndex((e) => e.type === 'character_designed' && e.characterId === 'Maerin');
-    const variantIdx = events.findIndex((e) => e.type === 'variant_designed' && e.characterId === 'Maerin');
+    const baseIdx = events.findIndex((e) => e.type === 'character_designed' && e.characterId === 'maerin');
+    const variantIdx = events.findIndex((e) => e.type === 'variant_designed' && e.characterId === 'maerin');
     expect(baseIdx).toBeGreaterThanOrEqual(0);
     expect(variantIdx).toBeGreaterThanOrEqual(0);
     expect(baseIdx).toBeLessThan(variantIdx);

@@ -43,8 +43,8 @@ describe('parseFilenameMetadata', () => {
    pattern) doesn't carry series info. */
 describe('parseSeriesFromTitle', () => {
   it('extracts series and integer position from "Title (Series Book N)"', () => {
-    expect(parseSeriesFromTitle('The Tidewatcher's Oath (The Hollow Tide Book 3)')).toEqual({
-      title: 'The Tidewatcher's Oath',
+    expect(parseSeriesFromTitle('The Tidewatcher’s Oath (The Hollow Tide Book 3)')).toEqual({
+      title: 'The Tidewatcher’s Oath',
       series: 'The Hollow Tide',
       seriesPosition: 3,
     });
@@ -87,7 +87,7 @@ describe('parseSeriesFromTitle', () => {
   });
 
   it('trims whitespace from the input title before matching', () => {
-    expect(parseSeriesFromTitle('  The Tidewatcher's Oath (The Hollow Tide Book 3)  ').series).toBe(
+    expect(parseSeriesFromTitle('  The Tidewatcher’s Oath (The Hollow Tide Book 3)  ').series).toBe(
       'The Hollow Tide',
     );
   });
@@ -99,10 +99,10 @@ describe('parseSeriesFromTitle', () => {
 describe('parseText — series extraction from title heuristic', () => {
   it('splits "(Series Book N)" off the H1 when filename has no metadata', () => {
     const out = parseText(
-      '# The Tidewatcher's Oath (The Hollow Tide Book 3)\n\nThe story begins.',
+      '# The Tidewatcher’s Oath (The Hollow Tide Book 3)\n\nThe story begins.',
       { format: 'markdown' },
     );
-    expect(out.title).toBe('The Tidewatcher's Oath');
+    expect(out.title).toBe('The Tidewatcher’s Oath');
     expect(out.series).toBe('The Hollow Tide');
     expect(out.seriesPosition).toBe(3);
     expect(out.seriesFromTitle).toBe(true);
@@ -110,10 +110,10 @@ describe('parseText — series extraction from title heuristic', () => {
 
   it('filename-derived series wins over title heuristic (authoritative > guess)', () => {
     const out = parseText(
-      '# The Tidewatcher's Oath (The Hollow Tide Book 3)\n\nThe story.',
+      '# The Tidewatcher’s Oath (The Hollow Tide Book 3)\n\nThe story.',
       {
         format: 'markdown',
-        fileName: 'Della Renwick - the Hollow Tide 03 - The Tidewatcher's Oath.md',
+        fileName: 'Della Renwick - the Hollow Tide 03 - The Tidewatcher’s Oath.md',
       },
     );
     /* Filename gives the Hollow Tide + 3; the title heuristic doesn't run, so
