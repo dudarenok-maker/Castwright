@@ -46,7 +46,7 @@
 | Edaline | Hespa | owned (mother) |
 | Brant | Bram | owned |
 
-**Books / series:**
+**Books / series — UNAMBIGUOUS (safe for the blanket codemod):**
 
 | KotLC | Owned |
 |---|---|
@@ -54,15 +54,30 @@
 | Stellarlune | The Drowning Bell |
 | Everblaze | The Tidewatcher's Oath |
 | Neverseen | Saltgrave |
-| Exile | The Ebb |
-| Unlocked | The Floodmark |
-| Legacy | The Lantern Tide |
-| Flashback | The Undertow |
-| Lodestar / Nightfall (if present) | The Lodestone / The Nightwater |
 
+**Books — CONTEXT-ONLY (⚠️ common English / code words — NOT in the codemod):**
+
+| KotLC | Owned | Why manual |
+|---|---|---|
+| Exile | The Ebb | "exile" is a common word |
+| Unlocked | The Floodmark | UI/state term |
+| Legacy | The Lantern Tide | **114 code files** use "legacy" for legacy format/pairing — must NOT blanket-rename |
+| Flashback | The Undertow | common word |
+| Foster (surname) | Sparrow | "foster" is also a verb — capitalised-standalone only |
+
+> These are renamed **only by the reviewed manual pass** (Phase 4 Step 3b / Phase 5
+> Step 1b), where a human confirms each occurrence genuinely refers to the KotLC
+> book/surname. The codemod must **exclude** them.
+>
 > All owned names above are original (no third-party IP). Coalfall cast names come
 > from `brand/test-book/the-coalfall-commission-cast-sheet.md`; the rest are
 > fabricated Hollow Tide-universe names.
+
+**Unambiguous CHARACTER tokens** (safe for the codemod): Sophie, Keefe, Elwin,
+Sandor, Prentice, Forkle, Fitz, Biana, Maruca, Grizel, Marella, Edaline,
+Hunkyhair, Cassius, Galvin, Stellarlune, Everblaze, Neverseen. (`Dex`, `Alina`,
+`Grady`, `Brant` are short/common enough to **spot-check** the diff, but `\b`
++ capitalisation makes them low-risk.)
 
 ---
 
@@ -104,7 +119,24 @@ Expected: the names already in the table. Add any stragglers (e.g. `Councillor X
 
 - [ ] **Step 5: Write the codemod (TDD)**
 
-Create `scripts/scrub-kotlc.mjs` exporting `scrubText(s)` that applies the mapping with **word boundaries** and **case preservation** (`Sophie`→`Wren`, `sophie`→`wren`, `SOPHIE`→`WREN`; longest-key-first so `Sophie Foster`/`Keefe Sencen`/`Lord Cassius` match before the single tokens; `Foster`→`Sparrow` only as a standalone word). The map (inline const — single source) also includes the **manuscript-path** entries (`…\Bonus Keefe Story.txt` and `~/Downloads/Bonus Keefe Story.txt` → `server/src/__fixtures__/the-coalfall-commission.md`). The module also implements a `--write <files...>` CLI that scrubs each given file in place (used by every later phase).
+Create `scripts/scrub-kotlc.mjs` exporting `scrubText(s)`. Requirements:
+
+- **Only the UNAMBIGUOUS map** (the safe character + book lists above). The
+  context-only words (`Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster`) are
+  **explicitly excluded** — a guard test asserts `scrubText('legacy pairing')` is
+  unchanged.
+- **Word boundaries + case preservation**: `Sophie`→`Wren`, `sophie`→`wren`,
+  `SOPHIE`→`WREN`.
+- **Longest-key-first**: `Sophie Foster`/`Keefe Sencen`/`Lord Cassius` before the
+  single tokens.
+- **Kebab/slug forms**: for each mapping, also match the hyphen-joined lowercase
+  form — `sophie-foster`→`wren-sparrow`, `keefe-sencen`→`tam-hollis`,
+  `mock-book-stellarlune`→`mock-book-the-drowning-bell`. Implement by, for each
+  `[from,to]`, registering both the spaced form AND `kebab(from)→kebab(to)`
+  (`from.toLowerCase().replace(/ /g,'-')`).
+- **Manuscript-path** entries: `…\Bonus Keefe Story.txt` and
+  `~/Downloads/Bonus Keefe Story.txt` → `server/src/__fixtures__/the-coalfall-commission.md`.
+- A `--write <files...>` CLI that scrubs each file in place (used by every later phase).
 
 Write `scripts/tests/scrub-kotlc.test.mjs` first:
 ```js
@@ -125,6 +157,15 @@ test('word boundaries — no mid-word hits', () => {
 test('books', () => {
   assert.equal(scrubText('Keeper of the Lost Cities: Stellarlune'),
     'The Hollow Tide: The Drowning Bell');
+});
+test('kebab/slug forms', () => {
+  assert.equal(scrubText("id: 'sophie-foster'"), "id: 'wren-sparrow'");
+  assert.equal(scrubText('mock-book-stellarlune'), 'mock-book-the-drowning-bell');
+});
+test('common words are LEFT ALONE (context-only, not codemod)', () => {
+  assert.equal(scrubText('the legacy pairing format'), 'the legacy pairing format');
+  assert.equal(scrubText('exile the chapter'), 'exile the chapter');
+  assert.equal(scrubText('foster a connection'), 'foster a connection');
 });
 ```
 Run: `node --test scripts/tests/scrub-kotlc.test.mjs` → FAIL, then implement `scrubText` until PASS.
@@ -230,12 +271,24 @@ Because the codemod renames inline fixture text AND the assertions consistently,
 
 For each file flagged in Step 1, after renaming, recompute the char offsets against the renamed fixture text (the name-length delta shifts them). Where feasible, prefer asserting on a substring/anchor rather than a hardcoded integer to avoid future fragility.
 
+- [ ] **Step 3b: Manual context-only pass (the ⚠️ common words)**
+
+The codemod left `Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster` untouched. Grep each in the Cat-4 files and rename **only** the occurrences that genuinely refer to the KotLC book/surname (almost always adjacent to other KotLC names):
+```bash
+git grep -nE "\b(Exile|Unlocked|Flashback)\b" -- 'server/src/**/*.test.ts'   # review each
+git grep -nE "\bFoster\b" -- 'server/src/**/*.test.ts'                         # surname → Sparrow
+```
+Do **not** touch lowercase `legacy`/`exile`/`unlocked` (code terms). `Legacy` the
+book is rare in tests; confirm by eye before any edit.
+
 - [ ] **Step 4: Verify**
 ```bash
 npm run test:server && npm run test:server-slow
-git grep -iE "sophie|keefe|elwin|sandor|prentice|forkle|dex|fitz|biana|stellarlune|everblaze|neverseen|exile|unlocked|legacy|keeper of the lost" -- 'server/src/**/*.test.ts'
+# Gate greps the UNAMBIGUOUS tokens only (common words excluded by design):
+git grep -iE "\b(sophie|keefe|elwin|sandor|prentice|forkle|fitz|biana|maruca|grizel|marella|edaline|hunkyhair|cassius|galvin|stellarlune|everblaze|neverseen|keeper of the lost)\b" -- 'server/src/**/*.test.ts'
 ```
-Expected: all server tests green; grep returns **no matches**. Commit `test(server): re-fixture the server suite onto owned Coalfall/Hollow Tide content`.
+Expected: all server tests green; gate grep returns **no matches**. (Eyeball the
+remaining `Exile`/`Legacy`/`Foster` hits are all non-KotLC.) Commit `test(server): re-fixture the server suite onto owned Coalfall/Hollow Tide content`.
 
 > This phase may warrant splitting into 2–3 PRs by directory (`analyzer`+`routes`, `tts`+`store`, `workspace`+`audio`+`export`+`parsers`+`handoff`) to keep each review tractable. The acceptance gate per PR is the same (scoped grep clean + that subtree's tests green).
 
@@ -260,9 +313,12 @@ Then hand-edit CLAUDE.md's "Canonical end-to-end manuscript" block prose (it is 
 
 Per the convention: in archived plans recording real past runs (observed char lists, "Ch44 pos 37588"), the codemod replaces the *name* — review the diff and **do not** invent Coalfall-specific numbers. Where a sentence would read as a fabricated Coalfall run, soften to "(historical run against the prior test manuscript)" rather than asserting it happened against Coalfall.
 
+Also do the **context-only book pass** here (the codemod skipped `Exile`/`Unlocked`/`Legacy`/`Flashback`): in *docs prose* these usually DO mean the KotLC book (e.g. "Exile ch56", "Stellarlune reusing Everblaze"). Rename those occurrences by hand to the owned titles; still leave lowercase code-term `legacy` alone if any appears in docs.
+
 - [ ] **Step 3: Verify**
 ```bash
-git grep -iE "keefe|sophie|bonus keefe story|stellarlune|keeper of the lost|neverseen|exile|everblaze|unlocked|elwin" -- 'CLAUDE.md' 'docs/**/*.md'
+# Unambiguous tokens must be zero; eyeball remaining Exile/Legacy hits are non-KotLC.
+git grep -iE "\b(keefe|sophie|bonus keefe story|stellarlune|keeper of the lost|neverseen|everblaze|elwin|sandor|prentice|forkle)\b" -- 'CLAUDE.md' 'docs/**/*.md'
 ```
 Expected: **no matches**. (Docs-only PR → CI doc-fast-path applies.) Commit `docs(docs): repoint canonical manuscript + scrub KotLC from all docs`.
 
@@ -287,11 +343,12 @@ Expected: language-detection e2e green; no KotLC matches. Commit `e2e(e2e): owne
 
 ## Final verification (after all phases)
 
-- [ ] **Repo-wide grep is clean:**
+- [ ] **Repo-wide grep is clean (UNAMBIGUOUS tokens):**
 ```bash
-git grep -iE "\b(sophie|keefe|elwin|sandor|prentice|forkle|fitz|biana|maruca|grizel|stellarlune|everblaze|neverseen|exile|unlocked|legacy|keeper of the lost|bonus keefe story)\b" -- ':!node_modules' ':!docs/superpowers/plans/2026-06-12-keefe-scrub.md' ':!docs/test-book/kotlc-to-coalfall-mapping.md'
+git grep -iE "\b(sophie|keefe|elwin|sandor|prentice|forkle|fitz|biana|maruca|grizel|marella|edaline|hunkyhair|cassius|galvin|stellarlune|everblaze|neverseen|keeper of the lost|bonus keefe story)\b" -- ':!node_modules' ':!docs/superpowers/plans/2026-06-12-keefe-scrub.md' ':!docs/test-book/kotlc-to-coalfall-mapping.md'
 ```
-Expected: **no matches** anywhere in the tracked tree (except this plan + the mapping doc, which name them deliberately).
+Expected: **no matches** (except this plan + the mapping doc, which name them deliberately).
+- [ ] **Context-only words audited:** the remaining `Exile`/`Unlocked`/`Legacy`/`Flashback`/`Foster` hits are each confirmed non-KotLC (code terms / the verb), per Phase 4 Step 3b + Phase 5 Step 2.
 - [ ] **Full battery:** `npm run verify` green.
 - [ ] **Spec status → delivered;** move the scope doc note. Update `CLAUDE.md` testing section already done in Phase 5.
 
