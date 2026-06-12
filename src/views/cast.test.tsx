@@ -1330,9 +1330,15 @@ describe('CastView — Design full cast button', () => {
     expect(screen.queryByTestId('design-full-cast')).toBeNull();
   });
 
-  it('is hidden when every character already has a voice', () => {
+  it('stays visible-but-disabled (with the tour anchor) when every character already has a voice', () => {
+    /* fe-38 final acceptance: the button used to vanish once the roster was
+       fully designed, leaving the guided tour's "Design the whole cast" step
+       with nothing to spotlight. It now stays rendered, disabled, and carries
+       the tour anchor. */
     setup({ modelKey: 'qwen3-tts-0.6b', chars: [qwenDesigned] });
-    expect(screen.queryByTestId('design-full-cast')).toBeNull();
+    const btn = screen.getByTestId('design-full-cast');
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('data-tour-id')).toBe('design-full-cast-btn');
   });
 
   it('click opens the scope picker (no immediate dispatch)', () => {
