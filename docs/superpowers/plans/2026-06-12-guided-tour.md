@@ -12,7 +12,16 @@
 
 **Branch/worktree:** `feat/frontend-guided-tour` (worktree `C:/Claude/Projects/wt-guided-tour`). Run all commands from the worktree root.
 
-**Sample-data note (read once):** Several anchors target the bundled sample (The Coalfall Commission). In mock mode (`VITE_USE_MOCKS`, used by e2e + most unit tests) `api.loadSample('the-coalfall-commission')` returns bookId `castwright__standalones__the-coalfall-commission` (`api.ts:6254` mock). Three sample-specific ids are pinned as constants in Task 5 — confirm each against the real `cast.json` / manuscript at implementation; these are data lookups, not placeholders.
+**Sample-data note (read once):** Several anchors target the bundled sample (The Coalfall Commission). `api.loadSample('the-coalfall-commission')` returns bookId `castwright__standalones__the-coalfall-commission` (`api.ts:6254` mock). Three sample-specific ids are pinned as constants in Task 5 — confirm each against the real `cast.json` / manuscript at implementation; these are data lookups, not placeholders.
+
+**Review round 1 corrections (verified against code — read before starting):**
+- **`API_BASE` does not exist.** The api convention is bare relative `fetch('/api/...')` (`realCompleteSetup` is `fetch('/api/setup/complete', { method: 'POST' })`, `api.ts:5258`). Task 3 uses that.
+- **Vitest does NOT use the mock toggle.** `USE_MOCKS` is `false` under vitest, so `api` resolves to `real`; tests mock it with `vi.mock('../lib/api', …)` (see `account-slice.test.ts:19`). Tasks 3–4 tests are written accordingly (Task 3 imports the exported mock fns directly; Task 4 `vi.mock`s the api).
+- **Server test reset** is `_resetUserSettingsCache()` + `rmSync(USER_SETTINGS_PATH)` (no `resetUserSettingsForTest` export). Tasks 1–2 use it.
+- **Top-bar props** are `stage: Stage['kind']` (a string) + `view: View | null` (`top-bar.tsx:155`), not a stage object. `screenForStage(stageKind, view)` (Task 11).
+- **Empty-library has no flag gating** — it renders purely on `isLibraryEmpty` (`library-grid.tsx:77`). The tour CTA needs explicit `tourCompleted` suppression (Task 10).
+- **🔴 Mock sample is not navigable yet** — `mockLoadSample`'s bookId isn't in `MOCK_LIBRARY`, and the Coalfall fixtures live only under `DEMO_CAPTURE`. **Task 13 (new)** seeds the sample into the standard mock flow; the e2e (now Task 14) depends on it.
+- **ui actions are safely guarded** (verified): `changeView` no-ops unless `stage.kind==='ready'`; `setOpenProfileId` no-ops unless ready/confirm; neither throws. `openBook({id,status:'complete',manuscriptId})` lands `ready`/`listen`. No change needed — the engine's dispatch order (openBook → changeView → setOpenProfileId) is correct.
 
 ---
 
@@ -27,23 +36,30 @@ Mirror fs-21's `setupCompletedAt` exactly (`server/src/workspace/user-settings.t
 - [ ] **Step 1: Write the failing test** — append after the `setupCompletedAt` describe block (`user-settings.test.ts:529`):
 
 ```ts
+import { rmSync } from 'node:fs';
+import * as mod from './user-settings.js';
+
+async function resetSettings() {
+  rmSync(mod.USER_SETTINGS_PATH, { force: true });
+  mod._resetUserSettingsCache();
+  await mod.readUserSettings();
+}
+
 describe('tourCompletedAt (guided tour)', () => {
   it('getResolvedTourCompletedAt is null before any write', async () => {
-    resetUserSettingsForTest();
-    const { getResolvedTourCompletedAt } = await import('./user-settings.js');
-    expect(getResolvedTourCompletedAt()).toBeNull();
+    await resetSettings();
+    expect(mod.getResolvedTourCompletedAt()).toBeNull();
   });
 
   it('writeTourCompletedAt persists and the getter reflects it', async () => {
-    resetUserSettingsForTest();
-    const { writeTourCompletedAt, getResolvedTourCompletedAt } = await import('./user-settings.js');
-    await writeTourCompletedAt('2026-06-12T00:00:00.000Z');
-    expect(getResolvedTourCompletedAt()).toBe('2026-06-12T00:00:00.000Z');
+    await resetSettings();
+    await mod.writeTourCompletedAt('2026-06-12T00:00:00.000Z');
+    expect(mod.getResolvedTourCompletedAt()).toBe('2026-06-12T00:00:00.000Z');
   });
 });
 ```
 
-(Use the same reset helper the `setupCompletedAt` block uses — match its exact import/setup lines at `user-settings.test.ts:529-551`.)
+(This mirrors the `setupCompletedAt` block's reset exactly — `user-settings.test.ts:529-551`: `rmSync(USER_SETTINGS_PATH)` → `_resetUserSettingsCache()` → `readUserSettings()`. If the file already imports `_resetUserSettingsCache` / `USER_SETTINGS_PATH` namespaced differently, reuse its imports rather than re-importing.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -119,10 +135,11 @@ Mirror the setup route (`server/src/routes/setup-readiness.ts:70-76` + its route
 
 ```ts
 import { describe, it, expect, beforeEach } from 'vitest';
+import { rmSync } from 'node:fs';
 import express from 'express';
 import request from 'supertest';
 import { tourRouter } from './tour.js';
-import { resetUserSettingsForTest } from '../workspace/user-settings.js';
+import * as settings from '../workspace/user-settings.js';
 
 function app() {
   const a = express();
@@ -131,7 +148,11 @@ function app() {
 }
 
 describe('/api/tour', () => {
-  beforeEach(() => resetUserSettingsForTest());
+  beforeEach(async () => {
+    rmSync(settings.USER_SETTINGS_PATH, { force: true });
+    settings._resetUserSettingsCache();
+    await settings.readUserSettings();
+  });
 
   it('GET /status returns { completedAt: null } before completion', async () => {
     const res = await request(app()).get('/api/tour/status');
@@ -151,7 +172,7 @@ describe('/api/tour', () => {
 });
 ```
 
-(If `resetUserSettingsForTest` isn't the real export name, copy whatever the setup route test imports — `setup-readiness.route.test.ts:54`.)
+(`tourRouter` reads the same in-process `cached` user-settings the writer updates, so the `rmSync`+`_resetUserSettingsCache`+`readUserSettings` reset gives each test a clean slate — same pattern as `user-settings.test.ts:529-551`.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -203,19 +224,21 @@ Mirror `completeSetup` (`api.ts:6004` real, `6254` mock).
 - Modify: `src/lib/api.ts`
 - Modify: `src/lib/api.test.ts` (if a sibling exists; otherwise covered by Task 4's slice test against the mock)
 
-- [ ] **Step 1: Write the failing test** — add to the mock-api test (or create `src/lib/api.tour.test.ts`):
+- [ ] **Step 1: Write the failing test** — `src/lib/api.tour.test.ts`. (Under vitest `api` resolves to `real`, which issues a real `fetch` jsdom can't serve — so test the exported **mock** functions directly; the real ones are covered by Task 2's server route test.)
 
 ```ts
-import { describe, it, expect } from 'vitest';
-import { api } from './api';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { mockGetTourStatus, mockCompleteTour, _resetMockTour } from './api';
 
-describe('tour api (mock)', () => {
-  it('getTourStatus returns { completedAt: null } initially', async () => {
-    expect(await api.getTourStatus()).toEqual({ completedAt: null });
+describe('tour api (mock fns)', () => {
+  beforeEach(() => _resetMockTour());
+  it('mockGetTourStatus returns { completedAt: null } initially', async () => {
+    expect(await mockGetTourStatus()).toEqual({ completedAt: null });
   });
-  it('completeTour returns an ISO completedAt', async () => {
-    const { completedAt } = await api.completeTour();
+  it('mockCompleteTour stamps completedAt and the getter reflects it', async () => {
+    const { completedAt } = await mockCompleteTour();
     expect(typeof completedAt).toBe('string');
+    expect((await mockGetTourStatus()).completedAt).toBe(completedAt);
   });
 });
 ```
@@ -223,32 +246,35 @@ describe('tour api (mock)', () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `npx vitest run src/lib/api.tour.test.ts`
-Expected: FAIL — `api.getTourStatus` is not a function.
+Expected: FAIL — `mockGetTourStatus` is not exported.
 
-- [ ] **Step 3: Implement** — add real + mock functions and register them in both `api` objects (next to `completeSetup`):
+- [ ] **Step 3: Implement** — add real + mock functions and register them in both `api` objects (next to `completeSetup`). Use **bare relative `fetch`** (no `API_BASE` — it doesn't exist; mirrors `realCompleteSetup` at `api.ts:5258`):
 
 ```ts
-// --- real ---
+// --- real (bare relative fetch, like realCompleteSetup / realGetSetupReadiness) ---
 type TourStatus = { completedAt: string | null };
 async function realGetTourStatus(): Promise<TourStatus> {
-  const r = await fetch(`${API_BASE}/api/tour/status`);
-  if (!r.ok) throw new Error(`tour status ${r.status}`);
-  return r.json();
+  const res = await fetch('/api/tour/status');
+  if (!res.ok) throw new Error(`tour status ${res.status}`);
+  return (await res.json()) as TourStatus;
 }
 async function realCompleteTour(): Promise<TourStatus> {
-  const r = await fetch(`${API_BASE}/api/tour/complete`, { method: 'POST' });
-  if (!r.ok) throw new Error(`tour complete ${r.status}`);
-  return r.json();
+  const res = await fetch('/api/tour/complete', { method: 'POST' });
+  if (!res.ok) throw new Error(`tour complete ${res.status}`);
+  return (await res.json()) as TourStatus;
 }
 
-// --- mock (module-level let, like other mock state) ---
+// --- mock (module-level state, like MOCK_LISTEN_PROGRESS; export + reset for tests) ---
 let mockTourCompletedAt: string | null = null;
-async function mockGetTourStatus(): Promise<TourStatus> {
+export async function mockGetTourStatus(): Promise<TourStatus> {
   return { completedAt: mockTourCompletedAt };
 }
-async function mockCompleteTour(): Promise<TourStatus> {
+export async function mockCompleteTour(): Promise<TourStatus> {
   mockTourCompletedAt = new Date().toISOString();
   return { completedAt: mockTourCompletedAt };
+}
+export function _resetMockTour(): void {
+  mockTourCompletedAt = null;
 }
 ```
 
@@ -265,8 +291,6 @@ and in the mock object (near `completeSetup: mockCompleteSetup,`):
   getTourStatus: mockGetTourStatus,
   completeTour: mockCompleteTour,
 ```
-
-Use the file's existing `API_BASE`/fetch helper if one is already defined (match how `realCompleteSetup` issues its request — copy its exact base/headers).
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -294,7 +318,18 @@ State shape (runtime + persisted-completion mirror):
 - [ ] **Step 1: Write the failing test** — `src/store/tour-slice.test.ts`:
 
 ```ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Under vitest `api` is the REAL impl (USE_MOCKS=false); mock it so the thunks
+// don't issue real fetches. Mirrors account-slice.test.ts:19.
+vi.mock('../lib/api', () => ({
+  api: {
+    getTourStatus: vi.fn(async () => ({ completedAt: null })),
+    completeTour: vi.fn(async () => ({ completedAt: '2026-06-12T00:00:00.000Z' })),
+    loadSample: vi.fn(async () => ({ bookId: 'castwright__standalones__the-coalfall-commission' })),
+  },
+}));
+
 import { tourSlice, tourActions, fetchTourStatus } from './tour-slice';
 import { configureStore } from '@reduxjs/toolkit';
 
@@ -994,7 +1029,7 @@ describe('tour anchors (smoke)', () => {
 });
 ```
 
-(Cover the remaining anchors in Task 13's e2e, which renders the real app — cheaper than booting every heavy view in jsdom.)
+(Cover the remaining anchors in Task 14's e2e, which renders the real app — cheaper than booting every heavy view in jsdom.)
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -1030,18 +1065,25 @@ git commit -m "feat(frontend): data-tour-id anchors for tour targets"
 ## Task 10: Empty-library "Take the guided tour" CTA
 
 **Files:**
-- Modify: `src/components/library/library-empty-states.tsx` (add `onStartTour` prop + primary button)
-- Modify: `src/components/library/library-grid.tsx`, `src/views/book-library.tsx` (thread the prop)
+- Modify: `src/components/library/library-empty-states.tsx` (add `onStartTour` + `tourCompleted` props + primary button)
+- Modify: `src/components/library/library-grid.tsx`, `src/views/book-library.tsx` (thread the props)
 - Modify: `src/components/library/library-empty-states.test.tsx`
 
-- [ ] **Step 1: Write the failing test** — in `library-empty-states.test.tsx`:
+> **Suppression (verified gap):** the empty state renders purely on `isLibraryEmpty` (`library-grid.tsx:77`) with NO existing flag gating. The tour CTA must be suppressed once `tour.completedAt` is set, so a returning user who deleted the sample isn't re-nagged. We thread a `tourCompleted` boolean down and hide the CTA when true.
+
+- [ ] **Step 1: Write the failing tests** — in `library-empty-states.test.tsx`:
 
 ```tsx
 it('renders the guided-tour CTA and fires onStartTour', () => {
   const onStartTour = vi.fn();
-  render(<EmptyLibrary onStartNew={() => {}} onTrySample={() => {}} onStartTour={onStartTour} />);
+  render(<EmptyLibrary onStartNew={() => {}} onTrySample={() => {}} onStartTour={onStartTour} tourCompleted={false} />);
   fireEvent.click(screen.getByRole('button', { name: /take the guided tour/i }));
   expect(onStartTour).toHaveBeenCalled();
+});
+
+it('suppresses the guided-tour CTA once the tour is completed', () => {
+  render(<EmptyLibrary onStartNew={() => {}} onTrySample={() => {}} onStartTour={vi.fn()} tourCompleted />);
+  expect(screen.queryByRole('button', { name: /take the guided tour/i })).toBeNull();
 });
 ```
 
@@ -1050,25 +1092,30 @@ it('renders the guided-tour CTA and fires onStartTour', () => {
 - [ ] **Step 3: Implement** — extend `EmptyLibrary`:
 
 ```tsx
-export function EmptyLibrary({ onStartNew, onTrySample, onStartTour }: {
-  onStartNew: () => void; onTrySample?: () => void; onStartTour?: () => void;
+export function EmptyLibrary({ onStartNew, onTrySample, onStartTour, tourCompleted }: {
+  onStartNew: () => void; onTrySample?: () => void;
+  onStartTour?: () => void; tourCompleted?: boolean;
 }) {
-  // ...existing markup; replace the button block's primary action:
-  // Keep "Import your first book" as secondary; add the tour as the primary CTA:
+  // ...existing markup; the tour CTA is the primary action when offered:
 }
 ```
 
-Add, above the existing `PrimaryButton`:
+Add, above the existing `PrimaryButton` (only when offered AND not yet completed):
 
 ```tsx
-{onStartTour && (
+{onStartTour && !tourCompleted && (
   <PrimaryButton variant="dark" onClick={onStartTour}>
     <span className="inline-flex items-center gap-2">Take the guided tour</span>
   </PrimaryButton>
 )}
 ```
 
-Demote "Import your first book" to a secondary link/button if `onStartTour` is present. Thread `onStartTour` from `book-library.tsx` → `library-grid.tsx` → `EmptyLibrary`. In `book-library.tsx`, wire it to `dispatch(startLinearTour())`.
+Keep "Import your first book" as the (secondary) action. Thread the props `book-library.tsx` → `library-grid.tsx` → `EmptyLibrary`. In `book-library.tsx`:
+
+```tsx
+const tourCompleted = useAppSelector((s) => s.tour.completedAt != null);
+// ...pass onStartTour={() => dispatch(startLinearTour())} tourCompleted={tourCompleted}
+```
 
 - [ ] **Step 4: Run to verify it passes** — `npx vitest run src/components/library/library-empty-states.test.tsx && npm run typecheck` → PASS.
 
@@ -1107,20 +1154,32 @@ it('renders the Help menu trigger and opens a popover with the three actions', (
 - [ ] **Step 3: Implement** — replace the `<a href="#/help">` block (`:346-356`) with a button that toggles a small popover (mirror `status-popover.tsx`'s portal + outside-click-close). Keep `data-testid="topbar-help"` on the button; add `aria-haspopup="menu"` + `aria-expanded`. Menu items:
   - **Help** → navigate to `#/help` (use the existing nav mechanism — `stageToHash({kind:'help'})` / `dispatch(uiActions.openHelp())`).
   - **Take the tour** → `dispatch(startLinearTour())`.
-  - **Show me this screen** → derive current `TourScreen` from `ui.stage` (map `ready.view`→screen, `books`→`library`) and `dispatch(startScreenTour(screen))`; disable when the current stage has no mini-tour.
+  - **Show me this screen** → compute the current `TourScreen` via `screenForStage(stage, view)` (top-bar already has these two props — see below) and `dispatch(startScreenTour(screen))`; **disable** the item when `screenForStage` returns `null`.
 
-Provide a `screenForStage(stage)` helper in `tour-steps.ts` (and unit-test it in Task 5's file):
+Provide a `screenForStage` helper in `tour-steps.ts`. **Top-bar passes `stage: Stage['kind']` (a string) + `view: View | null` separately** (`top-bar.tsx:155-156`), so the helper takes those two primitives — NOT a stage object:
 
 ```ts
-export function screenForStage(stage: { kind: string; view?: string }): TourScreen | null {
-  if (stage.kind === 'books') return 'library';
-  if (stage.kind === 'ready') {
-    const v = stage.view;
-    if (v === 'manuscript' || v === 'cast' || v === 'generate' || v === 'listen') return v;
+export function screenForStage(stageKind: string, view: string | null): TourScreen | null {
+  if (stageKind === 'books') return 'library';
+  if (stageKind === 'ready') {
+    if (view === 'manuscript' || view === 'cast' || view === 'generate' || view === 'listen') return view;
   }
   return null;
 }
 ```
+
+Add a unit test in `tour-steps.test.ts`:
+
+```ts
+it('screenForStage maps stage-kind + view to a TourScreen', () => {
+  expect(screenForStage('books', null)).toBe('library');
+  expect(screenForStage('ready', 'cast')).toBe('cast');
+  expect(screenForStage('ready', 'log')).toBeNull();
+  expect(screenForStage('account', null)).toBeNull();
+});
+```
+
+In `top-bar.tsx`, the "Show me this screen" handler is `const screen = screenForStage(stage, view);` then `screen && dispatch(startScreenTour(screen))`, with the menu item `disabled={!screen}`.
 
 - [ ] **Step 4: Run to verify it passes** — `npx vitest run src/components/top-bar.test.tsx && npm run typecheck` → PASS.
 
@@ -1171,11 +1230,73 @@ git commit -m "feat(frontend): Help view Take-the-tour button"
 
 ---
 
-## Task 13: E2E — golden path, mini-tour, responsive
+## Task 13: Wire the Coalfall sample into the standard mock flow (🔴 e2e blocker)
+
+**Why (verified):** `mockLoadSample` returns bookId `castwright__standalones__the-coalfall-commission`, which is **absent from `MOCK_LIBRARY`** — so after "load sample" the app can't find/open the book, and every downstream view is empty. The Coalfall fixtures exist (`src/mocks/marketing/hollow-tide.ts`: `COALFALL_CHAPTERS`, `coalfallCast`, `coalfallSentences`) but only under `DEMO_CAPTURE`, keyed by a different slug. The tour can't be driven in mock mode (local dev OR the Task 14 e2e) until the sample is navigable through the standard getters.
+
+**Files:**
+- Modify: `src/lib/api.ts` (make `mockLoadSample` register the sample, and the standard mock getters return its data)
+- Reuse: `src/mocks/marketing/hollow-tide.ts` fixtures (or `coalfall-*.json`)
+- Test: `src/lib/api.sample.test.ts`
+
+- [ ] **Step 1: Write the failing test** — `src/lib/api.sample.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { mockLoadSample, mockGetLibrary, mockGetBookState } from './api';
+
+const SAMPLE_ID = 'castwright__standalones__the-coalfall-commission';
+
+describe('mock sample is navigable', () => {
+  it('loadSample registers the book in the library', async () => {
+    await mockLoadSample('the-coalfall-commission');
+    const lib = await mockGetLibrary();
+    expect(lib.books.some((b) => b.bookId === SAMPLE_ID)).toBe(true);
+  });
+  it('the sample book has chapter 1 done (rest queued)', async () => {
+    await mockLoadSample('the-coalfall-commission');
+    const state = await mockGetBookState(SAMPLE_ID);
+    expect(state).not.toBeNull();
+    const ch1 = state!.chapters.find((c) => c.id === 1);
+    expect(ch1?.state).toBe('done');
+  });
+});
+```
+
+(Confirm exact mock getter names + payload shapes against `api.ts` — `mockGetLibrary`/`mockGetBookState`, the `books[]` + `chapters[]` shapes, and the chapter `id` field. Adapt the Coalfall fixture chapter ids so chapter 1 exists and is `done`.)
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `npx vitest run src/lib/api.sample.test.ts`
+Expected: FAIL — sample not in `MOCK_LIBRARY`.
+
+- [ ] **Step 3: Implement** — in `src/lib/api.ts`:
+  - In `mockLoadSample`, push a Coalfall library entry into the module-level state the standard `mockGetLibrary` reads (status `'generating'` so it opens `ready`), and seed a `MOCK_BOOK_STATES`-style entry keyed by `SAMPLE_ID` with **chapter 1 `state: 'done'`** (give it a duration) and chapters 2+ `'queued'` — this makes Generate show "Resume generation" and Listen show ch.1 playable + the rest pending (matches the spec's intentional partial state).
+  - Wire the standard mock getters (`mockGetCast`/characters, `mockGetChapters`, `mockGetManuscript`, `mockGetSentences`) to return the Coalfall fixtures **for `SAMPLE_ID`**, falling back to the existing canned data for other ids. Reuse `coalfallCast` / `coalfallSentences` / `COALFALL_CHAPTERS` from `hollow-tide.ts` rather than duplicating.
+  - Add a `_resetMockSample()` export that clears the seeded entry (for test isolation), mirroring `_resetMockTour`.
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `npx vitest run src/lib/api.sample.test.ts && npm run typecheck`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/api.ts src/lib/api.sample.test.ts
+git commit -m "test(mocks): seed Coalfall sample into the standard mock flow"
+```
+
+> **Server counterpart:** the REAL `POST /api/samples/{slug}/load` (fs-22) must likewise provision a navigable, chapter-1-rendered book on disk. That's fs-22's job (+ Task 15's audio), not this task — this task only unblocks mock-mode dev + e2e.
+
+---
+
+## Task 14: E2E — golden path, mini-tour, responsive
 
 **Files:**
 - Create: `e2e/tour.spec.ts`
 - Modify: `e2e/responsive/coverage.spec.ts` (append a tour case)
+- Depends on: **Task 13** (sample navigable in mock mode).
 
 - [ ] **Step 1: Write the spec** — `e2e/tour.spec.ts`:
 
@@ -1209,7 +1330,7 @@ Flesh out the assertions against the real DOM (use `data-testid`/`data-tour-id`)
 
 - [ ] **Step 2: Run to verify it fails** — `npm run test:e2e -- tour.spec.ts` → FAIL (CTA/flow not fully wired or assertions off).
 
-- [ ] **Step 3: Fix wiring** until green — most likely: ensure the mock sample is navigable (depends on fs-22 mock data; if absent, the e2e seeds via `api.loadSample` mock which returns the canned bookId — confirm the mock library/cast/manuscript expose that book).
+- [ ] **Step 3: Fix wiring** until green — the sample navigability is handled by Task 13; remaining work is timing/assertion robustness (wait on `data-tour-id`/`data-testid` elements, advance via the bubble's Next button).
 
 - [ ] **Step 4: Run to verify it passes** — `npm run test:e2e -- tour.spec.ts` → PASS.
 
@@ -1222,7 +1343,7 @@ git commit -m "test(e2e): guided tour golden path + mini-tour + responsive"
 
 ---
 
-## Task 14: Amend fs-22 spec (companion change) + ship chapter-1 audio recipe
+## Task 15: Amend fs-22 spec (companion change) + ship chapter-1 audio recipe
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-06-11-fs22-bundled-demo-book-design.md` (lift the "no pre-rendered audio" Non-Goal)
@@ -1245,7 +1366,7 @@ git commit -m "docs(docs): amend fs-22 to bundle chapter-1 audio for the tour"
 
 ---
 
-## Task 15: Bookkeeping — issue, backlog, plan/INDEX
+## Task 16: Bookkeeping — issue, backlog, plan/INDEX
 
 **Files:**
 - Modify: `docs/BACKLOG.md`, `docs/features/INDEX.md`
@@ -1279,9 +1400,17 @@ git commit -m "docs(docs): guided-tour regression plan + backlog + supersede fe-
 | `data-tour-id` anchors (incl. boundary-handle attr, m4b tile) | 9 |
 | Tour slice + real-navigation engine | 4, 6 |
 | `<TourOverlay/>` spotlight + z-[75] + click-through + fallback | 7 |
-| Entry points (empty-library CTA, `?` menu, Help button) | 10, 11, 12 |
+| Entry points (empty-library CTA + completion suppression, `?` menu, Help button) | 10, 11, 12 |
 | Server-side `tourCompletedAt` (fs-21 pattern) | 1, 2, 3, 4 |
-| fs-22 chapter-1 audio (amend + recipe) | 14 |
-| Edge cases (Esc, fallback, drawer open/close, responsive) | 6, 7, 13 |
-| Tests: unit/component/server/e2e + top-bar rewrite | 1–13 |
-| Bookkeeping (issue, backlog, plan, supersede fe-28) | 15 |
+| Sample navigable in mock mode (e2e/local-dev prerequisite) | 13 |
+| fs-22 chapter-1 audio (amend + recipe) | 15 |
+| Edge cases (Esc, fallback, drawer open/close, responsive) | 6, 7, 14 |
+| Tests: unit/component/server/e2e + top-bar rewrite | 1–14 |
+| Bookkeeping (issue, backlog, plan, supersede fe-28) | 16 |
+
+### Corrections folded in from review round 1
+- API: bare relative `fetch` (no `API_BASE`) · Tasks 3.
+- Tests: `vi.mock('../lib/api')` under vitest; server reset = `_resetUserSettingsCache`+`rmSync` · Tasks 1–4.
+- `screenForStage(stageKind, view)` (top-bar passes primitives) · Task 11.
+- Empty-library tour CTA gated on `tourCompleted` (no prior flag gating existed) · Task 10.
+- New Task 13 unblocks the e2e by seeding the sample into the standard mock flow.
