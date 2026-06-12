@@ -373,6 +373,155 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
   ],
 };
 
+/* ── Voice-library fixture (served under VITE_DEMO_CAPTURE=1) ──────────── */
+import type { VoiceLibraryResponse, Voice } from '../../lib/types';
+import { gradientForTtsVoice } from '../../lib/voice-palette';
+
+type MockVoice = Omit<Voice, 'gradient'> & {
+  ttsVoice: { provider: 'gemini' | 'qwen'; name: string; description: string };
+};
+
+function withGradient(v: MockVoice): Voice {
+  return { ...v, gradient: gradientForTtsVoice(v.ttsVoice.name, v.id) };
+}
+
+const geminiTts = (name: string, description: string) => ({
+  provider: 'gemini' as const,
+  name,
+  description,
+});
+
+const qwenTts = (name: string, description: string) => ({
+  provider: 'qwen' as const,
+  name,
+  description,
+});
+
+/* Three distinct base voices for the recurring principals.
+   Two minor characters share 'Sulafat' intentionally — the library then
+   shows a family with >1 member for that base voice. */
+export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
+  voices: [
+    /* ── Recurring across the whole series (designed in Book 1) ── */
+    withGradient({
+      id: 'v_marin_narrator',
+      character: 'Narrator',
+      bookTitle: 'The Drowning Bell',
+      bookId: 'hollow-tide-1',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Neutral', 'Mid-tempo', 'Mid-Atlantic', 'Measured', 'Weathered'],
+      usedIn: 3,
+      source: 'current',
+      reusable: true,
+      ttsVoice: geminiTts('Sulafat', 'Warm'),
+    }),
+    withGradient({
+      id: 'v_marin_cray',
+      character: 'Insp. Cray',
+      bookTitle: 'The Drowning Bell',
+      bookId: 'hollow-tide-1',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Male', 'Baritone', 'Northern English', '50s', 'Dogged'],
+      usedIn: 3,
+      source: 'current',
+      ttsVoice: geminiTts('Charon', 'Informative'),
+    }),
+    withGradient({
+      id: 'v_marin_wren',
+      character: 'Dr. Wren',
+      bookTitle: 'The Drowning Bell',
+      bookId: 'hollow-tide-1',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Female', 'Mezzo', 'RP English', '40s', 'Precise'],
+      usedIn: 3,
+      source: 'current',
+      ttsVoice: geminiTts('Aoede', 'Breezy'),
+    }),
+    /* ── Book-1-only characters (The Drowning Bell) ── */
+    withGradient({
+      id: 'v_marin_elara',
+      character: 'Elara Moss',
+      bookTitle: 'The Drowning Bell',
+      bookId: 'hollow-tide-1',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Female', 'Alto', 'West Country', '40s', 'Guarded'],
+      usedIn: 1,
+      source: 'current',
+      ttsVoice: geminiTts('Kore', 'Firm'),
+    }),
+    withGradient({
+      id: 'v_marin_fenwick',
+      character: 'Old Fenwick',
+      bookTitle: 'The Drowning Bell',
+      bookId: 'hollow-tide-1',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Male', 'Bass', 'Scottish', '70s', 'Grizzled'],
+      usedIn: 1,
+      source: 'current',
+      ttsVoice: geminiTts('Algieba', 'Smooth'),
+    }),
+    withGradient({
+      id: 'v_marin_constance',
+      character: 'Constance Vale',
+      bookTitle: 'The Drowning Bell',
+      bookId: 'hollow-tide-1',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Female', 'Soprano', 'Southern English', '50s', 'Grieving'],
+      usedIn: 1,
+      source: 'current',
+      ttsVoice: geminiTts('Sulafat', 'Warm'),
+    }),
+    withGradient({
+      id: 'v_marin_aldric',
+      character: 'Father Aldric',
+      bookTitle: 'The Drowning Bell',
+      bookId: 'hollow-tide-1',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Male', 'Tenor', 'Irish', '60s', 'Sepulchral'],
+      usedIn: 1,
+      source: 'current',
+      ttsVoice: geminiTts('Iapetus', 'Clear'),
+    }),
+    /* ── Book-2-new characters (Saltgrave) ── */
+    withGradient({
+      id: 'v_marin_remy',
+      character: 'Remy Halse',
+      bookTitle: 'Saltgrave',
+      bookId: 'hollow-tide-2',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Male', 'Tenor', 'West Country', '20s', 'Nervous'],
+      usedIn: 1,
+      source: 'library',
+      inCurrentSeries: true,
+      ttsVoice: qwenTts('qwen-remy', 'Designed voice'),
+    }),
+    withGradient({
+      id: 'v_marin_cross',
+      character: 'Magistrate Cross',
+      bookTitle: 'Saltgrave',
+      bookId: 'hollow-tide-2',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Male', 'Baritone', 'RP English', '60s', 'Imperious'],
+      usedIn: 1,
+      source: 'library',
+      inCurrentSeries: true,
+      ttsVoice: geminiTts('Charon', 'Informative'),
+    }),
+    withGradient({
+      id: 'v_marin_sable',
+      character: 'Sable Orn',
+      bookTitle: 'Saltgrave',
+      bookId: 'hollow-tide-2',
+      bookSeries: 'The Hollow Tide',
+      attributes: ['Female', 'Contralto', 'Scottish', '50s', 'Reclusive'],
+      usedIn: 1,
+      source: 'library',
+      inCurrentSeries: true,
+      ttsVoice: qwenTts('qwen-sable', 'Designed voice'),
+    }),
+  ],
+};
+
 /* Posed snapshots for the animated views (Task B4 emits these once, then hangs). */
 export const HOLLOW_TIDE_POSED = {
   analysing: {

@@ -57,6 +57,7 @@ import {
   HOLLOW_TIDE_LIBRARY,
   HOLLOW_TIDE_BOOK_STATES,
   HOLLOW_TIDE_POSED,
+  HOLLOW_TIDE_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MATCH_FACTORS } from '../data/match-factors';
@@ -614,6 +615,7 @@ async function mockGetLibrary(): Promise<LibraryResponse> {
 
 async function mockGetVoices(_args?: { currentBookId?: string }): Promise<VoiceLibraryResponse> {
   await wait(80);
+  if (DEMO_CAPTURE) return HOLLOW_TIDE_VOICES;
   return MOCK_VOICE_LIBRARY;
 }
 

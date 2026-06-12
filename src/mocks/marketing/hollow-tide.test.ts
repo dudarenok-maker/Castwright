@@ -3,6 +3,7 @@ import {
   HOLLOW_TIDE_LIBRARY,
   HOLLOW_TIDE_BOOK_STATES,
   HOLLOW_TIDE_POSED,
+  HOLLOW_TIDE_VOICES,
 } from './hollow-tide';
 
 describe('Hollow Tide marketing fixtures', () => {
@@ -55,5 +56,48 @@ describe('Hollow Tide marketing fixtures', () => {
       for (const series of author.series)
         for (const book of series.books)
           expect(HOLLOW_TIDE_BOOK_STATES.has(book.bookId)).toBe(true);
+  });
+
+  describe('HOLLOW_TIDE_VOICES', () => {
+    it('contains 10 voices covering all 10 characters', () => {
+      expect(HOLLOW_TIDE_VOICES.voices).toHaveLength(10);
+    });
+
+    it('every voice has id, character, bookId, bookSeries, gradient, usedIn, source, ttsVoice', () => {
+      for (const v of HOLLOW_TIDE_VOICES.voices) {
+        expect(v.id).toBeTruthy();
+        expect(v.character).toBeTruthy();
+        expect(v.bookId).toBeTruthy();
+        expect(v.bookSeries).toBe('The Hollow Tide');
+        expect(v.gradient).toHaveLength(2);
+        expect(typeof v.usedIn).toBe('number');
+        expect(['current', 'library']).toContain(v.source);
+        expect(v.ttsVoice.name).toBeTruthy();
+      }
+    });
+
+    it('recurring principals have usedIn >= 3 and source current', () => {
+      const recurring = HOLLOW_TIDE_VOICES.voices.filter((v) => v.usedIn >= 3);
+      expect(recurring.map((v) => v.character).sort()).toEqual(
+        ['Dr. Wren', 'Insp. Cray', 'Narrator'].sort(),
+      );
+      for (const v of recurring) expect(v.source).toBe('current');
+    });
+
+    it('book-2 voices belong to hollow-tide-2', () => {
+      const book2 = HOLLOW_TIDE_VOICES.voices.filter((v) => v.bookId === 'hollow-tide-2');
+      expect(book2.map((v) => v.character).sort()).toEqual(
+        ['Magistrate Cross', 'Remy Halse', 'Sable Orn'].sort(),
+      );
+    });
+
+    it('at least two voices share a base ttsVoice name (family with >1 member)', () => {
+      const nameCounts = new Map<string, number>();
+      for (const v of HOLLOW_TIDE_VOICES.voices) {
+        nameCounts.set(v.ttsVoice.name, (nameCounts.get(v.ttsVoice.name) ?? 0) + 1);
+      }
+      const shared = [...nameCounts.values()].filter((n) => n > 1);
+      expect(shared.length).toBeGreaterThanOrEqual(1);
+    });
   });
 });
