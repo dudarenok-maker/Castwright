@@ -67,6 +67,18 @@ test('Capitalised prose word next to a hyphen keeps its case (not a slug)', () =
   assert.equal(scrubText("id: 'Marlow-foo'"), "id: 'marlow-foo'");
 });
 
+test('camelCase / PascalCase identifier prefixes', () => {
+  assert.equal(scrubText('WrenFoster and MarlowRow'), 'wrenFoster and marlowRow');
+  assert.equal(scrubText('const MaerinCall = 1'), 'const MaerinCall = 1');
+});
+
+test('camelCase pass does NOT over-match a name glued to a lowercase letter', () => {
+  // `Hart`→Hart, `Pell`→Pell: a following LOWERCASE letter is a different word,
+  // not camelCase — must stay untouched (no `Hartwell`→`hartter`, `tamper`→`pellper`).
+  assert.equal(scrubText('dexterity and tamper'), 'dexterity and tamper');
+  assert.equal(scrubText('Dexterous'), 'Dexterous');
+});
+
 test('Pell (the Hollow Tide Pell Marsh) maps to Pell — no collision with Marlow', () => {
   assert.equal(scrubText('Marlow and Pell'), 'Marlow and Pell');
   assert.equal(scrubText('Pell Marsh'), 'Pell Marsh');

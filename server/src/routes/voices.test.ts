@@ -379,8 +379,8 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
           },
           {
             id: 'c-bo',
-            name: 'Bo',
-            voiceId: 'v_bo',
+            name: 'Fenn',
+            voiceId: 'v_fenn',
             ttsEngine: 'qwen',
             attributes: [],
             lines: 5,
@@ -445,7 +445,7 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
 
   it('never stamps generated on a voice with no designed Qwen voiceId', async () => {
     const res = await request(app).get('/api/voices?engine=qwen');
-    const bo = res.body.voices.find((v: { id: string }) => v.id === 'v_bo');
+    const bo = res.body.voices.find((v: { id: string }) => v.id === 'v_fenn');
     expect(bo.ttsVoice.name).toBe(''); // no qwen override → undesigned
     expect(bo.generated).toBeFalsy();
   });
@@ -467,9 +467,9 @@ describe('GET /api/voices?engine=qwen — generated flag', () => {
 
   it('leaves a designed Qwen voice with no cached audition un-sampled', async () => {
     /* Bo is undesigned and Marcus is Coqui — but more directly: no
-       `v_bo`/`v_marcus` sample file was dropped, so neither is sampled. */
+       `v_fenn`/`v_marcus` sample file was dropped, so neither is sampled. */
     const res = await request(app).get('/api/voices?engine=qwen');
-    const bo = res.body.voices.find((v: { id: string }) => v.id === 'v_bo');
+    const bo = res.body.voices.find((v: { id: string }) => v.id === 'v_fenn');
     expect(bo.sampled).toBeFalsy();
   });
 

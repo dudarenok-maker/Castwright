@@ -113,9 +113,9 @@ describe('ConfirmCastView — voice-match wiring', () => {
   it('renders unmatched characters without a Matched pill', () => {
     renderView();
     /* Wren's row should not show any Matched · % pill. */
-    const WrenHeading = screen.getByRole('heading', { name: 'Wren' });
-    const WrenCard = WrenHeading.closest('article')!;
-    expect(within(WrenCard).queryByText(/Matched · /)).toBeNull();
+    const wrenHeading = screen.getByRole('heading', { name: 'Wren' });
+    const wrenCard = wrenHeading.closest('article')!;
+    expect(within(wrenCard).queryByText(/Matched · /)).toBeNull();
   });
 
   it("defaults the matched character's decision to Reuse (continuity message visible)", () => {
@@ -250,9 +250,9 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        before confirming the cast. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const WrenHeading = screen.getByRole('heading', { name: 'Wren' });
-    const WrenCard = WrenHeading.closest('article')!;
-    fireEvent.click(WrenCard);
+    const wrenHeading = screen.getByRole('heading', { name: 'Wren' });
+    const wrenCard = wrenHeading.closest('article')!;
+    fireEvent.click(wrenCard);
     expect(onOpenProfile).toHaveBeenCalledWith('wren');
   });
 
@@ -265,9 +265,9 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        or correct the matched profile before confirming. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const MarlowHeading = screen.getByRole('heading', { name: 'Marlow' });
+    const marlowHeading = screen.getByRole('heading', { name: 'Marlow' });
     /* Click on the name node itself — the most natural target. */
-    fireEvent.click(MarlowHeading);
+    fireEvent.click(marlowHeading);
     expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 
@@ -295,9 +295,9 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
   it('pressing Enter on a focused card opens the profile drawer', () => {
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const MarlowHeading = screen.getByRole('heading', { name: 'Marlow' });
-    const MarlowCard = MarlowHeading.closest('article')!;
-    fireEvent.keyDown(MarlowCard, { key: 'Enter' });
+    const marlowHeading = screen.getByRole('heading', { name: 'Marlow' });
+    const marlowCard = marlowHeading.closest('article')!;
+    fireEvent.keyDown(marlowCard, { key: 'Enter' });
     expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 });

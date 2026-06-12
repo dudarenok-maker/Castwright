@@ -140,8 +140,8 @@ describe('CharacterSearchPicker', () => {
     const options = within(picker).getAllByRole('option');
     /* 4 local + 1 roster (Mae Vance only — Linnet deduped) = 5 rows. */
     expect(options).toHaveLength(5);
-    const LinnetOptions = within(picker).getAllByText('Councillor Linnet');
-    expect(LinnetOptions).toHaveLength(1); // only the local row
+    const linnetOptions = within(picker).getAllByText('Councillor Linnet');
+    expect(linnetOptions).toHaveLength(1); // only the local row
   });
 
   it('arrow keys move the highlight and Enter picks the highlighted local row', async () => {
@@ -175,8 +175,8 @@ describe('CharacterSearchPicker', () => {
     const user = userEvent.setup();
     renderPicker();
     const picker = screen.getByRole('dialog');
-    const LinnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
-    await user.click(LinnetRow);
+    const linnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
+    await user.click(linnetRow);
     await waitFor(() => {
       expect(onAddFromSeriesRoster).toHaveBeenCalled();
     });
@@ -264,8 +264,8 @@ describe('CharacterSearchPicker', () => {
     const onPickRosterEntry = vi.fn();
     renderPicker({ onPickRosterEntry });
     const picker = screen.getByRole('dialog');
-    const LinnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
-    await user.click(LinnetRow);
+    const linnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
+    await user.click(linnetRow);
     expect(onPickRosterEntry).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'councillor-linnet', bookId: 'the Hollow Tide-1' }),
     );
@@ -279,8 +279,8 @@ describe('CharacterSearchPicker', () => {
     const onPickRosterEntry = vi.fn();
     renderPicker({ onPickRosterEntry });
     const picker = screen.getByRole('dialog');
-    const WrenRow = within(picker).getByRole('option', { name: /Wren/ });
-    await user.click(WrenRow);
+    const wrenRow = within(picker).getByRole('option', { name: /Wren/ });
+    await user.click(wrenRow);
     expect(onPick).toHaveBeenCalledWith('wren');
     expect(onPickRosterEntry).not.toHaveBeenCalled();
   });

@@ -120,6 +120,24 @@ export function scrubText(input) {
       return slug ? kebab(to) : applyCase(m, to);
     });
   }
+  // camelCase / PascalCase prefixes in identifiers (test var names):
+  // WrenFoster → wrenFoster, MarlowRow → marlowRow, MaerinCall → MaerinCall.
+  // Single-token names only; the trailing word (Foster/Row/…) is left as-is.
+  // The following char MUST be a genuine uppercase A-Z (the case-INSENSITIVE
+  // `gi` flag would make `(?=[A-Z])` match any letter — turning `Hartwell` into
+  // `hartter` and `tamper` into `pellper`). So flex only the first letter via
+  // an explicit alternation and keep the regex case-SENSITIVE.
+  for (const [from, to] of MAP) {
+    if (from.includes(' ')) continue;
+    const single = to.replace(/[^A-Za-z]/g, ''); // single-word owned target
+    const head = from[0];
+    const tail = from.slice(1);
+    const re = new RegExp(
+      `(?<![A-Za-z0-9])[${head.toUpperCase()}${head.toLowerCase()}]${escapeRe(tail)}(?=[A-Z])`,
+      'g');
+    out = out.replace(re, (m) =>
+      m[0] === m[0].toLowerCase() ? single.toLowerCase() : single);
+  }
   return out;
 }
 

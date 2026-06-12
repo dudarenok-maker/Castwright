@@ -85,8 +85,8 @@ beforeAll(async () => {
      dropped generation). Encoded via the real MP3 encoder so the route's
      decode→scan pipeline runs against true bytes. */
   const amy = tone(1.0, 12000);
-  const CastorSilent = Buffer.alloc(SR * 2); // 1s of zeros
-  const chapterPcm = Buffer.concat([amy, CastorSilent]);
+  const castorSilent = Buffer.alloc(SR * 2); // 1s of zeros
+  const chapterPcm = Buffer.concat([amy, castorSilent]);
   const mp3Bytes = await mp3.encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
   writeFileSync(join(audioRoot, `${SLUG}.mp3`), mp3Bytes);
   writeFileSync(

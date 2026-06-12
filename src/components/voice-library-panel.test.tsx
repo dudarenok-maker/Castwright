@@ -40,8 +40,8 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onOpenProfile = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_marlow', 'Marlow'), makeVoice('v_ro', 'Ro')]}
-        characters={[makeCharacter('marlow', 'v_marlow'), makeCharacter('ro', 'v_ro')]}
+        library={[makeVoice('v_marlow', 'Marlow'), makeVoice('v_nim', 'Nim')]}
+        characters={[makeCharacter('marlow', 'v_marlow'), makeCharacter('nim', 'v_nim')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
@@ -304,7 +304,7 @@ describe('VoiceLibraryPanel — search', () => {
   const lib: Voice[] = [
     makeVoice('v_marlow', 'Marlow Halden', { bookTitle: 'The Hollow Tide' }),
     makeVoice('v_oduvan', 'Oduvan', { bookTitle: 'The Hollow Tide' }),
-    makeVoice('v_ro', 'Ro', { bookTitle: 'Flashback' }),
+    makeVoice('v_nim', 'Nim', { bookTitle: 'Flashback' }),
   ];
 
   it('filters cards by character name as the user types', () => {
@@ -318,7 +318,7 @@ describe('VoiceLibraryPanel — search', () => {
     });
     expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
     expect(screen.queryByText('Oduvan')).toBeNull();
-    expect(screen.queryByText('Ro')).toBeNull();
+    expect(screen.queryByText('Nim')).toBeNull();
   });
 
   it('also matches on book title', () => {
@@ -328,7 +328,7 @@ describe('VoiceLibraryPanel — search', () => {
     fireEvent.change(screen.getByPlaceholderText('Search voices'), {
       target: { value: 'flashback' },
     });
-    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.getByText('Nim')).toBeInTheDocument();
     expect(screen.queryByText('Marlow Halden')).toBeNull();
   });
 
@@ -338,7 +338,7 @@ describe('VoiceLibraryPanel — search', () => {
        the name matches — the tab filter runs before the query. */
     const mixed: Voice[] = [
       makeVoice('v_marlow', 'Marlow Halden', { source: 'current' }),
-      makeVoice('v_ro', 'Ro', {
+      makeVoice('v_nim', 'Nim', {
         source: 'library',
         inCurrentSeries: true,
         bookTitle: 'Flashback',
@@ -349,7 +349,7 @@ describe('VoiceLibraryPanel — search', () => {
       <VoiceLibraryPanel library={mixed} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Series' }));
-    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.getByText('Nim')).toBeInTheDocument();
     expect(screen.queryByText('Marlow Halden')).toBeNull();
     fireEvent.change(screen.getByPlaceholderText('Search voices'), {
       target: { value: 'marlow' },
@@ -368,7 +368,7 @@ describe('VoiceLibraryPanel — search', () => {
     fireEvent.change(input, { target: { value: '' } });
     expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
     expect(screen.getByText('Oduvan')).toBeInTheDocument();
-    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.getByText('Nim')).toBeInTheDocument();
   });
 
   it('shows an empty-state line when no voice matches the query', () => {

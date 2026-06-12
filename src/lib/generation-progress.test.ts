@@ -112,7 +112,7 @@ describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regre
     { id: 2, chapterId: 2, characterId: 'narrator', text: 'narrator continues' },
     { id: 3, chapterId: 2, characterId: 'marlow', text: 'marlow one' },
     { id: 4, chapterId: 2, characterId: 'narrator', text: 'narrator three' },
-    { id: 5, chapterId: 2, characterId: 'ro', text: 'ro one' },
+    { id: 5, chapterId: 2, characterId: 'nim', text: 'ro one' },
     { id: 6, chapterId: 2, characterId: 'narrator', text: 'narrator four' },
     { id: 7, chapterId: 2, characterId: 'oduvan', text: 'oduvan one' },
     { id: 8, chapterId: 2, characterId: 'narrator', text: 'narrator five' },
@@ -128,7 +128,7 @@ describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regre
     const out = characterLinePositionsByChapter(screenshotChapter);
     expect(out[2].narrator).toEqual([1, 2, 4, 6, 8, 9, 10, 11, 12, 13, 14]);
     expect(out[2].marlow).toEqual([3]);
-    expect(out[2].ro).toEqual([5]);
+    expect(out[2].nim).toEqual([5]);
     expect(out[2].oduvan).toEqual([7]);
   });
 
@@ -140,7 +140,7 @@ describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regre
        "done" with a full green bar at this moment. */
     expect(linesDoneAt(positions.narrator, 13)).toBe(10);
     expect(linesDoneAt(positions.marlow, 13)).toBe(1);
-    expect(linesDoneAt(positions.ro, 13)).toBe(1);
+    expect(linesDoneAt(positions.nim, 13)).toBe(1);
     expect(linesDoneAt(positions.oduvan, 13)).toBe(1);
   });
 

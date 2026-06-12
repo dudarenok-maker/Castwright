@@ -93,7 +93,7 @@ beforeAll(async () => {
         ttsEngine: 'qwen',
         overrideTtsVoices: { qwen: { name: 'marlow-designed' } },
       },
-      { id: 'ro', name: 'Ro', voiceId: 'v_ro', lines: 15 },
+      { id: 'nim', name: 'Nim', voiceId: 'v_nim', lines: 15 },
     ],
   });
   unlockedBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Unlocked', {
@@ -126,7 +126,7 @@ describe('GET /api/books/:bookId/series-cast', () => {
     expect(res.status).toBe(200);
     /* Keeper itself excluded → Bonus Marlow's 2 characters remain. */
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();
-    expect(ids).toEqual(['marlow', 'ro']);
+    expect(ids).toEqual(['marlow', 'nim']);
   });
 
   it('passes through full cast.json fidelity (lines / voiceStyle / overrideTtsVoices / ttsEngine)', async () => {
@@ -172,7 +172,7 @@ describe('GET /api/books/:bookId/series-cast', () => {
     const res = await request(app).get(`/api/books/${standaloneBookId}/series-cast`);
     expect(res.status).toBe(200);
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id).sort();
-    expect(ids).toEqual(['hart', 'marlow', 'narrator', 'ro', 'wren']);
+    expect(ids).toEqual(['hart', 'marlow', 'narrator', 'nim', 'wren']);
   });
 
   it('returns 200 with empty characters for an unknown bookId', async () => {

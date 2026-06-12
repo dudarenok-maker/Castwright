@@ -191,8 +191,8 @@ describe('RebaselineModal — default selection', () => {
     // The narrator row renders (toggleable on) but is unchecked by default.
     const narratorRow = screen.getByLabelText('Rebaseline Narrator') as HTMLInputElement;
     expect(narratorRow.checked).toBe(false);
-    const MaerinRow = screen.getByLabelText('Rebaseline Maerin') as HTMLInputElement;
-    expect(MaerinRow.checked).toBe(true);
+    const maerinRow = screen.getByLabelText('Rebaseline Maerin') as HTMLInputElement;
+    expect(maerinRow.checked).toBe(true);
   });
 
   it('renders nothing without a bookId (global voices tab)', () => {
@@ -441,10 +441,10 @@ describe('RebaselineModal — design progress indicators', () => {
     expect(store.getState().rebaseline.proposals.marlow.status).toBe('pending');
 
     // The active row reads "Designing voice…"; the queued row reads "Queued…".
-    const MaerinRow = screen.getByTestId('rebaseline-proposal-maerin');
-    const MarlowRow = screen.getByTestId('rebaseline-proposal-marlow');
-    expect(within(MaerinRow).getByText(/Designing voice…/)).toBeInTheDocument();
-    expect(within(MarlowRow).getAllByText(/Queued…/).length).toBeGreaterThan(0);
+    const maerinRow = screen.getByTestId('rebaseline-proposal-maerin');
+    const marlowRow = screen.getByTestId('rebaseline-proposal-marlow');
+    expect(within(maerinRow).getByText(/Designing voice…/)).toBeInTheDocument();
+    expect(within(marlowRow).getAllByText(/Queued…/).length).toBeGreaterThan(0);
 
     // Footer progress count is live and reads 0 settled of 2 selected.
     expect(screen.getByTestId('rebaseline-progress')).toHaveTextContent(
@@ -633,11 +633,11 @@ describe('RebaselineModal — approve', () => {
     const calls = setVoiceOverrideLinked.mock.calls as unknown as Array<
       [string, string, { engine: string; name: string }]
     >;
-    const MaerinCall = calls.find((c) => c[2].name === 'qwen-maerin');
-    expect(MaerinCall).toBeTruthy();
-    expect(MaerinCall![0]).toBe('book-1'); // home book (anchor = open book)
-    expect(MaerinCall![1]).toBe('maerin'); // character id
-    expect(MaerinCall![2]).toEqual({ engine: 'qwen', name: 'qwen-maerin' });
+    const maerinCall = calls.find((c) => c[2].name === 'qwen-maerin');
+    expect(maerinCall).toBeTruthy();
+    expect(maerinCall![0]).toBe('book-1'); // home book (anchor = open book)
+    expect(maerinCall![1]).toBe('maerin'); // character id
+    expect(maerinCall![2]).toEqual({ engine: 'qwen', name: 'qwen-maerin' });
     // The cast slice mirrors the engine + override.
     const maerin = store.getState().cast.characters.find((c) => c.id === 'maerin')!;
     expect(maerin.ttsEngine).toBe('qwen');

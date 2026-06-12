@@ -93,11 +93,11 @@ describe('pickMergeSurvivor', () => {
 
   it('picks the containing name as the survivor (substring rule, case-insensitive)', () => {
     const wren = makeNamedChar('wren', 'Wren');
-    const WrenFoster = makeNamedChar('wren-sparrow', 'Wren Sparrow');
-    const r1 = pickMergeSurvivor(wren, WrenFoster);
+    const wrenFoster = makeNamedChar('wren-sparrow', 'Wren Sparrow');
+    const r1 = pickMergeSurvivor(wren, wrenFoster);
     expect(r1.target.id).toBe('wren-sparrow');
     expect(r1.source.id).toBe('wren');
-    const r2 = pickMergeSurvivor(WrenFoster, wren);
+    const r2 = pickMergeSurvivor(wrenFoster, wren);
     expect(r2.target.id).toBe('wren-sparrow');
     expect(r2.source.id).toBe('wren');
     const r3 = pickMergeSurvivor(
