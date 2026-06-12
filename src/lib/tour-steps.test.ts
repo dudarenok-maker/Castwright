@@ -22,4 +22,8 @@ describe('tour-steps registry', () => {
     const ids = stepsForScreen('cast').map((s) => s.id);
     expect(ids).toEqual(['s6-roster', 's7-drawer', 's8-fullcast']);
   });
+
+  it('every step id is unique', () => {
+    expect(new Set(TOUR_STEPS.map((s) => s.id)).size).toBe(TOUR_STEPS.length);
+  });
 });
