@@ -32,7 +32,7 @@ class ApiException implements Exception {
 /// carries the Bearer token. The transport is injectable for tests.
 class ApiClient {
   ApiClient(this.connection,
-      {HttpSend? send, this.requestTimeout = const Duration(seconds: 10)})
+      {HttpSend? send, this.requestTimeout = const Duration(seconds: 4)})
       : _send = send ?? _pinnedSend(connection);
 
   final Connection connection;
@@ -216,7 +216,7 @@ class _ApiListenProgressApi implements ListenProgressApi {
 /// otherwise hang until the OS-default timeout — tens of seconds — leaving the
 /// library/player UIs spinning before their offline fallback can run. Bounding
 /// it makes "server is gone" surface fast so the local-library path takes over.
-const Duration _connectTimeout = Duration(seconds: 5);
+const Duration _connectTimeout = Duration(seconds: 2);
 
 /// Build the CA-pinned HttpClient shared by every real transport, with the
 /// fast-fail [_connectTimeout] applied so offline connects don't hang.
