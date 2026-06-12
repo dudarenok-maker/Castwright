@@ -5,7 +5,7 @@ import { render, screen } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice, uiActions } from '../store/ui-slice';
-import { settingsSlice } from '../store/settings-slice';
+import { settingsSlice, settingsActions } from '../store/settings-slice';
 import { HelpView } from './help';
 
 function renderHelp(focusCode?: string) {
@@ -47,5 +47,22 @@ describe('HelpView (fe-29)', () => {
   it('shows the live keybindings from the store', () => {
     renderHelp();
     expect(screen.getByText(/play \/ pause/i)).toBeInTheDocument();
+  });
+
+  it('reflects a rebound play-pause key', () => {
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, settings: settingsSlice.reducer },
+    });
+    store.dispatch(uiActions.openHelp({}));
+    store.dispatch(settingsActions.setKeybinding({ action: 'play-pause', key: 'K' }));
+    render(
+      <Provider store={store}>
+        <HelpView />
+      </Provider>,
+    );
+    /* The play/pause row should now show "K" in its <kbd>, not "Space". */
+    const allKbds = document.querySelectorAll('kbd');
+    const kKbd = Array.from(allKbds).find((el) => el.textContent === 'K');
+    expect(kKbd).toBeInTheDocument();
   });
 });

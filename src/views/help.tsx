@@ -33,16 +33,17 @@ const GETTING_STARTED: Array<{ title: string; body: string }> = [
     title: 'Add a book',
     body:
       'Click "New book" in the library and drop in a manuscript — plain text, EPUB or PDF. ' +
-      'Castwright finds the chapters on its own; if a boundary lands wrong, you can nudge it on ' +
-      'the next screen. For a first run with nothing at stake, open the bundled demo book — a ' +
+      'Castwright finds the chapters on its own; if a boundary lands wrong, untick front matter ' +
+      'on the next screen, and merge or split chapters later from the book\'s Chapters view. ' +
+      'For a first run with nothing at stake, open the bundled demo book — a ' +
       'short original story with its cast already designed.',
   },
   {
     title: 'Let it read',
     body:
       'The analyzer reads every chapter, finds the characters, and works out who speaks each ' +
-      'line. It runs on your own machine (with a free cloud fallback) and takes a few minutes ' +
-      'per book — feel free to wander off; it keeps going without you.',
+      'line. It runs on your own machine (with a free cloud fallback) and takes a few minutes — ' +
+      'sometimes longer for a big book on a local model — feel free to wander off; it keeps going without you.',
   },
   {
     title: 'Meet the cast',
@@ -89,7 +90,10 @@ function JumpLink({
       href={stageToHash({ kind: 'help' })}
       onClick={(e) => {
         e.preventDefault();
-        document.getElementById(id)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+        const el = document.getElementById(id);
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        el?.scrollIntoView?.({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+        el?.focus?.({ preventScroll: true });
       }}
       className={`inline-flex items-center min-h-[44px] sm:min-h-0 text-sm font-medium text-ink/70 hover:text-magenta transition-colors ${className}`}
     >
@@ -157,6 +161,7 @@ export function HelpView() {
             id="getting-started"
             aria-labelledby="getting-started-heading"
             className="scroll-mt-24"
+            tabIndex={-1}
           >
             <div id="getting-started-heading">
               <MixedHeading regular="Getting" bold="started" level="h2" />
@@ -187,6 +192,7 @@ export function HelpView() {
             id="keyboard-shortcuts"
             aria-labelledby="keyboard-shortcuts-heading"
             className="scroll-mt-24"
+            tabIndex={-1}
           >
             <div id="keyboard-shortcuts-heading">
               <MixedHeading regular="Keyboard" bold="shortcuts" level="h2" />
@@ -224,6 +230,7 @@ export function HelpView() {
             id="troubleshooting"
             aria-labelledby="troubleshooting-heading"
             className="scroll-mt-24"
+            tabIndex={-1}
           >
             {/* "Troubleshooting" is one word, so the brand bold-span sits
                 inside it — MixedHeading would insert a space. */}
