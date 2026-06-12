@@ -185,6 +185,34 @@ describe('ModelManagerView — inventory', () => {
     const coqui = await screen.findByTestId('model-row-coqui');
     expect(within(coqui).queryByRole('button', { name: /load model/i })).toBeNull();
   });
+
+  it('shows a Load pill on a NON-default Ollama row and calls loadAnalyzer with that model', async () => {
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        ...INVENTORY.items,
+        {
+          id: 'ollama:llama3.1:8b',
+          kind: 'analyzer',
+          label: 'llama3.1:8b',
+          present: true,
+          sizeBytes: 4_700_000_000,
+          diskPath: null,
+          loaded: false,
+          isDefaultEngine: false, // NON-default — the whole point
+          isFallbackEngine: false,
+          removable: true,
+          updatable: true,
+        },
+      ],
+    });
+    vi.mocked(api.loadAnalyzer).mockResolvedValue({ status: 'ready' });
+
+    renderManager();
+    const row = await screen.findByTestId('model-row-ollama:llama3.1:8b');
+    within(row).getByRole('button', { name: /load model/i }).click();
+    await waitFor(() => expect(api.loadAnalyzer).toHaveBeenCalledWith({ model: 'llama3.1:8b' }));
+  });
 });
 
 describe('ModelManagerView — remove', () => {
