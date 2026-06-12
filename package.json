@@ -37,6 +37,7 @@
     "test:e2e:all": "playwright test",
     "test:e2e:visual": "playwright test --project=chromium --workers=1 e2e/responsive/visual.spec.ts",
     "capture:marketing": "playwright test --config=playwright.marketing.config.ts --project=desktop",
+    "capture:companion": "node scripts/capture-companion.mjs",
     "test:a11y": "vitest run src/test/a11y.test.tsx",
     "test:fast": "npm run test:hooks && npm run test && npm run test:server",
     "test:all": "npm run test:hooks && npm run test && npm run test:server && npm run test:server-slow && npm run test:scripts && npm run test:sidecar",
