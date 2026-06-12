@@ -91,6 +91,15 @@ vi.mock('../lib/api', () => ({
        state update doesn't flush outside React's `act()` after a test
        asserts. */
     getChapterAudio: () => new Promise(() => {}),
+    /* fs-21 — Layout's boot-splash readiness gate fetches this once on mount;
+       resolve ready so the splash clears and the routed views render. */
+    getSetupReadiness: () =>
+      Promise.resolve({
+        ready: true,
+        completedAt: '2026-06-12T00:00:00.000Z',
+        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+      }),
   },
   AnalysisError: class extends Error {
     code = 'unknown';

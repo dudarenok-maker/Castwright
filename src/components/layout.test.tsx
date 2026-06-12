@@ -78,6 +78,15 @@ vi.mock('../lib/api', () => ({
        Return empty so the effect's catch path doesn't fire and these
        tests stay focused on per-book hydration. */
     getSeriesRoster: vi.fn(async () => ({ characters: [] })),
+    /* fs-21 — boot-splash readiness gate fetches this once on mount; resolve
+       ready so the splash clears and the normal app renders. */
+    getSetupReadiness: () =>
+      Promise.resolve({
+        ready: true,
+        completedAt: '2026-06-12T00:00:00.000Z',
+        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+      }),
   },
   AnalysisError: class extends Error {},
   ExportIncompleteError: class extends Error {
