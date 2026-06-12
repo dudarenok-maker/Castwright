@@ -158,6 +158,10 @@ export const uiSlice = createSlice({
     openModelManager: (s) => {
       s.stage = { kind: 'model-manager' };
     },
+    /* fs-21 — first-run setup wizard, reached on the boot gate or from Account. */
+    openSetup: (s) => {
+      s.stage = { kind: 'setup' };
+    },
     /* Wave 3 — /about brand page, reached from the Admin view. */
     openAbout: (s) => {
       s.stage = { kind: 'about' };
