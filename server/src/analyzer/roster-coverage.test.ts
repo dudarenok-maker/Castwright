@@ -23,7 +23,7 @@ afterEach(() => {
 
 /* The shape of the canonical bug, abbreviated: Aldous (on the roster) talks to
    Lessom (NOT on the roster), whose replies are tagged but uncast. */
-const Lessom_BODY = [
+const LESSOM_BODY = [
   '"Because I have a proposition for the most talented Keeper I’ve ever met."',
   '"The most talented," Lessom repeated, tucking his dreadlocks behind his ears.',
   '"That is some heavy flattery," Lessom said slowly.',
@@ -33,17 +33,17 @@ const Lessom_BODY = [
 
 describe('validateRosterCoverage', () => {
   it('flags a tagged speaker absent from the roster (the Lessom/ch19 regression)', () => {
-    const v = validateRosterCoverage(Lessom_BODY, ['Aldous', 'Wren Sparrow']);
+    const v = validateRosterCoverage(LESSOM_BODY, ['Aldous', 'Wren Sparrow']);
     expect(v.ok).toBe(false);
     const names = v.missingSpeakers.map((s) => s.name);
     expect(names).toContain('Lessom');
-    const Lessom = v.missingSpeakers.find((s) => s.name === 'Lessom')!;
-    expect(Lessom.id).toBe('Lessom');
-    expect(Lessom.tagCount).toBeGreaterThanOrEqual(3);
+    const lessom = v.missingSpeakers.find((s) => s.name === 'Lessom')!;
+    expect(lessom.id).toBe('lessom');
+    expect(lessom.tagCount).toBeGreaterThanOrEqual(3);
   });
 
   it('does not flag a speaker already on the roster', () => {
-    const v = validateRosterCoverage(Lessom_BODY, ['Aldous', 'Lessom']);
+    const v = validateRosterCoverage(LESSOM_BODY, ['Aldous', 'Lessom']);
     expect(v.ok).toBe(true);
     expect(v.missingSpeakers).toHaveLength(0);
   });
@@ -117,8 +117,8 @@ describe('validateRosterCoverage', () => {
   });
 
   it('honors ROSTER_GUARD_IGNORE_NAMES', () => {
-    process.env.ROSTER_GUARD_IGNORE_NAMES = 'Lessom';
-    const v = validateRosterCoverage(Lessom_BODY, ['Aldous']);
+    process.env.ROSTER_GUARD_IGNORE_NAMES = 'lessom';
+    const v = validateRosterCoverage(LESSOM_BODY, ['Aldous']);
     expect(v.missingSpeakers.map((s) => s.name)).not.toContain('Lessom');
   });
 });
@@ -134,12 +134,12 @@ describe('runStage1WithRosterGuard', () => {
   it('retries once, then keeps the cleaner take', async () => {
     const calls = [
       { characters: [{ id: 'Aldous', name: 'Aldous' }] }, // misses Lessom
-      { characters: [{ id: 'Aldous', name: 'Aldous' }, { id: 'Lessom', name: 'Lessom' }] },
+      { characters: [{ id: 'Aldous', name: 'Aldous' }, { id: 'lessom', name: 'Lessom' }] },
     ];
     let i = 0;
     const call = vi.fn(async () => calls[i++]);
     const res = await runStage1WithRosterGuard({
-      body: Lessom_BODY,
+      body: LESSOM_BODY,
       rosterNamesFor: (r) => r.characters.map((c) => c.name),
       call,
       makeCharacter: makeChar,
@@ -148,14 +148,14 @@ describe('runStage1WithRosterGuard', () => {
     expect(call).toHaveBeenCalledTimes(2);
     expect(res.verdict.ok).toBe(true);
     expect(res.autoAdded).toHaveLength(0);
-    expect(res.result.characters.map((c) => c.id)).toContain('Lessom');
+    expect(res.result.characters.map((c) => c.id)).toContain('lessom');
   });
 
   it('auto-adds the missing speaker when retries still miss', async () => {
     const call = vi.fn(async () => ({ characters: [{ id: 'Aldous', name: 'Aldous' }] }));
     const onAutoAdd = vi.fn();
     const res = await runStage1WithRosterGuard({
-      body: Lessom_BODY,
+      body: LESSOM_BODY,
       rosterNamesFor: (r) => r.characters.map((c) => c.name),
       call,
       makeCharacter: makeChar,
@@ -163,18 +163,18 @@ describe('runStage1WithRosterGuard', () => {
       onAutoAdd,
     });
     expect(call).toHaveBeenCalledTimes(2); // 1 + 1 retry
-    expect(res.autoAdded.map((m) => m.id)).toContain('Lessom');
-    const Lessom = res.result.characters.find((c) => c.id === 'Lessom')!;
-    expect(Lessom.name).toBe('Lessom');
+    expect(res.autoAdded.map((m) => m.id)).toContain('lessom');
+    const lessom = res.result.characters.find((c) => c.id === 'lessom')!;
+    expect(lessom.name).toBe('Lessom');
     expect(onAutoAdd).toHaveBeenCalledOnce();
   });
 
   it('does not retry or add when coverage is already clean', async () => {
     const call = vi.fn(async () => ({
-      characters: [{ id: 'Aldous', name: 'Aldous' }, { id: 'Lessom', name: 'Lessom' }],
+      characters: [{ id: 'Aldous', name: 'Aldous' }, { id: 'lessom', name: 'Lessom' }],
     }));
     const res = await runStage1WithRosterGuard({
-      body: Lessom_BODY,
+      body: LESSOM_BODY,
       rosterNamesFor: (r) => r.characters.map((c) => c.name),
       call,
       makeCharacter: makeChar,
@@ -187,14 +187,14 @@ describe('runStage1WithRosterGuard', () => {
   it('respects maxRetries=0 (no retry, straight to auto-add)', async () => {
     const call = vi.fn(async () => ({ characters: [{ id: 'Aldous', name: 'Aldous' }] }));
     const res = await runStage1WithRosterGuard({
-      body: Lessom_BODY,
+      body: LESSOM_BODY,
       rosterNamesFor: (r) => r.characters.map((c) => c.name),
       call,
       makeCharacter: makeChar,
       maxRetries: 0,
     });
     expect(call).toHaveBeenCalledTimes(1);
-    expect(res.autoAdded.map((m) => m.id)).toContain('Lessom');
+    expect(res.autoAdded.map((m) => m.id)).toContain('lessom');
   });
 });
 
@@ -215,14 +215,14 @@ describe('chapterDriftExceeded', () => {
 
 describe('toKebabId', () => {
   it('kebab-cases names like the analyzer convention', () => {
-    expect(toKebabId('Mr. Casper')).toBe('mr-Casper');
-    expect(toKebabId('Lessom')).toBe('Lessom');
+    expect(toKebabId('Mr. Casper')).toBe('mr-casper');
+    expect(toKebabId('Lessom')).toBe('lessom');
   });
 });
 
 describe('validateAttributionCoverage (#529 half-state)', () => {
   const roster = [
-    { id: 'Lessom', name: 'Lessom' },
+    { id: 'lessom', name: 'Lessom' },
     { id: 'Aldous', name: 'Aldous' },
   ];
 
@@ -235,25 +235,25 @@ describe('validateAttributionCoverage (#529 half-state)', () => {
       { characterId: 'Aldous' },
       { characterId: 'narrator' },
     ];
-    const v = validateAttributionCoverage(Lessom_BODY, roster, sentences);
+    const v = validateAttributionCoverage(LESSOM_BODY, roster, sentences);
     expect(v.ok).toBe(false);
-    expect(v.halfStateSpeakers.map((s) => s.id)).toContain('Lessom');
+    expect(v.halfStateSpeakers.map((s) => s.id)).toContain('lessom');
     expect(v.halfStateSpeakers.map((s) => s.id)).not.toContain('Aldous');
-    const Lessom = v.halfStateSpeakers.find((s) => s.id === 'Lessom')!;
-    expect(Lessom.attributedLines).toBe(0);
-    expect(Lessom.narratorLines).toBe(3);
-    expect(Lessom.tagCount).toBeGreaterThanOrEqual(2);
+    const lessom = v.halfStateSpeakers.find((s) => s.id === 'lessom')!;
+    expect(lessom.attributedLines).toBe(0);
+    expect(lessom.narratorLines).toBe(3);
+    expect(lessom.tagCount).toBeGreaterThanOrEqual(2);
   });
 
   it('does NOT flag rostered speakers who already have attributed lines', () => {
     /* Both tagged speakers (Lessom + Aldous) carry a line, so neither is a
        half-state — even though most of the chapter is narration. */
     const sentences = [
-      { characterId: 'Lessom' },
+      { characterId: 'lessom' },
       { characterId: 'Aldous' },
       { characterId: 'narrator' },
     ];
-    const v = validateAttributionCoverage(Lessom_BODY, roster, sentences);
+    const v = validateAttributionCoverage(LESSOM_BODY, roster, sentences);
     expect(v.ok).toBe(true);
     expect(v.halfStateSpeakers).toHaveLength(0);
   });
@@ -269,7 +269,7 @@ describe('validateAttributionCoverage (#529 half-state)', () => {
   it('respects the single-hit quote-adjacency bound (no false positive)', () => {
     const body =
       'Far from any dialogue, Lessom agreed with the assessment completely and utterly.';
-    const v = validateAttributionCoverage(body, [{ id: 'Lessom', name: 'Lessom' }], [
+    const v = validateAttributionCoverage(body, [{ id: 'lessom', name: 'Lessom' }], [
       { characterId: 'narrator' },
     ]);
     expect(v.ok).toBe(true); // one tag, no nearby quote → below the flag threshold

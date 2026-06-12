@@ -9,7 +9,7 @@ import { recoverTaggedNarratorLines, taggedSpeakerIds } from './recover-tagged-l
 
 const roster = [
   { id: 'behnam', name: 'Behnam Aria' },
-  { id: 'Wren-foster', name: 'Wren Sparrow' },
+  { id: 'wren-sparrow', name: 'Wren Sparrow' },
   { id: 'Aldous', name: 'Aldous' },
 ];
 
@@ -30,9 +30,9 @@ describe('recoverTaggedNarratorLines', () => {
     expect(byId.get('behnam')).toBe(1);
   });
 
-  it('matches by first name ("Wren said" → Wren-foster)', () => {
+  it('matches by first name ("Wren said" → wren-sparrow)', () => {
     const sentences = [s(1, 1, 'narrator', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
-    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('Wren-foster');
+    expect(recoverTaggedNarratorLines(sentences, roster).sentences[0].characterId).toBe('wren-sparrow');
   });
 
   it('does not overwrite a non-narrator quote', () => {
@@ -52,11 +52,11 @@ describe('recoverTaggedNarratorLines', () => {
 
   it('skips an ambiguous first name shared by two characters', () => {
     const dup = [
-      { id: 'Wren-foster', name: 'Wren Sparrow' },
-      { id: 'Wren-Oduvan', name: 'Wren Oduvan' },
+      { id: 'wren-sparrow', name: 'Wren Sparrow' },
+      { id: 'wren-oduvan', name: 'Wren Oduvan' },
     ];
     const sentences = [s(1, 1, 'narrator', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
-    expect(recoverTaggedNarratorLines(sentences, dup).flipped).toBe(0); // "Wren" → ambiguous
+    expect(recoverTaggedNarratorLines(sentences, dup).flipped).toBe(0); // "wren" → ambiguous
   });
 
   it('skips pronoun openers ("she said")', () => {
@@ -65,7 +65,7 @@ describe('recoverTaggedNarratorLines', () => {
   });
 
   it('is a no-op on a correctly-attributed book', () => {
-    const sentences = [s(1, 1, 'Wren-foster', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
+    const sentences = [s(1, 1, 'wren-sparrow', '“Hi,”'), s(2, 1, 'narrator', 'Wren said.')];
     expect(recoverTaggedNarratorLines(sentences, roster).flipped).toBe(0);
   });
 
@@ -85,7 +85,7 @@ describe('taggedSpeakerIds', () => {
     ];
     const ids = taggedSpeakerIds(sentences, roster);
     expect(ids.has('behnam')).toBe(true);
-    expect(ids.has('Wren-foster')).toBe(false);
+    expect(ids.has('wren-sparrow')).toBe(false);
     expect([...ids]).toEqual(['behnam']);
   });
 });

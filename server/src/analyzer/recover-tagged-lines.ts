@@ -14,7 +14,7 @@
    unambiguously to one rostered character, flip it to that character. It only
    ever moves a line OFF narrator onto a real, prose-named speaker, so a
    correctly-attributed book is a no-op (the quote before `"…," Wren said` is
-   already `Wren`, not narrator).
+   already `wren`, not narrator).
 
    `taggedSpeakerIds` exposes the same name-tag detection so `foldMinorCast` can
    keep a 0-line speaker that the prose clearly tags (backstop for speakers whose

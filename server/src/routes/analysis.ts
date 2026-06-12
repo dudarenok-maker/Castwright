@@ -204,7 +204,7 @@ export function createWatermarkForJob(userSettings?: UserSettings): PhaseWaterma
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
    CHAR_COLORS + CHARACTER_SLOTS). Gemini and humans both like to invent
-   character-specific kebab names like `Marlow` that don't exist in the
+   character-specific kebab names like `marlow` that don't exist in the
    palette and fall back to grey. We normalise here: narrator keeps its
    slot; everyone else gets a slot in roster order, cycling after 30.
    Order must match src/lib/colors.ts CHARACTER_SLOTS. */
@@ -943,8 +943,8 @@ function warnPerChapterDrift(
    loss when a follow-up run with a worse model collapses the cast.
 
    Concrete regression motivator (Unlocked, mns_VoP0mLGvov): an earlier
-   Phase 0a run produced 6 characters (narrator + Marlow + Oduvan + Maerin
-   + Linnet + Wren — visible in manuscript-edits.json's surviving
+   Phase 0a run produced 6 characters (narrator + marlow + oduvan + maerin
+   + linnet + wren — visible in manuscript-edits.json's surviving
    attribution); a later subset-retry with Gemini 3.1 Flash Lite hit
    chapters that the model collapsed to Narrator-only, rebuildRoster()
    produced a 1-character stage1, and the write went through silently —
@@ -1088,8 +1088,8 @@ export function buildStage1ChapterInbox(
      section. The prompt instructs the model to REUSE existing ids when
      a chapter speaker matches a known series character by name or
      alias — without this guidance Unlocked's per-chapter detector
-     would invent fresh ids like `Marlow-2` instead of recognising the
-     `Marlow` already confirmed in the Coalfall Commission / the Hollow Tide. */
+     would invent fresh ids like `marlow-2` instead of recognising the
+     `marlow` already confirmed in the Coalfall Commission / the Hollow Tide. */
   const priorJson =
     seriesPrior.length > 0
       ? JSON.stringify(
@@ -1137,7 +1137,7 @@ true:
 2. The chapter is a **first-person document** (journal entry, medical
    log, registry file, diary, letter, transcript, bio page) AND the
    author of that document is named or strongly implied — by chapter
-   title (\`Wren's Memory Log\`), header (\`FILED BY: Oduvan\`),
+   title (\`Wren's Memory Log\`), header (\`FILED BY: ODUVAN\`),
    signature (\`—Marlow\`), or the surrounding bio block. In that case
    the *author* is the character, with their \`id\` set to their name,
    and the document's prose becomes their evidence. \`narrator\` is
