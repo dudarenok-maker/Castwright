@@ -65,11 +65,21 @@ for (const scene of SCENES) {
       }
     }
     await waitForImages(page);
-    // Short settle for fonts + the posed frame to paint.
-    await page.waitForTimeout(500);
-    await page.screenshot({
-      path: resolve(OUT, `${scene.id}.${vp}.png`),
-      fullPage: process.env.CAPTURE_FULLPAGE === '1',
-    });
+
+    /* Capture each requested theme. The app's default theme preference is
+       "system", so emulating `prefers-color-scheme` re-themes it without any
+       app change. Default: both light + dark; `CAPTURE_THEME=light|dark` limits
+       to one. Output: `<scene>.<viewport>.<theme>.png`. */
+    const themes = (
+      process.env.CAPTURE_THEME ? [process.env.CAPTURE_THEME] : ['light', 'dark']
+    ) as ('light' | 'dark')[];
+    for (const theme of themes) {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.waitForTimeout(400); // settle the theme re-render
+      await page.screenshot({
+        path: resolve(OUT, `${scene.id}.${vp}.${theme}.png`),
+        fullPage: process.env.CAPTURE_FULLPAGE === '1',
+      });
+    }
   });
 }

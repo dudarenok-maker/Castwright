@@ -14,11 +14,14 @@ is not part of `npm run verify`.
 ## Commands
 
 ```bash
-# Capture the whole set at the desktop viewport → mockups/marketing-screens/
+# Capture the whole set at the desktop viewport, light + dark → mockups/marketing-screens/
 npm run capture:marketing
 
 # One scene only
 CAPTURE_SCENE=cast-reuse npm run capture:marketing
+
+# One theme only (default captures both light + dark)
+CAPTURE_THEME=dark npm run capture:marketing
 
 # Responsive variants (phone = Pixel 7, tablet = iPad Pro 11)
 npx playwright test --config=playwright.marketing.config.ts --project=phone --project=tablet
@@ -27,8 +30,10 @@ npx playwright test --config=playwright.marketing.config.ts --project=phone --pr
 CAPTURE_FULLPAGE=1 CAPTURE_SCENE=library-shelf npm run capture:marketing
 ```
 
-Output PNGs land in **`mockups/marketing-screens/`** as `<scene-id>.<viewport>.png`
-(git-ignored, regenerable).
+Output PNGs land in **`mockups/marketing-screens/`** as
+`<scene-id>.<viewport>.<theme>.png` (git-ignored, regenerable). Each scene is
+captured in both **light** and **dark** (the app's default "system" theme follows
+the emulated `prefers-color-scheme`).
 
 ## How it works
 
