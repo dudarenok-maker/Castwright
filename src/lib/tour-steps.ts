@@ -1,3 +1,5 @@
+import type { Stage, View } from './types';
+
 export const TOUR_SCREENS = ['library', 'manuscript', 'cast', 'generate', 'listen'] as const;
 export type TourScreen = (typeof TOUR_SCREENS)[number];
 
@@ -72,7 +74,7 @@ export function stepsForScreen(screen: TourScreen): TourStep[] {
 }
 
 /** Map the top-bar stage+view to a TourScreen for "Show me this screen". */
-export function screenForStage(stageKind: string, view: string | null): TourScreen | null {
+export function screenForStage(stageKind: Stage['kind'], view: View | null): TourScreen | null {
   if (stageKind === 'books') return 'library';
   if (stageKind === 'ready') {
     if (view === 'manuscript' || view === 'cast' || view === 'generate' || view === 'listen')

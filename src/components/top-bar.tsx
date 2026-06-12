@@ -393,6 +393,11 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
 
   useEffect(() => {
     if (!open) return;
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     function onDocMouseDown(e: MouseEvent) {
       const t = e.target as Node | null;
       if (!t) return;
