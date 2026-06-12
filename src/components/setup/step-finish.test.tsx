@@ -1,5 +1,5 @@
 /* StepFinish spec — fs-21 wave 3.
-   Verifies the two-tier smoke test UI and the "Finish setup" button. */
+   Verifies the two-tier smoke test UI and the finish button. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -45,12 +45,12 @@ describe('StepFinish', () => {
     mockRunSmokeTest.mockReset();
   });
 
-  it('renders a "Finish" heading', () => {
+  it('renders the finish-step heading', () => {
     render(<StepFinish readiness={makeReadiness()} onFinish={vi.fn()} />);
-    expect(screen.getByRole('heading', { name: /finish/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /ready to perform/i })).toBeInTheDocument();
   });
 
-  it('renders an ENABLED "Run smoke test" button (not the placeholder disabled state)', () => {
+  it('renders an ENABLED smoke-test button (not the placeholder disabled state)', () => {
     render(<StepFinish readiness={makeReadiness()} onFinish={vi.fn()} />);
     const smokeBtn = screen.getByTestId('smoke-test-placeholder');
     expect(smokeBtn).not.toBeDisabled();
@@ -63,19 +63,19 @@ describe('StepFinish', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('renders a "Finish setup" button', () => {
+  it('renders the finish button', () => {
     render(<StepFinish readiness={makeReadiness()} onFinish={vi.fn()} />);
-    expect(screen.getByRole('button', { name: /finish setup/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /finish & open my library/i })).toBeInTheDocument();
   });
 
-  it('calls onFinish when "Finish setup" is clicked', () => {
+  it('calls onFinish when the finish button is clicked', () => {
     const onFinish = vi.fn();
     render(<StepFinish readiness={makeReadiness()} onFinish={onFinish} />);
-    fireEvent.click(screen.getByRole('button', { name: /finish setup/i }));
+    fireEvent.click(screen.getByRole('button', { name: /finish & open my library/i }));
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
 
-  it('clicking "Run smoke test" calls api.runSmokeTest', async () => {
+  it('clicking the smoke-test button calls api.runSmokeTest', async () => {
     mockRunSmokeTest.mockResolvedValue(okResult());
     render(<StepFinish readiness={makeReadiness()} onFinish={vi.fn()} />);
     fireEvent.click(screen.getByTestId('smoke-test-placeholder'));
@@ -103,15 +103,15 @@ describe('StepFinish', () => {
     expect(screen.getByText(/sidecar unreachable/i)).toBeInTheDocument();
   });
 
-  it('does NOT render "Hear the demo book" button when onTryDemoBook is absent', () => {
+  it('does NOT render the demo-book button when onTryDemoBook is absent', () => {
     render(<StepFinish readiness={makeReadiness()} onFinish={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: /hear the demo book/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /play the demo book/i })).not.toBeInTheDocument();
   });
 
-  it('renders "Hear the demo book" button when onTryDemoBook is provided and calls it on click', () => {
+  it('renders the demo-book button when onTryDemoBook is provided and calls it on click', () => {
     const onTryDemoBook = vi.fn();
     render(<StepFinish readiness={makeReadiness()} onFinish={vi.fn()} onTryDemoBook={onTryDemoBook} />);
-    const btn = screen.getByRole('button', { name: /hear the demo book/i });
+    const btn = screen.getByRole('button', { name: /play the demo book/i });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
     expect(onTryDemoBook).toHaveBeenCalledTimes(1);
