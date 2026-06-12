@@ -38,6 +38,11 @@ dist/
 brand/
 mockups/
 
+# Marketing capture covers (local-only). Served by Vite at /marketing-covers/*
+# during `npm run capture:marketing`; the source art lives in git-ignored
+# brand/book-covers/. Regenerable, never committed (public/ otherwise ships).
+public/marketing-covers/
+
 # Logs
 *.log
 npm-debug.log*

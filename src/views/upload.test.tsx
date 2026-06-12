@@ -15,7 +15,7 @@ vi.mock('../lib/api', () => ({
       candidate: {
         format: 'markdown' as const,
         title: 'Solway Bay',
-        author: 'Mike Dudarenok',
+        author: 'Marin Vale',
         series: 'Northern Coast Trilogy',
         seriesPosition: 1,
         sourceText: args.text ?? '',
@@ -92,7 +92,7 @@ function renderUpload(store: ReturnType<typeof makeStore>) {
 const reuploadBook: LibraryBook = {
   bookId: 'bk_a',
   title: 'Solway Bay',
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Northern Coast Trilogy',
   seriesPosition: 1,
   isStandalone: false,

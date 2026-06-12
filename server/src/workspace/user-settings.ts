@@ -221,7 +221,7 @@ export const userSettingsSchema = z.object({
 export type UserSettings = z.infer<typeof userSettingsSchema>;
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
-  displayName: 'Mike Dudarenok',
+  displayName: 'Castwright',
   /* Default to Gemini 3.1 Flash Lite over a Google API key — the free
      tier (15 RPM, 250K TPM, 500/day) comfortably parses a full novel,
      dispatch is async-friendly so it doesn't tax the local GPU, and

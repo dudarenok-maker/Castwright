@@ -74,7 +74,7 @@ describe('ListenHeader — phone viewport render (plan 81 wave 3)', () => {
     render(
       <ListenHeader
         title="the Coalfall Commission"
-        author="Mike Dudarenok"
+        author="Marin Vale"
         narratorName="Anders Vale"
         voiceCount={3}
         totalSec={3600}

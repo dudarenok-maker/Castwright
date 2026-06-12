@@ -33,7 +33,7 @@ vi.mock('../lib/api', () => ({
 import { api } from '../lib/api';
 
 const SERVER_FIXTURE: UserSettings = {
-  displayName: 'Mike Dudarenok',
+  displayName: 'Castwright',
   defaultAnalysisModel: 'gemma-4-31b-it',
   defaultTtsEngine: 'local',
   defaultTtsModelKey: 'coqui-xtts-v2',
@@ -56,7 +56,7 @@ const SERVER_FIXTURE: UserSettings = {
 const SB_BOOK = {
   bookId: 'sb',
   title: 'Solway Bay',
-  author: 'Mike Dudarenok',
+  author: 'Marin Vale',
   series: 'Northern Coast Trilogy',
   seriesPosition: 1,
   isStandalone: false,
@@ -74,7 +74,7 @@ const LIBRARY_FIXTURE: LibraryState = {
   loaded: true,
   authors: [
     {
-      name: 'Mike Dudarenok',
+      name: 'Marin Vale',
       series: [{ name: 'Northern Coast Trilogy', books: [SB_BOOK] }],
     },
   ],
@@ -203,7 +203,7 @@ describe('AccountView — Backups card (srv-2)', () => {
     (api.getLibrary as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       authors: [
         {
-          name: 'Mike Dudarenok',
+          name: 'Marin Vale',
           series: [
             {
               name: 'Northern Coast Trilogy',

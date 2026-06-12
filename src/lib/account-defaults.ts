@@ -37,7 +37,7 @@ export const FRONTEND_ACCOUNT_DEFAULTS: Pick<
   | 'backupCadence'
   | 'backupRetention'
 > = {
-  displayName: 'Mike Dudarenok',
+  displayName: 'Castwright',
   /* Gemini 3.1 Flash Lite over the Google API key is the new default
      for analysis — free tier (15 RPM, 250K TPM, 500/day) handles a
      full novel without saturating the local GPU. Local Ollama models
