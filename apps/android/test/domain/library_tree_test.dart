@@ -94,7 +94,7 @@ void main() {
         bk('b2', author: 'Della Renwick', series: 'The Hollow Tide', title: 'Saltgrave'),
         bk('b3', author: 'Other', series: 'Different', title: 'Standalone'),
       ];
-      final hit = filterBooks(series, 'keeper');
+      final hit = filterBooks(series, 'hollow');
       expect(hit.map((b) => b.bookId), ['b1', 'b2']);
     });
   });
