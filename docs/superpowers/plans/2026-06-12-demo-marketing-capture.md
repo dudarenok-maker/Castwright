@@ -12,6 +12,23 @@
 
 ---
 
+## Subagent execution contract
+
+Each task is self-contained for a **fresh subagent with zero conversation context**. Per task:
+
+- **Work on the existing branch `feat/frontend-demo-marketing-capture`.** Do not create a new branch; do not merge. First action: `git switch feat/frontend-demo-marketing-capture` (it already exists).
+- **Touch only the files named in the task's "Files" block.** Read only the files the task names. Do not refactor adjacent code.
+- **Follow the steps in order**, run the exact commands shown, and confirm the stated "Expected" output before moving on. If a command's output differs, stop and report — do not improvise past a red step.
+- **Commit** with the task's shown message at the end; one commit per task.
+- **Do NOT touch** any `Keefe` / `Bonus Keefe Story` / `Keefe Side-Stories` strings (piece #2), or `LICENSE`/`NOTICE` (piece #3).
+- **Covers are already staged** in git-ignored `public/marketing-covers/` (planning did this); Wave C only verifies them.
+- **Dependencies:** Wave A tasks are independent of B/C and ship on their own. Within B, do tasks in order (B1→B9). Wave C needs B complete.
+- **Capture tasks need chromium:** `npx playwright install chromium` (one-time) before any `capture:marketing` run.
+
+A handful of steps say "read file X, confirm field/signature Y, then implement." These are **precise investigations**, not open-ended design — the file and the decision rule are named. Animated-view scenes (analysing/generating) carry a spelled-out fallback (Task B4) if the mock-layer freeze doesn't engage.
+
+---
+
 ## File Structure
 
 **Wave A — modify:**
@@ -147,7 +164,8 @@ In each of `src/mocks/library.ts`, `src/data/books.ts`, `src/mocks/canned-data.t
 In `src/mocks/manuscripts/the-northern-star.md`, replace the byline `Mike Dudarenok` with `Marin Vale`.
 
 Verify none missed (mock/data only):
-Run: `npx grep -n "Mike Dudarenok" src/mocks src/data src/lib/api.ts` — or use the editor's search. Expected: zero hits in those paths.
+Run: `git grep -n "Mike Dudarenok" -- src/mocks src/data src/lib/api.ts`
+Expected: no output (exit 1 = zero matches).
 
 - [ ] **Step 2: Run the mock-dependent suites**
 
@@ -258,16 +276,20 @@ import {
 } from './hollow-tide';
 
 describe('Hollow Tide marketing fixtures', () => {
-  it('exposes a single Marin Vale author with the three-book series', () => {
-    const authors = HOLLOW_TIDE_LIBRARY.authors;
-    expect(authors).toHaveLength(1);
-    expect(authors[0].name).toBe('Marin Vale');
-    const series = authors[0].series.find((s) => s.name === 'The Hollow Tide');
+  it('exposes the Marin Vale "The Hollow Tide" three-book series', () => {
+    const marin = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Marin Vale');
+    expect(marin).toBeDefined();
+    const series = marin!.series.find((s) => s.name === 'The Hollow Tide');
     expect(series?.books.map((b) => b.bookId)).toEqual([
       'hollow-tide-1',
       'hollow-tide-2',
       'hollow-tide-3',
     ]);
+  });
+
+  it('includes Coalfall as a Castwright standalone on the shelf', () => {
+    const cw = HOLLOW_TIDE_LIBRARY.authors.find((a) => a.name === 'Castwright');
+    expect(cw?.series[0].books[0].bookId).toBe('coalfall-commission');
   });
 
   it('poses the three books at finished / generating / analysing', () => {
@@ -314,7 +336,7 @@ Create `src/mocks/marketing/hollow-tide.ts`. Author the data using the real type
    served in normal mock mode, so this touches no existing spec. */
 import type { LibraryResponse, BookStateResponse, Character } from '../../lib/types';
 
-const COVER = (slug: string) => `/marketing-covers/${slug}.jpg`;
+const COVER = (slug: string) => `/marketing-covers/${slug}.png`;
 
 /* --- Recurring cast, designed in Book 1, reused in 2 & 3 --- */
 const narrator = (): Character => ({
@@ -476,7 +498,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               runtime: '7h 02m',
               lastWorkedOn: '2 days ago',
               coverGradient: ['#1F3A40', '#0B1416'],
-              coverUrl: COVER('hollow-tide-1'),
+              coverImageUrl: COVER('hollow-tide-1'),
               tags: ['series-1'],
             },
             {
@@ -495,7 +517,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               runtime: '6h 18m',
               lastWorkedOn: '4 min ago',
               coverGradient: ['#2B4C57', '#101D22'],
-              coverUrl: COVER('hollow-tide-2'),
+              coverImageUrl: COVER('hollow-tide-2'),
               pinned: true,
               tags: ['series-1'],
             },
@@ -514,7 +536,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               progress: 0.4,
               lastWorkedOn: 'Just now',
               coverGradient: ['#22343F', '#0A1014'],
-              coverUrl: COVER('hollow-tide-3'),
+              coverImageUrl: COVER('hollow-tide-3'),
               tags: ['series-1'],
             },
           ],
@@ -546,11 +568,48 @@ export const HOLLOW_TIDE_POSED = {
 };
 ```
 
-> **Important:** verify the `LibraryBook` type (`src/lib/types.ts`) accepts a `coverUrl` field; if the cover URL field is named differently (e.g. `cover` / `coverImageUrl`), use that name. Confirm by reading the `LibraryBook` interface before finalising.
+> **Cover field (verified):** the field is `coverImageUrl` on `LibraryBook` (`src/lib/types.ts:560`), and the library grid renders an `<img src={coverImageUrl}>` (`library-grid.tsx:198`). In mock mode the browser loads that URL as a static file, so `/marketing-covers/<slug>.png` (served by Vite from `public/`) renders directly — no api-mock interception needed.
+> **Listen-view cover (verify once):** the listen view receives `bookCoverImageUrl` as a prop (`src/views/listen.tsx:48,102`). Read `src/App.tsx` where it renders the listen view and confirm that prop is sourced from the active library book's `coverImageUrl` (the expected path). If instead it builds `/api/books/:id/cover`, that 404s offline → gradient fallback; in that case also stamp `coverImageUrl` wherever App derives the listen cover. The cast/confirm/account scenes don't show a book cover, so they're unaffected.
 
 - [ ] **Step 4: Fill the remaining data**
 
 Complete `hollow-tide-2` (11 chapters, 7 completed slugs, 3 new chars) and `hollow-tide-3` (8 chapters, empty cast beyond the 2 reused), plus 4 book-1-only characters, following the worked example's shape.
+
+- [ ] **Step 4b: Add Coalfall to the shelf (standalone anchor)**
+
+The library-shelf scene shows "Hollow Tide + Coalfall," so add a second author to `HOLLOW_TIDE_LIBRARY.authors` and a matching book state. Append to the `authors` array:
+```ts
+    {
+      name: 'Castwright',
+      series: [
+        {
+          name: 'Standalones',
+          books: [
+            {
+              bookId: 'coalfall-commission',
+              title: 'The Coalfall Commission',
+              author: 'Castwright',
+              series: 'Standalones',
+              seriesPosition: null,
+              isStandalone: true,
+              status: 'complete',
+              chapterCount: 4,
+              completedChapters: 4,
+              characterCount: 11,
+              voiceCount: 11,
+              progress: 1,
+              runtime: '2h 41m',
+              lastWorkedOn: 'Last week',
+              coverGradient: ['#3C194F', '#0F0E0D'],
+              coverImageUrl: COVER('coalfall-commission'),
+              tags: [],
+            },
+          ],
+        },
+      ],
+    },
+```
+And add a book state to `HOLLOW_TIDE_BOOK_STATES` (so a `#/books/coalfall-commission/listen` scene would also resolve), using `bookState({ bookId: 'coalfall-commission', title: 'The Coalfall Commission', seriesPosition: 0, coverGradient: ['#3C194F', '#0F0E0D'], castConfirmed: true, chapters: <4 chapters>, cast: <11 chars or null>, completedSlugs: <all 4> })` — but set its `state.author` to `'Castwright'`, `series` to `'Standalones'`, `isStandalone: true`, `seriesPosition: null` (override the helper defaults inline, or extend the helper to accept these). Update the B2 test's first assertion to expect two authors (`['Marin Vale', 'Castwright']`) if you assert author count.
 
 - [ ] **Step 5: Run to verify it passes**
 
@@ -683,7 +742,20 @@ if (DEMO_CAPTURE) {
 Run: `npm run typecheck`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Verify the freeze engages (deferred check)**
+
+This is verified when the `analysing` + `generating` scenes are captured in Task B7. The pass criterion: `analysing.desktop.png` shows the phase bar at ~45% with the forming-cast panel (NOT a spinner, blank, or a redirect to the confirm/cast screen), and `generating.desktop.png` shows 7/11 chapters done with one in progress.
+
+**Fallback if the mock-layer freeze does NOT engage** (e.g. the view redirects on `castConfirmed`, or never subscribes to the mock stream on direct hash navigation): pose the state by **direct redux dispatch** instead. (a) Under `DEMO_CAPTURE`, in `src/store/index.ts`, expose the store: `if (import.meta.env.VITE_DEMO_CAPTURE === '1') (window as any).__CW_STORE__ = store;`. (b) Give the two animated scenes a `setup(page)` that dispatches a posed snapshot, e.g.:
+```ts
+await page.evaluate((posed) => {
+  const store = (window as any).__CW_STORE__;
+  store.dispatch({ type: 'analysis/setActiveStream', payload: posed });
+}, HOLLOW_TIDE_POSED.analysing);
+```
+Confirm the real action creator + payload by reading `src/store/analysis-slice.ts` (look for the exported `analysisActions` member that replaces the whole `activeStream`) and `src/store/chapters-slice.ts` (chapter list + active-stream setters). Use the mock-layer freeze first; only add the store hook if B7 shows it's needed.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/lib/api.ts
@@ -929,14 +1001,22 @@ git commit -m "build: add capture:marketing command + recipe README"
 **Files:**
 - Create (local, git-ignored): `public/marketing-covers/hollow-tide-1.jpg`, `-2.jpg`, `-3.jpg`, `coalfall-commission.jpg`
 
-- [ ] **Step 1: Place the generated covers**
+- [ ] **Step 1: Verify the covers are staged (already done during planning)**
 
-Save the three generated Hollow Tide square JPEGs (from the spec's prompts) as `public/marketing-covers/hollow-tide-{1,2,3}.jpg`. Copy the existing Coalfall art:
+The four covers were already copied into `public/marketing-covers/` during
+planning, and `public/marketing-covers/` is git-ignored (`.gitignore`). Confirm:
 ```bash
-mkdir -p public/marketing-covers
-cp "brand/test-book/the-coalfall-commission-cover-final.png" public/marketing-covers/coalfall-commission.jpg
+ls public/marketing-covers/   # expect: coalfall-commission.png hollow-tide-1.png hollow-tide-2.png hollow-tide-3.png
+git check-ignore public/marketing-covers/hollow-tide-1.png   # expect: the path is printed (ignored)
 ```
-> `.jpg` extension on a PNG payload renders fine in browsers; re-encode to real JPEG if preferred.
+If any are missing, re-copy from the git-ignored sources:
+```bash
+cp "brand/book-covers/The Drowning Bell - Marin Vale.png"      public/marketing-covers/hollow-tide-1.png
+cp "brand/book-covers/Saltgrave - Marin Vale.png"              public/marketing-covers/hollow-tide-2.png
+cp "brand/book-covers/The Tidewatcher's Oath - Marin Vale.png" public/marketing-covers/hollow-tide-3.png
+cp "brand/test-book/the-coalfall-commission-cover-final.png"   public/marketing-covers/coalfall-commission.png
+```
+The fixture `COVER()` helper points at `/marketing-covers/<slug>.png` (Task B2).
 
 - [ ] **Step 2: Re-capture and verify covers render**
 
