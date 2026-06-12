@@ -21,6 +21,7 @@ import { api, type ModelInventoryItem, type ModelInventoryResponse } from '../li
 import { formatBytes } from '../lib/bytes';
 import { ModelSettingsForm } from '../components/model-settings-form';
 import { CoquiInstall } from '../components/coqui-install';
+import { KokoroInstall } from '../components/kokoro-install';
 import { QwenInstall } from '../components/qwen-install';
 import { WhisperInstall } from '../components/whisper-install';
 
@@ -35,9 +36,12 @@ const TTS_ENGINE_BY_ID: Partial<Record<string, 'coqui' | 'kokoro' | 'qwen'>> = {
 
 /* Inventory ids with an in-app installer, rendered inline under the row (fs-23
    follow-up — install lives with the model, not in a separate bottom section).
-   kokoro ships in the release bundle, qwen-design is fetched at design time, and
-   ollama models live in the analyzer section below — none get a row installer. */
+   As of fs-21 wave 1, kokoro has an in-app installer too — its ~330 MB weights
+   are fetched at install time rather than bundled in the release zip.
+   qwen-design is fetched at design time, and ollama models live in the analyzer
+   section below — neither gets a row installer here. */
 const INSTALLER_BY_ID: Partial<Record<string, ComponentType<{ onInstalled?: () => void }>>> = {
+  kokoro: KokoroInstall,
   coqui: CoquiInstall,
   'qwen-base': QwenInstall,
   whisper: WhisperInstall,
