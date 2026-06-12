@@ -23,6 +23,40 @@
 - **🔴 Mock sample is not navigable yet** — `mockLoadSample`'s bookId isn't in `MOCK_LIBRARY`, and the Coalfall fixtures live only under `DEMO_CAPTURE`. **Task 13 (new)** seeds the sample into the standard mock flow; the e2e (now Task 14) depends on it.
 - **ui actions are safely guarded** (verified): `changeView` no-ops unless `stage.kind==='ready'`; `setOpenProfileId` no-ops unless ready/confirm; neither throws. `openBook({id,status:'complete',manuscriptId})` lands `ready`/`listen`. No change needed — the engine's dispatch order (openBook → changeView → setOpenProfileId) is correct.
 
+## Subagent execution contract (read before dispatching each task)
+
+- **Work in the worktree:** `C:/Claude/Projects/wt-guided-tour`, branch `feat/frontend-guided-tour`. Run ALL commands from the worktree root (not the main checkout, which a concurrent session holds on another branch).
+- **Run Task 0 first.** Without `node_modules` nothing executes. (Already done once in this session via junctions — an agent should verify, not re-create.)
+- **Strictly sequential.** Tasks build on each other; dispatch in order, review between. Tasks that edit the SAME file must NOT run in parallel: `src/lib/api.ts` (Tasks 3, 13), `src/store/tour-slice.ts` (4, 6), `src/lib/tour-steps.ts` (5, 11), `src/store/index.ts` (4). When a later task appends to a file an earlier task created, **merge imports — never duplicate an import line** (e.g. Task 6 appends to `tour-slice.test.ts`, which already imports from `./tour-slice`).
+- **Scope discipline:** edit only the files a task lists; don't "improve" adjacent code.
+- **⚠️ Async entry note (affects Tasks 8, 10, 12, 14):** `startLinearTour` AWAITS `api.loadSample` *before* it activates the tour, so `tour.active` flips on a later microtask. Tests that click an entry point must `await waitFor(...)` — never assert synchronously — and must `vi.mock('../lib/api')` so `loadSample` resolves instantly.
+- **Each task ends green + committed:** its verify step must pass before the commit step. Keep commit subjects in `<type>(<scope>): <subject>` form manually (the commit-msg hook does NOT run in the worktree — see Task 0).
+
+---
+
+## Task 0: Worktree environment setup (run ONCE before Task 1)
+
+Git worktrees don't copy the ignored `node_modules`, so vitest/tsc/build can't run until linked.
+
+- [ ] **Step 1: Link dependencies from the main checkout** (fast; identical package versions). PowerShell junctions — NOT git-bash `mklink` (per repo convention). Idempotent (skips if present):
+
+```powershell
+$wt = "C:\Claude\Projects\wt-guided-tour"; $main = "C:\Claude\Projects\Audiobook-Generator"
+if (-not (Test-Path "$wt\node_modules")) { New-Item -ItemType Junction -Path "$wt\node_modules" -Target "$main\node_modules" | Out-Null }
+if (-not (Test-Path "$wt\server\node_modules")) { New-Item -ItemType Junction -Path "$wt\server\node_modules" -Target "$main\server\node_modules" | Out-Null }
+```
+
+(Fallback if the main checkout's deps are gone/mismatched: `npm install` in the worktree root — slower, fully isolated, and it also creates `.husky/_`.)
+
+- [ ] **Step 2: Verify the toolchain resolves**
+
+Run: `npx vitest --version && npx tsc --version`
+Expected: both print versions (e.g. `vitest/4.x`, `Version 6.x`).
+
+- [ ] **Step 3: Husky note — NO commit gate in the worktree.** `core.hooksPath` is `.husky/_`, which the junction approach does NOT create, so `git commit` here **skips** the pre-commit (`verify:fast:scoped`) and commit-msg hooks (commits still succeed). Therefore: (a) each task's verify step + the final `npm run verify` ARE the gate — don't skip them; (b) write commit subjects in the convention by hand. (Run `npm install` in Step 1 instead if you want the gate live.)
+
+No commit for this task (environment only). **Status: already completed in this session — an agent need only run Step 2 to confirm.**
+
 ---
 
 ## Task 1: Server — `tourCompletedAt` user-setting (schema + getter/setter)
@@ -957,41 +991,26 @@ git commit -m "feat(frontend): TourOverlay spotlight + coach bubble + fallback"
 
 ---
 
-## Task 8: Mount overlay + boot status fetch in layout
+## Task 8: Mount overlay + boot status fetch in layout (wiring)
 
 **Files:**
-- Modify: `src/components/layout.tsx` (mount `<TourOverlay/>`; dispatch `fetchTourStatus` beside `fetchAccountSettings` at `layout.tsx:453`)
+- Modify: `src/components/layout.tsx`
 
-- [ ] **Step 1: Write the failing test** — add to `src/components/layout.test.tsx` (match its existing render harness):
+This is a pure wiring task — `<TourOverlay/>` already has full unit coverage (Task 7), and its appearance-on-start is exercised by the Task 14 e2e (which renders the real `Layout`). So **no new unit test here** (a layout.test harness render of the whole tree just to assert a portal toggles would be brittle for no extra signal). Verification = typecheck + the existing layout suite staying green + Task 14.
 
-```tsx
-it('mounts the tour overlay container only when a tour is active', async () => {
-  // render Layout with a store where tour.active=false → no overlay
-  // then dispatch startTour + goToStep(0) → overlay appears
-  // (use the file's existing renderWithStore helper + store handle)
-});
-```
+- [ ] **Step 1: Implement** — in `layout.tsx`:
+  - import `{ TourOverlay }` from `./tour/tour-overlay` and render `<TourOverlay />` once near the root return (sibling to the stage views, before the closing fragment). It self-gates on `tour.active`, so it's inert until a tour starts.
+  - import `{ fetchTourStatus }` from `../store/tour-slice` and, in the same effect that dispatches `fetchAccountSettings()` (`layout.tsx:453`), add `void dispatch(fetchTourStatus());`.
 
-Flesh out using the file's existing helper (assert `queryByTestId('tour-overlay')` toggles with `store.dispatch(tourActions.startTour(...))`).
+- [ ] **Step 2: Verify nothing regressed + types**
 
-- [ ] **Step 2: Run to verify it fails**
+Run: `npx vitest run src/components/layout.test.tsx && npm run typecheck`
+Expected: PASS (existing layout suite green; new imports type-check).
 
-Run: `npx vitest run src/components/layout.test.tsx -t "tour overlay"`
-Expected: FAIL — overlay not mounted.
-
-- [ ] **Step 3: Implement** — in `layout.tsx`:
-  - import `{ TourOverlay }` and render `<TourOverlay />` once near the root return (sibling to the stage views, before the closing fragment).
-  - import `{ fetchTourStatus }` from `../store/tour-slice` and, in the same effect that dispatches `fetchAccountSettings()` (line ~453), add `void dispatch(fetchTourStatus());`.
-
-- [ ] **Step 4: Run to verify it passes**
-
-Run: `npx vitest run src/components/layout.test.tsx -t "tour overlay" && npm run typecheck`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/components/layout.tsx src/components/layout.test.tsx
+git add src/components/layout.tsx
 git commit -m "feat(frontend): mount TourOverlay + boot tour-status fetch"
 ```
 
@@ -1198,15 +1217,36 @@ git commit -m "feat(frontend): top-bar ? menu (help/tour/show-this-screen)"
 - Modify: `src/views/help.tsx` (Getting-started section, ~167)
 - Modify: `src/views/help.test.tsx`
 
-- [ ] **Step 1: Write the failing test**:
+- [ ] **Step 1: Write the failing test** — `src/views/help.test.tsx` (self-contained store; mock api so `loadSample` resolves instantly; `await waitFor` because `startLinearTour` is async — see the execution contract):
 
 ```tsx
-it('offers a Take the tour button that starts the linear tour', () => {
-  // render HelpView with a real store; click the button; assert store.tour.active === true
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
+
+vi.mock('../lib/api', () => ({
+  api: { loadSample: vi.fn(async () => ({ bookId: 'castwright__standalones__the-coalfall-commission' })) },
+}));
+
+import { tourSlice } from '../store/tour-slice';
+import { uiSlice } from '../store/ui-slice';
+import { settingsSlice } from '../store/settings-slice';
+import { HelpView } from './help';
+
+it('Take the tour button starts the linear tour', async () => {
+  const store = configureStore({
+    reducer: { tour: tourSlice.reducer, ui: uiSlice.reducer, settings: settingsSlice.reducer },
+  });
+  render(<Provider store={store}><HelpView /></Provider>);
+  fireEvent.click(screen.getByRole('button', { name: /take the tour/i }));
+  await waitFor(() => expect(store.getState().tour.active).toBe(true));
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails** — FAIL.
+(If `help.test.tsx` already has a render helper/store factory, reuse it and add only this case + the `vi.mock`. HelpView reads `s.ui.stage` + `s.settings?.keybindings` defensively, so the three-slice store renders it fine.)
+
+- [ ] **Step 2: Run to verify it fails** — `npx vitest run src/views/help.test.tsx -t "Take the tour"` → FAIL.
 
 - [ ] **Step 3: Implement** — add a button under the Getting-started heading:
 
@@ -1326,13 +1366,16 @@ test('per-screen mini-tour: Cast ? replays the cast steps only', async ({ page }
 });
 ```
 
-Flesh out the assertions against the real DOM (use `data-testid`/`data-tour-id`). Keep it resilient to timing with `expect(...).toBeVisible()` waits.
+Flesh out the assertions against the real DOM (use `data-testid`/`data-tour-id`). Keep it resilient to timing with `expect(...).toBeVisible()` waits — the welcome bubble appears only after `startLinearTour` finishes provisioning, so wait on it rather than asserting immediately.
 
-- [ ] **Step 2: Run to verify it fails** — `npm run test:e2e -- tour.spec.ts` → FAIL (CTA/flow not fully wired or assertions off).
+> **Env (a concurrent session may hold ports):** run with a free port to avoid collision, and ensure chromium is installed once:
+> `npx playwright install chromium` (cached in `%LOCALAPPDATA%`), then `CI=1 PLAYWRIGHT_PORT=0 npm run test:e2e -- tour.spec.ts` (or set `PLAYWRIGHT_PORT` to an unused value). The repo's e2e harness reads `PLAYWRIGHT_PORT`.
+
+- [ ] **Step 2: Run to verify it fails** — `CI=1 PLAYWRIGHT_PORT=0 npm run test:e2e -- tour.spec.ts` → FAIL (CTA/flow not fully wired or assertions off).
 
 - [ ] **Step 3: Fix wiring** until green — the sample navigability is handled by Task 13; remaining work is timing/assertion robustness (wait on `data-tour-id`/`data-testid` elements, advance via the bubble's Next button).
 
-- [ ] **Step 4: Run to verify it passes** — `npm run test:e2e -- tour.spec.ts` → PASS.
+- [ ] **Step 4: Run to verify it passes** — `CI=1 PLAYWRIGHT_PORT=0 npm run test:e2e -- tour.spec.ts` → PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1353,7 +1396,7 @@ git commit -m "test(e2e): guided tour golden path + mini-tour + responsive"
 
 > ~~No pre-rendered audio~~ **Exactly one pre-rendered chapter (chapter 1, full Qwen cast)** ships in the bundle to power the guided tour's Listen finale (see `2026-06-12-guided-tour-design.md`). Chapters 2+ remain un-rendered (the user generates them), keeping the bundle small.
 
-- [ ] **Step 2: Add the production recipe** — append to the fs-22 spec a short "Chapter-1 audio (for the tour)" subsection: render ch.1 on a GPU box via the real pipeline with the bundled `cast.json`, place the resulting per-chapter audio + `segments.json`/`state.json` under the sample's book dir in the bundle (`samples/the-coalfall-commission/...`), and confirm `loadSample` copies it so the book opens with chapter 1 `state: 'done'`.
+- [ ] **Step 2: Add the production recipe** — append to the fs-22 spec a short "Chapter-1 audio (for the tour)" subsection documenting the **agreed ownership**: the **user generates chapter 1 in production** (real pipeline, real Qwen cast) and **points to the rendered artifact**; we then **package** it — the per-chapter audio + `segments.json`/`state.json` — under the sample's book dir in the bundle (`samples/the-coalfall-commission/...`), so `loadSample` copies it and the book opens with chapter 1 `state: 'done'`.
 
 - [ ] **Step 3: Commit**
 
@@ -1362,7 +1405,7 @@ git add docs/superpowers/specs/2026-06-11-fs22-bundled-demo-book-design.md
 git commit -m "docs(docs): amend fs-22 to bundle chapter-1 audio for the tour"
 ```
 
-> **Ops follow-up (out of band, not a code task):** actually render + commit the chapter-1 audio fixture into the fs-22 bundle on a GPU box; track it in the fs-22 issue. The tour's Listen finale shows ch.1 placeholder until this lands.
+> **Ops handoff (owned by the user):** the user renders chapter 1 in prod and points us to the artifact; we package it into the fs-22 bundle. Until that artifact is wired in, the **mock** Listen finale (Task 13) carries the demo; the **real** bundle's finale lands when the user hands off the prod render.
 
 ---
 
