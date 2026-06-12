@@ -541,7 +541,7 @@ export function CastView({
           </div>
         </div>
       )}
-      <div>
+      <div data-tour-id="cast-roster">
         <div className="mb-6 md:mb-8 flex items-end justify-between gap-4 md:gap-6 flex-wrap">
           <div className="min-w-0">
             <SectionLabel>Your cast</SectionLabel>
@@ -1219,7 +1219,7 @@ export function CastView({
       {/* Plan 81 wave 3 — desktop aside (lg:+). Identical contract to
           the original sticky-aside path; just hidden under lg. */}
       {showLibrary && (
-        <aside className="hidden lg:block self-start sticky top-24" data-tour-id="cast-roster">
+        <aside className="hidden lg:block self-start sticky top-24">
           <VoiceLibraryPanel
             library={library}
             draggingVoiceId={draggingVoiceId}
