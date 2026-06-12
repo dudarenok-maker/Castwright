@@ -218,13 +218,13 @@ describe('ProfileDrawer Qwen emotion-variant persistence (regression)', () => {
     const onSave = vi.fn();
     const character: Character = {
       ...baseChar,
-      id: 'Marlow',
+      id: 'marlow',
       name: 'Marlow Halden',
-      voiceId: 'Marlow',
+      voiceId: 'marlow',
       ttsEngine: 'qwen',
       voiceStyle: 'a charming, smooth-talking teenage boy',
       overrideTtsVoices: {
-        qwen: { name: 'qwen-Marlow', variants: { whisper: { name: 'qwen-Marlow__whisper' } } },
+        qwen: { name: 'qwen-marlow', variants: { whisper: { name: 'qwen-marlow__whisper' } } },
       },
     };
     const store = makeStore();
@@ -245,15 +245,15 @@ describe('ProfileDrawer Qwen emotion-variant persistence (regression)', () => {
     expect(onSave).toHaveBeenCalledTimes(1);
     const next = onSave.mock.calls[0][0] as Character;
     expect(next.overrideTtsVoices?.qwen).toEqual({
-      name: 'qwen-Marlow',
-      variants: { whisper: { name: 'qwen-Marlow__whisper' } },
+      name: 'qwen-marlow',
+      variants: { whisper: { name: 'qwen-marlow__whisper' } },
     });
   });
 });
 
 describe('ProfileDrawer cast roster (merge + aliases)', () => {
-  const Wren: Character = {
-    id: 'Wren',
+  const wren: Character = {
+    id: 'wren',
     name: 'Wren',
     role: 'protagonist',
     color: 'eliza',
@@ -261,15 +261,15 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     scenes: 2,
   };
   const WrenFoster: Character = {
-    id: 'Wren-foster',
+    id: 'wren-sparrow',
     name: 'Wren Sparrow',
     role: 'protagonist',
     color: 'eliza',
     lines: 12,
     scenes: 4,
   };
-  const Marlow: Character = {
-    id: 'Marlow',
+  const marlow: Character = {
+    id: 'marlow',
     name: 'Marlow Halden',
     role: 'sidekick',
     color: 'halloran',
@@ -286,14 +286,14 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
   });
 
   it('hides the merge button when no candidates or onMerge handler are provided', () => {
-    renderDrawer(Wren);
+    renderDrawer(wren);
     /* No expandable picker, no merge button. */
     expect(screen.queryByRole('button', { name: /Merge .* into another character/i })).toBeNull();
   });
 
   it('opens the picker, calls onMerge with (source, target), and surfaces errors', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(Wren, { mergeCandidates: [WrenFoster, Marlow], onMerge });
+    renderDrawer(wren, { mergeCandidates: [WrenFoster, marlow], onMerge });
 
     /* Toggle the merge card open. */
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
@@ -308,12 +308,12 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     /* Microtask flush so the async onMerge call resolves. */
     await Promise.resolve();
-    expect(onMerge).toHaveBeenCalledWith('Wren', 'Wren-foster');
+    expect(onMerge).toHaveBeenCalledWith('wren', 'wren-sparrow');
   });
 
   it('surfaces an error message when onMerge rejects', async () => {
     const onMerge = vi.fn().mockRejectedValueOnce(new Error('Server said no.'));
-    renderDrawer(Wren, { mergeCandidates: [WrenFoster], onMerge });
+    renderDrawer(wren, { mergeCandidates: [WrenFoster], onMerge });
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/i }));
@@ -326,11 +326,11 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
 
   it('typeahead narrows the picker list to the searched character', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(Wren, { mergeCandidates: [WrenFoster, Marlow], onMerge });
+    renderDrawer(wren, { mergeCandidates: [WrenFoster, marlow], onMerge });
     fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     const searchInput = screen.getByPlaceholderText('Search character…');
-    fireEvent.change(searchInput, { target: { value: 'foster' } });
+    fireEvent.change(searchInput, { target: { value: 'sparrow' } });
     /* Scope to the picker dialog — the drawer also renders native
        <select>s (gender, age) whose <option>s share the option role. */
     const dialog = screen.getByRole('dialog');
@@ -340,7 +340,7 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
     fireEvent.click(options[0]);
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     await Promise.resolve();
-    expect(onMerge).toHaveBeenCalledWith('Wren', 'Wren-foster');
+    expect(onMerge).toHaveBeenCalledWith('wren', 'wren-sparrow');
   });
 });
 
@@ -354,7 +354,7 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     scenes: 9,
   };
   const inBookSibling: Character = {
-    id: 'Wren-foster',
+    id: 'wren-sparrow',
     name: 'Wren Sparrow',
     role: 'protagonist',
     color: 'eliza',
@@ -362,13 +362,13 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     scenes: 4,
   };
   const priorDex: PriorMergeCandidate = {
-    id: 'Hart',
+    id: 'hart',
     name: 'Hart',
     bookId: 'the Hollow Tide_1',
     bookTitle: 'The Hollow Tide',
   };
   const priorMarlow: PriorMergeCandidate = {
-    id: 'Marlow',
+    id: 'marlow',
     name: 'Marlow',
     bookId: 'the Hollow Tide_1',
     bookTitle: 'The Hollow Tide',
@@ -421,7 +421,7 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     /* Button label flips from "Merge" to "Link" when a prior is selected. */
     fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));
     await Promise.resolve();
-    expect(onLinkPrior).toHaveBeenCalledWith('Hartwell-alvin-Vale', 'the Hollow Tide_1', 'Marlow');
+    expect(onLinkPrior).toHaveBeenCalledWith('Hartwell-alvin-Vale', 'the Hollow Tide_1', 'marlow');
   });
 
   it('still routes an in-book pick to onMerge when both groups are present', async () => {
@@ -438,7 +438,7 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
     fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     await Promise.resolve();
-    expect(onMerge).toHaveBeenCalledWith('Hartwell-alvin-Vale', 'Wren-foster');
+    expect(onMerge).toHaveBeenCalledWith('Hartwell-alvin-Vale', 'wren-sparrow');
     expect(onLinkPrior).not.toHaveBeenCalled();
   });
 
@@ -517,8 +517,8 @@ describe('ProfileDrawer rename + promote alias', () => {
 });
 
 describe('ProfileDrawer Play sample (auto-load path)', () => {
-  const Brann: Character = {
-    id: 'Brann',
+  const brann: Character = {
+    id: 'brann',
     name: 'Brann',
     role: 'Telepath',
     color: 'halloran',
@@ -533,7 +533,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={Brann}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -546,7 +546,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     /* The voiceId for an unmatched character is namespaced char-<id> so
        cached sample files for the library voice can't collide with the
        in-progress character voice. */
-    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-Brann');
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-brann');
   });
 
   it('surfaces the inline eviction banner when the helper reports the analyzer was unloaded', async () => {
@@ -562,7 +562,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={Brann}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -582,7 +582,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={Brann}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -604,7 +604,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={Brann}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -618,7 +618,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
        present. */
     fireEvent.click(screen.getByRole('button', { name: /^Play sample for/i }));
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-Brann');
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-brann');
   });
 });
 
@@ -696,8 +696,8 @@ describe('ProfileDrawer downgrade to background bucket', () => {
 });
 
 describe('ProfileDrawer model-voice override picker', () => {
-  const Brann: Character = {
-    id: 'Brann',
+  const brann: Character = {
+    id: 'brann',
     name: 'Brann',
     role: 'protagonist',
     color: 'eliza',
@@ -708,7 +708,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   };
 
   const BrannVoice: Voice = {
-    id: 'v_Brann',
+    id: 'v_brann',
     character: 'Brann',
     bookTitle: 'Book One',
     bookId: 'b1',
@@ -726,7 +726,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   ];
 
   it('renders engine tabs (one per available engine) and labels the Auto trigger with the resolved voice', async () => {
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     /* The trigger button shows the Auto label until the user picks an
        explicit override — same content the legacy <select>'s auto
@@ -738,12 +738,12 @@ describe('ProfileDrawer model-voice override picker', () => {
 
   it('persists an override via api.setVoiceOverride when the user picks a base voice', async () => {
     setVoiceOverride.mockClear();
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('option', { name: /Asya Anara/ }));
     await waitFor(() => {
-      expect(setVoiceOverride).toHaveBeenCalledWith('v_Brann', {
+      expect(setVoiceOverride).toHaveBeenCalledWith('v_brann', {
         engine: 'coqui',
         name: 'Asya Anara',
       });
@@ -756,7 +756,7 @@ describe('ProfileDrawer model-voice override picker', () => {
       ...BrannVoice,
       overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
     };
-    renderDrawer(Brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     expect(trigger).toHaveTextContent(/Asya Anara/);
     fireEvent.click(trigger);
@@ -764,7 +764,7 @@ describe('ProfileDrawer model-voice override picker', () => {
        override (passes null to setVoiceOverride). */
     fireEvent.click(screen.getByRole('option', { name: /Auto — currently Coqui/i }));
     await waitFor(() => {
-      expect(setVoiceOverride).toHaveBeenCalledWith('v_Brann', null);
+      expect(setVoiceOverride).toHaveBeenCalledWith('v_brann', null);
     });
   });
 
@@ -775,7 +775,7 @@ describe('ProfileDrawer model-voice override picker', () => {
       ...BrannVoice,
       overrideTtsVoices: { gemini: { name: 'Charon' } },
     };
-    renderDrawer(Brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
     const geminiTab = await screen.findByRole('tab', { name: /Gemini/i });
     /* Filled-slot dot is added inside the tab button when that engine
        has a non-empty slot. */
@@ -783,7 +783,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   });
 
   it("switching tabs swaps which engine's catalog the picker shows", async () => {
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     /* Default tab (Coqui) — open the picker, only Coqui voices listed
        (besides Auto). */
     const coquiTrigger = await screen.findByRole('button', {
@@ -805,8 +805,8 @@ describe('ProfileDrawer model-voice override picker', () => {
 });
 
 describe('ProfileDrawer voice-preview while editing', () => {
-  const Brann: Character = {
-    id: 'Brann',
+  const brann: Character = {
+    id: 'brann',
     name: 'Brann',
     role: 'protagonist',
     color: 'eliza',
@@ -816,7 +816,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
     ageRange: 'teen',
   };
   const BrannVoice: Voice = {
-    id: 'v_Brann',
+    id: 'v_brann',
     character: 'Brann',
     bookTitle: 'Book One',
     bookId: 'b1',
@@ -833,7 +833,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   ];
 
   it('keeps the candidate-preview list collapsed by default; toggle expands it', async () => {
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     /* List + textarea are hidden until the user opens the section — keeps
        the drawer tidy on first open. */
     expect(screen.queryByTestId('voice-preview-candidates')).toBeNull();
@@ -849,7 +849,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
 
   it('clicking Play on a candidate row routes through playBaseVoiceSampleWithAutoLoad with the user-edited text', async () => {
     vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     /* User edits the sample line before auditioning. */
     fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
@@ -867,7 +867,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   it('clicking Play on a SECOND candidate forwards the new voice (read-only audition, no commit)', async () => {
     vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
     const onSave = vi.fn();
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
 
     fireEvent.click(screen.getByTestId('voice-preview-play-Asya Anara'));
@@ -888,7 +888,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   });
 
   it('switching the engine tab swaps which catalog the preview list shows', async () => {
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     /* Default tab (Coqui) lists Asya + Damien but not Charon. */
     expect(screen.getByTestId('voice-preview-row-Asya Anara')).toBeTruthy();
@@ -904,7 +904,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
     /* The drawer is the only consumer; jsdom backs localStorage with an
        in-memory map so the assertion is deterministic. */
     window.localStorage.removeItem('voice-preview-sample-text');
-    renderDrawer(Brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: BrannVoice, voices: [BrannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
       target: { value: 'Bespoke preview line.' },
@@ -1435,7 +1435,7 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
     voiceId: 'v_qwen_narr',
     voiceState: 'reused',
     matchedFrom: {
-      bookTitle: 'The Tidewatcher's Oath',
+      bookTitle: 'The Tidewatcher’s Oath',
       bookId: 'b_prev',
       characterId: 'narrator_prev',
       confidence: 0.95,
@@ -1444,7 +1444,7 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
   const reusedQwenVoice: Voice = {
     id: 'v_qwen_narr',
     character: 'Narrator',
-    bookTitle: 'The Tidewatcher's Oath',
+    bookTitle: 'The Tidewatcher’s Oath',
     bookId: 'b_prev',
     attributes: ['descriptive'],
     gradient: ['#E5B69C', '#C77B5C'],

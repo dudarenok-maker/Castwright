@@ -192,9 +192,9 @@ export const VOICE_DRIFT_EVENTS: DriftEvent[] = [
   },
   /* Second book — exercises the multi-book group header in dev. */
   {
-    id: 'drift:cc:3:Wren:attributes',
+    id: 'drift:cc:3:wren:attributes',
     bookId: 'cc',
-    characterId: 'Wren',
+    characterId: 'wren',
     chapterId: 3,
     chapterTitle: 'A Letter From Oduvan',
     severity: 'moderate',

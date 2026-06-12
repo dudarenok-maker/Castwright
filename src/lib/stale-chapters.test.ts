@@ -13,18 +13,18 @@ const ch = (id: number, state: string, characters: Record<string, unknown> | nul
 describe('renderedChaptersForCharacter', () => {
   it('returns ids of done chapters the character speaks in', () => {
     const chapters = [
-      ch(1, 'done', { Wren: 10, Marlow: 4 }),
-      ch(2, 'done', { Marlow: 2 }), // Wren absent
-      ch(3, 'queued', { Wren: 5 }), // not done
-      ch(4, 'done', { Wren: 1 }),
+      ch(1, 'done', { wren: 10, marlow: 4 }),
+      ch(2, 'done', { marlow: 2 }), // wren absent
+      ch(3, 'queued', { wren: 5 }), // not done
+      ch(4, 'done', { wren: 1 }),
     ];
-    expect(renderedChaptersForCharacter('Wren', chapters)).toEqual([1, 4]);
+    expect(renderedChaptersForCharacter('wren', chapters)).toEqual([1, 4]);
   });
 
   it('returns [] when the character speaks in no done chapter', () => {
-    expect(renderedChaptersForCharacter('ghost', [ch(1, 'done', { Wren: 1 })])).toEqual([]);
-    expect(renderedChaptersForCharacter('Wren', [ch(1, 'queued', { Wren: 1 })])).toEqual([]);
-    expect(renderedChaptersForCharacter('Wren', [ch(1, 'done', null)])).toEqual([]);
+    expect(renderedChaptersForCharacter('ghost', [ch(1, 'done', { wren: 1 })])).toEqual([]);
+    expect(renderedChaptersForCharacter('wren', [ch(1, 'queued', { wren: 1 })])).toEqual([]);
+    expect(renderedChaptersForCharacter('wren', [ch(1, 'done', null)])).toEqual([]);
   });
 });
 
@@ -87,13 +87,13 @@ describe('isChapterStaleFromReassign (Bug 2)', () => {
 });
 
 describe('isChapterReassignedSinceRender (#650 precise diff)', () => {
-  const rendered = { 1: 'narrator', 2: 'Wren', 3: 'Marlow' };
+  const rendered = { 1: 'narrator', 2: 'wren', 3: 'marlow' };
 
   it('not reassigned when the live mapping matches the render-time mapping', () => {
     const current = [
       { id: 1, characterId: 'narrator' },
-      { id: 2, characterId: 'Wren' },
-      { id: 3, characterId: 'Marlow' },
+      { id: 2, characterId: 'wren' },
+      { id: 3, characterId: 'marlow' },
     ];
     expect(isChapterReassignedSinceRender(rendered, current)).toBe(false);
   });
@@ -101,8 +101,8 @@ describe('isChapterReassignedSinceRender (#650 precise diff)', () => {
   it('reassigned when a rendered sentence now has a different speaker', () => {
     const current = [
       { id: 1, characterId: 'narrator' },
-      { id: 2, characterId: 'Marlow' }, // was Wren
-      { id: 3, characterId: 'Marlow' },
+      { id: 2, characterId: 'marlow' }, // was wren
+      { id: 3, characterId: 'marlow' },
     ];
     expect(isChapterReassignedSinceRender(rendered, current)).toBe(true);
   });
@@ -110,7 +110,7 @@ describe('isChapterReassignedSinceRender (#650 precise diff)', () => {
   it('reassigned when a rendered sentence is gone (split/merge/delete)', () => {
     const current = [
       { id: 1, characterId: 'narrator' },
-      { id: 3, characterId: 'Marlow' }, // id 2 removed
+      { id: 3, characterId: 'marlow' }, // id 2 removed
     ];
     expect(isChapterReassignedSinceRender(rendered, current)).toBe(true);
   });
@@ -120,8 +120,8 @@ describe('isChapterReassignedSinceRender (#650 precise diff)', () => {
        time-based heuristic would still read stale from the logged edits. */
     const current = [
       { id: 1, characterId: 'narrator' },
-      { id: 2, characterId: 'Wren' },
-      { id: 3, characterId: 'Marlow' },
+      { id: 2, characterId: 'wren' },
+      { id: 3, characterId: 'marlow' },
     ];
     expect(isChapterReassignedSinceRender(rendered, current)).toBe(false);
   });
@@ -131,8 +131,8 @@ describe('isChapterReassignedSinceRender (#650 precise diff)', () => {
        extra current sentence can't trip staleness on its own. */
     const current = [
       { id: 1, characterId: 'narrator' },
-      { id: 2, characterId: 'Wren' },
-      { id: 3, characterId: 'Marlow' },
+      { id: 2, characterId: 'wren' },
+      { id: 3, characterId: 'marlow' },
       { id: 99, characterId: 'narrator' }, // never rendered
     ];
     expect(isChapterReassignedSinceRender(rendered, current)).toBe(false);

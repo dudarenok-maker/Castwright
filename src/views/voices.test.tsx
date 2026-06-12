@@ -119,8 +119,8 @@ vi.mock('../lib/api', () => ({
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', lines: 120 },
-  { id: 'Marlow', name: 'Marlow', role: 'Empath', color: 'peach', lines: 60 },
-  { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10 },
+  { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach', lines: 60 },
+  { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10 },
 ];
 
 const sentences: Sentence[] = [];
@@ -151,7 +151,7 @@ const library: Voice[] = [
     source: 'current',
   }),
   makeVoice({
-    id: 'Marlow',
+    id: 'marlow',
     character: 'Marlow',
     bookId: 'b2',
     bookTitle: 'Book Two',
@@ -159,7 +159,7 @@ const library: Voice[] = [
     ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
   }),
   makeVoice({
-    id: 'Oduvan',
+    id: 'oduvan',
     character: 'Oduvan',
     bookId: 'b1',
     bookTitle: 'Book One',
@@ -288,7 +288,7 @@ describe('LibraryView character-card click', () => {
     expect(card).not.toBeNull();
     fireEvent.click(card);
     expect(onOpenCharacter).toHaveBeenCalledTimes(1);
-    expect(onOpenCharacter.mock.calls[0][0].id).toBe('Marlow');
+    expect(onOpenCharacter.mock.calls[0][0].id).toBe('marlow');
     expect(onOpenCharacter.mock.calls[0][0].bookId).toBe('b2');
   });
 
@@ -316,8 +316,8 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       lines: 120,
       voiceId: 'narrator',
     },
-    { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10, voiceId: 'Oduvan' },
-    { id: 'Garrow', name: 'Garrow', role: 'Guard', color: 'peach', lines: 30, voiceId: 'Garrow' },
+    { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', lines: 10, voiceId: 'oduvan' },
+    { id: 'garrow', name: 'Garrow', role: 'Guard', color: 'peach', lines: 30, voiceId: 'garrow' },
   ];
 
   const libraryB1: Voice[] = [
@@ -329,7 +329,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       source: 'current',
     }),
     makeVoice({
-      id: 'Garrow',
+      id: 'garrow',
       character: 'Garrow',
       bookId: 'b1',
       bookTitle: 'Book One',
@@ -337,7 +337,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
     }),
     makeVoice({
-      id: 'Oduvan',
+      id: 'oduvan',
       character: 'Oduvan',
       bookId: 'b1',
       bookTitle: 'Book One',
@@ -345,7 +345,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       ttsVoice: { provider: 'gemini', name: 'Kore', description: 'Firm' },
     }),
     makeVoice({
-      id: 'Marlow',
+      id: 'marlow',
       character: 'Marlow',
       bookId: 'b2',
       bookTitle: 'Book Two',
@@ -508,7 +508,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       },
       cast: {
         characters: [
-          { id: 'Marlow', name: 'Marlow', role: 'Empath', color: 'peach', voiceId: 'Marlow' },
+          { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach', voiceId: 'marlow' },
         ],
       },
       manuscript: null,
@@ -853,15 +853,15 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
      can also assert the cross-book guard. */
   const charactersB1: Character[] = [
     { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator', voiceId: 'narrator' },
-    { id: 'Wren', name: 'Wren', role: 'Lead', color: 'peach', voiceId: 'Wren' },
+    { id: 'wren', name: 'Wren', role: 'Lead', color: 'peach', voiceId: 'wren' },
     {
-      id: 'Wren-foster',
+      id: 'wren-sparrow',
       name: 'Wren Sparrow',
       role: 'Lead',
       color: 'peach',
-      voiceId: 'Wren-foster',
+      voiceId: 'wren-sparrow',
     },
-    { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', voiceId: 'Oduvan' },
+    { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta', voiceId: 'oduvan' },
   ];
 
   const libraryB1: Voice[] = [
@@ -873,7 +873,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       source: 'current',
     }),
     makeVoice({
-      id: 'Wren',
+      id: 'wren',
       character: 'Wren',
       bookId: 'b1',
       bookTitle: 'Book One',
@@ -881,7 +881,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
     }),
     makeVoice({
-      id: 'Wren-foster',
+      id: 'wren-sparrow',
       character: 'Wren Sparrow',
       bookId: 'b1',
       bookTitle: 'Book One',
@@ -889,7 +889,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       ttsVoice: { provider: 'gemini', name: 'Charon', description: 'Informative' },
     }),
     makeVoice({
-      id: 'Oduvan',
+      id: 'oduvan',
       character: 'Oduvan',
       bookId: 'b1',
       bookTitle: 'Book One',
@@ -903,7 +903,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
      "Wren" text matches would defeat plain getByText lookups in
      every other test. */
   const WrenFromBookTwo: Voice = makeVoice({
-    id: 'Wren-b2',
+    id: 'wren-b2',
     character: 'Wren',
     bookId: 'b2',
     bookTitle: 'Book Two',
@@ -955,7 +955,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
   });
 
   it('hides the Merge button for 2 same-voice DIFFERENT-book duplicates (cross-book guard)', async () => {
-    /* "Wren" lives in both b1 (id=Wren) and b2 (id=Wren-b2). Pick
+    /* "Wren" lives in both b1 (id=wren) and b2 (id=wren-b2). Pick
        the two same-name cards in different books — Compare stays
        enabled because plan-96 allows cross-book pairs, but Merge must
        be hidden because the server has no transport for it. */
@@ -976,7 +976,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
         updatedAt: new Date().toISOString(),
       },
       cast: {
-        characters: [{ id: 'Wren-b2', name: 'Wren', role: 'Lead', color: 'peach' }],
+        characters: [{ id: 'wren-b2', name: 'Wren', role: 'Lead', color: 'peach' }],
       },
       manuscript: null,
       manuscriptEdits: null,
@@ -1016,7 +1016,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     /* Narrator + Wren are both b1, but Charon ≠ Charon for narrator
        in our test fixture (narrator carries the default ttsVoice in
        makeVoice — Charon). Force the same-base check by re-selecting
-       Wren-foster + narrator: same provider, both Charon — but
+       wren-sparrow + narrator: same provider, both Charon — but
        narrator is a forbidden id. */
     renderMerge();
     selectCard('Narrator');
@@ -1033,13 +1033,13 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
       characters: [
         { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
         {
-          id: 'Wren-foster',
+          id: 'wren-sparrow',
           name: 'Wren Sparrow',
           role: 'Lead',
           color: 'peach',
           aliases: ['Wren'],
         },
-        { id: 'Oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta' },
+        { id: 'oduvan', name: 'Oduvan', role: 'Healer', color: 'magenta' },
       ],
     });
     renderMerge();
@@ -1053,8 +1053,8 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     expect(mergeCharactersMock).toHaveBeenCalledTimes(1);
     expect(mergeCharactersMock).toHaveBeenCalledWith({
       bookId: 'b1',
-      sourceId: 'Wren',
-      targetId: 'Wren-foster',
+      sourceId: 'wren',
+      targetId: 'wren-sparrow',
     });
     /* Pill collapses on success — Selected label is gone. */
     expect(screen.queryByText(/^Selected$/)).toBeNull();
@@ -1681,8 +1681,8 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
       bookId: 'b1',
       bookTitle: 'Book One',
       source: 'current',
-      overrideTtsVoices: { qwen: { name: 'qwen-Marlow' } },
-      ttsVoice: { provider: 'qwen', name: 'qwen-Marlow', description: 'Designed voice' },
+      overrideTtsVoices: { qwen: { name: 'qwen-marlow' } },
+      ttsVoice: { provider: 'qwen', name: 'qwen-marlow', description: 'Designed voice' },
     }),
     makeVoice({
       id: 'q_sampled',
@@ -1700,9 +1700,9 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
       bookId: 'b2',
       bookTitle: 'Book Two',
       source: 'library',
-      overrideTtsVoices: { qwen: { name: 'qwen-Oduvan' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-oduvan' } },
       generated: true,
-      ttsVoice: { provider: 'qwen', name: 'qwen-Oduvan', description: 'Designed voice' },
+      ttsVoice: { provider: 'qwen', name: 'qwen-oduvan', description: 'Designed voice' },
     }),
   ];
 

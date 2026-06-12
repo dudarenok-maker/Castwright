@@ -24,7 +24,7 @@ function makeStore() {
       manuscript: {
         ...manuscriptSlice.getInitialState(),
         sentences: [
-          { id: 1, chapterId: 1, characterId: 'Wren', text: 'Get down!' } as never,
+          { id: 1, chapterId: 1, characterId: 'wren', text: 'Get down!' } as never,
         ],
       },
       ui: {

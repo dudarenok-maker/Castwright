@@ -139,13 +139,13 @@ beforeEach(() => {
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
-  { id: 'Marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
+  { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
 ];
 
 const sentences: Sentence[] = [
   { id: 1, chapterId: 1, characterId: 'narrator', text: 'A long room.' }, // 3 words
-  { id: 2, chapterId: 1, characterId: 'Marlow', text: 'Hello there friend!' }, // 3 words
-  { id: 3, chapterId: 1, characterId: 'Marlow', text: 'How are you today on this fine evening?' }, // 8 words
+  { id: 2, chapterId: 1, characterId: 'marlow', text: 'Hello there friend!' }, // 3 words
+  { id: 3, chapterId: 1, characterId: 'marlow', text: 'How are you today on this fine evening?' }, // 8 words
   { id: 4, chapterId: 2, characterId: 'narrator', text: 'Elsewhere entirely.' }, // 2 words
 ];
 
@@ -155,7 +155,7 @@ const chapter1: Chapter = {
   duration: '00:49',
   state: 'done',
   progress: 1,
-  characters: { narrator: 'done', Marlow: 'done' },
+  characters: { narrator: 'done', marlow: 'done' },
 };
 const chapter2: Chapter = {
   id: 2,
@@ -163,7 +163,7 @@ const chapter2: Chapter = {
   duration: '00:00',
   state: 'queued',
   progress: 0,
-  characters: { narrator: 'queued', Marlow: 'queued' },
+  characters: { narrator: 'queued', marlow: 'queued' },
 };
 
 function makeStore() {
@@ -223,7 +223,7 @@ describe('GenerationView — chapter & character metadata (regression for screen
 
   it('shows manuscript-derived word/line/speaker counts under each chapter title', () => {
     renderView();
-    /* Chapter 1: 1 narrator sentence (3 words) + 2 Marlow sentences (3 + 8 = 11 words)
+    /* Chapter 1: 1 narrator sentence (3 words) + 2 marlow sentences (3 + 8 = 11 words)
        → 14 words, 3 lines, 2 speakers */
     expect(screen.getByText(/14 words · 3 lines · 2 speakers/)).toBeInTheDocument();
     /* Chapter 2: 1 narrator sentence (2 words) → 2 words, 1 line, 1 speaker */
@@ -235,7 +235,7 @@ describe('GenerationView — chapter & character metadata (regression for screen
     /* The chapter row toggle is the first button containing "CH 01". */
     fireEvent.click(screen.getByText('Chapter 1'));
     expect(screen.getByText(/1 line · 3 words/)).toBeInTheDocument(); // narrator in ch 1
-    expect(screen.getByText(/2 lines · 11 words/)).toBeInTheDocument(); // Marlow in ch 1
+    expect(screen.getByText(/2 lines · 11 words/)).toBeInTheDocument(); // marlow in ch 1
   });
 
   it('reports overall progress including Done chapters with no totalLines (the 4 % bug)', () => {
@@ -482,7 +482,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
       progress: 0.01,
       currentLine: 0,
       totalLines: 200,
-      characters: { narrator: 'in_progress', Marlow: 'queued' },
+      characters: { narrator: 'in_progress', marlow: 'queued' },
     };
     const store = configureStore({
       reducer: {
@@ -542,24 +542,24 @@ describe('GenerationView — per-character progress is derived from the manuscri
 
   const cast: Character[] = [
     { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
-    { id: 'Marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
+    { id: 'marlow', name: 'Marlow', role: 'Empath', color: 'peach' },
     { id: 'ro', name: 'Ro', role: 'Goblin', color: 'magenta' },
-    { id: 'Oduvan', name: 'Oduvan', role: 'Physician', color: 'violet' },
+    { id: 'oduvan', name: 'Oduvan', role: 'Physician', color: 'violet' },
   ];
 
   /* Day-One-shaped chapter: narrator dominates, the other three each speak
      once before line 13 AND have lines still to come after it — so at
-     currentLine=13 Marlow/ro/Oduvan should each show fractional progress,
+     currentLine=13 marlow/ro/oduvan should each show fractional progress,
      not "Done". Pre-fix the slice would have marked all three "done" the
      moment the next speaker took over. */
   const dayOne: Sentence[] = [
     { id: 1, chapterId: 2, characterId: 'narrator', text: 'open' },
     { id: 2, chapterId: 2, characterId: 'narrator', text: 'b' },
-    { id: 3, chapterId: 2, characterId: 'Marlow', text: 'k1' },
+    { id: 3, chapterId: 2, characterId: 'marlow', text: 'k1' },
     { id: 4, chapterId: 2, characterId: 'narrator', text: 'c' },
     { id: 5, chapterId: 2, characterId: 'ro', text: 'r1' },
     { id: 6, chapterId: 2, characterId: 'narrator', text: 'd' },
-    { id: 7, chapterId: 2, characterId: 'Oduvan', text: 'e1' },
+    { id: 7, chapterId: 2, characterId: 'oduvan', text: 'e1' },
     { id: 8, chapterId: 2, characterId: 'narrator', text: 'e' },
     { id: 9, chapterId: 2, characterId: 'narrator', text: 'f' },
     { id: 10, chapterId: 2, characterId: 'narrator', text: 'g' },
@@ -568,12 +568,12 @@ describe('GenerationView — per-character progress is derived from the manuscri
     { id: 13, chapterId: 2, characterId: 'narrator', text: 'j (current)' },
     /* Each non-narrator has at least one line still ahead of line 13 so
        they appear as partial progress, not "Done". */
-    { id: 14, chapterId: 2, characterId: 'Marlow', text: 'k2' },
-    { id: 15, chapterId: 2, characterId: 'Oduvan', text: 'e2' },
+    { id: 14, chapterId: 2, characterId: 'marlow', text: 'k2' },
+    { id: 15, chapterId: 2, characterId: 'oduvan', text: 'e2' },
     { id: 16, chapterId: 2, characterId: 'ro', text: 'r2' },
-    { id: 17, chapterId: 2, characterId: 'Marlow', text: 'k3' },
-    { id: 18, chapterId: 2, characterId: 'Oduvan', text: 'e3' },
-    { id: 19, chapterId: 2, characterId: 'Oduvan', text: 'e4' },
+    { id: 17, chapterId: 2, characterId: 'marlow', text: 'k3' },
+    { id: 18, chapterId: 2, characterId: 'oduvan', text: 'e3' },
+    { id: 19, chapterId: 2, characterId: 'oduvan', text: 'e4' },
     { id: 20, chapterId: 2, characterId: 'narrator', text: 'closer' },
   ];
 
@@ -591,9 +591,9 @@ describe('GenerationView — per-character progress is derived from the manuscri
          back at 'queued'. Pre-fix they'd all have been 'done' here. */
       characters: characterStatuses ?? {
         narrator: 'in_progress',
-        Marlow: 'queued',
+        marlow: 'queued',
         ro: 'queued',
-        Oduvan: 'queued',
+        oduvan: 'queued',
       },
     };
     const store = configureStore({
@@ -659,9 +659,9 @@ describe('GenerationView — per-character progress is derived from the manuscri
     /* Regenerate-of-a-rendered-chapter case: a hydrate re-seeded every cast
        member as 'done' from the on-disk audio, and applyGenerationTick has so
        far only un-done'd the live narrator. The rows must still derive from
-       currentLine=13 + positions, not the stale 'done' — Marlow/ro/Oduvan show
+       currentLine=13 + positions, not the stale 'done' — marlow/ro/oduvan show
        fractional progress, never a full-green "Done". */
-    renderScenario({ narrator: 'in_progress', Marlow: 'done', ro: 'done', Oduvan: 'done' });
+    renderScenario({ narrator: 'in_progress', marlow: 'done', ro: 'done', oduvan: 'done' });
     fireEvent.click(screen.getByText('DAY ONE'));
     expect(screen.getByText('1/3 done')).toBeInTheDocument();
     expect(screen.getByText('1/2 done')).toBeInTheDocument();
@@ -689,7 +689,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
       progress: 0.5,
       currentLine: 50,
       totalLines: 100,
-      characters: { narrator: 'in_progress', Marlow: 'queued' },
+      characters: { narrator: 'in_progress', marlow: 'queued' },
     };
     const store = configureStore({
       reducer: {
@@ -821,7 +821,7 @@ describe('GenerationView — header action once the run is complete', () => {
       state: 'done',
       progress: 1,
       duration: '00:42',
-      characters: { narrator: 'done', Marlow: 'done' },
+      characters: { narrator: 'done', marlow: 'done' },
     };
     const store = configureStore({
       reducer: {
@@ -1268,7 +1268,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
      Generate view diffs it against the LIVE manuscript instead of using the
      time-based change-log heuristic — precise (a reassign-then-undo reads
      not-stale) and immediate. Chapter 1's fixture sentences are
-     {1:narrator, 2:Marlow, 3:Marlow}. */
+     {1:narrator, 2:marlow, 3:marlow}. */
   function renderWithRenderMap(
     renderedSpeakersByChapter: Record<number, Record<number, string>>,
   ): void {
@@ -1324,15 +1324,15 @@ describe('GenerationView — precise reassignment staleness via render map (#650
   }
 
   it('shows the caption when the live mapping differs from the render map', () => {
-    /* Render had sentence 2 on narrator; the manuscript now has it on Marlow. */
-    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'narrator', 3: 'Marlow' } });
+    /* Render had sentence 2 on narrator; the manuscript now has it on marlow. */
+    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'narrator', 3: 'marlow' } });
     expect(screen.getByText(/Sentences reassigned · regenerate to refresh/i)).toBeInTheDocument();
   });
 
   it('does NOT show the caption when the live mapping matches the render map (no false positive)', () => {
     /* Identical to the fixture sentences → not stale, even if the time-based
        heuristic would have flagged it. */
-    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'Marlow', 3: 'Marlow' } });
+    renderWithRenderMap({ 1: { 1: 'narrator', 2: 'marlow', 3: 'marlow' } });
     expect(screen.queryByText(/Sentences reassigned/i)).toBeNull();
   });
 });
@@ -1561,7 +1561,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     phaseTimings: [],
     characters: [
       ...characters,
-      { id: 'Wren', name: 'Wren', role: 'Protagonist', color: 'magenta' as const },
+      { id: 'wren', name: 'Wren', role: 'Protagonist', color: 'magenta' as const },
     ],
     chapters: [
       { ...chapter1, characters: {} },
@@ -1570,7 +1570,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     ],
     sentences: [
       { id: 50, chapterId: 3, characterId: 'narrator', text: 'Chapter three begins.' },
-      { id: 51, chapterId: 3, characterId: 'Wren', text: 'I have something to say.' },
+      { id: 51, chapterId: 3, characterId: 'wren', text: 'I have something to say.' },
     ],
     libraryMatches: [],
   };
@@ -1697,13 +1697,13 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     /* Manuscript merge — pre-fix this stayed as the original 4 sentences. */
     const ch3Sentences = state.manuscript.sentences.filter((s) => s.chapterId === 3);
     expect(ch3Sentences).toHaveLength(2);
-    expect(ch3Sentences.map((s) => s.characterId).sort()).toEqual(['narrator', 'Wren']);
-    /* Cast merge — Wren is a newly-detected character. */
-    expect(state.cast.characters.some((c) => c.id === 'Wren')).toBe(true);
+    expect(ch3Sentences.map((s) => s.characterId).sort()).toEqual(['narrator', 'wren']);
+    /* Cast merge — wren is a newly-detected character. */
+    expect(state.cast.characters.some((c) => c.id === 'wren')).toBe(true);
     /* Chapter characters map populated for ch3 — the row will render
-       Wren + narrator as queued speakers on the next paint. */
+       wren + narrator as queued speakers on the next paint. */
     const ch3 = state.chapters.chapters.find((c) => c.id === 3);
-    expect(ch3?.characters).toMatchObject({ narrator: 'queued', Wren: 'queued' });
+    expect(ch3?.characters).toMatchObject({ narrator: 'queued', wren: 'queued' });
   });
 
   it('moves the subset bar off the floor on a heartbeat + shows live elapsed/throughput', async () => {
@@ -2267,7 +2267,7 @@ describe('GenerationView — fe-29 More-help deep-link', () => {
       duration: '00:00',
       state: 'failed',
       progress: 0,
-      characters: { narrator: 'failed', Marlow: 'failed' },
+      characters: { narrator: 'failed', marlow: 'failed' },
       errorReason: 'Synthesis failed: VRAM exhausted.',
       ...overrides,
     };

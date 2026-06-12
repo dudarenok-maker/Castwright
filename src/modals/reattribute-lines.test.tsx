@@ -51,11 +51,11 @@ const seededChapters: Chapter[] = [
 ];
 
 const seededSentences: Sentence[] = [
-  { id: 1, chapterId: 1, characterId: 'Saltgrave-figure', text: 'The shopkeeper laughed.' },
-  { id: 2, chapterId: 1, characterId: 'Saltgrave-figure', text: '"Garrow said that?"' },
-  { id: 5, chapterId: 4, characterId: 'Saltgrave-figure', text: 'Chapter four candidate line.' },
+  { id: 1, chapterId: 1, characterId: 'saltgrave-figure', text: 'The shopkeeper laughed.' },
+  { id: 2, chapterId: 1, characterId: 'saltgrave-figure', text: '"Garrow said that?"' },
+  { id: 5, chapterId: 4, characterId: 'saltgrave-figure', text: 'Chapter four candidate line.' },
   /* Out-of-scope sentence (different character) — must not appear in the modal. */
-  { id: 6, chapterId: 1, characterId: 'Wren', text: 'Wren line that is not a candidate.' },
+  { id: 6, chapterId: 1, characterId: 'wren', text: 'Wren line that is not a candidate.' },
 ];
 
 function renderModal(opts: {
@@ -73,9 +73,9 @@ function renderModal(opts: {
     ...render(
       <Provider store={store}>
         <ReattributeLinesModal
-          sourceCharacterId="Saltgrave-figure"
+          sourceCharacterId="saltgrave-figure"
           sourceCharacterName="Saltgrave Figure"
-          newCharacterId="Garrow"
+          newCharacterId="garrow"
           aliasName="Garrow"
           impactedChapters={impactedChapters}
           onClose={onClose}
@@ -109,7 +109,7 @@ describe('ReattributeLinesModal', () => {
     const reassigned = store
       .getState()
       .manuscript.sentences.find((s) => s.chapterId === 1 && s.id === 1)!;
-    expect(reassigned.characterId).toBe('Garrow');
+    expect(reassigned.characterId).toBe('garrow');
   });
 
   it('logs a boundary_move so the chapter is flagged stale (Bug 2 staleness precondition)', () => {
@@ -130,7 +130,7 @@ describe('ReattributeLinesModal', () => {
     const reverted = store
       .getState()
       .manuscript.sentences.find((s) => s.chapterId === 1 && s.id === 1)!;
-    expect(reverted.characterId).toBe('Saltgrave-figure');
+    expect(reverted.characterId).toBe('saltgrave-figure');
   });
 
   it('reflects aria-pressed state so screen readers know which chip is active', () => {
@@ -160,7 +160,7 @@ describe('ReattributeLinesModal', () => {
     expect(
       store.getState().manuscript.sentences.find((s) => s.chapterId === 1 && s.id === 1)!
         .characterId,
-    ).toBe('Garrow');
+    ).toBe('garrow');
   });
 
   it('Done button fires onClose', () => {

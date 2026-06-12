@@ -10,11 +10,11 @@ import {
 import type { VoiceSampleArgs } from './api';
 
 const sampleArgs: VoiceSampleArgs = {
-  voiceId: 'char-Brann',
+  voiceId: 'char-brann',
   /* Voice is opaque to the helper — it forwards as-is to the server. The
      fixture only needs the fields the type system requires. */
   voice: {
-    id: 'char-Brann',
+    id: 'char-brann',
     character: 'Brann',
     bookTitle: '',
     bookId: '',

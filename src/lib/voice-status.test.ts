@@ -332,21 +332,21 @@ describe('fs-34 — usedEmotionsByCharacter + countMissingVariants', () => {
 
   it('indexes the distinct non-neutral emotions each character uses', () => {
     const map = usedEmotionsByCharacter([
-      sentence('Wren', 'angry'),
-      sentence('Wren', 'angry'),
-      sentence('Wren', 'whisper'),
-      sentence('Wren', 'neutral'),
-      sentence('Marlow'),
-      sentence('Marlow', 'excited'),
+      sentence('wren', 'angry'),
+      sentence('wren', 'angry'),
+      sentence('wren', 'whisper'),
+      sentence('wren', 'neutral'),
+      sentence('marlow'),
+      sentence('marlow', 'excited'),
     ]);
-    expect([...(map.get('Wren') ?? [])].sort()).toEqual(['angry', 'whisper']);
-    expect([...(map.get('Marlow') ?? [])]).toEqual(['excited']);
+    expect([...(map.get('wren') ?? [])].sort()).toEqual(['angry', 'whisper']);
+    expect([...(map.get('marlow') ?? [])]).toEqual(['excited']);
   });
 
   it('counts used emotions that lack a designed variant', () => {
     const c = char({
-      id: 'Wren',
-      overrideTtsVoices: { qwen: { name: 'qwen-Wren', variants: { angry: { name: 'x' } } } },
+      id: 'wren',
+      overrideTtsVoices: { qwen: { name: 'qwen-wren', variants: { angry: { name: 'x' } } } },
     });
     const used = new Set(['angry', 'whisper', 'sad']);
     // angry is designed; whisper + sad are missing.
@@ -354,11 +354,11 @@ describe('fs-34 — usedEmotionsByCharacter + countMissingVariants', () => {
   });
 
   it('returns 0 when the character uses no emotions or all are designed', () => {
-    const c = char({ id: 'Wren' });
+    const c = char({ id: 'wren' });
     expect(countMissingVariants(c, undefined)).toBe(0);
     expect(countMissingVariants(c, new Set())).toBe(0);
     const allDesigned = char({
-      id: 'Wren',
+      id: 'wren',
       overrideTtsVoices: { qwen: { name: 'q', variants: { angry: { name: 'a' } } } },
     });
     expect(countMissingVariants(allDesigned, new Set(['angry']))).toBe(0);

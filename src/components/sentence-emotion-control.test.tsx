@@ -45,7 +45,7 @@ beforeEach(() => {
 
 describe('fs-25 — SentenceEmotionControl', () => {
   it('renders a discoverable trigger and dispatches a chosen emotion to the store', () => {
-    const store = makeStore([{ id: 2, chapterId: 1, characterId: 'Wren', text: 'Stop.' }]);
+    const store = makeStore([{ id: 2, chapterId: 1, characterId: 'wren', text: 'Stop.' }]);
     render(
       <Provider store={store}>
         <SentenceEmotionControl chapterId={1} sentenceId={2} />
@@ -58,7 +58,7 @@ describe('fs-25 — SentenceEmotionControl', () => {
 
   it('shows the current emotion and clears it via Neutral', () => {
     const store = makeStore([
-      { id: 2, chapterId: 1, characterId: 'Wren', text: 'Stop.', emotion: 'angry' },
+      { id: 2, chapterId: 1, characterId: 'wren', text: 'Stop.', emotion: 'angry' },
     ]);
     render(
       <Provider store={store}>

@@ -540,7 +540,7 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
           bookId: 'book-A',
           chapterId: 1,
           status: 'awaiting_confirm',
-          fallbackCharacters: [{ id: 'Wren', name: 'Wren' }],
+          fallbackCharacters: [{ id: 'wren', name: 'Wren' }],
         }),
       ]);
       /* Worker closed the stream without completing (idle). */

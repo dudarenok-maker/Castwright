@@ -257,7 +257,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
       chapterId: 3,
       queueEntryId: 'q3',
       fallbackCharacters: [
-        { id: 'Wren', name: 'Wren' },
+        { id: 'wren', name: 'Wren' },
         { id: 'ro', name: 'Ro' },
       ],
     } as unknown as GenerationTick);

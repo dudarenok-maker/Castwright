@@ -1,6 +1,6 @@
 /* Pure filter for the Profile Drawer's "link to a prior series book" picker.
 
-   A recurring character appears once PER prior book (The Tidewatcher's Oath's "Dame Linnet",
+   A recurring character appears once PER prior book (The Tidewatcher’s Oath's "Dame Linnet",
    Exile's "Dame Linnet", Saltgrave's "Councillor Linnet", …). The picker should
    only offer people this book hasn't already pinned to a canonical identity —
    otherwise a user who links one copy still sees the same person listed under

@@ -110,11 +110,11 @@ describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regre
        "Day One" chapter from the screenshot enough to pin the bug. */
     { id: 1, chapterId: 2, characterId: 'narrator', text: 'opening line' },
     { id: 2, chapterId: 2, characterId: 'narrator', text: 'narrator continues' },
-    { id: 3, chapterId: 2, characterId: 'Marlow', text: 'Marlow one' },
+    { id: 3, chapterId: 2, characterId: 'marlow', text: 'marlow one' },
     { id: 4, chapterId: 2, characterId: 'narrator', text: 'narrator three' },
     { id: 5, chapterId: 2, characterId: 'ro', text: 'ro one' },
     { id: 6, chapterId: 2, characterId: 'narrator', text: 'narrator four' },
-    { id: 7, chapterId: 2, characterId: 'Oduvan', text: 'Oduvan one' },
+    { id: 7, chapterId: 2, characterId: 'oduvan', text: 'oduvan one' },
     { id: 8, chapterId: 2, characterId: 'narrator', text: 'narrator five' },
     { id: 9, chapterId: 2, characterId: 'narrator', text: 'narrator six' },
     { id: 10, chapterId: 2, characterId: 'narrator', text: 'narrator seven' },
@@ -127,34 +127,34 @@ describe('characterLinePositionsByChapter + linesDoneAt — the false-Done regre
   it('groups 1-indexed line positions per character per chapter in narrative order', () => {
     const out = characterLinePositionsByChapter(screenshotChapter);
     expect(out[2].narrator).toEqual([1, 2, 4, 6, 8, 9, 10, 11, 12, 13, 14]);
-    expect(out[2].Marlow).toEqual([3]);
+    expect(out[2].marlow).toEqual([3]);
     expect(out[2].ro).toEqual([5]);
-    expect(out[2].Oduvan).toEqual([7]);
+    expect(out[2].oduvan).toEqual([7]);
   });
 
   it('counts lines ≤ currentLine for each character (no false "Done")', () => {
     const positions = characterLinePositionsByChapter(screenshotChapter)[2];
     /* At currentLine=13 (the screenshot moment): narrator has 10 of 11
-       lines done, Marlow/ro/Oduvan have each spoken once, none of them are
-       finished. Pre-fix the slice would have marked Marlow/ro/Oduvan as
+       lines done, marlow/ro/oduvan have each spoken once, none of them are
+       finished. Pre-fix the slice would have marked marlow/ro/oduvan as
        "done" with a full green bar at this moment. */
     expect(linesDoneAt(positions.narrator, 13)).toBe(10);
-    expect(linesDoneAt(positions.Marlow, 13)).toBe(1);
+    expect(linesDoneAt(positions.marlow, 13)).toBe(1);
     expect(linesDoneAt(positions.ro, 13)).toBe(1);
-    expect(linesDoneAt(positions.Oduvan, 13)).toBe(1);
+    expect(linesDoneAt(positions.oduvan, 13)).toBe(1);
   });
 
   it('returns 0 when currentLine is 0 or negative (start-of-run / post-regenerate)', () => {
     const positions = characterLinePositionsByChapter(screenshotChapter)[2];
     expect(linesDoneAt(positions.narrator, 0)).toBe(0);
-    expect(linesDoneAt(positions.Marlow, 0)).toBe(0);
+    expect(linesDoneAt(positions.marlow, 0)).toBe(0);
     expect(linesDoneAt(positions.narrator, -1)).toBe(0);
   });
 
   it('returns positions.length once currentLine reaches the chapter end (chapter_complete)', () => {
     const positions = characterLinePositionsByChapter(screenshotChapter)[2];
     expect(linesDoneAt(positions.narrator, 14)).toBe(11);
-    expect(linesDoneAt(positions.Marlow, 14)).toBe(1);
+    expect(linesDoneAt(positions.marlow, 14)).toBe(1);
   });
 
   it('returns 0 for an unknown character (no positions)', () => {
@@ -333,23 +333,23 @@ describe('fs-13 — exact per-character progress from the completed-id set', () 
      real intersection regardless of completion order. */
   const sentences: Sentence[] = [
     { id: 1, chapterId: 2, characterId: 'narrator', text: 'a' },
-    { id: 2, chapterId: 2, characterId: 'Marlow', text: 'b' },
+    { id: 2, chapterId: 2, characterId: 'marlow', text: 'b' },
     { id: 3, chapterId: 2, characterId: 'narrator', text: 'c' },
-    { id: 4, chapterId: 2, characterId: 'Wren', text: 'd' },
-    { id: 5, chapterId: 2, characterId: 'Wren', text: 'e' },
+    { id: 4, chapterId: 2, characterId: 'wren', text: 'd' },
+    { id: 5, chapterId: 2, characterId: 'wren', text: 'e' },
   ];
 
   it('maps each character to their sentence ids per chapter in narrative order', () => {
     const out = characterSentenceIdsByChapter(sentences);
     expect(out[2].narrator).toEqual([1, 3]);
-    expect(out[2].Marlow).toEqual([2]);
-    expect(out[2].Wren).toEqual([4, 5]);
+    expect(out[2].marlow).toEqual([2]);
+    expect(out[2].wren).toEqual([4, 5]);
   });
 
   it('reads an EXACT done count for a late-clustered character even when the chapter count is low', () => {
     /* Only one group has completed so far (count = 1, currentLine = 1), but it
-       was Wren's LAST line (id 5). A currentLine/positions approximation
-       would credit Wren 0 (her positions 4,5 are both > 1); the set credits
+       was wren's LAST line (id 5). A currentLine/positions approximation
+       would credit wren 0 (her positions 4,5 are both > 1); the set credits
        exactly the one finished sentence. */
     const ids = characterSentenceIdsByChapter(sentences)[2];
     const completedSet = new Set([5]);
@@ -359,7 +359,7 @@ describe('fs-13 — exact per-character progress from the completed-id set', () 
       linesTotal: 2,
       positions: [4, 5],
       currentLine: 1,
-      sentenceIds: ids.Wren,
+      sentenceIds: ids.wren,
       completedSet,
     });
     expect(r.derivedDone).toBe(1);
@@ -368,8 +368,8 @@ describe('fs-13 — exact per-character progress from the completed-id set', () 
   });
 
   it('does not over-count a character whose lines have NOT finished even when the chapter count is high', () => {
-    /* count is high (3 groups done) but none of them were Marlow's line (id 2).
-       The approximation would credit Marlow 1 (position 2 ≤ currentLine 3); the
+    /* count is high (3 groups done) but none of them were marlow's line (id 2).
+       The approximation would credit marlow 1 (position 2 ≤ currentLine 3); the
        set correctly credits 0. */
     const ids = characterSentenceIdsByChapter(sentences)[2];
     const completedSet = new Set([1, 3, 5]);
@@ -379,7 +379,7 @@ describe('fs-13 — exact per-character progress from the completed-id set', () 
       linesTotal: 1,
       positions: [2],
       currentLine: 3,
-      sentenceIds: ids.Marlow,
+      sentenceIds: ids.marlow,
       completedSet,
     });
     expect(r.derivedDone).toBe(0);
@@ -394,7 +394,7 @@ describe('fs-13 — exact per-character progress from the completed-id set', () 
       linesTotal: 2,
       positions: [4, 5],
       currentLine: 5,
-      sentenceIds: ids.Wren,
+      sentenceIds: ids.wren,
       completedSet: new Set([4, 5]),
     });
     expect(r.derivedDone).toBe(2);
@@ -425,7 +425,7 @@ describe('fs-13 — exact per-character progress from the completed-id set', () 
       linesTotal: 2,
       positions: [4, 5],
       currentLine: 0,
-      sentenceIds: ids.Wren,
+      sentenceIds: ids.wren,
       completedSet: new Set<number>(),
     });
     expect(r).toEqual({ derivedDone: 2, fraction: 1, fullyDone: true });

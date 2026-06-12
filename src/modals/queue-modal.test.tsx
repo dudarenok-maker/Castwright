@@ -296,7 +296,7 @@ describe('QueueModal', () => {
         status: 'awaiting_confirm',
         order: 0,
         fallbackCharacters: [
-          { id: 'Wren', name: 'Wren' },
+          { id: 'wren', name: 'Wren' },
           { id: 'ro', name: 'Ro' },
         ],
       }),

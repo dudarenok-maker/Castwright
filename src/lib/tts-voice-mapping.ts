@@ -350,7 +350,7 @@ export function resolveTtsVoiceForCharacter(
    voice the character's own override is empty and the bespoke voice rides on the
    matched library Voice (itself a qwen voice) — so fall back to it, otherwise the
    row reads "No voice designed yet" despite a real designed voice existing on the
-   matched Voice (e.g. Lord Vane → qwen-lord-Vane). Only the empty-name stub
+   matched Voice (e.g. Lord Vane → qwen-lord-vane). Only the empty-name stub
    remains when nothing resolves. */
 export function resolveDisplayTtsVoice(
   c: Character,

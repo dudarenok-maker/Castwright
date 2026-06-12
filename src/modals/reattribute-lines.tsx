@@ -25,7 +25,7 @@ interface Props {
   sourceCharacterId: string;
   sourceCharacterName: string;
   /** The freshly-minted standalone character ID for the un-linked alias
-      (e.g. "Garrow"). The quick-set chip on each sentence reassigns the
+      (e.g. "garrow"). The quick-set chip on each sentence reassigns the
       line to this id. */
   newCharacterId: string;
   /** Display name of the un-linked alias, used in the modal header and

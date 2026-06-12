@@ -35,8 +35,8 @@ function makeStore(opts: { activeStream: AnalysisStreamSnapshot | null; books?: 
 }
 
 const liveLocalSnapshot: AnalysisStreamSnapshot = {
-  bookId: 'b_Marlow',
-  manuscriptId: 'm_Marlow',
+  bookId: 'b_marlow',
+  manuscriptId: 'm_marlow',
   bookTitle: 'the Coalfall Commission',
   engine: 'local',
   phaseId: 0,
@@ -150,8 +150,8 @@ describe('useReverseLocalAnalyzerGuard', () => {
       activeStream: snapshotWithoutTitle,
       books: [
         {
-          bookId: 'b_Marlow',
-          manuscriptId: 'm_Marlow',
+          bookId: 'b_marlow',
+          manuscriptId: 'm_marlow',
           title: 'Library Title for Marlow',
           author: 'Della Renwick',
           series: 'The Hollow Tide',
@@ -188,6 +188,6 @@ describe('useReverseLocalAnalyzerGuard', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
-    expect(screen.getByText(/b_Marlow/)).toBeInTheDocument();
+    expect(screen.getByText(/b_marlow/)).toBeInTheDocument();
   });
 });

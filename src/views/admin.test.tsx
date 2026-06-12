@@ -303,8 +303,8 @@ describe('AdminView — fs-20 resource trends panel', () => {
   it('groups rows under a sticky per-book header, splitting on book change', async () => {
     mockTelemetry.mockResolvedValue({
       records: [
-        telemetry({ chapterId: 26, bookId: 'The Drowning Bell', bookTitle: 'The Drowning Bell' }),
-        telemetry({ chapterId: 25, bookId: 'The Drowning Bell', bookTitle: 'The Drowning Bell' }),
+        telemetry({ chapterId: 26, bookId: 'the drowning bell', bookTitle: 'The Drowning Bell' }),
+        telemetry({ chapterId: 25, bookId: 'the drowning bell', bookTitle: 'The Drowning Bell' }),
         telemetry({ chapterId: 4, bookId: 'unlocked', bookTitle: 'Unlocked' }),
       ],
     });

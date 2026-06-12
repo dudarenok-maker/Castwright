@@ -29,8 +29,8 @@ import type { Chapter, Character, Sentence } from '../lib/types';
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
-  { id: 'lord-Vane', name: 'Lord Vane', role: 'character', color: 'magenta' },
-  { id: 'Wren', name: 'Wren', role: 'character', color: 'peach' },
+  { id: 'lord-vane', name: 'Lord Vane', role: 'character', color: 'magenta' },
+  { id: 'wren', name: 'Wren', role: 'character', color: 'peach' },
 ];
 
 const chapter: Chapter = {
@@ -49,12 +49,12 @@ const sentences: Sentence[] = [
   {
     id: 2,
     chapterId: 1,
-    characterId: 'lord-Vane',
+    characterId: 'lord-vane',
     text: 'Low confidence two.',
     confidence: 0.4,
   },
-  { id: 3, chapterId: 1, characterId: 'Wren', text: 'High confidence three.', confidence: 0.9 },
-  { id: 4, chapterId: 1, characterId: 'Wren', text: 'Low confidence four.', confidence: 0.5 },
+  { id: 3, chapterId: 1, characterId: 'wren', text: 'High confidence three.', confidence: 0.9 },
+  { id: 4, chapterId: 1, characterId: 'wren', text: 'Low confidence four.', confidence: 0.5 },
 ];
 
 function makeStore(s: Sentence[]) {

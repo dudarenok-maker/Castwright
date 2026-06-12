@@ -359,14 +359,14 @@ describe('generationStreamMiddleware — halt + preview gate', () => {
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(
       castSlice.actions.setCharacters([
-        { id: 'Marlow', name: 'Marlow', isNarrator: false } as never,
+        { id: 'marlow', name: 'Marlow', isNarrator: false } as never,
       ]),
     );
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'in_progress' })]));
     store.dispatch(
       uiSlice.actions.setPreviewRegen({
-        characterId: 'Marlow',
+        characterId: 'marlow',
         previewChapterId: 3,
         remainingChapterIds: [4, 5],
         reason: 'voice',
@@ -377,7 +377,7 @@ describe('generationStreamMiddleware — halt + preview gate', () => {
        middleware builds the playable stub fresh and opens the diff player. */
     store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
     const pending = store.getState().revisions.pending;
-    expect(pending.some((p) => p.chapterId === 3 && p.characterId === 'Marlow' && p.playable)).toBe(
+    expect(pending.some((p) => p.chapterId === 3 && p.characterId === 'marlow' && p.playable)).toBe(
       true,
     );
     expect(store.getState().ui.showRevisionPlayer).toBe(true);

@@ -40,8 +40,8 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onOpenProfile = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_Marlow', 'Marlow'), makeVoice('v_ro', 'Ro')]}
-        characters={[makeCharacter('Marlow', 'v_Marlow'), makeCharacter('ro', 'v_ro')]}
+        library={[makeVoice('v_marlow', 'Marlow'), makeVoice('v_ro', 'Ro')]}
+        characters={[makeCharacter('marlow', 'v_marlow'), makeCharacter('ro', 'v_ro')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
@@ -49,7 +49,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
       />,
     );
     fireEvent.click(screen.getByText('Marlow').closest('[role="button"]')!);
-    expect(onOpenProfile).toHaveBeenCalledWith('Marlow');
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 
   it('plays a voice sample (not opens the drawer) when the swatch bubble is clicked', () => {
@@ -57,8 +57,8 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onPlaySample = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_Marlow', 'Marlow')]}
-        characters={[makeCharacter('Marlow', 'v_Marlow')]}
+        library={[makeVoice('v_marlow', 'Marlow')]}
+        characters={[makeCharacter('marlow', 'v_marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
@@ -68,8 +68,8 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const card = screen.getByText('Marlow').closest('[role="button"]')!;
     fireEvent.click(within(card as HTMLElement).getAllByRole('button')[0]);
     expect(onPlaySample).toHaveBeenCalledTimes(1);
-    expect(onPlaySample.mock.calls[0][0].id).toBe('Marlow');
-    expect(onPlaySample.mock.calls[0][1].id).toBe('v_Marlow');
+    expect(onPlaySample.mock.calls[0][0].id).toBe('marlow');
+    expect(onPlaySample.mock.calls[0][1].id).toBe('v_marlow');
     /* The swatch click must NOT bubble to the card root and double-fire
        onOpenProfile — the panel's user expectation is "bubble plays,
        card opens" as two distinct actions. */
@@ -116,8 +116,8 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onPlaySample = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('Marlow', 'Marlow')]} /* Voice.id mirrors character.id */
-        characters={[makeCharacter('Marlow', '')]} /* character has no voiceId */
+        library={[makeVoice('marlow', 'Marlow')]} /* Voice.id mirrors character.id */
+        characters={[makeCharacter('marlow', '')]} /* character has no voiceId */
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
@@ -126,9 +126,9 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     );
     const card = screen.getByText('Marlow').closest('[role="button"]')!;
     fireEvent.click(card);
-    expect(onOpenProfile).toHaveBeenCalledWith('Marlow');
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
     fireEvent.click(within(card as HTMLElement).getAllByRole('button')[0]);
-    expect(onPlaySample.mock.calls[0][0].id).toBe('Marlow');
+    expect(onPlaySample.mock.calls[0][0].id).toBe('marlow');
   });
 
   it('prefers an explicit voiceId match over the character.id fallback', () => {
@@ -160,7 +160,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        affordance. */
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_Marlow', 'Marlow')]}
+        library={[makeVoice('v_marlow', 'Marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
       />,
@@ -176,7 +176,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        any voice card becomes interactive (role="button" + Enter/Space)
        and fires the callback with the clicked voice. */
     const onSelect = vi.fn();
-    const voice = makeVoice('v_Marlow', 'Marlow');
+    const voice = makeVoice('v_marlow', 'Marlow');
     render(
       <VoiceCard
         voice={voice}
@@ -189,7 +189,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(card).not.toBeNull();
     fireEvent.click(card);
     expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(onSelect.mock.calls[0][0].id).toBe('v_Marlow');
+    expect(onSelect.mock.calls[0][0].id).toBe('v_marlow');
     /* Keyboard activation must also work — the card advertises role="button"
        so screen-reader users expect Enter/Space to fire the same action. */
     fireEvent.keyDown(card, { key: 'Enter' });
@@ -203,7 +203,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        checkbox surface — otherwise the Cast-view drawer would show a stray
        selection control. The "selectable" mode requires both `selected` AND
        `onToggleSelect`; either alone keeps the legacy DOM. */
-    const voice = makeVoice('v_Marlow', 'Marlow');
+    const voice = makeVoice('v_marlow', 'Marlow');
     const { rerender } = render(
       <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
@@ -239,7 +239,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        `onSelect` (the profile/navigation handler) never fires. */
     const onToggleSelect = vi.fn();
     const onSelect = vi.fn();
-    const voice = makeVoice('v_Marlow', 'Marlow');
+    const voice = makeVoice('v_marlow', 'Marlow');
     render(
       <VoiceCard
         voice={voice}
@@ -252,12 +252,12 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     );
     fireEvent.click(screen.getByLabelText('Select voice for compare'));
     expect(onToggleSelect).toHaveBeenCalledTimes(1);
-    expect(onToggleSelect.mock.calls[0][0].id).toBe('v_Marlow');
+    expect(onToggleSelect.mock.calls[0][0].id).toBe('v_marlow');
     expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('paints the card with bg-peach tint when selected (plan 22a — mirrors cast.tsx:~199)', () => {
-    const voice = makeVoice('v_Marlow', 'Marlow');
+    const voice = makeVoice('v_marlow', 'Marlow');
     const { rerender } = render(
       <VoiceCard
         voice={voice}
@@ -289,7 +289,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        `scrollbar-thin` the system scrollbar bleeds past the curve. */
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_Marlow', 'Marlow')]}
+        library={[makeVoice('v_marlow', 'Marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
       />,
@@ -302,8 +302,8 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
 
 describe('VoiceLibraryPanel — search', () => {
   const lib: Voice[] = [
-    makeVoice('v_Marlow', 'Marlow Halden', { bookTitle: 'The Hollow Tide' }),
-    makeVoice('v_Oduvan', 'Oduvan', { bookTitle: 'The Hollow Tide' }),
+    makeVoice('v_marlow', 'Marlow Halden', { bookTitle: 'The Hollow Tide' }),
+    makeVoice('v_oduvan', 'Oduvan', { bookTitle: 'The Hollow Tide' }),
     makeVoice('v_ro', 'Ro', { bookTitle: 'Flashback' }),
   ];
 
@@ -314,7 +314,7 @@ describe('VoiceLibraryPanel — search', () => {
     expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
     expect(screen.getByText('Oduvan')).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText('Search voices'), {
-      target: { value: 'Marlow' },
+      target: { value: 'marlow' },
     });
     expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
     expect(screen.queryByText('Oduvan')).toBeNull();
@@ -334,10 +334,10 @@ describe('VoiceLibraryPanel — search', () => {
 
   it('applies the tab filter before the query (tab wins first)', () => {
     /* Marlow is "current", Ro is a "library"/series voice. On the Series tab
-       only Ro is eligible, so searching "Marlow" finds nothing even though
+       only Ro is eligible, so searching "marlow" finds nothing even though
        the name matches — the tab filter runs before the query. */
     const mixed: Voice[] = [
-      makeVoice('v_Marlow', 'Marlow Halden', { source: 'current' }),
+      makeVoice('v_marlow', 'Marlow Halden', { source: 'current' }),
       makeVoice('v_ro', 'Ro', {
         source: 'library',
         inCurrentSeries: true,
@@ -352,7 +352,7 @@ describe('VoiceLibraryPanel — search', () => {
     expect(screen.getByText('Ro')).toBeInTheDocument();
     expect(screen.queryByText('Marlow Halden')).toBeNull();
     fireEvent.change(screen.getByPlaceholderText('Search voices'), {
-      target: { value: 'Marlow' },
+      target: { value: 'marlow' },
     });
     expect(screen.getByText(/No voices match/)).toBeInTheDocument();
     expect(screen.queryByText('Marlow Halden')).toBeNull();
@@ -363,7 +363,7 @@ describe('VoiceLibraryPanel — search', () => {
       <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
     const input = screen.getByPlaceholderText('Search voices');
-    fireEvent.change(input, { target: { value: 'Marlow' } });
+    fireEvent.change(input, { target: { value: 'marlow' } });
     expect(screen.queryByText('Oduvan')).toBeNull();
     fireEvent.change(input, { target: { value: '' } });
     expect(screen.getByText('Marlow Halden')).toBeInTheDocument();

@@ -931,13 +931,13 @@ describe('compareCastRows — cast table ordering', () => {
   it('pins unknown-male and unknown-female last regardless of line count', () => {
     const out = [
       mk({ id: 'unknown-male', name: 'Unknown male', lines: 9999 }),
-      mk({ id: 'Wren', name: 'Wren', lines: 10 }),
+      mk({ id: 'wren', name: 'Wren', lines: 10 }),
       mk({ id: 'unknown-female', name: 'Unknown female', lines: 8888 }),
       mk({ id: 'narrator', name: 'Narrator', lines: 5 }),
     ]
       .sort(compareCastRows)
       .map((c) => c.id);
-    expect(out).toEqual(['Wren', 'narrator', 'unknown-male', 'unknown-female']);
+    expect(out).toEqual(['wren', 'narrator', 'unknown-male', 'unknown-female']);
   });
 
   it('orders the two buckets between themselves by line count', () => {
@@ -1360,9 +1360,9 @@ describe('CastView — Design full cast button', () => {
   });
 
   it('opens the scope picker and dispatches a variants-scope design', () => {
-    /* Wren: has a base voice + an in-use emotion missing a variant */
-    const Wren: Character = {
-      id: 'Wren',
+    /* wren: has a base voice + an in-use emotion missing a variant */
+    const wren: Character = {
+      id: 'wren',
       name: 'Wren',
       role: 'Hero',
       color: 'mentor',
@@ -1370,10 +1370,10 @@ describe('CastView — Design full cast button', () => {
       scenes: 5,
       attributes: [],
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'qwen-Wren', variants: {} } },
+      overrideTtsVoices: { qwen: { name: 'qwen-wren', variants: {} } },
     };
     const variantSents: Sentence[] = [
-      { id: 10, chapterId: 1, text: 'No!', characterId: 'Wren', emotion: 'angry' },
+      { id: 10, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
     ];
     const actions2: Array<{ type: string; payload?: unknown }> = [];
     const recorder2 =
@@ -1390,7 +1390,7 @@ describe('CastView — Design full cast button', () => {
     render(
       <Provider store={store2}>
         <CastView
-          characters={[Wren]}
+          characters={[wren]}
           setCharacters={() => {}}
           library={library}
           sentences={variantSents}
@@ -1419,7 +1419,7 @@ describe('CastView — Design full cast button', () => {
     expect(a?.payload.bookId).toBe('b2');
     expect(a?.payload.scope).toBe('variants');
     expect(a?.payload.characterIds).toEqual([]);
-    expect(a?.payload.variantTasks).toEqual([{ characterId: 'Wren', emotions: ['angry'] }]);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'wren', emotions: ['angry'] }]);
   });
 
   it('shows a Cancel control while a run for this book is active', () => {
@@ -1593,8 +1593,8 @@ describe('CastView — variant glyph strip in the Status column', () => {
      text hint.  The strip renders inline below the lifecycle pill; the old
      VariantsBadge count and missing-variants-hint span must not appear. */
 
-  const Wren: Character = {
-    id: 'Wren',
+  const wren: Character = {
+    id: 'wren',
     name: 'Wren',
     role: 'Hero',
     color: 'mentor',
@@ -1603,12 +1603,12 @@ describe('CastView — variant glyph strip in the Status column', () => {
     attributes: [],
     ttsEngine: 'qwen',
     overrideTtsVoices: {
-      qwen: { name: 'qwen-Wren', variants: { angry: { name: 'qwen-Wren-angry' } } },
+      qwen: { name: 'qwen-wren', variants: { angry: { name: 'qwen-wren-angry' } } },
     },
   };
   const WrenSentences: Sentence[] = [
-    { id: 1, chapterId: 1, text: 'No!', characterId: 'Wren', emotion: 'angry' },
-    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'Wren', emotion: 'excited' },
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'wren', emotion: 'excited' },
   ];
 
   function renderGlyphTest() {
@@ -1618,7 +1618,7 @@ describe('CastView — variant glyph strip in the Status column', () => {
     return render(
       <Provider store={store}>
         <CastView
-          characters={[Wren]}
+          characters={[wren]}
           setCharacters={() => {}}
           library={library}
           sentences={WrenSentences}
