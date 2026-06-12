@@ -80,10 +80,10 @@ void main() {
       final controller = makeController();
       handler.attach(controller);
 
-      await controller.openBook('b1', bookTitle: 'Keeper of the Lost Cities');
+      await controller.openBook('b1', bookTitle: 'The Hollow Tide');
       await Future<void>.delayed(Duration.zero);
 
-      expect(handler.mediaItem.value?.album, 'Keeper of the Lost Cities');
+      expect(handler.mediaItem.value?.album, 'The Hollow Tide');
     });
   });
 }

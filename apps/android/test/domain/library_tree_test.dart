@@ -46,12 +46,12 @@ void main() {
 
     test('orders by decimal series position (novella 8.5 between 8 and 9)', () {
       final tree = buildLibraryTree([
-        bk('b1', author: 'SM', series: 'KOTLC', pos: 9, title: 'Stellarlune'),
-        bk('b2', author: 'SM', series: 'KOTLC', pos: 8, title: 'Legacy'),
-        bk('b3', author: 'SM', series: 'KOTLC', pos: 8.5, title: 'Unlocked'),
+        bk('b1', author: 'DR', series: 'the Hollow Tide', pos: 9, title: 'The Drowning Bell'),
+        bk('b2', author: 'DR', series: 'the Hollow Tide', pos: 8, title: 'The Lantern Tide'),
+        bk('b3', author: 'DR', series: 'the Hollow Tide', pos: 8.5, title: 'The Floodmark'),
       ]);
       expect(tree.single.series.single.books.map((b) => b.title),
-          ['Legacy', 'Unlocked', 'Stellarlune']);
+          ['The Lantern Tide', 'The Floodmark', 'The Drowning Bell']);
     });
 
     test('formatSeriesPosition shows decimals only when needed', () {
@@ -90,8 +90,8 @@ void main() {
 
     test('matches series — keeps every book in a matched series', () {
       final series = [
-        bk('b1', author: 'Shannon Messenger', series: 'Keeper of the Lost Cities', title: 'Exile'),
-        bk('b2', author: 'Shannon Messenger', series: 'Keeper of the Lost Cities', title: 'Neverseen'),
+        bk('b1', author: 'Della Renwick', series: 'The Hollow Tide', title: 'The Ebb'),
+        bk('b2', author: 'Della Renwick', series: 'The Hollow Tide', title: 'Saltgrave'),
         bk('b3', author: 'Other', series: 'Different', title: 'Standalone'),
       ];
       final hit = filterBooks(series, 'keeper');

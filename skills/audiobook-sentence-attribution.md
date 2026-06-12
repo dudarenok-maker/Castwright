@@ -125,7 +125,7 @@ Rules:
 ## Attribution heuristics
 
 - Narrative prose (no quotes) → `narrator`.
-- Quoted text inside dialogue → the speaker who's talking. (The dialogue tag itself — `he said`, `Keefe promised` — is a _separate_ entry, see "Splitting".)
+- Quoted text inside dialogue → the speaker who's talking. (The dialogue tag itself — `he said`, `Marlow promised` — is a _separate_ entry, see "Splitting".)
 - Consecutive quoted sentences with no tag → continue the previous speaker.
 - An action beat between two quotes (`"…" He stood. "…"`) → the action beat is its own entry attributed to `narrator`; the second quote continues the previous speaker unless context changes.
 - When a character refers to themself in third person ("Marcus was already moving") it is still narration — that line is `narrator`, not Marcus.
@@ -139,7 +139,7 @@ emit them as SEPARATE entries — never lump them into one entry attributed
 to the speaker.
 
 - Quoted portion → the speaker.
-- Non-quoted portion (dialogue tag like `Keefe promised`, action beat like
+- Non-quoted portion (dialogue tag like `Marlow promised`, action beat like
   `, waving his arms`) → `narrator`.
 
 Each split entry keeps its text verbatim from the source. Concatenating
@@ -148,12 +148,12 @@ whitespace) must reproduce the original sentence with no loss.
 
 **Worked examples.**
 
-Source: `"Look! I'm all better!" Keefe promised, waving his arms.`
+Source: `"Look! I'm all better!" Marlow promised, waving his arms.`
 
 Two entries — the exclamation makes the spoken split `excited`:
 
-- `"Look! I'm all better!"` → `keefe`, `emotion: "excited"`
-- `Keefe promised, waving his arms.` → `narrator`
+- `"Look! I'm all better!"` → `marlow`, `emotion: "excited"`
+- `Marlow promised, waving his arms.` → `narrator`
 
 Source: `"Hard to starboard," he said, "before the rocks."`
 

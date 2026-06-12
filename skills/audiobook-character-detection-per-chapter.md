@@ -71,13 +71,13 @@ one **verbatim utterance** that is theirs — either:
 2. **First-person prose by an identifiable author** — a journal entry,
    medical log, registry filing, letter, diary, transcript, or bio
    page **whose author is named or strongly implied** (header
-   `FILED BY: ELWIN`, signature `—Keefe`, chapter title `Sophie's
+   `FILED BY: ODUVAN`, signature `—Marlow`, chapter title `Wren's
 Registry File`, the surrounding bio block, etc.). The author of
    such text is a character whose `id` is their name, NOT `narrator`.
 
 **Binding rule — an explicit dialogue tag always counts.** If the chapter
 contains a `<Name> <speech-verb>` attribution beat next to a quote — `"…,"
-Prentice repeated.`, `"Fine," Grizel agreed.`, `"Where?" Sophie asked.` —
+Lessom repeated.`, `"Fine," Sela agreed.`, `"Where?" Wren asked.` —
 that Name **MUST** appear on the roster, every time, no exceptions. The tag
 itself is the verbatim evidence; do not weigh whether the character seems
 "important" or count how many lines they have. A character tagged once and a
@@ -92,7 +92,7 @@ Do **NOT** include:
 
 - Pets, animals, or non-speaking creatures (a cat that purrs, a dog that
   barks, a horse that whinnies, a magical creature that scampers).
-  Sounds the narrator describes are not dialogue. Marty the cat, Verdi
+  Sounds the narrator describes are not dialogue. Marty the cat, Rufus
   the pet dinosaur, an imp that hisses — all of these are narrator
   business, not cast.
 - Characters mentioned by name in narration but who never speak in this
@@ -121,13 +121,13 @@ does not give them a verbatim utterance.
 **Include such a character on the roster** when ALL of the following are
 true:
 
-1. They have a **proper noun name** (not a descriptor — "Grizel", not
+1. They have a **proper noun name** (not a descriptor — "Sela", not
    "the bodyguard").
 2. The name appears **at least twice** in this chapter's narration.
 3. The narration carries a **role or relationship marker** identifying
-   them as a recurring scene presence — e.g. "his bodyguard, Grizel",
-   "Grizel volunteered for the position", "Sandor, Sophie's goblin
-   bodyguard, stepped between them", "her mentor, Mr. Forkle".
+   them as a recurring scene presence — e.g. "his bodyguard, Sela",
+   "Sela volunteered for the position", "Garrow, Wren's goblin
+   bodyguard, stepped between them", "her mentor, Mr. Casper".
 4. They do NOT have any quoted dialogue in this chapter (if they do,
    the normal "Direct dialogue" rule applies and you skip this block).
 
@@ -141,14 +141,14 @@ When you include such a character, emit them with:
 
 Worked examples:
 
-- Chapter narration includes "He's now under the protection of Grizel,
-  who volunteered for the position." and later "Grizel and Sandor were
+- Chapter narration includes "He's now under the protection of Sela,
+  who volunteered for the position." and later "Sela and Garrow were
   also injured during this incident." → emit
-  `{ id: "grizel", name: "Grizel", role: "Bodyguard",
+  `{ id: "sela", name: "Sela", role: "Bodyguard",
 detectionSource: "narrator-mention", evidence: [] }`. The narrator
   still covers the narration text; this entry exists so the cast has a
-  voice slot for Grizel that the user can fill later.
-- Chapter narration includes "Mr. Forkle's lessons came back to her at
+  voice slot for Sela that the user can fill later.
+- Chapter narration includes "Mr. Casper's lessons came back to her at
   that moment." once, with no other mentions in the chapter and no
   role marker → DO NOT include (only one mention, no role marker; the
   narrator covers it).
@@ -159,8 +159,8 @@ The default character entry still requires `detectionSource:
 field exists so the downstream minor-cast fold can keep canonical
 bodyguards / mentors / family on the roster even when their attributed
 line count would normally fold them into the unknown-male / unknown-female
-buckets. Without this signal, characters like Grizel and Sandor (Lost
-Cities Neverseen — see
+buckets. Without this signal, characters like Sela and Garrow (Lost
+Cities Saltgrave — see
 `docs/features/archive/97-narrator-only-named-characters.md`) get silently
 erased from the cast at the post-stage-2 fold pass.
 
@@ -184,11 +184,11 @@ When a chapter is one of these formats:
   clearly narrated by an external storyteller, not by a character.
 - The **author** of the document is the character whose voice should
   speak the text. Identify them from the strongest available signal:
-  chapter title (`Sophie's Memory Log — Day 4`), document header
-  (`FILED BY: ELWIN`, `Author: Keefe Sencen`), closing signature
-  (`—Keefe`), surrounding bio block, or running-roster context (if
-  the roster has `keefe` and this chapter is unmistakably Keefe's
-  diary, use `keefe`).
+  chapter title (`Wren's Memory Log — Day 4`), document header
+  (`FILED BY: ODUVAN`, `Author: Marlow Halden`), closing signature
+  (`—Marlow`), surrounding bio block, or running-roster context (if
+  the roster has `marlow` and this chapter is unmistakably Marlow's
+  diary, use `marlow`).
 - The evidence quotes for that character should be excerpts of the
   document's prose — they don't need to be dialogue. Pick a long,
   representative sentence and a short, characterising one.
@@ -203,18 +203,18 @@ When a chapter is one of these formats:
 
 Worked examples:
 
-- **Chapter "Elwin's Medical Log"** opens with `FILED BY: ELWIN ·
-PATIENT: SOPHIE FOSTER` and the body is `I'd just settled into bed
-when Sophie hailed me. I figured she wouldn't want to know that her
+- **Chapter "Oduvan's Medical Log"** opens with `FILED BY: ODUVAN ·
+PATIENT: WREN SPARROW` and the body is `I'd just settled into bed
+when Wren hailed me. I figured she wouldn't want to know that her
 hands were covered in yeti pee.` → roster entry
-  `{ id: "elwin", name: "Elwin", role: "Healer / journal author",
-evidence: [{ quote: "I'd just settled into bed when Sophie hailed
+  `{ id: "oduvan", name: "Oduvan", role: "Healer / journal author",
+evidence: [{ quote: "I'd just settled into bed when Wren hailed
 me." }, { quote: "I figured she wouldn't want to know that her hands
 were covered in yeti pee." }] }`. **Not** narrator.
-- **Chapter "Keefe's Diary — Day Three"** signs off with `—Keefe`. The
-  body is `Foster's still mad at me. I've been working on the perfect
+- **Chapter "Marlow's Diary — Day Three"** signs off with `—Marlow`. The
+  body is `Sparrow's still mad at me. I've been working on the perfect
 apology. It hasn't been going well.` → roster entry
-  `{ id: "keefe", name: "Keefe Sencen", evidence: [...] }`. **Not**
+  `{ id: "marlow", name: "Marlow Halden", evidence: [...] }`. **Not**
   narrator.
 
 ### Reusing known series characters (when the prompt carries a prior)
@@ -236,7 +236,7 @@ still get fresh kebab-case ids.
 - If a character in this chapter is **already in the running roster**,
   reuse the existing `id` **verbatim**. The server matches characters
   across chapters by `id`; a typo or stylistic variation
-  (`sophie-foster` vs `sophie`) creates a duplicate entry.
+  (`wren-sparrow` vs `wren`) creates a duplicate entry.
 - For recurring characters you may still emit fresh `evidence`, refined
   `description`, updated `tone`, etc. — the server merges fields
   intelligently. But the `id` MUST match the roster's entry.
@@ -292,7 +292,7 @@ verbatim. Common mistakes that fail validation:
 - Missing required field (`id`, `name`, `role`, `color`).
 - Trailing commas or comments in the JSON (use strict JSON).
 - Character with an id that drifted from the running roster (e.g.
-  `sophie` in earlier chapters becoming `sophie-foster` here).
+  `wren` in earlier chapters becoming `wren-sparrow` here).
 
 ## Reference
 
