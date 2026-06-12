@@ -718,12 +718,12 @@ export function AnalysingView({
           markEvent();
           dispatch(castActions.mergeCharacters(characters));
         },
-        onChapterFailed: ({ chapterId: failedId, message }) => {
+        onChapterFailed: ({ chapterId: failedId, message, code, remediation }) => {
           markEvent();
           if (failedId === chapterId) retryReFailed = true;
           setFailedChapters((prev) => {
             const filtered = prev.filter((f) => f.chapterId !== failedId);
-            return [...filtered, { chapterId: failedId, message }];
+            return [...filtered, { chapterId: failedId, message, code, remediation }];
           });
         },
         onChapterResolved: ({ chapterId: resolvedId }) => {
