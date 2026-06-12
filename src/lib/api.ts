@@ -5262,6 +5262,27 @@ export async function mockCompleteSetup(): Promise<{ completedAt: string }> {
   return { completedAt: '2026-06-12T00:00:00.000Z' };
 }
 
+export interface SmokeTestResult {
+  ok: boolean;
+  url?: string;
+  durationSec?: number;
+  analyzerOk?: boolean;
+  analyzerDetail?: string;
+  stage?: string;
+  error?: string;
+}
+
+async function realRunSmokeTest(): Promise<SmokeTestResult> {
+  const res = await fetch('/api/setup/smoke', { method: 'POST' });
+  if (!res.ok) throw new Error(`smoke ${res.status}`);
+  return (await res.json()) as SmokeTestResult;
+}
+
+export async function mockRunSmokeTest(): Promise<SmokeTestResult> {
+  await wait(800);
+  return { ok: true, url: stubAudioA, durationSec: 3.2, analyzerOk: true, analyzerDetail: '(mock)' };
+}
+
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
@@ -5978,6 +5999,7 @@ const real = {
   getDiagnostics: realGetDiagnostics,
   getSetupReadiness: realGetSetupReadiness,
   completeSetup: realCompleteSetup,
+  runSmokeTest: realRunSmokeTest,
   getOllamaHealth: realGetOllamaHealth,
   loadSidecar: realLoadSidecar,
   unloadSidecar: realUnloadSidecar,
@@ -6227,6 +6249,7 @@ const mock = {
   getDiagnostics: mockGetDiagnostics,
   getSetupReadiness: mockGetSetupReadiness,
   completeSetup: mockCompleteSetup,
+  runSmokeTest: mockRunSmokeTest,
   getOllamaHealth: mockGetOllamaHealth,
   loadSidecar: mockLoadSidecar,
   unloadSidecar: mockUnloadSidecar,
