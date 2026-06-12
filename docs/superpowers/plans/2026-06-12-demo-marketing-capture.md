@@ -4,7 +4,7 @@
 
 **Goal:** Produce a repeatable, on-brand marketing screenshot set of the Castwright web app posed across its pipeline stages, driven by a fictional "The Hollow Tide" series in mock mode, with the maintainer's real name scrubbed from mock data and account chrome.
 
-**Architecture:** Three waves. **A** — narrow name scrub (author `Mike Dudarenok → Marin Vale`, default `displayName → "Castwright User"`) across mock data + the 12 asserting specs, leaving titles/slugs untouched. **B** — an *additive*, capture-only Hollow Tide fixture set served by the mock layer only under a new `VITE_DEMO_CAPTURE=1` flag, plus a dedicated `playwright.marketing.config.ts`, a scene registry, and a capture runner. Determinism lives in the mock layer: under the flag, the analysing/generating mock streams emit a single fixture-defined frame and then hang, so animated views freeze. **C** — cover art wiring, the remaining scenes (account/profile/voice-library), phone+tablet variants, and visual review.
+**Architecture:** Three waves. **A** — narrow name scrub (author `Mike Dudarenok → Marin Vale`, default `displayName → "Castwright"`) across mock data + the 12 asserting specs, leaving titles/slugs untouched. **B** — an *additive*, capture-only Hollow Tide fixture set served by the mock layer only under a new `VITE_DEMO_CAPTURE=1` flag, plus a dedicated `playwright.marketing.config.ts`, a scene registry, and a capture runner. Determinism lives in the mock layer: under the flag, the analysing/generating mock streams emit a single fixture-defined frame and then hang, so animated views freeze. **C** — cover art wiring, the remaining scenes (account/profile/voice-library), phone+tablet variants, and visual review.
 
 **Tech Stack:** Vite + React 18 + TS + Redux Toolkit (frontend), Vitest (unit), Playwright/chromium (capture), mock mode via `VITE_USE_MOCKS`.
 
@@ -53,7 +53,7 @@
 
 # Wave A — Name scrub
 
-### Task A1: Server default display name → "Castwright User"
+### Task A1: Server default display name → "Castwright"
 
 **Files:**
 - Modify: `server/src/workspace/user-settings.ts`
@@ -63,19 +63,19 @@
 
 In `server/src/routes/user-settings.test.ts` change line 74:
 ```ts
-    expect(res.body.displayName).toBe('Castwright User');
+    expect(res.body.displayName).toBe('Castwright');
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `cd server && npx vitest run src/routes/user-settings.test.ts`
-Expected: FAIL — received `'Mike Dudarenok'`, expected `'Castwright User'`.
+Expected: FAIL — received `'Mike Dudarenok'`, expected `'Castwright'`.
 
 - [ ] **Step 3: Update the default**
 
 In `server/src/workspace/user-settings.ts`, in `DEFAULT_USER_SETTINGS`, change:
 ```ts
-  displayName: 'Castwright User',
+  displayName: 'Castwright',
 ```
 
 - [ ] **Step 4: Run it to verify it passes**
@@ -87,7 +87,7 @@ Expected: PASS.
 
 ```bash
 git add server/src/workspace/user-settings.ts server/src/routes/user-settings.test.ts
-git commit -m "refactor(server): default display name to Castwright User"
+git commit -m "refactor(server): default display name to Castwright"
 ```
 
 ---
@@ -102,19 +102,19 @@ git commit -m "refactor(server): default display name to Castwright User"
 
 `src/lib/account-defaults.ts` line 40:
 ```ts
-  displayName: 'Castwright User',
+  displayName: 'Castwright',
 ```
 `src/views/account.test.tsx` line 28 (`SERVER_FIXTURE.displayName`):
 ```ts
-  displayName: 'Castwright User',
+  displayName: 'Castwright',
 ```
 `src/views/account.backups.test.tsx` line 36 (`SERVER_FIXTURE.displayName`):
 ```ts
-  displayName: 'Castwright User',
+  displayName: 'Castwright',
 ```
 `src/components/top-bar.test.tsx` line 70:
 ```ts
-    userDisplayName: 'Castwright User',
+    userDisplayName: 'Castwright',
 ```
 > Note: `account.backups.test.tsx` also has `author`/`name: 'Mike Dudarenok'` entries (lines 59/77/206) — those are book-author/library fixtures handled in Task A3; leave them for now.
 
@@ -127,7 +127,7 @@ Expected: PASS (displayName now flows from the updated default/fixtures).
 
 ```bash
 git add src/lib/account-defaults.ts src/views/account.test.tsx src/views/account.backups.test.tsx src/components/top-bar.test.tsx
-git commit -m "refactor(frontend): default display name to Castwright User"
+git commit -m "refactor(frontend): default display name to Castwright"
 ```
 
 ---
@@ -971,7 +971,7 @@ In `SCENES` (`e2e/marketing/scenes.ts`):
 - [ ] **Step 3: Capture + verify**
 
 Run: `CAPTURE_SCENE=account npm run capture:marketing`
-Expected: `account.desktop.png` shows the account view with display name "Castwright User" (or the marketing persona if overridden) and no error cards.
+Expected: `account.desktop.png` shows the account view with display name "Castwright" (or the marketing persona if overridden) and no error cards.
 
 - [ ] **Step 4: Commit**
 
