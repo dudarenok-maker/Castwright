@@ -81,6 +81,7 @@ import { qwenInstallRouter } from './routes/qwen-install.js';
 import { modelsInventoryRouter } from './routes/models-inventory.js';
 import { whisperInstallRouter } from './routes/whisper-install.js';
 import { coquiInstallRouter } from './routes/coqui-install.js';
+import { kokoroInstallRouter } from './routes/kokoro-install.js';
 import { gpuQueueRouter } from './routes/gpu-queue.js';
 import { diagnosticsRouter } from './routes/diagnostics.js';
 import { setupReadinessRouter } from './routes/setup-readiness.js';
@@ -246,6 +247,7 @@ app.use('/api/sidecar', sidecarHealthRouter); // mounts GET /health
 app.use('/api/ollama', ollamaHealthRouter); // mounts GET /health (local LLM analyzer)
 app.use('/api/qwen', qwenInstallRouter); // in-app Qwen3-TTS installer (detect/install/poll/recheck)
 app.use('/api/coqui', coquiInstallRouter); // in-app Coqui XTTS v2 installer (detect/install/poll/recheck)
+app.use('/api/kokoro', kokoroInstallRouter); // in-app Kokoro ONNX installer (fs-21: detect/install/poll/recheck)
 app.use('/api/whisper', whisperInstallRouter); // in-app Whisper ASR installer (srv-31: detect/install/poll/recheck)
 app.use('/api/models', modelsInventoryRouter); // fs-23 — in-app Model Manager: inventory + remove
 app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inFlight for the top-bar pill)

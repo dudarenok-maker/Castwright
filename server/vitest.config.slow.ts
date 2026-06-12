@@ -42,6 +42,7 @@ export const SLOW_FILES = [
   'src/routes/generation-boundary-recycle.test.ts',
   'src/parsers/pdf-real.test.ts',
   'src/routes/setup-readiness.route.test.ts',
+  'src/routes/kokoro-install.route.test.ts',
 ];
 
 export default defineConfig({
