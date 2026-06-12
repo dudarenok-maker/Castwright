@@ -1,8 +1,8 @@
-﻿/* fe-29 â€” maps the shared fs-19 remediation copy (server/src/routes/
+/* fe-29 — maps the shared fs-19 remediation copy (server/src/routes/
    failure-remediations.ts, bundled statically by Vite so Help works offline)
    into ordered, titled entries for the Help view's troubleshooting section.
    The `satisfies Record<FailureCode, string>` pin means a new FailureCode
-   without a Help title fails `npm run typecheck` â€” the contract the spec
+   without a Help title fails `npm run typecheck` — the contract the spec
    calls "pinned on both ends". */
 import {
   FAILURE_REMEDIATIONS,
@@ -43,4 +43,3 @@ export const HELP_FAILURE_ENTRIES: HelpFailureEntry[] = (
   title: TITLES[code],
   ...FAILURE_REMEDIATIONS[code],
 }));
-
