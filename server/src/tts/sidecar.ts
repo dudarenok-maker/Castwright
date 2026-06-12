@@ -123,7 +123,7 @@ export class SidecarTtsProvider implements TtsProvider {
 
         const buf = Buffer.from(await response.arrayBuffer());
         if (buf.length === 0) {
-          throw new Error('Local TTS sidecar returned an empty audio body.');
+          throw new Error('Local voice engine returned an empty audio body.');
         }
 
         const mimeType = response.headers.get('content-type') ?? 'audio/L16;codec=pcm;rate=24000';
@@ -187,7 +187,7 @@ export class SidecarTtsProvider implements TtsProvider {
 
         const buf = Buffer.from(await response.arrayBuffer());
         if (buf.length === 0) {
-          throw new Error('Local TTS sidecar returned an empty batch body.');
+          throw new Error('Local voice engine returned an empty batch body.');
         }
 
         const { sampleRate, pcms, genMs, audioMs } = parseBatchFrame(buf);
@@ -261,7 +261,7 @@ async function throwForResponse(response: Response): Promise<never> {
   const transient =
     !poisoned && (response.status === 408 || (response.status >= 500 && response.status < 600));
   throw Object.assign(
-    new Error(`Local TTS sidecar returned ${response.status}: ${trimmed || response.statusText}`),
+    new Error(`Local voice engine returned ${response.status}: ${trimmed || response.statusText}`),
     { transient, status: response.status, poisoned },
   );
 }
