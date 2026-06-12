@@ -23,7 +23,11 @@ Future<void> main() async {
     await binding.convertFlutterSurfaceToImage();
 
     final dir = await getExternalStorageDirectory();
-    final coversDir = '${dir!.path}/demo-covers';
+    // Covers live in adb-writable /data/local/tmp — it survives the app
+    // install/uninstall lifecycle (unlike the app's external dir, which is wiped
+    // on uninstall) and the app can still read it.
+    const coversDir = '/data/local/tmp/demo-covers';
+    final root = '${dir!.path}/demo-runtime'; // app-writable dir for Drift/settings
 
     for (final theme in [ThemeMode.light, ThemeMode.dark]) {
       final themeName = theme == ThemeMode.light ? 'light' : 'dark';
@@ -31,12 +35,14 @@ Future<void> main() async {
         final rt = await buildDemoRuntime(
           coversDir: coversDir,
           offline: scene.offline,
-          root: '${dir.path}/demo-runtime', // writable app dir on-device
+          root: root,
         );
 
         if (scene.nav == SceneNav.pairing) {
           // Pairing skips the runtime — pump the pre-filled review form directly.
           await tester.pumpWidget(MaterialApp(
+            key: ValueKey('${scene.id}-$themeName'),
+            debugShowCheckedModeBanner: false,
             themeMode: theme,
             theme: ThemeData(
                 colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFA43C6C)),
@@ -54,7 +60,11 @@ Future<void> main() async {
           ));
           await tester.pumpAndSettle();
         } else {
+          // A unique key per scene forces a FRESH HomePage State each pump, so
+          // _boot re-runs with this scene's runtime (otherwise Flutter reuses the
+          // State and every scene clings to scene 0's now-disposed runtime).
           await tester.pumpWidget(AudiobookCompanionApp(
+            key: ValueKey('${scene.id}-$themeName'),
             store: DemoPairingStore(),
             deepLinks: const Stream.empty(),
             runtimeOverride: rt,
@@ -82,8 +92,17 @@ Future<void> main() async {
           }
         }
 
+        // Image.file decodes off the frame pipeline, so pumpAndSettle doesn't
+        // wait for cover art. Let real async run, then paint, before the shot.
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 800)));
+        await tester.pumpAndSettle();
+
         await binding.takeScreenshot('${scene.id}.$themeName');
-        await rt.dispose();
+        // NOTE: do NOT dispose rt here — the just-pumped HomePage State still
+        // references it; the framework tears it down when the next scene pumps
+        // (different key). Disposing now closes the Drift DB the screen still
+        // reads. The handful of in-memory DBs are reclaimed at process exit.
       }
     }
   });
