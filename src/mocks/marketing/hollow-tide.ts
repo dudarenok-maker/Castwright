@@ -263,8 +263,26 @@ const COALFALL_CHAPTERS: BookStateResponse['state']['chapters'] = [
    .audiobook). 14-character canonical cast, all Qwen-designed with emotion
    variants + Kokoro fallbacks. Wren carries the 'Sparrow' alias (Master
    Oduvan's name for her) for the series-memory narrative. */
-const coalfallCast: Character[] = (coalfallCastJson.characters as unknown as Character[]).map(
-  (c) => (c.id === 'wren' ? { ...c, aliases: ['Sparrow'] } : c),
+const coalfallCast: Character[] = (coalfallCastJson.characters as unknown as Character[]).map((c) =>
+  c.id === 'wren'
+    ? {
+        ...c,
+        aliases: ['Sparrow'],
+        // Custom voice design with emotion variants, for the cast-drawer shot.
+        overrideTtsVoices: {
+          ...c.overrideTtsVoices,
+          qwen: {
+            name: c.overrideTtsVoices?.qwen?.name ?? 'qwen-wren',
+            variants: {
+              whisper: { name: 'qwen-wren__whisper' },
+              angry: { name: 'qwen-wren__angry' },
+              excited: { name: 'qwen-wren__excited' },
+              sad: { name: 'qwen-wren__sad' },
+            },
+          },
+        },
+      }
+    : c,
 );
 
 const coalfallSentences = coalfallManuscriptJson.sentences as unknown as Sentence[];
@@ -543,6 +561,24 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       ttsVoice: qwenTts('qwen-sable', 'Designed voice'),
     }),
   ],
+};
+
+/* Coalfall's own voice library — derived from its real cast so the standalone's
+   cast view shows ITS voices, not the Hollow Tide ones. All Qwen-designed. */
+export const COALFALL_VOICES: VoiceLibraryResponse = {
+  voices: coalfallCast.map((c) =>
+    withGradient({
+      id: `v_coalfall_${c.id}`,
+      character: c.name,
+      bookTitle: 'The Coalfall Commission',
+      bookId: 'coalfall-commission',
+      bookSeries: 'Standalones',
+      attributes: c.attributes ?? [],
+      usedIn: 1,
+      source: 'current',
+      ttsVoice: qwenTts(c.overrideTtsVoices?.qwen?.name ?? `qwen-${c.id}`, c.role),
+    }),
+  ),
 };
 
 /* Posed snapshots for the animated views (Task B4 emits these once, then hangs). */

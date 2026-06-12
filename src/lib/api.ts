@@ -58,6 +58,7 @@ import {
   HOLLOW_TIDE_BOOK_STATES,
   HOLLOW_TIDE_POSED,
   HOLLOW_TIDE_VOICES,
+  COALFALL_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MATCH_FACTORS } from '../data/match-factors';
@@ -613,9 +614,11 @@ async function mockGetLibrary(): Promise<LibraryResponse> {
   return MOCK_LIBRARY;
 }
 
-async function mockGetVoices(_args?: { currentBookId?: string }): Promise<VoiceLibraryResponse> {
+async function mockGetVoices(args?: { currentBookId?: string }): Promise<VoiceLibraryResponse> {
   await wait(80);
-  if (DEMO_CAPTURE) return HOLLOW_TIDE_VOICES;
+  if (DEMO_CAPTURE) {
+    return args?.currentBookId === 'coalfall-commission' ? COALFALL_VOICES : HOLLOW_TIDE_VOICES;
+  }
   return MOCK_VOICE_LIBRARY;
 }
 
