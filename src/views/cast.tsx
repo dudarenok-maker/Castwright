@@ -281,17 +281,24 @@ export function CastView({
   const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
   const designRunningElsewhere =
     designActive?.state === 'running' && designActive.bookId !== bookId;
-  /* Show the button on a Qwen project with ≥1 undesigned character OR ≥1 variant
+  /* A "Qwen book" = any character that resolves to Qwen — a per-character engine
+     override OR a matched Qwen library voice — independent of the global
+     `ttsModelKey`. Design full cast designs Qwen voices, so its visibility tracks
+     the CAST, not the global playback engine: a book with a Qwen cast (Kokoro as
+     per-character backup) still surfaces the control even when the user's global
+     model is Kokoro. This is why a fully-Qwen-designed sample shows it in the tour. */
+  const isQwenBook = characters.some(isQwenForVariants);
+  /* Show the button on a Qwen book with ≥1 undesigned character OR ≥1 variant
      to design, OR while a run for this book is active (so the Cancel control stays
      reachable even after the last row flips and the counts hit 0). */
   const showDesignFullCast =
-    (ttsEngine === 'qwen' && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) ||
+    (isQwenBook && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) ||
     designRunningHere;
-  /* A Qwen project whose roster is already fully designed: keep the button
-     visible but disabled, so users (and the guided tour) can still see the
-     feature exists rather than have it vanish entirely. */
+  /* A Qwen book whose roster is already fully designed: keep the button visible
+     but disabled, so users (and the guided tour) can still see the feature exists
+     rather than have it vanish entirely. */
   const fullyDesignedNothingToDo =
-    ttsEngine === 'qwen' &&
+    isQwenBook &&
     needsVoiceIds.length === 0 &&
     variantWork.totalTasks === 0 &&
     !designRunningHere &&
