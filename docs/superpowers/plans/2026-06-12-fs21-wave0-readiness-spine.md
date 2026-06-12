@@ -855,20 +855,40 @@ if (setupReady === null) {
 ```
 
 > **Rules-of-hooks:** place this early return **immediately before the component's final top-level `return (`**, after EVERY hook call in the component (Layout has ~20 hooks — `useTheme`, `useTtsLifecycle`, the many `useEffect`/`useState`, etc.). An early return placed above any hook will throw "rendered fewer hooks than expected." It only blocks the very first paint until the one-shot readiness fetch resolves; subsequent navigations don't re-trigger it (the effect has `[]` deps).
+>
+> **Boot cost (verified pre-execution):** the readiness fetch → `buildDiagnostics` runs `probeSidecarHealth` + `probeOllamaHealth`, each `PROBE_TIMEOUT_MS = 2_000`, in parallel — so the splash is bounded at **~2s worst-case** (sidecar down/slow), tens of ms on a healthy box. Acceptable for Wave 0. **Wave 2 optimization (note only, do NOT build here):** once `setupCompletedAt` is set, render the app immediately and check readiness in the background, redirecting only if a blocker regressed — so returning healthy users never wait.
 
-- [ ] **Step 3: Typecheck + frontend unit suite**
+- [ ] **Step 3: Fix the api mock in Layout-rendering test files (REQUIRED — they throw otherwise)**
+
+The unit tests that render `Layout` mock the api with an **explicit `vi.mock('../lib/api', () => ({ ... }))` factory** (confirmed: `src/components/layout.test.tsx:39`, `src/routes/index.test.tsx:41`). Those factories do NOT include `getSetupReadiness`, so the new boot fetch calls `undefined()` → `TypeError: api.getSetupReadiness is not a function`, failing the suite. This does NOT fail-open — the `.catch` only handles a *rejected promise*, not a *missing method*.
+
+For **every** test file whose `vi.mock('../lib/api')` factory is exercised by a `Layout` render, add this method to the factory's returned `api` object:
+
+```ts
+getSetupReadiness: () =>
+  Promise.resolve({
+    ready: true,
+    completedAt: '2026-06-12T00:00:00.000Z',
+    blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+    info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+  }),
+```
+
+Candidate files (run the suite to find the exact set — any that render Layout): `src/components/layout.test.tsx`, `src/routes/index.test.tsx`, `src/views/generation.test.tsx`, `src/modals/match-detail.test.tsx`. These tests already use `waitFor`/`findBy`, so the async splash→content transition needs no further change once the method exists.
+
+- [ ] **Step 4: Typecheck + frontend unit suite**
 
 Run: `npm run typecheck && npm run test`
-Expected: PASS (no type errors). Existing Layout tests now mount the readiness fetch on render: in unit tests `api` resolves to the mock (which returns `ready: true`) or, if it hits the real `fetch` and rejects in jsdom, the `.catch` fails OPEN (`setSetupReady(true)`) — either way the splash resolves. If a Layout test emits an `act(...)` warning from the post-mount state update, wrap its render/assertions in `await waitFor(...)` (or assert the resolved tree) rather than disabling the gate.
+Expected: PASS. If a suite throws `api.getSetupReadiness is not a function`, add the method above to that file's `vi.mock('../lib/api')` factory and re-run.
 
-- [ ] **Step 4: Manual mock check**
+- [ ] **Step 5: Manual mock check**
 
 Run: `npm run dev`, open `http://localhost:5173/#/?setup=notready` → expect redirect to `#/setup` showing the stub with TTS/analyzer "Needs attention". Open `http://localhost:5173/#/` → expect the normal library (gate open).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/components/layout.tsx
+git add src/components/layout.tsx src/components/layout.test.tsx src/routes/index.test.tsx
 git commit -m "feat(frontend): boot-splash readiness gate -> #/setup (fs-21 wave 0)"
 ```
 
