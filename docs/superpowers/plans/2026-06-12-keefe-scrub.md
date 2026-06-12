@@ -249,7 +249,7 @@ Run: `npm test` (frontend) → green. `git grep -iE "sophie|keefe|stellarlune|ev
 
 ## Phase 4: Server test fixtures (Cat 4 — the big one, ~62 files)
 
-**Files:** ~62 `server/src/**/*.test.ts` (enumerate: `git grep -il "sophie\|keefe\|stellarlune\|elwin\|prentice\|forkle\|dex\|fitz\|biana\|neverseen\|exile\|everblaze\|unlocked\|legacy" -- 'server/src/**/*.test.ts'`).
+**Files:** ~62 `server/src/**/*.test.ts` (enumerate with the **boundary-safe, unambiguous** token set — never bare `dex`/`legacy`/`exile`, which match `index`/`legacy-format`/etc.: `git grep -ilE "\b(sophie|keefe|stellarlune|elwin|sandor|prentice|forkle|fitz|biana|maruca|grizel|neverseen|everblaze|keeper of the lost)\b" -- 'server/src/**/*.test.ts'`).
 
 - [ ] **Step 1: Classify pure-rename vs. re-fixture**
 
@@ -263,7 +263,7 @@ Mark these for **manual re-derivation** (Step 3). Everything else is pure-rename
 
 Run the codemod across all Cat-4 test files EXCEPT the position-sensitive set:
 ```bash
-node scripts/scrub-kotlc.mjs --write $(git grep -il "sophie\|keefe\|stellarlune\|elwin\|prentice\|forkle\|dex\|fitz\|biana\|neverseen\|exile\|everblaze\|unlocked\|legacy" -- 'server/src/**/*.test.ts')
+node scripts/scrub-kotlc.mjs --write $(git grep -ilE "\b(sophie|keefe|stellarlune|elwin|sandor|prentice|forkle|fitz|biana|maruca|grizel|neverseen|everblaze|keeper of the lost)\b" -- 'server/src/**/*.test.ts')
 ```
 Because the codemod renames inline fixture text AND the assertions consistently, count/occurrence-based expectations stay correct.
 
@@ -305,7 +305,7 @@ The manuscript-path replacement is **a mapping entry** (added in Phase 0): both
 → `server/src/__fixtures__/the-coalfall-commission.md`. So the same `--write`
 codemod handles names, books, AND the path:
 ```bash
-node scripts/scrub-kotlc.mjs --write CLAUDE.md $(git grep -il "keefe\|sophie\|bonus keefe\|stellarlune\|keeper of the lost\|neverseen\|exile\|everblaze\|unlocked" -- 'docs/**/*.md')
+node scripts/scrub-kotlc.mjs --write CLAUDE.md $(git grep -ilE "\b(keefe|sophie|bonus keefe|stellarlune|keeper of the lost|neverseen|everblaze|elwin|sandor|prentice|forkle)\b" -- 'docs/**/*.md')
 ```
 Then hand-edit CLAUDE.md's "Canonical end-to-end manuscript" block prose (it is now committed + owned; drop the "do not commit — copyrighted" caveat).
 
