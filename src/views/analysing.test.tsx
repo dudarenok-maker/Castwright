@@ -1523,3 +1523,189 @@ describe('AnalysingView — Wave 2 brand manifesto', () => {
     expect(screen.getByText('Many voices, one machine.')).toBeInTheDocument();
   });
 });
+
+describe('AnalysingView — fs-19 classified failure remediation', () => {
+  function makeBookStateWithErrors(
+    failedIds: number[],
+    failedChapterErrors: Record<string, { code: string; message: string; remediation: string }>,
+  ): BookStateResponse {
+    return {
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        title: 'the Coalfall Commission',
+        author: '',
+        series: '',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'bonus-Marlow.txt',
+        castConfirmed: false,
+        chapters: [
+          { id: 2, title: 'Chapter Two', slug: '2-chapter-two', duration: '0:00' },
+          { id: 3, title: 'Chapter Three', slug: '3-chapter-three', duration: '0:00' },
+          { id: 4, title: 'Chapter Four', slug: '4-chapter-four', duration: '0:00' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: '2026-05-15T00:00:00.000Z',
+        updatedAt: '2026-05-15T00:00:00.000Z',
+      },
+      cast: null,
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      changeLog: null,
+      analysis: { failedChapterIds: failedIds, failedChapterErrors },
+    };
+  }
+
+  it('renders remediation from a live chapter-failed event (fs-19 analysis half)', async () => {
+    getBookStateImpl = () =>
+      Promise.resolve(makeBookStateWithErrors([], {}));
+
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+
+    await act(async () => {
+      capturedOpts!.onChapterFailed!({
+        chapterId: 2,
+        message: 'The analyzer could not be reached…',
+        code: 'analyzer-unreachable',
+        remediation: 'Check that Ollama is running…',
+      });
+    });
+
+    expect(await screen.findByText(/What to do:/)).toBeInTheDocument();
+    expect(screen.getByText(/Check that Ollama is running…/)).toBeInTheDocument();
+  });
+
+  it('hydrates remediation from book-state failedChapterErrors after reload', async () => {
+    getBookStateImpl = () =>
+      Promise.resolve(
+        makeBookStateWithErrors([3], {
+          '3': {
+            code: 'attribution-incomplete',
+            message: 'Some lines may be unattributed…',
+            remediation: 'Click Retry…',
+          },
+        }),
+      );
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(await screen.findByText(/Some lines may be unattributed…/)).toBeInTheDocument();
+    expect(screen.getByText(/What to do:/)).toBeInTheDocument();
+    expect(screen.getByText(/Click Retry…/)).toBeInTheDocument();
+  });
+
+  it('keeps the legacy generic line when no record exists', async () => {
+    getBookStateImpl = () =>
+      Promise.resolve(makeBookStateWithErrors([4], {}));
+
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(
+      await screen.findByText(/failed on a previous attempt/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/What to do:/)).not.toBeInTheDocument();
+  });
+
+  it('keeps failure classification (code + remediation) when a retried chapter re-fails', async () => {
+    /* Regression: handleRetryChapter's onChapterFailed only forwarded
+       `message`, dropping `code` and `remediation`, so the "What to do:"
+       line vanished after a retry that re-failed. */
+    getBookStateImpl = () =>
+      Promise.resolve(makeBookStateWithErrors([2], {}));
+
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* Click Retry on the hydrated row — this fires runAnalysisForChapters
+       and captures its opts in capturedSubsetCall. */
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+    expect(capturedSubsetCall).toBeDefined();
+
+    /* The server re-emits chapter-failed with classification fields. */
+    await act(async () => {
+      capturedSubsetCall!.opts!.onChapterFailed!({
+        chapterId: 2,
+        message: 'The analyzer could not be reached…',
+        code: 'analyzer-unreachable',
+        remediation: 'Check that Ollama is running…',
+      });
+    });
+
+    /* The "What to do:" label and remediation text must still be visible. */
+    expect(await screen.findByText(/What to do:/)).toBeInTheDocument();
+    expect(screen.getByText(/Check that Ollama is running…/)).toBeInTheDocument();
+  });
+});

@@ -114,7 +114,7 @@ export function AnalysingView({
   const [phase, setPhase] = useState(0);
   const [phaseProgress, setPhaseProgress] = useState(0);
   const [logs, setLogs] = useState<Record<number, string[]>>({});
-  const [error, setError] = useState<{ message: string; code: string; detail?: string } | null>(
+  const [error, setError] = useState<{ message: string; code: string; detail?: string; remediation?: string } | null>(
     null,
   );
   const [retry, setRetry] = useState<{
@@ -163,7 +163,7 @@ export function AnalysingView({
      from /api/books/:bookId/state on mount; appended to from the SSE's
      chapter-failed event; cleared per id when a Retry succeeds. */
   const [failedChapters, setFailedChapters] = useState<
-    Array<{ chapterId: number; message: string }>
+    Array<{ chapterId: number; message: string; code?: string; remediation?: string }>
   >([]);
   const [retryingChapterId, setRetryingChapterId] = useState<number | null>(null);
   /* Bump to refetch the dropped-quotes ledger. Goes up when the server
@@ -424,7 +424,7 @@ export function AnalysingView({
                by id, preserving locked voices on existing entries. */
             dispatch(castActions.mergeCharacters(characters));
           },
-          onChapterFailed: ({ chapterId, message }) => {
+          onChapterFailed: ({ chapterId, message, code, remediation }) => {
             if (cancelled) return;
             markEvent();
             /* Upsert by chapterId so a retry of the same chapter (which
@@ -432,7 +432,7 @@ export function AnalysingView({
                the row. */
             setFailedChapters((prev) => {
               const filtered = prev.filter((f) => f.chapterId !== chapterId);
-              return [...filtered, { chapterId, message }];
+              return [...filtered, { chapterId, message, code, remediation }];
             });
           },
           onChapterResolved: ({ chapterId }) => {
@@ -516,6 +516,7 @@ export function AnalysingView({
         setConn('error');
         const code = e instanceof AnalysisError ? e.code : 'unknown';
         const detail = e instanceof AnalysisError ? e.detail : undefined;
+        const remediation = e instanceof AnalysisError ? e.remediation : undefined;
         dispatch(
           analysisActions.setHalted({
             manuscriptId,
@@ -523,7 +524,7 @@ export function AnalysingView({
             message: (e as Error)?.message ?? 'Analysis failed.',
           }),
         );
-        setError({ message: (e as Error).message || 'Analysis failed.', code, detail });
+        setError({ message: (e as Error).message || 'Analysis failed.', code, detail, remediation });
       }
     })();
     return () => {
@@ -564,16 +565,21 @@ export function AnalysingView({
         setChapterTitleById(titles);
         const failedIds = res.analysis?.failedChapterIds ?? [];
         if (failedIds.length === 0) return;
+        const errorById = res.analysis?.failedChapterErrors ?? {};
         setFailedChapters((prev) => {
           /* Merge with whatever the SSE already pushed during this session
              so we don't clobber a fresh chapter-failed event whose
              message is more useful than the hydration placeholder. */
-          const messageById = new Map(prev.map((f) => [f.chapterId, f.message]));
-          return failedIds.map((id) => ({
-            chapterId: id,
-            message:
-              messageById.get(id) ?? 'Analysis failed on a previous attempt. Retry to try again.',
-          }));
+          const liveById = new Map(prev.map((f) => [f.chapterId, f]));
+          return failedIds.map((id) => {
+            const live = liveById.get(id);
+            if (live) return live;
+            const record = errorById[String(id)];
+            if (record) {
+              return { chapterId: id, message: record.message, code: record.code, remediation: record.remediation };
+            }
+            return { chapterId: id, message: 'Analysis failed on a previous attempt. Retry to try again.' };
+          });
         });
       })
       .catch((err) => {
@@ -712,12 +718,12 @@ export function AnalysingView({
           markEvent();
           dispatch(castActions.mergeCharacters(characters));
         },
-        onChapterFailed: ({ chapterId: failedId, message }) => {
+        onChapterFailed: ({ chapterId: failedId, message, code, remediation }) => {
           markEvent();
           if (failedId === chapterId) retryReFailed = true;
           setFailedChapters((prev) => {
             const filtered = prev.filter((f) => f.chapterId !== failedId);
-            return [...filtered, { chapterId: failedId, message }];
+            return [...filtered, { chapterId: failedId, message, code, remediation }];
           });
         },
         onChapterResolved: ({ chapterId: resolvedId }) => {
@@ -1126,11 +1132,16 @@ export function AnalysingView({
           {error && (
             <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-left">
               <p className="text-sm font-semibold text-red-900">
-                {error.code === 'daily_quota'
+                {(error.code === 'daily_quota' || error.code === 'analyzer-daily-quota')
                   ? 'Daily free-tier quota exhausted'
                   : 'Analysis failed'}
               </p>
               <p className="mt-1 text-sm text-red-800 wrap-break-word">{error.message}</p>
+              {error.remediation && (
+                <p className="mt-1 text-sm text-red-800/90 wrap-break-word">
+                  <span className="font-semibold">What to do:</span> {error.remediation}
+                </p>
+              )}
               {error.detail && (
                 <details className="mt-2 text-xs text-red-800/90">
                   <summary className="cursor-pointer font-medium hover:text-red-900">
@@ -1141,7 +1152,7 @@ export function AnalysingView({
                   </pre>
                 </details>
               )}
-              {error.code === 'daily_quota' && (
+              {(error.code === 'daily_quota' || error.code === 'analyzer-daily-quota') && (
                 <p className="mt-2 text-xs text-red-800/90">
                   Each Gemini model has its own 20-requests-per-day free-tier bucket. Try switching
                   to <span className="font-semibold">Gemini 3.1 Flash Lite</span> below, or wait for
@@ -1315,6 +1326,11 @@ export function AnalysingView({
                         {title}
                       </p>
                       <p className="mt-0.5 text-xs text-ink/60 wrap-break-word">{f.message}</p>
+                      {f.remediation && (
+                        <p className="mt-1 text-xs text-amber-900/90 wrap-break-word">
+                          <span className="font-semibold">What to do:</span> {f.remediation}
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"
