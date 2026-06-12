@@ -1162,7 +1162,7 @@ async function mockAnalyseManuscript(
 ): Promise<AnalyseResponse> {
   if (DEMO_CAPTURE) {
     const p = HOLLOW_TIDE_POSED.analysing;
-    onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress });
+    onPhase?.({ phaseId: p.phaseId, progress: p.phaseProgress, live: p.live });
     // Freeze on the analysing screen: never resolve, never advance.
     return new Promise<never>(() => {});
   }
