@@ -15,26 +15,54 @@
 - `failedChapterIds: number[]` stays; error records are an additive sibling.
 - PR 2 must regenerate the visual baselines (top-bar icon changes every screenshot).
 
-**Sequencing:** Tasks 1–8 = PR 1 (`feat/server-fs19-analysis-classification`). Tasks 9–16 = PR 2 (`feat/frontend-fe29-help-view`), branched AFTER PR 1 merges. Worktree note: this repo sees concurrent sessions on the shared checkout — prefer an isolated worktree (superpowers:using-git-worktrees) for each PR's work; if using the shared checkout, re-verify `git branch --show-current` before EVERY commit.
+**Sequencing:** Tasks 1–8 = PR 1 (`feat/server-fs19-analysis-classification`). Tasks 9–16 = PR 2 (`feat/frontend-fe29-help-view`), branched AFTER PR 1 merges.
+
+---
+
+## Subagent execution protocol
+
+This plan executes via **one fresh subagent per task, strictly SEQUENTIALLY** — tasks share files (`failure-taxonomy.ts` is touched by Tasks 2–5; `analysing.tsx` by 7 and 14) and each task builds on the previous one's commits. Do NOT parallelise.
+
+**Workspace:** create ONE isolated worktree per PR (superpowers:using-git-worktrees) and run all of that PR's task subagents inside it — this repo sees concurrent sessions switch the shared checkout mid-session. Worktree setup gotchas (from prior rounds): junction BOTH `node_modules` AND `server/node_modules` into the worktree; husky hooks may fail to spawn from a worktree — if `git commit` fails with a hook spawn error, run the gate manually (`npm run verify:fast`) and only then commit with `--no-verify`, noting it in the task report. `brand/` is git-ignored — a worktree has no copy; Task 12 must read it from the main checkout path.
+
+**Per-task subagent prompt MUST contain:**
+1. The plan path (`docs/superpowers/plans/2026-06-12-help-troubleshooting-fs19-completion.md`) + the task number, with the instruction to execute THAT task's steps exactly.
+2. The worktree path and expected branch; the subagent runs `git branch --show-current` and aborts if it doesn't match.
+3. The task's **Pre-flight reads** (listed per task below) — read these BEFORE editing; line numbers in this plan are anchors from 2026-06-12 main and MAY have drifted, so locate by the quoted code, not the number.
+4. The report-back contract: files changed, the verification commands run with their actual output (pass/fail counts), the commit SHA, and ANY deviation from the plan steps (signature mismatch, moved anchor, renamed variable) — deviations are reported, never silently absorbed.
+
+**Orchestrator gates (between tasks):** review `git show --stat HEAD` + the reported test output; spot-read any file where the subagent reported a deviation; re-dispatch with a correction rather than patching inline. After Tasks 5, 7, 12, and 14 (the risky merges), additionally run the relevant suite yourself before dispatching the next task. Tasks 8 and 16 (verify + PR) run their `npm run verify` INSIDE the worktree; the orchestrator (not a subagent) pushes and opens the PR.
+
+**Subagents do NOT:** push, open/ready PRs, merge, regenerate visual baselines outside Task 13, or touch files their task doesn't list.
 
 ---
 
 ## PR 1 — fs-19 completion
 
-### Task 1: Branch for PR 1
+### Task 1: Branch + worktree for PR 1 (orchestrator)
 
 **Files:** none (git only)
 
-- [ ] **Step 1: Cut the branch off latest main**
+- [ ] **Step 1: Create the PR-1 worktree on its branch** (per the execution protocol — do NOT build on the shared checkout)
 
 ```bash
 git fetch origin main
-git switch -c feat/server-fs19-analysis-classification origin/main
+git worktree add ../Audiobook-Generator-wt-fs19 -b feat/server-fs19-analysis-classification origin/main
 ```
 
-Expected: `Switched to a new branch 'feat/server-fs19-analysis-classification'`.
+- [ ] **Step 2: Junction the dependency dirs into the worktree** (PowerShell — junctions, not git-bash mklink, per the repo's known gotcha)
+
+```powershell
+New-Item -ItemType Junction -Path ..\Audiobook-Generator-wt-fs19\node_modules -Target .\node_modules
+New-Item -ItemType Junction -Path ..\Audiobook-Generator-wt-fs19\server\node_modules -Target .\server\node_modules
+```
+
+Expected: `git -C ../Audiobook-Generator-wt-fs19 branch --show-current` prints `feat/server-fs19-analysis-classification`; `npm run typecheck` works inside the worktree. All Task 2–8 subagents run inside this worktree.
 
 ### Task 2: Shared copy module + taxonomy pulls strings from it
+
+**Depends on:** Task 1 (branch exists).
+**Pre-flight reads:** `server/src/routes/failure-taxonomy.ts` (whole file, ~270 lines), `server/src/routes/failure-taxonomy.test.ts` (assertion style — it matches regexes on `classifyFailure` output, never reads `FAILURE_SIGNATURES` fields directly, which is WHY relocating the strings keeps it green).
 
 **Files:**
 - Create: `server/src/routes/failure-remediations.ts`
@@ -202,7 +230,12 @@ export const FAILURE_REMEDIATIONS = {
 
 In `server/src/routes/failure-taxonomy.ts`:
 
-1. Add the import at the top: `import { FAILURE_REMEDIATIONS } from './failure-remediations.js';`
+1. Add the import + re-export at the top (the re-export lets `analysis.ts` import everything taxonomy-related from one module in Tasks 5–6):
+
+```ts
+import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
+export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
+```
 2. Delete the `userMessage:` and `remediation:` properties from EVERY entry in `FAILURE_SIGNATURES`, and remove those two fields from the `FailureSignature` interface:
 
 ```ts
@@ -269,6 +302,9 @@ git commit -m "refactor(server): extract fs-19 failure copy into shared failure-
 ```
 
 ### Task 3: Source-gating + matchName on the signature table
+
+**Depends on:** Task 2 (`FAILURE_REMEDIATIONS` lookup is already wired into `classifyFailure`; this task restructures the scan around it).
+**Pre-flight reads:** `server/src/routes/failure-taxonomy.ts` as left by Task 2.
 
 **Files:**
 - Modify: `server/src/routes/failure-taxonomy.ts`
@@ -375,9 +411,10 @@ export function classifyFailure(err: unknown, engine?: string): ClassifiedFailur
   };
 }
 
-/** Table scan for the analysis path (cast-phase per-chapter catches). The
-    richer run-level entry point (classifyAnalysisFailure, Task 5) layers the
-    ported describeError envelope parsing on top of this. */
+/** Bare signature-table scan for the analysis path. Production callers use
+    classifyAnalysisFailure (Task 5) — which layers the ported describeError
+    envelope parsing on top and falls back to this scan; exported for that
+    fallback and for direct unit tests. */
 export function classifyAnalysisError(err: unknown): ClassifiedFailure {
   const hit = scanSignatures(err, ANALYSIS_SOURCES);
   if (hit) return hit;
@@ -407,6 +444,9 @@ git commit -m "feat(server): source-gate the fs-19 signature table for analysis-
 ```
 
 ### Task 4: New FailureCodes + OpenAPI (incl. recycle-storm drift fix)
+
+**Depends on:** Task 3 (`source`/`matchName` fields + `classifyAnalysisError` exist).
+**Pre-flight reads:** `server/src/routes/failure-taxonomy.ts` as left by Task 3; `openapi.yaml` around the `FailureCode:` schema (search for `FailureCode:` — ~line 4328).
 
 **Files:**
 - Modify: `server/src/routes/failure-taxonomy.ts`, `server/src/routes/failure-remediations.ts`, `openapi.yaml` (~line 4328 enum; analysis object ~line 4906), `server/src/routes/failure-taxonomy.test.ts`
@@ -576,6 +616,9 @@ git commit -m "feat(server): analysis-side FailureCodes + recycle-storm OpenAPI 
 ```
 
 ### Task 5: `classifyAnalysisFailure` — unify the run-level classifier
+
+**Depends on:** Tasks 2–4 (copy module + re-export, `classifyAnalysisError`, the four new codes).
+**Pre-flight reads:** `server/src/routes/analysis.ts` — the region around BOTH `describeError(e, analyzerLabel)` call sites (search `describeError(`; ~3604 and ~4477), the five function definitions (~4496–4627), AND the structured-log site at ~3592 that uses `tryParseApiError` independently (search `parsedLog`); `server/src/analyzer/errors.ts:19` and `server/src/analyzer/rate-limit.ts:73` (error classes).
 
 **Files:**
 - Modify: `server/src/routes/failure-taxonomy.ts` (gains the ported functions), `server/src/routes/analysis.ts` (call sites ~3604 and ~4477; DELETE `describeError` ~4496, `classifyStatus` ~4613, `formatErrorDetail` ~4560, `trimQuotaMessage` ~4582, `tryParseApiError` ~4588)
@@ -765,6 +808,9 @@ git commit -m "feat(server): unify run-level analysis classifier into the fs-19 
 
 ### Task 6: Per-chapter persistence + SSE (cast catches, coverage-suspect, replay, book-state)
 
+**Depends on:** Task 4 (`attribution-incomplete` copy exists), Task 5 (`classifyAnalysisFailure` + the `FAILURE_REMEDIATIONS` re-export are importable from `./failure-taxonomy.js`).
+**Pre-flight reads:** `server/src/routes/analysis.ts` — the two cast catch sites (search `'chapter-failed'`; ~2563 full-route, ~4072 subset — confirm the analyzer-label variable name in scope at EACH), the coverage-suspect block (search `coverage SUSPECT`; ~3199–3212), `clearFailedChapterId` (~782), the replay map type (~1357) + its `case 'chapter-failed'` handler (~1568); `server/src/store/analysis-cache.ts` (whole file); `server/src/routes/book-state.ts` (~260–270 and the response literal ~460); `openapi.yaml` analysis object (search `failedChapterIds:`; ~4906).
+
 **Files:**
 - Modify: `server/src/store/analysis-cache.ts`, `server/src/routes/analysis.ts` (catch sites ~2563 / ~4072, coverage-suspect ~3209, `clearFailedChapterId` ~782, replay map ~1357 + ~1568), `server/src/routes/book-state.ts` (~267 and ~462), `openapi.yaml` (analysis object ~4906)
 - Test: `server/src/routes/analysis.test.ts` (or the existing test file covering `clearFailedChapterId`), regenerate `src/lib/api-types.ts`
@@ -950,6 +996,9 @@ git commit -m "feat(server): persist + stream classified per-chapter analysis fa
 
 ### Task 7: Frontend — stream types, analysing rows, run-error panel
 
+**Depends on:** Task 6 (the SSE carries `code`/`remediation`; book-state serves `failedChapterErrors`; `src/lib/api-types.ts` regenerated).
+**Pre-flight reads:** `src/lib/api.ts` — the `onChapterFailed` callback type (~171), BOTH `payload.kind === 'chapter-failed'` handlers (~2155, ~3469), and `class AnalysisError` (~2065); `src/lib/types.ts` (~400–410, the BookState analysis mirror); `src/views/analysing.tsx` — `failedChapters` state (~165), live handler (~427), hydrate effect (~548–580), failed-row JSX (~1286–1337), run-error panel (~1120–1150); `src/views/analysing.test.tsx` — the ENTIRE test-harness setup before writing any test (mock idioms for the stream callbacks + getBookState).
+
 **Files:**
 - Modify: `src/lib/api.ts` (`onChapterFailed` type ~171; handlers ~2155 and ~3469; the run-level `AnalysisError` class at ~2065 — has `code`/`detail`, add `remediation?`), `src/lib/types.ts` (~405: the hand-written BookState mirror `analysis?: { failedChapterIds: number[] }` MUST gain `failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>` or the hydrate code below fails typecheck), `src/views/analysing.tsx` (state ~165, live handler ~427, hydrate ~565, row JSX ~1303, error panel ~1129)
 - Test: `src/views/analysing.test.tsx` (existing harness — extend)
@@ -1022,6 +1071,10 @@ git commit -m "feat(frontend): analysing view shows classified failure remediati
 
 ### Task 8: PR 1 — plan 173 update, verify, draft PR
 
+**Depends on:** Tasks 2–7 all committed green.
+**Pre-flight reads:** `docs/features/173-failure-taxonomy.md` (whole file — it's 43 lines).
+**Split responsibility:** the subagent does Steps 1–2 (docs + verify) and the docs commit; the ORCHESTRATOR does the push + `gh pr create` + ready/merge (Step 3's commands), reviewing the full branch diff first.
+
 **Files:**
 - Modify: `docs/features/173-failure-taxonomy.md`
 
@@ -1080,16 +1133,23 @@ Then after a final local `npm run verify` confirms green: `gh pr ready <n>` (one
 
 ## PR 2 — fe-29 Help view
 
-### Task 9: Branch for PR 2 (after PR 1 merges)
+### Task 9: Branch + worktree for PR 2 (orchestrator, after PR 1 merges)
 
-- [ ] **Step 1: Cut the branch off updated main**
+**Depends on:** PR 1 merged to main (Tasks 10+ import `failure-remediations.ts` and the regenerated `FailureCode` enum from main). Remove the PR-1 worktree first (`git worktree remove ../Audiobook-Generator-wt-fs19`).
+
+- [ ] **Step 1: Create the PR-2 worktree off updated main**
 
 ```bash
-git switch main && git pull
-git switch -c feat/frontend-fe29-help-view
+git fetch origin main
+git worktree add ../Audiobook-Generator-wt-fe29 -b feat/frontend-fe29-help-view origin/main
 ```
 
+- [ ] **Step 2: Junction the dependency dirs** (same as Task 1 Step 2, target `..\Audiobook-Generator-wt-fe29`). All Task 10–16 subagents run inside this worktree. Reminder for Task 12: `brand/` does NOT exist in the worktree — read it from the main checkout's absolute path.
+
 ### Task 10: Help content layer (curated topics + taxonomy mapper with satisfies pin)
+
+**Depends on:** Task 9 (PR-1 code on main: `server/src/routes/failure-remediations.ts` exists with 16 keys; `src/lib/api-types.ts` has the 16-value `FailureCode` enum).
+**Pre-flight reads:** `server/src/routes/failure-remediations.ts` (confirm the 16 keys), `src/lib/api-types.ts` — the `FailureCode` schema line (search `FailureCode:`).
 
 **Files:**
 - Create: `src/data/help-topics.ts`, `src/data/help-failures.ts`
@@ -1251,6 +1311,9 @@ git commit -m "feat(frontend): help content layer — shared failure copy mapper
 
 ### Task 11: Router + stage for `#/help?code=`
 
+**Depends on:** Task 9 only (independent of Task 10, but run sequentially — shared store/test files).
+**Pre-flight reads:** `src/lib/router.ts` (whole file, ~78 lines), `src/lib/types.ts` Stage union (~820–830), `src/store/ui-slice.ts` — the `openAbout` reducer (~162) and the file's action-export pattern, `src/routes/index.tsx` — the `AboutRoute` (~406–416), the lazy-import block (~70–82), one `useSearchParams` consumer (~528) and the route table (~1040–1060); `src/lib/router.test.ts` + `src/store/ui-slice.test.ts` case idioms.
+
 **Files:**
 - Modify: `src/lib/types.ts` (Stage union ~826), `src/lib/router.ts`, `src/store/ui-slice.ts` (mirror the `about` reducer ~163), `src/routes/index.tsx` (lazy import ~74-80 area; route table ~1053)
 - Test: `src/lib/router.test.ts`
@@ -1298,7 +1361,15 @@ and `stageEqual` gains (next to the `confirm` comparison):
   }
 ```
 
-3. `src/store/ui-slice.ts` — mirror the `about` reducer exactly (same naming pattern; find it at ~163 and add the sibling): a reducer that sets `s.stage = { kind: 'help', focusCode: a.payload?.focusCode }`.
+3. `src/store/ui-slice.ts` — add the sibling of `openAbout` (~162):
+
+```ts
+    openHelp: (s, a: PayloadAction<{ focusCode?: string } | undefined>) => {
+      s.stage = { kind: 'help', focusCode: a.payload?.focusCode };
+    },
+```
+
+(If the file's other no-payload reducers omit `PayloadAction` imports/typing style, match the file's existing idiom — but keep the optional `focusCode` payload.)
 4. `src/routes/index.tsx` — mirror `AboutRoute` (~406) with the query param (the `confirm` route's `?profile=` handling shows the file's `useSearchParams` idiom — follow it):
 
 ```tsx
@@ -1329,6 +1400,9 @@ git commit -m "feat(frontend): #/help route + stage with ?code= deep-link gramma
 ```
 
 ### Task 12: The Help view
+
+**Depends on:** Task 10 (`HELP_FAILURE_ENTRIES`, `HELP_TOPICS`), Task 11 (`{ kind: 'help' }` stage + `openHelp` action — the test dispatches it).
+**Pre-flight reads:** `src/views/about.tsx` (whole file — the page chrome to reuse), `src/store/index.ts` (store factory export name for the test), one existing view test (e.g. `src/views/account.test.tsx`) for the render-with-store idiom, `src/components/mini-player.tsx` ~105–115 (the defensive keybinding-read idiom), and — for Step 4 — `brand/project-narrative.md` + `docs/superpowers/specs/2026-06-07-castwright-brand-design.md` **from the MAIN checkout** (`C:\Claude\Projects\Audiobook-Generator\brand\…`; `brand/` is git-ignored so the worktree has no copy).
 
 **Files:**
 - Create: `src/views/help.tsx`
@@ -1544,6 +1618,10 @@ git commit -m "feat(frontend): fe-29 offline Help view — getting started, shor
 
 ### Task 13: Entry points — top-bar "?" + Account row (+ visual baselines)
 
+**Depends on:** Task 11 (the `'help'` stage value for the active state; the `#/help` route must resolve for the baseline screenshots to be meaningful), Task 12 (view exists — the regen run renders pages that include the top bar everywhere).
+**Pre-flight reads:** `src/components/top-bar.tsx` ~320–355 (the right-hand control cluster + `stage` prop type), `src/components/top-bar.test.tsx` (render-harness idiom), `src/views/account.tsx` — the release-notes row (search `release-notes`).
+**Visual-baseline warning:** Step 5 OVERWRITES committed PNGs under `e2e/responsive/` — this is the one task allowed to do that; eyeball the diff before committing.
+
 **Files:**
 - Modify: `src/components/top-bar.tsx` (~346, next to `<ThemeToggleButton />`), `src/views/account.tsx` (next to the release-notes row), `src/components/top-bar.test.tsx`
 - Regenerate: `e2e/responsive/visual.spec.ts-snapshots/` baselines
@@ -1594,7 +1672,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Regenerate the visual baselines** (the new icon changes every full-page screenshot — REQUIRED, this suite is in pre-push verify)
 
-Run: `npx playwright test --project=chromium e2e/responsive/visual.spec.ts --update-snapshots`
+Run: `npm run test:e2e:visual -- --update-snapshots` (MUST go through the npm script — it pins `--workers=1`, which the repo added because parallel snapshot runs race Windows font hinting; a bare `npx playwright test` regen can bake in drifted pixels)
 Then: `npm run test:e2e:visual`
 Expected: regen writes new PNGs; the verification run is green. Eyeball one updated PNG (e.g. library) to confirm the only visible change is the "?" in the top bar.
 
@@ -1606,6 +1684,9 @@ git commit -m "feat(frontend): persistent Help entry points (top-bar ? + Account
 ```
 
 ### Task 14: "More help" deep-links from both failure surfaces
+
+**Depends on:** Task 10 (`HELP_FAILURE_ENTRIES` for the analysing-side gate), Task 11 (`stageToHash` help case), PR 1 (the `code`/`remediation` fields on rows + panel, merged via Task 9's base).
+**Pre-flight reads:** `src/views/generation.tsx` — the `generationRemediation` block (search `What to do`; ~1539), `src/views/analysing.tsx` — the failed-row "What to do:" block and the run-error panel as left by PR 1's Task 7, `src/views/generation.test.tsx` — the existing fs-19 remediation test (search `What to do`).
 
 **Files:**
 - Modify: `src/views/generation.tsx` (~1539, the `generationRemediation` block), `src/views/analysing.tsx` (failed-row block from Task 7; run-error panel)
@@ -1697,6 +1778,9 @@ git commit -m "feat(frontend): More-help deep-links from generation + analysing 
 
 ### Task 15: E2E — help spec + responsive coverage case
 
+**Depends on:** Tasks 12–13 (the view, the `topbar-help` testid, post-brand-voice headings — the spec's text assertions must match the SHIPPED copy, so read `help.tsx` as committed, not this plan's draft strings).
+**Pre-flight reads:** `e2e/responsive/coverage.spec.ts` — the `about (global) view` case (~142) and the file's shared helpers; one root-level e2e spec for the goto/baseURL idiom; `src/views/help.tsx` as committed (actual headings + entry titles).
+
 **Files:**
 - Create: `e2e/help.spec.ts`
 - Modify: `e2e/responsive/coverage.spec.ts` (append a case mirroring the `about (global) view` one at ~142 — read it and copy its navigation idiom)
@@ -1741,6 +1825,10 @@ git commit -m "test(e2e): fe-29 help view golden path + responsive coverage"
 ```
 
 ### Task 16: Docs, verify, PR 2
+
+**Depends on:** Tasks 10–15 all committed green.
+**Pre-flight reads:** `docs/features/TEMPLATE.md`, `docs/features/INDEX.md` (neighbouring rows for format), `docs/BACKLOG.md` — the fe-29 block (~line 67), `docs/features/173-failure-taxonomy.md` Ship notes.
+**Split responsibility:** subagent does docs + verify + commit; ORCHESTRATOR pushes, opens the draft PR, readies and merges after reviewing the branch diff.
 
 **Files:**
 - Create: `docs/features/209-help-troubleshooting-view.md` (from `docs/features/TEMPLATE.md`)
