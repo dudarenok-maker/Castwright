@@ -71,11 +71,15 @@ cp "brand/test-book/the-coalfall-commission-cover-final.png"   public/marketing-
 Grid cards crop the square covers to 16:10; the fixtures set a top-biased
 `coverFraming` so titles aren't clipped on the shelf.
 
+## Scenes (v1)
+
+`library-shelf`, `confirm-cast`, `cast-reuse`, `generating`, `listen`,
+`account`, `profile-drawer`, `voice-library`. Desktop for all; phone + tablet
+variants for the core six.
+
 ## Known follow-ups
 
 - **`analysing` scene** is deferred (see the commented row in `scenes.ts`): the
   AnalysingView's content is local-state-driven and doesn't auto-start on a cold
   deep-link, so it shows the loading shell. The mock freeze + runner are ready;
   what remains is making the view start analysis under `VITE_DEMO_CAPTURE`.
-- **Voice-library side panel** (visible in `cast-reuse`) still shows the default
-  mock voices — the voice-library mock isn't behind the capture flag yet.
