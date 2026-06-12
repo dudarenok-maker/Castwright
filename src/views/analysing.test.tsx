@@ -1658,4 +1658,54 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/What to do:/)).not.toBeInTheDocument();
   });
+
+  it('keeps failure classification (code + remediation) when a retried chapter re-fails', async () => {
+    /* Regression: handleRetryChapter's onChapterFailed only forwarded
+       `message`, dropping `code` and `remediation`, so the "What to do:"
+       line vanished after a retry that re-failed. */
+    getBookStateImpl = () =>
+      Promise.resolve(makeBookStateWithErrors([2], {}));
+
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="Bonus Keefe Story"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    /* Click Retry on the hydrated row — this fires runAnalysisForChapters
+       and captures its opts in capturedSubsetCall. */
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+    await act(async () => {
+      fireEvent.click(retryBtn);
+    });
+    expect(capturedSubsetCall).toBeDefined();
+
+    /* The server re-emits chapter-failed with classification fields. */
+    await act(async () => {
+      capturedSubsetCall!.opts!.onChapterFailed!({
+        chapterId: 2,
+        message: 'The analyzer could not be reached…',
+        code: 'analyzer-unreachable',
+        remediation: 'Check that Ollama is running…',
+      });
+    });
+
+    /* The "What to do:" label and remediation text must still be visible. */
+    expect(await screen.findByText(/What to do:/)).toBeInTheDocument();
+    expect(screen.getByText(/Check that Ollama is running…/)).toBeInTheDocument();
+  });
 });
