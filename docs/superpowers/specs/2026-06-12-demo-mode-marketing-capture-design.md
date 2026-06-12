@@ -1,9 +1,36 @@
 # Demo-mode marketing screenshot capture — design
 
-**Status:** draft
+**Status:** built (pending final `verify` + review)
 **Date:** 2026-06-12
 **Author:** Castwright
 **Branch:** `feat/frontend-demo-marketing-capture`
+
+## As-built (2026-06-12)
+
+Implemented via subagent-driven execution against the plan
+`docs/superpowers/plans/2026-06-12-demo-marketing-capture.md`. Delivered:
+
+- **Wave A** name scrub (`Mike Dudarenok → Marin Vale`, default `displayName →
+  "Castwright"`) across mocks + 12 specs; plus a gap found in flight — the
+  hardcoded name in `src/views/preview-listener.tsx` (now "Marin Vale").
+- **Wave B** additive Hollow Tide fixtures behind `VITE_DEMO_CAPTURE`,
+  `.env.marketing`, `playwright.marketing.config.ts`, scene registry + capture
+  runner + `npm run capture:marketing`. Determinism beyond the plan: the
+  generating freeze works via the mock; the **runner also warms the library
+  first** (several views read `s.library.books` for the cover) and **waits for
+  images** (covers are large).
+- **Wave C** covers wired (+ top-biased `coverFraming` so shelf titles aren't
+  cropped), and scenes for account, profile-drawer, voice-library. The
+  **voice-library** was additionally put behind the flag (a Hollow Tide voices
+  fixture) so it shows on-brand voices.
+
+**9 marketing scenes** capture clean at desktop (+ phone/tablet for the core six):
+library-shelf, confirm-cast, cast-reuse, generating, listen, account,
+profile-drawer, voice-library. **Deferred:** the `analysing` scene — the
+AnalysingView's content is local-state-driven and doesn't auto-start on a cold
+deep-link; the mock freeze + runner are ready, the view just needs to start
+analysis under the flag. Tracked in `e2e/marketing/README.md` + a commented row
+in `scenes.ts`.
 
 ## Problem
 
