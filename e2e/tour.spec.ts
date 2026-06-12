@@ -161,7 +161,9 @@ test('per-screen mini-tour: cast "Show me this screen"', async ({ page }) => {
   /* The first cast step bubble should appear. */
   await waitForBubble(page, /meet the cast/i);
 
-  /* Advance through the remaining cast screen steps (s7, s8). */
+  /* Advance through the remaining cast screen steps (s7, s8). The overlay
+     scopes its dots/Back/Done to the active screen slice, so the final cast
+     step (s8) labels the advance button "Done", not "Next". */
   const CAST_STEPS = 3; // s6-roster, s7-drawer, s8-fullcast
   for (let i = 1; i < CAST_STEPS; i++) {
     await page.getByRole('button', { name: /^next$/i }).click();
@@ -169,8 +171,8 @@ test('per-screen mini-tour: cast "Show me this screen"', async ({ page }) => {
     await page.waitForTimeout(100);
   }
 
-  /* Last cast step — clicking Next ends the screen tour. */
-  await page.getByRole('button', { name: /^next$/i }).click();
+  /* Last cast step — the button reads "Done"; clicking it ends the screen tour. */
+  await page.getByRole('button', { name: /^done$/i }).click();
 
   /* Tour overlay must disappear once the screen tour exhausts its steps. */
   await expect(page.getByTestId('tour-overlay')).toHaveCount(0, { timeout: 5_000 });

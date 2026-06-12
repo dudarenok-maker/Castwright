@@ -33,17 +33,19 @@ export function EmptyLibrary({
         . Import a manuscript and we'll lay it out for you.
       </p>
       <div className="mt-6">
-        {onStartTour && !tourCompleted && (
-          <PrimaryButton variant="dark" onClick={onStartTour}>
-            <span className="inline-flex items-center gap-2">Take the guided tour</span>
+        <div className="flex flex-col gap-3 items-center">
+          {onStartTour && !tourCompleted && (
+            <PrimaryButton variant="dark" onClick={onStartTour}>
+              <span className="inline-flex items-center gap-2">Take the guided tour</span>
+            </PrimaryButton>
+          )}
+          <PrimaryButton variant="dark" onClick={onStartNew}>
+            <span className="inline-flex items-center gap-2">
+              <IconPlus className="w-4 h-4" />
+              Import your first book
+            </span>
           </PrimaryButton>
-        )}
-        <PrimaryButton variant="dark" onClick={onStartNew}>
-          <span className="inline-flex items-center gap-2">
-            <IconPlus className="w-4 h-4" />
-            Import your first book
-          </span>
-        </PrimaryButton>
+        </div>
         {onTrySample && (
           <button
             onClick={onTrySample}

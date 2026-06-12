@@ -437,6 +437,7 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
         <div
           ref={menuRef}
           role="menu"
+          tabIndex={-1}
           aria-label="Help menu"
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}

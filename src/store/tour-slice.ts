@@ -3,6 +3,7 @@ import type { ThunkAction, UnknownAction } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import { uiActions } from './ui-slice';
 import { TOUR_STEPS, stepsForScreen, SAMPLE, type TourScreen } from '../lib/tour-steps';
+import type { Stage } from '../lib/types';
 
 export type TourMode = 'linear' | 'screen';
 
@@ -80,7 +81,11 @@ export const tourActions = tourSlice.actions;
 
 // ── Navigation thunks ────────────────────────────────────────────────────────
 
-type AppThunk = ThunkAction<void | Promise<void>, any, unknown, UnknownAction>;
+interface TourThunkState {
+  tour: TourState;
+  ui: { stage: Stage };
+}
+type AppThunk = ThunkAction<void | Promise<void>, TourThunkState, unknown, UnknownAction>;
 
 const VIEW_FOR_SCREEN: Record<Exclude<TourScreen, 'library'>, 'manuscript' | 'cast' | 'generate' | 'listen'> = {
   manuscript: 'manuscript', cast: 'cast', generate: 'generate', listen: 'listen',
@@ -91,16 +96,19 @@ function navigateForStep(stepIndex: number): AppThunk {
   return (dispatch, getState) => {
     const step = TOUR_STEPS[stepIndex];
     if (!step) return;
+    const { mode } = getState().tour;
     if (step.screen === 'library') {
       dispatch(uiActions.goHome());
       return;
     }
-    const stage = getState().ui.stage;
-    if (stage.kind !== 'ready' || stage.bookId !== SAMPLE.bookId) {
-      dispatch(uiActions.openBook({ id: SAMPLE.bookId, status: 'complete', manuscriptId: SAMPLE.bookId }));
+    if (mode === 'linear') {
+      const stage = getState().ui.stage;
+      if (stage.kind !== 'ready' || stage.bookId !== SAMPLE.bookId) {
+        dispatch(uiActions.openBook({ id: SAMPLE.bookId, status: 'complete', manuscriptId: SAMPLE.bookId }));
+      }
     }
     dispatch(uiActions.changeView(VIEW_FOR_SCREEN[step.screen]));
-    dispatch(uiActions.setOpenProfileId(step.opensDrawer ? SAMPLE.drawerCharacterId : null));
+    dispatch(uiActions.setOpenProfileId(step.opensDrawer && mode === 'linear' ? SAMPLE.drawerCharacterId : null));
   };
 }
 
@@ -130,7 +138,14 @@ export function nextStep(): AppThunk {
 
 export function prevStep(): AppThunk {
   return (dispatch, getState) => {
-    const { stepIndex } = getState().tour;
+    const { stepIndex, mode, tourId } = getState().tour;
+    if (mode === 'screen') {
+      const slice = stepsForScreen(tourId as TourScreen);
+      const posInSlice = slice.findIndex((s) => s.id === TOUR_STEPS[stepIndex].id);
+      if (posInSlice <= 0) return; // already at the first step of the slice
+      dispatch(goToStep(TOUR_STEPS.indexOf(slice[posInSlice - 1])));
+      return;
+    }
     if (stepIndex > 0) dispatch(goToStep(stepIndex - 1));
   };
 }
