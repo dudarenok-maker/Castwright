@@ -23,11 +23,16 @@ export const SCENES: Scene[] = [
     viewports: ['desktop', 'phone', 'tablet'],
     waitFor: '[data-testid="book-cover-hollow-tide-1"]',
   },
-  {
-    id: 'analysing',
-    hash: '#/books/hollow-tide-3/analysing',
-    viewports: ['desktop', 'phone', 'tablet'],
-  },
+  /* DEFERRED (follow-up): the analysing scene. The AnalysingView's main content
+     is driven by its LOCAL state (phase cards / live tickers), populated only
+     when its analysis flow actually runs — which does not auto-start on a cold
+     deep-link (manuscriptId is null there), so the view shows the loading shell.
+     The mock-layer freeze (api.ts, B4) + this runner are ready; what remains is
+     making AnalysingView start analysis under VITE_DEMO_CAPTURE using the book's
+     manuscriptId from the book-state hydration. Re-add this row once that lands:
+       { id: 'analysing', hash: '#/books/hollow-tide-3/analysing',
+         viewports: ['desktop', 'phone', 'tablet'] },
+  */
   {
     id: 'confirm-cast',
     hash: '#/books/hollow-tide-1/confirm',
@@ -37,6 +42,7 @@ export const SCENES: Scene[] = [
     id: 'cast-reuse',
     hash: '#/books/hollow-tide-2/cast',
     viewports: ['desktop', 'phone', 'tablet'],
+    waitFor: '[data-testid^="cast-row-"]',
   },
   {
     id: 'generating',
