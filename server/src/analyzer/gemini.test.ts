@@ -143,6 +143,39 @@ describe('GeminiAnalyzer.runStage1 — streaming chunk feedback', () => {
 
     await expect(analyzer.runStage1('m_empty', '# prompt', {})).rejects.toThrow(/empty response/);
   });
+
+  it('names the finish reason (RECITATION) when a content filter blocks the chapter', async () => {
+    /* A recitation/safety block returns a candidate carrying the stop reason
+       but zero text — gemini-* models trip RECITATION on copyrighted source.
+       Surface the reason instead of an opaque "empty response" so the operator
+       knows to switch GEMINI_MODEL (gemma-*) or set ANALYZER=local. */
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([{ text: '', candidates: [{ finishReason: 'RECITATION' }] }]),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-3.1-flash-lite' });
+
+    /* Single call — the mocked async generator is single-use, so capture the
+       rejection once and assert both substrings against it. */
+    const err = await analyzer.runStage1('m_recitation', '# prompt', {}).then(
+      () => null,
+      (e: unknown) => e as Error,
+    );
+    expect(err?.message).toMatch(/empty response/); // back-compat with the generic branch
+    expect(err?.message).toMatch(/RECITATION/); // the actionable reason
+  });
+
+  it('surfaces a prompt-level blockReason (SAFETY) on an empty response', async () => {
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([{ text: '', promptFeedback: { blockReason: 'SAFETY' } }]),
+    );
+
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-3.1-flash-lite' });
+
+    await expect(analyzer.runStage1('m_blocked', '# prompt', {})).rejects.toThrow(/SAFETY/);
+  });
 });
 
 describe('GeminiAnalyzer.runStage1Chapter — Phase 0a per-chapter cast detection', () => {
