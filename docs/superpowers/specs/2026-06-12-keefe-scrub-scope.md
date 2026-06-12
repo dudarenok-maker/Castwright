@@ -1,6 +1,6 @@
 # Keefe / KotLC → Coalfall scrub — scope
 
-**Status:** scope (decisions captured 2026-06-12; not yet planned)
+**Status:** scope (decisions captured 2026-06-12; adversarial-reviewed; two decisions still open — see Open items; not yet planned)
 **Type:** content/copyright scrub (not a feature)
 
 ## Goal
@@ -31,10 +31,12 @@ Five categories by risk:
 | # | Category | Where | Risk |
 |---|---|---|---|
 | 1 | **Canonical manuscript pointer** | `CLAUDE.md` + ~60 doc refs to `…\Bonus Keefe Story.txt` | Low (doc edits) |
-| 2 | **Code comments** (KotLC as examples) | `roster-coverage.ts`, `voice-match.ts`, `text-match.ts`, `series-cast-scan.ts`, `drift-report.tsx`, `api.ts` comments | Low — verified **no logic depends on them**, pure reword |
-| 3 | **Frontend mock data** | `src/mocks/` (incl. `canned-data.ts`), `src/data/`, the mock branch of `src/lib/api.ts` (e.g. `mock-book-stellarlune`) | Med — drives mock-mode UI, marketing capture, frontend tests asserting names |
+| 2a | **Code comments** (KotLC as examples) | `roster-coverage.ts`, `voice-match.ts`, `text-match.ts`, `series-cast-scan.ts`, `drift-report.tsx` | Low — no logic depends, pure reword |
+| 2b | **Analyzer PROMPT examples** | `server/src/routes/analysis.ts` (~L1140–1147: KotLC names inside the LLM prompt template literals) | **Med** — these are prompt *content* the analyzer sends, likely pinned by `gemini.test.ts`/prompt tests. NOT a cosmetic reword. |
+| 3 | **Frontend mock data** | `src/mocks/` (incl. `canned-data.ts`), `src/data/`, the mock branch of `src/lib/api.ts` (e.g. `mock-book-stellarlune` book entries — *data*, not comments) | Med — drives mock-mode UI, marketing capture, frontend tests asserting names |
 | 4 | **Server test fixtures** | many `server/src/**/*.test.ts` (analyzer/audio/export) | **High** — use KotLC manuscripts + assert specific names/counts → owned fixtures + expected-value rewrites |
-| 5 | **Docs prose / archived plans** | 45 files, mostly historical regression plans | Med (volume) — reword KotLC walkthrough examples |
+| 5 | **Docs prose / archived plans** | 45 files (19 of which **also** hold the manuscript pointer from Cat 1 — edit once, not twice) | Med (volume) |
+| 6 | **Multilingual fixtures** | `e2e/language-detection.spec.ts`, `162-fs2-multilanguage.md` + non-English (Russian) KotLC content | **Blocked** — Coalfall is English-only; **no owned non-English text exists** (see Open items) |
 
 ## Owned replacement canon
 
@@ -95,28 +97,50 @@ committed fixtures path — proposed `server/src/__fixtures__/the-coalfall-commi
 manuscript" to cite the committed path. (Brand cover art etc. stay git-ignored;
 only the manuscript text + cast sheet become committed test fixtures.)
 
-## Phasing (recommended)
+## Phasing (revised after adversarial review)
 
 0. **Commit the owned manuscript fixture** + a `KotLC→owned` mapping doc (the canon).
-1. **Canonical pointer** — CLAUDE.md + ~60 doc refs → committed Coalfall path.
-2. **Code comments** — reword (low risk, no tests affected).
-3. **Frontend mock data** — owned books/chars + frontend test updates.
-4. **Server fixtures** — owned manuscripts/rosters + expected-value rewrites (largest).
-5. **Docs prose / archived plans** — reword KotLC examples (mechanical, high volume).
+1. **Code comments (Cat 2a)** — reword (low risk, no tests affected).
+2. **Analyzer prompt examples (Cat 2b)** — reword KotLC→Coalfall *inside* the
+   analyzer prompt; **update the analyzer/prompt tests in the same change** (this
+   is behaviour-adjacent, not cosmetic).
+3. **Frontend mock data (Cat 3)** — owned books/chars + frontend test updates.
+4. **Server fixtures (Cat 4)** — owned manuscripts/rosters + expected-value
+   rewrites (largest; identify pure-rename vs. re-fixture first).
+5. **Docs — pointer + prose together (Cat 1 + Cat 5)** — one pass per doc file
+   (the manuscript pointer and KotLC prose co-occur in 19 files; CLAUDE.md
+   included). Repoints to the committed Coalfall path AND rewords examples.
+6. **Multilingual (Cat 6)** — gated on the non-English-source decision below.
 
-Each phase is independently shippable and verifiable (`npm run verify` /
-`test:server`), so they can land as separate PRs.
+Phases 0–5 are independently shippable + verifiable (`npm run verify` /
+`test:server`) as separate PRs. Phase 6 is blocked until its decision lands.
 
 ## Open items / risks (resolve during planning)
 
+- **DECISION — multilingual source (Cat 6).** Coalfall is English-only and no
+  owned non-English text exists. Options: (a) commission a short owned non-English
+  passage (e.g. a Russian-translated Coalfall excerpt) as a committed fixture;
+  (b) replace the language-detection fixture with a minimal public-domain /
+  synthetic non-English snippet (no KotLC, no Coalfall); (c) descope multilingual
+  from this scrub and track it separately. **Needs a call before Phase 6.**
+- **DECISION — historicity convention.** Many Cat 2a comments and Cat 5 archived
+  docs record *real past runs* against Bonus Keefe (observed char lists, char
+  positions, e.g. `analysis.ts:946`, "Ch44 pos 37588"). Renaming to Coalfall
+  makes them describe a run that never happened. Convention: **replace the
+  copyrighted name, keep the illustrative point, and do NOT fabricate
+  Coalfall-specific observed values** (genericise the number or mark it
+  illustrative). Confirm this reading is acceptable.
 - **Server-fixture churn (Cat 4)** is the real cost — some analyzer tests encode
   KotLC-prose-specific expectations; those become owned-manuscript-specific.
-  Needs a pass to identify which tests are pure-rename vs. re-fixture.
-- **Hollow Tide rosters** must be fabricated for series tests (owned names only).
-- **Archived-doc churn (Cat 5)** edits historical records; acceptable per the
-  "everything" decision, but it's ~45 files of prose.
-- **Mapping completeness** — enumerate every KotLC name in use (not just the top
-  8) before the rename so nothing is missed.
+  Needs a pass to classify each test pure-rename vs. re-fixture.
+- **Cardinality** — KotLC fixtures may name more distinct characters than
+  Coalfall's 14 (e.g. a fixture with Sophie+Keefe+Elwin+Biana+Alina+narrator =
+  6 is fine, but enumerate the largest before assuming a 1:1 map). Hollow Tide
+  rosters (fabricated, owned) absorb the overflow + the series cases.
+- **Mapping completeness** — enumerate **every** KotLC name in use (not just the
+  top 8: also Biana, Alina, Grizel, Prentice, Dame Alina, etc.) before renaming.
+- **Test-pinned prompt (Cat 2b)** — confirm which analyzer tests assert prompt
+  substrings before editing `analysis.ts`.
 
 ## Effort
 
