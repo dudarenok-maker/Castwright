@@ -2,7 +2,8 @@
    contentinfo landmark + testid and a version-shaped stamp. Vitest runs as dev
    (import.meta.env.DEV === true), so the verbose form is rendered off the
    sentinel buildInfo — assertions stay resilient (shape, not exact sentinels).
-   Wave 1: stamp now starts with "Made with Castwright ·" for brand presence. */
+   The in-app stamp starts with the bare brand name "Castwright ·" (the
+   "Made with Castwright" attribution form is reserved for exported outputs). */
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -13,15 +14,15 @@ describe('BuildStamp', () => {
     render(<BuildStamp />);
     const footer = screen.getByTestId('build-stamp');
     expect(footer).toBeInTheDocument();
-    /* aria-label is the stamp itself — "Made with Castwright · v…" — so the
-       landmark is named. Match by the brand prefix. */
-    expect(screen.getByRole('contentinfo', { name: /made with castwright/i })).toBe(footer);
+    /* aria-label is the stamp itself — "Castwright · v…" — so the landmark is
+       named. Match by the brand prefix. */
+    expect(screen.getByRole('contentinfo', { name: /^castwright/i })).toBe(footer);
   });
 
-  it('shows "Made with Castwright" brand prefix in the stamp', () => {
+  it('shows the "Castwright" brand prefix in the stamp', () => {
     render(<BuildStamp />);
     const text = screen.getByTestId('build-stamp').textContent ?? '';
-    expect(text).toMatch(/^Made with Castwright/);
+    expect(text).toMatch(/^Castwright/);
     expect(text).toContain('·');
   });
 });
