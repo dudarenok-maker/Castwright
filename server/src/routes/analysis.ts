@@ -21,7 +21,6 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
@@ -29,7 +28,6 @@ import {
   resolveStage2ChunkCharBudget,
   type Stage2ChunkRunResult,
 } from '../analyzer/stage2-chunk.js';
-import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import {
   runStage1WithRosterGuard,
   validateRosterCoverage,
@@ -46,6 +44,7 @@ import {
   loadAnalysisCache,
   saveAnalysisCache,
   type AnalysisCache,
+  type ChapterErrorRecord,
 } from '../store/analysis-cache.js';
 import {
   deleteAnalysisState,
@@ -97,6 +96,7 @@ import {
   type DroppedQuotesBatch,
 } from '../store/dropped-quotes.js';
 import { configValue } from '../config/resolver.js';
+import { classifyAnalysisFailure, tryParseApiError, FAILURE_REMEDIATIONS } from './failure-taxonomy.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -780,14 +780,40 @@ function clampEst(ms: number): number {
    for the same id is a no-op and returns false. Exported for unit
    testing. */
 export function clearFailedChapterId(
-  cache: { failedChapterIds?: number[] },
+  cache: {
+    failedChapterIds?: number[];
+    failedChapterErrors?: Record<string, ChapterErrorRecord>;
+  },
   chapterId: number,
 ): boolean {
   const wasFailed = cache.failedChapterIds?.includes(chapterId) === true;
   if (wasFailed) {
     cache.failedChapterIds = cache.failedChapterIds!.filter((id) => id !== chapterId);
+    if (cache.failedChapterErrors) delete cache.failedChapterErrors[String(chapterId)];
   }
   return wasFailed;
+}
+
+/* fs-19 (analysis half) — promote a classified per-chapter failure to durable
+   cache state: the id keeps driving the Retry list; the record carries the
+   structured code/message/remediation for the post-reload display. */
+export function recordFailedChapter(
+  cache: {
+    failedChapterIds?: number[];
+    failedChapterErrors?: Record<string, ChapterErrorRecord>;
+  },
+  chapterId: number,
+  classified: { code: string; userMessage: string; remediation: string },
+): void {
+  const failedSet = new Set(cache.failedChapterIds ?? []);
+  failedSet.add(chapterId);
+  cache.failedChapterIds = Array.from(failedSet);
+  if (!cache.failedChapterErrors) cache.failedChapterErrors = {};
+  cache.failedChapterErrors[String(chapterId)] = {
+    code: classified.code,
+    message: classified.userMessage,
+    remediation: classified.remediation,
+  };
 }
 
 /* Phase 0a coverage check — every non-excluded chapter must have a
@@ -1354,7 +1380,7 @@ export interface AnalysisJobReplayState {
   /** Active failed-chapter records, keyed by chapterId. chapter-failed
       adds entries; chapter-resolved removes them. Replayed so a
       reconnecting client sees the right set of Retry rows. */
-  failedByChapterId: Map<number, { kind: 'chapter-failed'; chapterId: number; message: string }>;
+  failedByChapterId: Map<number, { kind: 'chapter-failed'; chapterId: number; message: string; code?: string; remediation?: string }>;
   /** One-shot series-cast prior event emitted at Phase 0 entry. Cached
       here so a subscriber that attaches AFTER Phase 0 entry receives
       the carry-over surface in its catch-up replay (otherwise the
@@ -1545,7 +1571,8 @@ function broadcastToJob(job: AnalysisJob, payload: unknown): void {
   }
 }
 
-function trackForReplay(job: AnalysisJob, payload: unknown): void {
+/* Exported for unit testing (the chapter-failed replay contract). */
+export function trackForReplay(job: AnalysisJob, payload: unknown): void {
   if (!payload || typeof payload !== 'object') return;
   const ev = payload as { kind?: string };
   switch (ev.kind) {
@@ -1566,12 +1593,14 @@ function trackForReplay(job: AnalysisJob, payload: unknown): void {
       job.replay.lastCastUpdate = ev as AnalysisJobReplayState['lastCastUpdate'];
       break;
     case 'chapter-failed': {
-      const e = ev as { chapterId?: number; message?: string };
+      const e = ev as { chapterId?: number; message?: string; code?: string; remediation?: string };
       if (typeof e.chapterId === 'number' && typeof e.message === 'string') {
         job.replay.failedByChapterId.set(e.chapterId, {
           kind: 'chapter-failed',
           chapterId: e.chapterId,
           message: e.message,
+          code: e.code,
+          remediation: e.remediation,
         });
       }
       break;
@@ -2551,16 +2580,16 @@ export async function runMainAnalyzerJob(
              skips it and the cache key is taken. */
           chapterCast[ch.id] = [];
           cache.chapterCast = chapterCast;
-          /* Promote the failure to durable cache state so the analysing
-             view can surface a per-chapter Retry button after reload.
-             The set is in-memory only; without this, the failed-id list
-             disappears the moment the SSE ends. Dedup via Set so a
-             second-chance retry inside the same run doesn't double up. */
-          const failedSet = new Set(cache.failedChapterIds ?? []);
-          failedSet.add(ch.id);
-          cache.failedChapterIds = Array.from(failedSet);
+          const classified = classifyAnalysisFailure(chErr, analyzerLabel);
+          recordFailedChapter(cache, ch.id, classified);
           await saveAnalysisCache(manuscriptId, cache);
-          send({ kind: 'chapter-failed', chapterId: ch.id, message: (chErr as Error).message });
+          send({
+            kind: 'chapter-failed',
+            chapterId: ch.id,
+            message: classified.userMessage,
+            code: classified.code,
+            remediation: classified.remediation,
+          });
           sendCastLiveTick();
           send({ kind: 'phase', phaseId: 0, progress: phase0Progress(), label: PHASES[0].label });
           return;
@@ -3206,9 +3235,19 @@ export async function runMainAnalyzerJob(
             coverageVerdict.issues[0] ?? 'low coverage'
           }); kept the best take and flagged the chapter for retry.`,
         );
-        const failedSet = new Set(cache.failedChapterIds ?? []);
-        failedSet.add(ch.id);
-        cache.failedChapterIds = Array.from(failedSet);
+        const copy = FAILURE_REMEDIATIONS['attribution-incomplete'];
+        recordFailedChapter(cache, ch.id, {
+          code: 'attribution-incomplete',
+          userMessage: copy.userMessage,
+          remediation: copy.remediation,
+        });
+        send({
+          kind: 'chapter-failed',
+          chapterId: ch.id,
+          message: copy.userMessage,
+          code: 'attribution-incomplete',
+          remediation: copy.remediation,
+        });
       }
       for (const s of stage2Sentences) s.chapterId = ch.id;
       sentencesByChapter.set(ch.id, stage2Sentences);
@@ -3601,8 +3640,8 @@ export async function runMainAnalyzerJob(
       message: (e as Error)?.message,
       details: parsedLog?.details,
     });
-    const { code, message, detail } = describeError(e, analyzerLabel);
-    endJob(job, { kind: 'error', code, message, detail });
+    const { code, userMessage: message, remediation, detail } = classifyAnalysisFailure(e, analyzerLabel);
+    endJob(job, { kind: 'error', code, message, remediation, detail });
   }
 }
 
@@ -4064,12 +4103,17 @@ async function runSubsetAnalyzerJob(
         if (chErr instanceof AnalysisAbortedError) throw chErr;
         chapterCast[ch.id] = [];
         cache.chapterCast = chapterCast;
-        const failedSet = new Set(cache.failedChapterIds ?? []);
-        failedSet.add(ch.id);
-        cache.failedChapterIds = Array.from(failedSet);
+        const classified = classifyAnalysisFailure(chErr, analyzerLabel);
+        recordFailedChapter(cache, ch.id, classified);
         await saveAnalysisCache(manuscriptId, cache);
         log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
-        send({ kind: 'chapter-failed', chapterId: ch.id, message: (chErr as Error).message });
+        send({
+          kind: 'chapter-failed',
+          chapterId: ch.id,
+          message: classified.userMessage,
+          code: classified.code,
+          remediation: classified.remediation,
+        });
         emitCastUpdate();
       }
       send({
@@ -4474,7 +4518,7 @@ async function runSubsetAnalyzerJob(
       });
       return;
     }
-    const { code, message, detail } = describeError(e, analyzerLabel);
+    const { code, userMessage: message, remediation, detail } = classifyAnalysisFailure(e, analyzerLabel);
     console.error('[analysis-subset] failed', {
       manuscriptId,
       code,
@@ -4482,146 +4526,11 @@ async function runSubsetAnalyzerJob(
       lastStep,
       stack: (e as Error)?.stack,
     });
-    endJob(job, { kind: 'error', code, message, detail });
+    endJob(job, { kind: 'error', code, message, remediation, detail });
   }
 }
 
-/* The Gemini SDK throws `ApiError` instances whose `.message` is the raw
-   JSON envelope (e.g. `{"error":{"code":503,"message":"...","status":"...","details":[...]}}`).
-   Surface a friendly, copy-pasteable line for the UI plus a short `code` the
-   client can switch on (rate_limit | unavailable | internal | invalid_key |
-   network | unknown), and a structured `detail` string the UI can show in a
-   collapsible block — preserves the upstream details[] array which usually
-   names the field/quota that triggered the failure. */
-function describeError(
-  err: unknown,
-  modelLabel: string,
-): { code: string; message: string; detail?: string } {
-  /* Output truncation (#528) — the chapter's per-sentence JSON exceeded the
-     model's output cap. The stage-2 chunker splits over-budget chapters
-     automatically, so reaching here means even an adaptively-split section
-     (or a single un-splittable paragraph) still truncated. Classify it
-     distinctly so the UI says "too large" rather than a generic failure. */
-  if (err instanceof AnalyzerTruncatedError) {
-    return {
-      code: 'truncated',
-      message: `${modelLabel} truncated the response (${err.reason}) — a chapter section is too large for one attribution call. Lower STAGE2_CHUNK_CHAR_BUDGET and retry.`,
-      detail: `engine=${err.engine} reason=${err.reason} bytes=${err.receivedBytes}${
-        err.outputTokens ? ` tokens=${err.outputTokens}` : ''
-      }`,
-    };
-  }
-
-  /* The limiter throws DailyQuotaExhaustedError when our own RPD counter
-     OR a Google daily-quota 429 trips. Route layer must classify these
-     uniformly so the UI shows a single "switch model or wait until N"
-     message regardless of which path detected it. */
-  if (err instanceof DailyQuotaExhaustedError) {
-    return {
-      code: 'daily_quota',
-      message: `${modelLabel} daily quota exhausted — resets at ${err.resetAt.toISOString()}.`,
-      detail: `resetAt: ${err.resetAt.toISOString()}`,
-    };
-  }
-  const raw = (err as Error)?.message ?? String(err);
-  const status = (err as { status?: number })?.status;
-
-  const parsed = tryParseApiError(raw);
-  if (parsed) {
-    const code = classifyStatus(parsed.code ?? status, parsed.message);
-    /* Only trim quota messages — 4xx/5xx bodies are usually short and
-       informative (an INVALID_ARGUMENT body names the failed field), so
-       trimming them throws away the only useful diagnostic. */
-    const trimmed =
-      code === 'rate_limit' || code === 'daily_quota'
-        ? trimQuotaMessage(parsed.message)
-        : parsed.message;
-    const statusSuffix = parsed.status ? ` (${parsed.status})` : '';
-    const detail = formatErrorDetail(parsed, raw);
-    return {
-      code,
-      message: `${modelLabel} returned ${parsed.code ?? status ?? '???'}${statusSuffix}: ${trimmed}`,
-      detail,
-    };
-  }
-
-  if (status) {
-    return {
-      code: classifyStatus(status, raw),
-      message: `${modelLabel} returned ${status}: ${raw}`,
-    };
-  }
-  return { code: 'unknown', message: raw || 'Analysis failed.' };
-}
-
-/* Build the detail blob shown in the UI's collapsible. Prefer the
-   structured details[] from the upstream envelope; fall back to the raw
-   error body so debugging never has to round-trip to the server log. */
-function formatErrorDetail(
-  parsed: { status?: string; details?: unknown[] },
-  raw: string,
-): string | undefined {
-  const lines: string[] = [];
-  if (parsed.status) lines.push(`status: ${parsed.status}`);
-  if (parsed.details && parsed.details.length > 0) {
-    lines.push('details:');
-    lines.push(JSON.stringify(parsed.details, null, 2));
-  }
-  if (lines.length === 0) {
-    /* No structured details — fall back to the raw SDK message, trimmed.
-       Useful when the error wasn't a Google API envelope (e.g. network). */
-    const trimmed = raw.length > 1500 ? `${raw.slice(0, 1500)}…` : raw;
-    return trimmed.trim() || undefined;
-  }
-  return lines.join('\n');
-}
-
-/* Google's 429 body is wall-of-text — strip everything after the first
-   sentence so the UI alert stays tractable. The full text still lives in
-   the server console (and the `detail` blob) for debugging. */
-function trimQuotaMessage(message: string): string {
-  const firstStop = message.search(/[.\n]/);
-  if (firstStop > 0 && firstStop < 240) return message.slice(0, firstStop + 1).trim();
-  return message.slice(0, 240) + (message.length > 240 ? '…' : '');
-}
-
-function tryParseApiError(
-  raw: string,
-): { code?: number; message: string; status?: string; details?: unknown[] } | null {
-  /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
-     Find the first '{' and try to parse from there. */
-  const start = raw.indexOf('{');
-  if (start < 0) return null;
-  try {
-    const obj = JSON.parse(raw.slice(start)) as {
-      error?: { code?: number; message?: string; status?: string; details?: unknown[] };
-    };
-    if (obj?.error?.message) {
-      return {
-        code: obj.error.code,
-        message: obj.error.message,
-        status: obj.error.status,
-        details: obj.error.details,
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function classifyStatus(status: number | undefined, message?: string): string {
-  if (!status) return 'unknown';
-  if (status === 429) {
-    /* Distinguish per-day "free tier exhausted" from short-term per-minute
-       throttling — the user-facing remedies differ (switch model / wait
-       until quota reset vs. just retry). */
-    if (message && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) return 'daily_quota';
-    return 'rate_limit';
-  }
-  if (status === 503) return 'unavailable';
-  if (status === 500) return 'internal';
-  if (status === 401 || status === 403) return 'invalid_key';
-  if (status === 400) return 'bad_request';
-  return 'unknown';
-}
+/* describeError, formatErrorDetail, trimQuotaMessage, tryParseApiError, and
+   classifyStatus have been moved to failure-taxonomy.ts (classifyAnalysisFailure
+   / tryParseApiError exported). Call sites above now use classifyAnalysisFailure.
+   Note: classifyStatus was renamed statusToFailureCode (private) in its new home. */

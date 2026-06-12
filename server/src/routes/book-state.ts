@@ -42,7 +42,7 @@ import {
   getOrHydrateManuscript,
   type ManuscriptRecord,
 } from '../store/manuscripts.js';
-import { clearAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
+import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { parseManuscript } from '../parsers/index.js';
@@ -265,9 +265,11 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        moment the user navigates away. Sourced from the analysis cache,
        populated in analysis.ts:913 (full route) and the subset route. */
     let failedChapterIds: number[] = [];
+    let failedChapterErrors: Record<string, ChapterErrorRecord> = {};
     if (state.manuscriptId) {
       const cache = await loadAnalysisCache(state.manuscriptId);
       failedChapterIds = cache.failedChapterIds ?? [];
+      failedChapterErrors = cache.failedChapterErrors ?? {};
       const cachedSentences = Object.values(cache.chapters ?? {}).flat();
       if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
         if (cachedSentences.length > 0) {
@@ -459,7 +461,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       renderedFallbackByCharacter,
       renderedSpeakersByChapter,
       changeLog: changeLog?.events ?? null,
-      analysis: { failedChapterIds },
+      analysis: { failedChapterIds, failedChapterErrors },
     });
   } catch (e) {
     console.error('[book-state] GET failed', e);

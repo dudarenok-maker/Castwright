@@ -4,10 +4,14 @@
    unmapped string) and asserts the stable `code`, a jargon-free `userMessage`,
    a non-empty `remediation`, and the legacy `fatal`. These pin the incident-
    tuned regexes the classifier ports from the old ad-hoc describeSynthesisError
-   so a refactor can't silently regress them. */
+   so a refactor can't silently regress them. The file also covers the
+   analysis-side classifiers (classifyAnalysisError + classifyAnalysisFailure). */
 
 import { describe, it, expect } from 'vitest';
-import { classifyFailure } from './failure-taxonomy.js';
+import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
+import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
+import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
    like a sentence (starts uppercase, ends with punctuation, no "Traceback"
@@ -207,5 +211,132 @@ describe('classifyFailure', () => {
     expect(out.code).toBe('unknown');
     expect(out.userMessage.length).toBeLessThanOrEqual(241);
     expect(out.userMessage.endsWith('…')).toBe(true);
+  });
+});
+
+describe('source gating (spec A2)', () => {
+  it('classifyFailure (generation) still matches sidecar-unreachable on ECONNREFUSED', () => {
+    const r = classifyFailure(new Error('connect ECONNREFUSED 127.0.0.1:8001'));
+    expect(r.code).toBe('sidecar-unreachable');
+  });
+  it('classifyAnalysisError never blames the sidecar for an analysis failure', () => {
+    const r = classifyAnalysisError(new Error('connect ECONNREFUSED 127.0.0.1:11434'));
+    expect(r.code).not.toBe('sidecar-unreachable');
+  });
+  it('analysis path still sees the both-gated quota signature', () => {
+    const err = Object.assign(new Error('429 Too Many Requests: quota exceeded'), { status: 429 });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-rate-limit');
+  });
+  it('analysis path still sees the both-gated disk-full signature', () => {
+    expect(classifyAnalysisError(new Error('ENOSPC: no space left on device')).code).toBe('disk-full');
+  });
+});
+
+describe('analysis-side codes (spec A2)', () => {
+  it('classifies AnalyzerTruncatedError by name', () => {
+    const err = Object.assign(new Error('gemini truncated the response'), {
+      name: 'AnalyzerTruncatedError',
+    });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-truncated');
+  });
+  it('classifies DailyQuotaExhaustedError by name, before the rate-limit signature', () => {
+    const err = Object.assign(new Error('daily quota exhausted — resets later'), {
+      name: 'DailyQuotaExhaustedError',
+    });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-daily-quota');
+  });
+  it('classifies an unreachable analyzer (connection refused) as analyzer-unreachable', () => {
+    expect(
+      classifyAnalysisError(new Error('connect ECONNREFUSED 127.0.0.1:11434')).code,
+    ).toBe('analyzer-unreachable');
+  });
+  it('classifies GeminiStreamIdleError (retry-exhausted) as analyzer-unreachable', () => {
+    const err = Object.assign(new Error('stream idle'), { name: 'GeminiStreamIdleError' });
+    expect(classifyAnalysisError(err).code).toBe('analyzer-unreachable');
+  });
+  it('generation path never sees the analysis-only entries', () => {
+    const err = Object.assign(new Error('whatever'), { name: 'AnalyzerTruncatedError' });
+    expect(classifyFailure(err).code).toBe('unknown');
+  });
+  it('attribution-incomplete has copy (synthetic code, no signature)', () => {
+    expect(FAILURE_REMEDIATIONS['attribution-incomplete'].remediation.length).toBeGreaterThan(0);
+  });
+});
+
+describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
+  it('has exactly one entry per FailureCode', () => {
+    expect(Object.keys(FAILURE_REMEDIATIONS).sort()).toEqual(
+      [
+        'analyzer-daily-quota',
+        'analyzer-rate-limit',
+        'analyzer-truncated',
+        'analyzer-unreachable',
+        'attribution-incomplete',
+        'auth',
+        'cuda-poisoned',
+        'disk-full',
+        'model-not-loaded',
+        'oom',
+        'recycle-storm',
+        'sidecar-unreachable',
+        'synth-timeout',
+        'unknown',
+        'vram-spill',
+        'xtts-speaker-desync',
+      ].sort(),
+    );
+  });
+  it('every entry has non-empty userMessage and remediation', () => {
+    for (const [code, copy] of Object.entries(FAILURE_REMEDIATIONS)) {
+      expect(copy.userMessage.length, code).toBeGreaterThan(0);
+      expect(copy.remediation.length, code).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('classifyAnalysisFailure (run-level, ports describeError verbatim — spec A3)', () => {
+  it('AnalyzerTruncatedError → analyzer-truncated with dynamic message + structured detail', () => {
+    const err = new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', 8192, 4096);
+    const r = classifyAnalysisFailure(err, 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('analyzer-truncated');
+    expect(r.userMessage).toContain('Gemini (gemma-4-31b-it)');
+    expect(r.userMessage).toContain('MAX_TOKENS');
+    expect(r.detail).toContain('engine=gemini');
+    expect(r.remediation.length).toBeGreaterThan(0);
+  });
+  it('DailyQuotaExhaustedError → analyzer-daily-quota preserving the reset time', () => {
+    const resetAt = new Date('2026-06-13T07:00:00Z');
+    const err = new DailyQuotaExhaustedError('gemma-4-31b-it', resetAt);
+    const r = classifyAnalysisFailure(err, 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('analyzer-daily-quota');
+    expect(r.userMessage).toContain('2026-06-13T07:00:00.000Z');
+  });
+  it('Google envelope 429 free-tier → analyzer-daily-quota with trimmed message', () => {
+    const raw =
+      'got status: 429. {"error":{"code":429,"message":"You exceeded your current quota: generate_requests_per_model_per_day_free_tier. Please check your plan and billing details. More text that should be trimmed away entirely.","status":"RESOURCE_EXHAUSTED","details":[{"quotaValue":"250"}]}}';
+    const r = classifyAnalysisFailure(new Error(raw), 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('analyzer-daily-quota');
+    expect(r.userMessage).toContain('429');
+    expect(r.detail).toContain('RESOURCE_EXHAUSTED');
+  });
+  it('envelope 503 → analyzer-unreachable; 401 → auth; 400 → unknown', () => {
+    const env = (code: number, status: string) =>
+      new Error(`got status: ${code}. {"error":{"code":${code},"message":"boom","status":"${status}"}}`);
+    expect(classifyAnalysisFailure(env(503, 'UNAVAILABLE'), 'm').code).toBe('analyzer-unreachable');
+    expect(classifyAnalysisFailure(env(401, 'UNAUTHENTICATED'), 'm').code).toBe('auth');
+    expect(classifyAnalysisFailure(env(400, 'INVALID_ARGUMENT'), 'm').code).toBe('unknown');
+  });
+  it('bare status (no envelope) classifies too', () => {
+    const err = Object.assign(new Error('Service Unavailable'), { status: 503 });
+    expect(classifyAnalysisFailure(err, 'm').code).toBe('analyzer-unreachable');
+  });
+  it('non-envelope plain error falls through to the analysis table scan', () => {
+    const r = classifyAnalysisFailure(new Error('connect ECONNREFUSED 127.0.0.1:11434'), 'Ollama');
+    expect(r.code).toBe('analyzer-unreachable');
+  });
+  it('unmapped error → unknown with raw message preserved', () => {
+    const r = classifyAnalysisFailure(new Error('some novel failure'), 'm');
+    expect(r.code).toBe('unknown');
+    expect(r.userMessage).toContain('some novel failure');
   });
 });
