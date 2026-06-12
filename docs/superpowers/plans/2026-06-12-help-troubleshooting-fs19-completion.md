@@ -35,6 +35,8 @@ This plan executes via **one fresh subagent per task, strictly SEQUENTIALLY** �
 
 **Subagents do NOT:** push, open/ready PRs, merge, regenerate visual baselines outside Task 13, or touch files their task doesn't list.
 
+**E2E port contention (any task that runs Playwright — 8, 13, 15, 16):** the mock-mode webServer wants port 5174; a concurrent session's (or stale worktree's) Vite can squat it. If startup fails or specs hit a foreign app, kill the stale node process and re-run with `CI=1` and a free `PLAYWRIGHT_PORT` (known workaround from the macOS-fixes round).
+
 ---
 
 ## PR 1 — fs-19 completion
@@ -1402,7 +1404,7 @@ git commit -m "feat(frontend): #/help route + stage with ?code= deep-link gramma
 ### Task 12: The Help view
 
 **Depends on:** Task 10 (`HELP_FAILURE_ENTRIES`, `HELP_TOPICS`), Task 11 (`{ kind: 'help' }` stage + `openHelp` action — the test dispatches it).
-**Pre-flight reads:** `src/views/about.tsx` (whole file — the page chrome to reuse), `src/store/index.ts` (store factory export name for the test), one existing view test (e.g. `src/views/account.test.tsx`) for the render-with-store idiom, `src/components/mini-player.tsx` ~105–115 (the defensive keybinding-read idiom), and — for Step 4 — `brand/project-narrative.md` + `docs/superpowers/specs/2026-06-07-castwright-brand-design.md` **from the MAIN checkout** (`C:\Claude\Projects\Audiobook-Generator\brand\…`; `brand/` is git-ignored so the worktree has no copy).
+**Pre-flight reads:** `src/views/about.tsx` (whole file — the page chrome to reuse), `src/views/generation.test.tsx:3-10` + one render helper (~201) for the local-configureStore test idiom (there is NO store factory — `src/store/index.ts` exports a singleton), `src/store/ui-slice.ts` + `src/store/settings-slice.ts` (slice/action export names), `src/components/mini-player.tsx` ~105–115 (the defensive keybinding-read idiom), and — for Step 4 — `brand/project-narrative.md` + `docs/superpowers/specs/2026-06-07-castwright-brand-design.md` **from the MAIN checkout** (`C:\Claude\Projects\Audiobook-Generator\brand\…`; `brand/` is git-ignored so the worktree has no copy).
 
 **Files:**
 - Create: `src/views/help.tsx`
@@ -1414,12 +1416,20 @@ git commit -m "feat(frontend): #/help route + stage with ?code= deep-link gramma
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Provider } from 'react-redux';
-import { makeStore } from '../store'; // match the idiom other view tests use — check analysing.test.tsx
+import { configureStore } from '@reduxjs/toolkit';
+import { uiSlice, uiActions } from '../store/ui-slice';
+import { settingsSlice } from '../store/settings-slice';
 import { HelpView } from './help';
 
-function renderHelp(stage: { kind: 'help'; focusCode?: string }) {
-  const store = makeStore();
-  store.dispatch({ type: 'ui/openHelp', payload: { focusCode: stage.focusCode } }); // match the real action name from Task 11
+// There is NO makeStore factory — src/store/index.ts exports a singleton.
+// View tests build a local store from the slices (generation.test.tsx:3-10
+// is the idiom); HelpView reads `ui` + `settings`. Verify the slice/action
+// export names against the slice files during pre-flight.
+function renderHelp(focusCode?: string) {
+  const store = configureStore({
+    reducer: { ui: uiSlice.reducer, settings: settingsSlice.reducer },
+  });
+  store.dispatch(uiActions.openHelp({ focusCode }));
   return render(
     <Provider store={store}>
       <HelpView />
@@ -1429,26 +1439,26 @@ function renderHelp(stage: { kind: 'help'; focusCode?: string }) {
 
 describe('HelpView (fe-29)', () => {
   it('renders the three sections', () => {
-    renderHelp({ kind: 'help' });
+    renderHelp();
     expect(screen.getByRole('heading', { name: /getting started/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /keyboard shortcuts/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /troubleshooting/i })).toBeInTheDocument();
   });
   it('renders a taxonomy entry with What-you-saw / What-to-do', () => {
-    renderHelp({ kind: 'help' });
+    renderHelp();
     expect(screen.getByText('GPU out of memory (VRAM)')).toBeInTheDocument();
     expect(screen.getAllByText(/what to do/i).length).toBeGreaterThan(0);
   });
   it('marks the focused entry when focusCode matches', () => {
-    renderHelp({ kind: 'help', focusCode: 'vram-spill' });
+    renderHelp('vram-spill');
     expect(document.getElementById('vram-spill')).toHaveAttribute('data-focused', 'true');
   });
   it('ignores an unknown focusCode', () => {
-    renderHelp({ kind: 'help', focusCode: 'nonsense' });
+    renderHelp('nonsense');
     expect(document.querySelector('[data-focused="true"]')).toBeNull();
   });
   it('shows the live keybindings from the store', () => {
-    renderHelp({ kind: 'help' });
+    renderHelp();
     expect(screen.getByText(/play \/ pause/i)).toBeInTheDocument();
   });
 });
@@ -1686,7 +1696,7 @@ git commit -m "feat(frontend): persistent Help entry points (top-bar ? + Account
 ### Task 14: "More help" deep-links from both failure surfaces
 
 **Depends on:** Task 10 (`HELP_FAILURE_ENTRIES` for the analysing-side gate), Task 11 (`stageToHash` help case), PR 1 (the `code`/`remediation` fields on rows + panel, merged via Task 9's base).
-**Pre-flight reads:** `src/views/generation.tsx` — the `generationRemediation` block (search `What to do`; ~1539), `src/views/analysing.tsx` — the failed-row "What to do:" block and the run-error panel as left by PR 1's Task 7, `src/views/generation.test.tsx` — the existing fs-19 remediation test (search `What to do`).
+**Pre-flight reads:** `src/views/generation.tsx` — the `generationRemediation` block (search `What to do`; ~1539), `src/views/analysing.tsx` — the failed-row "What to do:" block and the run-error panel as left by PR 1's Task 7, `src/views/generation.test.tsx` — its render helpers (~line 201; NOTE it contains NO fs-19 remediation test today — the fs-19 frontend coverage lives in `src/store/generation-stream-runner.test.ts:184`, which tests the tick→row data flow, not the JSX; your new link tests are the FIRST component-level render of the remediation block, so build the failed-chapter fixture from the file's existing chapter-fixture helpers).
 
 **Files:**
 - Modify: `src/views/generation.tsx` (~1539, the `generationRemediation` block), `src/views/analysing.tsx` (failed-row block from Task 7; run-error panel)
@@ -1694,7 +1704,7 @@ git commit -m "feat(frontend): persistent Help entry points (top-bar ? + Account
 
 - [ ] **Step 1: Write the failing tests**
 
-`generation.test.tsx` (mirror the harness used by the existing fs-19 remediation test — `rg -n "What to do" src/views/generation.test.tsx`):
+`generation.test.tsx` (use the file's existing render-with-configureStore helpers at ~201; seed a chapter fixture with `status: 'failed'`, `generationRemediation: 'free VRAM…'`, and the `generationErrorCode` under test):
 
 ```tsx
 it('failed chapter row links to #/help?code= when a FailureCode is present (fe-29)', () => {
