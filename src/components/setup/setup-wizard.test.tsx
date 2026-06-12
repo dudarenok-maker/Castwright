@@ -187,7 +187,7 @@ describe('SetupWizard', () => {
     expect(onFinish).toHaveBeenCalledTimes(1);
   });
 
-  it('checklist mode renders all 5 steps stacked, with no Back/Next', () => {
+  it('re-entry (checklist) mode opens on the summary board, NOT stacked steps', () => {
     render(
       <SetupWizard
         readiness={READINESS}
@@ -196,10 +196,74 @@ describe('SetupWizard', () => {
         onFinish={() => {}}
       />,
     );
+    expect(screen.getByTestId('setup-summary-board')).toBeInTheDocument();
+    // No step body is rendered until the user drills into a row.
     for (const id of STEP_TESTIDS) {
-      expect(screen.getByTestId(id)).toBeInTheDocument();
+      expect(screen.queryByTestId(id)).not.toBeInTheDocument();
     }
+    // No wizard paging at the summary level.
     expect(screen.queryByRole('button', { name: /next/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^back$/i })).not.toBeInTheDocument();
+  });
+
+  it('re-entry mode: clicking a summary row opens the guided wizard at that step', () => {
+    render(
+      <SetupWizard
+        readiness={READINESS}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={() => {}}
+      />,
+    );
+    // The "Audio assembly" row maps to the ffmpeg step (step 2 of 5).
+    fireEvent.click(screen.getByTestId('setup-summary-row-ffmpeg'));
+    expect(screen.getByTestId('step-ffmpeg-stub')).toBeInTheDocument();
+    expect(screen.getByText(/step 2 of 5/i)).toBeInTheDocument();
+  });
+
+  it('re-entry mode: a "Setup overview" link returns from the wizard to the summary', () => {
+    render(
+      <SetupWizard
+        readiness={READINESS}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('setup-summary-row-environment'));
+    expect(screen.getByTestId('step-environment-stub')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /setup overview/i }));
+    expect(screen.getByTestId('setup-summary-board')).toBeInTheDocument();
+    expect(screen.queryByTestId('step-environment-stub')).not.toBeInTheDocument();
+  });
+
+  it('re-entry mode: flags failing blockers as needing attention', () => {
+    // READINESS has tts:'fail' + analyzer:'fail' → voice + analyzer rows attention.
+    render(
+      <SetupWizard
+        readiness={READINESS}
+        mode="checklist"
+        onRefetch={() => {}}
+        onFinish={() => {}}
+      />,
+    );
+    expect(screen.getByText(/need.*attention/i)).toBeInTheDocument();
+    expect(screen.getByTestId('setup-summary-row-voice').dataset.status).toBe('attention');
+    expect(screen.getByTestId('setup-summary-row-analyzer').dataset.status).toBe('attention');
+    expect(screen.getByTestId('setup-summary-row-ffmpeg').dataset.status).toBe('ok');
+  });
+
+  it('re-entry mode: a Re-check button calls onRefetch', () => {
+    const onRefetch = vi.fn();
+    render(
+      <SetupWizard
+        readiness={READINESS}
+        mode="checklist"
+        onRefetch={onRefetch}
+        onFinish={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /re-check/i }));
+    expect(onRefetch).toHaveBeenCalledTimes(1);
   });
 });
