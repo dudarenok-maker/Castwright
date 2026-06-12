@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { TOUR_STEPS } from '../../lib/tour-steps';
@@ -20,6 +20,7 @@ export function TourOverlay() {
   const { active, stepIndex } = useAppSelector((s) => s.tour);
   const step = active ? TOUR_STEPS[stepIndex] : null;
   const [rect, setRect] = useState<Rect | null>(null);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
 
   const remeasure = useCallback(() => {
     setRect(step ? measure(step.anchor) : null);
@@ -44,6 +45,10 @@ export function TourOverlay() {
       window.removeEventListener('keydown', onKey);
     };
   }, [step, remeasure, dispatch]);
+
+  useEffect(() => {
+    if (active) bubbleRef.current?.focus?.();
+  }, [stepIndex, active]);
 
   if (!step) return null;
 
@@ -75,11 +80,13 @@ export function TourOverlay() {
         data-testid="tour-bubble"
         data-anchored={anchored ? 'true' : 'false'}
         role="dialog"
-        aria-label={step.title}
+        aria-labelledby="tour-bubble-title"
+        ref={bubbleRef}
+        tabIndex={-1}
         className="rounded-2xl bg-ink text-canvas p-4 shadow-float"
         style={bubbleStyle}
       >
-        <h4 className="font-semibold text-sm">{step.title}</h4>
+        <h4 id="tour-bubble-title" className="font-semibold text-sm">{step.title}</h4>
         <p className="mt-1 text-xs text-canvas/75 leading-relaxed">{step.body}</p>
         <div className="mt-3 flex items-center gap-2">
           <div className="flex gap-1" aria-hidden>
@@ -95,7 +102,7 @@ export function TourOverlay() {
           )}
           <button type="button" onClick={() => dispatch(nextStep())}
             className="text-xs font-bold bg-peach text-ink rounded-lg px-3 py-1.5 min-h-[44px] sm:min-h-0">
-            {stepIndex === TOUR_STEPS.length - 1 ? 'Done' : 'Next →'}
+            {stepIndex === TOUR_STEPS.length - 1 ? 'Done' : <>Next <span aria-hidden="true">→</span></>}
           </button>
         </div>
       </div>

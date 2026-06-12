@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { TOUR_STEPS } from '../../lib/tour-steps';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
@@ -38,5 +39,15 @@ describe('TourOverlay', () => {
     render(<Provider store={store}><TourOverlay /></Provider>);
     fireEvent.click(screen.getByRole('button', { name: /skip/i }));
     expect(store.getState().tour.active).toBe(false);
+  });
+
+  it('shows Back when not on the first step', () => {
+    render(<Provider store={mkStore(1)}><TourOverlay /></Provider>);
+    expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument();
+  });
+
+  it('shows Done on the last step', () => {
+    render(<Provider store={mkStore(TOUR_STEPS.length - 1)}><TourOverlay /></Provider>);
+    expect(screen.getByRole('button', { name: /done/i })).toBeInTheDocument();
   });
 });
