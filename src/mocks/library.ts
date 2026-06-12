@@ -10,7 +10,7 @@ import type { LibraryResponse } from '../lib/types';
 export const MOCK_LIBRARY: LibraryResponse = {
   authors: [
     {
-      name: 'Mike Dudarenok',
+      name: 'Marin Vale',
       series: [
         {
           name: 'Northern Coast Trilogy',
@@ -18,7 +18,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
             {
               bookId: 'sb',
               title: 'Solway Bay',
-              author: 'Mike Dudarenok',
+              author: 'Marin Vale',
               series: 'Northern Coast Trilogy',
               seriesPosition: 1,
               isStandalone: false,
@@ -36,7 +36,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
             {
               bookId: 'ns',
               title: 'The Northern Star',
-              author: 'Mike Dudarenok',
+              author: 'Marin Vale',
               series: 'Northern Coast Trilogy',
               seriesPosition: 2,
               isStandalone: false,
@@ -55,7 +55,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
             {
               bookId: 'cc',
               title: "Carrick's Compass",
-              author: 'Mike Dudarenok',
+              author: 'Marin Vale',
               series: 'Northern Coast Trilogy',
               seriesPosition: 3,
               isStandalone: false,
@@ -77,7 +77,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
             {
               bookId: 'ts',
               title: 'Twilight Stations',
-              author: 'Mike Dudarenok',
+              author: 'Marin Vale',
               series: 'Standalones',
               seriesPosition: null,
               isStandalone: true,

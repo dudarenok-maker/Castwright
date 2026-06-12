@@ -4,7 +4,7 @@ export const BOOKS: Book[] = [
   {
     id: 'ns',
     title: 'The Northern Star',
-    author: 'Mike Dudarenok',
+    author: 'Marin Vale',
     series: 'Northern Coast Trilogy · Book 2',
     status: 'generating',
     progress: 0.42,
@@ -20,7 +20,7 @@ export const BOOKS: Book[] = [
   {
     id: 'sb',
     title: 'Solway Bay',
-    author: 'Mike Dudarenok',
+    author: 'Marin Vale',
     series: 'Northern Coast Trilogy · Book 1',
     status: 'complete',
     progress: 1.0,
@@ -35,7 +35,7 @@ export const BOOKS: Book[] = [
   {
     id: 'cc',
     title: "Carrick's Compass",
-    author: 'Mike Dudarenok',
+    author: 'Marin Vale',
     series: 'Northern Coast Trilogy · Book 3',
     status: 'cast_pending',
     chapterCount: 22,
@@ -49,7 +49,7 @@ export const BOOKS: Book[] = [
   {
     id: 'ts',
     title: 'Twilight Stations',
-    author: 'Mike Dudarenok',
+    author: 'Marin Vale',
     series: 'Standalone',
     status: 'analysing',
     progress: 0.34,
