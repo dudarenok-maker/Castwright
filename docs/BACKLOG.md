@@ -77,7 +77,7 @@ _Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-
 
 #### `fs-21` — on-box acceptance for the first-run wizard ([#752](https://github.com/dudarenok-maker/Castwright/issues/752))
 
-- _What:_ The fs-21 first-run wizard shipped code-complete + CI-green (Waves 0/1/1b/2/3, merged 2026-06-12; regression plan [210](features/210-fs21-first-run-wizard.md)). This residual tracks the acceptance that can't run in CI / on the Windows dev box: real Kokoro install on Mac+Linux, a fresh venv bootstrap (decision Z), the no-Python degrade, audible Tier-1 smoke + Tier-2 demo generation, and a `cross-os.yml` run before release.
+- _What:_ The fs-21 first-run wizard shipped code-complete + CI-green (Waves 0/1/1b/2/3, merged 2026-06-12; regression plan [210](features/archive/210-fs21-first-run-wizard.md)). This residual tracks the acceptance that can't run in CI / on the Windows dev box: real Kokoro install on Mac+Linux, a fresh venv bootstrap (decision Z), the no-Python degrade, audible Tier-1 smoke + Tier-2 demo generation, and a `cross-os.yml` run before release.
 - _Benefit (user):_ confirms the one-click cross-platform setup actually works on every deployer OS before it ships.
 _Full detail + acceptance:_ [#752](https://github.com/dudarenok-maker/Castwright/issues/752).
 
