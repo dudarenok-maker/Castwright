@@ -1517,6 +1517,84 @@ describe('AnalysingView — request-model gating (plan 118)', () => {
   });
 });
 
+/* Regression: the readiness gate must follow the model the run ACTUALLY uses
+   (the per-phase split), NOT ui.selectedModel. Field report: the account
+   default seeds ui.selectedModel to a local Ollama model on every boot, but the
+   per-phase dropdowns route the run to Gemini — and the view stayed "stuck on
+   Ollama" (Ollama-not-reachable pill, "Waiting for analyzer…", needs-VRAM hint)
+   even though the cloud run never touches Ollama. */
+describe('AnalysingView — readiness gate follows the effective per-phase model', () => {
+  function makeStore(opts: {
+    selectedModel: string;
+    phase0?: string | null;
+    phase1?: string | null;
+  }) {
+    return configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+      },
+      preloadedState: {
+        ui: {
+          ...uiSlice.getInitialState(),
+          selectedModel: opts.selectedModel,
+          selectedModelExplicit: false,
+        } as ReturnType<typeof uiSlice.getInitialState>,
+        account: {
+          ...accountSlice.getInitialState(),
+          analyzerPhase0Model: opts.phase0 ?? null,
+          analyzerPhase1Model: opts.phase1 ?? null,
+        } as ReturnType<typeof accountSlice.getInitialState>,
+      },
+    });
+  }
+
+  it('does not gate on (or even probe) Ollama when the split routes both phases to cloud, despite a local ui.selectedModel', async () => {
+    /* Even with Ollama down, a cloud run must not be blocked by it. */
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'unreachable',
+      url: '(test)',
+      error: 'connect ECONNREFUSED',
+    });
+    const store = makeStore({
+      selectedModel: 'qwen3.5:4b', // stale local default seeded from account
+      phase0: 'gemma-4-31b-it', // per-phase split → both cloud
+      phase1: 'gemini-3.1-flash-lite',
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView manuscriptId="m1" title="the Coalfall Commission" model="qwen3.5:4b" onComplete={() => {}} />
+      </Provider>,
+    );
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    expect(startBtn).toBeEnabled();
+    expect(screen.queryByText(/Ollama not reachable/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Waiting for analyzer/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/resident in VRAM/i)).not.toBeInTheDocument();
+    /* The probe effect is gated on isLocalAnalyzer — a cloud-effective run must
+       never reach out to Ollama at all. */
+    expect(getOllamaHealthSpy).not.toHaveBeenCalled();
+  });
+
+  it('still gates on Ollama when the effective run IS local (split off, local default)', async () => {
+    getOllamaHealthSpy.mockResolvedValue({
+      status: 'unreachable',
+      url: '(test)',
+      error: 'connect ECONNREFUSED',
+    });
+    const store = makeStore({ selectedModel: 'qwen3.5:4b' }); // no per-phase split
+    render(
+      <Provider store={store}>
+        <AnalysingView manuscriptId="m1" title="the Coalfall Commission" model="qwen3.5:4b" onComplete={() => {}} />
+      </Provider>,
+    );
+    expect(await screen.findByText(/Ollama not reachable/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /waiting for analyzer/i })).toBeDisabled();
+  });
+});
+
 describe('AnalysingView — Wave 2 brand manifesto', () => {
   it('renders "Many voices, one machine." on the analysing screen', () => {
     renderView();

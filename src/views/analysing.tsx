@@ -260,22 +260,42 @@ export function AnalysingView({
      analyzer Load/Stop machinery lives further down; this slice pulls
      just the bits the analysis effect needs to decide whether it's
      safe to fire the SSE. */
-  const selectedModel = useMemo(() => {
-    const id = model ?? MODEL_OPTIONS[0].id;
-    return MODEL_OPTIONS.find((m) => m.id === id);
-  }, [model]);
-  const isLocalAnalyzer = selectedModel?.engine === 'local';
-  /* Plan 118 — the model id to SEND on the request (distinct from the
-     readiness/engine derivation above, which keeps reading the always-
-     populated `model` prop = ui.selectedModel). When the user has a per-phase
-     split configured AND hasn't made an explicit per-run pick, send nothing
-     so the server's saved per-phase models apply (precedence priority 3).
-     Otherwise send the selected model — preserving the single-model path
+  /* Plan 118 — the model id to SEND on the request. When the user has a
+     per-phase split configured AND hasn't made an explicit per-run pick, send
+     nothing so the server's saved per-phase models apply (precedence priority
+     3). Otherwise send the selected model — preserving the single-model path
      (split off → both phases use defaultAnalysisModel) and the explicit
      per-run override (priority 2). */
   const splitActive = useAppSelector((s) => selectAnalyzerSplitIsActive(s.account));
   const selectedModelExplicit = useAppSelector((s) => s.ui.selectedModelExplicit);
+  const phase0Model = useAppSelector((s) => s.account.analyzerPhase0Model);
+  const phase1Model = useAppSelector((s) => s.account.analyzerPhase1Model);
   const requestModel = splitActive && !selectedModelExplicit ? undefined : model;
+  /* The model id(s) the run will ACTUALLY execute on. The readiness/engine
+     gate MUST derive from these, not from ui.selectedModel: ui.selectedModel is
+     re-seeded from the account default on every boot (ui-slice.ts), so a user
+     who once used Ollama keeps a stale LOCAL default there even after switching
+     the per-phase dropdowns to a cloud model. Reading it directly left the view
+     "stuck on Ollama" — probing the daemon, blocking Start on VRAM residency —
+     for a Gemini run that never calls Ollama. Mirror requestModel exactly:
+       - split engaged, no explicit pick → the saved per-phase models (a blank
+         phase falls through to the server's own default, which the client
+         can't see; treat as not-local so a cloud deployment isn't gated on an
+         Ollama it never calls);
+       - otherwise → the single per-run model (or the built-in default). */
+  const effectiveModelIds = useMemo<string[]>(() => {
+    if (splitActive && !selectedModelExplicit) {
+      return [phase0Model, phase1Model].filter((id): id is string => Boolean(id));
+    }
+    return [model ?? MODEL_OPTIONS[0].id];
+  }, [splitActive, selectedModelExplicit, phase0Model, phase1Model, model]);
+  const isLocalAnalyzer = effectiveModelIds.some(
+    (id) => MODEL_OPTIONS.find((m) => m.id === id)?.engine === 'local',
+  );
+  /* Engine tag captured into the cross-navigation snapshot (read by the
+     reverse-local-analyzer guard). Mirror the effective-local derivation so a
+     cloud run is never mis-tagged 'local' and made to nag the TTS-start path. */
+  const effectiveEngine: 'local' | 'gemini' = isLocalAnalyzer ? 'local' : 'gemini';
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
   const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
   const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
@@ -351,7 +371,7 @@ export function AnalysingView({
          later. A user model-switch mid-stream must not mis-classify a
          running analysis from the reverse-direction guard's
          perspective (see use-reverse-local-analyzer-guard.tsx). */
-        engine: selectedModel?.engine,
+        engine: effectiveEngine,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,
@@ -677,7 +697,7 @@ export function AnalysingView({
         bookId: bookId ?? null,
         manuscriptId,
         bookTitle: title ?? undefined,
-        engine: selectedModel?.engine,
+        engine: effectiveEngine,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,
@@ -796,7 +816,7 @@ export function AnalysingView({
               bookId: bookId ?? null,
               manuscriptId,
               bookTitle: title ?? undefined,
-              engine: selectedModel?.engine,
+              engine: effectiveEngine,
               phaseId: 0,
               phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
               phaseProgress: 0,
