@@ -41,8 +41,10 @@ Two deliverables, one hard dependency between them:
 
 ## Non-goals
 
-- **No pre-rendered audio in the bundle.** The user generates locally (keeps the smoke
-  test honest and the bundle small).
+- **Exactly one pre-rendered chapter (chapter 1, full Qwen cast)** ships in the bundle
+  to power the guided tour's Listen finale (see
+  `docs/superpowers/specs/2026-06-12-guided-tour-design.md`). Chapters 2+ remain
+  un-rendered (the user generates them), keeping the bundle small.
 - **No re-analysis on load.** The bundle ships the attribution (analysis cache +
   `manuscript-edits.json`), so "who speaks each line" is already known; generation is the
   only pipeline step the demo exercises.
@@ -141,6 +143,17 @@ samples/the-coalfall-commission/
 
 Binary `.pt` files (Qwen speaker embeddings, ~20 KB each) are committed directly — small
 and stable enough that git-tracking them is fine. No `audio/`. No machine-specific paths.
+
+### Chapter-1 audio (for the guided tour)
+
+The **user renders chapter 1 in production** (real pipeline, full Qwen cast) and points to
+the rendered artifact; we then **package** it — the per-chapter audio plus `segments.json` /
+`state.json` — under the sample's book dir
+(`samples/the-coalfall-commission/.audiobook/audio/chapter-1/`), so the on-disk
+`loadSample` provisioning opens the book with chapter 1 `state: 'done'` (chapters 2+
+`queued`). Until that prod artifact is wired in, the in-app mock flow carries the demo (the
+mock seeds chapter 1 as done); the real bundle's Listen finale lands when the prod render is
+handed off.
 
 ### Fallback cast (Kokoro)
 
