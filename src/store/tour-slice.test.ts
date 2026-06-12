@@ -10,9 +10,8 @@ vi.mock('../lib/api', () => ({
   },
 }));
 
-import { tourSlice, tourActions, fetchTourStatus, completeTour, goToStep } from './tour-slice';
-import { uiSlice } from './ui-slice';
-import { uiActions } from './ui-slice';
+import { tourSlice, tourActions, fetchTourStatus, completeTour, goToStep, nextStep, startScreenTour } from './tour-slice';
+import { uiSlice, uiActions } from './ui-slice';
 import { configureStore } from '@reduxjs/toolkit';
 
 const reducer = tourSlice.reducer;
@@ -91,5 +90,26 @@ describe('tour navigation thunks', () => {
     await store.dispatch(goToStep(5)); // s6-roster
     stage = store.getState().ui.stage;
     if (stage.kind === 'ready') expect(stage.openProfileId).toBeNull();
+  });
+
+  it('screen-mode nextStep advances within the screen slice', async () => {
+    const store = mkStore();
+    store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
+    await store.dispatch(startScreenTour('cast'));
+    expect(store.getState().tour.stepIndex).toBe(5); // s6-roster
+    await store.dispatch(nextStep());
+    expect(store.getState().tour.stepIndex).toBe(6); // s7-drawer
+    await store.dispatch(nextStep());
+    expect(store.getState().tour.stepIndex).toBe(7); // s8-fullcast
+  });
+
+  it('screen-mode nextStep ends the tour after the screen\'s last step', async () => {
+    const store = mkStore();
+    store.dispatch(uiActions.openBook({ id: 'b', status: 'complete', manuscriptId: 'm' }));
+    await store.dispatch(startScreenTour('cast'));
+    await store.dispatch(nextStep()); // 6
+    await store.dispatch(nextStep()); // 7 (last cast step)
+    await store.dispatch(nextStep()); // past end → endTour
+    expect(store.getState().tour.active).toBe(false);
   });
 });

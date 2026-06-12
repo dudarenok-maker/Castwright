@@ -118,6 +118,7 @@ export function nextStep(): AppThunk {
     if (mode === 'screen') {
       const slice = stepsForScreen(tourId as TourScreen);
       const posInSlice = slice.findIndex((s) => s.id === TOUR_STEPS[stepIndex].id);
+      if (posInSlice === -1) { dispatch(tourSlice.actions.endTour()); return; }
       if (posInSlice + 1 >= slice.length) { dispatch(tourSlice.actions.endTour()); return; }
       dispatch(goToStep(TOUR_STEPS.indexOf(slice[posInSlice + 1])));
       return;
