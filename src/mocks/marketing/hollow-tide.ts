@@ -1,8 +1,15 @@
 /* Capture-only marketing fixtures (VITE_DEMO_CAPTURE=1). Additive — never
    served in normal mock mode, so this touches no existing spec. */
 import type { LibraryResponse, BookStateResponse, Character } from '../../lib/types';
+import type { CoverFraming } from '../../lib/cover-framing';
 
 const COVER = (slug: string) => `/marketing-covers/${slug}.png`;
+
+/* The grid card crops the square cover to 16:10 (object-cover, centred), which
+   clips the title near the top. Bias the visible region upward so the title
+   reads on the shelf. No effect on the 1:1 listen cover (the full square shows,
+   so object-position is a no-op there). */
+const TITLE_TOP_FRAME: CoverFraming = { offsetX: 0, offsetY: -55, zoom: 1 };
 
 /* --- Recurring cast, designed in Book 1, reused in 2 & 3 --- */
 const narrator = (): Character => ({
@@ -286,6 +293,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               lastWorkedOn: '2 days ago',
               coverGradient: ['#1F3A40', '#0B1416'],
               coverImageUrl: COVER('hollow-tide-1'),
+              coverFraming: TITLE_TOP_FRAME,
               tags: ['series-1'],
             },
             {
@@ -305,6 +313,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               lastWorkedOn: '4 min ago',
               coverGradient: ['#2B4C57', '#101D22'],
               coverImageUrl: COVER('hollow-tide-2'),
+              coverFraming: TITLE_TOP_FRAME,
               pinned: true,
               tags: ['series-1'],
             },
@@ -324,6 +333,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               lastWorkedOn: 'Just now',
               coverGradient: ['#22343F', '#0A1014'],
               coverImageUrl: COVER('hollow-tide-3'),
+              coverFraming: TITLE_TOP_FRAME,
               tags: ['series-1'],
             },
           ],
@@ -353,6 +363,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               lastWorkedOn: 'Last week',
               coverGradient: ['#3C194F', '#0F0E0D'],
               coverImageUrl: COVER('coalfall-commission'),
+              coverFraming: TITLE_TOP_FRAME,
               tags: [],
             },
           ],
