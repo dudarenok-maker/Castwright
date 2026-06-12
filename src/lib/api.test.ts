@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mockGetSetupReadiness } from './api';
+import { mockGetSetupReadiness, mockCompleteSetup } from './api';
 
 describe('mockGetSetupReadiness', () => {
   beforeEach(() => {
@@ -20,5 +20,13 @@ describe('mockGetSetupReadiness', () => {
     window.location.hash = '#/setup';
     const second = await mockGetSetupReadiness();
     expect(second.ready).toBe(false);
+  });
+});
+
+describe('mockCompleteSetup', () => {
+  it('resolves an ISO completedAt', async () => {
+    const r = await mockCompleteSetup();
+    expect(typeof r.completedAt).toBe('string');
+    expect(new Date(r.completedAt).toISOString()).toBe(r.completedAt);
   });
 });
