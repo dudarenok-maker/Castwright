@@ -48,4 +48,4 @@ the run-level describeError() unified into `classifyAnalysisFailure` (old codes
 truncated/daily_quota/rate_limit/unavailable/internal/invalid_key/bad_request →
 FailureCode), per-chapter cast failures + the stage-2 coverage-suspect path now
 persist `failedChapterErrors` records, and the analysing view renders
-message + remediation live and after reload.
+message + remediation live and after reload. fe-29 Help view deep-links (#/help?code=) delivered — the downstream surface the taxonomy's stable codes were built for.
