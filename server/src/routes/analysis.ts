@@ -44,6 +44,7 @@ import {
   loadAnalysisCache,
   saveAnalysisCache,
   type AnalysisCache,
+  type ChapterErrorRecord,
 } from '../store/analysis-cache.js';
 import {
   deleteAnalysisState,
@@ -781,7 +782,7 @@ function clampEst(ms: number): number {
 export function clearFailedChapterId(
   cache: {
     failedChapterIds?: number[];
-    failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
+    failedChapterErrors?: Record<string, ChapterErrorRecord>;
   },
   chapterId: number,
 ): boolean {
@@ -799,7 +800,7 @@ export function clearFailedChapterId(
 export function recordFailedChapter(
   cache: {
     failedChapterIds?: number[];
-    failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
+    failedChapterErrors?: Record<string, ChapterErrorRecord>;
   },
   chapterId: number,
   classified: { code: string; userMessage: string; remediation: string },
@@ -807,13 +808,11 @@ export function recordFailedChapter(
   const failedSet = new Set(cache.failedChapterIds ?? []);
   failedSet.add(chapterId);
   cache.failedChapterIds = Array.from(failedSet);
-  cache.failedChapterErrors = {
-    ...cache.failedChapterErrors,
-    [String(chapterId)]: {
-      code: classified.code,
-      message: classified.userMessage,
-      remediation: classified.remediation,
-    },
+  if (!cache.failedChapterErrors) cache.failedChapterErrors = {};
+  cache.failedChapterErrors[String(chapterId)] = {
+    code: classified.code,
+    message: classified.userMessage,
+    remediation: classified.remediation,
   };
 }
 

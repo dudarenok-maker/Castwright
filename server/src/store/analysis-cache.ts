@@ -57,6 +57,14 @@ function seedEmotionsFromTags(chapters: Record<number, SentenceOutput[]>): Recor
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = resolve(__dirname, '..', '..', 'handoff', 'cache');
 
+/** fs-19 — one classified per-chapter analysis failure (message = the
+    jargon-free userMessage at classification time). */
+export interface ChapterErrorRecord {
+  code: string;
+  message: string;
+  remediation: string;
+}
+
 export interface AnalysisCache {
   /** Phase 0a — raw per-chapter character output keyed by chapterId. The
       route replays these in chapter-id order through the merge to rebuild
@@ -87,7 +95,7 @@ export interface AnalysisCache {
       failedChapterIds: ids stay the durable retry list; this carries the
       classified code + copy so the analysing view shows a real message +
       remediation after reload instead of the generic fallback. */
-  failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
+  failedChapterErrors?: Record<string, ChapterErrorRecord>;
   updatedAt?: string;
 }
 
