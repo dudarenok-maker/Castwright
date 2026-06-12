@@ -70,6 +70,7 @@ const AdminView = lazy(() =>
 const ModelManagerView = lazy(() =>
   import('../views/model-manager').then((m) => ({ default: m.ModelManagerView })),
 );
+const SetupView = lazy(() => import('../views/setup').then((m) => ({ default: m.SetupView })));
 const AboutView = lazy(() =>
   import('../views/about').then((m) => ({ default: m.AboutView })),
 );
@@ -404,6 +405,19 @@ function AdminRoute() {
 function ModelManagerRoute() {
   useHydrateStage({ kind: 'model-manager' }, []);
   return <ModelManagerView />;
+}
+
+/* fs-21 — first-run setup wizard. Fetches readiness on mount; Wave 2 fleshes
+   the steps. */
+function SetupRoute() {
+  useHydrateStage({ kind: 'setup' }, []);
+  const [readiness, setReadiness] = useState<Awaited<ReturnType<typeof api.getSetupReadiness>> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.getSetupReadiness().then((r) => { if (!cancelled) setReadiness(r); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  return <SetupView readiness={readiness} />;
 }
 
 /* Wave 3 — /about brand page, reached from the Admin view. */
@@ -1062,6 +1076,7 @@ export const router = createHashRouter([
       /* Inbound alias for old dev bookmarks; stageToHash canonicalises to #/admin. */
       { path: 'worktrees', element: <AdminRoute /> },
       { path: 'models', element: <ModelManagerRoute /> },
+      { path: 'setup', element: <SetupRoute /> },
       { path: 'about', element: <AboutRoute /> },
       { path: 'help', element: <HelpRoute /> },
       { path: 'advanced', element: <AdvancedRoute /> },

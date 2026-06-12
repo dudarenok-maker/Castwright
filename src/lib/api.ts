@@ -5177,6 +5177,46 @@ async function mockGetDiagnostics(): Promise<DiagnosticsResponse> {
   };
 }
 
+/* fs-21 — first-run readiness. Mirrors SetupReadiness in
+   server/src/routes/setup-readiness.ts. */
+export type BlockerStatus = 'pass' | 'fail';
+export interface SetupReadiness {
+  ready: boolean;
+  completedAt: string | null;
+  blockers: { sidecar: BlockerStatus; ffmpeg: BlockerStatus; tts: BlockerStatus; analyzer: BlockerStatus };
+  info: { gpu: string };
+}
+
+async function realGetSetupReadiness(): Promise<SetupReadiness> {
+  const res = await fetch('/api/setup/readiness');
+  if (!res.ok) throw new Error(`readiness ${res.status}`);
+  return (await res.json()) as SetupReadiness;
+}
+
+/* Exported so unit tests can drive it directly (the `api.*` indirection locks
+   USE_MOCKS at import). Latches not-ready into sessionStorage from the
+   ?setup=notready param so the state survives the redirect to #/setup, where
+   the query param is gone. */
+export async function mockGetSetupReadiness(): Promise<SetupReadiness> {
+  if (window.location.hash.includes('setup=notready')) {
+    sessionStorage.setItem('mock-setup-readiness', 'notready');
+  }
+  const notReady = sessionStorage.getItem('mock-setup-readiness') === 'notready';
+  return notReady
+    ? {
+        ready: false,
+        completedAt: null,
+        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'fail', analyzer: 'fail' },
+        info: { gpu: 'CPU — no GPU detected' },
+      }
+    : {
+        ready: true,
+        completedAt: '2026-06-12T00:00:00.000Z',
+        blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
+        info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
+      };
+}
+
 async function mockGetSidecarHealth(): Promise<SidecarHealth> {
   /* Mocks pretend everything's healthy — generation is local and synchronous
      under VITE_USE_MOCKS=true, so there's no real sidecar to probe. */
@@ -5891,6 +5931,7 @@ const real = {
   removeModel: realRemoveModel,
   getGpuQueueState: realGetGpuQueueState,
   getDiagnostics: realGetDiagnostics,
+  getSetupReadiness: realGetSetupReadiness,
   getOllamaHealth: realGetOllamaHealth,
   loadSidecar: realLoadSidecar,
   unloadSidecar: realUnloadSidecar,
@@ -6138,6 +6179,7 @@ const mock = {
   removeModel: mockRemoveModel,
   getGpuQueueState: mockGetGpuQueueState,
   getDiagnostics: mockGetDiagnostics,
+  getSetupReadiness: mockGetSetupReadiness,
   getOllamaHealth: mockGetOllamaHealth,
   loadSidecar: mockLoadSidecar,
   unloadSidecar: mockUnloadSidecar,

@@ -210,6 +210,12 @@ export const userSettingsSchema = z.object({
   schemaVersion: z.number().int().optional(),
   lastSeenAppVersion: z.string().max(40).optional(),
   showWhatsNew: z.boolean().optional(),
+  /* fs-21 — ISO timestamp stamped when the user finishes (or exits) the
+     guided first-run flow. Suppresses the guided re-intro; the hard gate
+     itself stays derived from live readiness, so this never grants access.
+     Optional/absent on a fresh file. NOT user-editable: stripped from the
+     general PUT via FORBIDDEN_KEYS and written only by writeSetupCompletedAt. */
+  setupCompletedAt: z.string().nullable().optional(),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -376,6 +382,8 @@ const FORBIDDEN_KEYS = new Set([
   'schemaVersion',
   'lastSeenAppVersion',
   'showWhatsNew',
+  /* fs-21 first-run flow — written only by writeSetupCompletedAt. */
+  'setupCompletedAt',
 ]);
 
 function stripForbiddenKeys(value: unknown): Record<string, unknown> {
@@ -609,6 +617,29 @@ export async function writeUpgradeMeta(patch: {
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, ...patch };
+    await writeJsonAtomic(USER_SETTINGS_PATH, merged);
+    cached = merged;
+    return merged;
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
+/** fs-21 — ISO timestamp stamped when the user finishes (or exits) the
+    guided first-run flow. Suppresses the guided re-intro; the hard gate
+    itself stays derived from live readiness, so this never grants access.
+    Sync read off the in-process cache, like getResolvedGeminiApiKey. */
+export function getResolvedSetupCompletedAt(): string | null {
+  return cached?.setupCompletedAt ?? null;
+}
+
+/** Dedicated writer (mirrors writeUpgradeMeta): bypasses the general
+    writeUserSettings schema/strip path so the new field persists, and
+    refreshes the sync `cached` the getter reads. */
+export async function writeSetupCompletedAt(ts: string | null): Promise<UserSettings> {
+  const next = writeChain.then(async () => {
+    const current = await readUserSettings();
+    const merged: UserSettings = { ...current, setupCompletedAt: ts };
     await writeJsonAtomic(USER_SETTINGS_PATH, merged);
     cached = merged;
     return merged;

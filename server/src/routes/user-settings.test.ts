@@ -282,6 +282,7 @@ describe('user-settings router', () => {
       'schemaVersion',
       'lastSeenAppVersion',
       'showWhatsNew',
+      'setupCompletedAt',
     ]);
     const writableKeys = Object.keys(userSettingsSchema.shape).filter((k) => !NON_WRITABLE.has(k));
     for (const key of writableKeys) {
