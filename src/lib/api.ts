@@ -1103,10 +1103,15 @@ export async function mockPutBookState(bookId: string, req: PutStateRequest): Pr
 /** Test-only: drop the in-memory mock-state table and restore the
  *  default fixtures. Tests that want a truly empty store can call
  *  MOCK_BOOK_STATES.clear() directly (only the in-file specs in
- *  api.mock-state.test.ts do this today). */
+ *  api.mock-state.test.ts do this today).
+ *  Also resets the sample overlay so the two always travel together —
+ *  a stale mockSampleLibraryEntry would re-add the sample book's entry
+ *  to the library response even after a full book-states reset. */
 export function _resetMockBookStates(): void {
   MOCK_BOOK_STATES.clear();
   seedDefaultMockBookStates();
+  // Coupled reset: sample overlay must clear whenever the state table does.
+  _resetMockSample();
 }
 
 /* Plan 47 — listen-progress mocks. Module-scope Map so a PUT-then-GET
@@ -3111,6 +3116,15 @@ export async function mockLoadSample(_slug: string): Promise<{ bookId: string }>
       ? {
           ...base,
           state: { ...base.state, bookId: SAMPLE_BOOK_ID, updatedAt: now },
+          /* Defensive shallow clone: cast.characters and manuscriptEdits.sentences
+             carry arrays that callers (e.g. mockPutBookState) may mutate in-place.
+             Without this the spread above shares those arrays by reference with the
+             module-level marketing fixture, so a write to the sample's cast would
+             corrupt HOLLOW_TIDE_BOOK_STATES across subsequent test runs. */
+          cast: base.cast ? { ...base.cast, characters: [...base.cast.characters] } : base.cast,
+          manuscriptEdits: base.manuscriptEdits?.sentences
+            ? { ...base.manuscriptEdits, sentences: [...base.manuscriptEdits.sentences] }
+            : base.manuscriptEdits,
           completedSlugs: ['03-the-knock'],
         }
       : {
