@@ -472,7 +472,7 @@ export function Layout() {
         setSetupReady(r.ready);
         // Redirecting to /setup when already there is a harmless no-op, so we
         // don't need to read the current stage (Layout does NOT import `store`).
-        if (!r.ready) navigate('/setup');
+        if (!r.ready) navigate('/setup', { replace: true });
       })
       .catch(() => {
         if (!cancelled) setSetupReady(true);
