@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { classifyFailure } from './failure-taxonomy.js';
+import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
    like a sentence (starts uppercase, ends with punctuation, no "Traceback"
@@ -207,5 +208,32 @@ describe('classifyFailure', () => {
     expect(out.code).toBe('unknown');
     expect(out.userMessage.length).toBeLessThanOrEqual(241);
     expect(out.userMessage.endsWith('…')).toBe(true);
+  });
+});
+
+describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
+  it('has exactly one entry per FailureCode', () => {
+    expect(Object.keys(FAILURE_REMEDIATIONS).sort()).toEqual(
+      [
+        'analyzer-rate-limit',
+        'auth',
+        'cuda-poisoned',
+        'disk-full',
+        'model-not-loaded',
+        'oom',
+        'recycle-storm',
+        'sidecar-unreachable',
+        'synth-timeout',
+        'unknown',
+        'vram-spill',
+        'xtts-speaker-desync',
+      ].sort(),
+    );
+  });
+  it('every entry has non-empty userMessage and remediation', () => {
+    for (const [code, copy] of Object.entries(FAILURE_REMEDIATIONS)) {
+      expect(copy.userMessage.length, code).toBeGreaterThan(0);
+      expect(copy.remediation.length, code).toBeGreaterThan(0);
+    }
   });
 });
