@@ -22,10 +22,12 @@ via `Closes #NN`) and remove its row here; update the source plan's `status:` /
 Ship notes and archive it if `stable`. When you discover a new item, file a
 Backlog-item issue AND add the thin row here linking it, in the same round.
 
-_2026-06-12: moved `ops-12` (trademark clearance) and `ops-9` (server-side branch protection)
-out to the private commercialisation backlog — both are launch/business machinery, not app work
-(`ops-9` absorbed into its `com-4` public-repo-opening item). Folded the Windows code-signing and
-macOS notarisation requirements into `ops-1`/`ops-15` (the cost/vendor detail stays private)._
+_2026-06-12: added `ops-16` (Pinokio one-click installer) as a third first-class install path in
+the Must onboarding/install group, below `ops-15`. Moved `ops-12` (trademark clearance) and `ops-9`
+(server-side branch protection) out to the private commercialisation backlog — both are
+launch/business machinery, not app work (`ops-9` absorbed into its `com-4` public-repo-opening
+item). Folded the Windows code-signing and macOS notarisation requirements into `ops-1`/`ops-15`
+(the cost/vendor detail stays private)._
 
 _Last reprioritised 2026-06-08 (cleanup round: promoted the onboarding cluster, the
 voices-library/cloning item, and `srv-1` into Must; retired the delivered Android-companion,
@@ -92,6 +94,13 @@ _Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-
 - _Depends on:_ a paid **Apple Developer account** (~$99/yr) + a Developer ID Application cert for signing/notarization — external prerequisite that blocks the notarized half (Gatekeeper **hard-blocks** unnotarized internet-downloaded apps on Apple Silicon — not a click-through); unsigned `.dmg` mechanics can be built ahead of that. The same membership is the only iOS distribution path (`app-12`). _(Account procurement is tracked privately.)_
 - _Benefit (user):_ friction-free install for non-developer Mac users — the other primary deployer platform alongside Windows. Reduces a read-INSTALL.md-and-run-shell-commands bootstrap to drag-and-drop.
 _Full detail + acceptance:_ [#735](https://github.com/dudarenok-maker/Castwright/issues/735).
+
+#### `ops-16` — Pinokio one-click installer _(issue: to file)_
+
+- _What:_ Ship a single **Pinokio** JSON install script as a third first-class install path alongside the native installers (`ops-1` Windows `.exe`, `ops-15` macOS `.dmg`): one click in the Pinokio browser fetches the release, provisions the Python venv + TTS sidecar, checks the runtime prereqs, and launches the app — then hands off to the `fs-21` first-run wizard for GPU detect + model install, identical post-install setup to the native installers. The script's update path must be automated in `release.yml` (a manual-upload channel is a future stale-version complaint).
+- _Benefit (user):_ a no-terminal, no-Python-bootstrap install for users who run Pinokio — the same "click and it's running" path the `.exe`/`.dmg` give Windows/macOS deployers. Reduces a read-INSTALL.md bootstrap to one click.
+- _Area:_ ops. _Builds on:_ `ops-1`/`ops-15` (installers), `fs-21` (first-run wizard).
+_Full detail + acceptance:_ issue to be filed.
 
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
