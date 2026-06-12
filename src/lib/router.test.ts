@@ -34,6 +34,10 @@ describe('stageToHash', () => {
     expect(stageToHash({ kind: 'about' })).toBe('#/about');
   });
 
+  it('maps the setup stage to #/setup', () => {
+    expect(stageToHash({ kind: 'setup' })).toBe('#/setup');
+  });
+
   it('analysing with bookId → #/books/:id/analysing', () => {
     expect(stageToHash({ kind: 'analysing', bookId: 'ns', manuscriptId: null })).toBe(
       '#/books/ns/analysing',

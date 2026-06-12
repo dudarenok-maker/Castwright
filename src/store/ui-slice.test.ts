@@ -313,3 +313,10 @@ describe('uiSlice — openAbout', () => {
     expect(s.stage.kind).toBe('about');
   });
 });
+
+describe('uiSlice — openSetup', () => {
+  it('openSetup sets the setup stage', () => {
+    const s = uiSlice.reducer(undefined, uiActions.openSetup());
+    expect(s.stage).toEqual({ kind: 'setup' });
+  });
+});

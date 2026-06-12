@@ -822,6 +822,8 @@ export type Stage =
      from the Admin view. Consolidates all model install/inventory/residency
      controls that used to live in the Account view. */
   | { kind: 'model-manager' }
+  /* fs-21 — first-run setup wizard, reached on the boot gate or from Account. */
+  | { kind: 'setup' }
   /* Wave 3 — /about brand page, reached from the Admin view. */
   | { kind: 'about' }
   /* Advanced configuration — tune model, generation, and QA knobs. Reached
