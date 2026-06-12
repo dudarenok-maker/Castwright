@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-13
 owner: null
 ---
 
 # fe-38 — Guided product tour (in-app spotlight onboarding)
 
-> Status: active — implementation in progress on `feat/frontend-guided-tour`.
+> Status: stable — shipped via #765 (2026-06-12); final-acceptance flow polish via #772 (2026-06-13).
 > Key files: `src/lib/tour-steps.ts` (step registry), `src/store/tour-slice.ts` (state + thunks), `src/components/tour/tour-overlay.tsx` (spotlight renderer), `src/components/library/library-empty-states.tsx` (entry CTA), `src/components/top-bar.tsx` (? menu), `src/views/help.tsx` (re-entry button); server: `server/src/routes/tour.ts` (`GET/POST /api/tour`), `server/src/workspace/user-settings.ts` (`tourCompletedAt`).
 > URL surface: no dedicated hash route — overlay mounts at the app root; persisted state is server-side.
 > OpenAPI ops: `GET /api/tour/status`, `POST /api/tour/complete`
@@ -84,4 +84,14 @@ Run in mock mode (`VITE_USE_MOCKS=true`, `npm run dev`) unless noted.
 
 ## Ship notes
 
-_(To be filled when status flips to `stable`. Include: shipped date, PR SHA, any behaviour delta vs. the spec above. Then move to `docs/features/archive/`.)_
+**Shipped:** built end-to-end and merged via **PR #765** (2026-06-12, branch `feat/frontend-guided-tour`). Final-acceptance flow polish merged via **PR #772** (2026-06-13, branch `fix/frontend-guided-tour-flow`).
+
+**Final-acceptance flow fixes (PR #772)** — six issues found driving the shipped tour in **dark mode**:
+
+1. **Progress-dot contrast.** The active dot was `bg-peach` on the bubble surface; in dark mode `bg-ink` resolves *light* (theme-flipped) while `--peach` does not, so the active dot washed out. Now enlarged (`w-2`) with a `ring-canvas/50`; inactive dots are `bg-canvas/40`. `tour-overlay.tsx`.
+2. **+5. Anchor scrolled into view.** The spotlight ring was drawn at the anchor's viewport rect even when off-screen (the New-book button, the listen player/export tiles), so the step looked unhighlighted. The overlay now `scrollIntoView({block:'center'})`s the step anchor on each step, on the same 50/150/350 ms retry cadence as remeasure (so late-mounting anchors land too). `tour-overlay.tsx`.
+3. **s5 "Chapters & paragraphs"** now selects a character line and opens the segment inspector ("side draw") so the quote is highlighted in context.
+4. **"Design full cast" no longer vanishes** once the roster is fully designed — it stays rendered **disabled** on a Qwen project and carries the new s8 anchor `design-full-cast-btn` (was `anchor: null` → centered bubble). `cast.tsx`.
+6. **s4 "Who says each line"** selects a chapter **and** a speaker in the left Detected list, dimming the manuscript to that one speaker; the s4 anchor moved `manuscript-line` → `detected-speakers`. `manuscript.tsx`, `tour-steps.ts`.
+
+**Behaviour delta vs. the spec/invariants above:** the manuscript steps (s4/s5) are no longer purely passive spotlights — a tour-watching `useEffect` in `ManuscriptView` drives the existing local `filterChar` / `selectedSeg`+`inspectorOpen` state to demonstrate the controls, and self-undoes when the tour leaves the manuscript. Invariant #1 (real navigation) and #2 (no heavy flows) still hold — these are local view-state demonstrations, not analysis/design/generation. s8's anchor is no longer null. **Still OWED:** the s10 chapter-1 audio playback acceptance remains gated on the fs-22 bundled audio (see "OWED on-box acceptance" above).

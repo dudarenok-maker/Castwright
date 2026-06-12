@@ -1325,14 +1325,32 @@ describe('CastView — Design full cast button', () => {
     expect(screen.getByTestId('design-full-cast')).toBeInTheDocument();
   });
 
-  it('is hidden on a Kokoro project (default engine)', () => {
-    setup({});
+  it('shows for a Qwen cast even when the global model is Kokoro (book engine, not global, drives visibility)', () => {
+    /* fe-38 final acceptance: a book with a Qwen-designed cast (Kokoro backup)
+       is a Qwen book regardless of the user's global `ttsModelKey`. The button
+       used to be gated on the global engine, so a fully-Qwen sample on a default
+       Kokoro install hid it — the tour then had nothing to spotlight. */
+    setup({ chars: [qwenNeedsVoice] }); // no modelKey ⇒ default Kokoro global
+    expect(screen.getByTestId('design-full-cast')).toBeInTheDocument();
+  });
+
+  it('is hidden for a genuinely non-Qwen cast', () => {
+    /* Base Sweeney: no per-character engine + a Coqui library voice ⇒ not a
+       Qwen book on the default Kokoro global, so the button stays hidden. */
+    setup({ chars: [{ ...sweeney, ttsEngine: undefined, overrideTtsVoices: undefined }] });
     expect(screen.queryByTestId('design-full-cast')).toBeNull();
   });
 
-  it('is hidden when every character already has a voice', () => {
-    setup({ modelKey: 'qwen3-tts-0.6b', chars: [qwenDesigned] });
-    expect(screen.queryByTestId('design-full-cast')).toBeNull();
+  it('stays visible-but-disabled (with the tour anchor) when every character already has a voice', () => {
+    /* fe-38 final acceptance: the button used to vanish once the roster was
+       fully designed, leaving the guided tour's "Design the whole cast" step
+       with nothing to spotlight. It now stays rendered, disabled, and carries
+       the tour anchor — and, like visibility, this no longer depends on the
+       global model being Qwen. */
+    setup({ chars: [qwenDesigned] }); // default Kokoro global; cast is Qwen
+    const btn = screen.getByTestId('design-full-cast');
+    expect(btn).toBeDisabled();
+    expect(btn.getAttribute('data-tour-id')).toBe('design-full-cast-btn');
   });
 
   it('click opens the scope picker (no immediate dispatch)', () => {

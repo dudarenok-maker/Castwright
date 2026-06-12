@@ -30,12 +30,26 @@ export function TourOverlay() {
     setRect(step ? measure(step.anchor) : null);
   }, [step]);
 
+  /* Scroll the step's anchor into view so its highlight ring is on-screen.
+     Without this, an anchor below the fold (the New-book button, the listen
+     player tiles) gets a ring drawn off-screen — the step looks unhighlighted. */
+  const bringIntoView = useCallback(() => {
+    if (!step?.anchor) return;
+    const el = document.querySelector<HTMLElement>(`[data-tour-id="${step.anchor}"]`);
+    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }, [step]);
+
   useLayoutEffect(() => {
     if (!step) return;
+    /* Re-run on the same cadence as remeasure so late-mounting anchors
+       (e.g. the profile drawer) also get scrolled in once they appear. */
+    bringIntoView();
     remeasure();
-    const ids = [50, 150, 350].map((ms) => window.setTimeout(remeasure, ms));
+    const ids = [50, 150, 350].map((ms) =>
+      window.setTimeout(() => { bringIntoView(); remeasure(); }, ms),
+    );
     return () => ids.forEach(clearTimeout);
-  }, [step, remeasure]);
+  }, [step, remeasure, bringIntoView]);
 
   useEffect(() => {
     if (!step) return;
@@ -93,9 +107,16 @@ export function TourOverlay() {
         <h4 id="tour-bubble-title" className="font-semibold text-sm">{step.title}</h4>
         <p className="mt-1 text-xs text-canvas/75 leading-relaxed">{step.body}</p>
         <div className="mt-3 flex items-center gap-2">
-          <div className="flex gap-1" aria-hidden>
+          <div className="flex items-center gap-1" aria-hidden>
             {activeSteps.map((s, i) => (
-              <span key={s.id} className={`w-1.5 h-1.5 rounded-full ${i === posInActive ? 'bg-peach' : 'bg-canvas/30'}`} />
+              <span
+                key={s.id}
+                className={
+                  i === posInActive
+                    ? 'w-2 h-2 rounded-full bg-peach ring-1 ring-canvas/50'
+                    : 'w-1.5 h-1.5 rounded-full bg-canvas/40'
+                }
+              />
             ))}
           </div>
           <button type="button" onClick={() => dispatch(tourActions.endTour())}

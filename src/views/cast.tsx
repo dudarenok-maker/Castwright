@@ -281,12 +281,28 @@ export function CastView({
   const designRunningHere = designActive?.state === 'running' && designActive.bookId === bookId;
   const designRunningElsewhere =
     designActive?.state === 'running' && designActive.bookId !== bookId;
-  /* Show the button on a Qwen project with ≥1 undesigned character OR ≥1 variant
+  /* A "Qwen book" = any character that resolves to Qwen — a per-character engine
+     override OR a matched Qwen library voice — independent of the global
+     `ttsModelKey`. Design full cast designs Qwen voices, so its visibility tracks
+     the CAST, not the global playback engine: a book with a Qwen cast (Kokoro as
+     per-character backup) still surfaces the control even when the user's global
+     model is Kokoro. This is why a fully-Qwen-designed sample shows it in the tour. */
+  const isQwenBook = characters.some(isQwenForVariants);
+  /* Show the button on a Qwen book with ≥1 undesigned character OR ≥1 variant
      to design, OR while a run for this book is active (so the Cancel control stays
      reachable even after the last row flips and the counts hit 0). */
   const showDesignFullCast =
-    (ttsEngine === 'qwen' && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) ||
+    (isQwenBook && (needsVoiceIds.length > 0 || variantWork.totalTasks > 0)) ||
     designRunningHere;
+  /* A Qwen book whose roster is already fully designed: keep the button visible
+     but disabled, so users (and the guided tour) can still see the feature exists
+     rather than have it vanish entirely. */
+  const fullyDesignedNothingToDo =
+    isQwenBook &&
+    needsVoiceIds.length === 0 &&
+    variantWork.totalTasks === 0 &&
+    !designRunningHere &&
+    !designRunningElsewhere;
   useEffect(() => {
     if (designRunningHere || designRunningElsewhere) setScopeOpen(false);
   }, [designRunningHere, designRunningElsewhere]);
@@ -559,16 +575,17 @@ export function CastView({
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            {(showDesignFullCast || designRunningElsewhere) && (
+            {(showDesignFullCast || designRunningElsewhere || fullyDesignedNothingToDo) && (
               <div className="relative">
                 <button
                   onClick={onDesignFullCast}
-                  disabled={designRunningElsewhere}
+                  disabled={designRunningElsewhere || fullyDesignedNothingToDo}
                   data-testid="design-full-cast"
+                  data-tour-id="design-full-cast-btn"
                   aria-haspopup="menu"
                   aria-expanded={scopeOpen}
                   className={`min-h-[44px] px-4 py-2.5 rounded-full text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
-                    designRunningElsewhere
+                    designRunningElsewhere || fullyDesignedNothingToDo
                       ? 'bg-ink/5 text-ink/40 cursor-not-allowed'
                       : designRunningHere
                         ? 'bg-ink/6 text-ink/70 hover:bg-ink/10'
@@ -577,7 +594,9 @@ export function CastView({
                   title={
                     designRunningElsewhere
                       ? 'A design run is already in progress for another book.'
-                      : undefined
+                      : fullyDesignedNothingToDo
+                        ? 'Every character already has a voice.'
+                        : undefined
                   }
                 >
                   {designRunningHere ? (
