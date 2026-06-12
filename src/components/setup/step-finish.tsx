@@ -1,8 +1,8 @@
 /* fs-21 wave 3 — Step: Finish.
    Final wizard step. Two-tier smoke test:
-     Tier 1 — "Run smoke test" button → api.runSmokeTest() → audible clip + analyzer status.
-     Tier 2 — optional "Hear the demo book" button (threaded from SetupRoute in S4).
-   A "Finish setup" button closes the wizard. */
+     Tier 1 — "Hear a test line" button → api.runSmokeTest() → audible clip + analyzer status.
+     Tier 2 — optional "Play the demo book" button (threaded from SetupRoute in S4).
+   A "Finish & open my library" button closes the wizard. */
 
 import { useState } from 'react';
 import { PrimaryButton } from '../primitives';
@@ -14,9 +14,9 @@ import type { SetupReadiness, SmokeTestResult } from '../../lib/api';
 interface Props {
   /** Passed by the wizard orchestrator for contract uniformity. */
   readiness: SetupReadiness;
-  /** Called when the user clicks "Finish setup". */
+  /** Called when the user clicks "Finish & open my library". */
   onFinish: () => void;
-  /** Optional — renders the "Hear the demo book" button when provided. */
+  /** Optional — renders the "Play the demo book" button when provided. */
   onTryDemoBook?: () => void;
 }
 
@@ -39,20 +39,21 @@ export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook }: P
 
   return (
     <section className="space-y-6">
-      <h2 className="text-lg font-semibold text-ink">Finish</h2>
+      <h2 className="text-lg font-semibold text-ink">Ready to perform</h2>
 
       <p className="text-sm text-ink/60">
-        Everything looks good. When you're ready, finish setup to go to your library.
+        That's everything Castwright needs. Generate a quick test line to hear your setup
+        in action — then jump in and create your first audiobook.
       </p>
 
       {/* Smoke-test card */}
       <div className="rounded-2xl border border-ink/10 bg-canvas px-4 py-4 space-y-3">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-medium text-ink">End-to-end smoke test</span>
+          <span className="text-sm font-medium text-ink">Hear a test line</span>
         </div>
         <p className="text-xs text-ink/55">
-          Generate a short sample sentence through your configured voice engine and confirm
-          audio comes back correctly before you start on your first book.
+          We'll generate one short sentence through your voice engine — proof the whole
+          pipeline works end to end before you start a full book.
         </p>
 
         <button
@@ -62,7 +63,7 @@ export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook }: P
           onClick={runSmoke}
           className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/20 text-sm text-ink hover:bg-ink/5 disabled:opacity-50 disabled:cursor-wait transition-colors"
         >
-          {pending ? 'Testing…' : 'Run smoke test'}
+          {pending ? 'Generating…' : 'Hear a test line'}
         </button>
 
         {/* Success result */}
@@ -95,9 +96,10 @@ export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook }: P
       {onTryDemoBook && (
         <div className="rounded-2xl border border-ink/10 bg-canvas px-4 py-4 space-y-3">
           <div>
-            <span className="text-sm font-medium text-ink">Bundled demo audiobook</span>
+            <span className="text-sm font-medium text-ink">Listen to the demo audiobook</span>
             <p className="mt-1 text-xs text-ink/55">
-              Generate the bundled demo audiobook end-to-end.
+              Generate the bundled demo book end to end — a complete, full-cast example you
+              can play in a couple of minutes.
             </p>
           </div>
           <button
@@ -105,14 +107,14 @@ export function StepFinish({ readiness: _readiness, onFinish, onTryDemoBook }: P
             onClick={onTryDemoBook}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-ink/20 text-sm text-ink hover:bg-ink/5 transition-colors"
           >
-            Hear the demo book
+            Play the demo book
           </button>
         </div>
       )}
 
       <div className="flex justify-end">
-        <PrimaryButton onClick={onFinish} icon={false}>
-          Finish setup
+        <PrimaryButton onClick={onFinish}>
+          Finish &amp; open my library
         </PrimaryButton>
       </div>
     </section>
