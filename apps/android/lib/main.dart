@@ -33,7 +33,12 @@ Future<void> main() async {
 
 class AudiobookCompanionApp extends StatelessWidget {
   const AudiobookCompanionApp(
-      {super.key, required this.store, this.service, this.audioHandler, this.deepLinks});
+      {super.key,
+      required this.store,
+      this.service,
+      this.audioHandler,
+      this.deepLinks,
+      this.themeMode = ThemeMode.system});
 
   final PairingStore store;
 
@@ -46,13 +51,23 @@ class AudiobookCompanionApp extends StatelessWidget {
   /// Injectable deep-link stream (null in production — uses App Links platform channel).
   final Stream<Uri>? deepLinks;
 
+  /// Light/dark selection. Defaults to following the system; the capture harness
+  /// forces a value per pass.
+  final ThemeMode themeMode;
+
   @override
   Widget build(BuildContext context) {
+    const seed = Color(0xFFA43C6C);
     return MaterialApp(
       title: 'Castwright',
       debugShowCheckedModeBanner: false,
+      themeMode: themeMode,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFA43C6C)),
+        colorScheme: ColorScheme.fromSeed(seedColor: seed),
+        useMaterial3: true,
+      ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark),
         useMaterial3: true,
       ),
       home: HomePage(
