@@ -24,6 +24,7 @@ import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
+import { tourSlice } from '../store/tour-slice';
 import { router as appRouter } from './index';
 import { AnalysingRoute, BooksRoute, ChangelogRoute, ReadyRoute } from './index';
 import { chaptersActions } from '../store/chapters-slice';
@@ -125,6 +126,7 @@ function makeStore() {
       account: accountSlice.reducer,
       bookMeta: bookMetaSlice.reducer,
       queue: queueSlice.reducer,
+      tour: tourSlice.reducer,
     },
   });
 }

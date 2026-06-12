@@ -552,6 +552,32 @@ describe('setupCompletedAt (fs-21 wave 0)', () => {
   });
 });
 
+describe('tourCompletedAt (guided tour)', () => {
+  beforeEach(async () => {
+    const mod = await import('./user-settings.js');
+    rmSync(mod.USER_SETTINGS_PATH, { force: true });
+    mod._resetUserSettingsCache();
+    await mod.readUserSettings();
+  });
+
+  afterEach(async () => {
+    const mod = await import('./user-settings.js');
+    rmSync(mod.USER_SETTINGS_PATH, { force: true });
+    mod._resetUserSettingsCache();
+  });
+
+  it('getResolvedTourCompletedAt is null before any write', async () => {
+    const { getResolvedTourCompletedAt } = await import('./user-settings.js');
+    expect(getResolvedTourCompletedAt()).toBeNull();
+  });
+
+  it('writeTourCompletedAt persists and the getter reflects it', async () => {
+    const { writeTourCompletedAt, getResolvedTourCompletedAt } = await import('./user-settings.js');
+    await writeTourCompletedAt('2026-06-12T00:00:00.000Z');
+    expect(getResolvedTourCompletedAt()).toBe('2026-06-12T00:00:00.000Z');
+  });
+});
+
 describe('userSettingsSchema — fs-1 upgrade bookkeeping', () => {
   beforeEach(async () => {
     const mod = await import('./user-settings.js');

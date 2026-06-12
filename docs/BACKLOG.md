@@ -57,11 +57,17 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 _The onboarding & first-run cluster below was promoted from Could to Must on 2026-06-08 —
 first-run friction is the biggest adoption blocker for non-technical deployers._
 
-#### `fe-28` — Onboarding empty states + first-run checklist ([#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472))
+#### `fe-28` — Onboarding empty states + first-run checklist ([#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472)) _(superseded by fe-38 #761)_
 
 - _What:_ Make first-run guidance explicit: the books-library empty state walks a new user to their first upload, plus a small dismissible first-run checklist (upload → confirm cast → generate → listen). Pure frontend, driven off existing state.
 - _Benefit (user):_ reduces first-session bounce for non-technical deployers.
 _Full detail + acceptance:_ [#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472).
+
+#### `fe-38` — Guided product tour (in-app spotlight onboarding) ([#761](https://github.com/dudarenok-maker/Castwright/issues/761))
+
+- _What:_ WalkMe-style spotlight tour riding the bundled sample book (The Coalfall Commission, `fs-22`): 13 steps across 5 stations (Library → Manuscript → Cast → Generate → Listen). Each step dims the screen, cuts out one real control, and explains it with Back/Next/Skip. The sample ships with one pre-rendered chapter 1 so the Listen finale plays real audio. Entry: empty-library CTA, top-bar `?` menu, Help button. Completion persists server-side as `tourCompletedAt` (mirrors fs-21). The empty-library CTA and the fe-28 checklist concept are folded in here.
+- _Benefit (user):_ turns a bare first run into a guided, self-paced product demo — the single biggest lever for converting non-technical deployers into active users.
+_Full detail:_ [#761](https://github.com/dudarenok-maker/Castwright/issues/761) · spec `docs/superpowers/specs/2026-06-12-guided-tour-design.md` · plan [211](features/211-guided-tour.md).
 
 #### `fe-27` — In-app update notifier ([#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471))
 

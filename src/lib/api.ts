@@ -21,6 +21,7 @@ import type {
   VoiceSample,
   TtsModelKey,
   LibraryResponse,
+  LibraryBook,
   VoiceLibraryResponse,
   ImportResponse,
   ConfirmBookRequest,
@@ -608,10 +609,26 @@ export interface BaseVoiceSampleArgs {
 
 /* ── mock implementations ────────────────────────────────────────────── */
 
-async function mockGetLibrary(): Promise<LibraryResponse> {
+export async function mockGetLibrary(): Promise<LibraryResponse> {
   await wait(120);
   if (DEMO_CAPTURE) return HOLLOW_TIDE_LIBRARY;
-  return MOCK_LIBRARY;
+  if (!mockSampleLibraryEntry) return MOCK_LIBRARY;
+  /* Inject the seeded sample as a standalone under a synthetic "Castwright"
+     author so the library grid shows it without mutating the MOCK_LIBRARY const. */
+  return {
+    authors: [
+      ...MOCK_LIBRARY.authors,
+      {
+        name: 'Castwright',
+        series: [
+          {
+            name: 'Standalones',
+            books: [mockSampleLibraryEntry],
+          },
+        ],
+      },
+    ],
+  };
 }
 
 async function mockGetVoices(args?: { currentBookId?: string }): Promise<VoiceLibraryResponse> {
@@ -975,6 +992,19 @@ function seedDefaultMockBookStates(): void {
 }
 seedDefaultMockBookStates();
 
+/* ── Seeded sample overlay (Task 13) ───────────────────────────────────────
+   mockLoadSample seeds the Coalfall Commission into these variables so the
+   standard mock getters serve it under the canonical sample bookId without
+   mutating the MOCK_LIBRARY const or the default MOCK_BOOK_STATES entries.
+   _resetMockSample() clears both for test isolation (mirrors _resetMockTour). */
+const SAMPLE_BOOK_ID = 'castwright__standalones__the-coalfall-commission';
+let mockSampleLibraryEntry: LibraryBook | null = null;
+
+export function _resetMockSample(): void {
+  mockSampleLibraryEntry = null;
+  MOCK_BOOK_STATES.delete(SAMPLE_BOOK_ID);
+}
+
 function emptyBookStateResponse(bookId: string): BookStateResponse {
   const now = new Date().toISOString();
   return {
@@ -1073,10 +1103,15 @@ export async function mockPutBookState(bookId: string, req: PutStateRequest): Pr
 /** Test-only: drop the in-memory mock-state table and restore the
  *  default fixtures. Tests that want a truly empty store can call
  *  MOCK_BOOK_STATES.clear() directly (only the in-file specs in
- *  api.mock-state.test.ts do this today). */
+ *  api.mock-state.test.ts do this today).
+ *  Also resets the sample overlay so the two always travel together —
+ *  a stale mockSampleLibraryEntry would re-add the sample book's entry
+ *  to the library response even after a full book-states reset. */
 export function _resetMockBookStates(): void {
   MOCK_BOOK_STATES.clear();
   seedDefaultMockBookStates();
+  // Coupled reset: sample overlay must clear whenever the state table does.
+  _resetMockSample();
 }
 
 /* Plan 47 — listen-progress mocks. Module-scope Map so a PUT-then-GET
@@ -3064,9 +3099,87 @@ async function realLoadSample(slug: string): Promise<{ bookId: string }> {
   }
   return res.json();
 }
-async function mockLoadSample(_slug: string): Promise<{ bookId: string }> {
+export async function mockLoadSample(_slug: string): Promise<{ bookId: string }> {
   await wait(150);
-  return { bookId: 'castwright__standalones__the-coalfall-commission' };
+  /* Idempotent: skip seeding if already registered. */
+  if (!mockSampleLibraryEntry) {
+    /* Derive the sample's BookStateResponse from the marketing fixture.
+       The fixture uses bookId 'coalfall-commission'; we re-key it to the
+       canonical sample id that the real /api/samples/:slug/load would return.
+       completedSlugs is narrowed to only the first real story chapter
+       (id 3, slug '03-the-knock'; ids 1–2 are excluded title/credit pages)
+       so the guided tour opens to Generate with "Resume generation" and the
+       Listen view shows ch 1 playable + the rest pending. */
+    const base = HOLLOW_TIDE_BOOK_STATES.get('coalfall-commission');
+    const now = new Date().toISOString();
+    const bookState: BookStateResponse = base
+      ? {
+          ...base,
+          state: { ...base.state, bookId: SAMPLE_BOOK_ID, updatedAt: now },
+          /* Defensive shallow clone: cast.characters and manuscriptEdits.sentences
+             carry arrays that callers (e.g. mockPutBookState) may mutate in-place.
+             Without this the spread above shares those arrays by reference with the
+             module-level marketing fixture, so a write to the sample's cast would
+             corrupt HOLLOW_TIDE_BOOK_STATES across subsequent test runs. */
+          cast: base.cast ? { ...base.cast, characters: [...base.cast.characters] } : base.cast,
+          manuscriptEdits: base.manuscriptEdits?.sentences
+            ? { ...base.manuscriptEdits, sentences: [...base.manuscriptEdits.sentences] }
+            : base.manuscriptEdits,
+          completedSlugs: ['03-the-knock'],
+        }
+      : {
+          /* Fallback if the marketing fixture is ever restructured: minimal
+             navigable state so the tour doesn't crash. */
+          state: {
+            bookId: SAMPLE_BOOK_ID,
+            manuscriptId: 'mns_coalfall',
+            title: 'The Coalfall Commission',
+            author: 'Castwright',
+            series: 'Standalones',
+            seriesPosition: null,
+            isStandalone: true,
+            manuscriptFile: 'manuscript.epub',
+            castConfirmed: true,
+            chapters: [
+              { id: 1, title: 'The Coalfall Commission', slug: '01-title', excluded: true },
+              { id: 2, title: 'The Coalfall Commission', slug: '02-credit', excluded: true },
+              { id: 3, title: 'Chapter One — The Knock', slug: '03-the-knock', duration: '41:12' },
+              { id: 4, title: 'Chapter Two — The Pour', slug: '04-the-pour', duration: '38:44' },
+            ],
+            coverGradient: ['#3C194F', '#0F0E0D'],
+            createdAt: now,
+            updatedAt: now,
+            narratorCredit: null,
+          },
+          cast: null,
+          manuscript: { wordCount: 84_000, format: 'epub' },
+          manuscriptEdits: null,
+          revisions: null,
+          completedSlugs: ['03-the-knock'],
+          changeLog: null,
+        };
+
+    mockSampleLibraryEntry = {
+      bookId: SAMPLE_BOOK_ID,
+      title: 'The Coalfall Commission',
+      author: 'Castwright',
+      series: 'Standalones',
+      seriesPosition: null,
+      isStandalone: true,
+      status: 'generating',
+      chapterCount: 4,
+      completedChapters: 1,
+      characterCount: bookState.cast?.characters.length ?? 12,
+      voiceCount: bookState.cast?.characters.length ?? 12,
+      progress: 0.25,
+      runtime: '2h 41m',
+      lastWorkedOn: 'Just now',
+      coverGradient: ['#3C194F', '#0F0E0D'],
+      tags: [],
+    };
+    MOCK_BOOK_STATES.set(SAMPLE_BOOK_ID, bookState);
+  }
+  return { bookId: SAMPLE_BOOK_ID };
 }
 
 async function mockReparseBook(_bookId: string): Promise<ReparseBookResponse> {
@@ -5274,6 +5387,32 @@ export async function mockCompleteSetup(): Promise<{ completedAt: string }> {
   return { completedAt: '2026-06-12T00:00:00.000Z' };
 }
 
+// --- tour status ---
+type TourStatus = { completedAt: string | null };
+
+async function realGetTourStatus(): Promise<TourStatus> {
+  const res = await fetch('/api/tour/status');
+  if (!res.ok) throw new Error(`tour status ${res.status}`);
+  return (await res.json()) as TourStatus;
+}
+async function realCompleteTour(): Promise<TourStatus> {
+  const res = await fetch('/api/tour/complete', { method: 'POST' });
+  if (!res.ok) throw new Error(`tour complete ${res.status}`);
+  return (await res.json()) as TourStatus;
+}
+
+let mockTourCompletedAt: string | null = null;
+export async function mockGetTourStatus(): Promise<TourStatus> {
+  return { completedAt: mockTourCompletedAt };
+}
+export async function mockCompleteTour(): Promise<TourStatus> {
+  mockTourCompletedAt = new Date().toISOString();
+  return { completedAt: mockTourCompletedAt };
+}
+export function _resetMockTour(): void {
+  mockTourCompletedAt = null;
+}
+
 export interface SmokeTestResult {
   ok: boolean;
   url?: string;
@@ -6036,6 +6175,8 @@ const real = {
   getDiagnostics: realGetDiagnostics,
   getSetupReadiness: realGetSetupReadiness,
   completeSetup: realCompleteSetup,
+  getTourStatus: realGetTourStatus,
+  completeTour: realCompleteTour,
   runSmokeTest: realRunSmokeTest,
   getOllamaHealth: realGetOllamaHealth,
   loadSidecar: realLoadSidecar,
@@ -6286,6 +6427,8 @@ const mock = {
   getDiagnostics: mockGetDiagnostics,
   getSetupReadiness: mockGetSetupReadiness,
   completeSetup: mockCompleteSetup,
+  getTourStatus: mockGetTourStatus,
+  completeTour: mockCompleteTour,
   runSmokeTest: mockRunSmokeTest,
   getOllamaHealth: mockGetOllamaHealth,
   loadSidecar: mockLoadSidecar,

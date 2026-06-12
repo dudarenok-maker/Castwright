@@ -6,6 +6,7 @@ import { test, expect } from '@playwright/test';
 test('top-bar ? opens Help with all three sections', async ({ page }) => {
   await page.goto('/#/');
   await page.getByTestId('topbar-help').click();
+  await page.getByRole('menuitem', { name: /^help$/i }).click();
   await expect(page).toHaveURL(/#\/help$/);
   await expect(page.getByRole('heading', { name: 'Getting started' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Keyboard shortcuts' })).toBeVisible();

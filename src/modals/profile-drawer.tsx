@@ -801,6 +801,7 @@ export function ProfileDrawer({
           Clicking the dimmed area below the header still closes it. */}
       <div onClick={onClose} className="fixed inset-x-0 top-16 bottom-0 bg-ink/30 z-40 fade-in" />
       <aside
+        data-tour-id="profile-drawer"
         className="fixed top-16 right-0 bottom-0 w-full max-w-[520px] bg-white shadow-drawer z-50 overflow-y-auto scrollbar-thin slide-in-right"
         style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
       >

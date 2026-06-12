@@ -99,6 +99,7 @@ export function ListenDownloadSection({
             size="—"
             description="Single file with embedded chapter markers. Universal across audiobook apps."
             testid="download-tile-m4b"
+            tourId="download-tile-m4b"
             onDownload={onOpenM4bExport}
           />
           <DownloadCard
@@ -138,6 +139,7 @@ function DownloadCard({
   description,
   onDownload,
   testid,
+  tourId,
 }: {
   title: string;
   format: string;
@@ -149,6 +151,7 @@ function DownloadCard({
       a handler retain the "Coming soon" affordance. */
   onDownload?: () => void;
   testid?: string;
+  tourId?: string;
 }) {
   const live = onDownload != null;
   return (
@@ -170,6 +173,7 @@ function DownloadCard({
         onClick={live ? onDownload : undefined}
         disabled={!live}
         title={live ? 'Download' : 'Download — coming soon'}
+        {...(tourId ? { 'data-tour-id': tourId } : {})}
         className={
           live
             ? 'min-h-[44px] w-full inline-flex items-center justify-center gap-2 rounded-full px-4 py-2.5 text-sm font-semibold transition-colors bg-ink text-canvas hover:bg-ink/90'

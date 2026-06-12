@@ -541,7 +541,7 @@ export function CastView({
           </div>
         </div>
       )}
-      <div>
+      <div data-tour-id="cast-roster">
         <div className="mb-6 md:mb-8 flex items-end justify-between gap-4 md:gap-6 flex-wrap">
           <div className="min-w-0">
             <SectionLabel>Your cast</SectionLabel>

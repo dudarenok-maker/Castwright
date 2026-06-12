@@ -1,12 +1,17 @@
 // Pairs with the fe-29 offline Help view (src/views/help.tsx).
 
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { settingsSlice, settingsActions } from '../store/settings-slice';
+import { tourSlice } from '../store/tour-slice';
 import { HelpView } from './help';
+
+vi.mock('../lib/api', () => ({
+  api: { loadSample: vi.fn(async () => ({ bookId: 'castwright__standalones__the-coalfall-commission' })) },
+}));
 
 function renderHelp(focusCode?: string) {
   const store = configureStore({
@@ -65,4 +70,13 @@ describe('HelpView (fe-29)', () => {
     const kKbd = Array.from(allKbds).find((el) => el.textContent === 'K');
     expect(kKbd).toBeInTheDocument();
   });
+});
+
+it('Take the tour button starts the linear tour', async () => {
+  const store = configureStore({
+    reducer: { tour: tourSlice.reducer, ui: uiSlice.reducer, settings: settingsSlice.reducer },
+  });
+  render(<Provider store={store}><HelpView /></Provider>);
+  fireEvent.click(screen.getByRole('button', { name: /take the tour/i }));
+  await waitFor(() => expect(store.getState().tour.active).toBe(true));
 });
