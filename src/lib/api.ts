@@ -168,7 +168,7 @@ export interface AnalyseOpts {
       persisted to the analysis cache so the analysing view can render a
       per-chapter Retry button. Emitted by both the full and subset
       analysis routes. */
-  onChapterFailed?: (e: { chapterId: number; message: string }) => void;
+  onChapterFailed?: (e: { chapterId: number; message: string; code?: string; remediation?: string }) => void;
   /** A previously-failed chapter just had its Phase 0a re-run succeed
       (either via the main route re-queueing failedChapterIds on resume,
       or via the subset retry route). The chapter id has been cleared
@@ -2025,6 +2025,7 @@ interface AnalysisStreamEvent {
   response?: AnalyseResponse;
   message?: string;
   code?: string;
+  remediation?: string;
   chapterId?: number;
   /** Structured upstream detail (Google's `status` + `details[]` for ApiError
       envelopes; falls back to the raw SDK message). Rendered in a collapsible
@@ -2070,12 +2071,17 @@ export class AnalysisError extends Error {
       "Accept smaller roster" button without parsing the message. */
   prevCharCount?: number;
   nextCharCount?: number;
+  /** Human-readable remediation hint from the server's FailureCode
+      classification — mirrors the `remediation` field on `kind:'error'`
+      SSE events and surfaces in the run-error panel. */
+  remediation?: string;
   constructor(
     message: string,
     code: string,
     detail?: string,
     prevCharCount?: number,
     nextCharCount?: number,
+    remediation?: string,
   ) {
     super(message);
     this.name = 'AnalysisError';
@@ -2083,6 +2089,7 @@ export class AnalysisError extends Error {
     this.detail = detail;
     this.prevCharCount = prevCharCount;
     this.nextCharCount = nextCharCount;
+    this.remediation = remediation;
   }
 }
 
@@ -2154,7 +2161,12 @@ async function realAnalyseManuscript(
       }
     } else if (payload.kind === 'chapter-failed') {
       if (typeof payload.chapterId === 'number' && typeof payload.message === 'string') {
-        onChapterFailed?.({ chapterId: payload.chapterId, message: payload.message });
+        onChapterFailed?.({
+          chapterId: payload.chapterId,
+          message: payload.message,
+          code: payload.code,
+          remediation: payload.remediation,
+        });
       }
     } else if (payload.kind === 'chapter-resolved') {
       if (typeof payload.chapterId === 'number') {
@@ -2195,6 +2207,7 @@ async function realAnalyseManuscript(
         payload.detail,
         payload.prevCharCount,
         payload.nextCharCount,
+        payload.remediation,
       );
     }
   };
@@ -3468,7 +3481,12 @@ async function realRunAnalysisForChapters(
       }
     } else if (payload.kind === 'chapter-failed') {
       if (typeof payload.chapterId === 'number' && typeof payload.message === 'string') {
-        onChapterFailed?.({ chapterId: payload.chapterId, message: payload.message });
+        onChapterFailed?.({
+          chapterId: payload.chapterId,
+          message: payload.message,
+          code: payload.code,
+          remediation: payload.remediation,
+        });
       }
     } else if (payload.kind === 'chapter-resolved') {
       if (typeof payload.chapterId === 'number') {
@@ -3509,6 +3527,7 @@ async function realRunAnalysisForChapters(
         payload.detail,
         payload.prevCharCount,
         payload.nextCharCount,
+        payload.remediation,
       );
     }
   };
