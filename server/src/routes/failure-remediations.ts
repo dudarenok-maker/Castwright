@@ -76,6 +76,21 @@ export const FAILURE_REMEDIATIONS = {
       'When GEMINI_API_KEY is set, an unreachable Ollama silently retries against Gemini, so this ' +
       'error usually means no fallback was configured — or both engines failed.',
   },
+  'analyzer-content-blocked': {
+    userMessage:
+      "Gemini blocked this chapter — its recitation filter refused the source text. The gemini-* " +
+      "models reject text they recognise as copyrighted, and a published book's opening chapter is " +
+      'the classic trigger.',
+    remediation:
+      'Switch the analyzer to a gemma-* model (set GEMINI_MODEL=gemma-4-31b-it in server/.env — the ' +
+      'gemma family is not subject to the recitation filter) or to the local Ollama analyzer ' +
+      '(ANALYZER=local). Restart, then click Retry.',
+    helpDetail:
+      'The block is deterministic — retrying the same model on the same text fails identically, so ' +
+      'it is not a transient error. gemma-* runs on a separate API bucket without recitation ' +
+      'filtering; any local Ollama model (e.g. qwen3.5:4b) avoids the filter entirely and is the ' +
+      'most robust choice for copyrighted manuscripts.',
+  },
   'analyzer-truncated': {
     userMessage:
       'The analyzer model cut its reply short — a chapter section was too large for one ' +
