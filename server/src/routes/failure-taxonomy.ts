@@ -13,7 +13,12 @@
    2026-05-31 the Hollow Tide CH24, the CUDA poison-fence). Do not loosen them.
 
    `describeSynthesisError` now delegates here and maps back to its legacy
-   `{ errorReason, fatal }` shape so existing callers keep working. */
+   `{ errorReason, fatal }` shape so existing callers keep working.
+
+   The run-level analysis half (classifyAnalysisFailure + tryParseApiError,
+   statusToFailureCode, formatErrorDetail, trimQuotaMessage) is ported
+   VERBATIM from analysis.ts's describeError family — same envelope parsing,
+   same precedence, now unified into this module with FailureCode vocabulary. */
 
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
@@ -99,6 +104,8 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     fatal: true,
     source: 'analysis',
     matchName: 'DailyQuotaExhaustedError',
+    /* Same free-tier regex as statusToFailureCode, but applied to the RAW string —
+       the two paths see different inputs; do not unify. */
     match: (raw, ctx) =>
       ctx.status === 429 && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(raw),
   },
@@ -373,6 +380,8 @@ export function tryParseApiError(
 function statusToFailureCode(status: number | undefined, message?: string): FailureCode {
   if (!status) return 'unknown';
   if (status === 429) {
+    /* Same regex as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
+       only (raw would false-positive on per-minute quotaValue details). Do not unify. */
     if (message && /free[_-]?tier|quotaValue":"\d{1,3}"/i.test(message)) return 'analyzer-daily-quota';
     return 'analyzer-rate-limit';
   }

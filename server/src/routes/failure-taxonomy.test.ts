@@ -4,7 +4,8 @@
    unmapped string) and asserts the stable `code`, a jargon-free `userMessage`,
    a non-empty `remediation`, and the legacy `fatal`. These pin the incident-
    tuned regexes the classifier ports from the old ad-hoc describeSynthesisError
-   so a refactor can't silently regress them. */
+   so a refactor can't silently regress them. The file also covers the
+   analysis-side classifiers (classifyAnalysisError + classifyAnalysisFailure). */
 
 import { describe, it, expect } from 'vitest';
 import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
