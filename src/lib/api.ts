@@ -5265,6 +5265,32 @@ export async function mockCompleteSetup(): Promise<{ completedAt: string }> {
   return { completedAt: '2026-06-12T00:00:00.000Z' };
 }
 
+// --- tour status ---
+type TourStatus = { completedAt: string | null };
+
+async function realGetTourStatus(): Promise<TourStatus> {
+  const res = await fetch('/api/tour/status');
+  if (!res.ok) throw new Error(`tour status ${res.status}`);
+  return (await res.json()) as TourStatus;
+}
+async function realCompleteTour(): Promise<TourStatus> {
+  const res = await fetch('/api/tour/complete', { method: 'POST' });
+  if (!res.ok) throw new Error(`tour complete ${res.status}`);
+  return (await res.json()) as TourStatus;
+}
+
+let mockTourCompletedAt: string | null = null;
+export async function mockGetTourStatus(): Promise<TourStatus> {
+  return { completedAt: mockTourCompletedAt };
+}
+export async function mockCompleteTour(): Promise<TourStatus> {
+  mockTourCompletedAt = new Date().toISOString();
+  return { completedAt: mockTourCompletedAt };
+}
+export function _resetMockTour(): void {
+  mockTourCompletedAt = null;
+}
+
 export interface SmokeTestResult {
   ok: boolean;
   url?: string;
@@ -6002,6 +6028,8 @@ const real = {
   getDiagnostics: realGetDiagnostics,
   getSetupReadiness: realGetSetupReadiness,
   completeSetup: realCompleteSetup,
+  getTourStatus: realGetTourStatus,
+  completeTour: realCompleteTour,
   runSmokeTest: realRunSmokeTest,
   getOllamaHealth: realGetOllamaHealth,
   loadSidecar: realLoadSidecar,
@@ -6252,6 +6280,8 @@ const mock = {
   getDiagnostics: mockGetDiagnostics,
   getSetupReadiness: mockGetSetupReadiness,
   completeSetup: mockCompleteSetup,
+  getTourStatus: mockGetTourStatus,
+  completeTour: mockCompleteTour,
   runSmokeTest: mockRunSmokeTest,
   getOllamaHealth: mockGetOllamaHealth,
   loadSidecar: mockLoadSidecar,
