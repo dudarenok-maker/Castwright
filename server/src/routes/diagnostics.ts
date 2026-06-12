@@ -71,7 +71,7 @@ function fmtGb(mb: number | null | undefined): string {
   return mb == null ? '?' : (mb / 1024).toFixed(1);
 }
 
-diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
+export async function buildDiagnostics(): Promise<DiagnosticsResponse> {
   /* Probe the sidecar once and reuse it for both the sidecar row AND the GPU
      row — the sidecar /health is where VRAM figures come from. */
   const sidecar = await probeSidecarHealth().catch(
@@ -267,10 +267,13 @@ diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
     }),
   ]);
 
-  const response: DiagnosticsResponse = {
+  return {
     ts: new Date().toISOString(),
     overall: worst(checks),
     checks,
   };
-  res.json(response);
+}
+
+diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
+  res.json(await buildDiagnostics());
 });
