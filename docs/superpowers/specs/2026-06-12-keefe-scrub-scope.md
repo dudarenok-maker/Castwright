@@ -18,6 +18,8 @@ documented test recipe no longer points at a copyrighted local-only file.
 | Scope boundary | **Everything**, including the ~45 archived/historical regression-plan docs. |
 | Canonical manuscript | **Commit an owned manuscript** (the Coalfall Commission, 2 chapters) into the repo as the e2e fixture. |
 | Manuscript length | 2 chapters is **sufficient** (user-confirmed). |
+| Multilingual (Cat 6) | **(a)** create an owned **Russian** version of a Coalfall excerpt as the committed multilingual fixture. |
+| Historicity | **Confirmed:** replace the copyrighted name, keep the illustrative point, do NOT fabricate Coalfall-specific observed values. |
 
 ## The footprint (grounded)
 
