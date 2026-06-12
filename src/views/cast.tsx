@@ -745,7 +745,7 @@ export function CastView({
 
         {/* Plan 81 wave 3 — md:+ table layout (legacy, unchanged contract). */}
         <div className="hidden md:block bg-white rounded-3xl border border-ink/10 shadow-card overflow-hidden">
-          <div className="grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
+          <div className="grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] gap-x-3 px-6 py-3 text-[11px] uppercase tracking-wider font-semibold text-ink/50 border-b border-ink/10">
             <span></span>
             <span>Character</span>
             <span>Role</span>
@@ -789,7 +789,7 @@ export function CastView({
                   }
                   onOpenProfile(c.id);
                 }}
-                className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] px-6 py-4 items-center text-left text-sm hover:bg-ink/2 transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/4' : ''}`}
+                className={`w-full grid grid-cols-[40px_1.5fr_1.2fr_1.6fr_0.6fr_1.2fr_1fr_140px] gap-x-3 px-6 py-4 items-center text-left text-sm hover:bg-ink/2 transition-colors cursor-pointer ${i < filtered.length - 1 ? 'border-b border-ink/5' : ''} ${isDropTarget ? 'drop-active' : ''} ${selectedCharIds.includes(c.id) ? 'bg-peach/4' : ''}`}
               >
                 <span
                   onClick={(e) => {
