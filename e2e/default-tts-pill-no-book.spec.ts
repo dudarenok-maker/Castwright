@@ -34,7 +34,7 @@ test.describe('Default-engine TTS pill — reachable on the Books view (no book 
        "Kokoro ready" with a Stop button. */
     await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible({ timeout: 5_000 });
     await expect(
-      page.getByRole('button', { name: /^stop \(tts model\)$/i }).first(),
+      page.getByRole('button', { name: /^stop \(voice engine\)$/i }).first(),
     ).toBeVisible();
 
     /* The dead-end fallback must be gone. */

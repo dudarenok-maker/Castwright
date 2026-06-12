@@ -61,7 +61,7 @@ test.describe('voice-design progress indicator', () => {
        MOCK_PERSONA). We must let this 80 ms timer resolve BEFORE installing
        the fake clock — otherwise the textarea stays empty and the design
        button stays disabled. */
-    const engineSelect = page.getByLabel('TTS engine for this character');
+    const engineSelect = page.getByLabel('Voice engine for this character');
     await expect(engineSelect).toBeVisible();
     await engineSelect.selectOption('qwen');
 

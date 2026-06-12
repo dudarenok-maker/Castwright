@@ -299,7 +299,7 @@ describe('ModelManagerView — Gemini API key field', () => {
   });
 });
 
-describe('ModelManagerView — TTS sidecar preferences', () => {
+describe('ModelManagerView — voice engine preferences', () => {
   it('renders auto-start checked / unchecked from the preference', async () => {
     renderManager({ autoStartSidecar: false });
     const cb = (await screen.findByTestId('account-auto-start-sidecar')) as HTMLInputElement;
