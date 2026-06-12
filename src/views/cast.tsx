@@ -1219,7 +1219,7 @@ export function CastView({
       {/* Plan 81 wave 3 — desktop aside (lg:+). Identical contract to
           the original sticky-aside path; just hidden under lg. */}
       {showLibrary && (
-        <aside className="hidden lg:block self-start sticky top-24">
+        <aside className="hidden lg:block self-start sticky top-24" data-tour-id="cast-roster">
           <VoiceLibraryPanel
             library={library}
             draggingVoiceId={draggingVoiceId}

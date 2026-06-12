@@ -35,7 +35,7 @@ export function CompanionAppBanner() {
   }, []);
 
   return (
-    <section className="mb-8 md:mb-12" data-testid="companion-app-banner">
+    <section className="mb-8 md:mb-12" data-testid="companion-app-banner" data-tour-id="companion-app-banner">
       <div className="rounded-3xl border border-magenta/15 shadow-card bg-gradient-to-br from-peach/15 to-magenta/5 p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-6">
         <span className="w-14 h-14 rounded-2xl bg-white shadow-card grid place-items-center text-ink shrink-0">
           <CastwaveMark className="w-8 h-8" aria-hidden="true" />

@@ -883,6 +883,7 @@ export function GenerationView({
               type="button"
               onClick={() => dispatch(uiActions.requestStartGeneration())}
               data-testid="generation-view-resume"
+              data-tour-id="generate-resume-btn"
               className="min-h-[44px] px-4 py-2.5 rounded-full border border-magenta/30 bg-magenta/5 text-sm font-medium text-magenta hover:bg-magenta/10 inline-flex items-center gap-2"
             >
               <IconPlay className="w-4 h-4" /> Resume generation
