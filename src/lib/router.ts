@@ -10,6 +10,7 @@ import type { Stage } from './types';
      #/account                           → { kind: 'account' }
      #/admin                             → { kind: 'admin' }
                                            (#/worktrees kept as an inbound alias)
+     #/help?code=                        → { kind: 'help', focusCode? }
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
      #/books/:bookId/confirm?profile=    → { kind: 'confirm',   bookId,
                                              openProfileId }
@@ -36,6 +37,10 @@ export function stageToHash(stage: Stage | null | undefined): string {
       return '#/models';
     case 'about':
       return '#/about';
+    case 'help': {
+      const qs = stage.focusCode ? `?code=${encodeURIComponent(stage.focusCode)}` : '';
+      return `#/help${qs}`;
+    }
     case 'advanced':
       return '#/advanced';
     case 'release-notes':
@@ -59,6 +64,13 @@ export function stageToHash(stage: Stage | null | undefined): string {
   }
 }
 
+/** fe-29 — href for the Help view's troubleshooting anchor of a failure code.
+    Returns null for missing/unknown codes (the anchor adds nothing there). */
+export function helpHrefForFailureCode(code: string | null | undefined): string | null {
+  if (!code || code === 'unknown') return null;
+  return stageToHash({ kind: 'help', focusCode: code });
+}
+
 export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefined): boolean {
   if (!a || !b) return a === b;
   if (a.kind !== b.kind) return false;
@@ -72,6 +84,9 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
   }
   if (a.kind === 'confirm' && b.kind === 'confirm') {
     return a.openProfileId === b.openProfileId;
+  }
+  if (a.kind === 'help' && b.kind === 'help') {
+    return a.focusCode === b.focusCode;
   }
   return true;
 }
