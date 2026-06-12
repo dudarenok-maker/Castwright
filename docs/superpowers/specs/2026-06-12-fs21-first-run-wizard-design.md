@@ -1,13 +1,13 @@
 # fs-21 — First-run setup wizard (cross-platform setup owner)
 
 > **Status:** design (awaiting review) · **Date:** 2026-06-12 · **Issue:** [#474](https://github.com/dudarenok-maker/Castwright/issues/474)
-> **Owes:** a `docs/features/NN-*.md` regression plan at implementation (plans currently reach 207 → next free is 208).
+> **Owes:** a `docs/features/NN-*.md` regression plan at implementation (plans currently reach 208 → next free is 209).
 
 ## Summary
 
 A guided, cross-platform (Windows / macOS / Linux) first-run flow that becomes the **single owner of post-install setup for every platform**. Both installers (`ops-1` Windows `.exe`, `ops-15` macOS `.dmg`) and the Docker deploy (`ops-2`) ship only the app + runtime prerequisites and hand off here, so model install + verification is identical across OSes rather than reimplemented per installer.
 
-The wizard is an **orchestrator** over seams that already exist — the Model Manager install/inventory backends, the Ollama analyzer install/pull bootstraps, the fs-43 server-sourced device panel, the fs-22 bundled demo book, and the real generation pipeline — plus a small amount of new backend (a readiness probe, a Kokoro install route, a light smoke endpoint, and — per the venv decision below — a sidecar-bootstrap path).
+The wizard is an **orchestrator** over seams that already exist — the Model Manager install/inventory backends, the Ollama analyzer install/pull bootstraps, the existing `diagnostics.ts` health aggregator, the fs-43 device panel (`device-panel.tsx` over `/api/info`), the fs-22 bundled demo book, and the real generation pipeline — plus a small amount of new backend (a readiness shape *derived from* `diagnostics.ts`, a Kokoro install route, a light smoke endpoint, and — per the venv decision below — a sidecar-bootstrap path).
 
 ## Decisions locked in brainstorming
 
@@ -24,13 +24,13 @@ The wizard is an **orchestrator** over seams that already exist — the Model Ma
 ## Architecture & app surface
 
 - **New stage variant, not a modal.** Add `{ kind: 'setup' }` to the discriminated-union `ui.stage` (mirroring how `model-manager` was added in plan 193), routed at `#/setup` via pure `parseHash`/`stageToHash`. A real stage survives reload, deep-links, and slots into the e2e coverage spec.
-- **The adaptive gate is derived, not flag-driven.** On boot a selector computes `setupReadiness` from one new endpoint, `GET /api/setup/readiness`, which folds together: ffmpeg-on-PATH, the `/api/models/inventory` snapshot (TTS engines + Ollama tags), sidecar reachability + venv presence, the resolved analyzer config (Ollama daemon/model state **or** Gemini key), and the fs-43 device facts. It degrades gracefully with the sidecar down.
+- **The adaptive gate is derived, not flag-driven — and it reuses `diagnostics.ts`.** The existing `server/src/routes/diagnostics.ts` already aggregates the checks we need (`CheckId = 'gpu' | 'sidecar' | 'asr' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk'`), each returning a pass/fail + a human-readable detail line, and is built to "probe the sidecar once and reuse it." So `GET /api/setup/readiness` is a **thin mapper over diagnostics → the hard-blocker readiness shape**, adding only the probes diagnostics lacks: venv-present-on-disk, per-engine *weights* presence (from `/api/models/inventory`), and Ollama *model-pulled* state. It must NOT reinvent the aggregator. It degrades gracefully with the sidecar down (the diagnostics `sidecar`/`gpu` rows already model that).
 - **Boot splash gates first paint.** Because the router is a pure URL↔stage map (it doesn't gate today), a short *"Checking your setup…"* splash blocks first render until readiness resolves, then redirects into `#/setup` if any hard-blocker fails. This avoids a flash-then-yank and is what makes **headless/Docker work for free** — a fresh container with no models serves the UI, the probe reports not-ready, and the same gate fires without any launcher event.
 - **One persisted bit:** `setupCompletedAt` (user-settings, server-side) suppresses the *guided* intro on later launches and satisfies "doesn't re-run once completed." The hard gate stays purely derived, so removing a model later legitimately re-fires the gate in **checklist** mode (the Model Manager's "can't remove the in-use default → 409" guard already prevents a nasty mid-session yank).
 - **Hybrid presentation, one component, two modes:**
   - *Guided* (first run, `setupCompletedAt == null`): linear paged flow, one step per screen, Back/Next, progress dots.
   - *Checklist* (re-entry from **Account → "Re-run setup"** / Admin, or a later launch where a blocker regressed): all steps visible, status per row, jump to any item. Resume is automatic because state is derived from live checks.
-- **Reuse, don't rebuild:** install rows reuse `CoquiInstall` / `QwenInstall` / `WhisperInstall` and the Ollama analyzer section from the Model Manager; GPU facts come from the fs-43 device panel; the full smoke run reuses fs-22 sample-load + the generation pipeline.
+- **Reuse, don't rebuild:** install rows reuse `CoquiInstall` / `QwenInstall` / `WhisperInstall` and the Ollama analyzer section from the Model Manager; the readiness probe reuses `diagnostics.ts`; GPU facts are **sidecar-derived** (the diagnostics `gpu` row reads the sidecar's torch CUDA figures, so GPU info is simply absent until the venv/sidecar exist — consistent with GPU being info-only); the device-panel UI (`device-panel.tsx`) is reused for display; the full smoke run reuses fs-22 sample-load + the generation pipeline.
 
 ## Hard-blockers — precise definitions
 
@@ -45,10 +45,12 @@ The gate releases only when **all** of these pass; each is also a wizard step th
 
 GPU presence is surfaced (Step 1) but **never blocks** — CPU fallback is allowed.
 
+**What opens the gate (and what the smoke test is *not*).** The hard gate — app access — opens the moment the hard-blockers above (Steps 1–3) pass, *derived live*, independent of the smoke test. The **smoke test (Step 5) is confidence, not a gate condition**: a user who has satisfied Steps 1–3 already has app access and could skip it. `setupCompletedAt` is stamped when the user finishes (or exits) the *guided* flow, only to suppress the guided re-intro. Consequence of choosing the adaptive gate, stated honestly: the issue's "prove the whole stack end-to-end *before* the user uploads" becomes **"offer proof," not "force it."** Guided mode walks the user into the smoke test by default, but it is not a wall.
+
 ## The steps
 
 **Step 1 — Environment & sidecar** *(blocks only on sidecar-unreachable; GPU is info)*
-OS/arch, GPU (CUDA / MPS / none + VRAM) from the fs-43 panel, Python + sidecar reachability, venv presence, Node version. GPU is informational and *seeds the defaults* in Step 4 (CPU box → default to Kokoro, warn Qwen is slow). A missing venv / down sidecar surfaces the **Z** bootstrap affordance (below) or instruction.
+OS/arch, GPU (CUDA / MPS / none + VRAM) — **sidecar-derived** (the diagnostics `gpu` row reads torch CUDA figures), so absent until the venv/sidecar exist — Python + sidecar reachability, venv presence, Node version. GPU is informational and *seeds the defaults* in Step 4 (CPU box → default to Kokoro, warn Qwen is slow). A missing venv / down sidecar surfaces the **Z** bootstrap affordance (below) or instruction.
 
 **Step 2 — ffmpeg** *(hard blocker; verify + instruct)*
 Pass shows the version; fail shows per-OS remediation (`winget install ffmpeg` / `brew install ffmpeg` / `apt install ffmpeg`) + Re-check.
@@ -64,9 +66,9 @@ Default engine, analysis model, theme — pre-filled from Step 1, written throug
 
 **Step 5 — Two-tier smoke test** *(locked until Steps 1–3 pass)*
 - **Tier 1 — light check (automatic, on completion).** `POST /api/setup/smoke`: synth one fixed *committed* snippet with the default engine → ffmpeg assemble → audible inline clip, plus a cheap **analyzer liveness ping**. No book scaffold, no full analysis run. Pass = non-empty audio produced + assembled + plays (length/exit-code check, **not** a golden byte match — engines are stochastic). Fail names the broken stage with matching remediation.
-- **Tier 2 — full run on the demo book (opt-in).** A "Hear a real audiobook now?" card loads **The Coalfall Commission** (fs-22, `POST /api/samples/the-coalfall-commission/load`, idempotent) and runs the **real generation pipeline** (all 13 voices synthesized + assembled) → drops into the Listen view with playable audio. The demo ships with a pre-designed cast and **no audio**, so generation *is* the end-to-end proof. An optional **"re-analyze first"** toggle exercises the analyzer end-to-end for the thorough deployer. Refuses/queues if a generation is already active (no GPU contention); CPU-aware, progress-streaming budget (no false timeouts).
+- **Tier 2 — full run on the demo book (opt-in).** A "Hear a real audiobook now?" card loads **The Coalfall Commission** (fs-22, `POST /api/samples/the-coalfall-commission/load`, idempotent) and runs the **real generation pipeline** (all 13 voices synthesized + assembled) → ends in the Listen view with playable audio. The demo ships with a pre-designed cast and **no audio**, so generation *is* the end-to-end proof. **Flow caveat (verify at implementation):** a freshly-loaded sample may land in the **cast-confirm** state, not generate-ready (plan 207 routes to "cast-confirm or cast view depending on `book.status`"). So Tier 2 must either auto-advance past confirm for the demo, or the card walks the user through it — *not* assumed to be a single load→audio click. An optional **"re-analyze first"** toggle exercises the analyzer end-to-end for the thorough deployer. Refuses/queues if a generation is already active (no GPU contention); CPU-aware, progress-streaming budget (no false timeouts).
 
-Completion stamps `setupCompletedAt`; the gate opens and guided mode won't re-trigger. The checklist stays reachable from Account.
+Finishing (or exiting) the guided flow stamps `setupCompletedAt`, so guided mode won't re-trigger — note the *app-access* gate already opened when Steps 1–3 passed (see "What opens the gate" above). The checklist stays reachable from Account.
 
 ## Cross-platform install work (the full-parity scope)
 
@@ -86,7 +88,7 @@ New backend work:
 
 1. **Kokoro install route** — `POST /api/kokoro/install` + a `KokoroInstall` SSE component + a `runInstallScript()` **platform-dispatch helper** (`.ps1` on Windows, `.sh` elsewhere). Targets the **versioned** `<install>/models/kokoro` path (per `setup-versioned-install.mjs`, which shares weights across releases — *not* the legacy `voices/kokoro`). ops-7 hash-verified; `windowsHide: true` on the spawn (commit-gate invariant).
 2. **Sidecar bootstrap (per Z)** — detect Python 3.11 + venv; offer one-click `python -m venv + pip install -r requirements.txt` with streamed progress, degrading to instruction when Python 3.11 is absent. Reuses the platform-dispatch helper.
-3. **Readiness probe** — `GET /api/setup/readiness` folding the components above into one `setupReadiness` shape; works with the sidecar down. **Mockable to both ready and not-ready states** (query param / mock toggle) so dev and e2e can exercise both the gate firing and the happy path.
+3. **Readiness probe** — `GET /api/setup/readiness` as a **thin mapper over the existing `diagnostics.ts` aggregator** → the hard-blocker `setupReadiness` shape, adding only the probes diagnostics lacks (venv-on-disk, per-engine weights from inventory, Ollama model-pulled). Explicitly *not* a parallel re-implementation. Works with the sidecar down. **Mockable to both ready and not-ready states** (query param / mock toggle) so dev and e2e can exercise both the gate firing and the happy path.
 4. **Light smoke endpoint** — `POST /api/setup/smoke` (snippet → synth → assemble + analyzer ping); reuses real synth/assembly code, returns a per-stage breakdown.
 5. **Install-backend parity audit** — run Qwen / Coqui / Ollama install on real macOS + Linux boxes and fix what breaks. **Time-boxed with a pressure-release valve:** if a backend can't be made cross-platform cheaply, degrade *that one engine* to instruct-only and file a follow-up rather than sinking v1.
 
@@ -102,11 +104,11 @@ New backend work:
 
 Wave-structured, each independently reviewable with its own gate. Default disposition: one integration PR per parallel round, verified once (`integration/<date>`).
 
-- **Wave 0 — Readiness spine** *(foundational, sequential)*: `GET /api/setup/readiness` + `{ kind: 'setup' }` stage + `#/setup` route + boot splash + `setupCompletedAt` + mock dual-state stub. *Gate:* typecheck + unit tests (selector + router redirect) + e2e stub that the gate fires when not-ready.
+- **Wave 0 — Readiness spine** *(foundational, sequential)*: `GET /api/setup/readiness` as a **thin mapper over `diagnostics.ts`** (+ the 2-3 missing probes) + `{ kind: 'setup' }` stage + `#/setup` route + boot splash + `setupCompletedAt` + mock dual-state stub. *Gate:* typecheck + unit tests (mapper + selector + router redirect) + e2e stub that the gate fires when not-ready. (Reusing diagnostics keeps this wave small.)
 - **Wave 1 — Cross-platform install parity** *(riskiest; owes on-box acceptance)*: Kokoro install route + `KokoroInstall` + `runInstallScript()` helper + sidecar bootstrap (Z) + the parity audit. *Gate:* server/sidecar unit tests for the route + dispatch helper. **On-box install acceptance (Mac + Linux) is documented-OWED**, not a CI gate.
 - **Wave 2 — The wizard UI** *(hybrid; can run ∥ Wave 1 in a worktree, frontend scope)*: the `setup` view (two modes), 5 steps, reusing the existing installers + fs-43 panel; Account "Re-run setup" entry. *Gate:* vitest per step (pass/fail/remediation) + `e2e/responsive/coverage.spec.ts` entry.
 - **Wave 3 — Two-tier smoke test**: Tier 1 endpoint + committed snippet fixture + inline player + mock stub; Tier 2 card wiring sample-load → generation → Listen + optional re-analyze. Completion stamps `setupCompletedAt`. *Gate:* server test (per-stage breakdown) + **the issue's required mock-mode e2e happy-path progression**.
-- **Wave 4 — Docs & closure**: new `docs/features/208-fs21-first-run-wizard.md` regression plan + INDEX entry + BACKLOG row removal + `Closes #474`. Run `cross-os.yml` before any release announce.
+- **Wave 4 — Docs & closure**: new `docs/features/209-fs21-first-run-wizard.md` regression plan + INDEX entry + BACKLOG row removal + `Closes #474`. Run `cross-os.yml` before any release announce.
 
 **Parallelism:** Wave 0 lands first (spine). Then Wave 1 (server) ∥ Wave 2 (frontend, mocking the not-yet-real route via the existing install-component pattern) in worktrees → `integration/<date>`, verify between merges → Wave 3 → Wave 4.
 
