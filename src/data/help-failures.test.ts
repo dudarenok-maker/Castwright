@@ -10,7 +10,7 @@ describe('help content (fe-29)', () => {
       expect(e.userMessage.length).toBeGreaterThan(0);
       expect(e.remediation.length).toBeGreaterThan(0);
     }
-    expect(HELP_FAILURE_ENTRIES.length).toBe(16);
+    expect(HELP_FAILURE_ENTRIES.length).toBe(17);
   });
   it('curated topics each have a title and body', () => {
     expect(HELP_TOPICS.length).toBeGreaterThanOrEqual(5);

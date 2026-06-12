@@ -20,6 +20,7 @@ const TITLES = {
   'analyzer-daily-quota': 'Analyzer daily quota exhausted',
   'analyzer-truncated': 'Analyzer reply cut short',
   'analyzer-unreachable': 'Analyzer not reachable',
+  'analyzer-content-blocked': 'Gemini blocked the chapter (copyright filter)',
   'attribution-incomplete': 'Chapter attribution incomplete',
   oom: 'Computer ran out of memory',
   'disk-full': 'Disk full',

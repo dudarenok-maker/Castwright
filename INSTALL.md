@@ -173,6 +173,17 @@ Sidecar will fall back to CPU and log it. **On Windows / Linux (NVIDIA):** verif
 
 `npm run start:prod` checks for the pre-built frontend bundle. The release zip ships `dist/` pre-built — if you're seeing this, the extract was incomplete or you've manually deleted `dist/`. Re-extract.
 
+### Analysis fails immediately — "Gemini … returned an empty response"
+
+If a chapter (often **chapter 1**) fails the instant analysis starts with `Gemini <model> returned an empty response (reason=RECITATION)`, Gemini's **recitation filter** blocked the text: `gemini-*` models refuse to process source they recognise as copyrighted, and a published book's opening chapter is the classic trigger. It's deterministic — retrying the same model on the same text fails identically.
+
+Two ways around it:
+
+- **Stay on the cloud, switch model.** Set `GEMINI_MODEL=gemma-4-31b-it` in `server/.env` and restart — the `gemma-*` family isn't subject to the recitation filter. Trade-off: gemma is weaker and can grind on very long chapters.
+- **Go fully local (most robust for copyrighted manuscripts).** Set `ANALYZER=local` in `server/.env`, run Ollama with `ollama pull qwen3.5:4b`, and restart. Local models apply no content filter at all. See [Setting up the analyzer](#setting-up-the-analyzer).
+
+After editing `server/.env`, click **Try again** in the app — it resumes from the first uncached chapter.
+
 ---
 
 ## Configuration

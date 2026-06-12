@@ -33,6 +33,7 @@ export type FailureCode =
   | 'analyzer-daily-quota'
   | 'analyzer-truncated'
   | 'analyzer-unreachable'
+  | 'analyzer-content-blocked'
   | 'attribution-incomplete'
   | 'oom'
   | 'disk-full'
@@ -118,6 +119,19 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
       ctx.status === 503 ||
       ctx.status === 500 ||
       /ECONNREFUSED|fetch failed|EAI_AGAIN|socket hang up/i.test(raw),
+  },
+  /* Content-filter block (analysis only). A gemini-* model returns a candidate
+     carrying RECITATION/SAFETY but no text — the engine surfaces this as
+     "Gemini <model> returned an empty response" (gemini.ts). Scoped to the
+     Gemini message so Ollama's same-worded empty-response (a local-model
+     problem, not a content filter) falls through to `unknown`. Deterministic on
+     the same text, so splitting/retrying the same model never clears it — the
+     remediation points at a gemma-* model or the local analyzer. */
+  {
+    code: 'analyzer-content-blocked',
+    fatal: true,
+    source: 'analysis',
+    match: (raw) => /Gemini\b.*\breturned an empty response\b/i.test(raw),
   },
   {
     code: 'synth-timeout',
