@@ -1,9 +1,9 @@
-/* In-app TTS venv bootstrap affordance (fs-21 wave 1b).
+/* In-app voice-engine runtime bootstrap affordance (fs-21 wave 1b).
    Three states driven by GET /api/setup/venv/detect:
 
-     1. venvPresent (or job installed)  → green "TTS engine ready" card
-     2. !venvPresent && pythonFound     → one-click "Set up the TTS engine" button
-                                          that POSTs bootstrap and polls the job
+     1. venvPresent (or job installed)  → green "Voice engine runtime ready" card
+     2. !venvPresent && pythonFound     → one-click "Set up the voice engine runtime"
+                                          button that POSTs bootstrap and polls the job
      3. !venvPresent && !pythonFound    → decision-Z degrade: per-OS manual
                                           instructions + Re-check button
 
@@ -105,9 +105,9 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
         <div className="flex items-center gap-3">
           <span className="w-2 h-2 rounded-full bg-emerald-600" />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-emerald-900">TTS engine ready</p>
+            <p className="text-sm font-semibold text-emerald-900">Voice engine runtime ready</p>
             <p className="text-xs text-emerald-900/70">
-              The Python virtual environment is set up — all TTS engines can be loaded.
+              The Python runtime is set up — all voice engines can be loaded.
             </p>
           </div>
           <button
@@ -133,7 +133,7 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
       >
         <div className="flex items-center gap-3">
           <span className="w-3 h-3 rounded-full border-2 border-magenta border-t-transparent animate-spin" />
-          <p className="text-sm font-semibold text-ink">Setting up TTS engine…</p>
+          <p className="text-sm font-semibold text-ink">Setting up the voice engine runtime…</p>
         </div>
         <p className="text-xs text-ink/60">
           {job.step ??
@@ -172,7 +172,7 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
         <div>
           <p className="text-sm font-semibold text-ink">Python 3.11 not found</p>
           <p className="mt-1 text-xs text-ink/55">
-            The TTS engine requires Python 3.11. Install it from{' '}
+            The voice engine runtime requires Python 3.11. Install it from{' '}
             <span className="font-medium text-ink">python.org</span>, then run these
             commands from the <code className="text-xs bg-ink/5 px-1 rounded">server/tts-sidecar</code>{' '}
             directory:
@@ -214,14 +214,14 @@ export function VenvBootstrap({ onBootstrapped }: { onBootstrapped?: () => void 
       className="rounded-2xl border border-ink/10 bg-canvas p-4 space-y-3"
     >
       <div>
-        <p className="text-sm font-semibold text-ink">TTS engine not set up</p>
+        <p className="text-sm font-semibold text-ink">Voice engine runtime not set up</p>
         <p className="mt-1 text-xs text-ink/55">
-          The TTS engine needs a Python virtual environment with its dependencies installed.
+          Voice engines need a Python runtime with their dependencies installed.
           This is a one-time setup (~2 GB download).
         </p>
       </div>
       <PrimaryButton variant="dark" onClick={startBootstrap} disabled={busy} icon={false}>
-        {busy ? 'Starting…' : 'Set up the TTS engine'}
+        {busy ? 'Starting…' : 'Set up the voice engine runtime'}
       </PrimaryButton>
       {error && <p className="text-xs text-rose-700">{error}</p>}
     </div>

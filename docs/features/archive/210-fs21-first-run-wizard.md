@@ -1,12 +1,12 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-13
 owner: null
 ---
 
 # fs-21 — First-run setup wizard (cross-platform setup owner)
 
-> Status: active — code-complete + CI-green across all five waves; on-box acceptance OWED (see below).
+> Status: stable — shipped 2026-06-13 (five waves + post-ship UX polish, all CI-green). Real-hardware on-box acceptance across Mac/Linux is a separate residual tracked by the backlog item `fs-21` ([#752](https://github.com/dudarenok-maker/Castwright/issues/752)) — see the OWED matrix below.
 > Key files: `server/src/routes/setup-readiness.ts` (readiness + complete + smoke), `server/src/routes/kokoro-install.ts`, `server/src/routes/venv-bootstrap.ts`; `server/src/tts/kokoro-install-bootstrap.ts`, `server/src/tts/venv-bootstrap.ts`; `server/tts-sidecar/scripts/install-kokoro.mjs`, `server/tts-sidecar/scripts/bootstrap-venv.mjs`; `server/src/tts/python-discovery.ts`, `server/src/tts/engine-presence.ts`, `server/src/tts/kokoro-install-detect.ts`, `server/src/diagnostics/venv.ts`; `src/views/setup.tsx`, `src/components/setup/` (setup-wizard + 5 steps), `src/components/kokoro-install.tsx`, `src/components/venv-bootstrap.tsx`, `src/components/ollama-install.tsx`; `src/routes/index.tsx` (SetupRoute + boot gate), `src/components/layout.tsx` (boot-splash gate), `src/lib/api.ts` (`getSetupReadiness` / `completeSetup` / `runSmokeTest`); `setupCompletedAt` user-setting.
 > URL surface: `#/setup`
 > OpenAPI ops: `GET /api/setup/readiness`, `POST /api/setup/complete`, `POST /api/setup/smoke`, `GET /api/kokoro/status`, `POST /api/kokoro/install`, `GET /api/setup/venv`, `POST /api/setup/venv`
@@ -73,7 +73,7 @@ owner: null
 - Vitest frontend (`src/components/setup/step-finish.test.tsx`) — asserts the finish step smoke-test integration.
 - Vitest frontend (`src/views/account.test.tsx`) — asserts the "Re-run setup" Account entry renders and fires the correct action.
 - Vitest frontend (`src/components/ollama-install.test.tsx`) — asserts `OllamaInstall` `onInstalled` callback wiring.
-- Playwright e2e (`e2e/setup-wizard.spec.ts`) — asserts happy-path progression through all five wizard steps; asserts guided vs checklist mode; asserts `coverage.spec.ts` entry for the `#/setup` view.
+- Playwright e2e (`e2e/setup-wizard.spec.ts`) — asserts happy-path progression through all five wizard steps; asserts the re-entry **summary board** opens (not a stacked list) and a row drills into the guided flow, with "Setup overview" returning; asserts `coverage.spec.ts` entry for the `#/setup` view.
 
 **Wave 3 (two-tier smoke test):**
 - Vitest server (`server/src/routes/setup-readiness.test.ts`) — asserts `POST /api/setup/smoke` per-stage breakdown (sidecar / analyzer / audio), `ok:false`-never-500 contract.
@@ -90,9 +90,9 @@ Run `npm start` against a real workspace with a fresh `setupCompletedAt` absent 
 3. **Step 2 — Environment (venv):** Python 3.11 detected. Click "Bootstrap sidecar environment." `VenvBootstrap` polls `/api/setup/venv`; progress bar advances. On completion, step flips green. (No-Python path: instructions shown, step marked "manual" — wizard still advances.)
 4. **Step 3 — ffmpeg check:** ffmpeg on PATH → step green automatically. If absent, instructions shown.
 5. **Step 4 — Defaults:** engine + analyzer + theme pickers. Confirm selections.
-6. **Step 5 — Finish / Smoke:** click "Run smoke test." `POST /api/setup/smoke` returns per-stage breakdown. Tier-1 audio plays inline. "Complete setup" button active.
-7. **Complete setup** — `POST /api/setup/complete` → `setupCompletedAt` stamped → `ui.stage` transitions out of `{ kind: 'setup' }` → app lands on `#/`.
-8. **Re-entry via Account** — navigate to `#/account`. "Re-run setup" entry visible. Clicking it resets the wizard (checklist mode — all previously-complete steps shown as checked, individual steps can be re-run). URL goes to `#/setup`.
+6. **Step 5 — Finish / Smoke:** click "Hear a test line." `POST /api/setup/smoke` returns per-stage breakdown. Tier-1 audio plays inline. "Finish & open my library" button active.
+7. **Complete setup** — "Finish & open my library" → `POST /api/setup/complete` → `setupCompletedAt` stamped → `ui.stage` transitions out of `{ kind: 'setup' }` → app lands on `#/`.
+8. **Re-entry via Account** — navigate to `#/account`. "Re-run setup" entry visible. Clicking it lands on `#/setup` in re-entry mode: an at-a-glance **summary board** (one green/amber row per area — Environment, Audio assembly, Voice engines, Analyzer, Defaults — mirroring the Admin → Health board), NOT the linear wizard and NOT a long stacked list. Clicking any row (or "Open setup wizard" / "Fix setup") drills into that step of the guided flow; a "‹ Setup overview" link returns to the summary.
 9. **Headless / Docker** — open `http://<host>:5173/#/` on a box with no Kokoro weights. Gate fires identically; wizard serves all model installs in-browser.
 
 ## OWED on-box acceptance matrix
@@ -130,3 +130,16 @@ Shipped 2026-06-12. Five waves across five PRs, all CI-green. On-box acceptance 
 - **Wave 1b** — venv bootstrap (decision Z): `findPython311`, `bootstrap-venv.mjs`, `VenvBootstrap` + `/api/setup/venv`, no-Python degrade-to-instructions path. PR #749, merge `10fae6b6`.
 - **Wave 2** — 5-step hybrid guided/checklist wizard UI: `SetupWizard` + 5 step components, `POST /api/setup/complete`, `api.completeSetup`, `OllamaInstall` `onInstalled`, Account "Re-run setup" entry, `SetupRoute` re-fetch. PR #750, merge `3f0b206b`.
 - **Wave 3** — two-tier smoke test: `POST /api/setup/smoke` (Tier 1, `ok:false`-never-500), `api.runSmokeTest`, Step-Finish smoke UI, Tier-2 demo-book run via the fs-22 flow. PR #751, merge `1179ce9f`.
+
+### Post-ship polish (2026-06-13, branch `fix/frontend-fs21-wizard-polish`)
+
+First on-box look surfaced four UX issues; all fixed on this branch (frontend-only, tests in lockstep):
+
+1. **Re-entry rendered as a long stacked list.** The old `checklist` mode stacked all five step bodies. Replaced with an at-a-glance **summary board** (`SetupSummary` in `setup-wizard.tsx`) — one green/amber row per area, styled after the Admin → Health board — that drills into the same guided step-by-step flow (row click / "Open setup wizard" → `GuidedWizard` at that step; "‹ Setup overview" returns). The linear `guided` first-run flow is unchanged.
+2. **"ffmpeg" step was jargon.** Renamed the step to **"Audio assembly"** with a plain-language explanation (stitches the generated voice clips into one finished, levelled file); ffmpeg is named only as the underlying tool. `step-ffmpeg.tsx`.
+3. **Setup still said "TTS".** Renamed user-facing "TTS runtime / TTS engine" copy to **"voice engine"** in `step-models.tsx` and the shared `venv-bootstrap.tsx` (also surfaces in the Model Manager).
+4. **Finish button misaligned + flat copy.** The `PrimaryButton icon={false}` asymmetric padding off-centred the label; restored the default arrow icon (centres it + reads as a primary CTA) and rewrote the Finish-step copy ("Ready to perform", "Hear a test line", "Play the demo book", "Finish & open my library"). `step-finish.tsx`.
+
+> Known follow-up (not in this branch): the `PrimaryButton icon={false}` asymmetric padding (`pl-5 pr-1.5`) off-centres labels on ~22 buttons app-wide. Fixed only the Finish button here (surgical); a global fix to symmetrise padding when `!icon` is a candidate cleanup (would touch visual baselines).
+
+Shipped via **PR #773** (merge into `main`). With this polish landed and the automated regression net real + green, the plan is marked `stable` and archived. The only remaining fs-21 work is real-hardware on-box acceptance (`#752`, OWED matrix above) — that is hardware verification, not a code gate.

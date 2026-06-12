@@ -16,7 +16,12 @@ export function StepFfmpeg({ readiness, onRefetch }: Props) {
   if (passed) {
     return (
       <section className="space-y-4">
-        <h2 className="text-lg font-semibold text-ink">ffmpeg</h2>
+        <h2 className="text-lg font-semibold text-ink">Audio assembly</h2>
+        <p className="text-sm text-ink/60">
+          The final step of every audiobook stitches your generated voice clips into a
+          single, properly-levelled audio file. Castwright does this with a free tool
+          called <span className="font-medium text-ink">ffmpeg</span>.
+        </p>
         <div
           data-testid="step-ffmpeg-ready"
           className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4"
@@ -24,9 +29,10 @@ export function StepFfmpeg({ readiness, onRefetch }: Props) {
           <div className="flex items-center gap-3">
             <span className="w-2 h-2 rounded-full bg-emerald-600 shrink-0" />
             <div className="flex-1">
-              <p className="text-sm font-semibold text-emerald-900">ffmpeg found</p>
+              <p className="text-sm font-semibold text-emerald-900">Audio assembly ready</p>
               <p className="text-xs text-emerald-900/70">
-                Audio assembly is ready — ffmpeg is available on this machine.
+                ffmpeg is installed on this machine — Castwright can assemble finished
+                audiobooks.
               </p>
             </div>
           </div>
@@ -37,16 +43,22 @@ export function StepFfmpeg({ readiness, onRefetch }: Props) {
 
   return (
     <section className="space-y-4">
-      <h2 className="text-lg font-semibold text-ink">ffmpeg</h2>
+      <h2 className="text-lg font-semibold text-ink">Audio assembly</h2>
+      <p className="text-sm text-ink/60">
+        The final step of every audiobook stitches your generated voice clips into a
+        single, properly-levelled audio file. Castwright does this with a free tool
+        called <span className="font-medium text-ink">ffmpeg</span>.
+      </p>
       <div
         data-testid="step-ffmpeg-missing"
         className="rounded-2xl border border-amber-200 bg-amber-50 p-4 space-y-4"
       >
         <div>
-          <p className="text-sm font-semibold text-amber-900">ffmpeg not found</p>
+          <p className="text-sm font-semibold text-amber-900">ffmpeg isn’t installed yet</p>
           <p className="mt-1 text-xs text-amber-900/70">
-            Castwright uses ffmpeg to assemble and normalise audio. Install it with your
-            OS package manager, then click Re-check.
+            Without it, Castwright can generate voices but can’t assemble them into a
+            finished audiobook. Install it with your OS package manager, then click
+            Re-check.
           </p>
         </div>
 
