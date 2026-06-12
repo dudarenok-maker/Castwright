@@ -83,6 +83,7 @@ import { whisperInstallRouter } from './routes/whisper-install.js';
 import { coquiInstallRouter } from './routes/coqui-install.js';
 import { gpuQueueRouter } from './routes/gpu-queue.js';
 import { diagnosticsRouter } from './routes/diagnostics.js';
+import { setupReadinessRouter } from './routes/setup-readiness.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
 import { configRouter } from './routes/config.js';
@@ -249,6 +250,7 @@ app.use('/api/whisper', whisperInstallRouter); // in-app Whisper ASR installer (
 app.use('/api/models', modelsInventoryRouter); // fs-23 — in-app Model Manager: inventory + remove
 app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inFlight for the top-bar pill)
 app.use('/api/diagnostics', diagnosticsRouter); // fs-18 — GET / one-shot health board (admin console)
+app.use('/api/setup', setupReadinessRouter); // fs-21 — first-run readiness probe
 
 /* Production-mode frontend serving. Helper resolves whether to mount based
    on NODE_ENV=production OR the existence of dist/index.html. Mounted AFTER

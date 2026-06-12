@@ -40,6 +40,9 @@ const SLOW_FILES_TO_EXCLUDE = [
   /* Loads the real pdf-parse 2 / bundled pdfjs; destabilises the parallel
      fork pool ("Worker exited unexpectedly"). Serialised, not slow. */
   'src/parsers/pdf-real.test.ts',
+  /* Integration test: makes a real 2s-timeout network probe to the sidecar.
+     Slow/flaky under the parallel fast pool — serialised here (fs-21). */
+  'src/routes/setup-readiness.route.test.ts',
 ];
 
 /* Contention throttle (plan 156). LOW_CONCURRENCY (set manually, or
