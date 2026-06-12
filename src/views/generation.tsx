@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
+import { helpHrefForFailureCode } from '../lib/router';
 import { MANIFESTO } from '../lib/brand';
 import {
   IconPlay,
@@ -1539,6 +1540,17 @@ function ChapterRow({
             {chapter.generationRemediation && (
               <p className="text-xs text-rose-700/80 mt-1.5 leading-relaxed">
                 <span className="font-semibold">What to do:</span> {chapter.generationRemediation}
+                {helpHrefForFailureCode(chapter.generationErrorCode) && (
+                  <>
+                    {' '}
+                    <a
+                      href={helpHrefForFailureCode(chapter.generationErrorCode)!}
+                      className="underline font-semibold text-magenta hover:text-magenta/80"
+                    >
+                      More help
+                    </a>
+                  </>
+                )}
               </p>
             )}
           </div>

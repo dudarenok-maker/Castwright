@@ -64,6 +64,13 @@ export function stageToHash(stage: Stage | null | undefined): string {
   }
 }
 
+/** fe-29 — href for the Help view's troubleshooting anchor of a failure code.
+    Returns null for missing/unknown codes (the anchor adds nothing there). */
+export function helpHrefForFailureCode(code: string | null | undefined): string | null {
+  if (!code || code === 'unknown') return null;
+  return stageToHash({ kind: 'help', focusCode: code });
+}
+
 export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefined): boolean {
   if (!a || !b) return a === b;
   if (a.kind !== b.kind) return false;
