@@ -195,6 +195,18 @@ describe('TopBar — StatusPill (hover popover)', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'books', statusSummary: null })} />);
     expect(screen.queryByTestId('status-pill')).not.toBeInTheDocument();
   });
+
+  it('keeps the pill outside the horizontally-scrolling nav strip so a wide breadcrumb cannot clip it', () => {
+    /* Regression: on the listen view the long book-title breadcrumb starved
+       the `overflow-x-auto` middle strip and scrolled the right-anchored pill
+       off-screen, clipping it to "Revis". The pill must live in an
+       always-visible shrink-0 slot, never inside an overflow-x-auto ancestor. */
+    renderWithStore(
+      <TopBar {...makeProps({ stage: 'ready', view: 'listen', projectTitle: 'The Drowning Bell' })} />,
+    );
+    const pill = screen.getByTestId('status-pill');
+    expect(pill.closest('.overflow-x-auto')).toBeNull();
+  });
 });
 
 describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => {

@@ -35,7 +35,7 @@ const inspCray = (): Character => ({
   tone: { warmth: 0.4, pace: 0.45, authority: 0.85, emotion: 0.5 },
   description: 'Dogged harbour-town inspector.',
   ttsEngine: 'qwen',
-  overrideTtsVoices: { qwen: { name: 'qwen-cray-v1' } },
+  overrideTtsVoices: { qwen: { name: 'Cray v1' } },
 });
 
 const drWren = (): Character => ({
@@ -48,7 +48,7 @@ const drWren = (): Character => ({
   tone: { warmth: 0.55, pace: 0.4, authority: 0.6, emotion: 0.45 },
   description: 'Precise, dryly humane coroner.',
   ttsEngine: 'qwen',
-  overrideTtsVoices: { qwen: { name: 'qwen-wren-v1' } },
+  overrideTtsVoices: { qwen: { name: 'Wren v1' } },
 });
 
 const reusedFromBook1 = (c: Character): Character => ({
@@ -534,7 +534,7 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       usedIn: 1,
       source: 'library',
       inCurrentSeries: true,
-      ttsVoice: qwenTts('qwen-remy', 'Designed voice'),
+      ttsVoice: qwenTts('Remy v1', 'Designed voice'),
     }),
     withGradient({
       id: 'v_marin_cross',
@@ -558,7 +558,7 @@ export const HOLLOW_TIDE_VOICES: VoiceLibraryResponse = {
       usedIn: 1,
       source: 'library',
       inCurrentSeries: true,
-      ttsVoice: qwenTts('qwen-sable', 'Designed voice'),
+      ttsVoice: qwenTts('Sable v1', 'Designed voice'),
     }),
   ],
 };
