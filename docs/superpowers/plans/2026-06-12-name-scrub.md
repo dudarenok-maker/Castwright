@@ -1,5 +1,24 @@
 # Marlow / the Hollow Tide → Coalfall Scrub Implementation Plan
 
+> **STATUS: DELIVERED (2026-06-13)** on branch `chore/Marlow-scrub`. All six
+> phases plus a wider clean-up landed; the whole tree is grep-clean of the Hollow Tide IP
+> except this plan, the scope spec, and `docs/test-book/the Hollow Tide-to-coalfall-mapping.md`
+> (the three meta-docs that name the IP deliberately as the scrub ledger — the
+> last remaining references; safe to delete/move before the repo goes public).
+> Local gates green: typecheck, lint, build, a11y, frontend (2711), server
+> (2541) + slow (222), scripts node (382), Pester (24), codemod (17), Flutter
+> companion (231), e2e (186 + the visual-baseline skips). Sidecar pytest skips
+> (worktree venv not bootstrapped — `test_qwen3.py` changes are consistent
+> voiceId renames). **Scope gaps the execution uncovered beyond the original
+> six phases** (the subagent phases missed them; all now scrubbed): the entire
+> `scripts/**` tree, `openapi.yaml`, the de-facto author name "Della Renwick"
+> (→ Della Renwick) hard-coded across ~40 test files + its stale bookId slugs,
+> the `skills/*.md` analyzer prompts, the `apps/android` Flutter companion
+> fixtures, `server/tts-sidecar/tests`, `server/.env.example`, the Hart long-form
+> "Hartwell Brennan Vale" (+ Hartwell/Hartie/Bren), and the surname/pet/place long
+> tail (Vell/Vale/Reeve/Varek/Pib/Rufus/Lumen/Saltmoor/Tidehaven/
+> Unraveled) — all added to the codemod with tests.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan phase-by-phase. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Remove all *The Hollow Tide* (third-party copyright) content — the codebase's de-facto fixture/mock dataset — and replace it with Castwright-owned content (The Coalfall Commission + the Hollow Tide series), committing an owned canonical e2e manuscript (+ a Russian variant for multilingual).
