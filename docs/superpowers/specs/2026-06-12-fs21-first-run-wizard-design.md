@@ -86,8 +86,8 @@ Audit of where the install backends stand today:
 
 New backend work:
 
-1. **Kokoro install route** — `POST /api/kokoro/install` + a `KokoroInstall` SSE component + a `runInstallScript()` **platform-dispatch helper** (`.ps1` on Windows, `.sh` elsewhere). Targets the **versioned** `<install>/models/kokoro` path (per `setup-versioned-install.mjs`, which shares weights across releases — *not* the legacy `voices/kokoro`). ops-7 hash-verified; `windowsHide: true` on the spawn (commit-gate invariant).
-2. **Sidecar bootstrap (per Z)** — detect Python 3.11 + venv; offer one-click `python -m venv + pip install -r requirements.txt` with streamed progress, degrading to instruction when Python 3.11 is absent. Reuses the platform-dispatch helper.
+1. **Kokoro install route** — `POST /api/kokoro/install` (polling, not SSE) + a `KokoroInstall` component + `install-kokoro.mjs` (Node script, uniform spawn on all platforms via `node server/tts-sidecar/scripts/install-kokoro.mjs`). `install-kokoro.ps1` / `install-kokoro.sh` remain as **terminal/manual fallbacks** — they were not removed. Targets the **versioned** `<install>/models/kokoro` path (per `setup-versioned-install.mjs`). ops-7 SHA256-verified; `windowsHide: true` on the spawn (commit-gate invariant).
+2. **Sidecar bootstrap (per Z)** — detect Python 3.11 (`findPython311`) + venv; offer one-click `python -m venv + pip install -r requirements.txt` via `bootstrap-venv.mjs` with polled progress, degrading to instructions when Python 3.11 is absent.
 3. **Readiness probe** — `GET /api/setup/readiness` as a **thin mapper over the existing `diagnostics.ts` aggregator** → the hard-blocker `setupReadiness` shape, adding only the probes diagnostics lacks (venv-on-disk, per-engine weights from inventory, Ollama model-pulled). Explicitly *not* a parallel re-implementation. Works with the sidecar down. **Mockable to both ready and not-ready states** (query param / mock toggle) so dev and e2e can exercise both the gate firing and the happy path.
 4. **Light smoke endpoint** — `POST /api/setup/smoke` (snippet → synth → assemble + analyzer ping); reuses real synth/assembly code, returns a per-stage breakdown.
 5. **Install-backend parity audit** — run Qwen / Coqui / Ollama install on real macOS + Linux boxes and fix what breaks. **Time-boxed with a pressure-release valve:** if a backend can't be made cross-platform cheaply, degrade *that one engine* to instruct-only and file a follow-up rather than sinking v1.
@@ -105,10 +105,10 @@ New backend work:
 Wave-structured, each independently reviewable with its own gate. Default disposition: one integration PR per parallel round, verified once (`integration/<date>`).
 
 - **Wave 0 — Readiness spine** *(foundational, sequential)*: `GET /api/setup/readiness` as a **thin mapper over `diagnostics.ts`** (+ the 2-3 missing probes) + `{ kind: 'setup' }` stage + `#/setup` route + boot splash + `setupCompletedAt` + mock dual-state stub. *Gate:* typecheck + unit tests (mapper + selector + router redirect) + e2e stub that the gate fires when not-ready. (Reusing diagnostics keeps this wave small.)
-- **Wave 1 — Cross-platform install parity** *(riskiest; owes on-box acceptance)*: Kokoro install route + `KokoroInstall` + `runInstallScript()` helper + sidecar bootstrap (Z) + the parity audit. *Gate:* server/sidecar unit tests for the route + dispatch helper. **On-box install acceptance (Mac + Linux) is documented-OWED**, not a CI gate.
+- **Wave 1 — Cross-platform install parity** *(riskiest; owes on-box acceptance)*: Kokoro install route + `KokoroInstall` + `install-kokoro.mjs` (uniform Node spawn) + sidecar bootstrap (Z) + the parity audit. *Gate:* server/sidecar unit tests for the route + install helpers. **On-box install acceptance (Mac + Linux) is documented-OWED**, not a CI gate.
 - **Wave 2 — The wizard UI** *(hybrid; can run ∥ Wave 1 in a worktree, frontend scope)*: the `setup` view (two modes), 5 steps, reusing the existing installers + fs-43 panel; Account "Re-run setup" entry. *Gate:* vitest per step (pass/fail/remediation) + `e2e/responsive/coverage.spec.ts` entry.
 - **Wave 3 — Two-tier smoke test**: Tier 1 endpoint + committed snippet fixture + inline player + mock stub; Tier 2 card wiring sample-load → generation → Listen + optional re-analyze. Completion stamps `setupCompletedAt`. *Gate:* server test (per-stage breakdown) + **the issue's required mock-mode e2e happy-path progression**.
-- **Wave 4 — Docs & closure**: new `docs/features/209-fs21-first-run-wizard.md` regression plan + INDEX entry + BACKLOG row removal + `Closes #474`. Run `cross-os.yml` before any release announce.
+- **Wave 4 — Docs & closure**: new `docs/features/210-fs21-first-run-wizard.md` regression plan + INDEX entry + BACKLOG row removal + `Closes #474`. Run `cross-os.yml` before any release announce.
 
 **Parallelism:** Wave 0 lands first (spine). Then Wave 1 (server) ∥ Wave 2 (frontend, mocking the not-yet-real route via the existing install-component pattern) in worktrees → `integration/<date>`, verify between merges → Wave 3 → Wave 4.
 
@@ -132,7 +132,7 @@ Wave-structured, each independently reviewable with its own gate. Default dispos
 ## Testing strategy
 
 - **Unit (frontend):** readiness selector, router redirect + boot-splash gating, each wizard step's pass/fail/remediation rendering, two-mode (guided/checklist) switch.
-- **Unit (server/sidecar):** `runInstallScript()` platform dispatch, Kokoro install route (stubbed spawn), readiness shape (incl. sidecar-down degradation), smoke endpoint per-stage breakdown, sidecar-bootstrap detection.
+- **Unit (server/sidecar):** Kokoro install route (stubbed spawn via `install-kokoro.mjs` Node spawn), readiness shape (incl. sidecar-down degradation), smoke endpoint per-stage breakdown, sidecar-bootstrap detection (`findPython311` + venv bootstrap helpers).
 - **e2e (mock mode):** happy-path progression through all five steps; gate-fires-when-not-ready; `coverage.spec.ts` entry for the new view.
 - **Manual / on-box (OWED):** real one-click installs on a Mac + a Linux box; the Tier-2 demo-book full run producing audible output; the Z venv bootstrap on a box with Python 3.11.
 
@@ -143,3 +143,14 @@ Per the review-first convention: land this spec branch first and **hold** filing
 ## Open question for review
 
 - **Confirm the venv decision (Z).** The spec assumes Z (installer owns the venv; wizard offers one-click bootstrap when Python 3.11 is present). If you prefer **X** (pure installer responsibility, wizard instructs only) or **Y** (wizard fully owns Python/CUDA provisioning), the hard-blocker list, Wave 1 sizing, and the DoD shift accordingly.
+
+## Implementation deltas (folded in Wave 4)
+
+Corrections discovered during execution, recorded here for spec accuracy:
+
+- **Polling, not SSE.** Install progress (Kokoro install + venv bootstrap) is delivered via **polling** — the component polls a status endpoint at a fixed interval. There is no SSE stream for the install flow (SSE is used for analysis and generation jobs, not setup installers).
+- **In-app Kokoro install path is `install-kokoro.mjs` (uniform Node spawn).** The spec originally described a `runInstallScript()` platform-dispatch helper (`.ps1` on Windows, `.sh` elsewhere). What shipped: a single `server/tts-sidecar/scripts/install-kokoro.mjs` Node script invoked via `node` on all platforms. `install-kokoro.ps1` and `install-kokoro.sh` **remain as terminal/manual fallbacks** (they were never removed); the "no wrapper" claim was never the design. The `runInstallScript()` helper was not built — the install bootstrap calls `install-kokoro.mjs` directly.
+- **Venv bootstrap split to Wave 1b.** The original plan grouped the venv bootstrap in Wave 1. It shipped as its own wave (Wave 1b, PR #749) after the Wave 1 review.
+- **Guided-Next is not blocker-gated.** The wizard's "Next" button in guided mode advances regardless of per-step blocker status. The derived gate (`readiness.blockers`) is the actual lock at the route level; per-step Next gating was considered and rejected.
+- **Layout `completedAt` splash-skip optimization deferred.** The boot gate in `layout.tsx` always probes readiness on cold boot. The optimization to skip the probe when `setupCompletedAt` is set (and blockers are not expected) was deferred — it does not affect correctness, only startup latency.
+- **Regression plan number: 210.** The spec's Wave 4 delivery roadmap originally cited `209-fs21-first-run-wizard.md`; 209 was assigned to the help-view plan before Wave 4 landed. The correct plan number is **210** (`docs/features/210-fs21-first-run-wizard.md`).
