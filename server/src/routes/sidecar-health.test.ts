@@ -465,6 +465,26 @@ describe('POST /api/sidecar/load', () => {
       }),
     );
   });
+
+  it('maps a downed-process fetch failure to friendly copy, not the raw "fetch failed"', async () => {
+    /* The pill's Load click before the sidecar finishes launching → undici
+       rejects with the opaque `TypeError: fetch failed` (real reason in
+       `.cause.code`). The proxy must surface something actionable instead of
+       leaking that string into the error banner. */
+    fetchMock.mockRejectedValue(
+      Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+    );
+    const res = await request(makeApp()).post('/api/sidecar/load').send({ engine: 'kokoro' });
+    expect(res.status).toBe(503);
+    expect(res.body.status).toBe('error');
+    expect(res.body.error).toMatch(/voice engine/i);
+    expect(res.body.error).toMatch(/starting up|running/i);
+    /* The bare undici string must NOT be the whole message (the ECONNREFUSED
+       code may still appear in the diagnostic parens). */
+    expect(res.body.error).not.toBe('fetch failed');
+  });
 });
 
 describe('POST /api/sidecar/unload', () => {
@@ -517,6 +537,8 @@ describe('POST /api/sidecar/unload', () => {
     const res = await request(makeApp()).post('/api/sidecar/unload');
     expect(res.status).toBe(503);
     expect(res.body.status).toBe('error');
+    expect(res.body.error).toMatch(/voice engine/i);
+    expect(res.body.error).not.toBe('fetch failed');
   });
 });
 
