@@ -16,6 +16,7 @@ import {
   stage1ShrinkRefused,
   buildStage1ChapterInbox,
   readPriorCastForMerge,
+  trackForReplay,
 } from './analysis.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -814,6 +815,37 @@ describe('failedChapterErrors records (spec A4)', () => {
     expect(clearFailedChapterId(cache, 7)).toBe(true);
     expect(cache.failedChapterIds).toEqual([]);
     expect(cache.failedChapterErrors['7']).toBeUndefined();
+  });
+});
+
+describe('chapter-failed replay map (spec A4 — reconnect carries code/remediation)', () => {
+  function makeJob() {
+    return {
+      replay: { failedByChapterId: new Map(), logs: [] },
+    } as unknown as Parameters<typeof trackForReplay>[0];
+  }
+  it('stores code + remediation off a chapter-failed event', () => {
+    const job = makeJob();
+    trackForReplay(job, {
+      kind: 'chapter-failed',
+      chapterId: 3,
+      message: 'analyzer down',
+      code: 'analyzer-unreachable',
+      remediation: 'start ollama',
+    });
+    expect((job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId.get(3)).toEqual({
+      kind: 'chapter-failed',
+      chapterId: 3,
+      message: 'analyzer down',
+      code: 'analyzer-unreachable',
+      remediation: 'start ollama',
+    });
+  });
+  it('chapter-resolved drops the entry', () => {
+    const job = makeJob();
+    trackForReplay(job, { kind: 'chapter-failed', chapterId: 3, message: 'm' });
+    trackForReplay(job, { kind: 'chapter-resolved', chapterId: 3 });
+    expect((job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId.size).toBe(0);
   });
 });
 
