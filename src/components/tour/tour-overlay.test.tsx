@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { TOUR_STEPS } from '../../lib/tour-steps';
+import { stepsForScreen, TOUR_STEPS } from '../../lib/tour-steps';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
@@ -49,5 +49,19 @@ describe('TourOverlay', () => {
   it('shows Done on the last step', () => {
     render(<Provider store={mkStore(TOUR_STEPS.length - 1)}><TourOverlay /></Provider>);
     expect(screen.getByRole('button', { name: /done/i })).toBeInTheDocument();
+  });
+
+  it('screen-mode shows slice-scoped dots and Done on the slice last step', () => {
+    const store = configureStore({ reducer: { tour: tourSlice.reducer, ui: uiSlice.reducer } });
+    const cast = stepsForScreen('cast');
+    const lastCastGlobalIndex = TOUR_STEPS.indexOf(cast[cast.length - 1]);
+    store.dispatch(tourSlice.actions.startTour({ tourId: 'cast', mode: 'screen' }));
+    store.dispatch(tourSlice.actions.setStepIndex(lastCastGlobalIndex));
+    render(<Provider store={store}><TourOverlay /></Provider>);
+    expect(screen.getByRole('button', { name: /done/i })).toBeInTheDocument();
+    // dot count == cast slice length (the dots are small rounded-full spans in the bubble)
+    const bubble = screen.getByTestId('tour-bubble');
+    const dots = bubble.querySelectorAll('span.rounded-full');
+    expect(dots.length).toBe(cast.length);
   });
 });

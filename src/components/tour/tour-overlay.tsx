@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useAppDispatch, useAppSelector } from '../../store';
-import { TOUR_STEPS } from '../../lib/tour-steps';
+import { TOUR_STEPS, stepsForScreen, type TourScreen } from '../../lib/tour-steps';
 import { tourActions, nextStep, prevStep } from '../../store/tour-slice';
 
 type Rect = { top: number; left: number; width: number; height: number };
@@ -17,8 +17,12 @@ function measure(anchor: string | null): Rect | null {
 
 export function TourOverlay() {
   const dispatch = useAppDispatch();
-  const { active, stepIndex } = useAppSelector((s) => s.tour);
+  const { active, stepIndex, mode, tourId } = useAppSelector((s) => s.tour);
   const step = active ? TOUR_STEPS[stepIndex] : null;
+  const activeSteps = active ? (mode === 'screen' ? stepsForScreen(tourId as TourScreen) : TOUR_STEPS) : [];
+  const posInActive = step ? activeSteps.findIndex((s) => s.id === step.id) : -1;
+  const isFirst = posInActive <= 0;
+  const isLast = posInActive === activeSteps.length - 1;
   const [rect, setRect] = useState<Rect | null>(null);
   const bubbleRef = useRef<HTMLDivElement | null>(null);
 
@@ -90,19 +94,19 @@ export function TourOverlay() {
         <p className="mt-1 text-xs text-canvas/75 leading-relaxed">{step.body}</p>
         <div className="mt-3 flex items-center gap-2">
           <div className="flex gap-1" aria-hidden>
-            {TOUR_STEPS.map((s, i) => (
-              <span key={s.id} className={`w-1.5 h-1.5 rounded-full ${i === stepIndex ? 'bg-peach' : 'bg-canvas/30'}`} />
+            {activeSteps.map((s, i) => (
+              <span key={s.id} className={`w-1.5 h-1.5 rounded-full ${i === posInActive ? 'bg-peach' : 'bg-canvas/30'}`} />
             ))}
           </div>
           <button type="button" onClick={() => dispatch(tourActions.endTour())}
             className="ml-auto text-xs text-canvas/60 min-h-[44px] sm:min-h-0">Skip</button>
-          {stepIndex > 0 && (
+          {!isFirst && (
             <button type="button" onClick={() => dispatch(prevStep())}
               className="text-xs font-semibold text-canvas/80 min-h-[44px] sm:min-h-0">Back</button>
           )}
           <button type="button" onClick={() => dispatch(nextStep())}
             className="text-xs font-bold bg-peach text-ink rounded-lg px-3 py-1.5 min-h-[44px] sm:min-h-0">
-            {stepIndex === TOUR_STEPS.length - 1 ? 'Done' : <>Next <span aria-hidden="true">→</span></>}
+            {isLast ? 'Done' : <>Next <span aria-hidden="true">→</span></>}
           </button>
         </div>
       </div>

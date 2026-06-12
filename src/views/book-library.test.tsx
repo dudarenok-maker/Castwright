@@ -7,6 +7,7 @@ import { Provider } from 'react-redux';
 import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { accountSlice } from '../store/account-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
+import { tourSlice } from '../store/tour-slice';
 import { BookLibraryView } from './book-library';
 import type { ActiveAnalysisSummary, LibraryAuthor, LibraryBook } from '../lib/types';
 
@@ -45,6 +46,7 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
     reducer: {
       account: accountSlice.reducer,
       library: librarySlice.reducer,
+      tour: tourSlice.reducer,
     },
     preloadedState: {
       library: {
@@ -260,7 +262,7 @@ describe('BookLibraryView — loading affordance', () => {
       writtenAt: Date.now(),
     };
     const store = configureStore({
-      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
       preloadedState: {
         library: {
           loaded: true,
@@ -304,7 +306,7 @@ describe('BookLibraryView — loading affordance', () => {
       writtenAt: Date.now(),
     };
     const store = configureStore({
-      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
       preloadedState: {
         library: {
           loaded: true,
@@ -350,7 +352,7 @@ describe('BookLibraryView — loading affordance', () => {
       writtenAt: Date.now(),
     };
     const store = configureStore({
-      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
       preloadedState: {
         library: {
           loaded: true,
@@ -410,7 +412,7 @@ describe('BookLibraryView — loading affordance', () => {
   it('renders the "Import portable bundle" button when onImportPortable is provided, and fires the handler on file pick (plan 75)', async () => {
     const onImportPortable = vi.fn();
     const store = configureStore({
-      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
       preloadedState: {
         library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
       },
@@ -618,7 +620,7 @@ describe('BookLibraryView — loading affordance', () => {
        which mirrors the production behaviour where the parent re-renders
        on slice changes. */
     const store = configureStore({
-      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
       preloadedState: { library: { loaded: false, authors: [], books: [], pausedSnapshots: {} } },
     });
     const handlers = {

@@ -52,6 +52,12 @@ describe('mock sample is navigable', () => {
     expect(state!.cast!.characters.length).toBeGreaterThan(0);
   });
 
+  it('the seeded cast contains the drawer character (wren)', async () => {
+    await mockLoadSample('the-coalfall-commission');
+    const state = await mockGetBookState(SAMPLE_ID);
+    expect(state!.cast?.characters?.some((c) => c.id === 'wren')).toBe(true);
+  });
+
   it('after _resetMockSample the library no longer contains the sample', async () => {
     await mockLoadSample('the-coalfall-commission');
     _resetMockSample();
