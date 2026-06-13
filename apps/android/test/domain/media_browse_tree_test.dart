@@ -30,6 +30,38 @@ void main() {
     });
   });
 
+  group('mediaId codec (Android Auto tabs)', () {
+    test('round-trips the current / library / recent sentinels', () {
+      expect(parseMediaId(currentMediaId).kind, MediaIdKind.current);
+      expect(parseMediaId(libraryMediaId).kind, MediaIdKind.library);
+      expect(parseMediaId(recentMediaId).kind, MediaIdKind.recent);
+    });
+  });
+
+  group('rootBrowseChildren', () {
+    test('shows the current-book tab first, then Library, when a book is current', () {
+      final nodes = rootBrowseChildren(currentBookTitle: 'Unraveled');
+      expect(nodes.map((n) => n.id), [currentMediaId, libraryMediaId]);
+      expect(nodes.first.title, 'Unraveled');
+      expect(nodes.last.title, 'Library');
+      expect(nodes.every((n) => !n.playable), isTrue);
+    });
+
+    test('hides the current-book tab when there is no current book', () {
+      final nodes = rootBrowseChildren(currentBookTitle: null);
+      expect(nodes.map((n) => n.id), [libraryMediaId]);
+    });
+  });
+
+  group('content-style extras', () {
+    test('list extras request the LIST hint for browsable + playable children', () {
+      expect(listContentStyleExtras['android.media.browse.CONTENT_STYLE_BROWSABLE_HINT'],
+          1);
+      expect(listContentStyleExtras['android.media.browse.CONTENT_STYLE_PLAYABLE_HINT'],
+          1);
+    });
+  });
+
   group('buildMediaBrowseTree', () {
     test('root lists books as browsable nodes', () {
       final root = buildMediaBrowseTree(lib);
