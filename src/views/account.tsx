@@ -7,12 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../components/primitives';
-import type {
-  BackupSnapshot,
-  ConfigGroup,
-  UserSettings,
-  UserSettingsPatch,
-} from '../lib/types';
+import type { BackupSnapshot, ConfigGroup, UserSettings, UserSettingsPatch } from '../lib/types';
 import type { ThemePreference } from '../lib/use-theme';
 import { api } from '../lib/api';
 import { UpgradeCard } from '../components/upgrade-card';
@@ -31,10 +26,7 @@ import {
 } from '../store/settings-slice';
 import { formatKeyLabel, normalizeKeyEvent } from '../lib/keybindings';
 import { FieldRow, ReadOnlyRow } from '../components/account-forms';
-import {
-  SettingsAccordion,
-  SettingsSection,
-} from '../components/settings/settings-accordion';
+import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
 
 /* Synthetic ConfigGroup descriptors for account sections — these are not
    registry knobs, so overriddenCount is always 0 and there's no reset. */
@@ -191,7 +183,7 @@ export function AccountView() {
   }
 
   return (
-    <div className="max-w-[960px] mx-auto px-6 py-10">
+    <div className="max-w-[1200px] mx-auto px-6 py-10">
       <div className="mb-8">
         <SectionLabel>Account</SectionLabel>
         <div className="mt-4">
@@ -215,10 +207,18 @@ export function AccountView() {
             { id: 'acct-backups', label: 'Backups', risk: 'low' },
             { id: 'acct-workspace', label: 'Workspace', risk: 'low' },
             { id: 'acct-device-local', label: 'Device-local', risk: 'low' },
+            { id: 'acct-models', label: 'Models & engines', risk: 'low' },
+            { id: 'acct-advanced', label: 'Advanced configuration', risk: 'low' },
+            { id: 'acct-help', label: 'Help & troubleshooting', risk: 'low' },
+            { id: 'acct-setup', label: 'First-run setup', risk: 'low' },
           ]}
         >
           <SettingsSection
-            group={acctGroup('acct-profile', 'Profile', 'How you appear in the top bar and the change log.')}
+            group={acctGroup(
+              'acct-profile',
+              'Profile',
+              'How you appear in the top bar and the change log.',
+            )}
             overriddenCount={0}
           >
             <FieldRow label="Display name">
@@ -292,7 +292,7 @@ export function AccountView() {
             group={acctGroup(
               'acct-appearance',
               'Appearance',
-              "How the app looks. The sun/moon toggle in the top bar is a device-only override; this picker sets the default that any new device or fresh session inherits.",
+              'How the app looks. The sun/moon toggle in the top bar is a device-only override; this picker sets the default that any new device or fresh session inherits.',
             )}
             overriddenCount={0}
           >
@@ -317,9 +317,10 @@ export function AccountView() {
                 className="flex items-center justify-between gap-3 rounded-xl border border-magenta/30 bg-magenta/10 px-4 py-3"
               >
                 <div className="text-xs text-ink/75">
-                  <span className="font-semibold text-magenta">This device is overridden</span> — the
-                  top-bar toggle is set to <span className="font-mono text-ink">{themeOverride}</span>
-                  . Clear the override to follow the account default again.
+                  <span className="font-semibold text-magenta">This device is overridden</span> —
+                  the top-bar toggle is set to{' '}
+                  <span className="font-mono text-ink">{themeOverride}</span>. Clear the override to
+                  follow the account default again.
                 </div>
                 <PrimaryButton
                   variant="ghost"
@@ -430,77 +431,92 @@ export function AccountView() {
           </SettingsSection>
 
           <AdvancedCard />
+
+          {/* fs-23 — model setup (engines, installers, sidecar, analyzer split,
+              server config) now lives in the Model Manager, reached from Admin.
+              Button-only cards live INSIDE the accordion so the side-nav lists
+              and scroll-links them too (id="cfg-section-<navId>"). */}
+          <section
+            id="cfg-section-acct-models"
+            className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <h2 className="text-base font-semibold text-ink">Models &amp; engines</h2>
+              <p className="mt-1 text-xs text-ink/55 max-w-prose">
+                Installing models, picking the default Voice / analyzer engine, the Voice engine /
+                Ollama URLs, and the Gemini key now live in the Model Manager.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => dispatch(uiActions.openModelManager())}
+              data-testid="account-model-manager-pointer"
+              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+            >
+              Open Model Manager →
+            </button>
+          </section>
+
+          <section
+            id="cfg-section-acct-advanced"
+            className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <h2 className="text-base font-semibold text-ink">Advanced configuration</h2>
+              <p className="mt-1 text-xs text-ink/55 max-w-prose">
+                Tune model, generation, and QA settings at your own risk.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => dispatch(uiActions.openAdvanced())}
+              data-testid="account-advanced-pointer"
+              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+            >
+              Open Advanced settings →
+            </button>
+          </section>
+
+          <section
+            id="cfg-section-acct-help"
+            className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <h2 className="text-base font-semibold text-ink">Help &amp; troubleshooting</h2>
+              <p className="mt-1 text-xs text-ink/55 max-w-prose">
+                FAQs, engine setup guides, and troubleshooting steps for common issues.
+              </p>
+            </div>
+            <a
+              href="#/help"
+              data-testid="account-help-pointer"
+              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
+            >
+              Open Help →
+            </a>
+          </section>
+
+          <section
+            id="cfg-section-acct-setup"
+            className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <h2 className="text-base font-semibold text-ink">First-run setup</h2>
+              <p className="mt-1 text-xs text-ink/55 max-w-prose">
+                Re-open the setup wizard to check model installation, workspace, and engine
+                readiness.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => dispatch(uiActions.openSetup())}
+              data-testid="account-rerun-setup"
+              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
+            >
+              Re-run setup →
+            </button>
+          </section>
         </SettingsAccordion>
-
-        {/* fs-23 — model setup (engines, installers, sidecar, analyzer split,
-            server config) now lives in the Model Manager, reached from Admin. */}
-        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-ink">Models &amp; engines</h2>
-            <p className="mt-1 text-xs text-ink/55 max-w-prose">
-              Installing models, picking the default Voice / analyzer engine, the Voice engine /
-              Ollama URLs, and the Gemini key now live in the Model Manager.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => dispatch(uiActions.openModelManager())}
-            data-testid="account-model-manager-pointer"
-            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
-          >
-            Open Model Manager →
-          </button>
-        </section>
-
-        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-ink">Advanced configuration</h2>
-            <p className="mt-1 text-xs text-ink/55 max-w-prose">
-              Tune model, generation, and QA settings at your own risk.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => dispatch(uiActions.openAdvanced())}
-            data-testid="account-advanced-pointer"
-            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
-          >
-            Open Advanced settings →
-          </button>
-        </section>
-
-        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-ink">Help &amp; troubleshooting</h2>
-            <p className="mt-1 text-xs text-ink/55 max-w-prose">
-              FAQs, engine setup guides, and troubleshooting steps for common issues.
-            </p>
-          </div>
-          <a
-            href="#/help"
-            data-testid="account-help-pointer"
-            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
-          >
-            Open Help →
-          </a>
-        </section>
-
-        <section className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-ink">First-run setup</h2>
-            <p className="mt-1 text-xs text-ink/55 max-w-prose">
-              Re-open the setup wizard to check model installation, workspace, and engine readiness.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => dispatch(uiActions.openSetup())}
-            data-testid="account-rerun-setup"
-            className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft"
-          >
-            Re-run setup →
-          </button>
-        </section>
 
         <div className="flex items-center gap-4">
           <PrimaryButton variant={dirty ? 'dark' : 'ghost'} onClick={onSave} icon={false}>
@@ -748,13 +764,12 @@ function AdvancedCard() {
       )}
       overriddenCount={0}
     >
-      <div
-        data-testid="account-advanced-card"
-        className="space-y-6"
-      >
+      <div data-testid="account-advanced-card" className="space-y-6">
         {/* Keyboard shortcut — play/pause */}
         <div>
-          <span className="block text-sm font-medium text-ink">Keyboard shortcut — play / pause</span>
+          <span className="block text-sm font-medium text-ink">
+            Keyboard shortcut — play / pause
+          </span>
           <span className="block text-xs text-ink/55 mt-0.5">
             Toggles the mini-player on the Listen view. Default is Space; rebind to any letter or
             Space.
@@ -820,7 +835,9 @@ function AdvancedCard() {
 
         {/* fe-24 — keyboard shortcut — skip forward */}
         <div>
-          <span className="block text-sm font-medium text-ink">Keyboard shortcut — skip forward</span>
+          <span className="block text-sm font-medium text-ink">
+            Keyboard shortcut — skip forward
+          </span>
           <span className="block text-xs text-ink/55 mt-0.5">
             Fast-forwards the mini-player by the skip-forward delta below. Default is L (mirrors
             YouTube).
@@ -880,7 +897,10 @@ function AdvancedCard() {
             />
           </div>
           <div>
-            <label htmlFor="account-skip-forward-sec" className="block text-sm font-medium text-ink">
+            <label
+              htmlFor="account-skip-forward-sec"
+              className="block text-sm font-medium text-ink"
+            >
               Skip-forward amount (s)
             </label>
             <span className="block text-xs text-ink/55 mt-0.5">
