@@ -1,18 +1,18 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-13
 owner: null
 ---
 
 # fs-15 + fs-16 — Continue Listening rail + Listening-stats dashboard
 
-> Status: active (web + server shipped on `feat/listening-stats-fs15-fs16`; companion reporter = Wave H follow-up; on-box acceptance owed)
+> Status: stable (shipped 2026-06-13 — web + server via PR #783, companion reporter via PR #785; on-device companion relaunch acceptance owed)
 > Key files: `server/src/workspace/{listen-stats,listen-stats-aggregate,chapter-durations,file-lock}.ts`, `server/src/routes/{book-state,library}.ts`, `src/lib/{listen-stats-reporter,listen-stats-math,api}.ts`, `src/store/continue-listening-slice.ts`, `src/components/library/continue-listening-rail.tsx`, `src/components/mini-player.tsx`, `src/views/stats.tsx`
 > URL surface: `#/stats` (new top-level view); the rail lives at the top of `#/` (Books library)
 > OpenAPI ops: `PUT /api/books/{bookId}/listen-stats`, `GET /api/library/stats`, `GET /api/library/continue-listening`
 
-Spec: [`docs/superpowers/specs/2026-06-13-fs15-fs16-listening-stats-design.md`](../superpowers/specs/2026-06-13-fs15-fs16-listening-stats-design.md) ·
-Plan: [`docs/superpowers/plans/2026-06-13-fs15-fs16-listening-stats.md`](../superpowers/plans/2026-06-13-fs15-fs16-listening-stats.md).
+Spec: [`docs/superpowers/specs/2026-06-13-fs15-fs16-listening-stats-design.md`](../../superpowers/specs/2026-06-13-fs15-fs16-listening-stats-design.md) ·
+Plan: [`docs/superpowers/plans/2026-06-13-fs15-fs16-listening-stats.md`](../../superpowers/plans/2026-06-13-fs15-fs16-listening-stats.md).
 Issues: [#462 (fs-15)](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462), [#463 (fs-16)](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463).
 
 ## Benefit / Rationale
@@ -68,7 +68,7 @@ Issues: [#462 (fs-15)](https://github.com/dudarenok-maker/AudioBook-Generator/is
 
 ## Out of scope
 
-- **Companion reporter (Wave H)** — the Android companion gaining a wall-clock accumulator + persisted offline buffer that flushes absolute per-(session,day) totals on reconnect. Report-only (no companion UI). Tracked as the immediate follow-up to this plan.
+- **Companion reporter (Wave H)** — SHIPPED (PR #785): the Android companion gained a wall-clock accumulator (`listen_stats_accumulator.dart`) + a persisted drift offline buffer (`ListenStatsBuffer`, schema 3→4) that flushes absolute per-(session,date) totals on reconnect (`ListenStatsFlushService` wired into `auto_sync_service`). Report-only (no companion UI).
 - Past-day file compaction (collapse closed days into one slot) — noted optimization, not built.
 - Per-device stat breakdowns (the session-keyed model intentionally drops device identity as a key).
 
@@ -81,4 +81,11 @@ Issues: [#462 (fs-15)](https://github.com/dudarenok-maker/AudioBook-Generator/is
 
 ## Ship notes
 
-(Pending — fill with shipped date + merge SHA when the PR merges; flip status → stable and move to `archive/`.)
+Shipped **2026-06-13**, in two merges to `main`:
+
+- **PR #783** (merge `349b95fe`) — fs-15 rail + fs-16 `#/stats` dashboard (frontend + server + openapi). Closes #462 / #463.
+- **PR #785** (merge `209f44c5`) — Wave H Android companion reporter (report-only). (Re-opened from the auto-closed stacked PR #784.)
+
+Built subagent-driven (one implementer + spec + quality review per task) from the 2026-06-13 spec; the design + spec + plan each went through adversarial review rounds. CI was billing-blocked, so both PRs merged on the authority of a green local `npm run verify` (web/server) + `flutter test` 294 / `flutter analyze` clean (companion), via `gh pr merge --admin`.
+
+**No behaviour delta vs. the spec.** Residual: on-device companion relaunch acceptance (buffer survival across an app kill is correct by design + unit-tested with in-memory drift, but unproven on a real device).
