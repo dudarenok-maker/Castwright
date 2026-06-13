@@ -3811,16 +3811,16 @@ export interface components {
             totalListenedSec: number;
             /** @description Number of books with `finished = true`. */
             booksFinished: number;
-            /** @description Per-book rollup, one entry per book with any listening data. */
+            /** @description One entry per book in the library; unlistened books appear with completionPct 0 and finished false. */
             perBook: {
                 bookId: string;
                 title: string;
-                /** @description Estimated completion percentage (0–100). */
+                /** @description Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage). */
                 completionPct: number;
                 /** @description True when the book is considered fully listened. */
                 finished: boolean;
             }[];
-            /** @description Per-series rollup. Only series with at least one finished book are included. */
+            /** @description All non-standalone series in the workspace, keyed by series name; finishedCount may be 0. */
             perSeries: {
                 /** @description Series name. */
                 series: string;
@@ -3856,7 +3856,7 @@ export interface components {
             currentSec: number;
             /** @description Estimated seconds remaining in the book from the current position. */
             remainingSec: number;
-            /** @description Estimated completion percentage (0–100). */
+            /** @description Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage). */
             completionPct: number;
             /**
              * Format: date-time

@@ -5067,7 +5067,7 @@ components:
           description: Number of books with `finished = true`.
         perBook:
           type: array
-          description: Per-book rollup, one entry per book with any listening data.
+          description: One entry per book in the library; unlistened books appear with completionPct 0 and finished false.
           items:
             type: object
             required: [bookId, title, completionPct, finished]
@@ -5077,14 +5077,14 @@ components:
               completionPct:
                 type: number
                 minimum: 0
-                maximum: 100
-                description: Estimated completion percentage (0–100).
+                maximum: 1
+                description: Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage).
               finished:
                 type: boolean
                 description: True when the book is considered fully listened.
         perSeries:
           type: array
-          description: Per-series rollup. Only series with at least one finished book are included.
+          description: All non-standalone series in the workspace, keyed by series name; finishedCount may be 0.
           items:
             type: object
             required: [series, finishedCount, importedCount]
@@ -5143,8 +5143,8 @@ components:
         completionPct:
           type: number
           minimum: 0
-          maximum: 100
-          description: Estimated completion percentage (0–100).
+          maximum: 1
+          description: Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage).
         updatedAt:
           type: string
           format: date-time
