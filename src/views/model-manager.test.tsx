@@ -460,4 +460,23 @@ describe('ModelManagerView — settings form accordion shell', () => {
     await user.click(screen.getByRole('button', { name: /save changes/i }));
     await waitFor(() => expect(putUserSettings).toHaveBeenCalledTimes(1));
   });
+
+  it('renders exactly ONE side-nav rail covering both inventory and settings sections', async () => {
+    /* Regression: the Model Manager wrapped ModelSettingsForm (which has its own
+       SettingsAccordion) inside a second accordion, so two separate nav rails of
+       different sizes rendered. The form is now embedded — one rail lists Device
+       + Installed models + the form's sections together. */
+    renderManager();
+    await screen.findByTestId('model-inventory');
+
+    /* One nav rail, one mobile jump-select — not two of each. */
+    expect(screen.getAllByRole('navigation', { name: /settings sections/i })).toHaveLength(1);
+    expect(screen.getAllByLabelText('Jump to section')).toHaveLength(1);
+
+    /* That single rail spans inventory AND settings sections. */
+    const jump = screen.getByLabelText('Jump to section');
+    for (const label of ['Device', 'Installed models', 'Defaults for new books', 'Voice engine']) {
+      expect(within(jump).getByRole('option', { name: label })).toBeInTheDocument();
+    }
+  });
 });
