@@ -192,8 +192,17 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
 }
 
 /// Standard audio_service config for the companion's media session.
+///
+/// app-9: `androidBrowsableRootExtras` declares Android Auto content-style
+/// support (render the browse tree as lists); `artDownscale*` forces
+/// audio_service to decode + re-encode cover art itself so the AA projection —
+/// a separate process that can't read our private `file://` thumbnails — can
+/// still show covers (Stage-1 art fix).
 const companionAudioServiceConfig = AudioServiceConfig(
   androidNotificationChannelId: 'ai.castwright.audio',
   androidNotificationChannelName: 'Playback',
   androidNotificationOngoing: true,
+  artDownscaleWidth: 256,
+  artDownscaleHeight: 256,
+  androidBrowsableRootExtras: browsableRootExtras,
 );
