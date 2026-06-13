@@ -37,6 +37,9 @@ class StatsAccumulator {
   final int Function() _now;
   final String Function() _localDate;
 
+  /// The book this accumulator is currently targeting.
+  String get bookId => _bookId;
+
   final Map<String, double> _byDate = {};
   bool _playing = false;
   int _lastCheckpoint = 0;

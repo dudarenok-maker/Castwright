@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import '../domain/listen_stats_accumulator.dart';
 import '../domain/skip_behavior.dart';
 import 'audio_engine.dart';
+import 'library_database.dart';
 import 'playback_store.dart';
 
 /// One chapter the player can load: its stable `uuid` and local file path,
@@ -55,6 +57,10 @@ class PlayerController {
     required DateTime Function() clock,
     SkipButtonBehavior skipBehavior = SkipButtonBehavior.seek,
     Duration saveInterval = const Duration(seconds: 10),
+    // fs-16: optional listen-stats accumulator wiring.
+    this._statsDb,
+    this._sessionId,
+    this._localDate,
   })  : _engine = audioEngine,
         _store = playbackStore,
         _loadPlaylist = playlistLoader,
@@ -67,6 +73,8 @@ class PlayerController {
       if (finished != null) _chapterCompleted.add(finished);
       _advance();
     });
+    // Subscribe to playing state to drive the accumulator.
+    _playingSub = _engine.playingStream.listen(_onPlayingChanged);
   }
 
   final AudioEngine _engine;
@@ -74,6 +82,12 @@ class PlayerController {
   final PlaylistLoader _loadPlaylist;
   final DateTime Function() _now;
   final Duration _autosaveInterval;
+
+  // fs-16: listen-stats accumulator — null when no db/sessionId injected.
+  final LibraryDatabase? _statsDb;
+  final String? _sessionId;
+  final String Function()? _localDate;
+  StatsAccumulator? _accumulator;
 
   /// Skip-button behaviour + seek amounts (driven by `app-13`); mutable so
   /// settings can change them at runtime.
@@ -83,6 +97,7 @@ class PlayerController {
 
   StreamSubscription<Duration>? _sub;
   StreamSubscription<void>? _completionSub;
+  StreamSubscription<bool>? _playingSub;
   final StreamController<NowPlaying?> _nowPlaying =
       StreamController<NowPlaying?>.broadcast();
 
@@ -155,6 +170,23 @@ class PlayerController {
   /// point (or start at the first chapter), and seek there.
   Future<void> openBook(String bookId,
       {String bookTitle = '', String? artPath}) async {
+    // fs-16: create or retarget the accumulator for this book.
+    final ld = _localDate;
+    if (_statsDb != null && _sessionId != null && ld != null) {
+      final acc = _accumulator;
+      if (acc == null) {
+        // First open — create the accumulator targeting this book.
+        _accumulator = StatsAccumulator(
+          bookId,
+          () => _now().millisecondsSinceEpoch,
+          ld,
+        );
+      } else if (acc.bookId != bookId) {
+        // Book changed via a direct openBook call (e.g. car browse): flush + retarget.
+        final handoff = acc.switchBook(bookId);
+        await _persistStatsHandoff(handoff);
+      }
+    }
     _bookId = bookId;
     _bookTitle = bookTitle;
     _artPath = artPath;
@@ -218,6 +250,12 @@ class PlayerController {
   /// resume point — per-book state is preserved across switches.
   Future<void> switchBook(String bookId) async {
     await saveNow();
+    // fs-16: flush the prior book's accumulated stats before retargeting.
+    final acc = _accumulator;
+    if (acc != null) {
+      final handoff = acc.switchBook(bookId);
+      await _persistStatsHandoff(handoff);
+    }
     await openBook(bookId);
   }
 
@@ -237,6 +275,17 @@ class PlayerController {
     }
   }
 
+  // fs-16: drive the accumulator from the engine's playing-state stream.
+  void _onPlayingChanged(bool isPlaying) {
+    final acc = _accumulator;
+    if (acc == null) return;
+    if (isPlaying) {
+      acc.onPlay();
+    } else {
+      acc.onPause();
+    }
+  }
+
   void _onTick(Duration position) {
     final last = _lastSave;
     final now = _now();
@@ -248,13 +297,49 @@ class PlayerController {
         // Fire-and-forget; ordering preserved by the single-subscription stream.
         _store.savePlayback(
             book, uuid, position.inMilliseconds, now.toIso8601String());
+        // fs-16: tick the accumulator and buffer any drained days.
+        _tickStats(book);
       }
+    }
+  }
+
+  /// Tick the stats accumulator and upsert drained days into the offline buffer.
+  void _tickStats(String bookId) {
+    final acc = _accumulator;
+    final db = _statsDb;
+    final session = _sessionId;
+    if (acc == null || db == null || session == null) return;
+    acc.tick();
+    final result = acc.drain();
+    for (final day in result.days) {
+      db.upsertListenStatAccrual(
+        sessionId: session,
+        bookId: bookId,
+        date: day.date,
+        seconds: day.seconds,
+      );
+    }
+  }
+
+  /// Persist the prior book's accumulated stats to the offline buffer.
+  Future<void> _persistStatsHandoff(BookHandoff handoff) async {
+    final db = _statsDb;
+    final session = _sessionId;
+    if (db == null || session == null || handoff.days.isEmpty) return;
+    for (final day in handoff.days) {
+      await db.upsertListenStatAccrual(
+        sessionId: session,
+        bookId: handoff.bookId,
+        date: day.date,
+        seconds: day.seconds,
+      );
     }
   }
 
   Future<void> dispose() async {
     await _sub?.cancel();
     await _completionSub?.cancel();
+    await _playingSub?.cancel();
     await _nowPlaying.close();
     await _chapterCompleted.close();
     await _engine.dispose();

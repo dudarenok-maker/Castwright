@@ -125,11 +125,8 @@ void main() {
       final db = _makeDb();
 
       // We need a controllable per-call failure. Use a custom fake.
-      final callCount = <String, int>{};
-      late ListenStatsFlushService svc;
-
       final selectiveApi = _SelectiveFailApi({'b2'});
-      svc = ListenStatsFlushService(api: selectiveApi, db: db);
+      final svc = ListenStatsFlushService(api: selectiveApi, db: db);
 
       await db.upsertListenStatAccrual(
           sessionId: 's1', bookId: 'b1', date: '2026-06-14', seconds: 10);
@@ -142,7 +139,6 @@ void main() {
       // b1 succeeded → cleared; b2 failed → still buffered.
       expect(pending.containsKey('b1'), isFalse);
       expect(pending['b2']!['s1']!.single.seconds, 20);
-      expect(callCount, isEmpty); // ignore — used by _SelectiveFailApi internally
       await db.close();
     });
   });
