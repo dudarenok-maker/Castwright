@@ -811,6 +811,22 @@ top for the running status):
   **To ship a properly-signed alpha:** `keytool -genkey -v -keystore upload-keystore.jks
   -keyalg RSA -keysize 2048 -validity 10000 -alias upload`, drop `android/key.properties`
   (see the example), then `flutter build apk --release`; sideload `app-release.apk`.
+  - **Google Play channel (2026-06-13):** the real upload keystore now exists
+    (`apps/android/android/app/upload-keystore.jks`, alias `upload`, RSA-2048,
+    valid → 2053; upload-cert SHA-256 `ba7b147d…`). `flutter build appbundle
+    --release` produces a Play-ready **AAB** signed by that upload key (verified:
+    `keytool -printcert -jarfile app-release.aab` → `CN=Mikhail Dudarenok,
+    O=Castwright`). The AAB is a **second, parallel channel** for Play
+    internal/closed testing — it does **not** replace the sideload APK, which the
+    release zip still bundles at `companion/castwright-companion.apk` for
+    `GET /api/companion/apk`. CI (`app.yml`) gained a `bundleRelease`
+    build-health step (debug-signed; not a Play artifact). Play caveats:
+    Android Auto (`app-9`) needs a separate Cars review; App Links (`app-17`)
+    must pin the **Play app-signing** key fingerprint in `assetlinks.json`, read
+    from Console post-enrollment. Full build/sign/upload doc lives in
+    `apps/android/README.md` ("Two distribution channels"). Console-side steps
+    (account, create-app + Play App Signing opt-in, App content declarations)
+    are maintainer-only.
 - `app-9` — in-car (closed #552): pure `media_browse_tree` (root→books→chapters `MediaNode` +
   mediaId codec + `childrenOf`) wired into `CompanionAudioHandler.getChildren`/`playFromMediaId`
   (audio_service `MediaBrowser`, Android Auto + CarPlay) + Android Auto descriptor
