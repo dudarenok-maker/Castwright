@@ -255,9 +255,26 @@ doesn't mistake the fallback for an omission.
   re-segments a chapter, a stale `(chapterId, sentenceId)` pair in a manual
   entry simply fails the "still attributed to source" intersection and is
   dropped — graceful degradation, no crash.
+- **Alias union vs. journal replace mismatch (found in third review).** Aliases
+  are **monotonically unioned** across re-analyses
+  (`merge-analysis-cast.ts:146` — old ∪ fresh), but fold journal entries are
+  **replaced** each pass (Decision 2). So if the analyzer stops detecting a
+  previously-folded character on a later re-analysis, its alias chip survives on
+  the bucket (union) while its `kind:'fold'` entry is dropped (replace) — and
+  unlinking that specific alias falls back to `chapterCast`. Degraded precision
+  for that one alias, not breakage. Replace is still the right choice: it keeps
+  every live fold entry's `(chapterId, sentenceId)` pairs in lockstep with the
+  current `manuscript-edits.json`, which is the more important correctness
+  property (append-merge would risk stale pairs against re-segmented chapters).
+  This is the deliberate consequence of the user's Decision 2; documented, not
+  fixed.
 - **`mergeAnalysisResultWithExistingCast` can resurrect a folded character**
-  (re-adds a voiced survivor the fold dropped). Pre-existing analysis behavior;
-  the journal neither helps nor worsens it. Out of scope.
+  (`merge-analysis-cast.ts:154–157` re-adds a voiced survivor the fold dropped).
+  Pre-existing analysis behavior; the journal neither helps nor worsens it. The
+  only knock-on is cosmetic: if a voiced "Garrow" is both folded into a bucket
+  (sentences → bucket, journaled) and re-added as a 0-line row, unlinking the
+  bucket's "Garrow" alias mints `garrow-2` (the `garrow` id is taken). The modal
+  still surfaces the right sentences. Out of scope.
 - **Load-modify-write race.** Two near-simultaneous merges (or a merge racing a
   fold pass) could lose an entry, same as the `dropped-quotes` ledger. Accepted
   at this concurrency profile (manual merges are user-driven, one at a time on
