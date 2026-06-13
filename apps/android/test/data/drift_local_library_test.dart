@@ -199,6 +199,45 @@ void main() {
     });
   });
 
+  group('DriftLocalLibrary (Android Auto browse support)', () {
+    test('mostRecentlyPlayedBookId returns the book with the latest playback updatedAt',
+        () async {
+      final lib = makeLib(InMemoryFileStore());
+      await lib.savePlayback('b1', 'u1', 1000, '2026-06-10T10:00:00Z');
+      await lib.savePlayback('b2', 'u2', 2000, '2026-06-12T09:00:00Z');
+      await lib.savePlayback('b3', 'u3', 500, '2026-06-11T08:00:00Z');
+
+      expect(await lib.mostRecentlyPlayedBookId(), 'b2');
+      await lib.close();
+    });
+
+    test('mostRecentlyPlayedBookId is null when nothing has been played', () async {
+      final lib = makeLib(InMemoryFileStore());
+      expect(await lib.mostRecentlyPlayedBookId(), isNull);
+      await lib.close();
+    });
+
+    test('chaptersForBook exposes downloaded bytes — 0 after a file is evicted',
+        () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', List.filled(300, 1));
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp', urlSuffix: 'audio.mp3');
+
+      expect((await lib.chaptersForBook('b1')).single.bytes, 300);
+
+      // Eviction drops the file but keeps the row at bytes=0 — must read as 0.
+      await lib.applyEviction(const EvictionPlan(
+        chapterFilesToDrop: [ChapterRef('b1', 'u1')],
+        booksToEvict: [],
+      ));
+      expect((await lib.chaptersForBook('b1')).single.bytes, 0);
+      await lib.close();
+    });
+  });
+
   group('DriftLocalLibrary legacy JSON import', () {
     test('imports an app-3 sync-state.json then deletes it', () async {
       final fs = InMemoryFileStore();

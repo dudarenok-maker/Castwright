@@ -37,12 +37,19 @@ class DownloadedChapter {
     required this.title,
     required this.durationSec,
     required this.urlSuffix,
+    this.bytes = 0,
   });
   final String uuid;
   final int chapterId;
   final String title;
   final double? durationSec;
   final String? urlSuffix;
+
+  /// On-disk byte size of the downloaded audio (0 when the file is absent —
+  /// e.g. a finished chapter whose file was evicted but whose row remains).
+  /// The Android Auto browse tree filters to `bytes > 0` so only playable
+  /// chapters appear in the car.
+  final int bytes;
 }
 
 /// The production on-device store (`app-4`): a drift/SQLite-backed
@@ -181,6 +188,7 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
           title: r.title,
           durationSec: r.durationSec,
           urlSuffix: r.urlSuffix,
+          bytes: r.bytes,
         ),
     ];
   }
@@ -340,6 +348,18 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
       positionMs: row.positionMs,
       listenedAt: row.updatedAt,
     );
+  }
+
+  /// The `bookId` with the most recent resume activity (max `playback.updatedAt`),
+  /// or null if nothing has ever been played. Drives the Android Auto "current
+  /// book" tab on cold connect, when no book is loaded in the player yet.
+  Future<String?> mostRecentlyPlayedBookId() async {
+    final row = await (_db.select(_db.playback)
+          ..orderBy(
+              [(p) => OrderingTerm(expression: p.updatedAt, mode: OrderingMode.desc)])
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.bookId;
   }
 
   /// One-time migration: if the `app-3` JSON snapshot exists under [_rootPath],
