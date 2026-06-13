@@ -542,6 +542,15 @@ describe('BookLibraryView — loading affordance', () => {
     });
   });
 
+  it('delete confirm dialog (grid/BookCard) warns that listening history will be removed (fs-16/D14)', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    /* Open the book card's options menu. */
+    fireEvent.click(screen.getByLabelText(/Book options/i));
+    /* Click the Delete book menu item to open the ConfirmDialog. */
+    fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+    expect(screen.getByText(/listening history/i)).toBeInTheDocument();
+  });
+
   it('renders the search input above the grid (plan 73)', () => {
     renderView({ loaded: true, authors: [oneAuthor] });
     expect(screen.getByTestId('library-search-input')).toBeInTheDocument();

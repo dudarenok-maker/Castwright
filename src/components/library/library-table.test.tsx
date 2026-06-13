@@ -249,6 +249,19 @@ describe('LibraryTable — interactions', () => {
     expect(onDeleteBook).toHaveBeenCalledTimes(1);
   });
 
+  it('delete confirm dialog warns that listening history will be removed (fs-16/D14)', () => {
+    const authors: LibraryAuthor[] = [
+      {
+        name: 'Author A',
+        series: [{ name: 'S', books: [makeBook({ bookId: 'a1', title: 'A One' })] }],
+      },
+    ];
+    renderTable({ authors });
+    fireEvent.click(screen.getByLabelText(/Actions for A One/));
+    fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+    expect(screen.getByText(/listening history/i)).toBeInTheDocument();
+  });
+
   it('opens the Edit modal from the kebab menu', () => {
     const authors: LibraryAuthor[] = [
       {
