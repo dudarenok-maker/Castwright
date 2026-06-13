@@ -151,6 +151,12 @@ _Full detail + acceptance:_ [#396](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ keeps the `npm install` warning surface at zero so new deprecations stand out instead of getting lost in the noise.
 _Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-Generator/issues/431).
 
+#### `ops-17` — Migrate companion off KGP-applying plugins (Flutter built-in Kotlin / AGP 9) ([#790](https://github.com/dudarenok-maker/Castwright/issues/790))
+
+- _What:_ `flutter build apk --release` warns that `audio_session`, `flutter_foreground_task`, `mobile_scanner` still apply the standalone Kotlin Gradle Plugin; "future versions of Flutter will fail to build" once the temporary KGP allowance is removed. Per Flutter's for-app-developers guide the only app-side fix is upgrading each plugin to a built-in-Kotlin/AGP-9 release — and as of **2026-06-14** all three are already at their latest pub versions with no migrated release available. **Blocked upstream** (the companion analogue of `ops-14`'s eslint-10 plugin-peer cap); re-check `flutter pub outdated` periodically and bump when upstream ships support.
+- _Benefit (technical):_ keeps the companion buildable on future Flutter versions before the temporary KGP support is dropped (avoids a hard build failure later). Not a current break.
+_Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright/issues/790).
+
 ### Companion app
 
 _The three items below are the companion-app follow-ups left after the Android v1 shipped
