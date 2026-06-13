@@ -243,6 +243,35 @@ describe('cast-merge router', () => {
     }
   });
 
+  it('records a manual journal entry with chapter-qualified affected sentences', async () => {
+    /* The first test merged wren → wren-sparrow. wren spoke sentences
+       id1/id2 (chapter 1) and id3 (chapter 2). The journal must record those
+       three as chapter-qualified pairs under a single manual entry. */
+    const journal = readDisk<{
+      entries: Array<{
+        kind: string;
+        sourceId: string;
+        sourceName: string;
+        targetId: string;
+        affected: Array<{ chapterId: number; sentenceId: number }>;
+      }>;
+    }>('cast-merges.json');
+
+    expect(journal.entries).toHaveLength(1);
+    const entry = journal.entries[0];
+    expect(entry).toMatchObject({
+      kind: 'manual',
+      sourceId: 'wren',
+      sourceName: 'Wren',
+      targetId: 'wren-sparrow',
+    });
+    expect(entry.affected).toEqual([
+      { chapterId: 1, sentenceId: 1 },
+      { chapterId: 1, sentenceId: 2 },
+      { chapterId: 2, sentenceId: 3 },
+    ]);
+  });
+
   it('400s when sourceId equals targetId', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge`)
