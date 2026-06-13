@@ -32,6 +32,30 @@ export const JOBS = [
   ['apps/android/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png', ICON, 192, 192, true],
 ];
 
+// app-15: iOS AppIcon set. iOS forbids an alpha channel and applies its own
+// superellipse mask, so these render SQUARE (rx 118 -> 0) and OPAQUE
+// (omitBackground:false). Same artwork as the Android/web icon, corners filled.
+// Filenames + sizes match ios/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json.
+const IOS_DIR = 'apps/android/ios/Runner/Assets.xcassets/AppIcon.appiconset';
+const squareTile = (svg) => svg.replace('rx="118"', 'rx="0"');
+export const IOS_JOBS = [
+  [`${IOS_DIR}/Icon-App-20x20@1x.png`, ICON, 20, 20, false, squareTile],
+  [`${IOS_DIR}/Icon-App-20x20@2x.png`, ICON, 40, 40, false, squareTile],
+  [`${IOS_DIR}/Icon-App-20x20@3x.png`, ICON, 60, 60, false, squareTile],
+  [`${IOS_DIR}/Icon-App-29x29@1x.png`, ICON, 29, 29, false, squareTile],
+  [`${IOS_DIR}/Icon-App-29x29@2x.png`, ICON, 58, 58, false, squareTile],
+  [`${IOS_DIR}/Icon-App-29x29@3x.png`, ICON, 87, 87, false, squareTile],
+  [`${IOS_DIR}/Icon-App-40x40@1x.png`, ICON, 40, 40, false, squareTile],
+  [`${IOS_DIR}/Icon-App-40x40@2x.png`, ICON, 80, 80, false, squareTile],
+  [`${IOS_DIR}/Icon-App-40x40@3x.png`, ICON, 120, 120, false, squareTile],
+  [`${IOS_DIR}/Icon-App-60x60@2x.png`, ICON, 120, 120, false, squareTile],
+  [`${IOS_DIR}/Icon-App-60x60@3x.png`, ICON, 180, 180, false, squareTile],
+  [`${IOS_DIR}/Icon-App-76x76@1x.png`, ICON, 76, 76, false, squareTile],
+  [`${IOS_DIR}/Icon-App-76x76@2x.png`, ICON, 152, 152, false, squareTile],
+  [`${IOS_DIR}/Icon-App-83.5x83.5@2x.png`, ICON, 167, 167, false, squareTile],
+  [`${IOS_DIR}/Icon-App-1024x1024@1x.png`, ICON, 1024, 1024, false, squareTile],
+];
+
 export function sized(svg, w, h) {
   // Force the root <svg> to the target pixel box; viewBox drives the scaling.
   return svg.replace(/<svg\b([^>]*)>/, (m, attrs) => {
@@ -40,11 +64,12 @@ export function sized(svg, w, h) {
   });
 }
 
-export async function renderAll() {
+export async function renderJobs(jobs) {
   const browser = await chromium.launch();
   try {
-    for (const [out, src, w, h, omit] of JOBS) {
-      const svg = sized(readFileSync(src, 'utf8'), w, h);
+    for (const [out, src, w, h, omit, transform] of jobs) {
+      let svg = sized(readFileSync(src, 'utf8'), w, h);
+      if (transform) svg = transform(svg);
       const page = await browser.newPage({
         viewport: { width: w, height: h },
         deviceScaleFactor: 1,
@@ -63,6 +88,10 @@ export async function renderAll() {
   } finally {
     await browser.close();
   }
+}
+
+export async function renderAll() {
+  await renderJobs([...JOBS, ...IOS_JOBS]);
 }
 
 // Only render when invoked directly — so the test can import JOBS without
