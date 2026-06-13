@@ -80,10 +80,22 @@ flutter build appbundle --release   # build/app/outputs/bundle/release/app-relea
 **Play signing model (Play App Signing):** the `android/key.properties`
 keystore is your **upload key** — you sign every AAB upload with it; Google
 holds the app *signing* key and re-signs what users download. The AAB **must**
-be signed with the real upload key (`key.properties` present), so build it
-**locally** — CI falls back to debug signing, which Play rejects. Verify a
-build with `keytool -printcert -jarfile app-release.aab` (AABs are JAR-signed,
-so `keytool` reads them; APKs are v2-signed — use
+be signed with the real upload key, which Play accepts but a debug-signed bundle
+is rejected.
+
+**Two ways to get a signed AAB:**
+
+- **Release pipeline (preferred for tagged releases).** With the four
+  `ANDROID_UPLOAD_*` repo secrets set (see `android/key.properties.example`),
+  `.github/workflows/release.yml` materialises the keystore, builds the
+  **upload-key-signed** APK *and* AAB, and attaches
+  `castwright-vX.Y.Z.aab` (+ `.sha256`) to the GitHub Release. Without the
+  secrets it falls back to debug signing and skips the AAB attach.
+- **Locally (for ad-hoc Play uploads).** With `android/key.properties` present:
+  `flutter build appbundle --release`.
+
+Verify a build with `keytool -printcert -jarfile app-release.aab` (AABs are
+JAR-signed, so `keytool` reads them; APKs are v2-signed — use
 `apksigner verify --print-certs` for those).
 
 **versionCode** is derived monotonically from the semver by

@@ -820,7 +820,14 @@ top for the running status):
     internal/closed testing — it does **not** replace the sideload APK, which the
     release zip still bundles at `companion/castwright-companion.apk` for
     `GET /api/companion/apk`. CI (`app.yml`) gained a `bundleRelease`
-    build-health step (debug-signed; not a Play artifact). Play caveats:
+    build-health step (debug-signed; not a Play artifact). The **release
+    pipeline** (`release.yml`) now materialises the upload keystore from four
+    `ANDROID_UPLOAD_*` repo secrets, signs the release APK **and** AAB with the
+    upload key, and attaches `castwright-vX.Y.Z.aab` (+`.sha256`) to the GitHub
+    Release (skipped, debug-fallback, when the secret is absent). Wiring the
+    upload key into release CI also fixes a latent sideload bug: hosted-runner
+    debug keystores drift per run, so debug-signed sideload APKs couldn't update
+    in place across releases — upload-key signing gives a stable identity. Play caveats:
     Android Auto (`app-9`) needs a separate Cars review; App Links (`app-17`)
     must pin the **Play app-signing** key fingerprint in `assetlinks.json`, read
     from Console post-enrollment. Full build/sign/upload doc lives in
