@@ -44,8 +44,8 @@ function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnap
 }
 
 const liveSnapshot: ActiveStreamSnapshot = {
-  streamKey: 'keefe_book::1',
-  bookId: 'keefe_book',
+  streamKey: 'marlow_book::1',
+  bookId: 'marlow_book',
   chapterId: 1,
   modelKey: 'coqui-xtts-v2',
   done: 2,
@@ -153,8 +153,8 @@ describe('useLocalAnalyzerGuard', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
-    /* The bookId 'keefe_book' is rendered as the fallback identifier
+    /* The bookId 'marlow_book' is rendered as the fallback identifier
        inside the dialog body. */
-    expect(screen.getByText(/keefe_book/)).toBeInTheDocument();
+    expect(screen.getByText(/marlow_book/)).toBeInTheDocument();
   });
 });

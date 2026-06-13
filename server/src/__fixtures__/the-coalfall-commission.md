@@ -70,15 +70,15 @@ The first arrival came before the crucible was warm.
 
 "That was me shouting," said the man in the doorway, who had clearly run there and clearly wished he hadn't. He was thirty-odd, all elbows, with feathers on his coat that suggested the hens had objected to being locked up early. "Down the lane. The running, the fools, all of that. I'd shout it again."
 
-"Tam Hollis," said Maerin, who had never left, "you woke half the valley over a hay wagon in the dark last Lammas."
+"Pell Hollis," said Maerin, who had never left, "you woke half the valley over a hay wagon in the dark last Lammas."
 
-"A wagon moves wrong in the dark, you say so." Tam edged inside, keeping the anvil between himself and the doorway. The doorway watched him with one gold eye. "I'll just — I'll stand here. By the hammers. In case."
+"A wagon moves wrong in the dark, you say so." Pell edged inside, keeping the anvil between himself and the doorway. The doorway watched him with one gold eye. "I'll just — I'll stand here. By the hammers. In case."
 
 "In case of what?" asked Wren.
 
 "I'll know it when it happens."
 
-The dragon exhaled, slow, and the coals brightened. Tam went the colour of the moulding sand and then, when nothing further occurred, a more ordinary colour. By the time the tin went into the crucible he had drifted two steps closer and was offering opinions about heat.
+The dragon exhaled, slow, and the coals brightened. Pell went the colour of the moulding sand and then, when nothing further occurred, a more ordinary colour. By the time the tin went into the crucible he had drifted two steps closer and was offering opinions about heat.
 
 Widow Casper came next, because her cottage shared a wall with the lane and her curiosity shared a wall with nothing. She was eighty-some and built like a question mark, and she looked the dragon over the way you look over a pedlar's cart.
 
@@ -138,7 +138,7 @@ The room went quiet in the way a held breath is quiet.
 
 The great eye lowered. It came down and down until it was level with the child, and the gold of it lit her face like a lamp. The murmur ran around the forge in pieces:
 
-"Steady—" said Tam.
+"Steady—" said Pell.
 
 "Let her be," said Widow Casper.
 
@@ -182,7 +182,7 @@ Maerin gathered her daughter in and held on, and didn't trust herself to add any
 
 What followed, the forge did mostly in silence, and the narrator will tell it, because the people in it were too busy to.
 
-The mould was sand and clay and an old bell-gauge Oduvan had not touched in nine years, since the man who taught him the gauge stopped needing tools. Wren cut the channels. Tam fetched and was, to general surprise including his own, useful. The widow advised, accurately and without mercy. The twins held the crucible cradle as one creature with four arms — there is no argument left in two men lifting a thing that cannot be set down — and Ivo's wax and Ivo's rope turned out to be exactly what was wanted, for nothing, tonight.
+The mould was sand and clay and an old bell-gauge Oduvan had not touched in nine years, since the man who taught him the gauge stopped needing tools. Wren cut the channels. Pell fetched and was, to general surprise including his own, useful. The widow advised, accurately and without mercy. The twins held the crucible cradle as one creature with four arms — there is no argument left in two men lifting a thing that cannot be set down — and Ivo's wax and Ivo's rope turned out to be exactly what was wanted, for nothing, tonight.
 
 The pour, when it came, was the colour of the morning that hadn't arrived yet. Bronze went down the channel with a sound like a long word in a language one syllable wide.
 
@@ -230,13 +230,13 @@ Widow Casper spoke up from her bench. "My gran would not believe me, you know. T
 
 "Then tell it the way she told hers," said Coalfall. "Badly, and often."
 
-That got the laugh the night had been saving up — even Maerin's, even Lessom's — and Tam laughed loudest of all and then looked around to check whether laughing was allowed.
+That got the laugh the night had been saving up — even Maerin's, even Lessom's — and Pell laughed loudest of all and then looked around to check whether laughing was allowed.
 
 They broke the mould as the sky went from coal to ash. The bell came out of the sand the way the dragon had come out of the dark — all at once, and smaller than the stories, and exactly the right size. Small enough to hang from a claw. Oduvan filed the lip, struck it once with a knuckle, listened with his eyes shut, and filed again. The third time he didn't reach for the file.
 
 "There's your true note," he said. "Such as the second-best smith makes."
 
-"It's the best in the valley," said Tam, who had decided sometime in the dark that this was his adventure too, "and I'll shout down anyone who says otherwise. I'm known for it. The shouting."
+"It's the best in the valley," said Pell, who had decided sometime in the dark that this was his adventure too, "and I'll shout down anyone who says otherwise. I'm known for it. The shouting."
 
 They hung it from the dragon's claw with Ivo's rope, there in the great doorway with the whole valley's worth of night-gathered faces watching. Coalfall raised its claw, careful as a man carrying full cups, and turned it, and looked a long time at the small bright thing it had crossed the world to be sure of.
 

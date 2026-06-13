@@ -205,7 +205,7 @@
     {
       "id": 26,
       "chapterId": 3,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“Run, you fools — it’ll have the lot of you!”",
       "confidence": 0.65,
       "emotion": "excited"
@@ -479,7 +479,7 @@
     {
       "id": 8,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“That was me shouting,”",
       "confidence": 0.98,
       "emotion": "excited"
@@ -501,7 +501,7 @@
     {
       "id": 11,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“Down the lane. The running, the fools, all of that. I’d shout it again.”",
       "confidence": 0.95,
       "emotion": "angry"
@@ -510,7 +510,7 @@
       "id": 12,
       "chapterId": 4,
       "characterId": "maerin",
-      "text": "“Tam Hollis,”",
+      "text": "“Pell Hollis,”",
       "confidence": 0.95
     },
     {
@@ -530,7 +530,7 @@
     {
       "id": 15,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“A wagon moves wrong in the dark, you say so.”",
       "confidence": 0.92
     },
@@ -538,7 +538,7 @@
       "id": 16,
       "chapterId": 4,
       "characterId": "narrator",
-      "text": "Tam edged inside, keeping the anvil between himself and the doorway.",
+      "text": "Pell edged inside, keeping the anvil between himself and the doorway.",
       "confidence": 1
     },
     {
@@ -551,7 +551,7 @@
     {
       "id": 18,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“I’ll just — I’ll stand here. By the hammers. In case.”",
       "confidence": 0.88
     },
@@ -572,7 +572,7 @@
     {
       "id": 21,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“I’ll know it when it happens.”",
       "confidence": 0.9
     },
@@ -587,7 +587,7 @@
       "id": 23,
       "chapterId": 4,
       "characterId": "narrator",
-      "text": "Tam went the colour of the moulding sand and then, when nothing further occurred, a more ordinary colour.",
+      "text": "Pell went the colour of the moulding sand and then, when nothing further occurred, a more ordinary colour.",
       "confidence": 1
     },
     {
@@ -1072,7 +1072,7 @@
     {
       "id": 92,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“Steady—”",
       "confidence": 0.85
     },
@@ -1080,7 +1080,7 @@
       "id": 93,
       "chapterId": 4,
       "characterId": "narrator",
-      "text": "said Tam.",
+      "text": "said Pell.",
       "confidence": 0.98
     },
     {
@@ -1452,7 +1452,7 @@
       "id": 146,
       "chapterId": 4,
       "characterId": "narrator",
-      "text": "Tam fetched and was, to general surprise including his own, useful.",
+      "text": "Pell fetched and was, to general surprise including his own, useful.",
       "confidence": 0.98
     },
     {
@@ -1922,7 +1922,7 @@
       "id": 213,
       "chapterId": 4,
       "characterId": "narrator",
-      "text": "That got the laugh the night had been saving up — even Maerin’s, even Lessom’s — and Tam laughed loudest of all and then looked around to check whether laughing was allowed.",
+      "text": "That got the laugh the night had been saving up — even Maerin’s, even Lessom’s — and Pell laughed loudest of all and then looked around to check whether laughing was allowed.",
       "confidence": 0.98
     },
     {
@@ -1984,7 +1984,7 @@
     {
       "id": 222,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“It’s the best in the valley,”",
       "confidence": 0.96
     },
@@ -1992,13 +1992,13 @@
       "id": 223,
       "chapterId": 4,
       "characterId": "narrator",
-      "text": "said Tam, who had decided sometime in the dark that this was his adventure too,",
+      "text": "said Pell, who had decided sometime in the dark that this was his adventure too,",
       "confidence": 0.98
     },
     {
       "id": 224,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "“and I’ll shout down anyone who says otherwise.",
       "confidence": 0.85,
       "emotion": "angry"
@@ -2006,14 +2006,14 @@
     {
       "id": 225,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "I’m known for it.",
       "confidence": 0.85
     },
     {
       "id": 226,
       "chapterId": 4,
-      "characterId": "tam-hollis",
+      "characterId": "pell-hollis",
       "text": "The shouting.”",
       "confidence": 0.85
     },

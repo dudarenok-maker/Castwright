@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node ESM script, Express + Vitest (server), React + RTK + Vitest/RTL (frontend), Playwright (e2e).
 
-**Scope note:** Wave 3 of the fs-22 spec (`docs/superpowers/specs/2026-06-11-fs22-bundled-demo-book-design.md`). This builds + tests the bundling **infrastructure**, which does NOT need finished content. The actual **freeze** (running the capture script and committing `samples/`) is the LAST step and is gated on Wave 2 being complete: all 13 characters Qwen-designed (7 still owed — `Tam Hollis, Widow Casper, Brann Weir, Berrin Weir, Father Lessom, Ivo, Hart`). Until then the capture script runs but produces an incomplete bundle that MUST NOT be committed.
+**Scope note:** Wave 3 of the fs-22 spec (`docs/superpowers/specs/2026-06-11-fs22-bundled-demo-book-design.md`). This builds + tests the bundling **infrastructure**, which does NOT need finished content. The actual **freeze** (running the capture script and committing `samples/`) is the LAST step and is gated on Wave 2 being complete: all 13 characters Qwen-designed (7 still owed — `Pell Hollis, Widow Casper, Brann Weir, Berrin Weir, Father Lessom, Ivo, Hart`). Until then the capture script runs but produces an incomplete bundle that MUST NOT be committed.
 
 This touches `scripts`, `server`, `frontend` — they ship as one branch `feat/fs-bundled-demo-book` (sequential: frontend calls the new endpoint).
 

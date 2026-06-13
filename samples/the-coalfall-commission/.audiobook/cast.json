@@ -281,8 +281,8 @@
       "voiceState": "generated"
     },
     {
-      "id": "tam-hollis",
-      "name": "Tam Hollis",
+      "id": "pell-hollis",
+      "name": "Pell Hollis",
       "role": "Villager",
       "color": "slot-5",
       "attributes": [
@@ -311,18 +311,18 @@
       ],
       "lines": 11,
       "scenes": 2,
-      "voiceId": "tam-hollis",
+      "voiceId": "pell-hollis",
       "voiceState": "generated",
       "voiceStyle": "A male adult voice with a medium-low pitch and erratic, fast-paced cadence, featuring a gravelly, restless timbre and a jittery, high-intensity emotional register for expressive character dialogue.",
       "overrideTtsVoices": {
         "qwen": {
-          "name": "qwen-tam-hollis",
+          "name": "qwen-pell-hollis",
           "variants": {
             "excited": {
-              "name": "qwen-tam-hollis__excited"
+              "name": "qwen-pell-hollis__excited"
             },
             "angry": {
-              "name": "qwen-tam-hollis__angry"
+              "name": "qwen-pell-hollis__angry"
             }
           }
         },

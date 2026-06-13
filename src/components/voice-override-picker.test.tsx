@@ -21,7 +21,7 @@ type OnChange = NonNullable<React.ComponentProps<typeof VoiceOverridePicker>['on
 
 function defaultProps(overrides: Partial<React.ComponentProps<typeof VoiceOverridePicker>> = {}) {
   return {
-    voiceId: 'v_fitz',
+    voiceId: 'v_brann',
     engineTab: 'coqui' as const,
     autoVoiceEngine: 'coqui' as const,
     autoVoiceName: 'Aaron Dreschner',

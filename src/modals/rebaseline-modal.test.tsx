@@ -515,7 +515,7 @@ describe('RebaselineModal — serial design queue', () => {
     designQwenVoice.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ voiceId: 'qwen-maerin-v2', previewUrl: 'blob:biana2' });
+          release = () => resolve({ voiceId: 'qwen-maerin-v2', previewUrl: 'blob:maerin2' });
         }),
     );
     await act(async () => {
