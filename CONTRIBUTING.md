@@ -1,10 +1,15 @@
 # Contributing
 
-How to land changes on this repo without stepping on yourself (or on a parallel
-agent run). Two rules — the **branching model** keeps work isolated until it's
-ready to merge, and the **commit convention** makes the history greppable by
-area. The commit convention is enforced by a git hook; the branching model is
-soft convention.
+Castwright turns a manuscript into a full-cast audiobook — every character in
+their own voice, performed on a machine you already own. This guide is how to
+work on it without stepping on yourself (or on a parallel agent run).
+
+Two habits carry most of that weight. The **branching model** keeps work
+isolated until it's ready to merge, and the **commit convention** keeps the
+history greppable by area. The commit convention is enforced by a git hook; the
+branching model is soft convention — held up by agreement, not tooling. The
+honest version: `main` is the only branch anyone trusts, so everything else is
+in service of keeping it shippable.
 
 ## TL;DR
 
@@ -37,6 +42,8 @@ place, please open an issue to discuss a change before sending a PR.
 ## Branching model
 
 Trunk-based with short-lived feature branches, isolated per agent via worktrees.
+One branch is one cohesive change — small enough to hold in your head, isolated
+enough that a parallel run can't trip over it.
 
 ### Branch naming
 
@@ -200,6 +207,9 @@ manually):
 
 ## Commit convention
 
+The history is a tool, not a log. Tag every commit by area so
+`git log --grep="(scope)"` can walk a single surface years later.
+
 Format:
 
 ```
@@ -347,8 +357,9 @@ label-lint or required-field enforcement beyond the forms themselves; the
 
 ## Pull requests
 
-Every change that lands on `main` goes through a GitHub PR. The template, the
-title gate, and the merge-button policy together codify what PRs #1-#4 already
+Every change that lands on `main` goes through a GitHub PR — that's the one door,
+and the review at it is what lets the next person trust the branch. The template,
+the title gate, and the merge-button policy together codify what PRs #1-#4 already
 do by hand. See [docs/features/archive/44-pr-hygiene.md](docs/features/archive/44-pr-hygiene.md)
 for the regression plan and rationale.
 
@@ -477,6 +488,7 @@ The compact version:
 
 ## Releasing
 
+A release is a performance going out the door, so it gets the same care as one.
 Cutting a public release is one command (after the notes file is ready):
 
 ```sh
