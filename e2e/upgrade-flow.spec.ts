@@ -49,6 +49,9 @@ test.describe('fs-1 — in-app upgrade flow', () => {
     await expect(confirm).toBeVisible();
     await confirm.getByRole('button', { name: 'Cancel' }).click();
     await expect(confirm).toBeHidden();
-    await expect(card.getByRole('button', { name: /Apply update package/ })).toBeVisible();
+    /* Mock getUpdateStatus reports "up to date", so the manual-apply affordance
+       is the demoted label (the prominent "Apply update package…" only shows
+       when a newer release is detected). Either way the picker is back. */
+    await expect(card.getByRole('button', { name: /Apply a package manually/ })).toBeVisible();
   });
 });
