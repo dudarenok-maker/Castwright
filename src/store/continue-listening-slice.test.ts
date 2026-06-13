@@ -50,6 +50,26 @@ describe('continueListeningSlice — hydrate', () => {
   });
 });
 
+describe('continueListeningSlice — dismiss', () => {
+  it('removes the matching book and leaves the rest', () => {
+    const start = continueListeningSlice.reducer(
+      empty(),
+      continueListeningActions.hydrate([item({ bookId: 'b1' }), item({ bookId: 'b2' })]),
+    );
+    const next = continueListeningSlice.reducer(start, continueListeningActions.dismiss('b1'));
+    expect(next.items.map((i) => i.bookId)).toEqual(['b2']);
+  });
+
+  it('is a no-op when the bookId is not on the shelf', () => {
+    const start = continueListeningSlice.reducer(
+      empty(),
+      continueListeningActions.hydrate([item({ bookId: 'b1' })]),
+    );
+    const next = continueListeningSlice.reducer(start, continueListeningActions.dismiss('nope'));
+    expect(next.items.map((i) => i.bookId)).toEqual(['b1']);
+  });
+});
+
 describe('selectContinueListening', () => {
   it('returns items when slice is present', () => {
     const items = [item()];

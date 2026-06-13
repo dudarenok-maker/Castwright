@@ -104,6 +104,7 @@ This section lists only the **in-flight working set** — plans whose `status:` 
 
 ### H. Listen & playback
 
+- [213 — Continue-listening shelf controls (covers · auto-hide · finish/hide)](213-continue-listening-shelf-controls.md) — `active`. Polish on the fs-15 rail (plan 212): real cover art with gradient fallback; theme-aware thin scrollbar (dark-mode compliant); server-side auto-hide of effectively-complete books (`isEffectivelyComplete` + extended `isFinished`) so "0:00 left" cards drop off; and per-card ⋯ menu **Mark as finished** (sticky, counts in fs-16 stats) / **Hide from shelf** (cleared on next resume), persisted via `POST /api/books/{id}/shelf-status` on `listen-progress.json` with a merge-not-clobber `PUT /listen-progress`. Portal-anchored menu (rail's `overflow-x-auto` would clip an in-flow dropdown). Closes the four shelf nits.
 - [159 — Listen-row affordances gated on generated audio](159-listen-ungenerated-chapter-affordances.md) — `active`. Listen-view chapter rows for chapters that haven't generated audio yet (`state` of `queued`/`in_progress`/`failed`) no longer masquerade as playable: the Play + Share-clip buttons are `disabled`, and a state-aware label (`Queued`/`Generating…`/`Failed`) replaces the misleading "0:00" duration. Reuses the existing `state === 'done'` "has audio" predicate; Regenerate stays active (it can start/retry generation). Single-component change in `listen-player-region.tsx` with paired unit coverage.
 
 ### K. Cross-cutting invariants

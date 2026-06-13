@@ -1925,3 +1925,129 @@ describe('PUT /:bookId/listen-stats', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('book-state router — shelf-status (fs-15 shelf controls)', () => {
+  const SS_AUTHOR = 'Shelf Status Author';
+  const SS_SERIES = 'Standalones';
+  const SS_TITLE = 'Shelf Status Book';
+  let ssBookId: string;
+  let ssBookDir: string;
+  const lpFile = () => join(ssBookDir, '.audiobook', 'listen-progress.json');
+  const readLp = () => JSON.parse(readFileSync(lpFile(), 'utf8'));
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    ssBookId = makeBookId(SS_AUTHOR, SS_SERIES, SS_TITLE);
+    ssBookDir = join(workspaceRoot, 'books', SS_AUTHOR, SS_SERIES, SS_TITLE);
+    mkdirSync(join(ssBookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(ssBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: ssBookId,
+        manuscriptId: 'm_shelf_status',
+        title: SS_TITLE,
+        author: SS_AUTHOR,
+        series: SS_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: 'chapter-one' },
+          { id: 2, title: 'Chapter 2', slug: 'chapter-two' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(ssBookDir, 'manuscript.txt'), 'placeholder');
+  });
+
+  beforeEach(() => {
+    // Reset to a known mid-listen bookmark before each case.
+    writeFileSync(
+      lpFile(),
+      JSON.stringify({ chapterId: 1, currentSec: 120, updatedAt: '2026-06-14T00:00:00.000Z' }),
+    );
+  });
+
+  it('POST finished:true stamps finished + finishedAt on disk', async () => {
+    const res = await request(app)
+      .post(`/api/books/${ssBookId}/shelf-status`)
+      .set('Content-Type', 'application/json')
+      .send({ finished: true });
+    expect(res.status).toBe(200);
+    expect(res.body.finished).toBe(true);
+    expect(typeof res.body.finishedAt).toBe('string');
+    const onDisk = readLp();
+    expect(onDisk.finished).toBe(true);
+    expect(onDisk.chapterId).toBe(1); // position preserved
+  });
+
+  it('POST hidden:true stamps hidden + dismissedAt on disk', async () => {
+    const res = await request(app)
+      .post(`/api/books/${ssBookId}/shelf-status`)
+      .send({ hidden: true });
+    expect(res.status).toBe(200);
+    expect(res.body.hidden).toBe(true);
+    expect(typeof res.body.dismissedAt).toBe('string');
+    expect(readLp().hidden).toBe(true);
+  });
+
+  it('POST finished:false clears the flag', async () => {
+    await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ finished: true });
+    const res = await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ finished: false });
+    expect(res.status).toBe(200);
+    expect(res.body.finished).toBeFalsy();
+    expect(readLp().finished).toBeFalsy();
+  });
+
+  it('is idempotent (POST finished:true twice stays finished)', async () => {
+    await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ finished: true });
+    const res = await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ finished: true });
+    expect(res.status).toBe(200);
+    expect(res.body.finished).toBe(true);
+  });
+
+  it('400s when neither finished nor hidden is a boolean', async () => {
+    const res = await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ foo: 'bar' });
+    expect(res.status).toBe(400);
+  });
+
+  it('404s on an unknown book', async () => {
+    const res = await request(app).post(`/api/books/does-not-exist/shelf-status`).send({ finished: true });
+    expect(res.status).toBe(404);
+  });
+
+  it('works when no listen-progress.json exists yet (marks finished from cold)', async () => {
+    rmSync(lpFile(), { force: true });
+    const res = await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ finished: true });
+    expect(res.status).toBe(200);
+    expect(res.body.finished).toBe(true);
+    expect(readLp().finished).toBe(true);
+  });
+
+  describe('PUT /listen-progress merge', () => {
+    it('preserves finished across a subsequent progress save', async () => {
+      await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ finished: true });
+      const put = await request(app)
+        .put(`/api/books/${ssBookId}/listen-progress`)
+        .send({ chapterId: 2, currentSec: 45 });
+      expect(put.status).toBe(200);
+      expect(put.body.chapterId).toBe(2);
+      expect(put.body.finished).toBe(true); // sticky
+      expect(readLp().finished).toBe(true);
+    });
+
+    it('clears hidden on a subsequent progress save (resuming un-hides)', async () => {
+      await request(app).post(`/api/books/${ssBookId}/shelf-status`).send({ hidden: true });
+      const put = await request(app)
+        .put(`/api/books/${ssBookId}/listen-progress`)
+        .send({ chapterId: 1, currentSec: 200 });
+      expect(put.status).toBe(200);
+      expect(put.body.hidden).toBeFalsy();
+      expect(readLp().hidden).toBeFalsy();
+    });
+  });
+});

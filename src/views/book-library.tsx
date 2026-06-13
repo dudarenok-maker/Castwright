@@ -26,6 +26,7 @@ import { useAppSelector, useAppDispatch } from '../store';
 import { startLinearTour } from '../store/tour-slice';
 import { uiActions } from '../store/ui-slice';
 import { continueListeningActions, selectContinueListening } from '../store/continue-listening-slice';
+import { notificationsActions } from '../store/notifications-slice';
 import { useDebouncedValue } from '../lib/use-debounced-value';
 import {
   LibraryChrome,
@@ -141,6 +142,32 @@ export function BookLibraryView({
       }),
     );
   };
+
+  /* fs-15 shelf controls — optimistically drop the card, then persist via
+     api.setShelfStatus. On failure, re-fetch the shelf to restore truth and
+     surface an error toast. */
+  const applyShelfStatus = (
+    bookId: string,
+    body: { finished?: boolean; hidden?: boolean },
+    okMessage: string,
+    failMessage: string,
+  ) => {
+    dispatch(continueListeningActions.dismiss(bookId));
+    api
+      .setShelfStatus(bookId, body)
+      .then(() => dispatch(notificationsActions.pushToast({ kind: 'info', message: okMessage })))
+      .catch(() => {
+        dispatch(notificationsActions.pushToast({ kind: 'error', message: failMessage }));
+        api
+          .getContinueListening()
+          .then((items) => dispatch(continueListeningActions.hydrate(items)))
+          .catch(() => {});
+      });
+  };
+  const handleFinishContinue = (bookId: string) =>
+    applyShelfStatus(bookId, { finished: true }, 'Marked as finished.', "Couldn't mark as finished.");
+  const handleHideContinue = (bookId: string) =>
+    applyShelfStatus(bookId, { hidden: true }, 'Hidden from Continue listening.', "Couldn't hide this book.");
   const [filter, setFilter] = useState<Filter>('all');
   /* Plan 73 — raw input fires every keystroke, debouncedSearch lags by
      ~150ms so the filter chain doesn't re-run mid-word. activeTags is
@@ -219,6 +246,13 @@ export function BookLibraryView({
   const allBooks = useMemo(
     () => authors.flatMap((a) => a.series.flatMap((s) => s.books)),
     [authors],
+  );
+  /* fs-15 — bookId → cover URL, so the Continue-listening rail can show real
+     covers (it gets only ids from the listen-progress aggregate). Missing entry
+     ⇒ the rail falls back to its gradient placeholder. */
+  const coversByBookId = useMemo(
+    () => Object.fromEntries(allBooks.map((b) => [b.bookId, b.coverImageUrl] as const)),
+    [allBooks],
   );
   const totals = {
     books: allBooks.length,
@@ -318,7 +352,13 @@ export function BookLibraryView({
         toggleLanguage={toggleLanguage}
         clearFilters={clearFilters}
       />
-      <ContinueListeningRail items={continueListeningItems} onOpen={handleOpenContinue} />
+      <ContinueListeningRail
+        items={continueListeningItems}
+        covers={coversByBookId}
+        onOpen={handleOpenContinue}
+        onFinish={handleFinishContinue}
+        onHide={handleHideContinue}
+      />
       {showNoResults ? (
         <NoResults onClear={clearFilters} />
       ) : effectiveViewMode === 'card' ? (

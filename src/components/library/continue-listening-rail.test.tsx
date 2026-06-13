@@ -14,10 +14,12 @@ const item = (over: Partial<ContinueItem> = {}): ContinueItem => ({
   ...over,
 });
 
+const noop = () => {};
+
 describe('ContinueListeningRail', () => {
   it('renders nothing when items is empty', () => {
     const { container } = render(
-      <ContinueListeningRail items={[]} onOpen={() => {}} />,
+      <ContinueListeningRail items={[]} onOpen={noop} onFinish={noop} onHide={noop} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -27,12 +29,10 @@ describe('ContinueListeningRail', () => {
       item({ bookId: 'b1', title: 'The Coalfall Commission', chapterId: 3, remainingSec: 3600 }),
       item({ bookId: 'b2', title: 'Another Book', chapterId: 1, remainingSec: 300 }),
     ];
-    render(<ContinueListeningRail items={items} onOpen={() => {}} />);
+    render(<ContinueListeningRail items={items} onOpen={noop} onFinish={noop} onHide={noop} />);
 
     expect(screen.getByText('The Coalfall Commission')).toBeInTheDocument();
     expect(screen.getByText('Another Book')).toBeInTheDocument();
-
-    // Captions: "Ch N · HH:MM:SS left" or "Ch N · MM:SS left"
     expect(screen.getByText(/Ch 3/)).toBeInTheDocument();
     expect(screen.getByText(/Ch 1/)).toBeInTheDocument();
   });
@@ -43,19 +43,111 @@ describe('ContinueListeningRail', () => {
       item({ bookId: 'book-alpha', chapterId: 5 }),
       item({ bookId: 'book-beta', chapterId: 2, title: 'Book Beta' }),
     ];
-    render(<ContinueListeningRail items={items} onOpen={onOpen} />);
+    render(<ContinueListeningRail items={items} onOpen={onOpen} onFinish={noop} onHide={noop} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /book-alpha|The Coalfall Commission/i }));
+    // The card's accessible name is "Continue listening to {title}"; the ⋯
+    // button's title-free label keeps these queries unambiguous.
+    fireEvent.click(screen.getByRole('button', { name: /Continue listening to The Coalfall Commission/i }));
     expect(onOpen).toHaveBeenCalledWith('book-alpha', 5);
 
-    fireEvent.click(screen.getByRole('button', { name: /Book Beta/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Continue listening to Book Beta/i }));
     expect(onOpen).toHaveBeenCalledWith('book-beta', 2);
 
     expect(onOpen).toHaveBeenCalledTimes(2);
   });
 
   it('renders the section heading when items are present', () => {
-    render(<ContinueListeningRail items={[item()]} onOpen={() => {}} />);
+    render(<ContinueListeningRail items={[item()]} onOpen={noop} onFinish={noop} onHide={noop} />);
     expect(screen.getByText(/continue listening/i)).toBeInTheDocument();
+  });
+
+  it('applies the theme-aware thin scrollbar to the scroll strip', () => {
+    const { container } = render(
+      <ContinueListeningRail items={[item()]} onOpen={noop} onFinish={noop} onHide={noop} />,
+    );
+    expect(container.querySelector('.scrollbar-thin')).not.toBeNull();
+  });
+});
+
+describe('ContinueListeningRail — covers', () => {
+  it('renders the cover image when a URL is supplied', () => {
+    const { container } = render(
+      <ContinueListeningRail
+        items={[item({ bookId: 'b1' })]}
+        covers={{ b1: '/api/books/b1/cover' }}
+        onOpen={noop}
+        onFinish={noop}
+        onHide={noop}
+      />,
+    );
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img?.getAttribute('src')).toBe('/api/books/b1/cover');
+  });
+
+  it('falls back to the gradient placeholder when no cover URL is supplied', () => {
+    const { container } = render(
+      <ContinueListeningRail items={[item({ bookId: 'b1' })]} onOpen={noop} onFinish={noop} onHide={noop} />,
+    );
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('svg')).not.toBeNull();
+  });
+
+  it('falls back to the gradient when the cover image errors', () => {
+    const { container } = render(
+      <ContinueListeningRail
+        items={[item({ bookId: 'b1' })]}
+        covers={{ b1: '/api/books/b1/cover' }}
+        onOpen={noop}
+        onFinish={noop}
+        onHide={noop}
+      />,
+    );
+    const img = container.querySelector('img')!;
+    fireEvent.error(img);
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('svg')).not.toBeNull();
+  });
+});
+
+describe('ContinueListeningRail — finish / hide menu', () => {
+  it('opens the ⋯ menu and fires onFinish with the bookId', () => {
+    const onFinish = vi.fn();
+    render(
+      <ContinueListeningRail
+        items={[item({ bookId: 'book-x' })]}
+        onOpen={noop}
+        onFinish={onFinish}
+        onHide={noop}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Continue-listening options/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Mark as finished/i }));
+    expect(onFinish).toHaveBeenCalledWith('book-x');
+  });
+
+  it('fires onHide with the bookId from the menu', () => {
+    const onHide = vi.fn();
+    render(
+      <ContinueListeningRail
+        items={[item({ bookId: 'book-y' })]}
+        onOpen={noop}
+        onFinish={noop}
+        onHide={onHide}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Continue-listening options/i }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Hide from shelf/i }));
+    expect(onHide).toHaveBeenCalledWith('book-y');
+  });
+
+  it('closes the menu on Escape', () => {
+    render(
+      <ContinueListeningRail items={[item({ bookId: 'b1' })]} onOpen={noop} onFinish={noop} onHide={noop} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Continue-listening options/i }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 });
