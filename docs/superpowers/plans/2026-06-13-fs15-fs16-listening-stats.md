@@ -816,17 +816,18 @@ describe('GET /api/library/continue-listening', () => {
 
 ```ts
 // in the library router
-import { readJson } from '../workspace/state-io.js';            // match the helper book-state.ts uses
-import { listenProgressJsonPath, listenStatsJsonPath, stateJsonPath } from '../workspace/paths.js';
+import { readJson } from '../workspace/state-io.js';
+import { listenProgressJsonPath, listenStatsJsonPath } from '../workspace/paths.js';
+import { collectBooks } from '../workspace/scan.js';
 import { buildLibraryStats, buildContinueListening, type BookStatsInput } from '../workspace/listen-stats-aggregate.js';
-// + the existing book-enumeration helper
 
 async function assembleBookInputs(): Promise<BookStatsInput[]> {
-  // PL8 — reuse the SAME workspace scan realGetLibrary uses (in scan.ts) to list
-  // books; do not invent a new enumerator. Confirm the exact exported name.
-  const books = await listWorkspaceBooks(); // → [{ bookId, bookDir }]
-  return Promise.all(books.map(async ({ bookId, bookDir }) => {
-    const state = await readJson<any>(stateJsonPath(bookDir));
+  // PL8 — reuse collectBooks() (server/src/workspace/scan.js), the SAME enumerator
+  // the sync-manifest router uses. It returns [{ bookDir, state }] — state already
+  // carries bookId/title/series/isStandalone/chapters, so no extra state.json read.
+  const books = await collectBooks();
+  return Promise.all(books.map(async ({ bookDir, state }) => {
+    const bookId = state.bookId;
     const resume = await readJson<any>(listenProgressJsonPath(bookDir));
     const statsFile = await readJson<any>(listenStatsJsonPath(bookDir));
     const chapters = (state?.chapters ?? []).map((c: any) =>
@@ -862,7 +863,7 @@ libraryRouter.get('/continue-listening', async (_req, res) => {
 });
 ```
 
-> Confirm the exact names: `enumerateBooks`, `readJson`, the series/title fields on `state.json`, and where `libraryRouter` is mounted under `/api/library` in `index.ts`. Match what the codebase already has; do not invent new enumeration logic.
+> Resolved names (verified): add both GETs to `server/src/routes/library.ts` (already mounted at `/api/library` in `index.ts:204`); enumerate with `collectBooks()` from `../workspace/scan.js` (returns `{ bookDir, state }`); `state` carries `bookId`/`title`/`series`/`isStandalone`/`chapters`. Do not invent new enumeration logic.
 
 - [ ] **Step 4: Run, verify pass.** PASS.
 
