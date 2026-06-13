@@ -22,18 +22,6 @@ via `Closes #NN`) and remove its row here; update the source plan's `status:` /
 Ship notes and archive it if `stable`. When you discover a new item, file a
 Backlog-item issue AND add the thin row here linking it, in the same round.
 
-_2026-06-12: added `ops-16` (Pinokio one-click installer) as a third first-class install path in
-the Must onboarding/install group, below `ops-15`. Moved `ops-12` (trademark clearance) and `ops-9`
-(server-side branch protection) out to the private commercialisation backlog — both are
-launch/business machinery, not app work (`ops-9` absorbed into its `com-4` public-repo-opening
-item). Folded the Windows code-signing and macOS notarisation requirements into `ops-1`/`ops-15`
-(the cost/vendor detail stays private)._
-
-_Last reprioritised 2026-06-08 (cleanup round: promoted the onboarding cluster, the
-voices-library/cloning item, and `srv-1` into Must; retired the delivered Android-companion,
-dependency-major, and ASR-verifying-phase rows; archived stale parked items; moved `side-11`
-to monitoring). Prior full pass 2026-06-02 folded in the 29 brainstorm items #458–#486._
-
 ---
 
 ## Must — blocks v1 ship or hurts existing users
