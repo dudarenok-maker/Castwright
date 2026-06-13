@@ -25,9 +25,7 @@ Future<void> main() async {
   // app-5/app-9: the media session must exist before the UI (lock-screen /
   // Bluetooth / Android Auto). The runtime attaches the live player once paired.
   final handler = await AudioService.init(
-    builder: () => CompanionAudioHandler(
-      notifyChildrenChanged: AudioService.notifyChildrenChanged,
-    ),
+    builder: () => CompanionAudioHandler(),
     config: companionAudioServiceConfig,
   );
   runApp(AudiobookCompanionApp(store: SecurePairingStore(), audioHandler: handler));

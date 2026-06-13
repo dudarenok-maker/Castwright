@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
+import 'package:rxdart/rxdart.dart';
 
 import '../domain/media_browse_tree.dart';
 import 'player_controller.dart';
@@ -21,19 +22,16 @@ import 'player_controller.dart';
 /// [Completer] and refreshes AA via [_notifyChildrenChanged] once the live tree
 /// is available and whenever the playing chapter/book changes.
 class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
-  CompanionAudioHandler({
-    Duration readyTimeout = const Duration(seconds: 4),
-    Future<void> Function(String parentMediaId)? notifyChildrenChanged,
-  })  : _readyTimeout = readyTimeout,
-        _notifyChildrenChanged = notifyChildrenChanged ?? ((_) async {});
+  CompanionAudioHandler({this.readyTimeout = const Duration(seconds: 4)});
 
   /// How long [getChildren] waits for [attach] before falling back to the info
   /// row (so Android Auto never hangs on a cold/unpaired connect).
-  final Duration _readyTimeout;
+  final Duration readyTimeout;
 
-  /// Seam over `AudioService.notifyChildrenChanged` (no-op default keeps unit
-  /// tests off the platform channel; `main()` wires the real one).
-  final Future<void> Function(String parentMediaId) _notifyChildrenChanged;
+  /// Per-folder subjects backing [subscribeToChildren]. Android Auto listens to
+  /// these; pushing an event re-queries [getChildren] for that folder. Created
+  /// lazily as AA subscribes (only the folders it shows are tracked).
+  final Map<String, BehaviorSubject<Map<String, dynamic>>> _childrenSubjects = {};
 
   PlayerController? _controller;
   Future<List<MediaItem>> Function(String parentMediaId)? _childrenProvider;
@@ -93,9 +91,17 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
     _subs.clear();
   }
 
-  /// Fire-and-forget AA refresh — a media-browser hiccup must never break playback.
+  /// Tell Android Auto a folder's children changed (re-queries [getChildren]).
+  /// No-op when nothing is subscribed to that folder.
   void _notify(String parentMediaId) {
-    _notifyChildrenChanged(parentMediaId).catchError((_) {});
+    final s = _childrenSubjects[parentMediaId];
+    if (s != null && !s.isClosed) s.add(const <String, dynamic>{});
+  }
+
+  @override
+  ValueStream<Map<String, dynamic>> subscribeToChildren(String parentMediaId) {
+    return _childrenSubjects.putIfAbsent(
+        parentMediaId, () => BehaviorSubject.seeded(const <String, dynamic>{}));
   }
 
   void _onNowPlaying(NowPlaying? np) {
@@ -168,7 +174,7 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
     if (_childrenProvider == null) {
       // AA queried before the runtime attached — wait (bounded) for it.
       try {
-        await _ready.future.timeout(_readyTimeout);
+        await _ready.future.timeout(readyTimeout);
       } on TimeoutException {
         return [_infoRow];
       }

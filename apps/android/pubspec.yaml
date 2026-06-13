@@ -54,6 +54,10 @@ dependencies:
   image: ^4.9.1
   just_audio: ^0.10.5
   audio_service: ^0.18.18
+  # app-9: per-folder BehaviorSubjects backing AudioHandler.subscribeToChildren,
+  # so the car browse tree can push a "children changed" refresh to Android Auto.
+  # Already resolved transitively via audio_service; pinned here as a direct dep.
+  rxdart: ^0.28.0
   connectivity_plus: 6.1.0
   # app-2 — scan the server pairing QR. zxing-cpp (flutter_zxing) could not decode
   # the QR on a real Android 16 device (confirmed 2026-06-11: valid QR, native lib
