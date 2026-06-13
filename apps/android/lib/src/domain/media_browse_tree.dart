@@ -35,6 +35,14 @@ const Map<String, dynamic> listContentStyleExtras = {
   _contentStylePlayableHint: _contentStyleListItem,
 };
 
+/// Extras for `AudioServiceConfig.androidBrowsableRootExtras` — tells Android
+/// Auto we support content styling and to render top-level children as lists.
+const Map<String, dynamic> browsableRootExtras = {
+  'android.media.browse.CONTENT_STYLE_SUPPORTED': true,
+  _contentStyleBrowsableHint: _contentStyleListItem,
+  _contentStylePlayableHint: _contentStyleListItem,
+};
+
 enum MediaIdKind { root, current, library, recent, book, chapter, unknown }
 
 class MediaId {

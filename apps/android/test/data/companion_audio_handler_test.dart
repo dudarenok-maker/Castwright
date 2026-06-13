@@ -154,4 +154,13 @@ void main() {
       expect(result.single.playable, isFalse); // info row, not stale ['x']
     });
   });
+
+  group('companionAudioServiceConfig (Android Auto)', () {
+    test('declares root content-style extras + art downscale for the car', () {
+      expect(companionAudioServiceConfig.androidBrowsableRootExtras,
+          browsableRootExtras);
+      expect(companionAudioServiceConfig.artDownscaleWidth, isNotNull);
+      expect(companionAudioServiceConfig.artDownscaleHeight, isNotNull);
+    });
+  });
 }
