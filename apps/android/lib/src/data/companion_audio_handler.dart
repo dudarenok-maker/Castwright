@@ -4,6 +4,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:rxdart/rxdart.dart';
 
 import '../domain/media_browse_tree.dart';
+import 'art_uri.dart';
 import 'player_controller.dart';
 
 /// Bridges the OS media session (lock screen, notification, Bluetooth/headset,
@@ -112,9 +113,9 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
       title: np.title,
       album: np.album.isEmpty ? 'Castwright' : np.album,
       duration: np.duration,
-      artUri: (np.artPath != null && np.artPath!.isNotEmpty)
-          ? Uri.file(np.artPath!)
-          : null,
+      // content:// (not file://) so the Android Auto projection can load the
+      // cover cross-process — see ArtContentProvider.
+      artUri: carArtUri(np.artPath),
     ));
     _broadcastState();
     // Refresh the current-book chapter list (moves the highlight); refresh the

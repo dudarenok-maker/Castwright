@@ -130,6 +130,12 @@ void main() {
       expect(items.single.artist, 'Shannon');
       expect(items.single.playable, isFalse);
     });
+
+    test('library rows carry a content:// cover uri (AA-readable)', () async {
+      final items = await makeBrowse().getChildren(libraryMediaId);
+      expect(items.single.artUri?.scheme, 'content');
+      expect(items.single.artUri?.queryParameters['path'], '/t/b1.jpg');
+    });
   });
 
   group('CarBrowse recent', () {

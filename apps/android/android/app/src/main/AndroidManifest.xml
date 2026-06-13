@@ -81,6 +81,20 @@
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
 
+        <!-- app-9: serves local cover thumbnails as content:// so the Android
+             Auto host (separate process) can render covers in the projection +
+             browse rows (a private file:// is only readable in-process).
+             Exported with no permission: book covers are public + zero-sensitivity,
+             and ArtContentProvider hard-restricts reads to image files in a
+             thumbs/ dir under this app's data dir. Headless-safe (manifest
+             component, no Flutter engine needed). -->
+        <provider
+            android:name=".ArtContentProvider"
+            android:authorities="ai.castwright.art"
+            android:exported="true"
+            android:grantUriPermissions="false"
+            tools:ignore="ExportedContentProvider" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
