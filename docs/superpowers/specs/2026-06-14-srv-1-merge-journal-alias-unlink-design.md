@@ -168,16 +168,34 @@ never fail the merge (mirrors the reuse-link / dropped-quotes precedent).
 ## Write path — folds (`server/src/routes/analysis.ts`, both fold call sites)
 
 At the main route (~3447) and the subset re-analysis route (~4341): after
-`foldMinorCast`, call
-`buildFoldJournalEntries(folded.rewrites, recovered.sentences, stage1.characters, ts)`
-and persist via `replaceFoldEntries` + `saveCastMerges`. `recovered.sentences`
-is the pre-fold list, so `affected` for each source is its sentences before the
-rewrite.
+`foldMinorCast`, compute
+`buildFoldJournalEntries(folded.rewrites, recovered.sentences, stage1.characters, ts)`.
+`recovered.sentences` is the pre-fold list, so `affected` for each source is its
+sentences before the rewrite.
+
+**Placement (corrected in second review).** The journal write must live
+**inside the existing persist block, immediately after the
+`manuscriptEditsJsonPath` write** (main route ~3540; subset ~4444), not directly
+after `foldMinorCast`. Rationale: the journal describes sentence-level rewrites,
+and those rewrites are persisted in `manuscript-edits.json` — which is written
+even when attribution drift exceeds the threshold (cast.json is the file
+skipped on drift, not edits). Co-locating the journal write with the edits write
+guarantees the journal can never claim folds that aren't reflected on disk:
+
+- On the **main route** the persist block is only reached on completion (an
+  abort throws earlier), so no abort gate is needed.
+- On the **subset route** the block is already gated by `!isAborted()`, so an
+  aborted retry writes neither the edits nor the journal — consistent.
+- On **drift** the edits (with folded attributions) _are_ written, so the
+  journal stays consistent with them; cast.json may not carry the bucket yet,
+  but an unreachable journal entry (no alias chip to unlink) is harmless dead
+  data that the next clean run's `replaceFoldEntries` refreshes.
 
 Both paths fold over the **full whole-book sentence set** — the subset path
 stitches every cached chapter (`analysis.ts:4322–4329`) before folding and
 persists the full `manuscript-edits.json` — so replace-all fold journaling is
-correct on both. Wrapped `try/catch` + warn, non-fatal.
+correct on both. The journal write itself is wrapped `try/catch` + warn,
+non-fatal, so a journal failure never breaks the persist.
 
 `fresh: true` clear: add `await clearCastMerges(recordRef.bookDir)` to the
 existing `requestedFresh` cleanup block (`analysis.ts:2041–2047`), guarded by
@@ -189,11 +207,13 @@ Replace the `chapterCast` derivation (lines ~164–208) with:
 
 1. `loadCastMerges(bookDir)`; select entries where `targetId === sourceCharacterId`
    **and** `sourceName` matches `aliasName` (case-insensitive, trimmed).
-2. **Match found (journal path):** union the matched entries' `affected` pairs,
-   then intersect with the sentences in `manuscript-edits.json` still attributed
-   to `sourceCharacterId` (drops lines already reattributed / re-merged
-   elsewhere; also drops any stale pair whose id no longer exists). Group the
-   survivors by `chapterId` → `impactedChapters`.
+2. **Match found (journal path):** union the matched entries' `affected` pairs
+   (dedup on the composite `chapterId:sentenceId` key), then intersect with the
+   sentences in `manuscript-edits.json` still attributed to `sourceCharacterId`
+   (drops lines already reattributed / re-merged elsewhere; also drops any stale
+   pair whose id no longer exists). Group the survivors by `chapterId` →
+   `impactedChapters`. Skip the `loadAnalysisCache` / `chapterCast` read
+   entirely on this path.
 3. **No match (fallback path):** run today's exact `chapterCast` derivation,
    unchanged.
 
@@ -213,6 +233,17 @@ Audited during design review. Only the manual merge and the auto-fold rewrite
   available and the fallback is correct, not a gap.
 - **`cast-link-prior` / `voice-match`** append a cross-book _recognition_ alias
   to a prior book and never rewrite the current book's sentences.
+- **`add-alias`** (manual chip add in the drawer) only adds a label; it never
+  moved sentences, so there is nothing precise to surface — fallback is correct.
+
+A second caveat: only the merged source's **primary name** gets deterministic
+lineage. A manual merge / fold also rolls the source's _own pre-existing
+aliases_ into the survivor (`mergeAliases` / fold lines 337–338), but the
+journal records `sourceName` = the source's primary name only. Unlinking one of
+those secondary sub-aliases finds no journal match and falls back to
+`chapterCast`. Acceptable — those sub-aliases never had sentences attributed
+under their own id, so the precise set is the same as the primary's and the
+fallback degrades gracefully rather than breaking.
 
 Documented in the journal module + `cast-aliases.ts` headers so a future reader
 doesn't mistake the fallback for an omission.
