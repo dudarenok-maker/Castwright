@@ -113,19 +113,7 @@ at the bottom of this bucket.)
 - _Benefit (user / strategic):_ "produce this book overnight and tell me when it's exported" becomes a one-line agent prompt; aligns Castwright with the agent-first direction of every major harness, and the MCP pipeline e2e doubles as the missing whole-pipeline integration test.
 _Full detail + acceptance:_ [#721](https://github.com/dudarenok-maker/Castwright/issues/721).
 
-### Listener experience
-
-#### `fs-15` — Continue listening: cross-book listening history + progress sync ([#462](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462))
-
-- _What:_ Aggregate the per-book server-persisted resume positions into a **"Continue listening"** surface (books library and/or a landing rail) that jumps straight to the most-recently-played position across **any** book in one tap — a cross-book **listening history**. Builds on the now-shipped two-way progress sync (`srv-34` client-`listenedAt` compare-and-set + the companion app's `ResumeSyncService`), so the history and the resume point stay consistent whether the position was set in the web app **or** on the Android companion.
-- _Benefit (user):_ one-tap re-entry into whatever you were last listening to, the same on web and the companion app; rewards the multi-book workflow that's already a first-class invariant.
-_Full detail + acceptance:_ [#462](https://github.com/dudarenok-maker/AudioBook-Generator/issues/462).
-
-#### `fs-16` — Listening-stats dashboard ([#463](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463))
-
-- _What:_ Derive and display listening statistics from the existing per-book progress records: total hours listened, books finished, per-book completion %, a simple streak. Lightweight dashboard (own view or an Account/library card).
-- _Benefit (user):_ engagement + a sense of progress through long series.
-_Full detail + acceptance:_ [#463](https://github.com/dudarenok-maker/AudioBook-Generator/issues/463).
+_(fs-15 + fs-16 shipped — cross-book "Continue listening" rail + `#/stats` dashboard; see [plan 212](features/212-fs15-fs16-listening-stats.md). Companion reporter = Wave H follow-up.)_
 
 ### Voice & cast
 
