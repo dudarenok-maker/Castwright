@@ -75,20 +75,29 @@ jobs:
       - name: Build
         run: npm run build
 
-  # Build the installable companion APK ONCE (versioned in lockstep via
-  # bump-version.mjs → pubspec) and hand it to `publish` as a workflow artifact.
-  # `publish` both bundles it INTO the server zip (so the in-app "Download .apk"
-  # button works straight from the install) and attaches it as a standalone
-  # release asset. Building here (not inside publish) keeps the Flutter toolchain
-  # off the zip job and lets the APK build run in parallel with verify.
+  # Build the companion artifacts ONCE (versioned in lockstep via
+  # bump-version.mjs → pubspec) and hand them to `publish` as a workflow
+  # artifact. Two parallel channels from one signed build:
+  #   - the sideload APK, which `publish` bundles INTO the server zip (so the
+  #     in-app "Download .apk" button works straight from the install) AND
+  #     attaches as a standalone release asset;
+  #   - the Google Play AAB, attached as a standalone release asset for the
+  #     Play internal/closed testing track.
+  # Building here (not inside publish) keeps the Flutter toolchain off the zip
+  # job and lets the build run in parallel with verify.
   companion-apk-build:
-    name: Build companion APK
+    name: Build companion APK + AAB
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/android
+    # Expose whether the build was signed with the real upload key so `publish`
+    # only attaches the AAB when it's an actual Play-uploadable artifact (a
+    # debug-signed AAB is useless — Play rejects it).
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
     steps:
       - uses: actions/checkout@v6
       - uses: subosito/flutter-action@v2
@@ -96,22 +105,60 @@ jobs:
           channel: stable
           flutter-version: 3.44.1
           cache: true
+      # app-11 release signing in CI: materialise the git-ignored upload keystore
+      # + key.properties from repo secrets so the released APK + AAB are signed
+      # with the STABLE upload key (Play App Signing). Without the secret (forks,
+      # or before the maintainer adds it) the release build falls back to debug
+      # signing exactly as before — the AAB is then NOT attached (see `signed`).
+      # Required secrets: ANDROID_UPLOAD_KEYSTORE_BASE64 (base64 of
+      # upload-keystore.jks), ANDROID_UPLOAD_KEYSTORE_PASSWORD,
+      # ANDROID_UPLOAD_KEY_PASSWORD, ANDROID_UPLOAD_KEY_ALIAS.
+      - name: Wire upload keystore (release signing)
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::warning::No ANDROID_UPLOAD_KEYSTORE_BASE64 secret — release APK/AAB will be DEBUG-signed and the AAB will NOT be attached (Play rejects debug-signed bundles). Add the upload-keystore secrets to ship a Play artifact."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          {
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=upload-keystore.jks"
+          } > android/key.properties
+          echo "Wired upload keystore — release APK + AAB are upload-key-signed."
+          echo "signed=true" >> "$GITHUB_OUTPUT"
       - run: flutter pub get
       - run: flutter build apk --release
+      - run: flutter build appbundle --release
       - name: Stage + checksum
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk \
             "castwright-${{ github.ref_name }}.apk"
+          cp build/app/outputs/bundle/release/app-release.aab \
+            "castwright-${{ github.ref_name }}.aab"
           shasum -a 256 "castwright-${{ github.ref_name }}.apk" \
             > "castwright-${{ github.ref_name }}.apk.sha256"
-          cat "castwright-${{ github.ref_name }}.apk.sha256"
-      - name: Upload APK artifact
+          shasum -a 256 "castwright-${{ github.ref_name }}.aab" \
+            > "castwright-${{ github.ref_name }}.aab.sha256"
+          cat "castwright-${{ github.ref_name }}.apk.sha256" \
+            "castwright-${{ github.ref_name }}.aab.sha256"
+      - name: Upload companion artifacts
         uses: actions/upload-artifact@v4
         with:
           name: companion-apk
           path: |
             apps/android/castwright-${{ github.ref_name }}.apk
             apps/android/castwright-${{ github.ref_name }}.apk.sha256
+            apps/android/castwright-${{ github.ref_name }}.aab
+            apps/android/castwright-${{ github.ref_name }}.aab.sha256
           retention-days: 1
 
   # Publish: builds the zip + SHA-256 on Ubuntu (the zip is platform-
@@ -224,6 +271,19 @@ jobs:
           gh release upload "${{ github.ref_name }}" \
             "companion-apk/castwright-${{ github.ref_name }}.apk" \
             "companion-apk/castwright-${{ github.ref_name }}.apk.sha256" --clobber
+
+      - name: Attach companion AAB to release (Google Play)
+        # The Play App Bundle for the internal/closed testing track. Attached only
+        # when the build was signed with the real upload key (see the build job's
+        # `signed` output) — a debug-signed AAB is not Play-uploadable. NOT bundled
+        # into the server zip: the zip serves the APK; the AAB is a Play artifact.
+        if: needs.companion-apk-build.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            "companion-apk/castwright-${{ github.ref_name }}.aab" \
+            "companion-apk/castwright-${{ github.ref_name }}.aab.sha256" --clobber
 
   # plan 188 / app-12 prep — build the companion for iOS UNSIGNED so the release
   # pathway exists + the iOS build is gated each release. An installable .ipa

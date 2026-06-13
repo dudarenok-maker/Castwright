@@ -8,8 +8,15 @@
 #     -validity 10000 -alias upload
 # Then point storeFile at it (path relative to android/app, or absolute).
 #
-# In CI, write this file from repository secrets before `flutter build apk --release`
-# and base64-decode the keystore — never commit either.
+# In CI (.github/workflows/release.yml) this file + the keystore are materialised
+# from repository secrets before the release build, so the released APK + AAB are
+# signed with the upload key. Set these four repo secrets (Settings → Secrets and
+# variables → Actions), or via `gh secret set`:
+#   ANDROID_UPLOAD_KEYSTORE_BASE64    # base64 of upload-keystore.jks
+#   ANDROID_UPLOAD_KEYSTORE_PASSWORD
+#   ANDROID_UPLOAD_KEY_PASSWORD
+#   ANDROID_UPLOAD_KEY_ALIAS          # = upload
+# Never commit the keystore or this file.
 
 storePassword=changeit
 keyPassword=changeit

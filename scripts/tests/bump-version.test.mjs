@@ -479,12 +479,17 @@ test('pubspec version helpers round-trip with a monotonic build number', () => {
     mkdirSync(dirname(p), { recursive: true });
     writeFileSync(p, 'name: x\nversion: 1.0.0+1\nenvironment:\n  sdk: ^3.0.0\n');
     assert.equal(readPubspecVersion(dir), '1.0.0'); // drops the +build
-    assert.equal(pubspecBuildNumber('1.6.0'), 10600);
-    assert.equal(pubspecBuildNumber('2.13.4'), 21304);
+    // ×1000 reserves a 3-digit build-iteration band (base+1, base+2, … for
+    // successive Play uploads of the same marketing version) without colliding
+    // with the next patch's base.
+    assert.equal(pubspecBuildNumber('1.6.0'), 10600000);
+    assert.equal(pubspecBuildNumber('2.13.4'), 21304000);
+    // Iteration band stays below the next patch's base — no overlap.
+    assert.ok(pubspecBuildNumber('1.6.0') + 999 < pubspecBuildNumber('1.6.1'));
 
     writePubspecVersion(dir, '1.6.0');
     assert.equal(readPubspecVersion(dir), '1.6.0');
-    assert.match(readFileSync(p, 'utf8'), /^version: 1\.6\.0\+10600$/m);
+    assert.match(readFileSync(p, 'utf8'), /^version: 1\.6\.0\+10600000$/m);
     assert.match(readFileSync(p, 'utf8'), /sdk: \^3\.0\.0/); // other lines survive
   } finally {
     rmSync(dir, { recursive: true, force: true });
