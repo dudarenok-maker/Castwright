@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/domain/home_shelf.dart';
 import 'package:castwright/src/ui/home_screen.dart';
+import 'package:castwright/src/brand.dart';
 
 ShelfBook sb(String id, {String? lastPlayedAt, String updatedAt = 't'}) =>
     ShelfBook(
@@ -42,5 +43,14 @@ void main() {
       home: HomeScreen(books: [sb('x')], onOpenBook: (_) {}),
     ));
     expect(find.byKey(const Key('continue-empty')), findsOneWidget);
+  });
+
+  testWidgets('shows the brand tagline in the empty state', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: HomeScreen(books: [sb('x')], onOpenBook: (_) {}),
+    ));
+    final tagline = find.byKey(const Key('home-tagline'));
+    expect(tagline, findsOneWidget);
+    expect(tester.widget<Text>(tagline).data, brandTaglineShort);
   });
 }
