@@ -10,6 +10,7 @@ import type { Stage } from './types';
      #/account                           → { kind: 'account' }
      #/admin                             → { kind: 'admin' }
                                            (#/worktrees kept as an inbound alias)
+     #/stats                             → { kind: 'stats' }
      #/help?code=                        → { kind: 'help', focusCode? }
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
      #/books/:bookId/confirm?profile=    → { kind: 'confirm',   bookId,

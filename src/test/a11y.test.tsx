@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { axe } from 'jest-axe';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -19,6 +19,7 @@ import { BookLibraryView } from '../views/book-library';
 import { UploadView } from '../views/upload';
 import { ConfirmCastView } from '../views/confirm-cast';
 import { ListenView } from '../views/listen';
+import { StatsView } from '../views/stats';
 
 import { accountSlice } from '../store/account-slice';
 import { librarySlice } from '../store/library-slice';
@@ -47,6 +48,28 @@ vi.mock('../lib/api', () => ({
     checkCompanionApk: () => Promise.resolve({ available: false, sizeBytes: null }),
     // Book-library view fetches the continue-listening rail on mount.
     getContinueListening: () => new Promise(() => {}),
+    // Stats view fetches the library stats on mount; seed a small payload
+    // so it renders real content (lede, sparkbars, progress rows, series)
+    // for axe to scan rather than the loading state.
+    getLibraryStats: () =>
+      Promise.resolve({
+        totalListenedSec: 47 * 3600 + 12 * 60,
+        booksFinished: 6,
+        perBook: [
+          { bookId: 'b-coalfall', title: 'The Coalfall Commission', completionPct: 1, finished: true },
+          { bookId: 'b-hollow', title: 'Hollow Tide', completionPct: 0.78, finished: false },
+          { bookId: 'b-never2', title: 'Neverseen · Book 2', completionPct: 0.54, finished: false },
+        ],
+        perSeries: [
+          { series: 'Neverseen', finishedCount: 1, importedCount: 3 },
+          { series: 'Coalfall', finishedCount: 1, importedCount: 2 },
+        ],
+        byDay: [
+          { date: '2026-06-11', seconds: 1200 },
+          { date: '2026-06-12', seconds: 1800 },
+          { date: '2026-06-13', seconds: 3600 },
+        ],
+      }),
   },
 }));
 
@@ -231,6 +254,18 @@ describe('a11y — confirm-cast view', () => {
         />
       </Provider>,
     );
+    expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
+  });
+});
+
+describe('a11y — stats view', () => {
+  it('has no axe violations', async () => {
+    /* No store needed — StatsView reads only from api.getLibraryStats
+       (mocked above) and an injected `today`. */
+    const { container } = render(<StatsView today="2026-06-13" />);
+    // Wait for the fetch to resolve so axe scans the real content, not the
+    // loading state.
+    await screen.findByTestId('stats-lede');
     expect(await axe(container, AXE_OPTS)).toHaveNoViolations();
   });
 });
