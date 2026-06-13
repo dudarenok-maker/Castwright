@@ -23,6 +23,7 @@ import {
   castReuseCarryoverJsonPath,
   changeLogJsonPath,
   listenProgressJsonPath,
+  listenStatsJsonPath,
   manuscriptEditsJsonPath,
   queueJsonPath,
   revisionsJsonPath,
@@ -30,6 +31,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withKeyLock } from '../workspace/file-lock.js';
+import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
@@ -1405,5 +1408,28 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
   } catch (e) {
     console.error('[book-state] PUT listen-progress failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to write listen-progress.' });
+  }
+});
+
+/* fs-16 — PUT per-book listening stats. Body { sessionId, days:[{date,seconds}] }.
+   Read-modify-write under a per-book key lock; slots upsert via max(). */
+bookStateRouter.put('/:bookId/listen-stats', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const reason = validateStatsBody(req.body, Date.now());
+    if (reason) return res.status(400).json({ error: reason });
+    const { sessionId, days } = req.body as StatsPutBody;
+    const path = listenStatsJsonPath(located.bookDir);
+    const written = await withKeyLock(`listen-stats:${located.bookDir}`, async () => {
+      const current = (await readJson<ListenStatsFile>(path)) ?? emptyStatsFile();
+      const next = mergeStatsDays(current, sessionId, days);
+      await writeJsonAtomic(path, next);
+      return next;
+    });
+    res.json(written);
+  } catch (e) {
+    console.error('[book-state] PUT listen-stats failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to write listen-stats.' });
   }
 });

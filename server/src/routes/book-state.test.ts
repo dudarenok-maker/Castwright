@@ -1898,3 +1898,30 @@ describe('book-state router — GET defaults narratorCredit to Castwright', () =
     expect(res.body.state.narratorCredit).toBe('Jane Narrator');
   });
 });
+
+describe('PUT /:bookId/listen-stats', () => {
+  it('writes a session slot, idempotent + monotonic (max)', async () => {
+    let res = await request(app).put(`/api/books/${bookId}/listen-stats`)
+      .send({ sessionId: 's1', days: [{ date: '2026-06-13', seconds: 120 }] });
+    expect(res.status).toBe(200);
+    res = await request(app).put(`/api/books/${bookId}/listen-stats`)
+      .send({ sessionId: 's1', days: [{ date: '2026-06-13', seconds: 30 }] }); // stale, lower
+    expect(res.status).toBe(200);
+    const day = res.body.perDay.find((d: any) => d.date === '2026-06-13');
+    expect(day.sessions.find((s: any) => s.sessionId === 's1').seconds).toBe(120);
+  });
+  it('sums distinct sessions on the same day', async () => {
+    await request(app).put(`/api/books/${bookId}/listen-stats`).send({ sessionId: 'a', days: [{ date: '2026-06-12', seconds: 100 }] });
+    const res = await request(app).put(`/api/books/${bookId}/listen-stats`).send({ sessionId: 'b', days: [{ date: '2026-06-12', seconds: 50 }] });
+    const day = res.body.perDay.find((d: any) => d.date === '2026-06-12');
+    expect(day.sessions).toHaveLength(2);
+  });
+  it('400s on a bad body', async () => {
+    const res = await request(app).put(`/api/books/${bookId}/listen-stats`).send({ sessionId: '', days: [] });
+    expect(res.status).toBe(400);
+  });
+  it('404s on an unknown book', async () => {
+    const res = await request(app).put(`/api/books/does-not-exist/listen-stats`).send({ sessionId: 's', days: [] });
+    expect(res.status).toBe(404);
+  });
+});
