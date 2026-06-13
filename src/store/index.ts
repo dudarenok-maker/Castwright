@@ -57,6 +57,7 @@ import { upgradeSlice } from './upgrade-slice';
 import { spliceSlice } from './splice-slice';
 import { configSlice } from './config-slice';
 import { tourSlice } from './tour-slice';
+import { continueListeningSlice } from './continue-listening-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
@@ -199,6 +200,7 @@ export const store = configureStore({
     splice: spliceSlice.reducer,
     config: configSlice.reducer,
     tour: tourSlice.reducer,
+    continueListening: continueListeningSlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({
