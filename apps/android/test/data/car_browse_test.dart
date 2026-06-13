@@ -86,6 +86,41 @@ void main() {
       final items = await makeBrowse().getChildren(bookMediaId('b1'));
       expect(items.map((i) => i.id), [chapterMediaId('b1', 'u1')]);
     });
+
+    test('current tab is rotated to start at the playing chapter (wrapping)',
+        () async {
+      final chs = [for (var i = 1; i <= 5; i++) _ch('u$i', i, 'C$i', 100)];
+      final browse = CarBrowse(
+        allBooks: () async => [_book('b', 'Book', 'A')],
+        chaptersForBook: (_) async => chs,
+        current: () async => const CarCurrent(bookId: 'b', chapterUuid: 'u3'),
+        play: (_, _) async {},
+      );
+
+      final items = await browse.getChildren(currentMediaId);
+      expect(items.map((i) => i.id), [
+        chapterMediaId('b', 'u3'),
+        chapterMediaId('b', 'u4'),
+        chapterMediaId('b', 'u5'),
+        chapterMediaId('b', 'u1'),
+        chapterMediaId('b', 'u2'),
+      ]);
+    });
+
+    test('browsing a book via Library keeps natural chapter order (no rotation)',
+        () async {
+      final chs = [for (var i = 1; i <= 5; i++) _ch('u$i', i, 'C$i', 100)];
+      final browse = CarBrowse(
+        allBooks: () async => [_book('b', 'Book', 'A')],
+        chaptersForBook: (_) async => chs,
+        current: () async => const CarCurrent(bookId: 'b', chapterUuid: 'u3'),
+        play: (_, _) async {},
+      );
+
+      final items = await browse.getChildren(bookMediaId('b'));
+      expect(items.map((i) => i.id),
+          [for (var i = 1; i <= 5; i++) chapterMediaId('b', 'u$i')]);
+    });
   });
 
   group('CarBrowse library', () {
@@ -94,6 +129,12 @@ void main() {
       expect(items.map((i) => i.id), [bookMediaId('b1')]); // b2 fully evicted → hidden
       expect(items.single.artist, 'Shannon');
       expect(items.single.playable, isFalse);
+    });
+
+    test('library rows carry a content:// cover uri (AA-readable)', () async {
+      final items = await makeBrowse().getChildren(libraryMediaId);
+      expect(items.single.artUri?.scheme, 'content');
+      expect(items.single.artUri?.queryParameters['path'], '/t/b1.jpg');
     });
   });
 

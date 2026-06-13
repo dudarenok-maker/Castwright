@@ -130,6 +130,20 @@ void main() {
       await next.timeout(const Duration(seconds: 1)); // completes ⇒ AA notified
     });
 
+    test('now-playing art is a content:// uri (readable by the AA host)',
+        () async {
+      final handler = CompanionAudioHandler();
+      final controller = makeController();
+      handler.attach(controller);
+      await controller.openBook('b1', artPath: '/data/thumbs/b1.jpg');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(handler.mediaItem.value?.artUri?.scheme, 'content');
+      expect(handler.mediaItem.value?.artUri?.queryParameters['path'],
+          '/data/thumbs/b1.jpg');
+      await controller.dispose();
+    });
+
     test('signals the current tab changed when the playing chapter changes',
         () async {
       final handler = CompanionAudioHandler();
