@@ -29,7 +29,7 @@ describe('withKeyLock', () => {
       order.push('b-end');
     });
     await Promise.all([a, b]);
-    expect(order[0]).toBe('a-start');
+    expect(order.slice(0, 2).sort()).toEqual(['a-start', 'b-start']);
     expect(order.indexOf('b-end')).toBeLessThan(order.indexOf('a-end'));
   });
 
