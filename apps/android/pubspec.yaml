@@ -17,8 +17,11 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
 # Kept in lockstep with the root/server version by scripts/bump-version.mjs
-# (build number = M*10000 + m*100 + p, monotonic). Plan 188.
-version: 1.6.0+10600
+# (versionCode = (M*10000 + m*100 + p) * 1000, monotonic; the ×1000 reserves a
+# 3-digit build-iteration band so successive Play uploads of the same marketing
+# version take base+1, base+2, … via `flutter build … --build-number=<N>`).
+# Plan 188.
+version: 1.6.0+10600000
 
 environment:
   sdk: ^3.12.1

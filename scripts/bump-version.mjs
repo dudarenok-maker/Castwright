@@ -128,10 +128,17 @@ export function readPubspecVersion(repoRootDir) {
   return m ? m[2].split('+')[0] : null;
 }
 
-/** Deterministic, monotonic build number from a semver: M*10000 + m*100 + p. */
+/** Deterministic, monotonic versionCode base from a semver. The semver maps to
+ *  `M*10000 + m*100 + p`, then `×1000` to reserve the low three digits as a
+ *  build-ITERATION band. The tagged release takes the base (iteration 0); a
+ *  successive Play upload of the *same* marketing version (e.g. an internal-test
+ *  build) takes `base + 1`, `base + 2`, … — distinct, strictly-increasing
+ *  versionCodes that never collide with the next patch's base. Play forbids
+ *  reusing a versionCode, so this is what lets you iterate test builds without a
+ *  marketing bump. 1.6.0 → 10600000; 1.6.1 → 10601000 (999 iteration slots). */
 export function pubspecBuildNumber(version) {
   const [maj, min, pat] = version.split('.').map((n) => parseInt(n, 10) || 0);
-  return maj * 10000 + min * 100 + pat;
+  return (maj * 10000 + min * 100 + pat) * 1000;
 }
 
 export function writePubspecVersion(repoRootDir, version) {

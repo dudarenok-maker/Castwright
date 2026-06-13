@@ -98,6 +98,25 @@ Verify a build with `keytool -printcert -jarfile app-release.aab` (AABs are
 JAR-signed, so `keytool` reads them; APKs are v2-signed — use
 `apksigner verify --print-certs` for those).
 
+### Iterating internal-test builds (no marketing bump)
+
+Play forbids reusing a **versionCode**, so a second upload of the *same*
+marketing version needs a higher code. `bump-version.mjs` derives the
+versionCode as `(M*10000 + m*100 + p) * 1000` — the `×1000` reserves a 3-digit
+**iteration band** (999 slots) below the next patch's base. So for `1.6.0` the
+base is `10600000`; iterate internal-test uploads by overriding the build
+number:
+
+```sh
+flutter build appbundle --release --build-number=10600001   # 2nd 1.6.0 upload
+flutter build appbundle --release --build-number=10600002   # 3rd, etc.
+```
+
+The tagged **release** uses the base (iteration 0). To ship a tested build to
+production, **promote** the chosen internal build in Play Console (same
+versionCode — no re-upload) rather than re-cutting iteration 0, or bump the
+patch. The iteration band never overlaps the next patch (`1.6.1 → 10601000`).
+
 **versionCode** is derived monotonically from the semver by
 `scripts/bump-version.mjs` (`M*10000 + m*100 + p`, e.g. `1.6.0 → 10600`), so
 each released version uploads cleanly. Play forbids reusing a versionCode —

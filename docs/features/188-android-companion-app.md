@@ -827,7 +827,13 @@ top for the running status):
     Release (skipped, debug-fallback, when the secret is absent). Wiring the
     upload key into release CI also fixes a latent sideload bug: hosted-runner
     debug keystores drift per run, so debug-signed sideload APKs couldn't update
-    in place across releases — upload-key signing gives a stable identity. Play caveats:
+    in place across releases — upload-key signing gives a stable identity.
+    **versionCode iteration band:** `bump-version.mjs` now derives the
+    versionCode as `(M*10000+m*100+p)*1000` (1.6.0 → 10600000); the ×1000
+    reserves 999 iteration slots so successive Play uploads of the *same*
+    marketing version take `base+1, base+2, …`
+    (`flutter build … --build-number=<N>`) without colliding with the next
+    patch's base — Play forbids reusing a versionCode. Play caveats:
     Android Auto (`app-9`) needs a separate Cars review; App Links (`app-17`)
     must pin the **Play app-signing** key fingerprint in `assetlinks.json`, read
     from Console post-enrollment. Full build/sign/upload doc lives in
