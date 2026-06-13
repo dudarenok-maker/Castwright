@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { completionPct, isFinished, buildLibraryStats, buildContinueListening } from './listen-stats-aggregate';
+import { completionPct, isFinished, buildLibraryStats, buildContinueListening } from './listen-stats-aggregate.js';
 
 const ch = [{ id: 1, duration: '10:00' }, { id: 2, duration: '10:00' }];
 

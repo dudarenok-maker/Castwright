@@ -5,8 +5,8 @@
 import {
   bookListenableSeconds, secondsBeforeChapter, finalListenableChapter, parseDurationToSec,
   type DurChapter,
-} from './chapter-durations';
-import { sumAllSeconds, byDayTotals, type ListenStatsFile } from './listen-stats';
+} from './chapter-durations.js';
+import { sumAllSeconds, byDayTotals, type ListenStatsFile } from './listen-stats.js';
 
 const NOISE_FLOOR_SEC = 5;
 const FINISH_TAIL_SEC = 30;
@@ -71,7 +71,7 @@ export function buildLibraryStats(books: BookStatsInput[]): LibraryStats {
     booksFinished: perBook.filter((p) => p.finished).length,
     perBook,
     perSeries: [...seriesMap.entries()].map(([series, v]) => ({ series, ...v })),
-    byDay: Object.entries(totals).map(([date, seconds]) => ({ date, seconds }))
+    byDay: Object.entries(totals).map(([date, seconds]) => ({ date, seconds: seconds as number }))
       .sort((a, b) => (a.date < b.date ? -1 : 1)),
   };
 }
