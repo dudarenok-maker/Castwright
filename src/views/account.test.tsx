@@ -19,6 +19,15 @@ vi.mock('../lib/api', () => ({
     getUserSettings: vi.fn(),
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
+    /* UpgradeCard (rendered inside AccountView) checks for updates on mount;
+       fail-open so these tests don't touch the network. */
+    getUpdateStatus: vi.fn().mockResolvedValue({
+      reachable: false,
+      currentVersion: '',
+      latestVersion: null,
+      updateAvailable: false,
+      url: null,
+    }),
   },
 }));
 

@@ -18,6 +18,8 @@ import {
 } from '../store/upgrade-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { useAppInfo } from '../lib/use-app-info';
+import { api } from '../lib/api';
+import type { UpdateStatus } from '../lib/types';
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
@@ -42,6 +44,27 @@ export function UpgradeCard() {
   const fileRef = useRef<HTMLInputElement>(null);
   const runningVersion = info?.appVersion ?? '…';
 
+  /* Best-effort "is a newer release out?" check. Fail-open: on an unreachable
+     source (private repo / offline) `update` stays null OR carries
+     reachable:false, and the card shows only the running version — no error. */
+  const [update, setUpdate] = useState<UpdateStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void api
+      .getUpdateStatus()
+      .then((u) => {
+        if (alive) setUpdate(u);
+      })
+      .catch(() => {
+        /* fail-open — leave update null, show running version only */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const updateAvailable = update?.reachable === true && update.updateAvailable;
+  const upToDate = update?.reachable === true && !update.updateAvailable;
+
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) void dispatch(stageUpgrade(file));
@@ -54,6 +77,31 @@ export function UpgradeCard() {
         You&apos;re running <span className="font-semibold">v{runningVersion}</span>
         {info?.sidecarVersion ? ` · sidecar v${info.sidecarVersion}` : ''}.
       </p>
+
+      {updateAvailable && (
+        <p data-testid="update-available" className="mt-2 text-sm font-semibold text-magenta">
+          Update available: v{update?.latestVersion}
+          {update?.url ? (
+            <>
+              {' '}
+              <a
+                href={update.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium underline"
+              >
+                View release
+              </a>
+            </>
+          ) : null}
+        </p>
+      )}
+      {upToDate && (
+        <p data-testid="up-to-date" className="mt-2 text-sm text-ink/65">
+          You&apos;re up to date.
+        </p>
+      )}
+
       <p className="mt-1 text-xs">
         <Link to="/release-notes" className="font-medium text-magenta hover:underline">
           See what&apos;s new
@@ -65,9 +113,17 @@ export function UpgradeCard() {
         type="button"
         onClick={() => fileRef.current?.click()}
         disabled={upgrade.status === 'staging' || upgrade.status === 'applying'}
-        className="mt-3 min-h-[44px] sm:min-h-0 rounded-xl bg-magenta px-4 py-2 text-sm font-medium text-white hover:bg-magenta/90 disabled:opacity-50"
+        className={
+          updateAvailable
+            ? 'mt-3 min-h-[44px] sm:min-h-0 rounded-xl bg-magenta px-4 py-2 text-sm font-medium text-white hover:bg-magenta/90 disabled:opacity-50'
+            : 'mt-3 min-h-[44px] sm:min-h-0 rounded-xl border border-ink/15 px-4 py-2 text-sm font-medium text-ink/70 hover:bg-ink/5 disabled:opacity-50'
+        }
       >
-        {upgrade.status === 'staging' ? 'Validating…' : 'Apply update package…'}
+        {upgrade.status === 'staging'
+          ? 'Validating…'
+          : updateAvailable
+            ? 'Apply update package…'
+            : 'Apply a package manually…'}
       </button>
 
       {upgrade.status === 'error' && upgrade.error && (

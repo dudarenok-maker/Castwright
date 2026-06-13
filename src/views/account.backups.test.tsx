@@ -27,6 +27,14 @@ vi.mock('../lib/api', () => ({
     backupBookNow: vi.fn(),
     restoreBookBackup: vi.fn(),
     getLibrary: vi.fn(),
+    /* UpgradeCard (inside AccountView) checks for updates on mount; fail-open. */
+    getUpdateStatus: vi.fn().mockResolvedValue({
+      reachable: false,
+      currentVersion: '',
+      latestVersion: null,
+      updateAvailable: false,
+      url: null,
+    }),
   },
 }));
 
