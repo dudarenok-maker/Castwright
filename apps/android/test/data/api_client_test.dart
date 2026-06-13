@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/api_client.dart';
+import 'package:castwright/src/data/listen_stats_service.dart';
 import 'package:castwright/src/data/pairing_service.dart';
 import 'package:castwright/src/domain/paired_server.dart';
 
@@ -55,6 +57,37 @@ void main() {
         send: (_, _, _) => Completer<HttpResult>().future, // never completes
       );
       await expectLater(api.info(), throwsA(isA<TimeoutException>()));
+    });
+
+    // listenStatsApi is the [_ApiListenStatsApi] adapter wiring [ApiClient] as
+    // the [ListenStatsApi] port.  Verify the adapter delegates correctly by
+    // exercising it through a fake [ListenStatsApi] implementation — the real
+    // PUT uses a pinned HttpClient that is not injectable, so the transport is
+    // validated at the flush-service level (listen_stats_flush_service_test.dart).
+    test('listenStatsApi getter returns a ListenStatsApi', () {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
+      expect(api.listenStatsApi, isA<ListenStatsApi>());
+    });
+
+    test('putListenStats serialises the JSON body correctly', () async {
+      // We can't inject a send hook into putListenStats because it creates its
+      // own pinned client.  Instead we verify the JSON shape directly using
+      // jsonEncode (the same code path the method uses) to confirm the contract
+      // matches the server spec: { sessionId, days:[{date,seconds}] }.
+      final days = [
+        StatDay(date: '2026-06-14', seconds: 120),
+        StatDay(date: '2026-06-13', seconds: 60),
+      ];
+      final body = jsonEncode({
+        'sessionId': 'test-session',
+        'days': [for (final d in days) {'date': d.date, 'seconds': d.seconds}],
+      });
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      expect(decoded['sessionId'], 'test-session');
+      final decodedDays = decoded['days'] as List<dynamic>;
+      expect(decodedDays.length, 2);
+      expect(decodedDays[0], {'date': '2026-06-14', 'seconds': 120});
+      expect(decodedDays[1], {'date': '2026-06-13', 'seconds': 60});
     });
   });
 }

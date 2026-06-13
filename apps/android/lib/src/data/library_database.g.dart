@@ -1430,12 +1430,327 @@ class PlaybackCompanion extends UpdateCompanion<PlaybackData> {
   }
 }
 
+class $ListenStatsBufferTable extends ListenStatsBuffer
+    with TableInfo<$ListenStatsBufferTable, ListenStatsBufferData> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ListenStatsBufferTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _sessionIdMeta = const VerificationMeta(
+    'sessionId',
+  );
+  @override
+  late final GeneratedColumn<String> sessionId = GeneratedColumn<String>(
+    'session_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _bookIdMeta = const VerificationMeta('bookId');
+  @override
+  late final GeneratedColumn<String> bookId = GeneratedColumn<String>(
+    'book_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dateMeta = const VerificationMeta('date');
+  @override
+  late final GeneratedColumn<String> date = GeneratedColumn<String>(
+    'date',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _secondsMeta = const VerificationMeta(
+    'seconds',
+  );
+  @override
+  late final GeneratedColumn<int> seconds = GeneratedColumn<int>(
+    'seconds',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [sessionId, bookId, date, seconds];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'listen_stats_buffer';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<ListenStatsBufferData> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('session_id')) {
+      context.handle(
+        _sessionIdMeta,
+        sessionId.isAcceptableOrUnknown(data['session_id']!, _sessionIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_sessionIdMeta);
+    }
+    if (data.containsKey('book_id')) {
+      context.handle(
+        _bookIdMeta,
+        bookId.isAcceptableOrUnknown(data['book_id']!, _bookIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_bookIdMeta);
+    }
+    if (data.containsKey('date')) {
+      context.handle(
+        _dateMeta,
+        date.isAcceptableOrUnknown(data['date']!, _dateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dateMeta);
+    }
+    if (data.containsKey('seconds')) {
+      context.handle(
+        _secondsMeta,
+        seconds.isAcceptableOrUnknown(data['seconds']!, _secondsMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_secondsMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {sessionId, bookId, date};
+  @override
+  ListenStatsBufferData map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ListenStatsBufferData(
+      sessionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}session_id'],
+      )!,
+      bookId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}book_id'],
+      )!,
+      date: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}date'],
+      )!,
+      seconds: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}seconds'],
+      )!,
+    );
+  }
+
+  @override
+  $ListenStatsBufferTable createAlias(String alias) {
+    return $ListenStatsBufferTable(attachedDatabase, alias);
+  }
+}
+
+class ListenStatsBufferData extends DataClass
+    implements Insertable<ListenStatsBufferData> {
+  final String sessionId;
+  final String bookId;
+  final String date;
+  final int seconds;
+  const ListenStatsBufferData({
+    required this.sessionId,
+    required this.bookId,
+    required this.date,
+    required this.seconds,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['session_id'] = Variable<String>(sessionId);
+    map['book_id'] = Variable<String>(bookId);
+    map['date'] = Variable<String>(date);
+    map['seconds'] = Variable<int>(seconds);
+    return map;
+  }
+
+  ListenStatsBufferCompanion toCompanion(bool nullToAbsent) {
+    return ListenStatsBufferCompanion(
+      sessionId: Value(sessionId),
+      bookId: Value(bookId),
+      date: Value(date),
+      seconds: Value(seconds),
+    );
+  }
+
+  factory ListenStatsBufferData.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ListenStatsBufferData(
+      sessionId: serializer.fromJson<String>(json['sessionId']),
+      bookId: serializer.fromJson<String>(json['bookId']),
+      date: serializer.fromJson<String>(json['date']),
+      seconds: serializer.fromJson<int>(json['seconds']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'sessionId': serializer.toJson<String>(sessionId),
+      'bookId': serializer.toJson<String>(bookId),
+      'date': serializer.toJson<String>(date),
+      'seconds': serializer.toJson<int>(seconds),
+    };
+  }
+
+  ListenStatsBufferData copyWith({
+    String? sessionId,
+    String? bookId,
+    String? date,
+    int? seconds,
+  }) => ListenStatsBufferData(
+    sessionId: sessionId ?? this.sessionId,
+    bookId: bookId ?? this.bookId,
+    date: date ?? this.date,
+    seconds: seconds ?? this.seconds,
+  );
+  ListenStatsBufferData copyWithCompanion(ListenStatsBufferCompanion data) {
+    return ListenStatsBufferData(
+      sessionId: data.sessionId.present ? data.sessionId.value : this.sessionId,
+      bookId: data.bookId.present ? data.bookId.value : this.bookId,
+      date: data.date.present ? data.date.value : this.date,
+      seconds: data.seconds.present ? data.seconds.value : this.seconds,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ListenStatsBufferData(')
+          ..write('sessionId: $sessionId, ')
+          ..write('bookId: $bookId, ')
+          ..write('date: $date, ')
+          ..write('seconds: $seconds')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(sessionId, bookId, date, seconds);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ListenStatsBufferData &&
+          other.sessionId == this.sessionId &&
+          other.bookId == this.bookId &&
+          other.date == this.date &&
+          other.seconds == this.seconds);
+}
+
+class ListenStatsBufferCompanion
+    extends UpdateCompanion<ListenStatsBufferData> {
+  final Value<String> sessionId;
+  final Value<String> bookId;
+  final Value<String> date;
+  final Value<int> seconds;
+  final Value<int> rowid;
+  const ListenStatsBufferCompanion({
+    this.sessionId = const Value.absent(),
+    this.bookId = const Value.absent(),
+    this.date = const Value.absent(),
+    this.seconds = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ListenStatsBufferCompanion.insert({
+    required String sessionId,
+    required String bookId,
+    required String date,
+    required int seconds,
+    this.rowid = const Value.absent(),
+  }) : sessionId = Value(sessionId),
+       bookId = Value(bookId),
+       date = Value(date),
+       seconds = Value(seconds);
+  static Insertable<ListenStatsBufferData> custom({
+    Expression<String>? sessionId,
+    Expression<String>? bookId,
+    Expression<String>? date,
+    Expression<int>? seconds,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (sessionId != null) 'session_id': sessionId,
+      if (bookId != null) 'book_id': bookId,
+      if (date != null) 'date': date,
+      if (seconds != null) 'seconds': seconds,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ListenStatsBufferCompanion copyWith({
+    Value<String>? sessionId,
+    Value<String>? bookId,
+    Value<String>? date,
+    Value<int>? seconds,
+    Value<int>? rowid,
+  }) {
+    return ListenStatsBufferCompanion(
+      sessionId: sessionId ?? this.sessionId,
+      bookId: bookId ?? this.bookId,
+      date: date ?? this.date,
+      seconds: seconds ?? this.seconds,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (sessionId.present) {
+      map['session_id'] = Variable<String>(sessionId.value);
+    }
+    if (bookId.present) {
+      map['book_id'] = Variable<String>(bookId.value);
+    }
+    if (date.present) {
+      map['date'] = Variable<String>(date.value);
+    }
+    if (seconds.present) {
+      map['seconds'] = Variable<int>(seconds.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ListenStatsBufferCompanion(')
+          ..write('sessionId: $sessionId, ')
+          ..write('bookId: $bookId, ')
+          ..write('date: $date, ')
+          ..write('seconds: $seconds, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$LibraryDatabase extends GeneratedDatabase {
   _$LibraryDatabase(QueryExecutor e) : super(e);
   $LibraryDatabaseManager get managers => $LibraryDatabaseManager(this);
   late final $BooksTable books = $BooksTable(this);
   late final $ChaptersTable chapters = $ChaptersTable(this);
   late final $PlaybackTable playback = $PlaybackTable(this);
+  late final $ListenStatsBufferTable listenStatsBuffer =
+      $ListenStatsBufferTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -1444,6 +1759,7 @@ abstract class _$LibraryDatabase extends GeneratedDatabase {
     books,
     chapters,
     playback,
+    listenStatsBuffer,
   ];
 }
 
@@ -2163,6 +2479,200 @@ typedef $$PlaybackTableProcessedTableManager =
       PlaybackData,
       PrefetchHooks Function()
     >;
+typedef $$ListenStatsBufferTableCreateCompanionBuilder =
+    ListenStatsBufferCompanion Function({
+      required String sessionId,
+      required String bookId,
+      required String date,
+      required int seconds,
+      Value<int> rowid,
+    });
+typedef $$ListenStatsBufferTableUpdateCompanionBuilder =
+    ListenStatsBufferCompanion Function({
+      Value<String> sessionId,
+      Value<String> bookId,
+      Value<String> date,
+      Value<int> seconds,
+      Value<int> rowid,
+    });
+
+class $$ListenStatsBufferTableFilterComposer
+    extends Composer<_$LibraryDatabase, $ListenStatsBufferTable> {
+  $$ListenStatsBufferTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get sessionId => $composableBuilder(
+    column: $table.sessionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get bookId => $composableBuilder(
+    column: $table.bookId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get date => $composableBuilder(
+    column: $table.date,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get seconds => $composableBuilder(
+    column: $table.seconds,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$ListenStatsBufferTableOrderingComposer
+    extends Composer<_$LibraryDatabase, $ListenStatsBufferTable> {
+  $$ListenStatsBufferTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get sessionId => $composableBuilder(
+    column: $table.sessionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get bookId => $composableBuilder(
+    column: $table.bookId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get date => $composableBuilder(
+    column: $table.date,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get seconds => $composableBuilder(
+    column: $table.seconds,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$ListenStatsBufferTableAnnotationComposer
+    extends Composer<_$LibraryDatabase, $ListenStatsBufferTable> {
+  $$ListenStatsBufferTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get sessionId =>
+      $composableBuilder(column: $table.sessionId, builder: (column) => column);
+
+  GeneratedColumn<String> get bookId =>
+      $composableBuilder(column: $table.bookId, builder: (column) => column);
+
+  GeneratedColumn<String> get date =>
+      $composableBuilder(column: $table.date, builder: (column) => column);
+
+  GeneratedColumn<int> get seconds =>
+      $composableBuilder(column: $table.seconds, builder: (column) => column);
+}
+
+class $$ListenStatsBufferTableTableManager
+    extends
+        RootTableManager<
+          _$LibraryDatabase,
+          $ListenStatsBufferTable,
+          ListenStatsBufferData,
+          $$ListenStatsBufferTableFilterComposer,
+          $$ListenStatsBufferTableOrderingComposer,
+          $$ListenStatsBufferTableAnnotationComposer,
+          $$ListenStatsBufferTableCreateCompanionBuilder,
+          $$ListenStatsBufferTableUpdateCompanionBuilder,
+          (
+            ListenStatsBufferData,
+            BaseReferences<
+              _$LibraryDatabase,
+              $ListenStatsBufferTable,
+              ListenStatsBufferData
+            >,
+          ),
+          ListenStatsBufferData,
+          PrefetchHooks Function()
+        > {
+  $$ListenStatsBufferTableTableManager(
+    _$LibraryDatabase db,
+    $ListenStatsBufferTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ListenStatsBufferTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ListenStatsBufferTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ListenStatsBufferTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> sessionId = const Value.absent(),
+                Value<String> bookId = const Value.absent(),
+                Value<String> date = const Value.absent(),
+                Value<int> seconds = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ListenStatsBufferCompanion(
+                sessionId: sessionId,
+                bookId: bookId,
+                date: date,
+                seconds: seconds,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String sessionId,
+                required String bookId,
+                required String date,
+                required int seconds,
+                Value<int> rowid = const Value.absent(),
+              }) => ListenStatsBufferCompanion.insert(
+                sessionId: sessionId,
+                bookId: bookId,
+                date: date,
+                seconds: seconds,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$ListenStatsBufferTableProcessedTableManager =
+    ProcessedTableManager<
+      _$LibraryDatabase,
+      $ListenStatsBufferTable,
+      ListenStatsBufferData,
+      $$ListenStatsBufferTableFilterComposer,
+      $$ListenStatsBufferTableOrderingComposer,
+      $$ListenStatsBufferTableAnnotationComposer,
+      $$ListenStatsBufferTableCreateCompanionBuilder,
+      $$ListenStatsBufferTableUpdateCompanionBuilder,
+      (
+        ListenStatsBufferData,
+        BaseReferences<
+          _$LibraryDatabase,
+          $ListenStatsBufferTable,
+          ListenStatsBufferData
+        >,
+      ),
+      ListenStatsBufferData,
+      PrefetchHooks Function()
+    >;
 
 class $LibraryDatabaseManager {
   final _$LibraryDatabase _db;
@@ -2173,4 +2683,6 @@ class $LibraryDatabaseManager {
       $$ChaptersTableTableManager(_db, _db.chapters);
   $$PlaybackTableTableManager get playback =>
       $$PlaybackTableTableManager(_db, _db.playback);
+  $$ListenStatsBufferTableTableManager get listenStatsBuffer =>
+      $$ListenStatsBufferTableTableManager(_db, _db.listenStatsBuffer);
 }
