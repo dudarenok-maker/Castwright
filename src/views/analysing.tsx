@@ -15,6 +15,7 @@ import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../lib/models';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
+import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
@@ -1227,6 +1228,7 @@ export function AnalysingView({
                     ))}
                   </select>
                 </label>
+                <AnalyzerModelOverrideBadge />
                 <button
                   onClick={() => setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }))}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-ink text-canvas text-xs font-semibold hover:bg-ink/90"

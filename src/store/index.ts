@@ -68,16 +68,22 @@ import { exportPollMiddleware } from './exports-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
 
 /** Persisted ui-slice keys. Stage so refresh restores the same view +
- *  chapter + drawer; model selectors so the user's per-session picks
- *  survive boot. Transient overlays (regenChapter,
- *  matchDetailFor, staleAudio, previewRegen, previewMode, ...) are
- *  deliberately omitted — restoring them would re-open dismissed
- *  modals on every refresh. */
+ *  chapter + drawer; the TTS engine pick so the chosen voice engine
+ *  survives boot. Transient overlays (regenChapter, matchDetailFor,
+ *  staleAudio, previewRegen, previewMode, ...) are deliberately omitted —
+ *  restoring them would re-open dismissed modals on every refresh.
+ *
+ *  NOTE — the analyzer model selectors (`selectedModel` /
+ *  `selectedModelExplicit`) are intentionally NOT persisted. They are a
+ *  per-run override; persisting them let an explicit pick (e.g. qwen3.5:4b
+ *  chosen to dodge a Gemini recitation block) silently shadow the saved
+ *  `analysisEngine`/`defaultAnalysisModel` on every later run, across
+ *  reloads and books, with no UI signal. Leaving them transient means a
+ *  reload reverts to the saved default; the override badge surfaces it
+ *  within a session. See src/store/persist-whitelist.test.ts. */
 export const UI_PERSIST_WHITELIST: ReadonlyArray<keyof UiState> = [
   'stage',
-  'selectedModel',
   'ttsModelKey',
-  'selectedModelExplicit',
   'ttsModelKeyExplicit',
   'themeOverride',
 ];
@@ -102,7 +108,11 @@ export const MANUSCRIPT_PERSIST_WHITELIST: ReadonlyArray<keyof ManuscriptState> 
  *  initialState, which is the safe outcome for storage we don't know how
  *  to migrate. Pair with a `migrate:` config entry to do a real
  *  field-level migration when one is needed. */
-const UI_PERSIST_VERSION = 2;
+/* v3 — drop the persisted analyzer-model override (selectedModel /
+   selectedModelExplicit). The migrate below strips it from existing v2
+   blobs so a value stuck from before the fix (e.g. qwen3.5:4b) clears on
+   upgrade WITHOUT resetting the still-persisted stage / TTS / theme keys. */
+const UI_PERSIST_VERSION = 3;
 const MANUSCRIPT_PERSIST_VERSION = 1;
 
 /* fe-2 — the whole settings slice persists device-local (every field is a
@@ -116,6 +126,19 @@ const uiPersistConfig: PersistConfig<UiState> = {
   /* Cast to mutable to satisfy redux-persist's PersistConfig (it widens
      to string[] internally). */
   whitelist: UI_PERSIST_WHITELIST as unknown as string[],
+  /* v2→v3: strip the no-longer-persisted analyzer-model override from any
+     existing blob so a pre-fix stuck value (e.g. qwen3.5:4b silently
+     shadowing the saved Gemini default) is cleared on first load after the
+     upgrade. Returning the same blob minus those two keys preserves the
+     other persisted prefs (stage / TTS engine / theme). */
+  migrate: (state) => {
+    if (state && typeof state === 'object') {
+      const s = state as Record<string, unknown>;
+      delete s.selectedModel;
+      delete s.selectedModelExplicit;
+    }
+    return Promise.resolve(state);
+  },
 };
 
 const manuscriptPersistConfig: PersistConfig<ManuscriptState> = {
