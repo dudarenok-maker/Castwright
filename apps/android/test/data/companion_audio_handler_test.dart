@@ -120,16 +120,25 @@ void main() {
       expect(result.single.title, contains('Castwright'));
     });
 
-    test('notifies AA (root + current) when the playing chapter changes', () async {
-      final notified = <String>[];
-      final handler = CompanionAudioHandler(
-          notifyChildrenChanged: (id) async => notified.add(id));
+    test('signals subscribers that the root changed when the runtime attaches',
+        () async {
+      final handler = CompanionAudioHandler();
+      // skip(1) drops the BehaviorSubject's seeded value; .first awaits our push.
+      final next = handler.subscribeToChildren(rootMediaId).skip(1).first;
+      handler.attach(makeController());
+
+      await next.timeout(const Duration(seconds: 1)); // completes ⇒ AA notified
+    });
+
+    test('signals the current tab changed when the playing chapter changes',
+        () async {
+      final handler = CompanionAudioHandler();
       final controller = makeController();
       handler.attach(controller);
-      await controller.openBook('b1');
-      await Future<void>.delayed(Duration.zero);
+      final next = handler.subscribeToChildren(currentMediaId).skip(1).first;
 
-      expect(notified, containsAll(<String>[rootMediaId, currentMediaId]));
+      await controller.openBook('b1');
+      await next.timeout(const Duration(seconds: 1));
       await controller.dispose();
     });
 

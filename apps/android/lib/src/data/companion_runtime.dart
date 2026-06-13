@@ -1,15 +1,14 @@
 import 'dart:async';
 
-import 'package:audio_service/audio_service.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../domain/app_settings.dart';
-import '../domain/media_browse_tree.dart';
 import '../domain/sleep_timer.dart';
 import '../domain/storage_policy.dart';
 import 'api_client.dart';
+import 'car_browse.dart';
 import 'auto_sync_service.dart';
 import 'chapter_downloader.dart';
 import 'companion_audio_handler.dart';
@@ -170,50 +169,33 @@ class CompanionRuntime {
         .listen((uuid) => library.setChapterFinished(uuid, true));
 
     // app-5/app-9: connect the media session (lock-screen / Bluetooth / car) to
-    // the live player + a library-backed browse tree.
-    handler?.attach(
-      player,
-      childrenProvider: (parentId) async {
-        final parsed = parseMediaId(parentId);
-        if (parsed.kind == MediaIdKind.book && parsed.bookId != null) {
-          try {
-            await sync.ensureDetail(parsed.bookId!);
-          } catch (_) {/* offline — fall back to local rows */}
-          final chs = await library.chaptersForBook(parsed.bookId!);
-          return [
-            for (final c in chs)
-              MediaItem(
-                id: chapterMediaId(parsed.bookId!, c.uuid),
-                title: c.title.isEmpty ? 'Chapter ${c.chapterId}' : c.title,
-                playable: true,
-              ),
-          ];
-        }
-        final books = await library.listBooks();
-        return [
-          for (final b in books)
-            MediaItem(
-                id: bookMediaId(b.bookId),
-                title: b.title,
-                album: b.author,
-                playable: false),
-        ];
+    // the live player + a downloaded-only, 2-tab car browse tree (CarBrowse).
+    // "current book" = the live player's book, else the most-recently-played one.
+    final carBrowse = CarBrowse(
+      allBooks: library.listBooks,
+      chaptersForBook: library.chaptersForBook,
+      current: () async {
+        final bid =
+            player.currentBookId ?? await library.mostRecentlyPlayedBookId();
+        if (bid == null) return const CarCurrent();
+        final uuid = player.currentChapterUuid ??
+            (await library.loadPlayback(bid))?.chapterUuid;
+        return CarCurrent(bookId: bid, chapterUuid: uuid);
       },
-      onPlayMediaId: (mediaId) async {
-        final parsed = parseMediaId(mediaId);
-        if (parsed.kind != MediaIdKind.chapter) return;
-        final bid = parsed.bookId!;
-        try {
-          await sync.ensureDetail(bid);
-        } catch (_) {/* offline */}
+      play: (bookId, uuid) async {
         BookSummary? meta;
         for (final b in await library.listBooks()) {
-          if (b.bookId == bid) meta = b;
+          if (b.bookId == bookId) meta = b;
         }
-        await player.openBook(bid,
+        await player.openBook(bookId,
             bookTitle: meta?.title ?? '', artPath: meta?.coverThumbPath);
-        await player.playChapter(parsed.uuid!);
+        await player.playChapter(uuid);
       },
+    );
+    handler?.attach(
+      player,
+      childrenProvider: carBrowse.getChildren,
+      onPlayMediaId: carBrowse.playFromMediaId,
     );
 
     return CompanionRuntime._(api, library, sync, player, thumbnails,
