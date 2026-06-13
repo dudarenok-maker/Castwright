@@ -17,6 +17,7 @@ import { scanLibrary, collectBooks } from '../workspace/scan.js';
 import { scanActiveAnalyses } from '../workspace/active-analyses.js';
 import { readJson } from '../workspace/state-io.js';
 import { listenProgressJsonPath, listenStatsJsonPath } from '../workspace/paths.js';
+import type { ListenStatsFile } from '../workspace/listen-stats.js';
 import {
   buildLibraryStats,
   buildContinueListening,
@@ -25,14 +26,17 @@ import {
 
 export const libraryRouter = Router();
 
+type ResumeBookmark = { chapterId: number; currentSec: number; updatedAt: string; chapterUuid?: string };
+type MappedChapter = { id: number; uuid?: string; duration?: string; excluded?: boolean; held?: boolean };
+
 async function assembleBookInputs(): Promise<BookStatsInput[]> {
   const books = await collectBooks(); // [{ bookDir, state }]
   return Promise.all(
     books.map(async ({ bookDir, state }) => {
       const bookId = state.bookId;
-      const resume = await readJson<any>(listenProgressJsonPath(bookDir));
-      const statsFile = await readJson<any>(listenStatsJsonPath(bookDir));
-      const chapters = (state.chapters ?? []).map((c: any) => ({
+      const resume = await readJson<ResumeBookmark>(listenProgressJsonPath(bookDir));
+      const statsFile = await readJson<ListenStatsFile>(listenStatsJsonPath(bookDir));
+      const chapters: MappedChapter[] = (state.chapters ?? []).map((c) => ({
         id: c.id,
         uuid: c.uuid,
         duration: c.duration,
@@ -41,29 +45,27 @@ async function assembleBookInputs(): Promise<BookStatsInput[]> {
       }));
       // PL1 — resolve the resume bookmark's chapterUuid -> the chapter's CURRENT id
       // (mirror GET /listen-progress in book-state.ts). A restructure shifts positional ids.
-      let resumeChapterId = resume?.chapterId;
-      if (resume?.chapterUuid) {
-        const match = chapters.find((c: any) => c.uuid === resume.chapterUuid);
-        if (match) resumeChapterId = match.id;
+      let resumeObject: { chapterId: number; currentSec: number; updatedAt: string } | null = null;
+      if (resume) {
+        let resumeChapterId = resume.chapterId;
+        if (resume.chapterUuid) {
+          const match = chapters.find((c) => c.uuid === resume.chapterUuid);
+          if (match) resumeChapterId = match.id;
+        }
+        resumeObject = { chapterId: resumeChapterId, currentSec: resume.currentSec, updatedAt: resume.updatedAt };
       }
       return {
         bookId,
         title: state.title ?? bookId,
         series: state.series ?? null,
         isStandalone: state.isStandalone ?? !state.series,
-        chapters: chapters.map(({ id, duration, excluded, held }: any) => ({
+        chapters: chapters.map(({ id, duration, excluded, held }) => ({
           id,
           duration,
           excluded,
           held,
         })),
-        resume: resume
-          ? {
-              chapterId: resumeChapterId,
-              currentSec: resume.currentSec,
-              updatedAt: resume.updatedAt,
-            }
-          : null,
+        resume: resumeObject,
         statsFile: statsFile ?? null,
       };
     }),

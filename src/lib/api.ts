@@ -50,6 +50,8 @@ import type {
   ConfigValues,
   PromptState,
   PairSessionInfo,
+  LibraryStats,
+  ContinueListeningItem,
 } from './types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { initialCharacters } from '../data/characters';
@@ -1202,7 +1204,7 @@ export async function mockPutListenStats(
 
 export async function mockGetLibraryStats() {
   await wait(15);
-  const seeded = (globalThis as any).__SEED_LIBRARY_STATS__;
+  const seeded = (globalThis as unknown as { __SEED_LIBRARY_STATS__?: LibraryStats }).__SEED_LIBRARY_STATS__;
   if (seeded) return seeded;
   let totalListenedSec = 0;
   const byDayMap = new Map<string, number>();
@@ -1227,7 +1229,7 @@ export async function mockGetLibraryStats() {
 
 export async function mockGetContinueListening() {
   await wait(15);
-  const seeded = (globalThis as any).__SEED_CONTINUE__;
+  const seeded = (globalThis as unknown as { __SEED_CONTINUE__?: ContinueListeningItem[] }).__SEED_CONTINUE__;
   return seeded ?? [];
 }
 

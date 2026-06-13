@@ -473,7 +473,7 @@ function ReleaseNotesRoute() {
   return <ReleaseNotesView />;
 }
 
-/* fs-16 — listening-stats dashboard stub. F3 builds the real Tufte view. */
+/* fs-16 — #/stats listening-stats dashboard */
 function StatsRoute() {
   useHydrateStage({ kind: 'stats' }, []);
   return <StatsView />;
