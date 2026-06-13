@@ -31,6 +31,9 @@ describe('validateStatsBody', () => {
     expect(validateStatsBody({ sessionId: 's', days: [{ date: '2026-06-13', seconds: -1 }] }, NOW)).toMatch(/seconds/);
     expect(validateStatsBody({ sessionId: 's', days: [{ date: '2026-06-13', seconds: 90000 }] }, NOW)).toMatch(/seconds/);
   });
+  it('rejects a roll-over invalid calendar date', () => {
+    expect(validateStatsBody({ sessionId: 's', days: [{ date: '2026-02-30', seconds: 1 }] }, NOW)).toMatch(/calendar|date/);
+  });
 });
 
 describe('mergeStatsDays', () => {

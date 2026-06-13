@@ -31,8 +31,14 @@ export function validateStatsBody(raw: unknown, now: number): string | null {
   for (const d of b.days) {
     if (!d || typeof d !== 'object') return 'each day must be an object';
     const day = d as Partial<StatsDayInput>;
-    if (typeof day.date !== 'string' || !ISO_DATE.test(day.date) || Number.isNaN(Date.parse(day.date))) {
+    if (typeof day.date !== 'string' || !ISO_DATE.test(day.date)) {
       return 'day.date must be an ISO YYYY-MM-DD string';
+    }
+    // Round-trip guard: Date.parse accepts roll-over dates (2026-02-30 -> Mar 2),
+    // so re-serialize and compare to reject invalid calendar dates.
+    const parsedDate = new Date(day.date + 'T00:00:00Z');
+    if (Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== day.date) {
+      return 'day.date must be a valid calendar date';
     }
     const t = Date.parse(day.date);
     if (t > now + FUTURE_SKEW_MS) return 'day.date is too far in the future';
