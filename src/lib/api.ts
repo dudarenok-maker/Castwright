@@ -1159,6 +1159,82 @@ export function _resetMockListenProgress(): void {
   MOCK_LISTEN_PROGRESS.clear();
 }
 
+/* fs-15/fs-16 — listen-stats mocks. Keyed by bookId; each entry mirrors
+   the on-disk listen-stats.json schema. Module-scope so PUT-then-GET
+   round-trips within a single mock session. Reset via _resetMockListenStats. */
+export interface ListenStatsPutBody {
+  sessionId: string;
+  days: { date: string; seconds: number }[];
+}
+
+type MockListenStatsFile = {
+  schema: 1;
+  perDay: { date: string; sessions: { sessionId: string; seconds: number }[] }[];
+};
+
+const MOCK_LISTEN_STATS = new Map<string, MockListenStatsFile>();
+
+export async function mockPutListenStats(
+  bookId: string,
+  body: ListenStatsPutBody,
+): Promise<MockListenStatsFile> {
+  await wait(15);
+  const file: MockListenStatsFile = MOCK_LISTEN_STATS.get(bookId) ?? {
+    schema: 1,
+    perDay: [],
+  };
+  for (const { date, seconds } of body.days) {
+    let day = file.perDay.find((d) => d.date === date);
+    if (!day) {
+      day = { date, sessions: [] };
+      file.perDay.push(day);
+    }
+    const slot = day.sessions.find((s) => s.sessionId === body.sessionId);
+    if (slot) {
+      slot.seconds = Math.max(slot.seconds, seconds);
+    } else {
+      day.sessions.push({ sessionId: body.sessionId, seconds });
+    }
+  }
+  MOCK_LISTEN_STATS.set(bookId, file);
+  return file;
+}
+
+export async function mockGetLibraryStats() {
+  await wait(15);
+  const seeded = (globalThis as any).__SEED_LIBRARY_STATS__;
+  if (seeded) return seeded;
+  let totalListenedSec = 0;
+  const byDayMap = new Map<string, number>();
+  for (const file of MOCK_LISTEN_STATS.values()) {
+    for (const d of file.perDay) {
+      for (const s of d.sessions) {
+        totalListenedSec += s.seconds;
+        byDayMap.set(d.date, (byDayMap.get(d.date) ?? 0) + s.seconds);
+      }
+    }
+  }
+  return {
+    totalListenedSec,
+    booksFinished: 0,
+    perBook: [],
+    perSeries: [],
+    byDay: [...byDayMap.entries()]
+      .map(([date, seconds]) => ({ date, seconds }))
+      .sort((a, b) => (a.date < b.date ? -1 : 1)),
+  };
+}
+
+export async function mockGetContinueListening() {
+  await wait(15);
+  const seeded = (globalThis as any).__SEED_CONTINUE__;
+  return seeded ?? [];
+}
+
+export function _resetMockListenStats(): void {
+  MOCK_LISTEN_STATS.clear();
+}
+
 async function mockConfirmBook(body: ConfirmBookRequest): Promise<ConfirmBookResponse> {
   await wait(180);
   const bookId = `${body.author.toLowerCase().replace(/[^a-z0-9]+/g, '-')}__${body.isStandalone ? 'standalones' : body.series.toLowerCase().replace(/[^a-z0-9]+/g, '-')}__${body.title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
@@ -1870,6 +1946,38 @@ async function realPutListenProgress(
   if (!res.ok)
     throw new Error(
       `Listen-progress PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+/* fs-15/fs-16 — listen-stats + library aggregates. */
+async function realPutListenStats(bookId: string, body: ListenStatsPutBody) {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/listen-stats`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(
+      `listen-stats PUT failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realGetLibraryStats() {
+  const res = await fetch('/api/library/stats');
+  if (!res.ok)
+    throw new Error(
+      `library stats GET failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+async function realGetContinueListening() {
+  const res = await fetch('/api/library/continue-listening');
+  if (!res.ok)
+    throw new Error(
+      `continue-listening GET failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   return res.json();
 }
@@ -6145,6 +6253,9 @@ const real = {
   putBookState: realPutBookState,
   getListenProgress: realGetListenProgress,
   putListenProgress: realPutListenProgress,
+  putListenStats: realPutListenStats,
+  getLibraryStats: realGetLibraryStats,
+  getContinueListening: realGetContinueListening,
   findCoverCandidates: realFindCoverCandidates,
   setCover: realSetCover,
   removeCover: realRemoveCover,
@@ -6398,6 +6509,9 @@ const mock = {
   putBookState: mockPutBookState,
   getListenProgress: mockGetListenProgress,
   putListenProgress: mockPutListenProgress,
+  putListenStats: mockPutListenStats,
+  getLibraryStats: mockGetLibraryStats,
+  getContinueListening: mockGetContinueListening,
   findCoverCandidates: mockFindCoverCandidates,
   setCover: mockSetCover,
   removeCover: mockRemoveCover,
