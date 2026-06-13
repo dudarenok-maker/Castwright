@@ -630,6 +630,27 @@ export function buildInterimCast(
   return attachLinesAndScenes(assignPaletteColors(folded), []);
 }
 
+/* srv-1 — persist a fold pass's lineage to the merge journal. Replace-all keeps
+   kind:'fold' entries in lockstep with the current manuscript-edits.json
+   (manual entries are preserved). Co-locate the CALL with the edits write so the
+   journal is persisted iff the sentences it describes are. Non-fatal at the call
+   site. */
+async function writeFoldJournal(
+  bookDir: string,
+  rewrites: Record<string, string>,
+  preFoldSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
+  characters: ReadonlyArray<{ id: string; name: string }>,
+): Promise<void> {
+  const journal = await loadCastMerges(bookDir);
+  await saveCastMerges(
+    bookDir,
+    replaceFoldEntries(
+      journal,
+      buildFoldJournalEntries(rewrites, preFoldSentences, characters, new Date().toISOString()),
+    ),
+  );
+}
+
 /* Name-only descriptor fold used by both the interim cast.json write
    and the live SSE cast-update payload. Collapses "The Jogger" /
    "Drooly Boy" / "Unknown Intruder" into the Unknown male / Unknown
@@ -3569,24 +3590,14 @@ export async function runMainAnalyzerJob(
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: reconciled.sentences,
         });
-        /* srv-1 — record this fold pass's lineage. Co-located with the edits
-           write so the journal is persisted iff the sentences it describes are
-           (edits are written even on drift; cast.json is the file skipped).
-           Replace-all keeps fold entries in lockstep with the current edits;
-           manual entries are preserved. Non-fatal. */
+        /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
+           a journal failure must never fail the analysis persist. */
         try {
-          const journal = await loadCastMerges(record.bookDir);
-          await saveCastMerges(
+          await writeFoldJournal(
             record.bookDir,
-            replaceFoldEntries(
-              journal,
-              buildFoldJournalEntries(
-                folded.rewrites,
-                recovered.sentences,
-                stage1.characters,
-                new Date().toISOString(),
-              ),
-            ),
+            folded.rewrites,
+            recovered.sentences,
+            stage1.characters,
           );
         } catch (journalErr) {
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
@@ -4510,22 +4521,14 @@ async function runSubsetAnalyzerJob(
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: subsetReconciled.sentences,
         });
-        /* srv-1 — record this fold pass's lineage (see the main route's same
-           block). Subset fold runs over the full whole-book sentence set, so
-           replace-all is correct. Gated by !isAborted() with the edits write. */
+        /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
+           a journal failure must never fail the analysis persist. */
         try {
-          const journal = await loadCastMerges(record.bookDir);
-          await saveCastMerges(
+          await writeFoldJournal(
             record.bookDir,
-            replaceFoldEntries(
-              journal,
-              buildFoldJournalEntries(
-                folded.rewrites,
-                recovered.sentences,
-                stage1.characters,
-                new Date().toISOString(),
-              ),
-            ),
+            folded.rewrites,
+            recovered.sentences,
+            stage1.characters,
           );
         } catch (journalErr) {
           console.warn('[analysis] failed to write cast-merges journal', journalErr);
