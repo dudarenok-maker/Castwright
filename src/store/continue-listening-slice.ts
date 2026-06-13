@@ -34,9 +34,13 @@ export const continueListeningSlice = createSlice({
 
 export const continueListeningActions = continueListeningSlice.actions;
 
-/** Defensive selector: returns [] when the slice isn't registered (older
- *  test stores composed before this slice was added), matching how
- *  `selectListenProgress` guards against missing state. */
+const EMPTY_ITEMS: ContinueItem[] = [];
+
+/** Defensive selector: returns a stable empty array when the slice isn't
+ *  registered (older test stores composed before this slice was added),
+ *  matching how `selectListenProgress` guards against missing state. The
+ *  stable reference prevents react-redux from emitting "different result
+ *  with same parameters" warnings in those test stores. */
 export const selectContinueListening = (s: {
   continueListening?: ContinueListeningState;
-}): ContinueItem[] => s.continueListening?.items ?? [];
+}): ContinueItem[] => s.continueListening?.items ?? EMPTY_ITEMS;

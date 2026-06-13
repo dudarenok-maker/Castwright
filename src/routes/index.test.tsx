@@ -101,6 +101,9 @@ vi.mock('../lib/api', () => ({
         blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
         info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
       }),
+    /* fs-15 — book-library view fetches the continue-listening rail on
+       mount. Never resolve so no rail state update escapes the test. */
+    getContinueListening: () => new Promise(() => {}),
   },
   AnalysisError: class extends Error {
     code = 'unknown';

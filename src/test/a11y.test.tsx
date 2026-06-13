@@ -45,6 +45,8 @@ vi.mock('../lib/api', () => ({
     // Listen-view companion banner probes this on mount; no APK in the a11y
     // fixture, so the "Download .apk" button stays hidden.
     checkCompanionApk: () => Promise.resolve({ available: false, sizeBytes: null }),
+    // Book-library view fetches the continue-listening rail on mount.
+    getContinueListening: () => new Promise(() => {}),
   },
 }));
 
