@@ -51,11 +51,11 @@ const seededChapters: Chapter[] = [
 ];
 
 const seededSentences: Sentence[] = [
-  { id: 1, chapterId: 1, characterId: 'neverseen-figure', text: 'The shopkeeper laughed.' },
-  { id: 2, chapterId: 1, characterId: 'neverseen-figure', text: '"Sandor said that?"' },
-  { id: 5, chapterId: 4, characterId: 'neverseen-figure', text: 'Chapter four candidate line.' },
+  { id: 1, chapterId: 1, characterId: 'saltgrave-figure', text: 'The shopkeeper laughed.' },
+  { id: 2, chapterId: 1, characterId: 'saltgrave-figure', text: '"Garrow said that?"' },
+  { id: 5, chapterId: 4, characterId: 'saltgrave-figure', text: 'Chapter four candidate line.' },
   /* Out-of-scope sentence (different character) — must not appear in the modal. */
-  { id: 6, chapterId: 1, characterId: 'sophie', text: 'Sophie line that is not a candidate.' },
+  { id: 6, chapterId: 1, characterId: 'wren', text: 'Wren line that is not a candidate.' },
 ];
 
 function renderModal(opts: {
@@ -73,10 +73,10 @@ function renderModal(opts: {
     ...render(
       <Provider store={store}>
         <ReattributeLinesModal
-          sourceCharacterId="neverseen-figure"
-          sourceCharacterName="Neverseen Figure"
-          newCharacterId="sandor"
-          aliasName="Sandor"
+          sourceCharacterId="saltgrave-figure"
+          sourceCharacterName="Saltgrave Figure"
+          newCharacterId="garrow"
+          aliasName="Garrow"
           impactedChapters={impactedChapters}
           onClose={onClose}
         />
@@ -93,29 +93,29 @@ describe('ReattributeLinesModal', () => {
     expect(screen.getByText('A Manifest')).toBeTruthy();
     /* Candidate sentences from the impactedChapters payload only. */
     expect(screen.getByText('The shopkeeper laughed.')).toBeTruthy();
-    expect(screen.getByText('"Sandor said that?"')).toBeTruthy();
+    expect(screen.getByText('"Garrow said that?"')).toBeTruthy();
     expect(screen.getByText('Chapter four candidate line.')).toBeTruthy();
-    /* Out-of-scope sentence (Sophie's) must not render. */
-    expect(screen.queryByText('Sophie line that is not a candidate.')).toBeNull();
+    /* Out-of-scope sentence (Wren's) must not render. */
+    expect(screen.queryByText('Wren line that is not a candidate.')).toBeNull();
   });
 
   it('clicking the alias chip on a row reassigns that sentence to the new character', () => {
     const { store } = renderModal({});
-    /* Click the "Sandor" chip on the first row. There are multiple
-       "Sandor" buttons (one per row), so disambiguate by finding the
+    /* Click the "Garrow" chip on the first row. There are multiple
+       "Garrow" buttons (one per row), so disambiguate by finding the
        row's parent first. */
     const row = screen.getByText('The shopkeeper laughed.').closest('li')!;
-    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Sandor' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Garrow' }));
     const reassigned = store
       .getState()
       .manuscript.sentences.find((s) => s.chapterId === 1 && s.id === 1)!;
-    expect(reassigned.characterId).toBe('sandor');
+    expect(reassigned.characterId).toBe('garrow');
   });
 
   it('logs a boundary_move so the chapter is flagged stale (Bug 2 staleness precondition)', () => {
     const { store } = renderModal({});
     const row = screen.getByText('The shopkeeper laughed.').closest('li')!;
-    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Sandor' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Garrow' }));
     const events = store.getState().changeLog.events;
     expect(events.some((e) => e.type === 'boundary_move' && e.chapterId === 1)).toBe(true);
   });
@@ -124,13 +124,13 @@ describe('ReattributeLinesModal', () => {
     const { store } = renderModal({});
     const row = screen.getByText('The shopkeeper laughed.').closest('li')!;
     /* Reassign … */
-    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Sandor' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Garrow' }));
     /* … then revert. */
-    fireEvent.click(within(row).getByRole('button', { name: 'Keep on Neverseen Figure' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Keep on Saltgrave Figure' }));
     const reverted = store
       .getState()
       .manuscript.sentences.find((s) => s.chapterId === 1 && s.id === 1)!;
-    expect(reverted.characterId).toBe('neverseen-figure');
+    expect(reverted.characterId).toBe('saltgrave-figure');
   });
 
   it('reflects aria-pressed state so screen readers know which chip is active', () => {
@@ -138,21 +138,21 @@ describe('ReattributeLinesModal', () => {
     const row = screen.getByText('The shopkeeper laughed.').closest('li')!;
     /* Initially the source chip is "pressed" because the sentence is
        still attributed to the source character. */
-    expect(within(row).getByRole('button', { name: 'Keep on Neverseen Figure' })).toHaveAttribute(
+    expect(within(row).getByRole('button', { name: 'Keep on Saltgrave Figure' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
-    expect(within(row).getByRole('button', { name: 'Reassign to Sandor' })).toHaveAttribute(
+    expect(within(row).getByRole('button', { name: 'Reassign to Garrow' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
-    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Sandor' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Reassign to Garrow' }));
     /* Need to re-query — same elements, but attributes flip. */
-    expect(within(row).getByRole('button', { name: 'Keep on Neverseen Figure' })).toHaveAttribute(
+    expect(within(row).getByRole('button', { name: 'Keep on Saltgrave Figure' })).toHaveAttribute(
       'aria-pressed',
       'false',
     );
-    expect(within(row).getByRole('button', { name: 'Reassign to Sandor' })).toHaveAttribute(
+    expect(within(row).getByRole('button', { name: 'Reassign to Garrow' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
@@ -160,7 +160,7 @@ describe('ReattributeLinesModal', () => {
     expect(
       store.getState().manuscript.sentences.find((s) => s.chapterId === 1 && s.id === 1)!
         .characterId,
-    ).toBe('sandor');
+    ).toBe('garrow');
   });
 
   it('Done button fires onClose', () => {

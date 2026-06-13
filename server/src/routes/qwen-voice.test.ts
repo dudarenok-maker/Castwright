@@ -36,14 +36,14 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
-const BOOK = 'Keeper of the Lost Cities';
+const AUTHOR = 'Della Renwick';
+const SERIES = 'The Hollow Tide';
+const BOOK = 'The Hollow Tide';
 const QWEN_KEY = 'qwen3-tts-0.6b';
 
-/* Biana's longest evidence quote, smart-quotes stripped — what buildSampleText
+/* Maerin's longest evidence quote, smart-quotes stripped — what buildSampleText
    picks and the audition therefore speaks. */
-const BIANA_LINE = 'We have to tell the Council, and we have to do it before the others wake.';
+const MAERIN_LINE = 'We have to tell the Council, and we have to do it before the others wake.';
 
 let workspaceRoot: string;
 let audioDir: string;
@@ -63,13 +63,13 @@ vi.mock('../tts/index.js', async (importOriginal) => {
 const characters = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
   {
-    id: 'biana',
-    name: 'Biana',
+    id: 'maerin',
+    name: 'Maerin',
     role: 'supporting',
     color: 'lilac',
-    voiceId: 'v_biana',
+    voiceId: 'v_maerin',
     voiceStyle: 'a poised, confident teenage girl, clear and warm',
-    evidence: [{ quote: `“${BIANA_LINE}”` }, { quote: 'Wait.' }],
+    evidence: [{ quote: `“${MAERIN_LINE}”` }, { quote: 'Wait.' }],
   },
   { id: 'nopersona', name: 'Nopersona', role: 'extra', color: 'amber' },
   /* Designed voice via an explicit per-character override (name diverges from
@@ -141,7 +141,7 @@ function isMp3Magic(buf: Buffer): boolean {
   return false;
 }
 
-const designBody = { sampleVoiceId: 'v_biana', modelKey: QWEN_KEY };
+const designBody = { sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY };
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-qwen-voice-test-'));
@@ -186,13 +186,13 @@ afterAll(() => {
 describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
   it('forwards persona + a calibrationText from the character line, caches the MP3, returns {voiceId,url}', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
 
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/application\/json/);
-    expect(res.body.voiceId).toBe('qwen-v_biana');
-    expect(res.body.url).toMatch(/^\/audio\/voices\/v_biana-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+    expect(res.body.voiceId).toBe('qwen-v_maerin');
+    expect(res.body.url).toMatch(/^\/audio\/voices\/v_maerin-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
 
     /* Sidecar called once with the right payload — including the character's
        own line as the audition calibration text. */
@@ -201,10 +201,10 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     expect(url).toBe('http://localhost:9000/qwen/design-voice');
     const sent = JSON.parse(init.body);
     expect(sent).toEqual({
-      voiceId: 'qwen-v_biana',
+      voiceId: 'qwen-v_maerin',
       instruct: 'a poised, confident teenage girl, clear and warm',
       language: 'English',
-      calibrationText: BIANA_LINE,
+      calibrationText: MAERIN_LINE,
     });
 
     /* The cached file on disk is a real MP3 at the URL's filename. */
@@ -215,7 +215,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 
   it('ONE PASS: after design, /sample for the same identity is a cache hit (no provider call)', async () => {
     const design = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(design.status).toBe(200);
 
@@ -223,11 +223,11 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
        voice pinned in overrideTtsVoices.qwen and the character's evidence as
        the hint — exactly the inputs that reproduce the cached filename. */
     const sample = await request(app)
-      .post('/api/voices/v_biana/sample')
+      .post('/api/voices/v_maerin/sample')
       .send({
         modelKey: QWEN_KEY,
-        voice: { id: 'v_biana', overrideTtsVoices: { qwen: { name: 'qwen-v_biana' } } },
-        characterHint: { evidence: [`“${BIANA_LINE}”`, 'Wait.'] },
+        voice: { id: 'v_maerin', overrideTtsVoices: { qwen: { name: 'qwen-v_maerin' } } },
+        characterHint: { evidence: [`“${MAERIN_LINE}”`, 'Wait.'] },
       });
 
     expect(sample.status).toBe(200);
@@ -239,7 +239,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 
   it('OVERWRITES the cached audition on re-design (an explicit regenerate must refresh the preview)', async () => {
     const first = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(first.status).toBe(200);
     const fileName = first.body.url.split('/').pop() as string;
@@ -253,7 +253,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
        serving the FIRST design's audio and the re-design looked like a no-op. */
     fetchMock.mockResolvedValue(okSidecarResponse(new Uint8Array(24_000 * 2).fill(0x40)));
     const second = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(second.status).toBe(200);
     expect(second.body.url).toBe(first.body.url); // same deterministic filename
@@ -263,7 +263,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 
   it('defaults the persona to the character voiceStyle and lets the body override it', async () => {
     await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ ...designBody, persona: 'a gruff old sailor' });
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(sent.instruct).toBe('a gruff old sailor');
@@ -271,12 +271,12 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 
   it('does NOT persist the override (design only caches + previews)', async () => {
     await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     const cast = readCast();
-    const biana = cast.characters.find((c) => c.id === 'biana');
-    expect(biana?.overrideTtsVoices).toBeUndefined();
-    expect(biana?.ttsEngine).toBeUndefined();
+    const maerin = cast.characters.find((c) => c.id === 'maerin');
+    expect(maerin?.overrideTtsVoices).toBeUndefined();
+    expect(maerin?.ttsEngine).toBeUndefined();
   });
 
   it('400s when neither a body persona nor a persisted voiceStyle exists', async () => {
@@ -289,7 +289,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 
   it('400s when sampleVoiceId is missing', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ modelKey: QWEN_KEY });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/sampleVoiceId/);
@@ -298,8 +298,8 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 
   it('400s when modelKey is missing or invalid', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
-      .send({ sampleVoiceId: 'v_biana', modelKey: 'nope' });
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
+      .send({ sampleVoiceId: 'v_maerin', modelKey: 'nope' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/modelKey/);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -308,7 +308,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
   it('502s with a clear message when the sidecar is unreachable', async () => {
     fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/unreachable/i);
@@ -324,7 +324,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
       json: async () => ({ error: 'qwen-tts not installed' }),
     });
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/qwen-tts not installed/);
@@ -344,7 +344,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
       json: async () => ({ detail: 'Cannot copy out of meta tensor; no data!' }),
     });
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/meta tensor/);
@@ -352,7 +352,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
   });
 
   it('404s for an unknown bookId', async () => {
-    const res = await request(app).post('/api/books/nope/cast/biana/design-voice').send(designBody);
+    const res = await request(app).post('/api/books/nope/cast/maerin/design-voice').send(designBody);
     expect(res.status).toBe(404);
   });
 
@@ -379,7 +379,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     writeFileSync(statePath, JSON.stringify({ ...state, language: 'ru' }));
 
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(res.status).toBe(200);
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -390,7 +390,7 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
     /* beforeEach writes the book with no `language` — the seam defaults to 'en'
        → 'English', so legacy books keep designing English voices unchanged. */
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(res.status).toBe(200);
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -401,52 +401,52 @@ describe('POST /api/books/:bookId/cast/:characterId/design-voice', () => {
 describe('fs-25 — design-voice emotion variants (Wave 3)', () => {
   it('designs an emotion variant under <base>__<emotion>, augments the instruct, and records it on the cast', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ ...designBody, emotion: 'angry' });
 
     expect(res.status).toBe(200);
-    expect(res.body.voiceId).toBe('qwen-v_biana__angry');
+    expect(res.body.voiceId).toBe('qwen-v_maerin__angry');
 
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.voiceId).toBe('qwen-v_biana__angry');
+    expect(sent.voiceId).toBe('qwen-v_maerin__angry');
     // base persona is preserved AND an emotion delivery clause is appended.
     expect(sent.instruct).toContain('a poised, confident teenage girl, clear and warm');
     expect(sent.instruct.toLowerCase()).toContain('angr');
 
     // the variant is persisted onto the character's qwen slot.
     const cast = readCast();
-    const biana = cast.characters.find((c) => c.id === 'biana') as Record<string, any>;
-    expect(biana.overrideTtsVoices.qwen.variants.angry).toEqual({ name: 'qwen-v_biana__angry' });
+    const maerin = cast.characters.find((c) => c.id === 'maerin') as Record<string, any>;
+    expect(maerin.overrideTtsVoices.qwen.variants.angry).toEqual({ name: 'qwen-v_maerin__angry' });
   });
 
   it('rejects an out-of-enum / neutral emotion with 400', async () => {
     const bad = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ ...designBody, emotion: 'furious' });
     expect(bad.status).toBe(400);
 
     const neutral = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ ...designBody, emotion: 'neutral' });
     expect(neutral.status).toBe(400);
   });
 
   it('a base design (no emotion) leaves variants untouched', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send(designBody);
     expect(res.status).toBe(200);
-    expect(res.body.voiceId).toBe('qwen-v_biana');
+    expect(res.body.voiceId).toBe('qwen-v_maerin');
     const cast = readCast();
-    const biana = cast.characters.find((c) => c.id === 'biana') as Record<string, any>;
-    expect(biana.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    const maerin = cast.characters.find((c) => c.id === 'maerin') as Record<string, any>;
+    expect(maerin.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 });
 
 describe('GET /api/books/:bookId/cast/:characterId/designed-persona', () => {
   it('returns the sidecar instruct for a character whose voice was designed (derived voiceId)', async () => {
-    writeQwenSidecar('qwen-v_biana', 'a poised, confident teenage girl, clear and warm');
-    const res = await request(app).get(`/api/books/${bookId}/cast/biana/designed-persona`);
+    writeQwenSidecar('qwen-v_maerin', 'a poised, confident teenage girl, clear and warm');
+    const res = await request(app).get(`/api/books/${bookId}/cast/maerin/designed-persona`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ instruct: 'a poised, confident teenage girl, clear and warm' });
   });
@@ -462,20 +462,20 @@ describe('GET /api/books/:bookId/cast/:characterId/designed-persona', () => {
   });
 
   it('returns an empty instruct (200, not 404) when no sidecar exists on disk', async () => {
-    const res = await request(app).get(`/api/books/${bookId}/cast/biana/designed-persona`);
+    const res = await request(app).get(`/api/books/${bookId}/cast/maerin/designed-persona`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ instruct: '' });
   });
 
   it('returns an empty instruct when the sidecar exists but has no instruct key', async () => {
-    writeQwenSidecar('qwen-v_biana', undefined);
-    const res = await request(app).get(`/api/books/${bookId}/cast/biana/designed-persona`);
+    writeQwenSidecar('qwen-v_maerin', undefined);
+    const res = await request(app).get(`/api/books/${bookId}/cast/maerin/designed-persona`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ instruct: '' });
   });
 
   it('404s for an unknown bookId', async () => {
-    const res = await request(app).get('/api/books/nope/cast/biana/designed-persona');
+    const res = await request(app).get('/api/books/nope/cast/maerin/designed-persona');
     expect(res.status).toBe(404);
   });
 
@@ -499,85 +499,85 @@ describe('Preview / promote / discard (plan 161 — non-destructive A/B)', () =>
 
   it('design-voice with preview:true stages under a -preview id (live voice untouched)', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/design-voice`)
+      .post(`/api/books/${bookId}/cast/maerin/design-voice`)
       .send({ ...designBody, preview: true });
     expect(res.status).toBe(200);
-    expect(res.body.voiceId).toBe('qwen-v_biana-preview');
+    expect(res.body.voiceId).toBe('qwen-v_maerin-preview');
     /* The sidecar was asked to design the PREVIEW id, not the live one. */
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.voiceId).toBe('qwen-v_biana-preview');
+    expect(sent.voiceId).toBe('qwen-v_maerin-preview');
   });
 
   it('promote-voice moves the preview onto the stable id, returns it, and evicts the sidecar cache', async () => {
-    stagedPreviewArtifacts('qwen-v_biana-preview');
+    stagedPreviewArtifacts('qwen-v_maerin-preview');
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_biana-preview', sampleVoiceId: 'v_biana', modelKey: QWEN_KEY });
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
-    expect(res.body.voiceId).toBe('qwen-v_biana');
-    expect(res.body.url).toMatch(/^\/audio\/voices\/v_biana-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
+    expect(res.body.voiceId).toBe('qwen-v_maerin');
+    expect(res.body.url).toMatch(/^\/audio\/voices\/v_maerin-qwen3-tts-0\.6b-[a-z0-9]+\.mp3$/);
     /* Files moved: real id now present, preview gone. */
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana.pt'))).toBe(true);
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana.json'))).toBe(true);
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana-preview.pt'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin.pt'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin.json'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'))).toBe(false);
     /* The sidecar cache for the REAL id was evicted so the swap is seen. */
     const evictCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/qwen/evict-voice'));
     expect(evictCall).toBeTruthy();
-    expect(JSON.parse(evictCall![1].body).voiceId).toBe('qwen-v_biana');
+    expect(JSON.parse(evictCall![1].body).voiceId).toBe('qwen-v_maerin');
   });
 
   it('promote-voice 409s when nothing was staged', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/promote-voice`)
-      .send({ previewVoiceId: 'qwen-v_biana-preview', sampleVoiceId: 'v_biana', modelKey: QWEN_KEY });
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
     expect(res.status).toBe(409);
   });
 
   it('promote-voice 400s on a previewVoiceId that is not this character’s preview', async () => {
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/promote-voice`)
-      .send({ previewVoiceId: 'qwen-someone-else-preview', sampleVoiceId: 'v_biana', modelKey: QWEN_KEY });
+      .post(`/api/books/${bookId}/cast/maerin/promote-voice`)
+      .send({ previewVoiceId: 'qwen-someone-else-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
     expect(res.status).toBe(400);
   });
 
   it('discard-voice removes the staged preview and never touches the live voice', async () => {
-    stagedPreviewArtifacts('qwen-v_biana-preview');
+    stagedPreviewArtifacts('qwen-v_maerin-preview');
     /* A live voice exists alongside the preview — it must survive. */
-    writeFileSync(join(qwenDir(), 'qwen-v_biana.pt'), 'LIVE');
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'LIVE');
     const res = await request(app)
-      .post(`/api/books/${bookId}/cast/biana/discard-voice`)
-      .send({ previewVoiceId: 'qwen-v_biana-preview', sampleVoiceId: 'v_biana', modelKey: QWEN_KEY });
+      .post(`/api/books/${bookId}/cast/maerin/discard-voice`)
+      .send({ previewVoiceId: 'qwen-v_maerin-preview', sampleVoiceId: 'v_maerin', modelKey: QWEN_KEY });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana-preview.pt'))).toBe(false);
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana-preview.json'))).toBe(false);
-    expect(readFileSync(join(qwenDir(), 'qwen-v_biana.pt'), 'utf8')).toBe('LIVE');
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.pt'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin-preview.json'))).toBe(false);
+    expect(readFileSync(join(qwenDir(), 'qwen-v_maerin.pt'), 'utf8')).toBe('LIVE');
   });
 });
 
 describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (fs-34)', () => {
   const qwenDir = () => join(workspaceRoot, 'voices', 'qwen');
 
-  /* Seed biana with TWO designed variants (angry + sad) on cast.json + disk,
+  /* Seed maerin with TWO designed variants (angry + sad) on cast.json + disk,
      alongside the base voice — so a delete can be shown to drop exactly one. */
   function seedVariants() {
     mkdirSync(qwenDir(), { recursive: true });
-    for (const id of ['qwen-v_biana', 'qwen-v_biana__angry', 'qwen-v_biana__sad']) {
+    for (const id of ['qwen-v_maerin', 'qwen-v_maerin__angry', 'qwen-v_maerin__sad']) {
       writeFileSync(join(qwenDir(), `${id}.pt`), 'EMBEDDING');
       writeFileSync(join(qwenDir(), `${id}.json`), JSON.stringify({ voiceId: id }));
     }
     const withVariants = characters.map((c) =>
-      c.id === 'biana'
+      c.id === 'maerin'
         ? {
             ...c,
             overrideTtsVoices: {
               qwen: {
-                name: 'qwen-v_biana',
+                name: 'qwen-v_maerin',
                 variants: {
-                  angry: { name: 'qwen-v_biana__angry' },
-                  sad: { name: 'qwen-v_biana__sad' },
+                  angry: { name: 'qwen-v_maerin__angry' },
+                  sad: { name: 'qwen-v_maerin__sad' },
                 },
               },
             },
@@ -592,29 +592,29 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
 
   it('drops the variant from cast.json + deletes its .pt/.json, leaving base + siblings intact', async () => {
     seedVariants();
-    const res = await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/angry`);
+    const res = await request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/angry`);
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, removed: 'angry' });
 
-    const biana = readCast().characters.find((c) => c.id === 'biana')!;
-    const qwen = biana.overrideTtsVoices as { qwen: { name: string; variants?: Record<string, unknown> } };
-    expect(qwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_biana__sad' } });
-    expect(qwen.qwen.name).toBe('qwen-v_biana'); // base untouched
+    const maerin = readCast().characters.find((c) => c.id === 'maerin')!;
+    const qwen = maerin.overrideTtsVoices as { qwen: { name: string; variants?: Record<string, unknown> } };
+    expect(qwen.qwen.variants).toEqual({ sad: { name: 'qwen-v_maerin__sad' } });
+    expect(qwen.qwen.name).toBe('qwen-v_maerin'); // base untouched
 
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana__angry.pt'))).toBe(false);
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana__angry.json'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'))).toBe(false);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__angry.json'))).toBe(false);
     // Sibling + base files survive.
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana__sad.pt'))).toBe(true);
-    expect(existsSync(join(qwenDir(), 'qwen-v_biana.pt'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin__sad.pt'))).toBe(true);
+    expect(existsSync(join(qwenDir(), 'qwen-v_maerin.pt'))).toBe(true);
   });
 
   it('clears the whole variants map (and badge) when the last variant is removed', async () => {
     mkdirSync(qwenDir(), { recursive: true });
-    writeFileSync(join(qwenDir(), 'qwen-v_biana__angry.pt'), 'E');
+    writeFileSync(join(qwenDir(), 'qwen-v_maerin__angry.pt'), 'E');
     const onlyAngry = characters.map((c) =>
-      c.id === 'biana'
-        ? { ...c, overrideTtsVoices: { qwen: { name: 'qwen-v_biana', variants: { angry: { name: 'qwen-v_biana__angry' } } } } }
+      c.id === 'maerin'
+        ? { ...c, overrideTtsVoices: { qwen: { name: 'qwen-v_maerin', variants: { angry: { name: 'qwen-v_maerin__angry' } } } } }
         : c,
     );
     writeFileSync(
@@ -622,30 +622,30 @@ describe('DELETE /api/books/:bookId/cast/:characterId/emotion-variant/:emotion (
       JSON.stringify({ characters: onlyAngry }),
     );
 
-    const res = await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/angry`);
+    const res = await request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/angry`);
     expect(res.status).toBe(200);
-    const qwen = readCast().characters.find((c) => c.id === 'biana')!.overrideTtsVoices as {
+    const qwen = readCast().characters.find((c) => c.id === 'maerin')!.overrideTtsVoices as {
       qwen: { name: string; variants?: unknown };
     };
     expect(qwen.qwen.variants).toBeUndefined();
-    expect(qwen.qwen.name).toBe('qwen-v_biana');
+    expect(qwen.qwen.name).toBe('qwen-v_maerin');
   });
 
   it('400s on an emotion outside the variant enum (incl. neutral)', async () => {
     seedVariants();
-    expect((await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/furious`)).status).toBe(400);
-    expect((await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/neutral`)).status).toBe(400);
+    expect((await request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/furious`)).status).toBe(400);
+    expect((await request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/neutral`)).status).toBe(400);
   });
 
   it('404s for an unknown book or character', async () => {
     seedVariants();
-    expect((await request(app).delete(`/api/books/nope/cast/biana/emotion-variant/angry`)).status).toBe(404);
+    expect((await request(app).delete(`/api/books/nope/cast/maerin/emotion-variant/angry`)).status).toBe(404);
     expect((await request(app).delete(`/api/books/${bookId}/cast/ghost/emotion-variant/angry`)).status).toBe(404);
   });
 
   it('is idempotent — removing an absent variant still returns 200', async () => {
-    // biana has no variants in the default cast (beforeEach wrote it).
-    const res = await request(app).delete(`/api/books/${bookId}/cast/biana/emotion-variant/excited`);
+    // maerin has no variants in the default cast (beforeEach wrote it).
+    const res = await request(app).delete(`/api/books/${bookId}/cast/maerin/emotion-variant/excited`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, removed: 'excited' });
   });
@@ -675,7 +675,7 @@ describe('persistEmotionVariant', () => {
       join(bookDir, '.audiobook', 'cast.json'),
       JSON.stringify({
         characters: [
-          { id: 'sophie', voiceId: 'sophie', overrideTtsVoices: { qwen: { name: 'qwen-sophie' } } },
+          { id: 'wren', voiceId: 'wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } },
         ],
       }),
     );
@@ -699,18 +699,18 @@ describe('persistEmotionVariant', () => {
 
   it('records the variant slot without clobbering the base name', async () => {
     const { readFile } = await import('node:fs/promises');
-    await persistEmotionVariantFn(bookDir, 'sophie', 'angry', 'qwen-sophie__angry');
+    await persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
     const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
-    expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe('qwen-sophie');
+    expect(cast.characters[0].overrideTtsVoices.qwen.name).toBe('qwen-wren');
     expect(cast.characters[0].overrideTtsVoices.qwen.variants.angry).toEqual({
-      name: 'qwen-sophie__angry',
+      name: 'qwen-wren__angry',
     });
   });
 
   it('preserves a sibling variant when adding another', async () => {
     const { readFile } = await import('node:fs/promises');
-    await persistEmotionVariantFn(bookDir, 'sophie', 'angry', 'qwen-sophie__angry');
-    await persistEmotionVariantFn(bookDir, 'sophie', 'sad', 'qwen-sophie__sad');
+    await persistEmotionVariantFn(bookDir, 'wren', 'angry', 'qwen-wren__angry');
+    await persistEmotionVariantFn(bookDir, 'wren', 'sad', 'qwen-wren__sad');
     const cast = JSON.parse(await readFile(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
     expect(Object.keys(cast.characters[0].overrideTtsVoices.qwen.variants).sort()).toEqual([
       'angry',

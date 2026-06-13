@@ -185,10 +185,12 @@ Harnesses (five tiers):
   `npm run verify` adds typecheck + e2e + build on top (pre-push gate).
 
 Canonical end-to-end manuscript for full-pipeline regression:
-`C:\Users\dudar\Downloads\Bonus Keefe Story.txt` (do not commit — copyrighted).
-Cite this file from any regression plan that needs an e2e run rather than
-inventing fresh fixtures. See `docs/features/archive/28-chapter-audio-format.md` for
-the canonical recipe.
+`server/src/__fixtures__/the-coalfall-commission.md` — _The Coalfall Commission_,
+a Castwright-owned original (committed; safe to use freely). A Russian variant of
+Chapter One lives alongside it at `the-coalfall-commission.ru.md` for the
+language-detection fixtures. Cite these from any regression plan that needs an
+e2e run rather than inventing fresh fixtures. See
+`docs/features/archive/28-chapter-audio-format.md` for the canonical recipe.
 
 ## The backlog
 

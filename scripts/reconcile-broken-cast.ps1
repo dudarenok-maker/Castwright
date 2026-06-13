@@ -11,7 +11,7 @@
 #
 # Parameters:
 #   -BookId         Required. The fully-slugged bookId, e.g.
-#                   shannon-messenger__keeper-of-the-lost-cities__unlocked
+#                   shannon-messenger__the-hollow-tide__unlocked
 #   -WorkspaceDir   Optional override. Defaults to:
 #                     1. server/user-settings.json `workspaceDirOverride`
 #                     2. server/.env  WORKSPACE_DIR

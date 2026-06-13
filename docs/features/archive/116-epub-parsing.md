@@ -21,7 +21,7 @@ owner: null
   `Import failed (500): EPUB had no extractable text in its spine.` now import
   cleanly. This is a whole class of files — any EPUB whose OPF package document
   namespaces its elements with an explicit `opf:` prefix (Simon & Schuster
-  titles like *Stellarlune* are the canonical example). When an EPUB genuinely
+  titles like *The Drowning Bell* are the canonical example). When an EPUB genuinely
   can't be read, the message now says **why** (DRM-protected / image-only /
   no readable spine) instead of the generic spine error.
 - **Technical:** The `epub2` library's OPF walker only recognises *unprefixed*
@@ -113,9 +113,9 @@ owner: null
 Run with the real server (`cd server && npm run dev`) — mocks bypass the parser.
 
 1. **Drop a prefixed-OPF EPUB** on `#/new` — e.g. a Simon & Schuster title like
-   *Stellarlune*. Expect: no 500; transitions to the analysing stage with a full
+   *The Drowning Bell*. Expect: no 500; transitions to the analysing stage with a full
    chapter count and non-empty source text. (Verified against the real file:
-   57 chapters, ~159.7k words, title "Stellarlune", author "Shannon Messenger".)
+   57 chapters, ~159.7k words, title "The Drowning Bell", author "Della Renwick".)
 2. **Confirm no head/title leak** — chapter bodies start with prose or the real
    `<h1>` heading, not the document `<title>`.
 3. **DRM negative path** — drop a DRM-protected EPUB (has `META-INF/encryption.xml`).
@@ -143,7 +143,7 @@ Run with the real server (`cd server && npm run dev`) — mocks bypass the parse
 ## Ship notes
 
 **Shipped 2026-05-26** in merge commit `82215df` (`fix(server): recover namespace-prefixed-OPF EPUBs via raw-zip fallback`, commit `c24ec2e`), branch `fix/server-epub-prefixed-opf-fallback`, PR [#266](https://github.com/dudarenok-maker/AudioBook-Generator/pull/266). Bug fix — diagnosed against the real failing file
-`Calibre Library/Shannon Messenger/Stellarlune (655)/Stellarlune - Shannon Messenger.epub`,
+`Calibre Library/Della Renwick/The Drowning Bell (655)/The Drowning Bell - Della Renwick.epub`,
 whose `OEBPS/content.opf` (a valid `version="2.0"` package) prefixes every
 element with `opf:`, defeating epub2's `parseManifest`/`parseSpine`.
 

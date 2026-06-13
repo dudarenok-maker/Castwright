@@ -160,11 +160,11 @@ describe('finalizeChapterAudioWrite engine stamp (false-drift fix)', () => {
       pcm,
       segments: [
         { groupIndex: 0, characterId: 'narrator', sentenceIds: [1], startSec: 0, endSec: 0.5 },
-        { groupIndex: 1, characterId: 'sophie', sentenceIds: [2], startSec: 0.5, endSec: 1.0 },
+        { groupIndex: 1, characterId: 'wren', sentenceIds: [2], startSec: 0.5, endSec: 1.0 },
       ],
       cast: [
         { id: 'narrator', name: 'Narrator', gender: 'neutral', attributes: [] },
-        { id: 'sophie', name: 'Sophie', gender: 'female', attributes: [], ttsEngine: 'qwen' },
+        { id: 'wren', name: 'Wren', gender: 'female', attributes: [], ttsEngine: 'qwen' },
       ],
       defaultEngine: 'kokoro',
       modelKey: 'kokoro-v1',

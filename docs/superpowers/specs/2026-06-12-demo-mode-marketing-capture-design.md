@@ -68,7 +68,7 @@ name/character scrub.
 - Real manuscripts, real audio, or live generation for the fictional series.
 - **Renaming the existing mock books/series or their slugs** — see F1 below; we
   keep them and add Hollow Tide alongside.
-- The codebase-wide copyrighted-character ("Keefe") fixture scrub — **piece #2**.
+- The codebase-wide third-party copyrighted-character fixture scrub — **piece #2**.
 - The codebase-wide real-name scrub across legal/docs prose — **piece #3**.
 - Committing the rendered PNGs to git (they are regenerable; only the harness +
   fixtures are committed).
@@ -297,11 +297,11 @@ core scenes.
   (downscaled to the companion's 250×250 thumbs) + the existing Coalfall art — so
   the two surfaces stay visually consistent. Treat the Hollow Tide content
   (metadata + cast + covers) as a **shared content pack** both pieces consume.
-- **Piece #2 — copyrighted-character fixture scrub.** Rename the "Keefe"-family
+- **Piece #2 — copyrighted-character fixture scrub.** Rename the third-party
   copyrighted character names baked into ~122 test-fixture files to the owned
   Castwright cast, and re-point the canonical regression-manuscript reference
-  (`CLAUDE.md`, plan docs) away from the copyrighted "Bonus Keefe Story.txt" to
-  an owned book. Large, mechanical, risky — its own spec.
+  (`CLAUDE.md`, plan docs) away from the legacy copyrighted manuscript to the
+  owned Coalfall book. Large, mechanical, risky — its own spec.
 - **Piece #3 — real-name scrub across legal/docs.** Per the user's call:
   **copyright + licence (`LICENSE`, `NOTICE`) keep the real name** (the actual
   legal holder); everywhere else non-legal — `User-Agent` strings in

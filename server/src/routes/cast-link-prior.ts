@@ -5,7 +5,7 @@
    book in the same series." Complements the auto-matcher
    (POST /api/books/:bookId/voice-match) — used when the name-score
    floor in voice-match.ts dropped a legitimate match (e.g.
-   "Dexter Alvin Diznee" vs "Dex" — token Jaccard is 0, so the matcher
+   "Hartwell Brennan Vale" vs "Hart" — token Jaccard is 0, so the matcher
    never surfaced the candidate).
 
    Side effect (the durable bit): the SOURCE character's name (and any
@@ -163,7 +163,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
      A manual continuity link declares "these are the same person", so the
      reused row should inherit the canonical character's representative quotes
      and descriptors — not just its voice. Without this a roster-carried row
-     (e.g. an Unlocked "Dame Alina" with zero of its own detected lines) stays
+     (e.g. an The Floodmark "Dame Linnet" with zero of its own detected lines) stays
      blank after linking, which reads as "the link did nothing". Merge rules
      mirror the in-book merge (cast-merge.ts): union the list fields (evidence,
      attributes) source-first so the current book's own quotes lead, and

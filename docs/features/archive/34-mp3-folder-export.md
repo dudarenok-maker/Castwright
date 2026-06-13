@@ -101,7 +101,7 @@ destination='sync-folder'`).
 ## Acceptance walkthrough (manual)
 
 Use the canonical end-to-end manuscript at
-`C:\Users\dudar\Downloads\Bonus Keefe Story.txt` per `CLAUDE.md`.
+`server/src/__fixtures__/the-coalfall-commission.md` per `CLAUDE.md`.
 
 1. With `VITE_USE_MOCKS=false`, server running, and a generated book
    on disk: configure `exportSyncFolder` under Account.

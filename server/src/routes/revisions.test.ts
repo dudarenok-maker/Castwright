@@ -290,19 +290,19 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
        was bound to a leaner attribute set; we want the drift report to
        surface that change so the user can decide whether to regenerate. */
     seed({
-      snapshots: { elwin: { attributes: ['kind'] } },
-      cast: [{ id: 'elwin', attributes: ['eccentric', 'kind', 'reassuring'] }],
+      snapshots: { oduvan: { attributes: ['kind'] } },
+      cast: [{ id: 'oduvan', attributes: ['eccentric', 'kind', 'reassuring'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
     const drift = res.body.drift as DriftEventOut[];
     expect(drift).toHaveLength(1);
     expect(drift[0]).toMatchObject({
-      id: `drift:${bookId}:1:elwin:attributes`,
+      id: `drift:${bookId}:1:oduvan:attributes`,
       bookId,
       severity: 'moderate',
       factor: 'attributes',
-      characterId: 'elwin',
+      characterId: 'oduvan',
       chapterId: 1,
     });
     expect(drift[0]).toHaveProperty('description');
@@ -314,8 +314,8 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
 
   it('emits a moderate drift event when an attribute is removed since synthesis', async () => {
     seed({
-      snapshots: { elwin: { attributes: ['eccentric', 'kind', 'reassuring'] } },
-      cast: [{ id: 'elwin', attributes: ['kind'] }],
+      snapshots: { oduvan: { attributes: ['eccentric', 'kind', 'reassuring'] } },
+      cast: [{ id: 'oduvan', attributes: ['kind'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
@@ -329,8 +329,8 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
     /* Stable comparison: order is a normalisation artefact, not a real
        drift signal. */
     seed({
-      snapshots: { elwin: { attributes: ['eccentric', 'kind', 'reassuring'] } },
-      cast: [{ id: 'elwin', attributes: ['reassuring', 'eccentric', 'kind'] }],
+      snapshots: { oduvan: { attributes: ['eccentric', 'kind', 'reassuring'] } },
+      cast: [{ id: 'oduvan', attributes: ['reassuring', 'eccentric', 'kind'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
@@ -340,8 +340,8 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
     /* Case-insensitive set comparison — the analyzer doesn't always
        normalise casing, and the drift report would look noisy otherwise. */
     seed({
-      snapshots: { elwin: { attributes: ['Kind'] } },
-      cast: [{ id: 'elwin', attributes: ['kind'] }],
+      snapshots: { oduvan: { attributes: ['Kind'] } },
+      cast: [{ id: 'oduvan', attributes: ['kind'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
@@ -352,8 +352,8 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
        against. Detector stays quiet rather than treating "added everything"
        as drift on every previously-rendered character. */
     seed({
-      snapshots: { elwin: { voiceId: 'v1' } }, // no attributes captured
-      cast: [{ id: 'elwin', voiceId: 'v1', attributes: ['kind'] }],
+      snapshots: { oduvan: { voiceId: 'v1' } }, // no attributes captured
+      cast: [{ id: 'oduvan', voiceId: 'v1', attributes: ['kind'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
@@ -361,9 +361,9 @@ describe('GET /api/books/:bookId/revisions — attribute drift (set-symmetric-di
 
   it('respects the dismissed filter for the attribute factor', async () => {
     seed({
-      snapshots: { elwin: { attributes: ['kind'] } },
-      cast: [{ id: 'elwin', attributes: ['eccentric', 'kind'] }],
-      dismissed: [`drift:${bookId}:1:elwin:attributes`],
+      snapshots: { oduvan: { attributes: ['kind'] } },
+      cast: [{ id: 'oduvan', attributes: ['eccentric', 'kind'] }],
+      dismissed: [`drift:${bookId}:1:oduvan:attributes`],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
@@ -413,8 +413,8 @@ describe('GET /api/books/:bookId/revisions — autoQueueable flag (plan 20 C1+C2
        selection on future regenerations). One-click auto-queue isn't
        warranted — the user should look at the diff first. */
     seed({
-      snapshots: { elwin: { attributes: ['kind'] } },
-      cast: [{ id: 'elwin', attributes: ['eccentric', 'kind'] }],
+      snapshots: { oduvan: { attributes: ['kind'] } },
+      cast: [{ id: 'oduvan', attributes: ['eccentric', 'kind'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
@@ -495,8 +495,8 @@ describe('GET /api/books/:bookId/revisions — comparison payload (plan: drift-r
 
   it('embeds before-snapshot and current on attribute-drift events', async () => {
     seed({
-      snapshots: { elwin: { attributes: ['kind'] } },
-      cast: [{ id: 'elwin', attributes: ['eccentric', 'kind'] }],
+      snapshots: { oduvan: { attributes: ['kind'] } },
+      cast: [{ id: 'oduvan', attributes: ['eccentric', 'kind'] }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     const drift = res.body.drift as DriftEventOut[];
@@ -533,14 +533,14 @@ describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', ()
   it('fires both engine drift AND voice drift when a character moves to a new engine + designed voice', async () => {
     seed({
       snapshots: {
-        biana: { voiceId: 'lib-biana', voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' },
+        maerin: { voiceId: 'lib-maerin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' },
       },
       cast: [
         {
-          id: 'biana',
-          voiceId: 'lib-biana',
+          id: 'maerin',
+          voiceId: 'lib-maerin',
           ttsEngine: 'qwen',
-          overrideTtsVoices: { qwen: { name: 'biana-designed' } },
+          overrideTtsVoices: { qwen: { name: 'maerin-designed' } },
         },
       ],
     });
@@ -552,7 +552,7 @@ describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', ()
     // Engine changed kokoro -> qwen.
     expect(engineEvent, 'expected an engine drift event').toBeTruthy();
     expect(engineEvent!.severity).toBe('severe');
-    // Resolved voice name changed af_bella -> biana-designed (the qwen override).
+    // Resolved voice name changed af_bella -> maerin-designed (the qwen override).
     expect(voiceEvent, 'expected a voice drift event').toBeTruthy();
     expect(voiceEvent!.severity).toBe('severe');
   });
@@ -560,11 +560,11 @@ describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', ()
   it('catches an override-ONLY voice change (same voiceId) via resolvedVoiceName, with no engine drift', async () => {
     seed({
       snapshots: {
-        biana: { voiceId: 'lib-biana', voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' },
+        maerin: { voiceId: 'lib-maerin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' },
       },
       // voiceId unchanged; only the per-engine override flipped af_bella -> af_nicole.
       cast: [
-        { id: 'biana', voiceId: 'lib-biana', overrideTtsVoices: { kokoro: { name: 'af_nicole' } } },
+        { id: 'maerin', voiceId: 'lib-maerin', overrideTtsVoices: { kokoro: { name: 'af_nicole' } } },
       ],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
@@ -578,8 +578,8 @@ describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', ()
   it('pre-108 snapshot (no resolvedVoiceName) falls back to the voiceId comparison', async () => {
     seed({
       // No resolvedVoiceName — legacy segment. Same voiceId → no voice drift.
-      snapshots: { biana: { voiceId: 'lib-biana', voiceEngine: 'kokoro' } },
-      cast: [{ id: 'biana', voiceId: 'lib-biana' }],
+      snapshots: { maerin: { voiceId: 'lib-maerin', voiceEngine: 'kokoro' } },
+      cast: [{ id: 'maerin', voiceId: 'lib-maerin' }],
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);

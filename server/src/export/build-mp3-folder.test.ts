@@ -54,8 +54,8 @@ function makeState(over: Partial<BookStateJson> = {}): BookStateJson {
   return {
     bookId: 'demo__sa__test',
     manuscriptId: 'mns_test',
-    title: 'Bonus Keefe Story',
-    author: 'Shannon Messenger',
+    title: 'the Coalfall Commission',
+    author: 'Della Renwick',
     series: 'Standalones',
     seriesPosition: null,
     isStandalone: true,
@@ -97,7 +97,7 @@ describeIfFfmpeg('buildMp3Folder', () => {
   });
 
   it('writes one tagged MP3 per non-excluded chapter, ordered by id, with NN- filenames', async () => {
-    const outDir = join(tmpRoot, 'export-1', 'Bonus Keefe Story');
+    const outDir = join(tmpRoot, 'export-1', 'the Coalfall Commission');
     const result = await buildMp3Folder({ bookDir, state: makeState(), outDir });
 
     expect(result.entries).toHaveLength(2);
@@ -108,7 +108,7 @@ describeIfFfmpeg('buildMp3Folder', () => {
 
     const ch1 = readFileSync(join(outDir, names[0]));
     expect(readId3Frame(ch1, 'TIT2')).toBe('Chapter 1 — Opening');
-    expect(readId3Frame(ch1, 'TALB')).toBe('Bonus Keefe Story');
+    expect(readId3Frame(ch1, 'TALB')).toBe('the Coalfall Commission');
     expect(readId3Frame(ch1, 'TRCK')).toBe('1/2');
 
     const ch2 = readFileSync(join(outDir, names[1]));
@@ -127,13 +127,13 @@ describeIfFfmpeg('buildMp3Folder', () => {
       buildMp3Folder({
         bookDir: join(tmpRoot, 'incomplete-book'),
         state: makeState(),
-        outDir: join(tmpRoot, 'export-incomplete', 'Bonus Keefe Story'),
+        outDir: join(tmpRoot, 'export-incomplete', 'the Coalfall Commission'),
       }),
     ).rejects.toBeInstanceOf(ExportIncompleteError);
   }, 15_000);
 
   it('overwrites the destination directory on rerun so stale chapter files do not survive', async () => {
-    const outDir = join(tmpRoot, 'export-rerun', 'Bonus Keefe Story');
+    const outDir = join(tmpRoot, 'export-rerun', 'the Coalfall Commission');
     /* Plant a stale file inside the destination first — represents a
        previous run that produced more chapters than this one. The
        builder must rm-and-recreate, not just write-through. */
@@ -148,7 +148,7 @@ describeIfFfmpeg('buildMp3Folder', () => {
   }, 30_000);
 
   it('reports monotonic progress reaching 1 on completion', async () => {
-    const outDir = join(tmpRoot, 'export-progress', 'Bonus Keefe Story');
+    const outDir = join(tmpRoot, 'export-progress', 'the Coalfall Commission');
     const ratios: number[] = [];
     await buildMp3Folder({
       bookDir,

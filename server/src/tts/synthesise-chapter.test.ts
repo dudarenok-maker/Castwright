@@ -4,7 +4,7 @@
    before calling pickVoiceForEngine. The picker then had nothing to work with
    beyond id/name/attributes, inferGender returned 'unknown' for any character
    whose attributes didn't contain a gendered noun, and the fallback was
-   narrator-cool. Net effect: Elwin (male) and Ro (female) both came out
+   narrator-cool. Net effect: Oduvan (male) and Ro (female) both came out
    sounding like the narrator.
 
    These tests pin the contract so a future refactor cannot silently revert
@@ -64,8 +64,8 @@ describe('synthesiseChapter voice routing', () => {
   it('routes a male character to the male voice bucket when gender is set on the cast', async () => {
     const cast: CastCharacter[] = [
       {
-        id: 'elwin',
-        name: 'Elwin',
+        id: 'oduvan',
+        name: 'Oduvan',
         gender: 'male',
         ageRange: 'adult',
         attributes: ['caring', 'firm', 'patient'],
@@ -75,7 +75,7 @@ describe('synthesiseChapter voice routing', () => {
     const provider = makeProvider();
 
     await synthesiseChapter({
-      sentences: [sentence(1, 'elwin')],
+      sentences: [sentence(1, 'oduvan')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -91,8 +91,8 @@ describe('synthesiseChapter voice routing', () => {
   it('routes a female character to the female voice bucket when gender is set on the cast', async () => {
     const cast: CastCharacter[] = [
       {
-        id: 'ro',
-        name: 'Ro',
+        id: 'nim',
+        name: 'Nim',
         gender: 'female',
         ageRange: 'adult',
         attributes: ['sarcastic', 'blunt', 'intimidating'],
@@ -102,7 +102,7 @@ describe('synthesiseChapter voice routing', () => {
     const provider = makeProvider();
 
     await synthesiseChapter({
-      sentences: [sentence(1, 'ro')],
+      sentences: [sentence(1, 'nim')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -139,21 +139,21 @@ describe('synthesiseChapter voice routing', () => {
   });
 
   it('uses different voice buckets per speaker within the same chapter (multi-character regression)', async () => {
-    /* The exact bug scenario from Day One of the Bonus Keefe Story: three
+    /* The exact bug scenario from Day One of the the Coalfall Commission: three
        speakers, only the narrator gendered by id. Without the hint plumbing,
-       Elwin and Ro both collapsed onto the narrator-cool bucket. */
+       Oduvan and Ro both collapsed onto the narrator-cool bucket. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
       {
-        id: 'elwin',
-        name: 'Elwin',
+        id: 'oduvan',
+        name: 'Oduvan',
         gender: 'male',
         ageRange: 'adult',
         attributes: ['caring', 'firm'],
       },
       {
-        id: 'ro',
-        name: 'Ro',
+        id: 'nim',
+        name: 'Nim',
         gender: 'female',
         ageRange: 'adult',
         attributes: ['sarcastic', 'blunt'],
@@ -163,9 +163,9 @@ describe('synthesiseChapter voice routing', () => {
 
     await synthesiseChapter({
       sentences: [
-        sentence(1, 'narrator', 'And it made Keefe queasier.'),
-        sentence(2, 'elwin', 'Lifetime of pain if you do not listen.'),
-        sentence(3, 'ro', 'Moving from denial mode to sulky boy.'),
+        sentence(1, 'narrator', 'And it made Marlow queasier.'),
+        sentence(2, 'oduvan', 'Lifetime of pain if you do not listen.'),
+        sentence(3, 'nim', 'Moving from denial mode to sulky boy.'),
       ],
       cast,
       provider,
@@ -174,15 +174,15 @@ describe('synthesiseChapter voice routing', () => {
     });
 
     expect(provider.calls).toHaveLength(3);
-    const [narratorVoice, elwinVoice, roVoice] = provider.calls.map((c) => c.voiceName);
+    const [narratorVoice, oduvanVoice, roVoice] = provider.calls.map((c) => c.voiceName);
 
     expect(GEMINI_NARRATOR_VOICES, `narrator → ${narratorVoice}`).toContain(narratorVoice);
-    expect(GEMINI_MALE_VOICES, `elwin → ${elwinVoice}`).toContain(elwinVoice);
+    expect(GEMINI_MALE_VOICES, `oduvan → ${oduvanVoice}`).toContain(oduvanVoice);
     expect(GEMINI_FEMALE_VOICES, `ro → ${roVoice}`).toContain(roVoice);
 
     /* All three must be distinct — the original bug collapsed them onto the
        same narrator voice. */
-    expect(new Set([narratorVoice, elwinVoice, roVoice]).size).toBe(3);
+    expect(new Set([narratorVoice, oduvanVoice, roVoice]).size).toBe(3);
   });
 
   it('honours an abort signal between groups (per-bookId mutex regression)', async () => {
@@ -193,8 +193,8 @@ describe('synthesiseChapter voice routing', () => {
        on CPU). This is what unstuck the pause→resume loop. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'elwin', name: 'Elwin', gender: 'male', attributes: ['caring'] },
-      { id: 'ro', name: 'Ro', gender: 'female', attributes: ['blunt'] },
+      { id: 'oduvan', name: 'Oduvan', gender: 'male', attributes: ['caring'] },
+      { id: 'nim', name: 'Nim', gender: 'female', attributes: ['blunt'] },
     ];
     const controller = new AbortController();
     const provider = makeProvider();
@@ -209,8 +209,8 @@ describe('synthesiseChapter voice routing', () => {
       synthesiseChapter({
         sentences: [
           sentence(1, 'narrator', 'First group.'),
-          sentence(2, 'elwin', 'Second group.'),
-          sentence(3, 'ro', 'Third group.'),
+          sentence(2, 'oduvan', 'Second group.'),
+          sentence(3, 'nim', 'Third group.'),
         ],
         cast,
         provider,
@@ -267,7 +267,7 @@ describe('synthesiseChapter voice routing', () => {
        regress the stall UX. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'elwin', name: 'Elwin', gender: 'male', attributes: ['caring'] },
+      { id: 'oduvan', name: 'Oduvan', gender: 'male', attributes: ['caring'] },
     ];
     const events: string[] = [];
     const provider: TtsProvider = {
@@ -278,7 +278,7 @@ describe('synthesiseChapter voice routing', () => {
     };
 
     await synthesiseChapter({
-      sentences: [sentence(1, 'narrator', 'First.'), sentence(2, 'elwin', 'Second.')],
+      sentences: [sentence(1, 'narrator', 'First.'), sentence(2, 'oduvan', 'Second.')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -294,15 +294,15 @@ describe('synthesiseChapter voice routing', () => {
     expect(events[0]).toBe('start:narrator');
     expect(events[1]).toMatch(/^synth:/);
     expect(events[2]).toBe('complete:narrator');
-    expect(events[3]).toBe('start:elwin');
+    expect(events[3]).toBe('start:oduvan');
     expect(events[4]).toMatch(/^synth:/);
-    expect(events[5]).toBe('complete:elwin');
+    expect(events[5]).toBe('complete:oduvan');
   });
 
   it('scrubs all-caps openers and em-dashes before handing text to the provider (chapter-2 regression)', async () => {
-    /* The canonical Keeper of the Lost Cities chapter-2 opener fed XTTS
+    /* The canonical The Hollow Tide chapter-2 opener fed XTTS
        a 3-sentence narrator group whose first sentence was all-caps
-       ("THE NEXT SECOND WAS A BLUR.") with two em-dashes in the
+       ("THE NEXT SECOND WAS A HAZE.") with two em-dashes in the
        follow-on. XTTS spelled the all-caps letter-by-letter and looped
        around the dashes, producing ~60s of garbled audio for what
        should have been ~13s of speech.
@@ -318,16 +318,16 @@ describe('synthesiseChapter voice routing', () => {
 
     await synthesiseChapter({
       sentences: [
-        sentence(1, 'narrator', 'THE NEXT SECOND WAS A BLUR.'),
+        sentence(1, 'narrator', 'THE NEXT SECOND WAS A HAZE.'),
         sentence(
           2,
           'narrator',
-          'The car swerved right—missing Sophie by inches—then jumped the curb and sideswiped a streetlight.',
+          'The car swerved right—missing Wren by inches—then jumped the curb and sideswiped a streetlight.',
         ),
         sentence(
           3,
           'narrator',
-          'The heavy steel lantern cracked from its base and plummeted toward Sophie.',
+          'The heavy steel lantern cracked from its base and plummeted toward Wren.',
         ),
       ],
       cast,
@@ -345,8 +345,8 @@ describe('synthesiseChapter voice routing', () => {
       expect(call.text, `provider received: ${call.text}`).not.toMatch(/[A-Z]{3,}/);
       expect(call.text, `provider received: ${call.text}`).not.toMatch(/[—–]/);
     }
-    expect(provider.calls[0].text).toBe('The Next Second Was A Blur.');
-    expect(provider.calls[1].text).toContain('Sophie by inches, then');
+    expect(provider.calls[0].text).toBe('The Next Second Was A Haze.');
+    expect(provider.calls[1].text).toContain('Wren by inches, then');
   });
 
   it('resamples mid-chapter sample-rate mismatches to the first-group anchor (Kokoro/Coqui co-cast regression)', async () => {
@@ -358,7 +358,7 @@ describe('synthesiseChapter voice routing', () => {
        array stays monotonic. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'elwin', name: 'Elwin', gender: 'male', attributes: ['caring'] },
+      { id: 'oduvan', name: 'Oduvan', gender: 'male', attributes: ['caring'] },
     ];
     let callIndex = 0;
     const provider: TtsProvider = {
@@ -377,7 +377,7 @@ describe('synthesiseChapter voice routing', () => {
     const result = await synthesiseChapter({
       sentences: [
         sentence(1, 'narrator', 'First group.'),
-        sentence(2, 'elwin', 'Second group with a different rate.'),
+        sentence(2, 'oduvan', 'Second group with a different rate.'),
       ],
       cast,
       provider,
@@ -405,8 +405,8 @@ describe('synthesiseChapter voice routing', () => {
        in the right bucket. */
     const cast: CastCharacter[] = [
       {
-        id: 'keefe',
-        name: 'Keefe',
+        id: 'marlow',
+        name: 'Marlow',
         attributes: ['playful', 'witty'],
         description:
           'A witty young man recovering from his injuries. He often grins and jokes when he is scared. He keeps trying to reassure himself.',
@@ -415,7 +415,7 @@ describe('synthesiseChapter voice routing', () => {
     const provider = makeProvider();
 
     await synthesiseChapter({
-      sentences: [sentence(1, 'keefe')],
+      sentences: [sentence(1, 'marlow')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -635,12 +635,12 @@ describe('synthesiseChapter chapter-title beat', () => {
   it('prepends a narrator-voiced title segment with leading + trailing silence', async () => {
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'keefe', name: 'Keefe', gender: 'male', attributes: ['witty'] },
+      { id: 'marlow', name: 'Marlow', gender: 'male', attributes: ['witty'] },
     ];
     const provider = makeProvider();
 
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'keefe', 'Body line one.')],
+      sentences: [sentence(1, 'marlow', 'Body line one.')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -670,7 +670,7 @@ describe('synthesiseChapter chapter-title beat', () => {
        24 kHz) PCM for the title, so titleEndSec ≈ 1.5 + 0.0000417 and
        body startSec ≈ 1.5 + 0.0000417 + 1.5 ≈ 3.0. */
     expect(result.segments[1].kind).toBeUndefined();
-    expect(result.segments[1].characterId).toBe('keefe');
+    expect(result.segments[1].characterId).toBe('marlow');
     expect(result.segments[1].startSec).toBeCloseTo(3.0, 2);
   });
 
@@ -705,7 +705,7 @@ describe('synthesiseChapter chapter-title beat', () => {
        accidentally lets the body loop re-anchor mid-chapter. */
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator', attributes: ['observational'] },
-      { id: 'elwin', name: 'Elwin', gender: 'male', attributes: ['caring'] },
+      { id: 'oduvan', name: 'Oduvan', gender: 'male', attributes: ['caring'] },
     ];
     let callIndex = 0;
     const provider: TtsProvider = {
@@ -718,7 +718,7 @@ describe('synthesiseChapter chapter-title beat', () => {
     };
 
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'elwin', 'Body line at a mismatched rate.')],
+      sentences: [sentence(1, 'oduvan', 'Body line at a mismatched rate.')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -775,12 +775,12 @@ describe('synthesiseChapter chapter-title beat', () => {
        with no gender/age hints; pickVoiceForEngine routes that to the
        narrator-cool bucket (which IS what we want for chapter titles). */
     const cast: CastCharacter[] = [
-      { id: 'keefe', name: 'Keefe', gender: 'male', attributes: ['witty'] },
+      { id: 'marlow', name: 'Marlow', gender: 'male', attributes: ['witty'] },
     ];
     const provider = makeProvider();
 
     await synthesiseChapter({
-      sentences: [sentence(1, 'keefe', 'Body.')],
+      sentences: [sentence(1, 'marlow', 'Body.')],
       cast,
       provider,
       modelKey: 'gemini-2.5-flash',
@@ -798,7 +798,7 @@ describe('synthesiseChapter chapter-title beat', () => {
 /* ── plan 70d — buildSentenceGroups emits one group per sentence ─────
    Earlier code folded consecutive same-speaker sentences into one
    synth call to cut HTTP roundtrips. That folding produced a 207-
-   sentence narrator group on the canonical Keeper book that ran past
+   sentence narrator group on the canonical The Hollow Tide book that ran past
    the 30 s "Worker has gone quiet" watchdog and either timed out or
    hung at very large context sizes. Per-sentence groups: continuous
    progress ticks (one per sentence), bounded synth duration, no voice
@@ -822,8 +822,8 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
 
   it('fs-25 — carries each sentence\'s emotion onto its group (undefined when absent)', () => {
     const groups = buildSentenceGroups([
-      { id: 1, chapterId: 1, characterId: 'sophie', text: 'Stop!', emotion: 'angry' },
-      { id: 2, chapterId: 1, characterId: 'sophie', text: 'okay.' },
+      { id: 1, chapterId: 1, characterId: 'wren', text: 'Stop!', emotion: 'angry' },
+      { id: 2, chapterId: 1, characterId: 'wren', text: 'okay.' },
     ]);
     expect(groups.map((g) => g.emotion)).toEqual(['angry', undefined]);
   });
@@ -831,16 +831,16 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
   it('preserves order across mixed speakers', () => {
     const groups = buildSentenceGroups([
       s(1, 'narrator', 'Open.'),
-      s(2, 'sophie', 'Hi.'),
-      s(3, 'sophie', 'Are you there?'),
+      s(2, 'wren', 'Hi.'),
+      s(3, 'wren', 'Are you there?'),
       s(4, 'narrator', 'Close.'),
     ]);
-    expect(groups.map((g) => g.characterId)).toEqual(['narrator', 'sophie', 'sophie', 'narrator']);
+    expect(groups.map((g) => g.characterId)).toEqual(['narrator', 'wren', 'wren', 'narrator']);
     expect(groups.map((g) => g.text)).toEqual(['Open.', 'Hi.', 'Are you there?', 'Close.']);
   });
 
   it('scales to a 207-sentence all-narrator chapter (the regression case)', () => {
-    /* Chapter 4 of the canonical Keeper book is a structured registry
+    /* Chapter 4 of the canonical The Hollow Tide book is a structured registry
        file — 207 narrator-only sentences. Pre-fix this collapsed to 1
        giant group; post-fix each becomes its own bounded synth call. */
     const sentences = Array.from({ length: 207 }, (_, i) =>
@@ -860,7 +860,7 @@ describe('buildSentenceGroups (plan 70d — per-sentence)', () => {
     const groups = buildSentenceGroups([
       s(1, 'narrator', 'Open.'),
       s(2, 'narrator', '   '), // whitespace-only → no spoken audio
-      s(3, 'sophie', 'Hi.'),
+      s(3, 'wren', 'Hi.'),
       s(4, 'narrator', ''), // empty → dropped
       s(5, 'narrator', 'Close.'),
     ]);
@@ -1205,19 +1205,19 @@ describe('synthesiseChapter per-character engine routing (plan 108)', () => {
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator' },
       {
-        id: 'biana',
-        name: 'Biana',
+        id: 'maerin',
+        name: 'Maerin',
         gender: 'female',
         ageRange: 'teen',
         ttsEngine: 'qwen',
-        overrideTtsVoices: { qwen: { name: 'biana-designed' } },
+        overrideTtsVoices: { qwen: { name: 'maerin-designed' } },
       },
     ];
     const kokoro = taggedProvider(24000); // default engine + anchor rate
     const qwen = taggedProvider(16000); // different rate → must resample to anchor
 
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'narrator'), sentence(2, 'biana'), sentence(3, 'narrator')],
+      sentences: [sentence(1, 'narrator'), sentence(2, 'maerin'), sentence(3, 'narrator')],
       cast,
       provider: kokoro,
       modelKey: 'kokoro-v1',
@@ -1228,9 +1228,9 @@ describe('synthesiseChapter per-character engine routing (plan 108)', () => {
           : { provider: kokoro, modelKey: 'kokoro-v1' },
     });
 
-    // Biana's line went to the Qwen provider with her designed voiceId + qwen modelKey.
+    // Maerin's line went to the Qwen provider with her designed voiceId + qwen modelKey.
     expect(qwen.calls).toHaveLength(1);
-    expect(qwen.calls[0].voiceName).toBe('biana-designed');
+    expect(qwen.calls[0].voiceName).toBe('maerin-designed');
     expect(qwen.calls[0].modelKey).toBe('qwen3-tts-0.6b');
     // The narrator's two lines used the default (kokoro) provider + a kokoro voice.
     expect(kokoro.calls).toHaveLength(2);
@@ -1241,17 +1241,17 @@ describe('synthesiseChapter per-character engine routing (plan 108)', () => {
     // Anchor rate is groups[0] (narrator/kokoro = 24000); the 16k qwen group resamples up.
     expect(result.sampleRate).toBe(24000);
     // Narrative order preserved across engines.
-    expect(result.segments.map((s) => s.characterId)).toEqual(['narrator', 'biana', 'narrator']);
+    expect(result.segments.map((s) => s.characterId)).toEqual(['narrator', 'maerin', 'narrator']);
   });
 
   it('without resolveForEngine + no per-character ttsEngine, everything uses the default provider (byte-identical to pre-108)', async () => {
     const cast: CastCharacter[] = [
       { id: 'narrator', name: 'Narrator' },
-      { id: 'fitz', name: 'Fitz', gender: 'male', ageRange: 'teen' },
+      { id: 'brann', name: 'Brann', gender: 'male', ageRange: 'teen' },
     ];
     const provider = taggedProvider(24000);
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'narrator'), sentence(2, 'fitz')],
+      sentences: [sentence(1, 'narrator'), sentence(2, 'brann')],
       cast,
       provider,
       modelKey: 'kokoro-v1',
@@ -1406,18 +1406,18 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       overrideTtsVoices: { qwen: { name: 'narr-q' } },
     },
     {
-      id: 'biana',
-      name: 'Biana',
+      id: 'maerin',
+      name: 'Maerin',
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'biana-q' } },
+      overrideTtsVoices: { qwen: { name: 'maerin-q' } },
     },
   ];
 
   const MIXED_SENTENCES = [
     sentence(1, 'narrator', 'First sentence here.'),
-    sentence(2, 'biana', 'Two.'),
+    sentence(2, 'maerin', 'Two.'),
     sentence(3, 'narrator', 'A noticeably longer third sentence to vary the byte length.'),
-    sentence(4, 'biana', 'Fourth!'),
+    sentence(4, 'maerin', 'Fourth!'),
     sentence(5, 'narrator', 'Fifth and final sentence.'),
   ];
 
@@ -1461,9 +1461,9 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     expect(batchP.singleCalls).toHaveLength(1);
     expect(batchP.batchCalls).toHaveLength(1);
     expect(batchP.batchCalls[0].items.map((i) => i.voiceName)).toEqual([
-      'biana-q',
+      'maerin-q',
       'narr-q',
-      'biana-q',
+      'maerin-q',
       'narr-q',
     ]);
   });
@@ -1643,8 +1643,8 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
       synthesiseChapter({
         sentences: [
           sentence(1, 'narrator', 'Anchor.'),
-          sentence(2, 'biana', 'Batched one.'),
-          sentence(3, 'biana', 'Batched two.'),
+          sentence(2, 'maerin', 'Batched one.'),
+          sentence(3, 'maerin', 'Batched two.'),
         ],
         cast: QWEN_CAST,
         provider,
@@ -1723,13 +1723,13 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
   const VARIED_SENTENCES = [
     sentence(1, 'narrator', 'Anchor sentence sets the sample rate.'),
     sentence(2, 'narrator', 'Hi.'),
-    sentence(3, 'biana', long(3)),
+    sentence(3, 'maerin', long(3)),
     sentence(4, 'narrator', 'Yo!'),
-    sentence(5, 'biana', long(5)),
+    sentence(5, 'maerin', long(5)),
     sentence(6, 'narrator', 'Ok.'),
-    sentence(7, 'biana', long(7)),
+    sentence(7, 'maerin', long(7)),
     sentence(8, 'narrator', 'Go.'),
-    sentence(9, 'biana', long(9)),
+    sentence(9, 'maerin', long(9)),
   ];
   const batchSpreads = (p: ReturnType<typeof makeBatchProvider>): number[] =>
     p.batchCalls.map((c) => {
@@ -1844,10 +1844,10 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
   const TB_SENTENCES = [
     sentence(1, 'narrator', 'Anchor sentence sets the sample rate.'),
     ...Array.from({ length: 8 }, (_, i) =>
-      sentence(i + 2, i % 2 ? 'biana' : 'narrator', SHORT),
+      sentence(i + 2, i % 2 ? 'maerin' : 'narrator', SHORT),
     ),
     ...Array.from({ length: 4 }, (_, i) =>
-      sentence(i + 10, i % 2 ? 'biana' : 'narrator', LONG),
+      sentence(i + 10, i % 2 ? 'maerin' : 'narrator', LONG),
     ),
   ];
 
@@ -1934,7 +1934,7 @@ describe('synthesiseChapter Qwen true batching (plan 112)', () => {
     const sentences = [
       sentence(1, 'narrator', 'Anchor sentence sets the sample rate.'),
       ...Array.from({ length: 6 }, (_, i) => sentence(i + 2, 'narrator', SHORT)),
-      sentence(8, 'biana', HUGE),
+      sentence(8, 'maerin', HUGE),
     ];
     const p = makeBatchProvider();
     const out = await synthesiseChapter({
@@ -2002,11 +2002,11 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
   }
 
   it('falls an undesigned Qwen character back to Kokoro and stamps the segment', async () => {
-    const cast: CastCharacter[] = [{ id: 'sophie', name: 'Sophie', gender: 'female' }];
+    const cast: CastCharacter[] = [{ id: 'wren', name: 'Wren', gender: 'female' }];
     const { qwen, kokoro, resolveForEngine } = multiEngine();
 
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'sophie')],
+      sentences: [sentence(1, 'wren')],
       cast,
       provider: qwen,
       modelKey: 'qwen3-tts-0.6b',
@@ -2024,12 +2024,12 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
 
   it('does NOT fall back a designed Qwen voice when the engine is available', async () => {
     const cast: CastCharacter[] = [
-      { id: 'keefe', name: 'Keefe', gender: 'male', overrideTtsVoices: { qwen: { name: 'keefe-q' } } },
+      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'marlow-q' } } },
     ];
     const { qwen, kokoro, resolveForEngine } = multiEngine();
 
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'keefe')],
+      sentences: [sentence(1, 'marlow')],
       cast,
       provider: qwen,
       modelKey: 'qwen3-tts-0.6b',
@@ -2038,7 +2038,7 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
     });
 
     expect(qwen.calls).toHaveLength(1);
-    expect(qwen.calls[0].voiceName).toBe('keefe-q');
+    expect(qwen.calls[0].voiceName).toBe('marlow-q');
     expect(kokoro.calls).toHaveLength(0);
     const body = result.segments.find((s) => s.kind !== 'title');
     expect(body?.renderedFallbackEngine).toBeUndefined();
@@ -2046,12 +2046,12 @@ describe('synthesiseChapter — Qwen→Kokoro graceful fallback', () => {
 
   it('falls a designed Qwen voice back to Kokoro when the engine is unavailable', async () => {
     const cast: CastCharacter[] = [
-      { id: 'keefe', name: 'Keefe', gender: 'male', overrideTtsVoices: { qwen: { name: 'keefe-q' } } },
+      { id: 'marlow', name: 'Marlow', gender: 'male', overrideTtsVoices: { qwen: { name: 'marlow-q' } } },
     ];
     const { qwen, kokoro, resolveForEngine } = multiEngine();
 
     const result = await synthesiseChapter({
-      sentences: [sentence(1, 'keefe')],
+      sentences: [sentence(1, 'marlow')],
       cast,
       provider: qwen,
       modelKey: 'qwen3-tts-0.6b',
@@ -2218,7 +2218,7 @@ describe('resolveQwenTokenBudget', () => {
   });
 });
 
-/* Plan 148 — defensive per-call synth timeout. The KOTLC stall: a Qwen call
+/* Plan 148 — defensive per-call synth timeout. The the Hollow Tide stall: a Qwen call
    ran away on degenerate back-matter and never returned, hanging the chapter
    (and the queue) for an hour. The watchdog must turn that into a chapter
    failure the queue rides past. */

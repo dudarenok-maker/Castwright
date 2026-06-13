@@ -83,7 +83,7 @@ const QWEN_BATCH_TOKEN_BUDGET = configValue<number>('tts.batch.tokenBudget');
    returns — e.g. Qwen's open-ended decode running away on degenerate, non-prose
    input (a table-of-contents page, a copyright block) — would otherwise hang the
    chapter, and with it the whole generation queue, indefinitely (the 2026-05-31
-   KOTLC stall). Bounding each call turns that infinite hang into a single
+   the Hollow Tide stall). Bounding each call turns that infinite hang into a single
    chapter failure the queue rides past. Generous default (10 min) — far above
    any legitimate single batch (~250 s for 32 sentences). `0` disables. */
 const SYNTH_CALL_TIMEOUT_MS = (() => {
@@ -113,7 +113,7 @@ export class ChapterSynthTimeoutError extends Error {
     (encode / ffmpeg loudnorm / disk), which has no per-call timeout. It is NOT
     an AbortError, so the generation loop records it as a durable
     `generationError` instead of silently swallowing it as a pause. The
-    2026-06-02 stellarlune ch52 stall was exactly this: no progress, no error,
+    2026-06-02 the drowning bell ch52 stall was exactly this: no progress, no error,
     no breadcrumb. */
 export class ChapterStallError extends Error {
   constructor(ms: number, phase: 'synthesis' | 'assembly') {
@@ -191,7 +191,7 @@ function logSynthTimeoutOffender(err: unknown, groups: SentenceGroup[]): void {
     `pickVoiceForEngine` away from the narrator fallback for non-narrator
     characters. Dropping them here forces every character without a gendered
     word in its name/attributes to land on narrator-cool, which manifested as
-    Elwin and Ro speaking in the narrator's voice. */
+    Oduvan and Ro speaking in the narrator's voice. */
 export interface CastCharacter {
   id: string;
   name?: string;
@@ -579,7 +579,7 @@ export interface AsrPassOptions {
 /** One group per sentence. Plan 70d — earlier code folded consecutive
     same-speaker sentences into one synth call to cut HTTP roundtrips.
     Two production failures pushed us to per-sentence:
-      1. A 207-sentence narrator block on the canonical Keeper book
+      1. A 207-sentence narrator block on the canonical The Hollow Tide book
          folded into one Kokoro call that ran longer than the 30 s
          "Worker has gone quiet" client watchdog, then either timed out
          on the model side or hung at very large context sizes — never

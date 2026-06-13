@@ -10,11 +10,11 @@ owner: null
 > Key files: `server/src/analyzer/stage2-coverage.ts`, `server/src/routes/analysis.ts`, `scripts/audit-stage2-coverage.mts`
 > URL surface: none (analysis pipeline + CLI audit)
 > OpenAPI ops: none
-> Issues: closes #515 (analyzer loop-and-truncate — Stellarlune ch12/ch18)
+> Issues: closes #515 (analyzer loop-and-truncate — The Drowning Bell ch12/ch18)
 
 ## Context
 
-While listening to *Stellarlune* the user hit duplicated sections in Chapter 18.
+While listening to *The Drowning Bell* the user hit duplicated sections in Chapter 18.
 Forensics (2026-06-05) traced it through every layer — raw EPUB clean (×1),
 stage1 + stage2 PROMPTS clean (×1), but the **stage2 attribution response ×2 and
 truncated**. The per-chapter attribution model (prose → per-sentence JSON) fell
@@ -82,12 +82,12 @@ per-sentence audio quality, not source fidelity).
   false positive), tag tolerance, env + explicit thresholds, empty input; plus
   `runStage2WithCoverageGuard` — accepts good first try, retries-and-keeps-good,
   exhausts-and-keeps-least-bad, disabled at 0.
-- Real-data validation: `npm run audit:stage2-coverage` flags exactly Stellarlune
+- Real-data validation: `npm run audit:stage2-coverage` flags exactly The Drowning Bell
   ch12 (12%) + ch18 (52% + DUP×44) and clears every other novel.
 
 ### Manual acceptance (owed — needs the analyzer running)
 
-1. Re-analyze Stellarlune ch12 + ch18 with the guard on; confirm the log shows a
+1. Re-analyze The Drowning Bell ch12 + ch18 with the guard on; confirm the log shows a
    coverage re-analysis if the model loops, and the resulting cache passes the
    audit (no dup, full coverage). Then regenerate their audio.
 
@@ -95,7 +95,7 @@ per-sentence audio quality, not source fidelity).
 
 - Re-analyzing + regenerating the two damaged chapters (the user runs this once
   the app is on the new code).
-- Auditing non-EPUB (txt/pdf) books and the Unlocked guide book (re-parse id
+- Auditing non-EPUB (txt/pdf) books and the Floodmark guide book (re-parse id
   drift makes title-gated alignment unreliable — reported as skipped).
 - **Missing-speaker / roster coverage** — a speaker the prose tags but Phase-0a
   dropped from the roster (so stage-2 demotes their lines to narrator). That is a
@@ -106,5 +106,5 @@ per-sentence audio quality, not source fidelity).
 ## Ship notes
 
 Shipped 2026-06-06 (merge 1e93419, PR #516, closes #515). Live acceptance
-confirmed: Stellarlune ch12 + ch18 re-analysed and regenerated;
+confirmed: The Drowning Bell ch12 + ch18 re-analysed and regenerated;
 `npm run audit:stage2-coverage` came back clean; the data-fix issue #517 is closed.

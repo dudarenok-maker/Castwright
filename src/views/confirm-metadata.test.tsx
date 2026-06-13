@@ -15,9 +15,9 @@ import type { ImportCandidate, LibraryBook } from '../lib/types';
 const candidate: ImportCandidate = {
   tempId: 'imp_test',
   format: 'epub',
-  title: 'Keeper of the Lost Cities',
-  author: 'Shannon Messenger',
-  series: 'Keeper of the Lost Cities',
+  title: 'The Hollow Tide',
+  author: 'Della Renwick',
+  series: 'The Hollow Tide',
   seriesPosition: null /* Mirrors the screenshot: parser left position blank. */,
   sourceText: 'body',
   wordCount: 103102,
@@ -29,8 +29,8 @@ const libraryBook = (
   overrides: Partial<LibraryBook> & Pick<LibraryBook, 'bookId'>,
 ): LibraryBook => ({
   title: overrides.bookId,
-  author: 'Shannon Messenger',
-  series: 'Keeper of the Lost Cities',
+  author: 'Della Renwick',
+  series: 'The Hollow Tide',
   seriesPosition: null,
   isStandalone: false,
   status: 'complete',
@@ -98,15 +98,15 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     const user = userEvent.setup();
     renderView([
       libraryBook({
-        bookId: 'shannon-messenger__keeper__exile',
-        title: 'Exile',
+        bookId: 'della-renwick__the-hollow-tide__the-ebb',
+        title: 'The Ebb',
         seriesPosition: 2,
       }),
     ]);
     const bookNum = screen.getByPlaceholderText('1');
     await user.type(bookNum, '2');
     expect(screen.getByText(/heads-up/i)).toBeInTheDocument();
-    expect(screen.getByText(/Exile/)).toBeInTheDocument();
+    expect(screen.getByText(/The Ebb/)).toBeInTheDocument();
   });
 
   it('does not warn when the same number exists in a different series', async () => {
@@ -119,19 +119,19 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     expect(screen.queryByText(/heads-up/i)).not.toBeInTheDocument();
   });
 
-  it('matches series case-insensitively (so "keeper of the lost cities" and "Keeper…" collide)', async () => {
+  it('matches series case-insensitively (so "the hollow tide" and "Keeper…" collide)', async () => {
     const user = userEvent.setup();
     renderView([
       libraryBook({
         bookId: 'lower-case-series',
-        title: 'Everblaze',
-        series: 'keeper of the lost cities',
+        title: 'The Tidewatcher’s Oath',
+        series: 'the hollow tide',
         seriesPosition: 3,
       }),
     ]);
     const bookNum = screen.getByPlaceholderText('1');
     await user.type(bookNum, '3');
-    expect(screen.getByText(/Everblaze/)).toBeInTheDocument();
+    expect(screen.getByText(/The Tidewatcher’s Oath/)).toBeInTheDocument();
   });
 });
 
@@ -167,9 +167,9 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
   it('renders the chip next to SERIES when seriesFromTitle is true', () => {
     renderWithCandidate({
       seriesFromTitle: true,
-      series: 'Keeper of the Lost Cities',
+      series: 'The Hollow Tide',
       seriesPosition: 3,
-      title: 'Everblaze',
+      title: 'The Tidewatcher’s Oath',
     });
     expect(screen.getByText(/auto-extracted from title/i)).toBeInTheDocument();
   });
@@ -177,7 +177,7 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
   it('omits the chip when seriesFromTitle is false', () => {
     renderWithCandidate({
       seriesFromTitle: false,
-      series: 'Keeper of the Lost Cities',
+      series: 'The Hollow Tide',
       seriesPosition: 3,
     });
     expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
@@ -186,7 +186,7 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
   it('omits the chip when seriesFromTitle is undefined (older server build)', () => {
     /* Forward-compat: if the server hasn't been upgraded to emit the
        flag yet, the field is absent — chip stays hidden, no crash. */
-    renderWithCandidate({ series: 'Keeper of the Lost Cities', seriesPosition: 3 });
+    renderWithCandidate({ series: 'The Hollow Tide', seriesPosition: 3 });
     expect(screen.queryByText(/auto-extracted from title/i)).not.toBeInTheDocument();
   });
 
@@ -194,7 +194,7 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
     const user = userEvent.setup();
     renderWithCandidate({
       seriesFromTitle: true,
-      series: 'Keeper of the Lost Cities',
+      series: 'The Hollow Tide',
       seriesPosition: 3,
     });
     expect(screen.getByText(/auto-extracted from title/i)).toBeInTheDocument();

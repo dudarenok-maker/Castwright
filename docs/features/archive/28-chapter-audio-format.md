@@ -106,7 +106,7 @@ urlSuffix: 'audio.mp3' }` when `<slug>.mp3` exists, or null. No probe
 ## Acceptance walkthrough
 
 Use the canonical end-to-end manuscript at
-`C:\Users\dudar\Downloads\Bonus Keefe Story.txt` — see the recipe below.
+`server/src/__fixtures__/the-coalfall-commission.md` — see the recipe below.
 Run with `VITE_USE_MOCKS=false`, sidecar up, ffmpeg on PATH.
 
 ### End-to-end recipe (canonical, cite from other plans)
@@ -114,9 +114,9 @@ Run with `VITE_USE_MOCKS=false`, sidecar up, ffmpeg on PATH.
 1. `npm run start` (or `scripts/start-app.ps1`) — preflight should pass
    silently when ffmpeg is installed.
 2. App opens. From Books, **Upload** the canonical manuscript:
-   `C:\Users\dudar\Downloads\Bonus Keefe Story.txt`.
+   `server/src/__fixtures__/the-coalfall-commission.md`.
 3. Confirm metadata; let analysis run. Expected cast includes at minimum
-   Keefe, Elwin, Ro, and a narrator.
+   Marlow, Oduvan, Ro, and a narrator.
 4. Confirm cast → **Generate** chapter 1.
 5. On-disk: `<workspace>\books\<Author>\<Series>\<Title>\audio\<slug>.mp3`
    exists. No `<slug>.wav` for this chapter.
@@ -136,11 +136,11 @@ Run with `VITE_USE_MOCKS=false`, sidecar up, ffmpeg on PATH.
 
 ## Canonical e2e fixture
 
-`C:\Users\dudar\Downloads\Bonus Keefe Story.txt` — Keeper of the Lost
-Cities bonus story by Shannon Messenger. Multi-character (Keefe, Elwin,
-Ro, narrator). **Do not commit** — copyrighted. Future regression plans
-that need a full pipeline run should cite this file and the recipe above
-rather than inventing new fixtures.
+`server/src/__fixtures__/the-coalfall-commission.md` — _The Coalfall
+Commission_, a Castwright original. Multi-character (Marlow, Oduvan,
+Nim, narrator). Committed + owned, so it's safe to cite freely. Future
+regression plans that need a full pipeline run should cite this file and
+the recipe above rather than inventing new fixtures.
 
 ## Out of scope (follow-ups)
 

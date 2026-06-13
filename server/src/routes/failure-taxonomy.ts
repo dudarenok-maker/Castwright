@@ -10,7 +10,7 @@
    The incident-tuned regexes are PORTED VERBATIM from generation-error.ts —
    they encode hard-won knowledge from real failures (the XTTS "index out of
    range in self" cascade of 2026-05-13, the "degenerate"→/rate/ misclassify of
-   2026-05-31 KOTLC CH24, the CUDA poison-fence). Do not loosen them.
+   2026-05-31 the Hollow Tide CH24, the CUDA poison-fence). Do not loosen them.
 
    `describeSynthesisError` now delegates here and maps back to its legacy
    `{ errorReason, fatal }` shape so existing callers keep working.

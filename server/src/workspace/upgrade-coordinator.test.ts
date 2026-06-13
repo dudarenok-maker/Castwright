@@ -48,8 +48,8 @@ describe('upgrade-coordinator', () => {
     booksRoot = join(workspaceRoot, 'books');
     userSettingsPath = join(root, 'user-settings.json');
     // One book with a couple of seam files.
-    const bookDir = join(booksRoot, 'Shannon Messenger', 'Keeper', 'Book 1', '.audiobook');
-    writeJson(join(bookDir, 'cast.json'), { characters: [{ id: 'sophie' }] });
+    const bookDir = join(booksRoot, 'Della Renwick', 'The Hollow Tide', 'Book 1', '.audiobook');
+    writeJson(join(bookDir, 'cast.json'), { characters: [{ id: 'wren' }] });
     writeJson(join(bookDir, 'state.json'), { schema: 1, title: 'Book 1' });
     writeJson(join(workspaceRoot, 'voices.json'), { pins: {} });
     writeFileSync(userSettingsPath, JSON.stringify({ displayName: 'Mike' }), 'utf8');

@@ -50,7 +50,7 @@ owner: dudarenok-maker
 
 Real-backend regression on the canonical end-to-end manuscript:
 
-1. **Pre-reboot baseline:** per [feedback_reboot_before_perf_baselines], reboot first; record `GEN_CHAPTER_CONCURRENCY=1` wall-clock for `C:\Users\dudar\Downloads\Bonus Keefe Story.txt` end-to-end generation (single Kokoro engine, no other GPU consumers).
+1. **Pre-reboot baseline:** per [feedback_reboot_before_perf_baselines], reboot first; record `GEN_CHAPTER_CONCURRENCY=1` wall-clock for `server/src/__fixtures__/the-coalfall-commission.md` end-to-end generation (single Kokoro engine, no other GPU consumers).
 2. **Default-concurrency run:** set `GEN_CHAPTER_CONCURRENCY=2`, regenerate same book; expect 50–70% of serial baseline wall-clock (target: 2× speedup minus orchestrator overhead).
 3. **Pill UI:** generation pill shows aggregated "K of N" + per-chapter mini-bars (UI detail TBD during implementation).
 4. **Stall scenario:** kill the sidecar mid-chapter-2 while chapters 1 and 3 are in flight; chapter 2 track shows "stalled" pill within 30 s; chapters 1 and 3 continue and complete; resume mode (plan 31) restarts only chapter 2 on the next navigate-back.

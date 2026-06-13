@@ -273,14 +273,14 @@ export async function linkSeriesReuseAtAnalysis(
 
     const notLinkedToPrior = (v: LibraryVoice): boolean =>
       /* notLinkedTo guard — the user explicitly declared this pair is NOT the
-         same person (e.g. teenage vs adult Sophie); never auto-link it. */
+         same person (e.g. teenage vs adult Wren); never auto-link it. */
       (c.notLinkedTo ?? []).some(
         (p) => p.bookId === v.bookId && p.characterId === v.characterId,
       );
 
     /* Stable-key pass FIRST: a character that kept its deterministic write key
        (`voiceId ?? id`) across books IS the same voice, even when the analyzer
-       renamed it to something with no name-token overlap — the Unraveled
+       renamed it to something with no name-token overlap — the The Riptide
        narrator ("Narrator" → "Author"). The name scorer's 0.34 floor can't see
        this, so match on the key directly and prefer the most-recent earlier
        book. Confidence is 1: an identical write key is definitive, not fuzzy. */

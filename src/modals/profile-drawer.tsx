@@ -98,8 +98,8 @@ interface Props {
   mergeCandidates?: Character[];
   /** Characters from prior books in the same series — rendered as a
       separate optgroup under the in-book candidates so the user can
-      manually link a duplicate ("Dexter Alvin Diznee") to its canonical
-      form ("Dex" from book 1) when the auto-matcher's name-score floor
+      manually link a duplicate ("Hartwell Brennan Vale") to its canonical
+      form ("Hart" from book 1) when the auto-matcher's name-score floor
       missed the connection. Each entry carries the prior bookId so the
       link-prior endpoint can address it. */
   mergeCandidatesPrior?: PriorMergeCandidate[];
@@ -805,7 +805,7 @@ export function ProfileDrawer({
         className="fixed top-16 right-0 bottom-0 w-full max-w-[520px] bg-white shadow-drawer z-50 overflow-y-auto scrollbar-thin slide-in-right"
         style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
       >
-        <div className="sticky top-0 bg-white/95 backdrop-blur-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
+        <div className="sticky top-0 bg-white/95 backdrop-haze-md border-b border-ink/10 px-6 py-4 flex items-center gap-3">
           <Avatar name={character.name} color={character.color as CharColor} size={40} />
           <div className="flex-1 min-w-0">
             {editingName ? (

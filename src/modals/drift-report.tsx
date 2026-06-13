@@ -111,7 +111,7 @@ export function DriftReportModal({
      correction (plan 91 archive) this counted per-factor events, which
      inflated the "{N} chapters flagged" label whenever the server
      emitted multiple drift factors for the same chapter (voice + tone
-     + attributes on the same Keefe chapter → 3× count). */
+     + attributes on the same Marlow chapter → 3× count). */
   const totalCount = visibleGroupsByBook.reduce(
     (acc, g) => acc + g.groups.reduce((sub, gr) => sub + gr.chapters.length, 0),
     0,

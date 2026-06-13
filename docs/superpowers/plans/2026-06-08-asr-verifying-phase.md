@@ -260,7 +260,7 @@ git -c core.hooksPath=.husky/_ commit -F .git\CMSG.txt
           chapters={[verifying, ch2Queued]}
           characters={characters}
           paused
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           bookId="b1"
           modelKey="coqui-xtts-v2"
           onRegenerate={() => {}}

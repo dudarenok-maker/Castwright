@@ -1,7 +1,7 @@
 /* Integration tests for the library-cast override router.
 
    Sets up a tempdir workspace with two books that both contain a
-   character named "Elwin". The source book (richer profile — full
+   character named "Oduvan". The source book (richer profile — full
    description, attributes, gender, ageRange) is the "current" book the
    user is on; the target book (leaner profile — only name + voiceId) is
    the library record whose profile we want to overwrite. Asserts the
@@ -17,8 +17,8 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
+const AUTHOR = 'Della Renwick';
+const SERIES = 'The Hollow Tide';
 const NOVELLA = 'Novella';
 const FULL_NOVEL = 'Full Novel';
 
@@ -27,16 +27,16 @@ let app: Express;
 let novellaBookId: string;
 let novelBookId: string;
 
-/* The lean library record: a novella met Elwin only briefly, so the
+/* The lean library record: a novella met Oduvan only briefly, so the
    analyzer only nailed down his name + gender. The voiceId is the
    crucial bit — the novella's chapter audio is bound to it and must
    survive the override. */
 const leanElwin = {
-  id: 'elwin',
-  name: 'Elwin',
+  id: 'oduvan',
+  name: 'Oduvan',
   role: 'minor character',
   color: 'eliza',
-  voiceId: 'v_elwin_novella',
+  voiceId: 'v_oduvan_novella',
   gender: 'male',
   lines: 4,
   scenes: 1,
@@ -46,22 +46,22 @@ const leanElwin = {
   evidence: [{ quote: 'Easy now.', note: 'novella moment' }],
 };
 
-/* The rich source: a full novel saw Elwin across many chapters and
-   built a fuller portrait. Slightly different canonical name ("Elwin
-   Heks") — the override should fold the lean target's "Elwin" form
+/* The rich source: a full novel saw Oduvan across many chapters and
+   built a fuller portrait. Slightly different canonical name ("Oduvan
+   Heks") — the override should fold the lean target's "Oduvan" form
    into target.aliases so future matches across the series recognise
    either form. */
 const richElwin = {
-  id: 'elwin',
-  name: 'Elwin Heks',
+  id: 'oduvan',
+  name: 'Oduvan Heks',
   role: 'Physician',
   color: 'damien',
-  voiceId: 'v_elwin_novel',
+  voiceId: 'v_oduvan_novel',
   gender: 'male',
   ageRange: 'adult',
   attributes: ['eccentric', 'reassuring', 'humorous'],
   aliases: ['Doc'],
-  description: 'The elvin physician at Foxfire — eccentric, kind, calm under pressure.',
+  description: 'The elvin physician at Saltmoor — eccentric, kind, calm under pressure.',
   tone: { warmth: 75, pace: 55, authority: 60 },
   evidence: [{ quote: "I'll have you patched up in no time.", note: 'novel moment' }],
   lines: 208,
@@ -139,7 +139,7 @@ function callOverride(body: object) {
 
 describe('library-cast override router', () => {
   it('rejects when any of the four ids are missing', async () => {
-    const res = await callOverride({ sourceBookId: novelBookId, sourceCharacterId: 'elwin' });
+    const res = await callOverride({ sourceBookId: novelBookId, sourceCharacterId: 'oduvan' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
   });
@@ -147,9 +147,9 @@ describe('library-cast override router', () => {
   it('rejects when source === target', async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'elwin',
+      sourceCharacterId: 'oduvan',
       targetBookId: novelBookId,
-      targetCharacterId: 'elwin',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/differ/i);
@@ -158,9 +158,9 @@ describe('library-cast override router', () => {
   it('returns 404 when the source book id is unknown', async () => {
     const res = await callOverride({
       sourceBookId: 'nope',
-      sourceCharacterId: 'elwin',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
-      targetCharacterId: 'elwin',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source book/i);
@@ -171,7 +171,7 @@ describe('library-cast override router', () => {
       sourceBookId: novelBookId,
       sourceCharacterId: 'missing',
       targetBookId: novellaBookId,
-      targetCharacterId: 'elwin',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source character/i);
@@ -180,7 +180,7 @@ describe('library-cast override router', () => {
   it('returns 404 when the target character id is unknown', async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'elwin',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
       targetCharacterId: 'missing',
     });
@@ -191,9 +191,9 @@ describe('library-cast override router', () => {
   it("writes the merged profile to BOTH books while preserving each side's audio identity", async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'elwin',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
-      targetCharacterId: 'elwin',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(200);
 
@@ -201,14 +201,14 @@ describe('library-cast override router', () => {
     const sourceOnDisk = readCast(FULL_NOVEL).characters[0];
 
     /* Audio identity preserved per-side — id, voiceId, name, color stay
-       with their own book. The novella keeps v_elwin_novella so its
-       chapter audio still plays; the full novel keeps v_elwin_novel. */
-    expect(targetOnDisk.id).toBe('elwin');
-    expect(targetOnDisk.voiceId).toBe('v_elwin_novella');
-    expect(targetOnDisk.name).toBe('Elwin');
-    expect(sourceOnDisk.id).toBe('elwin');
-    expect(sourceOnDisk.voiceId).toBe('v_elwin_novel');
-    expect(sourceOnDisk.name).toBe('Elwin Heks');
+       with their own book. The novella keeps v_oduvan_novella so its
+       chapter audio still plays; the full novel keeps v_oduvan_novel. */
+    expect(targetOnDisk.id).toBe('oduvan');
+    expect(targetOnDisk.voiceId).toBe('v_oduvan_novella');
+    expect(targetOnDisk.name).toBe('Oduvan');
+    expect(sourceOnDisk.id).toBe('oduvan');
+    expect(sourceOnDisk.voiceId).toBe('v_oduvan_novel');
+    expect(sourceOnDisk.name).toBe('Oduvan Heks');
 
     /* Per-book metrics + per-book evidence don't cross over. */
     expect(targetOnDisk.lines).toBe(4);
@@ -234,39 +234,39 @@ describe('library-cast override router', () => {
     }
 
     /* Aliases — each side drops its OWN name. The novella's aliases
-       include "Elwin Heks" (source's name) and "Doc" (source's alias).
-       The full novel's aliases include "Elwin" (target's name).
+       include "Oduvan Heks" (source's name) and "Doc" (source's alias).
+       The full novel's aliases include "Oduvan" (target's name).
        Neither side self-aliases. */
     const targetAliases = (targetOnDisk.aliases as string[] | undefined) ?? [];
-    expect(targetAliases).toContain('Elwin Heks');
+    expect(targetAliases).toContain('Oduvan Heks');
     expect(targetAliases).toContain('Doc');
-    expect(targetAliases).not.toContain('Elwin');
+    expect(targetAliases).not.toContain('Oduvan');
 
     const sourceAliases = (sourceOnDisk.aliases as string[] | undefined) ?? [];
-    expect(sourceAliases).toContain('Elwin');
+    expect(sourceAliases).toContain('Oduvan');
     expect(sourceAliases).toContain('Doc');
-    expect(sourceAliases).not.toContain('Elwin Heks');
+    expect(sourceAliases).not.toContain('Oduvan Heks');
   });
 
   it('returns both merged records in the response body', async () => {
     const res = await callOverride({
       sourceBookId: novelBookId,
-      sourceCharacterId: 'elwin',
+      sourceCharacterId: 'oduvan',
       targetBookId: novellaBookId,
-      targetCharacterId: 'elwin',
+      targetCharacterId: 'oduvan',
     });
     expect(res.status).toBe(200);
     expect(res.body.source).toMatchObject({
-      id: 'elwin',
-      voiceId: 'v_elwin_novel',
-      name: 'Elwin Heks',
+      id: 'oduvan',
+      voiceId: 'v_oduvan_novel',
+      name: 'Oduvan Heks',
       description: richElwin.description,
       role: 'Physician',
     });
     expect(res.body.target).toMatchObject({
-      id: 'elwin',
-      voiceId: 'v_elwin_novella',
-      name: 'Elwin',
+      id: 'oduvan',
+      voiceId: 'v_oduvan_novella',
+      name: 'Oduvan',
       description: richElwin.description,
       role: 'Physician',
     });
@@ -284,25 +284,25 @@ describe('library-cast override router', () => {
     const leanerSourceId = makeBookId(AUTHOR, SERIES, LEANER_SOURCE_TITLE);
 
     const richerTarget = {
-      id: 'kenric',
-      name: 'Kenric',
+      id: 'aldous',
+      name: 'Aldous',
       role: 'councillor',
       color: 'eliza',
-      voiceId: 'v_kenric_target',
+      voiceId: 'v_aldous_target',
       gender: 'male',
       ageRange: 'adult',
       description:
-        'A red-haired councillor with a warm laugh, known for treating Sophie like a daughter and for breaking ranks with the Council when conscience demanded it.',
+        'A red-haired councillor with a warm laugh, known for treating Wren like a daughter and for breaking ranks with the Council when conscience demanded it.',
       attributes: ['warm', 'principled'],
       lines: 90,
       scenes: 3,
     };
     const leanerSource = {
-      id: 'kenric',
-      name: 'Kenric',
+      id: 'aldous',
+      name: 'Aldous',
       role: '',
       color: 'eliza',
-      voiceId: 'v_kenric_source',
+      voiceId: 'v_aldous_source',
       gender: 'male',
       description: 'A councillor.',
       lines: 12,
@@ -317,9 +317,9 @@ describe('library-cast override router', () => {
 
     const res = await callOverride({
       sourceBookId: leanerSourceId,
-      sourceCharacterId: 'kenric',
+      sourceCharacterId: 'aldous',
       targetBookId: richerTargetId,
-      targetCharacterId: 'kenric',
+      targetCharacterId: 'aldous',
     });
     expect(res.status).toBe(200);
     /* Target's longer description survived on BOTH sides — the source's

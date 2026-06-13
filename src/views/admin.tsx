@@ -447,7 +447,7 @@ function GenerationThroughput({ stats }: { stats: GenerationStatsResponse | null
    across the records (no charting dep). VRAM (reserved/total) + wall-time
    columns surface the resource pressure that climbs across a long run. */
 /* Group newest-first telemetry into contiguous runs by book, so a long
-   workspace run reads as "Stellarlune (chapters…), Unlocked (chapters…)"
+   workspace run reads as "The Drowning Bell (chapters…), The Floodmark (chapters…)"
    rather than an undifferentiated wall of chapter numbers. We split on every
    bookId change rather than collapsing all of a book's rows together, so the
    chronological newest-first ordering is preserved even when two books'

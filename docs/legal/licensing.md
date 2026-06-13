@@ -59,7 +59,7 @@ release archive bundles nothing whose licence is unverified.
   - Audit: `git log --all --full-history -- '**/.env' 'server/.env'` and a
     secret scan (e.g. `gitleaks detect`, `trufflehog`). Also check the canonical
     copyrighted manuscript fixture never entered history:
-    `git log --all --full-history --oneline -- '**/*Keefe*'`.
+    `git log --all --full-history --oneline -- '**/*Marlow*'`.
   - If anything is found: back up the repo, rewrite with
     `git filter-repo --invert-paths --path <file>` (or BFG), force-push, and
     have every clone re-clone. Do **not** run casually.

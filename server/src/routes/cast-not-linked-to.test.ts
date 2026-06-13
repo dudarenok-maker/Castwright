@@ -1,7 +1,7 @@
 /* Integration tests for the cast/:characterId/not-linked-to router (plan 101).
 
-   Seeds two KOTLC books on disk: book A ("Keeper of the Lost Cities")
-   with a "sophie" character, book B ("Exile") with a "sophie" character
+   Seeds two the Hollow Tide books on disk: book A ("The Hollow Tide")
+   with a "wren" character, book B ("The Ebb") with a "wren" character
    that the analyzer named the same way but is intentionally a separate
    variant. The tests assert:
 
@@ -21,10 +21,10 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
-const KEEPER_BOOK = 'Keeper of the Lost Cities';
-const EXILE_BOOK = 'Exile';
+const AUTHOR = 'Della Renwick';
+const SERIES = 'The Hollow Tide';
+const KEEPER_BOOK = 'The Hollow Tide';
+const EXILE_BOOK = 'The Ebb';
 const OTHER_BOOK = 'Other Series Book';
 const STANDALONE = 'Some Standalone';
 
@@ -38,22 +38,22 @@ let standaloneBookId: string;
 const initialKeeperCast = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
   {
-    id: 'sophie',
-    name: 'Sophie Foster',
+    id: 'wren',
+    name: 'Wren Sparrow',
     role: 'character',
     color: 'unset',
-    voiceId: 'v_sophie_kotlc',
+    voiceId: 'v_wren_the Hollow Tide',
   },
 ];
 
 const initialExileCast = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
   {
-    id: 'sophie',
-    name: 'Sophie',
+    id: 'wren',
+    name: 'Wren',
     role: 'character',
     color: 'unset',
-    voiceId: 'v_sophie_exile',
+    voiceId: 'v_wren_exile',
   },
 ];
 
@@ -157,13 +157,13 @@ function callUnmark(bookId: string, characterId: string, body: object) {
 
 describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
   it('rejects when body fields are missing', async () => {
-    const res = await callNotLinked(keeperBookId, 'sophie', {});
+    const res = await callNotLinked(keeperBookId, 'wren', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
   });
 
   it('rejects same-bookId pair', async () => {
-    const res = await callNotLinked(keeperBookId, 'sophie', {
+    const res = await callNotLinked(keeperBookId, 'wren', {
       otherBookId: keeperBookId,
       otherCharacterId: 'narrator',
     });
@@ -172,15 +172,15 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
   });
 
   it('rejects self-pair', async () => {
-    const res = await callNotLinked(keeperBookId, 'sophie', {
+    const res = await callNotLinked(keeperBookId, 'wren', {
       otherBookId: keeperBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     expect(res.status).toBe(400);
   });
 
   it('returns 404 on cross-series pair', async () => {
-    const res = await callNotLinked(keeperBookId, 'sophie', {
+    const res = await callNotLinked(keeperBookId, 'wren', {
       otherBookId,
       otherCharacterId: 'unrelated',
     });
@@ -189,7 +189,7 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
   });
 
   it('returns 404 when other book is a standalone', async () => {
-    const res = await callNotLinked(keeperBookId, 'sophie', {
+    const res = await callNotLinked(keeperBookId, 'wren', {
       otherBookId: standaloneBookId,
       otherCharacterId: 'lonely',
     });
@@ -199,14 +199,14 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
   it('returns 404 when source character is unknown', async () => {
     const res = await callNotLinked(keeperBookId, 'missing', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source character/i);
   });
 
   it('returns 404 when other character is unknown', async () => {
-    const res = await callNotLinked(keeperBookId, 'sophie', {
+    const res = await callNotLinked(keeperBookId, 'wren', {
       otherBookId: exileBookId,
       otherCharacterId: 'missing',
     });
@@ -215,40 +215,40 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
   });
 
   it('writes a symmetric pair record to both cast.json files', async () => {
-    const res = await callNotLinked(keeperBookId, 'sophie', {
+    const res = await callNotLinked(keeperBookId, 'wren', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       pair: {
-        a: { bookId: keeperBookId, characterId: 'sophie' },
-        b: { bookId: exileBookId, characterId: 'sophie' },
+        a: { bookId: keeperBookId, characterId: 'wren' },
+        b: { bookId: exileBookId, characterId: 'wren' },
       },
     });
 
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'sophie',
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'wren',
     );
-    const sophieExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
-      (c) => c.id === 'sophie',
+    const wrenExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
+      (c) => c.id === 'wren',
     );
-    expect(sophieKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'sophie' }]);
-    expect(sophieExile?.notLinkedTo).toEqual([{ bookId: keeperBookId, characterId: 'sophie' }]);
+    expect(wrenKeeper?.notLinkedTo).toEqual([{ bookId: exileBookId, characterId: 'wren' }]);
+    expect(wrenExile?.notLinkedTo).toEqual([{ bookId: keeperBookId, characterId: 'wren' }]);
   });
 
   it('is idempotent: a repeat call does not duplicate the array entries', async () => {
-    await callNotLinked(keeperBookId, 'sophie', {
+    await callNotLinked(keeperBookId, 'wren', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     const before = {
       keeper: readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK),
       exile: readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK),
     };
-    const res2 = await callNotLinked(keeperBookId, 'sophie', {
+    const res2 = await callNotLinked(keeperBookId, 'wren', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     const after = {
       keeper: readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK),
@@ -262,42 +262,42 @@ describe('POST /api/books/:bookId/cast/:characterId/not-linked-to', () => {
 describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', () => {
   it('removes the symmetric pair from BOTH cast.json files', async () => {
     /* Mark first, then unmark. */
-    await callNotLinked(keeperBookId, 'sophie', {
+    await callNotLinked(keeperBookId, 'wren', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
-    const res = await callUnmark(keeperBookId, 'sophie', {
+    const res = await callUnmark(keeperBookId, 'wren', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       pair: {
-        a: { bookId: keeperBookId, characterId: 'sophie' },
-        b: { bookId: exileBookId, characterId: 'sophie' },
+        a: { bookId: keeperBookId, characterId: 'wren' },
+        b: { bookId: exileBookId, characterId: 'wren' },
       },
     });
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'sophie',
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'wren',
     );
-    const sophieExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
-      (c) => c.id === 'sophie',
+    const wrenExile = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK).characters.find(
+      (c) => c.id === 'wren',
     );
-    expect(sophieKeeper?.notLinkedTo).toEqual([]);
-    expect(sophieExile?.notLinkedTo).toEqual([]);
+    expect(wrenKeeper?.notLinkedTo).toEqual([]);
+    expect(wrenExile?.notLinkedTo).toEqual([]);
   });
 
   it('is idempotent: deleting an absent pair is a 200 no-op', async () => {
-    const res = await callUnmark(keeperBookId, 'sophie', {
+    const res = await callUnmark(keeperBookId, 'wren', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     expect(res.status).toBe(200);
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'sophie',
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'wren',
     );
     /* No notLinkedTo written (never marked) — field absent or empty. */
-    expect(sophieKeeper?.notLinkedTo ?? []).toEqual([]);
+    expect(wrenKeeper?.notLinkedTo ?? []).toEqual([]);
   });
 
   it('removes the entry only on the side that has it (asymmetric on-disk start)', async () => {
@@ -305,41 +305,41 @@ describe('DELETE /api/books/:bookId/cast/:characterId/not-linked-to (fs-11)', ()
        (e.g. a prior failed symmetric write). DELETE still settles both. */
     const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, KEEPER_BOOK);
     const cast = JSON.parse(readFileSync(join(dir, '.audiobook', 'cast.json'), 'utf8'));
-    cast.characters.find((c: { id: string }) => c.id === 'sophie').notLinkedTo = [
-      { bookId: exileBookId, characterId: 'sophie' },
+    cast.characters.find((c: { id: string }) => c.id === 'wren').notLinkedTo = [
+      { bookId: exileBookId, characterId: 'wren' },
     ];
     writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify(cast));
-    const res = await callUnmark(keeperBookId, 'sophie', {
+    const res = await callUnmark(keeperBookId, 'wren', {
       otherBookId: exileBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     expect(res.status).toBe(200);
-    const sophieKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'sophie',
+    const wrenKeeper = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'wren',
     );
-    expect(sophieKeeper?.notLinkedTo).toEqual([]);
+    expect(wrenKeeper?.notLinkedTo).toEqual([]);
   });
 
   it('rejects same-bookId and self-pair', async () => {
-    const sameBook = await callUnmark(keeperBookId, 'sophie', {
+    const sameBook = await callUnmark(keeperBookId, 'wren', {
       otherBookId: keeperBookId,
       otherCharacterId: 'narrator',
     });
     expect(sameBook.status).toBe(400);
-    const selfPair = await callUnmark(keeperBookId, 'sophie', {
+    const selfPair = await callUnmark(keeperBookId, 'wren', {
       otherBookId: keeperBookId,
-      otherCharacterId: 'sophie',
+      otherCharacterId: 'wren',
     });
     expect(selfPair.status).toBe(400);
   });
 
   it('returns 404 on cross-series / standalone other book', async () => {
-    const crossSeries = await callUnmark(keeperBookId, 'sophie', {
+    const crossSeries = await callUnmark(keeperBookId, 'wren', {
       otherBookId,
       otherCharacterId: 'unrelated',
     });
     expect(crossSeries.status).toBe(404);
-    const standalone = await callUnmark(keeperBookId, 'sophie', {
+    const standalone = await callUnmark(keeperBookId, 'wren', {
       otherBookId: standaloneBookId,
       otherCharacterId: 'lonely',
     });

@@ -183,7 +183,7 @@ Single place that records, for the maintainer:
   - `LICENSE`, `brand/LICENSE`, `NOTICE`, README statement, CONTRIBUTING terms —
     *done in this pass*.
   - **Git history secret/fixture scrub** — *pending*; exact targets (`.env`,
-    keys, the copyrighted *Bonus Keefe Story* fixture) and the recommended
+    keys, the legacy copyrighted manuscript fixture) and the recommended
     `git filter-repo` command sketch, flagged destructive.
   - cla-assistant bot; `gh repo edit --visibility public`; branch protection on
     `main`; the licence-key (`fs-`) seam.

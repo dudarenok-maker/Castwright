@@ -119,7 +119,7 @@ function renderView() {
       <Provider store={store}>
         <AnalysingView
           manuscriptId="m1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -346,29 +346,29 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
   it('renders the running roster as cast-update events arrive, growing chapter-by-chapter', async () => {
     await renderViewWaitingForAnalysis();
 
-    /* Chapter 1 lands — narrator + Sophie. */
+    /* Chapter 1 lands — narrator + Wren. */
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
       capturedOpts?.onCastUpdate?.({
-        characters: [makeChar('narrator', 'Narrator'), makeChar('sophie', 'Sophie')],
+        characters: [makeChar('narrator', 'Narrator'), makeChar('wren', 'Wren')],
       });
     });
     expect(screen.getByText(/Cast so far · 2 characters/)).toBeInTheDocument();
-    expect(screen.getByText('Sophie')).toBeInTheDocument();
+    expect(screen.getByText('Wren')).toBeInTheDocument();
 
-    /* Chapter 5 lands — adds Keefe. */
+    /* Chapter 5 lands — adds Marlow. */
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.4 });
       capturedOpts?.onCastUpdate?.({
         characters: [
           makeChar('narrator', 'Narrator'),
-          makeChar('sophie', 'Sophie'),
-          makeChar('keefe', 'Keefe'),
+          makeChar('wren', 'Wren'),
+          makeChar('marlow', 'Marlow'),
         ],
       });
     });
     expect(screen.getByText(/Cast so far · 3 characters/)).toBeInTheDocument();
-    expect(screen.getByText('Keefe')).toBeInTheDocument();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
   });
 
   it('keeps the cast preview visible under Phase 0 after the active phase advances (regression: model-switch retry on a fully-cached Phase 0 was wiping the chips from the UI even though the cast slice still held them)', async () => {
@@ -377,7 +377,7 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 1 });
       capturedOpts?.onCastUpdate?.({
-        characters: [makeChar('narrator', 'Narrator'), makeChar('sophie', 'Sophie')],
+        characters: [makeChar('narrator', 'Narrator'), makeChar('wren', 'Wren')],
       });
       /* Now Phase 1 (attribution) becomes active. */
       capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.05 });
@@ -388,7 +388,7 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
        phase is currently active. */
     expect(screen.getByText(/Cast so far · 2 characters/)).toBeInTheDocument();
     expect(screen.getByText('Narrator')).toBeInTheDocument();
-    expect(screen.getByText('Sophie')).toBeInTheDocument();
+    expect(screen.getByText('Wren')).toBeInTheDocument();
   });
 });
 
@@ -728,12 +728,12 @@ describe('AnalysingView — failed-chapter retry', () => {
       state: {
         bookId: 'b1',
         manuscriptId: 'm1',
-        title: 'Bonus Keefe Story',
+        title: 'the Coalfall Commission',
         author: '',
         series: '',
         seriesPosition: null,
         isStandalone: true,
-        manuscriptFile: 'bonus-keefe.txt',
+        manuscriptFile: 'bonus-marlow.txt',
         castConfirmed: false,
         chapters: [
           { id: 44, title: 'Chapter Forty-Two', slug: '44-chapter-forty-two', duration: '0:00' },
@@ -769,7 +769,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -800,7 +800,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -878,7 +878,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -926,7 +926,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -993,8 +993,8 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
     store.dispatch(
       castSlice.actions.setCharacters([
         makeChar('narrator', 'Narrator'),
-        makeChar('sophie', 'Sophie'),
-        makeChar('keefe', 'Keefe'),
+        makeChar('wren', 'Wren'),
+        makeChar('marlow', 'Marlow'),
       ]),
     );
 
@@ -1002,7 +1002,7 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
       <Provider store={store}>
         <AnalysingView
           manuscriptId="m1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -1012,8 +1012,8 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
     /* Chips render immediately — no Start click, no cast-update SSE event. */
     expect(screen.getByText(/Cast so far · 3 characters/)).toBeInTheDocument();
     expect(screen.getByText('Narrator')).toBeInTheDocument();
-    expect(screen.getByText('Sophie')).toBeInTheDocument();
-    expect(screen.getByText('Keefe')).toBeInTheDocument();
+    expect(screen.getByText('Wren')).toBeInTheDocument();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
   });
 });
 
@@ -1027,7 +1027,7 @@ describe('AnalysingView — dropped-quotes panel', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -1088,22 +1088,22 @@ describe('AnalysingView — dropped-quotes panel', () => {
             affectedCharacters: 2,
             entries: [
               {
-                characterId: 'sophie',
-                characterName: 'Sophie',
+                characterId: 'wren',
+                characterName: 'Wren',
                 quote: 'fabricated 1',
                 truncated: false,
                 reason: 'not_in_source',
               },
               {
-                characterId: 'sophie',
-                characterName: 'Sophie',
+                characterId: 'wren',
+                characterName: 'Wren',
                 quote: 'fabricated 2',
                 truncated: false,
                 reason: 'not_in_source',
               },
               {
-                characterId: 'keefe',
-                characterName: 'Keefe',
+                characterId: 'marlow',
+                characterName: 'Marlow',
                 quote: '   ',
                 truncated: false,
                 reason: 'empty_after_normalisation',
@@ -1119,8 +1119,8 @@ describe('AnalysingView — dropped-quotes panel', () => {
       await screen.findByText(/Verifier dropped 3 quotes across 2 characters/),
     ).toBeInTheDocument();
     /* Both character groups render. */
-    expect(screen.getByText('Sophie')).toBeInTheDocument();
-    expect(screen.getByText('Keefe')).toBeInTheDocument();
+    expect(screen.getByText('Wren')).toBeInTheDocument();
+    expect(screen.getByText('Marlow')).toBeInTheDocument();
     /* Quotes themselves appear (with quote marks rendered around them). */
     expect(screen.getByText(/fabricated 1/)).toBeInTheDocument();
     expect(screen.getByText(/fabricated 2/)).toBeInTheDocument();
@@ -1298,7 +1298,7 @@ describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
     });
     const snap = store.getState().analysis.activeStream!;
     expect(snap.manuscriptId).toBe('m1');
-    expect(snap.bookTitle).toBe('Bonus Keefe Story');
+    expect(snap.bookTitle).toBe('the Coalfall Commission');
     expect(snap.state).toBe('running');
     /* D2 — snapshot captures the engine at start time so the reverse
        local-analyzer guard can decide whether to prompt before a
@@ -1342,15 +1342,15 @@ describe('AnalysingView — series-cast carry-over pill (C3)', () => {
     await act(async () => {
       (capturedOpts as AnalyseOpts | undefined)?.onSeriesPrior?.({
         count: 41,
-        names: ['Sophie', 'Keefe', 'Elwin'],
+        names: ['Wren', 'Marlow', 'Oduvan'],
       });
     });
     const pill = await screen.findByTestId('series-prior-pill');
     expect(pill).toBeInTheDocument();
     expect(pill.textContent).toContain('41');
-    expect(pill.textContent).toContain('Sophie');
-    expect(pill.textContent).toContain('Keefe');
-    expect(pill.textContent).toContain('Elwin');
+    expect(pill.textContent).toContain('Wren');
+    expect(pill.textContent).toContain('Marlow');
+    expect(pill.textContent).toContain('Oduvan');
     /* +N appears when the total exceeds the sample. 41 - 3 = 38. */
     expect(pill.textContent).toMatch(/\+38/);
   });
@@ -1388,7 +1388,7 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
           activeStream: {
             bookId: 'book-1',
             manuscriptId: 'm1',
-            bookTitle: 'Bonus Keefe Story',
+            bookTitle: 'the Coalfall Commission',
             engine: 'gemini' as const,
             phaseId: 1,
             phaseLabel: 'Parsing & attribution',
@@ -1406,7 +1406,7 @@ describe('AnalysingView — cold-boot rehydration from analysis slice', () => {
         <Provider store={store}>
           <AnalysingView
             manuscriptId="m1"
-            title="Bonus Keefe Story"
+            title="the Coalfall Commission"
             wordCount={2440}
             onComplete={() => {}}
           />
@@ -1491,7 +1491,7 @@ describe('AnalysingView — request-model gating (plan 118)', () => {
     });
     render(
       <Provider store={store}>
-        <AnalysingView manuscriptId="m1" title="Bonus Keefe Story" model={opts.modelProp} onComplete={() => {}} />
+        <AnalysingView manuscriptId="m1" title="the Coalfall Commission" model={opts.modelProp} onComplete={() => {}} />
       </Provider>,
     );
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
@@ -1565,7 +1565,7 @@ describe('AnalysingView — readiness gate follows the effective per-phase model
     });
     render(
       <Provider store={store}>
-        <AnalysingView manuscriptId="m1" title="Bonus Keefe Story" model="qwen3.5:4b" onComplete={() => {}} />
+        <AnalysingView manuscriptId="m1" title="the Coalfall Commission" model="qwen3.5:4b" onComplete={() => {}} />
       </Provider>,
     );
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
@@ -1587,7 +1587,7 @@ describe('AnalysingView — readiness gate follows the effective per-phase model
     const store = makeStore({ selectedModel: 'qwen3.5:4b' }); // no per-phase split
     render(
       <Provider store={store}>
-        <AnalysingView manuscriptId="m1" title="Bonus Keefe Story" model="qwen3.5:4b" onComplete={() => {}} />
+        <AnalysingView manuscriptId="m1" title="the Coalfall Commission" model="qwen3.5:4b" onComplete={() => {}} />
       </Provider>,
     );
     expect(await screen.findByText(/Ollama not reachable/i)).toBeInTheDocument();
@@ -1611,12 +1611,12 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
       state: {
         bookId: 'b1',
         manuscriptId: 'm1',
-        title: 'Bonus Keefe Story',
+        title: 'the Coalfall Commission',
         author: '',
         series: '',
         seriesPosition: null,
         isStandalone: true,
-        manuscriptFile: 'bonus-keefe.txt',
+        manuscriptFile: 'bonus-marlow.txt',
         castConfirmed: false,
         chapters: [
           { id: 2, title: 'Chapter Two', slug: '2-chapter-two', duration: '0:00' },
@@ -1654,7 +1654,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -1700,7 +1700,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -1724,7 +1724,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -1754,7 +1754,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -1797,7 +1797,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />
@@ -1843,7 +1843,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         <AnalysingView
           manuscriptId="m1"
           bookId="b1"
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           wordCount={2440}
           onComplete={() => {}}
         />

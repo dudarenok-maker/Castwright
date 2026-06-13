@@ -286,8 +286,8 @@ export interface OverrideLibraryCastResponse {
   target: Character;
 }
 /* Manual continuity link to a prior series book — used when the
-   auto-matcher's name-score floor missed a legitimate link (e.g. "Dex"
-   in book 1 vs "Dexter Alvin Diznee" in book 2). Server appends
+   auto-matcher's name-score floor missed a legitimate link (e.g. "Hart"
+   in book 1 vs "Hartwell Brennan Vale" in book 2). Server appends
    source.name to the prior book's character.aliases on disk, then
    returns the matchedFrom payload the frontend dispatches via
    castActions.applyManualMatch so the "Continuity preserved" footer +
@@ -2111,7 +2111,7 @@ interface AnalysisStreamEvent {
   nextCharCount?: number;
   /** Carried on the `series-prior` event emitted once at Phase 0 entry.
       `count` is the total number of carry-over characters; `names` is
-      the first three for the "Carrying in Sophie, Keefe, Elwin +N" pill
+      the first three for the "Carrying in Wren, Marlow, Oduvan +N" pill
       copy. Series carry-over is detection-time only -- the confirm-time
       voice-match (plan 09) is a separate surface. */
   count?: number;
@@ -2832,7 +2832,7 @@ async function realLinkPriorCharacter(
 
 /* POST /api/books/:bookId/cast/:characterId/not-linked-to  (plan 101) — the
    user has just declared "these two cross-book characters are intentionally
-   different people" (e.g. teenage Sophie vs adult Sophie). Server pair-writes
+   different people" (e.g. teenage Wren vs adult Wren). Server pair-writes
    a symmetric record to both books' cast.json so the voices-view duplicate-
    candidate detection stops surfacing the pair. Mirror to redux via
    castActions.applyNotLinked. */
@@ -6521,13 +6521,13 @@ const mock = {
     /* Newest-first; the first three rows come from a second book so the Admin
        panel's per-book grouping has more than one group to render in mock mode. */
     const books = [
-      { bookId: 'mock-book-stellarlune', bookTitle: 'Stellarlune' },
-      { bookId: 'mock-book-stellarlune', bookTitle: 'Stellarlune' },
-      { bookId: 'mock-book-stellarlune', bookTitle: 'Stellarlune' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
+      { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
+      { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
+      { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
     ];
     const records: ResourceTelemetryRecord[] = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map(
       (rtf, i) => ({

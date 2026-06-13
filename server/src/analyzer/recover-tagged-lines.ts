@@ -2,7 +2,7 @@
 
    The roster-coverage guard (plan 182) ensures a tagged speaker is in the
    roster, but stage-2 attribution still sometimes leaves their quoted lines on
-   `narrator` (observed: Stellarlune ch16 Behnam — `"…," Behnam noted.` with the
+   `narrator` (observed: The Drowning Bell ch16 Behnam — `"…," Behnam noted.` with the
    quote stuck on narrator even though Behnam was in the cast). Those 0-line
    speakers are then deleted by the minor-cast fold, so a found character never
    persists (#537) and never speaks (#529).
@@ -13,8 +13,8 @@
    speaker's quote — if it's currently `narrator` and `<Name>` resolves
    unambiguously to one rostered character, flip it to that character. It only
    ever moves a line OFF narrator onto a real, prose-named speaker, so a
-   correctly-attributed book is a no-op (the quote before `"…," Sophie said` is
-   already `sophie`, not narrator).
+   correctly-attributed book is a no-op (the quote before `"…," Wren said` is
+   already `wren`, not narrator).
 
    `taggedSpeakerIds` exposes the same name-tag detection so `foldMinorCast` can
    keep a 0-line speaker that the prose clearly tags (backstop for speakers whose

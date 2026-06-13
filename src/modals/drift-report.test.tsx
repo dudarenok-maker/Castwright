@@ -77,7 +77,7 @@ function makeEvent(over: Partial<DriftEvent>): DriftEvent {
 function group(events: DriftEvent[], over: Partial<DriftBookGroupView> = {}): DriftBookGroupView {
   return {
     bookId: 'book-A',
-    bookTitle: 'Bonus Keefe Story',
+    bookTitle: 'the Coalfall Commission',
     characters,
     groups: groupDriftEvents(events),
     ...over,
@@ -240,7 +240,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
   it('renders the book sub-header even when only one book has drift', () => {
     render(
       <DriftReportModal
-        groupsByBook={[group([makeEvent({})], { bookTitle: 'Bonus Keefe Story' })]}
+        groupsByBook={[group([makeEvent({})], { bookTitle: 'the Coalfall Commission' })]}
         onClose={vi.fn()}
         onRegenerateChapter={vi.fn()}
         onDismiss={vi.fn()}
@@ -254,7 +254,7 @@ describe('DriftReportModal — fidelity contract (drift-report-fidelity plan)', 
     /* The book sub-header is always rendered so the user can tell which book
        any given cast card belongs to — the modal can be opened from any view
        and may surface drift from a non-active book. */
-    expect(screen.getByText('Bonus Keefe Story')).toBeInTheDocument();
+    expect(screen.getByText('the Coalfall Commission')).toBeInTheDocument();
   });
 
   it('renders the side-by-side comparison with both When rendered and Now columns', () => {

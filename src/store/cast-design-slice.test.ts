@@ -12,7 +12,7 @@ import { castDesignSlice, castDesignActions } from './cast-design-slice';
 const begin = castDesignActions.begin({
   bookId: 'b1',
   total: 3,
-  currentName: 'Sophie',
+  currentName: 'Wren',
   lastTickAt: 1000,
 });
 
@@ -30,7 +30,7 @@ describe('castDesignSlice — active snapshot reducers', () => {
       total: 3,
       done: 0,
       skipped: 0,
-      currentName: 'Sophie',
+      currentName: 'Wren',
       state: 'running',
       lastTickAt: 1000,
       failures: [],
@@ -51,14 +51,14 @@ describe('castDesignSlice — active snapshot reducers', () => {
       castDesignActions.charFailed({
         bookId: 'b1',
         characterId: 'c2',
-        name: 'Keefe',
+        name: 'Marlow',
         error: 'GEMINI_API_KEY is required',
         lastTickAt: 1300,
       }),
     );
     expect(s.active?.done).toBe(0);
     expect(s.active?.failures).toEqual([
-      { characterId: 'c2', name: 'Keefe', error: 'GEMINI_API_KEY is required' },
+      { characterId: 'c2', name: 'Marlow', error: 'GEMINI_API_KEY is required' },
     ]);
   });
 
@@ -66,11 +66,11 @@ describe('castDesignSlice — active snapshot reducers', () => {
     let s = castDesignSlice.reducer(undefined, begin);
     s = castDesignSlice.reducer(
       s,
-      castDesignActions.tick({ bookId: 'b1', currentName: 'Keefe', lastTickAt: 1400 }),
+      castDesignActions.tick({ bookId: 'b1', currentName: 'Marlow', lastTickAt: 1400 }),
     );
-    expect(s.active).toMatchObject({ currentName: 'Keefe', lastTickAt: 1400 });
+    expect(s.active).toMatchObject({ currentName: 'Marlow', lastTickAt: 1400 });
     s = castDesignSlice.reducer(s, castDesignActions.heartbeat({ bookId: 'b1', lastTickAt: 1500 }));
-    expect(s.active).toMatchObject({ currentName: 'Keefe', lastTickAt: 1500 });
+    expect(s.active).toMatchObject({ currentName: 'Marlow', lastTickAt: 1500 });
   });
 
   it('settle flips to done + nulls currentName; clear tears down', () => {

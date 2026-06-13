@@ -70,9 +70,9 @@ _Settings:_ `QWEN_ATTN_IMPL=sdpa` (**confirmed** from the model-load log), `dtyp
 |---|---|---|---|---|---|
 | serial `/synthesize` (cold) | 1 sentence, first call | 3.2 | 27.3 | **8.52** | includes one-time CUDA warm-up |
 | serial `/synthesize` (warm) | 10× `qwen-narrator` | 58.6 | 384.5 | **6.63** | warm barely beats cold — cost is the AR decode, not load |
-| serial `/synthesize` (real prose) | 8 "DAY ONE" sentences | 30.4 | 251.9 | **8.29** | real Keefe prose, single voice |
+| serial `/synthesize` (real prose) | 8 "DAY ONE" sentences | 30.4 | 251.9 | **8.29** | real Marlow prose, single voice |
 | **batch `/synthesize-batch`** | 8 same-voice items, 1 call | 30.2 | 78.8 | **2.61** | **3.2× faster than serial** — clean single-voice batch |
-| **full pipeline, mixed cast** | "Bonus Keefe Story" ch.2 "DAY ONE", 4 voices | 296.3 | 1221.8 | **4.12** | real per-character gen (Narrator/Keefe/Elwin/Ro); MP3 ffprobe-confirmed (296.28 s, mono 24 kHz, ~67 kbps) |
+| **full pipeline, mixed cast** | "the Coalfall Commission" ch.2 "DAY ONE", 4 voices | 296.3 | 1221.8 | **4.12** | real per-character gen (Narrator/Marlow/Oduvan/Nim); MP3 ffprobe-confirmed (296.28 s, mono 24 kHz, ~67 kbps) |
 
 **Observations:**
 
@@ -90,7 +90,7 @@ _Settings:_ `QWEN_ATTN_IMPL=sdpa` (**confirmed** from the model-load log), `dtyp
 
 _Settings:_ dedicated benchmark sidecar on `:9001`, `PRELOAD_QWEN=1`, **Kokoro/Coqui not loaded**, the app's `:9000` Qwen unloaded → **VRAM ~0.8 GB base** (vs ~97% full for the run above — that contention was the whole 3–5× gap). `dtype=bfloat16`, `low_cpu_mem_usage=False`. Attention impl **confirmed from each load log** (`flash_attention_2` did NOT silently fall back to sdpa). flash-attn 2.7.4 wheel installed via plan 115. Each batch = one `/synthesize-batch` call of N items; concurrency = N such calls fired in parallel. 2 samples per cell.
 
-**SDPA vs FlashAttention-2** (RTF = wall ÷ audio; lower is better; real "DAY ONE" Keefe prose, `qwen-narrator`):
+**SDPA vs FlashAttention-2** (RTF = wall ÷ audio; lower is better; real "DAY ONE" Marlow prose, `qwen-narrator`):
 
 | Batch | SDPA | FA2 |
 |---|---|---|
@@ -119,7 +119,7 @@ _Settings:_ dedicated benchmark sidecar on `:9001`, `PRELOAD_QWEN=1`, **Kokoro/C
 
 ### Qwen3-TTS 0.6B — end-to-end (real pipeline) — 2026-05-26
 
-The true per-chapter number through the full server pipeline (per-character voice routing + `QWEN_BATCH_SIZE=8` batching + MP3 assembly), generating "Bonus Keefe Story" ch.2 "DAY ONE" (87 sentences, 4 voices, ~290 s audio) on a freed GPU, **after the concurrent-batch race fix** (plan 113):
+The true per-chapter number through the full server pipeline (per-character voice routing + `QWEN_BATCH_SIZE=8` batching + MP3 assembly), generating "the Coalfall Commission" ch.2 "DAY ONE" (87 sentences, 4 voices, ~290 s audio) on a freed GPU, **after the concurrent-batch race fix** (plan 113):
 
 | Engine | RTF (3 runs) | Mean | Failures |
 |---|---|---|---|
@@ -168,7 +168,7 @@ Forcing the clock higher did **not** improve RTF and util stayed ~15% — the GP
 
 ### Qwen3-TTS 0.6B — token-budget batching live A/B — 2026-05-29 ⚠️ INCONCLUSIVE (re-run after plan 137)
 
-Tested plan 136 token-budget batching live on "Keeper of the Lost Cities" CH 10 "EIGHT" (217 lines, 7 speakers — dialogue-dense) at three configs: `32/2400`, `64/4800`, `64/3600` (`QWEN_BATCH_SIZE`/`QWEN_BATCH_TOKEN_BUDGET`).
+Tested plan 136 token-budget batching live on "The Hollow Tide" CH 10 "EIGHT" (217 lines, 7 speakers — dialogue-dense) at three configs: `32/2400`, `64/4800`, `64/3600` (`QWEN_BATCH_SIZE`/`QWEN_BATCH_TOKEN_BUDGET`).
 
 **The per-batch / aggregate RTF numbers are NOT trustworthy** — two confounds:
 1. **`tsx watch` restart churn** — editing repo files / switching branches mid-run reloaded the server, tearing down the sidecar and re-running the chapter.
@@ -206,7 +206,7 @@ The plan-136 token-budget A/B — blocked on 2026-05-29 by the plan-137 fetch ti
 
 ### Qwen3-TTS 0.6B — full-book run RTF (32/3600, merged build) + host-memory leak — 2026-05-30
 
-Live full-book run of **Keeper of the Lost Cities** on the merged build (32/3600 token-budget default, single worker, eager Qwen, 8 GB 4070 Laptop / 64 GB host). Two outcomes: the config's per-chapter RTF is **strong**, and the run surfaced a **host-memory leak** that is its own record below.
+Live full-book run of **The Hollow Tide** on the merged build (32/3600 token-budget default, single worker, eager Qwen, 8 GB 4070 Laptop / 64 GB host). Two outcomes: the config's per-chapter RTF is **strong**, and the run surfaced a **host-memory leak** that is its own record below.
 
 **Per-chapter RTF (server-reported `synth ÷ audio`, the true pipeline figure):**
 
@@ -229,7 +229,7 @@ Live full-book run of **Keeper of the Lost Cities** on the merged build (32/3600
 
 ### Qwen3-TTS 0.6B — full-book overnight run on the FIXED build (32/3600, plans 141/146/147) — 2026-05-31 ✅ best sustained full-book result
 
-The headline run: a complete overnight render of **Keeper of the Lost Cities** (the full story, chapters 25–49 of the manuscript = chapterIds 27–51) on the build carrying all three prior fixes — the gc-on-unload + RSS-recycle leak work (plan 141/143), the Kokoro pre-warm / fallback gate (plan 146), and the sidecar-readiness gate (plan 147 / srv-17b). Goal was twofold: re-render the whole book on Qwen for engine consistency, and validate those fixes on a genuine multi-voice book rather than a micro-bench. **All three held; the config sustained ~realtime across 25 chapters.** A late stall (root-caused below) was a *new*, separate bug (back-matter), since fixed as plan 148.
+The headline run: a complete overnight render of **The Hollow Tide** (the full story, chapters 25–49 of the manuscript = chapterIds 27–51) on the build carrying all three prior fixes — the gc-on-unload + RSS-recycle leak work (plan 141/143), the Kokoro pre-warm / fallback gate (plan 146), and the sidecar-readiness gate (plan 147 / srv-17b). Goal was twofold: re-render the whole book on Qwen for engine consistency, and validate those fixes on a genuine multi-voice book rather than a micro-bench. **All three held; the config sustained ~realtime across 25 chapters.** A late stall (root-caused below) was a *new*, separate bug (back-matter), since fixed as plan 148.
 
 _Settings:_ adopted production config **`QWEN_BATCH_SIZE=32`, `QWEN_BATCH_TOKEN_BUDGET=3600`** (the shipped defaults), **single generation worker** (account `generationWorkers`; the per-chapter-fastest config per 2026-05-28/29), eager Qwen (`PRELOAD_QWEN=1`), **Kokoro NOT loaded** (plan 146 stopped the unconditional pre-warm), `QWEN_ATTN_IMPL=sdpa`, Windows High-performance plan. 8 GB 4070 Laptop / 64 GB host. RTF = server-reported `synth ÷ audio` (the true pipeline figure; per-character voice routing + batching + MP3 assembly).
 

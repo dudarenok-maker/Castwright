@@ -12,7 +12,7 @@ import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './a
 const baseSnapshot: AnalysisStreamSnapshot = {
   bookId: 'b1',
   manuscriptId: 'm1',
-  bookTitle: 'Bonus Keefe Story',
+  bookTitle: 'the Coalfall Commission',
   phaseId: 0,
   phaseLabel: 'Detecting characters',
   phaseProgress: 0,
@@ -216,12 +216,12 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
       analysisActions.setSeriesPrior({
         manuscriptId: 'm1',
         count: 41,
-        names: ['Sophie', 'Keefe', 'Elwin'],
+        names: ['Wren', 'Marlow', 'Oduvan'],
       }),
     );
     expect(s2.activeStream?.seriesPrior).toEqual({
       count: 41,
-      names: ['Sophie', 'Keefe', 'Elwin'],
+      names: ['Wren', 'Marlow', 'Oduvan'],
     });
     /* Cross-book: another tab's series-prior event must not poison this tab. */
     const s3 = analysisSlice.reducer(

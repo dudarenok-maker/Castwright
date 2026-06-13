@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-Spun off from a real low-confidence triage session on a series-Book-2 manuscript: "Councillor Alina" was misattributed to "Lord Cassius" with a Low-confidence pill, but Alina was nowhere in the per-sentence reassign picker — she exists in the series-level roster (via `api.getSeriesRoster`), just not in the local cast for this book. Fixing one misattribution required three context switches (manuscript → ProfileDrawer → manual link → back). After this round, the same fix is keyboard-and-one-click.
+Spun off from a real low-confidence triage session on a series-Book-2 manuscript: "Councillor Linnet" was misattributed to "Lord Vane" with a Low-confidence pill, but Linnet was nowhere in the per-sentence reassign picker — she exists in the series-level roster (via `api.getSeriesRoster`), just not in the local cast for this book. Fixing one misattribution required three context switches (manuscript → ProfileDrawer → manual link → back). After this round, the same fix is keyboard-and-one-click.
 
 - **User:** turns "find a misattributed sentence" from "scroll a 300-sentence chapter by eye" into K key presses (J for next low-confidence, K for prev) regardless of chapter length. Turns "reassign to a recurring series character missing from this book's cast" from three context switches into one picker click. Keeps the picker usable as casts grow — internal-scroll height cap + typeahead means a 30-character series-Book-N cast doesn't overflow the viewport (especially on plan 81's mobile/tablet viewports).
 - **Technical:** factors the reassign UI into a single `<CharacterSearchPicker>` component consumed by all three manuscript-view picker sites (segment-row dropdown + inspector segment-level + inspector per-sentence). New `POST /cast/add-from-roster` endpoint extends the existing `cast/link-prior` family with the "create-new-character-from-prior" case the old endpoint can't cover (link-prior requires the source character to already exist locally). New `priorRoster` field on `LayoutContext` so the manuscript view and the ProfileDrawer share one `/series-roster` round-trip per book.
@@ -124,7 +124,7 @@ component that the original ship missed:
 
 **New tests:** five additional cases in
 `src/components/character-search-picker.test.tsx` (portal + dismissal),
-two cases in `src/views/manuscript.test.tsx` (Grizel-reachable + row-popover
+two cases in `src/views/manuscript.test.tsx` (Sela-reachable + row-popover
 survives pointerleave), one entry in `src/test/dark-mode-css.test.ts`
 (`.picker-surface`), and a new Playwright spec
 `e2e/manuscript-reassign-picker.spec.ts` (4 cases — portal contract,

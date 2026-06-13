@@ -19,7 +19,7 @@ owner: dudarenok-maker
   marked `generating` (or deep-linking to its Generate view) silently re-queued
   every unfinished chapter on every open, restarting generation before the user
   had finished designing voices. That is exactly the reported bug ("clicking on
-  Stellarlune automatically adds all chapters to generation").
+  The Drowning Bell automatically adds all chapters to generation").
 - **Technical:** Auto-enqueue is now driven by a single explicit-intent action
   (`ui/requestStartGeneration`) instead of inferring intent from "the viewed
   book is on the Generate view." The view heuristic could not distinguish "user

@@ -13,9 +13,9 @@ owner: dudarenok-maker
 
 ## Benefit / Rationale
 
-- **User:** unblocks the case where Phase 0a per-chapter detection misses a canonical-but-rarely-quoted named character — bodyguards / mentors / family who are referenced heavily in narration but rarely speak. Concrete example that motivated this plan: in `C:\AudiobookWorkspace\books\Shannon Messenger\Keeper of the Lost Cities\Neverseen\.audiobook\cast.json`, Grizel (Fitz's goblin bodyguard) is absent entirely (0 detections across all ~65 Phase 0a stage1 outputs in `server/handoff/outbox/mns_S3qh0_FVnz-stage1-ch*.json`) and Sandor was detected in 1 chapter then folded out by `server/src/analyzer/fold-minor-cast.ts`'s `minLines: 3` threshold. The script gets them into the roster so the user can assign voices without waiting for a Phase 0a re-run.
+- **User:** unblocks the case where Phase 0a per-chapter detection misses a canonical-but-rarely-quoted named character — bodyguards / mentors / family who are referenced heavily in narration but rarely speak. Concrete example that motivated this plan: in `C:\AudiobookWorkspace\books\Della Renwick\The Hollow Tide\Saltgrave\.audiobook\cast.json`, Sela (Brann's goblin bodyguard) is absent entirely (0 detections across all ~65 Phase 0a stage1 outputs in `server/handoff/outbox/mns_S3qh0_FVnz-stage1-ch*.json`) and Garrow was detected in 1 chapter then folded out by `server/src/analyzer/fold-minor-cast.ts`'s `minLines: 3` threshold. The script gets them into the roster so the user can assign voices without waiting for a Phase 0a re-run.
 - **Technical:** avoids a Phase 0a re-run — re-running the same analyzer with the same prompt would miss the same character for the same reason (per `feedback_verify_reanalysis_actually_needed`). The script is also additive: appending one character entry + flipping per-sentence `characterId` is mechanical and reversible.
-- **Architectural:** establishes a manual-recovery seam BEFORE the analyzer-side fix in [plan 97](97-narrator-only-named-characters.md) lands. Layer 1 ships independently of Layer 2 so the user can fix the immediate Neverseen gap without waiting for the systemic change, and Layer 2's regression plan can cite the Neverseen recovery as the worked example.
+- **Architectural:** establishes a manual-recovery seam BEFORE the analyzer-side fix in [plan 97](97-narrator-only-named-characters.md) lands. Layer 1 ships independently of Layer 2 so the user can fix the immediate Saltgrave gap without waiting for the systemic change, and Layer 2's regression plan can cite the Saltgrave recovery as the worked example.
 
 ## Architectural impact
 
@@ -29,10 +29,10 @@ owner: dudarenok-maker
 
 ## Invariants to preserve
 
-1. **kebab-case id convention** matches the analyzer's id shape. `toKebabId('Mr. Forkle') === 'mr-forkle'`, `'Councillor Emery' → 'councillor-emery'`. A future Phase 0a re-run with [plan 97](97-narrator-only-named-characters.md) in place produces the same id, so the manual entry merges cleanly instead of orphaning.
+1. **kebab-case id convention** matches the analyzer's id shape. `toKebabId('Mr. Casper') === 'mr-casper'`, `'Councillor Reld' → 'councillor-reld'`. A future Phase 0a re-run with [plan 97](97-narrator-only-named-characters.md) in place produces the same id, so the manual entry merges cleanly instead of orphaning.
 2. **Refuses double-add** by checking `cast.characters[].id` collision before write. Prevents accidental duplicate entries on repeat invocations.
 3. **Dialogue re-attribution is bounded to the immediately-preceding sentence** in the same chapter. The script never re-attributes across chapter boundaries (Phase 1 ids are per-chapter scoped) and only flips sentences currently attributed to `narrator` (a tag sentence already attributed to a non-narrator character represents third-party observation, not a true tag — see `findDialogueReattributions` for the rule).
-4. **Word-boundary matching on the speaker name** prevents `'Grizel'` matching the substring `'Grizela'` (different person) or `'grow'` matching `'growth'`. Both directions of the boundary are checked.
+4. **Word-boundary matching on the speaker name** prevents `'Sela'` matching the substring `'Grizela'` (different person) or `'grow'` matching `'growth'`. Both directions of the boundary are checked.
 5. **Dry-run by default** — `--apply` is required to write. Matches the convention in `scripts/relufs-existing.mjs`.
 
 ## Test plan
@@ -41,7 +41,7 @@ owner: dudarenok-maker
 
 - `scripts/tests/recover-missing-character.test.mjs` — 18 cases covering:
   - `parseArgs`: arg shape (positional bookDir + named --name/--gender/--role), `--apply` flag, unknown-flag rejection, multiple-positional rejection.
-  - `toKebabId`: matches the analyzer id convention across simple names, names with punctuation (`'Mr. Forkle'`), accented names (NFD-normalised), and whitespace.
+  - `toKebabId`: matches the analyzer id convention across simple names, names with punctuation (`'Mr. Casper'`), accented names (NFD-normalised), and whitespace.
   - `buildCharacter`: shape against the `Character` schema — id / name / role / gender / ageRange, four-axis `tone`, `voiceState: 'unassigned'`, no `matchedFrom`, generated description fallback.
   - `findDialogueReattributions`: catches `<Name> said` / `growled` / `warned`; multiple verbs in one chapter; chapter-boundary bounded; ignores third-party tags (sentence already attributed to a non-narrator); word-boundary false-positive guard against `'Grizela'` and similar substrings.
   - `buildChangeLogEntry`: type `character_manually_added`, actor `user-script`, note text for both 0-line and N-line counts.
@@ -55,27 +55,27 @@ Wired into `npm run test:hooks` via `scripts/run-hooks-tests.mjs`. Runs as part 
 
 The script is invoked from a terminal, not from the app — no URL hashes or redux state to assert.
 
-1. **Dry-run against the Neverseen workspace book:**
+1. **Dry-run against the Saltgrave workspace book:**
    ```
-   node scripts/recover-missing-character.mjs "C:\AudiobookWorkspace\books\Shannon Messenger\Keeper of the Lost Cities\Neverseen" --name Grizel --gender female --role Bodyguard --description "Fitz's goblin bodyguard"
+   node scripts/recover-missing-character.mjs "C:\AudiobookWorkspace\books\Della Renwick\The Hollow Tide\Saltgrave" --name Sela --gender female --role Bodyguard --description "Brann's goblin bodyguard"
    ```
    → expected output:
    ```
    [plan] add character to ...\.audiobook\cast.json:
-     id="grizel" name="Grizel" role="Bodyguard" gender="female"
+     id="sela" name="Sela" role="Bodyguard" gender="female"
 
    [plan] proposed dialogue re-attributions: 0
 
    [dry-run] no files written. Re-run with --apply to commit.
    ```
-   (Neverseen has zero `Grizel said`/`growled`/etc. patterns in `manuscript-edits.json`, so the dialogue-tag scan finds nothing — the recovery is cast-only.)
+   (Saltgrave has zero `Sela said`/`growled`/etc. patterns in `manuscript-edits.json`, so the dialogue-tag scan finds nothing — the recovery is cast-only.)
 2. **Apply mode:** append `--apply` to the same command. The script writes the cast entry + a `change-log.json` event with `type: "character_manually_added"`, no manuscript-edits change.
-3. **Repeat the script for Sandor:**
+3. **Repeat the script for Garrow:**
    ```
-   node scripts/recover-missing-character.mjs "...\Neverseen" --name Sandor --gender male --role "Goblin Bodyguard" --description "Sophie's fierce goblin bodyguard." --apply
+   node scripts/recover-missing-character.mjs "...\Saltgrave" --name Garrow --gender male --role "Goblin Bodyguard" --description "Wren's fierce goblin bodyguard." --apply
    ```
-4. **Verify in the cast view:** open the book in the running app (`npm start`) → Cast view → both Grizel and Sandor appear in the roster with `0 lines`, `0 scenes`, voice slot `Unassigned`. The voice library "Suggest voice" path can now match them.
-5. **Re-run refuses:** re-invoke step 2 with `--apply` → exits 1 with `character id "grizel" already exists in ...cast.json. Refusing to double-add.`.
+4. **Verify in the cast view:** open the book in the running app (`npm start`) → Cast view → both Sela and Garrow appear in the roster with `0 lines`, `0 scenes`, voice slot `Unassigned`. The voice library "Suggest voice" path can now match them.
+5. **Re-run refuses:** re-invoke step 2 with `--apply` → exits 1 with `character id "sela" already exists in ...cast.json. Refusing to double-add.`.
 
 ## Out of scope
 
@@ -86,4 +86,4 @@ The script is invoked from a terminal, not from the app — no URL hashes or red
 
 ## Ship notes
 
-Shipped 2026-05-22 via PR — recover-missing-character script + 18 paired `node:test` cases. Worked end-to-end against the Neverseen workspace data for both Grizel and Sandor (dry-run shows correct plan; `--apply` writes cast.json + change-log.json). Layer 2 ([plan 97](97-narrator-only-named-characters.md)) is the follow-up that stops the analyzer from dropping these characters in the first place.
+Shipped 2026-05-22 via PR — recover-missing-character script + 18 paired `node:test` cases. Worked end-to-end against the Saltgrave workspace data for both Sela and Garrow (dry-run shows correct plan; `--apply` writes cast.json + change-log.json). Layer 2 ([plan 97](97-narrator-only-named-characters.md)) is the follow-up that stops the analyzer from dropping these characters in the first place.

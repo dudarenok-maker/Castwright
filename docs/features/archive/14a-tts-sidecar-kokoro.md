@@ -165,7 +165,7 @@ text="Hello, world."`:
 ### End-to-end
 
 7. Drive the canonical manuscript
-   `~/Downloads/Bonus Keefe Story.txt` through the full pipeline with
+   `server/src/__fixtures__/the-coalfall-commission.md` through the full pipeline with
    Kokoro selected. Expect: audibly better narration vs the XTTS
    baseline; chapter render proceeds without the analyzer/TTS eviction
    dance; the Load/Stop pill is irrelevant during Kokoro synthesis.

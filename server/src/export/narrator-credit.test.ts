@@ -11,7 +11,7 @@ describe('DEFAULT_NARRATOR_CREDIT', () => {
 });
 
 describe('artistForExport', () => {
-  const author = 'Shannon Messenger';
+  const author = 'Della Renwick';
 
   it('returns the author when narratorCredit is absent', () => {
     expect(artistForExport({ author })).toBe(author);

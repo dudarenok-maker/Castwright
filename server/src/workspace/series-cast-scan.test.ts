@@ -17,8 +17,8 @@ import { join } from 'node:path';
 let workspaceRoot: string;
 let scan: typeof import('./series-cast-scan.js');
 
-const AUTHOR = 'Shannon Messenger';
-const SERIES = 'Keeper of the Lost Cities';
+const AUTHOR = 'Della Renwick';
+const SERIES = 'The Hollow Tide';
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-series-scan-test-'));
@@ -26,9 +26,9 @@ beforeAll(async () => {
   scan = await import('./series-cast-scan.js');
 
   /* Three books in the same series:
-       - KOTLC #1 (confirmed) -- contributes 3 characters
-       - Bonus Keefe (confirmed) -- contributes 2 characters
-       - Unlocked (NOT confirmed) -- excluded by library-cast-scan
+       - the Hollow Tide #1 (confirmed) -- contributes 3 characters
+       - Bonus Marlow (confirmed) -- contributes 2 characters
+       - The Floodmark (NOT confirmed) -- excluded by library-cast-scan
      Plus one book in a different series to prove the series scope. */
   const seed = (
     title: string,
@@ -68,22 +68,22 @@ beforeAll(async () => {
     );
   };
 
-  seed('Keeper of the Lost Cities', {
+  seed('The Hollow Tide', {
     confirmed: true,
     characters: [
       { id: 'narrator', name: 'Narrator' },
-      { id: 'sophie', name: 'Sophie' },
-      { id: 'keefe', name: 'Keefe' },
+      { id: 'wren', name: 'Wren' },
+      { id: 'marlow', name: 'Marlow' },
     ],
   });
-  seed('Bonus Keefe Story', {
+  seed('the Coalfall Commission', {
     confirmed: true,
     characters: [
-      { id: 'keefe', name: 'Keefe' },
-      { id: 'ro', name: 'Ro' },
+      { id: 'marlow', name: 'Marlow' },
+      { id: 'nim', name: 'Nim' },
     ],
   });
-  seed('Unlocked', {
+  seed('The Floodmark', {
     confirmed: false, // analyzing now, no cast on disk yet
     characters: [{ id: 'narrator', name: 'Narrator' }],
   });
@@ -110,20 +110,20 @@ afterAll(() => {
 describe('scanSeriesCharacters', () => {
   it('returns confirmed characters across all books in the target series', async () => {
     const records = await scan.scanSeriesCharacters(AUTHOR, SERIES);
-    /* KOTLC (3) + Bonus Keefe (2) = 5. Unlocked excluded (castConfirmed=false). */
+    /* the Hollow Tide (3) + Bonus Marlow (2) = 5. The Floodmark excluded (castConfirmed=false). */
     expect(records).toHaveLength(5);
     const ids = records.map((r) => r.character.id).sort();
-    expect(ids).toEqual(['keefe', 'keefe', 'narrator', 'ro', 'sophie']);
+    expect(ids).toEqual(['marlow', 'marlow', 'narrator', 'nim', 'wren']);
   });
 
   it('excludes the supplied bookId from the result (book never seeds itself)', async () => {
     const records = await scan.scanSeriesCharacters(AUTHOR, SERIES, {
-      excludeBookId: 'shannon-messenger__keeper-of-the-lost-cities__keeper-of-the-lost-cities',
+      excludeBookId: 'della-renwick__the-hollow-tide__the-hollow-tide',
     });
-    /* KOTLC's 3 characters drop out; Bonus Keefe's 2 remain. */
+    /* the Hollow Tide's 3 characters drop out; Bonus Marlow's 2 remain. */
     expect(records).toHaveLength(2);
     const ids = records.map((r) => r.character.id).sort();
-    expect(ids).toEqual(['keefe', 'ro']);
+    expect(ids).toEqual(['marlow', 'nim']);
   });
 
   it('excludes books in a different series even when the author matches', async () => {
@@ -147,11 +147,11 @@ describe('scanSeriesCharacters', () => {
 describe('scanSeriesCharactersForBookId', () => {
   it('resolves (author, series) from a bookId and returns its series-mates', async () => {
     const records = await scan.scanSeriesCharactersForBookId(
-      'shannon-messenger__keeper-of-the-lost-cities__unlocked',
+      'della-renwick__the-hollow-tide__the-floodmark',
     );
-    /* Unlocked sits in KOTLC series. Its OWN cast (narrator only, not
+    /* The Floodmark sits in the Hollow Tide series. Its OWN cast (narrator only, not
        confirmed) is excluded by both excludeBookId AND the
-       castConfirmed gate. KOTLC's 3 + Bonus Keefe's 2 = 5. */
+       castConfirmed gate. the Hollow Tide's 3 + Bonus Marlow's 2 = 5. */
     expect(records).toHaveLength(5);
   });
 
@@ -162,17 +162,17 @@ describe('scanSeriesCharactersForBookId', () => {
 
   it('returns [] for a standalone book (its own cast is NOT part of any series)', async () => {
     const records = await scan.scanSeriesCharactersForBookId(
-      'shannon-messenger__keeper-of-the-lost-cities__some-standalone',
+      'della-renwick__the-hollow-tide__some-standalone',
     );
-    /* The standalone's series field resolves to KOTLC, BUT the scan's
+    /* The standalone's series field resolves to the Hollow Tide, BUT the scan's
        isStandalone filter excludes every other book from the result.
-       Hmm -- actually, the OTHER books in KOTLC series aren't
+       Hmm -- actually, the OTHER books in the Hollow Tide series aren't
        standalones, so they DO appear. This is the right behaviour:
        a standalone asking "who else is in my series" should still
        discover the series regulars; they just don't need to flow
        back the other way. */
     /* Loosen: scope is "series-mates" which means non-standalone books
-       in the same series. KOTLC + Bonus Keefe both appear (5 characters
+       in the same series. the Hollow Tide + Bonus Marlow both appear (5 characters
        total). */
     expect(records).toHaveLength(5);
   });

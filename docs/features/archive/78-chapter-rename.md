@@ -55,7 +55,7 @@ owner: dudarenok@gmail.com
 
 ### Manual acceptance walkthrough
 
-Run against real backend (`npm start`) with the canonical end-to-end manuscript `C:\Users\dudar\Downloads\Bonus Keefe Story.txt`:
+Run against real backend (`npm start`) with the canonical end-to-end manuscript `server/src/__fixtures__/the-coalfall-commission.md`:
 
 1. **Import → confirm metadata → analyse → listen view.** Note a chapter whose auto-derived title looks wrong.
 2. **Click the pencil icon** on that chapter row. Modal opens with the current title in the input.

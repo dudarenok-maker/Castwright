@@ -6,8 +6,8 @@
    (server/src/analyzer/fold-minor-cast.ts) and via the manual merge route
    (cast-merge.ts), both of which append. There has been no reverse
    operation, which left the user with no recovery path when the auto-fold
-   over-merged a real distinct cast member as an alias (e.g. "Sandor"
-   folded into "Neverseen Figure").
+   over-merged a real distinct cast member as an alias (e.g. "Garrow"
+   folded into "Saltgrave Figure").
 
    The merge route rewrites sentence.characterId in place with no lineage
    column on the Sentence schema, so we cannot deterministically recover

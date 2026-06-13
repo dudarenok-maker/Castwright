@@ -83,9 +83,9 @@ describe('api.removeQwenVariant', () => {
   it('issues a DELETE to the emotion-variant route', async () => {
     const { api } = await import('./api');
     fetchMock.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }) });
-    await api.removeQwenVariant('book-1', 'biana', 'angry');
+    await api.removeQwenVariant('book-1', 'maerin', 'angry');
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('/api/books/book-1/cast/biana/emotion-variant/angry');
+    expect(url).toBe('/api/books/book-1/cast/maerin/emotion-variant/angry');
     expect(init.method).toBe('DELETE');
   });
 
@@ -96,6 +96,6 @@ describe('api.removeQwenVariant', () => {
       status: 400,
       json: () => Promise.resolve({ error: 'bad emotion' }),
     });
-    await expect(api.removeQwenVariant('book-1', 'biana', 'furious')).rejects.toThrow(/bad emotion/);
+    await expect(api.removeQwenVariant('book-1', 'maerin', 'furious')).rejects.toThrow(/bad emotion/);
   });
 });

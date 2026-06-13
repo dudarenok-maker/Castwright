@@ -134,15 +134,15 @@ function makeStore(
   });
 }
 
-/* Canonical cast: narrator dominates lines (excluded), Biana + Keefe carry
+/* Canonical cast: narrator dominates lines (excluded), Maerin + Marlow carry
    the bulk of dialogue, Bystander is a one-liner under the 80% threshold. */
 const CHARACTERS = [
   char('narrator', 'Narrator', 500),
-  char('biana', 'Biana', 80),
-  char('keefe', 'Keefe', 60),
+  char('maerin', 'Maerin', 80),
+  char('marlow', 'Marlow', 60),
   char('bystander', 'Bystander', 1),
 ];
-const VOICES = [voice('voice-biana', 'biana'), voice('voice-keefe', 'keefe')];
+const VOICES = [voice('voice-maerin', 'maerin'), voice('voice-marlow', 'marlow')];
 
 beforeEach(() => {
   designQwenVoice.mockClear();
@@ -184,15 +184,15 @@ describe('RebaselineModal — default selection', () => {
     );
     await waitFor(() => {
       const sel = store.getState().rebaseline.selectedCharacterIds;
-      expect(sel).toContain('biana');
-      expect(sel).toContain('keefe');
+      expect(sel).toContain('maerin');
+      expect(sel).toContain('marlow');
       expect(sel).not.toContain('narrator');
     });
     // The narrator row renders (toggleable on) but is unchecked by default.
     const narratorRow = screen.getByLabelText('Rebaseline Narrator') as HTMLInputElement;
     expect(narratorRow.checked).toBe(false);
-    const bianaRow = screen.getByLabelText('Rebaseline Biana') as HTMLInputElement;
-    expect(bianaRow.checked).toBe(true);
+    const maerinRow = screen.getByLabelText('Rebaseline Maerin') as HTMLInputElement;
+    expect(maerinRow.checked).toBe(true);
   });
 
   it('renders nothing without a bookId (global voices tab)', () => {
@@ -217,7 +217,7 @@ describe('RebaselineModal — cast sourcing', () => {
     /* Open-book path: the anchor cast comes from redux (getBookState is never
        called). The series aggregation still fetches its series-mates. */
     await waitFor(() => {
-      expect(store.getState().rebaseline.selectedCharacterIds).toContain('biana');
+      expect(store.getState().rebaseline.selectedCharacterIds).toContain('maerin');
     });
     expect(getBookState).not.toHaveBeenCalled();
     expect(getSeriesCast).toHaveBeenCalledWith('book-1');
@@ -231,8 +231,8 @@ describe('RebaselineModal — cast sourcing', () => {
       cast: {
         characters: [
           char('narrator', 'Narrator', 400),
-          char('fitz', 'Fitz', 90),
-          char('dex', 'Dex', 70),
+          char('brann', 'Brann', 90),
+          char('hart', 'Hart', 70),
         ],
       },
     });
@@ -244,32 +244,32 @@ describe('RebaselineModal — cast sourcing', () => {
       </Provider>,
     );
     await waitFor(() => expect(getBookState).toHaveBeenCalledWith('book-2'));
-    /* The principal cast is seeded from book-2's fetched cast (Fitz + Dex),
-       NOT the open book's redux cast (Biana + Keefe). */
+    /* The principal cast is seeded from book-2's fetched cast (Brann + Hart),
+       NOT the open book's redux cast (Maerin + Marlow). */
     await waitFor(() => {
       const sel = store.getState().rebaseline.selectedCharacterIds;
-      expect(sel).toContain('fitz');
-      expect(sel).toContain('dex');
-      expect(sel).not.toContain('biana');
+      expect(sel).toContain('brann');
+      expect(sel).toContain('hart');
+      expect(sel).not.toContain('maerin');
       expect(sel).not.toContain('narrator');
     });
     /* The fetched cast's rows render in the setup step. */
-    expect(screen.getByLabelText('Rebaseline Fitz')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rebaseline Brann')).toBeInTheDocument();
   });
 });
 
 describe('RebaselineModal — whole-series aggregation', () => {
   it('lists characters from other series books and pre-selects by SERIES-total lines', async () => {
-    /* Open book (book-1) has Biana(80) + Keefe(60). The series-cast fetch adds
-       a recurring Biana entry from a later volume (same voiceId → merges +
-       sums lines to 380) and Tam(250), who never appears in book-1. With the
-       aggregation, the principal cast is Biana + Tam (covering ≥80% of the
-       691 non-narrator series lines), and Keefe drops below the threshold —
+    /* Open book (book-1) has Maerin(80) + Marlow(60). The series-cast fetch adds
+       a recurring Maerin entry from a later volume (same voiceId → merges +
+       sums lines to 380) and Pell(250), who never appears in book-1. With the
+       aggregation, the principal cast is Maerin + Pell (covering ≥80% of the
+       691 non-narrator series lines), and Marlow drops below the threshold —
        proving the default selection is series-wide, not one book's. */
     getSeriesCast.mockResolvedValue({
       characters: [
-        { ...char('biana-b2', 'Biana', 300), voiceId: 'voice-biana' } as Character,
-        { ...char('tam', 'Tam', 250), voiceId: 'voice-tam' } as Character,
+        { ...char('maerin-b2', 'Maerin', 300), voiceId: 'voice-maerin' } as Character,
+        { ...char('pell', 'Pell', 250), voiceId: 'voice-pell' } as Character,
       ],
     });
     const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
@@ -279,24 +279,24 @@ describe('RebaselineModal — whole-series aggregation', () => {
       </Provider>,
     );
     await waitFor(() => expect(getSeriesCast).toHaveBeenCalledWith('book-1'));
-    /* Tam — who is in no book-1 cast — is now a selectable row. */
-    await waitFor(() => expect(screen.getByLabelText('Rebaseline Tam')).toBeInTheDocument());
+    /* Pell — who is in no book-1 cast — is now a selectable row. */
+    await waitFor(() => expect(screen.getByLabelText('Rebaseline Pell')).toBeInTheDocument());
     await waitFor(() => {
       const sel = store.getState().rebaseline.selectedCharacterIds;
-      expect(sel).toContain('biana'); // anchor identity kept (not biana-b2)
-      expect(sel).toContain('tam');
-      expect(sel).not.toContain('keefe'); // dropped below 80% once Tam's lines count
+      expect(sel).toContain('maerin'); // anchor identity kept (not maerin-b2)
+      expect(sel).toContain('pell');
+      expect(sel).not.toContain('marlow'); // dropped below 80% once Pell's lines count
       expect(sel).not.toContain('narrator');
     });
   });
 
   it('collapses a divergent-id same-name sibling into ONE row (plan 122 name/alias)', async () => {
-    /* Anchor book-1 has "Biana" (id 'biana'). A later volume detected her as
-       "Biana Vacker" (different id, NO shared voiceId) — divergent write key.
+    /* Anchor book-1 has "Maerin" (id 'maerin'). A later volume detected her as
+       "Maerin Vell" (different id, NO shared voiceId) — divergent write key.
        Name/alias collapse must fold her into the single anchor row, NOT render
-       a second "Biana Vacker" row. */
+       a second "Maerin Vell" row. */
     getSeriesCast.mockResolvedValue({
-      characters: [{ ...char('biana-vacker', 'Biana Vacker', 200), sourceBookId: 'book-2' } as Character],
+      characters: [{ ...char('maerin-vell', 'Maerin Vell', 200), sourceBookId: 'book-2' } as Character],
     });
     const store = makeStore(CHARACTERS, VOICES, { openBookId: 'book-1' });
     render(
@@ -305,19 +305,19 @@ describe('RebaselineModal — whole-series aggregation', () => {
       </Provider>,
     );
     await waitFor(() => expect(getSeriesCast).toHaveBeenCalledWith('book-1'));
-    /* getByLabelText throws if there were two "Biana" rows — single row proves
+    /* getByLabelText throws if there were two "Maerin" rows — single row proves
        the collapse; the divergent-id name never spawns its own row. */
-    await waitFor(() => expect(screen.getByLabelText('Rebaseline Biana')).toBeInTheDocument());
-    expect(screen.queryByLabelText('Rebaseline Biana Vacker')).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText('Rebaseline Maerin')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Rebaseline Maerin Vell')).toBeNull();
   });
 
   it('keeps a notLinkedTo sibling as a SEPARATE row (auto-collapse escape hatch)', async () => {
     getSeriesCast.mockResolvedValue({
       characters: [
         {
-          ...char('biana-vacker', 'Biana Vacker', 200),
+          ...char('maerin-vell', 'Maerin Vell', 200),
           sourceBookId: 'book-2',
-          notLinkedTo: [{ bookId: 'book-1', characterId: 'biana' }],
+          notLinkedTo: [{ bookId: 'book-1', characterId: 'maerin' }],
         } as Character,
       ],
     });
@@ -329,8 +329,8 @@ describe('RebaselineModal — whole-series aggregation', () => {
     );
     await waitFor(() => expect(getSeriesCast).toHaveBeenCalledWith('book-1'));
     /* The user marked them intentionally different → both rows remain. */
-    await waitFor(() => expect(screen.getByLabelText('Rebaseline Biana Vacker')).toBeInTheDocument());
-    expect(screen.getByLabelText('Rebaseline Biana')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText('Rebaseline Maerin Vell')).toBeInTheDocument());
+    expect(screen.getByLabelText('Rebaseline Maerin')).toBeInTheDocument();
   });
 
   it('falls back to the anchor cast when the series-cast fetch fails', async () => {
@@ -344,8 +344,8 @@ describe('RebaselineModal — whole-series aggregation', () => {
     /* Degrades gracefully: the modal still seeds from the open book's cast. */
     await waitFor(() => {
       const sel = store.getState().rebaseline.selectedCharacterIds;
-      expect(sel).toContain('biana');
-      expect(sel).toContain('keefe');
+      expect(sel).toContain('maerin');
+      expect(sel).toContain('marlow');
     });
     expect(screen.getByTestId('rebaseline-propose')).not.toBeDisabled();
   });
@@ -364,28 +364,28 @@ describe('RebaselineModal — propose', () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
     await waitFor(() => {
-      expect(screen.getByTestId('rebaseline-proposal-biana')).toBeInTheDocument();
-      expect(screen.getByTestId('rebaseline-proposal-keefe')).toBeInTheDocument();
+      expect(screen.getByTestId('rebaseline-proposal-maerin')).toBeInTheDocument();
+      expect(screen.getByTestId('rebaseline-proposal-marlow')).toBeInTheDocument();
     });
     // Both a current + proposed audition button per row.
-    expect(screen.getByTestId('rebaseline-play-current-biana')).toBeInTheDocument();
-    expect(screen.getByTestId('rebaseline-play-proposed-biana')).toBeInTheDocument();
+    expect(screen.getByTestId('rebaseline-play-current-maerin')).toBeInTheDocument();
+    expect(screen.getByTestId('rebaseline-play-proposed-maerin')).toBeInTheDocument();
     // The design call fired once per selected character.
     expect(designQwenVoice).toHaveBeenCalledTimes(2);
-    expect(store.getState().rebaseline.proposals.biana.proposedVoiceId).toBe('qwen-biana');
+    expect(store.getState().rebaseline.proposals.maerin.proposedVoiceId).toBe('qwen-maerin');
     // Personas are generated per-character (these two lack one) — never via
     // the batch endpoint, which would rebuild every persona on the server.
     expect(generateAllVoiceStyles).not.toHaveBeenCalled();
   });
 
   it('reuses an existing persona and only generates the missing one', async () => {
-    /* biana already carries a persona (e.g. from a prior session); keefe does
-       not. Re-proposing must NOT regenerate biana's — it reuses the string and
-       only fills keefe's gap. */
+    /* maerin already carries a persona (e.g. from a prior session); marlow does
+       not. Re-proposing must NOT regenerate maerin's — it reuses the string and
+       only fills marlow's gap. */
     const withPersona = [
       char('narrator', 'Narrator', 500),
-      { ...char('biana', 'Biana', 80), voiceStyle: 'an existing, hand-tuned persona' } as Character,
-      char('keefe', 'Keefe', 60),
+      { ...char('maerin', 'Maerin', 80), voiceStyle: 'an existing, hand-tuned persona' } as Character,
+      char('marlow', 'Marlow', 60),
       char('bystander', 'Bystander', 1),
     ];
     const store = makeStore(withPersona, VOICES);
@@ -398,13 +398,13 @@ describe('RebaselineModal — propose', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
-    await waitFor(() => expect(store.getState().rebaseline.proposals.keefe.status).toBe('ready'));
-    // No batch regenerate; the per-character generator ran ONLY for keefe.
+    await waitFor(() => expect(store.getState().rebaseline.proposals.marlow.status).toBe('ready'));
+    // No batch regenerate; the per-character generator ran ONLY for marlow.
     expect(generateAllVoiceStyles).not.toHaveBeenCalled();
     expect(generateVoiceStyle).toHaveBeenCalledTimes(1);
-    expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'keefe');
-    // biana's reused persona is carried through verbatim onto the proposal.
-    expect(store.getState().rebaseline.proposals.biana.persona).toBe(
+    expect(generateVoiceStyle).toHaveBeenCalledWith('book-1', 'marlow');
+    // maerin's reused persona is carried through verbatim onto the proposal.
+    expect(store.getState().rebaseline.proposals.maerin.persona).toBe(
       'an existing, hand-tuned persona',
     );
   });
@@ -412,15 +412,15 @@ describe('RebaselineModal — propose', () => {
 
 describe('RebaselineModal — design progress indicators', () => {
   it('shows queued + designing badges and a live progress count while voices design', async () => {
-    /* Hold biana's design open so we can observe the mid-flight state: the
-       sequential loop has biana 'designing' while keefe waits as 'pending'.
+    /* Hold maerin's design open so we can observe the mid-flight state: the
+       sequential loop has maerin 'designing' while marlow waits as 'pending'.
        Without these indicators the queued rows render blank and the modal
        looks frozen (the bug this guards). */
     let releaseBiana: () => void = () => {};
     designQwenVoice.mockImplementation((_bookId: string, characterId: string) =>
-      characterId === 'biana'
+      characterId === 'maerin'
         ? new Promise<{ voiceId: string; previewUrl: string }>((resolve) => {
-            releaseBiana = () => resolve({ voiceId: 'qwen-biana', previewUrl: 'blob:biana' });
+            releaseBiana = () => resolve({ voiceId: 'qwen-maerin', previewUrl: 'blob:maerin' });
           })
         : Promise.resolve({ voiceId: `qwen-${characterId}`, previewUrl: `blob:${characterId}` }),
     );
@@ -434,24 +434,24 @@ describe('RebaselineModal — design progress indicators', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
-    // biana is mid-design; keefe is queued behind it.
+    // maerin is mid-design; marlow is queued behind it.
     await waitFor(() => {
-      expect(store.getState().rebaseline.proposals.biana.status).toBe('designing');
+      expect(store.getState().rebaseline.proposals.maerin.status).toBe('designing');
     });
-    expect(store.getState().rebaseline.proposals.keefe.status).toBe('pending');
+    expect(store.getState().rebaseline.proposals.marlow.status).toBe('pending');
 
     // The active row reads "Designing voice…"; the queued row reads "Queued…".
-    const bianaRow = screen.getByTestId('rebaseline-proposal-biana');
-    const keefeRow = screen.getByTestId('rebaseline-proposal-keefe');
-    expect(within(bianaRow).getByText(/Designing voice…/)).toBeInTheDocument();
-    expect(within(keefeRow).getAllByText(/Queued…/).length).toBeGreaterThan(0);
+    const maerinRow = screen.getByTestId('rebaseline-proposal-maerin');
+    const marlowRow = screen.getByTestId('rebaseline-proposal-marlow');
+    expect(within(maerinRow).getByText(/Designing voice…/)).toBeInTheDocument();
+    expect(within(marlowRow).getAllByText(/Queued…/).length).toBeGreaterThan(0);
 
     // Footer progress count is live and reads 0 settled of 2 selected.
     expect(screen.getByTestId('rebaseline-progress')).toHaveTextContent(
       'Designing voices… (0 of 2)',
     );
 
-    // Releasing biana drains the run; the modal leaves the busy state.
+    // Releasing maerin drains the run; the modal leaves the busy state.
     await act(async () => {
       releaseBiana();
     });
@@ -509,34 +509,34 @@ describe('RebaselineModal — serial design queue', () => {
     await waitFor(() => expect(store.getState().rebaseline.status).toBe('proposed'));
     expect(designQwenVoice).toHaveBeenCalledTimes(2);
 
-    // Hold the NEXT design (biana's re-design) open, then fire two re-designs
+    // Hold the NEXT design (maerin's re-design) open, then fire two re-designs
     // back-to-back. The second must QUEUE, not fire concurrently.
     let release: () => void = () => {};
     designQwenVoice.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ voiceId: 'qwen-biana-v2', previewUrl: 'blob:biana2' });
+          release = () => resolve({ voiceId: 'qwen-maerin-v2', previewUrl: 'blob:biana2' });
         }),
     );
     await act(async () => {
-      fireEvent.click(screen.getByTestId('rebaseline-redesign-biana'));
-      fireEvent.click(screen.getByTestId('rebaseline-redesign-keefe'));
+      fireEvent.click(screen.getByTestId('rebaseline-redesign-maerin'));
+      fireEvent.click(screen.getByTestId('rebaseline-redesign-marlow'));
     });
-    // biana is designing (held); keefe is queued behind it — only biana's
+    // maerin is designing (held); marlow is queued behind it — only maerin's
     // re-design call has fired (2 from propose + 1).
     await waitFor(() =>
-      expect(store.getState().rebaseline.proposals.biana.status).toBe('designing'),
+      expect(store.getState().rebaseline.proposals.maerin.status).toBe('designing'),
     );
-    expect(store.getState().rebaseline.proposals.keefe.status).toBe('pending');
+    expect(store.getState().rebaseline.proposals.marlow.status).toBe('pending');
     expect(designQwenVoice).toHaveBeenCalledTimes(3);
 
-    // Releasing biana lets keefe's re-design run next (serial drain).
+    // Releasing maerin lets marlow's re-design run next (serial drain).
     await act(async () => {
       release();
     });
     await waitFor(() => expect(designQwenVoice).toHaveBeenCalledTimes(4));
-    expect(store.getState().rebaseline.proposals.keefe.status).toBe('ready');
-    expect(store.getState().rebaseline.proposals.biana.proposedVoiceId).toBe('qwen-biana-v2');
+    expect(store.getState().rebaseline.proposals.marlow.status).toBe('ready');
+    expect(store.getState().rebaseline.proposals.maerin.proposedVoiceId).toBe('qwen-maerin-v2');
   });
 });
 
@@ -546,23 +546,23 @@ describe('RebaselineModal — reuse already-approved voices', () => {
       char('narrator', 'Narrator', 500),
       // Already on its bespoke Qwen voice HERE → unchanged: no design, no write.
       {
-        ...char('biana', 'Biana', 90),
+        ...char('maerin', 'Maerin', 90),
         ttsEngine: 'qwen',
-        overrideTtsVoices: { qwen: { name: 'qwen-biana-approved' } },
+        overrideTtsVoices: { qwen: { name: 'qwen-maerin-approved' } },
       } as Character,
       // Has an approved Qwen voice (from another book) but the WRONG engine in
       // this book → reuse it, no re-design, but written on approve to fix it.
       {
-        ...char('dex', 'Dex', 80),
-        overrideTtsVoices: { qwen: { name: 'qwen-dex-approved' } },
+        ...char('hart', 'Hart', 80),
+        overrideTtsVoices: { qwen: { name: 'qwen-hart-approved' } },
       } as Character,
       // No Qwen voice → designed fresh.
-      char('keefe', 'Keefe', 70),
+      char('marlow', 'Marlow', 70),
     ];
     const voices = [
-      voice('voice-biana', 'biana'),
-      voice('voice-dex', 'dex'),
-      voice('voice-keefe', 'keefe'),
+      voice('voice-maerin', 'maerin'),
+      voice('voice-hart', 'hart'),
+      voice('voice-marlow', 'marlow'),
     ];
     const store = makeStore(cast, voices);
     render(
@@ -577,16 +577,16 @@ describe('RebaselineModal — reuse already-approved voices', () => {
     await waitFor(() => expect(store.getState().rebaseline.status).toBe('proposed'));
 
     const props = store.getState().rebaseline.proposals;
-    expect(props.biana.status).toBe('unchanged');
-    expect(props.biana.proposedVoiceId).toBe('qwen-biana-approved');
-    expect(props.dex).toMatchObject({ status: 'ready', proposedVoiceId: 'qwen-dex-approved' });
-    expect(props.keefe).toMatchObject({ status: 'ready', proposedVoiceId: 'qwen-keefe' });
+    expect(props.maerin.status).toBe('unchanged');
+    expect(props.maerin.proposedVoiceId).toBe('qwen-maerin-approved');
+    expect(props.hart).toMatchObject({ status: 'ready', proposedVoiceId: 'qwen-hart-approved' });
+    expect(props.marlow).toMatchObject({ status: 'ready', proposedVoiceId: 'qwen-marlow' });
     // ONLY the character without a Qwen voice was designed — the approved
     // voices are reused, never rebuilt.
     expect(designQwenVoice).toHaveBeenCalledTimes(1);
     expect(designQwenVoice).toHaveBeenCalledWith(
       'book-1',
-      'keefe',
+      'marlow',
       expect.objectContaining({
         persona: expect.any(String),
         sampleVoiceId: expect.any(String),
@@ -594,9 +594,9 @@ describe('RebaselineModal — reuse already-approved voices', () => {
       }),
     );
     // The unchanged row offers no include checkbox (nothing to do).
-    expect(screen.queryByTestId('rebaseline-include-biana')).toBeNull();
+    expect(screen.queryByTestId('rebaseline-include-maerin')).toBeNull();
 
-    // Approve writes Dex (reused) + Keefe (designed), NOT Biana (unchanged).
+    // Approve writes Hart (reused) + Marlow (designed), NOT Maerin (unchanged).
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-approve'));
     });
@@ -604,9 +604,9 @@ describe('RebaselineModal — reuse already-approved voices', () => {
     const names = (
       setVoiceOverrideLinked.mock.calls as unknown as Array<[string, string, { name: string }]>
     ).map((c) => c[2].name);
-    expect(names).toContain('qwen-dex-approved');
-    expect(names).toContain('qwen-keefe');
-    expect(names).not.toContain('qwen-biana-approved');
+    expect(names).toContain('qwen-hart-approved');
+    expect(names).toContain('qwen-marlow');
+    expect(names).not.toContain('qwen-maerin-approved');
   });
 });
 
@@ -633,15 +633,15 @@ describe('RebaselineModal — approve', () => {
     const calls = setVoiceOverrideLinked.mock.calls as unknown as Array<
       [string, string, { engine: string; name: string }]
     >;
-    const bianaCall = calls.find((c) => c[2].name === 'qwen-biana');
-    expect(bianaCall).toBeTruthy();
-    expect(bianaCall![0]).toBe('book-1'); // home book (anchor = open book)
-    expect(bianaCall![1]).toBe('biana'); // character id
-    expect(bianaCall![2]).toEqual({ engine: 'qwen', name: 'qwen-biana' });
+    const maerinCall = calls.find((c) => c[2].name === 'qwen-maerin');
+    expect(maerinCall).toBeTruthy();
+    expect(maerinCall![0]).toBe('book-1'); // home book (anchor = open book)
+    expect(maerinCall![1]).toBe('maerin'); // character id
+    expect(maerinCall![2]).toEqual({ engine: 'qwen', name: 'qwen-maerin' });
     // The cast slice mirrors the engine + override.
-    const biana = store.getState().cast.characters.find((c) => c.id === 'biana')!;
-    expect(biana.ttsEngine).toBe('qwen');
-    expect(biana.overrideTtsVoices?.qwen?.name).toBe('qwen-biana');
+    const maerin = store.getState().cast.characters.find((c) => c.id === 'maerin')!;
+    expect(maerin.ttsEngine).toBe('qwen');
+    expect(maerin.overrideTtsVoices?.qwen?.name).toBe('qwen-maerin');
     // Success toast fired with the count.
     const toast = store
       .getState()
@@ -660,9 +660,9 @@ describe('RebaselineModal — approve', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
-    await waitFor(() => expect(screen.getByTestId('rebaseline-include-keefe')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('rebaseline-include-marlow')).toBeInTheDocument());
     await act(async () => {
-      fireEvent.click(screen.getByTestId('rebaseline-include-keefe'));
+      fireEvent.click(screen.getByTestId('rebaseline-include-marlow'));
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-approve'));
@@ -671,14 +671,14 @@ describe('RebaselineModal — approve', () => {
     const calls = setVoiceOverrideLinked.mock.calls as unknown as Array<
       [string, string, { name: string }]
     >;
-    expect(calls[0][2].name).toBe('qwen-biana');
+    expect(calls[0][2].name).toBe('qwen-maerin');
   });
 });
 
 describe('RebaselineModal — per-character failure', () => {
   it('marks a failed row and still proposes + approves the others', async () => {
     designQwenVoice.mockImplementation(async (_bookId: string, characterId: string) => {
-      if (characterId === 'keefe') throw new Error('sidecar down');
+      if (characterId === 'marlow') throw new Error('sidecar down');
       return { voiceId: `qwen-${characterId}`, previewUrl: `blob:${characterId}` };
     });
     const store = makeStore(CHARACTERS, VOICES);
@@ -692,8 +692,8 @@ describe('RebaselineModal — per-character failure', () => {
       fireEvent.click(screen.getByTestId('rebaseline-propose'));
     });
     await waitFor(() => {
-      expect(store.getState().rebaseline.proposals.keefe.status).toBe('failed');
-      expect(store.getState().rebaseline.proposals.biana.status).toBe('ready');
+      expect(store.getState().rebaseline.proposals.marlow.status).toBe('failed');
+      expect(store.getState().rebaseline.proposals.maerin.status).toBe('ready');
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId('rebaseline-approve'));
@@ -703,6 +703,6 @@ describe('RebaselineModal — per-character failure', () => {
     const calls = setVoiceOverrideLinked.mock.calls as unknown as Array<
       [string, string, { name: string }]
     >;
-    expect(calls[0][2].name).toBe('qwen-biana');
+    expect(calls[0][2].name).toBe('qwen-maerin');
   });
 });

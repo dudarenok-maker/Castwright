@@ -2,7 +2,7 @@
 
    "These two cross-book characters look like duplicates to the voices-view
    detector, but they ARE intentionally separate people (e.g. teenage
-   Sophie vs adult Sophie)." Writes a symmetric pair record to BOTH books'
+   Wren vs adult Wren)." Writes a symmetric pair record to BOTH books'
    cast.json so the duplicate-candidate predicate stops surfacing this
    pair on either side.
 

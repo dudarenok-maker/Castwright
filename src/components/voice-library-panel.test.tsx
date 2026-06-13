@@ -11,7 +11,7 @@ import type { Character, Voice } from '../lib/types';
 const makeVoice = (id: string, character: string, overrides: Partial<Voice> = {}): Voice => ({
   id,
   character,
-  bookTitle: 'Bonus Keefe Story',
+  bookTitle: 'the Coalfall Commission',
   bookId: 'bks',
   attributes: ['Warm'],
   gradient: ['#A43C6C', '#3C194F'],
@@ -40,16 +40,16 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onOpenProfile = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_keefe', 'Keefe'), makeVoice('v_ro', 'Ro')]}
-        characters={[makeCharacter('keefe', 'v_keefe'), makeCharacter('ro', 'v_ro')]}
+        library={[makeVoice('v_marlow', 'Marlow'), makeVoice('v_nim', 'Nim')]}
+        characters={[makeCharacter('marlow', 'v_marlow'), makeCharacter('nim', 'v_nim')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={vi.fn()}
       />,
     );
-    fireEvent.click(screen.getByText('Keefe').closest('[role="button"]')!);
-    expect(onOpenProfile).toHaveBeenCalledWith('keefe');
+    fireEvent.click(screen.getByText('Marlow').closest('[role="button"]')!);
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 
   it('plays a voice sample (not opens the drawer) when the swatch bubble is clicked', () => {
@@ -57,19 +57,19 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onPlaySample = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_keefe', 'Keefe')]}
-        characters={[makeCharacter('keefe', 'v_keefe')]}
+        library={[makeVoice('v_marlow', 'Marlow')]}
+        characters={[makeCharacter('marlow', 'v_marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={onPlaySample}
       />,
     );
-    const card = screen.getByText('Keefe').closest('[role="button"]')!;
+    const card = screen.getByText('Marlow').closest('[role="button"]')!;
     fireEvent.click(within(card as HTMLElement).getAllByRole('button')[0]);
     expect(onPlaySample).toHaveBeenCalledTimes(1);
-    expect(onPlaySample.mock.calls[0][0].id).toBe('keefe');
-    expect(onPlaySample.mock.calls[0][1].id).toBe('v_keefe');
+    expect(onPlaySample.mock.calls[0][0].id).toBe('marlow');
+    expect(onPlaySample.mock.calls[0][1].id).toBe('v_marlow');
     /* The swatch click must NOT bubble to the card root and double-fire
        onOpenProfile — the panel's user expectation is "bubble plays,
        card opens" as two distinct actions. */
@@ -116,19 +116,19 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     const onPlaySample = vi.fn();
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('keefe', 'Keefe')]} /* Voice.id mirrors character.id */
-        characters={[makeCharacter('keefe', '')]} /* character has no voiceId */
+        library={[makeVoice('marlow', 'Marlow')]} /* Voice.id mirrors character.id */
+        characters={[makeCharacter('marlow', '')]} /* character has no voiceId */
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
         onOpenProfile={onOpenProfile}
         onPlaySample={onPlaySample}
       />,
     );
-    const card = screen.getByText('Keefe').closest('[role="button"]')!;
+    const card = screen.getByText('Marlow').closest('[role="button"]')!;
     fireEvent.click(card);
-    expect(onOpenProfile).toHaveBeenCalledWith('keefe');
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
     fireEvent.click(within(card as HTMLElement).getAllByRole('button')[0]);
-    expect(onPlaySample.mock.calls[0][0].id).toBe('keefe');
+    expect(onPlaySample.mock.calls[0][0].id).toBe('marlow');
   });
 
   it('prefers an explicit voiceId match over the character.id fallback', () => {
@@ -160,12 +160,12 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        affordance. */
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_keefe', 'Keefe')]}
+        library={[makeVoice('v_marlow', 'Marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
       />,
     );
-    const card = screen.getByText('Keefe').closest('div.group')!;
+    const card = screen.getByText('Marlow').closest('div.group')!;
     expect(card.getAttribute('role')).toBeNull();
   });
 
@@ -176,7 +176,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        any voice card becomes interactive (role="button" + Enter/Space)
        and fires the callback with the clicked voice. */
     const onSelect = vi.fn();
-    const voice = makeVoice('v_keefe', 'Keefe');
+    const voice = makeVoice('v_marlow', 'Marlow');
     render(
       <VoiceCard
         voice={voice}
@@ -185,11 +185,11 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         onSelect={onSelect}
       />,
     );
-    const card = screen.getByText('Keefe').closest('[role="button"]')!;
+    const card = screen.getByText('Marlow').closest('[role="button"]')!;
     expect(card).not.toBeNull();
     fireEvent.click(card);
     expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(onSelect.mock.calls[0][0].id).toBe('v_keefe');
+    expect(onSelect.mock.calls[0][0].id).toBe('v_marlow');
     /* Keyboard activation must also work — the card advertises role="button"
        so screen-reader users expect Enter/Space to fire the same action. */
     fireEvent.keyDown(card, { key: 'Enter' });
@@ -203,7 +203,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        checkbox surface — otherwise the Cast-view drawer would show a stray
        selection control. The "selectable" mode requires both `selected` AND
        `onToggleSelect`; either alone keeps the legacy DOM. */
-    const voice = makeVoice('v_keefe', 'Keefe');
+    const voice = makeVoice('v_marlow', 'Marlow');
     const { rerender } = render(
       <VoiceCard voice={voice} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
@@ -239,7 +239,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        `onSelect` (the profile/navigation handler) never fires. */
     const onToggleSelect = vi.fn();
     const onSelect = vi.fn();
-    const voice = makeVoice('v_keefe', 'Keefe');
+    const voice = makeVoice('v_marlow', 'Marlow');
     render(
       <VoiceCard
         voice={voice}
@@ -252,12 +252,12 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     );
     fireEvent.click(screen.getByLabelText('Select voice for compare'));
     expect(onToggleSelect).toHaveBeenCalledTimes(1);
-    expect(onToggleSelect.mock.calls[0][0].id).toBe('v_keefe');
+    expect(onToggleSelect.mock.calls[0][0].id).toBe('v_marlow');
     expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('paints the card with bg-peach tint when selected (plan 22a — mirrors cast.tsx:~199)', () => {
-    const voice = makeVoice('v_keefe', 'Keefe');
+    const voice = makeVoice('v_marlow', 'Marlow');
     const { rerender } = render(
       <VoiceCard
         voice={voice}
@@ -267,7 +267,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         onToggleSelect={vi.fn()}
       />,
     );
-    const card = screen.getByText('Keefe').closest('div.group')!;
+    const card = screen.getByText('Marlow').closest('div.group')!;
     expect(card.className).not.toMatch(/bg-peach/);
     rerender(
       <VoiceCard
@@ -289,7 +289,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
        `scrollbar-thin` the system scrollbar bleeds past the curve. */
     render(
       <VoiceLibraryPanel
-        library={[makeVoice('v_keefe', 'Keefe')]}
+        library={[makeVoice('v_marlow', 'Marlow')]}
         draggingVoiceId={null}
         setDraggingVoiceId={vi.fn()}
       />,
@@ -302,23 +302,23 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
 
 describe('VoiceLibraryPanel — search', () => {
   const lib: Voice[] = [
-    makeVoice('v_keefe', 'Keefe Sencen', { bookTitle: 'Keeper of the Lost Cities' }),
-    makeVoice('v_elwin', 'Elwin', { bookTitle: 'Keeper of the Lost Cities' }),
-    makeVoice('v_ro', 'Ro', { bookTitle: 'Flashback' }),
+    makeVoice('v_marlow', 'Marlow Halden', { bookTitle: 'The Hollow Tide' }),
+    makeVoice('v_oduvan', 'Oduvan', { bookTitle: 'The Hollow Tide' }),
+    makeVoice('v_nim', 'Nim', { bookTitle: 'Flashback' }),
   ];
 
   it('filters cards by character name as the user types', () => {
     render(
       <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
-    expect(screen.getByText('Keefe Sencen')).toBeInTheDocument();
-    expect(screen.getByText('Elwin')).toBeInTheDocument();
+    expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
+    expect(screen.getByText('Oduvan')).toBeInTheDocument();
     fireEvent.change(screen.getByPlaceholderText('Search voices'), {
-      target: { value: 'keefe' },
+      target: { value: 'marlow' },
     });
-    expect(screen.getByText('Keefe Sencen')).toBeInTheDocument();
-    expect(screen.queryByText('Elwin')).toBeNull();
-    expect(screen.queryByText('Ro')).toBeNull();
+    expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
+    expect(screen.queryByText('Oduvan')).toBeNull();
+    expect(screen.queryByText('Nim')).toBeNull();
   });
 
   it('also matches on book title', () => {
@@ -328,17 +328,17 @@ describe('VoiceLibraryPanel — search', () => {
     fireEvent.change(screen.getByPlaceholderText('Search voices'), {
       target: { value: 'flashback' },
     });
-    expect(screen.getByText('Ro')).toBeInTheDocument();
-    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+    expect(screen.getByText('Nim')).toBeInTheDocument();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
   });
 
   it('applies the tab filter before the query (tab wins first)', () => {
-    /* Keefe is "current", Ro is a "library"/series voice. On the Series tab
-       only Ro is eligible, so searching "keefe" finds nothing even though
+    /* Marlow is "current", Ro is a "library"/series voice. On the Series tab
+       only Ro is eligible, so searching "marlow" finds nothing even though
        the name matches — the tab filter runs before the query. */
     const mixed: Voice[] = [
-      makeVoice('v_keefe', 'Keefe Sencen', { source: 'current' }),
-      makeVoice('v_ro', 'Ro', {
+      makeVoice('v_marlow', 'Marlow Halden', { source: 'current' }),
+      makeVoice('v_nim', 'Nim', {
         source: 'library',
         inCurrentSeries: true,
         bookTitle: 'Flashback',
@@ -349,13 +349,13 @@ describe('VoiceLibraryPanel — search', () => {
       <VoiceLibraryPanel library={mixed} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Series' }));
-    expect(screen.getByText('Ro')).toBeInTheDocument();
-    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+    expect(screen.getByText('Nim')).toBeInTheDocument();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
     fireEvent.change(screen.getByPlaceholderText('Search voices'), {
-      target: { value: 'keefe' },
+      target: { value: 'marlow' },
     });
     expect(screen.getByText(/No voices match/)).toBeInTheDocument();
-    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
   });
 
   it('restores the full tab-filtered list when the query is cleared', () => {
@@ -363,12 +363,12 @@ describe('VoiceLibraryPanel — search', () => {
       <VoiceLibraryPanel library={lib} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
     );
     const input = screen.getByPlaceholderText('Search voices');
-    fireEvent.change(input, { target: { value: 'keefe' } });
-    expect(screen.queryByText('Elwin')).toBeNull();
+    fireEvent.change(input, { target: { value: 'marlow' } });
+    expect(screen.queryByText('Oduvan')).toBeNull();
     fireEvent.change(input, { target: { value: '' } });
-    expect(screen.getByText('Keefe Sencen')).toBeInTheDocument();
-    expect(screen.getByText('Elwin')).toBeInTheDocument();
-    expect(screen.getByText('Ro')).toBeInTheDocument();
+    expect(screen.getByText('Marlow Halden')).toBeInTheDocument();
+    expect(screen.getByText('Oduvan')).toBeInTheDocument();
+    expect(screen.getByText('Nim')).toBeInTheDocument();
   });
 
   it('shows an empty-state line when no voice matches the query', () => {
@@ -379,7 +379,7 @@ describe('VoiceLibraryPanel — search', () => {
       target: { value: 'zzzznope' },
     });
     expect(screen.getByText(/No voices match/)).toBeInTheDocument();
-    expect(screen.queryByText('Keefe Sencen')).toBeNull();
+    expect(screen.queryByText('Marlow Halden')).toBeNull();
   });
 });
 

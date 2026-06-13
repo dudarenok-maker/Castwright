@@ -16,7 +16,7 @@ owner: null
 
 Two related bugs from the plan-182 missing-speaker repair.
 
-**#528 — stage-2 fails on large chapters.** Re-analysing *Stellarlune* ch19
+**#528 — stage-2 fails on large chapters.** Re-analysing *The Drowning Bell* ch19
 ("Chapter Sixteen", 507 sentences) via the subset route died at stage-2 start
 every time: the client saw `ECONNRESET`, `manuscript-edits.json` was never
 written, and the server process stayed up. Deterministic and size-correlated.
@@ -38,7 +38,7 @@ speaker to `cast.json` (name in roster) but stage-2 never attributed their lines
 so their dialogue is still on `narrator` (0 attributed lines). `validateRosterCoverage`
 + `scripts/audit-missing-speakers.mts` only check "is the name in the roster?",
 so the audit reported "clean" and the plan-182 repair needed a `--force`
-workaround. On ch19: Prentice was in cast.json with 0 lines, narrator had 221.
+workaround. On ch19: Lessom was in cast.json with 0 lines, narrator had 221.
 
 ## What shipped
 
@@ -154,7 +154,7 @@ un-splittable paragraph".
 ## Ship notes
 
 Shipped 2026-06-06 (merge 56d0418, PR #532, closes #528 + #529). Live acceptance
-confirmed: Stellarlune ch19 re-analysed via the subset route — stage-2 completed
+confirmed: The Drowning Bell ch19 re-analysed via the subset route — stage-2 completed
 (chunked), edits landed in `manuscript-edits.json`, and ch19's tagged speakers
-carry lines; `npm run audit:missing-speakers -- --book Stellarlune` is clean (no
+carry lines; `npm run audit:missing-speakers -- --book The Drowning Bell` is clean (no
 half-state).

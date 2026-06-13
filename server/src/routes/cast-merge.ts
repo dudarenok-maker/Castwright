@@ -1,8 +1,8 @@
 /* POST /api/books/:bookId/cast/merge
 
    Resolves an analyzer-duplicate cast entry by folding `sourceId` into
-   `targetId`. The duplicate ("Sophie") disappears and its name is added
-   to the survivor's ("Sophie Foster") `aliases` list so the matcher can
+   `targetId`. The duplicate ("Wren") disappears and its name is added
+   to the survivor's ("Wren Sparrow") `aliases` list so the matcher can
    recognise the same person when later books in the series detect the
    character under either form.
 

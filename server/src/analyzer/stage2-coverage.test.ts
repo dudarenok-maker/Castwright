@@ -1,7 +1,7 @@
 /* Stage-2 attribution coverage guard. The per-chapter attribution model
    (prose → per-sentence JSON) can fall into a degenerate repeat-loop: it
    re-emits a span of sentences and terminates early, so the chapter is both
-   DUPLICATED and TRUNCATED (the 2026-06-05 Stellarlune ch12/ch18 forensics).
+   DUPLICATED and TRUNCATED (the 2026-06-05 The Drowning Bell ch12/ch18 forensics).
    The cache ingest trusts the model's list with no coverage check, so it ships.
 
    These tests pin the detector that compares the attributed sentences against
@@ -82,7 +82,7 @@ describe('validateStage2Coverage', () => {
 
   it('does NOT flag normal analyzer compression (coverage ~0.7, ending present)', () => {
     // The attribution legitimately drops/merges minor fragments — a healthy
-    // chapter can read ~70% coverage and still reach its ending (Keeper ch22).
+    // chapter can read ~70% coverage and still reach its ending (The Hollow Tide ch22).
     const { body, sentences } = bodyOf(20);
     // keep 14 of 20 sentences (incl. the last) → ~0.7 coverage, ending intact
     const compressed = sentences.filter((_, i) => i < 13 || i === 19);

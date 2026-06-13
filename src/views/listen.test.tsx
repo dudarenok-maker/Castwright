@@ -53,9 +53,9 @@ const characters: Character[] = [
 const voices: Voice[] = [];
 
 const baseMeta = (over: Partial<EditableBookMeta> = {}): EditableBookMeta => ({
-  title: 'Bonus Keefe Story',
+  title: 'the Coalfall Commission',
   author: 'Marin Vale',
-  series: 'Keefe Side-Stories',
+  series: 'Marlow Side-Stories',
   narratorCredit: 'Anders Vale',
   genre: 'Fantasy',
   publicationDate: '2026-05-09',
@@ -165,7 +165,7 @@ describe('ListenView — CoverArt cover-image overlay', () => {
     renderView({ coverImageUrl: null });
     expect(screen.queryByTestId('listen-cover-art-image')).not.toBeInTheDocument();
     /* Title block stays visible as the gradient-skeleton label. */
-    expect(screen.getAllByText('Bonus Keefe Story').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('the Coalfall Commission').length).toBeGreaterThan(0);
   });
 
   it('renders the cover <img> with the provided URL when present', () => {
@@ -568,7 +568,7 @@ describe('ListenView — excluded chapters are filtered out of the listen rail',
 });
 
 describe('ListenView — chapter list scroll cap', () => {
-  /* Long books (59 chapters in Keeper of the Lost Cities) would otherwise
+  /* Long books (59 chapters in The Hollow Tide) would otherwise
      stretch the chapters card across pages. The list is wrapped in a
      capped, scrollable inner div so the rest of the Listen view stays
      reachable. */

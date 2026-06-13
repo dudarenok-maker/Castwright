@@ -27,9 +27,9 @@ import {
 } from '../recover-missing-character.mjs';
 
 test('parseArgs collects bookDir + --name + --gender + --role', () => {
-  const opts = parseArgs(['/some/book', '--name', 'Grizel', '--gender', 'female', '--role', 'Bodyguard']);
+  const opts = parseArgs(['/some/book', '--name', 'Sela', '--gender', 'female', '--role', 'Bodyguard']);
   assert.equal(opts.bookDir, '/some/book');
-  assert.equal(opts.name, 'Grizel');
+  assert.equal(opts.name, 'Sela');
   assert.equal(opts.gender, 'female');
   assert.equal(opts.role, 'Bodyguard');
   assert.equal(opts.apply, false);
@@ -54,24 +54,24 @@ test('toKebabId matches the analyzer id convention', () => {
      manual recovery using the same convention means a future re-analysis
      with the Layer-2 fix in place would produce the same id and merge
      cleanly without orphaning the manual entry. */
-  assert.equal(toKebabId('Grizel'), 'grizel');
-  assert.equal(toKebabId('Sandor'), 'sandor');
-  assert.equal(toKebabId("Mr. Forkle"), 'mr-forkle');
-  assert.equal(toKebabId('Councillor Emery'), 'councillor-emery');
+  assert.equal(toKebabId('Sela'), 'sela');
+  assert.equal(toKebabId('Garrow'), 'garrow');
+  assert.equal(toKebabId("Mr. Casper"), 'mr-casper');
+  assert.equal(toKebabId('Councillor Reld'), 'councillor-reld');
   assert.equal(toKebabId('Sir Astin'), 'sir-astin');
-  assert.equal(toKebabId('  Edaline  '), 'edaline');
+  assert.equal(toKebabId('  Hespa  '), 'hespa');
 });
 
 test('buildCharacter produces a Character-shaped entry with the required fields', () => {
   const c = buildCharacter({
-    id: 'grizel',
-    name: 'Grizel',
+    id: 'sela',
+    name: 'Sela',
     role: 'Bodyguard',
     gender: 'female',
     ageRange: 'adult',
   });
-  assert.equal(c.id, 'grizel');
-  assert.equal(c.name, 'Grizel');
+  assert.equal(c.id, 'sela');
+  assert.equal(c.name, 'Sela');
   assert.equal(c.role, 'Bodyguard');
   assert.equal(c.gender, 'female');
   assert.equal(c.ageRange, 'adult');
@@ -96,9 +96,9 @@ test('findDialogueReattributions catches "<Name> said" in a narrator tag sentenc
      is the tag. The script proposes flipping the dialogue's characterId. */
   const sentences = [
     { id: 100, chapterId: 1, characterId: 'narrator', text: '"WE HAVE TO go,"' },
-    { id: 101, chapterId: 1, characterId: 'narrator', text: 'Sandor said, his hand on the doorknob.' },
+    { id: 101, chapterId: 1, characterId: 'narrator', text: 'Garrow said, his hand on the doorknob.' },
   ];
-  const found = findDialogueReattributions(sentences, 'Sandor');
+  const found = findDialogueReattributions(sentences, 'Garrow');
   assert.equal(found.length, 1);
   assert.equal(found[0].dialogueSentenceId, 100);
   assert.equal(found[0].tagSentenceId, 101);
@@ -107,11 +107,11 @@ test('findDialogueReattributions catches "<Name> said" in a narrator tag sentenc
 test('findDialogueReattributions catches multiple verbs', () => {
   const sentences = [
     { id: 1, chapterId: 1, characterId: 'narrator', text: '"Get back!"' },
-    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Grizel growled at the intruder.' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Sela growled at the intruder.' },
     { id: 3, chapterId: 1, characterId: 'narrator', text: '"Mind yourself,"' },
-    { id: 4, chapterId: 1, characterId: 'narrator', text: 'Grizel warned.' },
+    { id: 4, chapterId: 1, characterId: 'narrator', text: 'Sela warned.' },
   ];
-  const found = findDialogueReattributions(sentences, 'Grizel');
+  const found = findDialogueReattributions(sentences, 'Sela');
   assert.equal(found.length, 2);
   assert.deepEqual(
     found.map((r) => r.dialogueSentenceId).sort(),
@@ -125,58 +125,58 @@ test('findDialogueReattributions does NOT cross chapter boundaries', () => {
      chapterId equality. */
   const sentences = [
     { id: 99, chapterId: 1, characterId: 'narrator', text: '"Dialogue from ch1."' },
-    { id: 1, chapterId: 2, characterId: 'narrator', text: 'Sandor said in chapter 2.' },
+    { id: 1, chapterId: 2, characterId: 'narrator', text: 'Garrow said in chapter 2.' },
   ];
-  const found = findDialogueReattributions(sentences, 'Sandor');
+  const found = findDialogueReattributions(sentences, 'Garrow');
   assert.equal(found.length, 0);
 });
 
 test('findDialogueReattributions returns empty for a name not in the manuscript', () => {
   const sentences = [
     { id: 1, chapterId: 1, characterId: 'narrator', text: '"go,"' },
-    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Fitz said.' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Brann said.' },
   ];
-  const found = findDialogueReattributions(sentences, 'Grizel');
+  const found = findDialogueReattributions(sentences, 'Sela');
   assert.equal(found.length, 0);
 });
 
 test('findDialogueReattributions only flips narrator-attributed tag sentences', () => {
-  /* If the model already attributed the tag sentence to someone (Sophie
-     observing "Sandor growled"), we don't want to flip the preceding
+  /* If the model already attributed the tag sentence to someone (Wren
+     observing "Garrow growled"), we don't want to flip the preceding
      dialogue — that's not a tag, it's a third-party observation. */
   const sentences = [
-    { id: 1, chapterId: 1, characterId: 'sophie', text: '"Watch out!"' },
-    { id: 2, chapterId: 1, characterId: 'sophie', text: 'I heard Sandor growled below.' },
+    { id: 1, chapterId: 1, characterId: 'wren', text: '"Watch out!"' },
+    { id: 2, chapterId: 1, characterId: 'wren', text: 'I heard Garrow growled below.' },
   ];
-  const found = findDialogueReattributions(sentences, 'Sandor');
+  const found = findDialogueReattributions(sentences, 'Garrow');
   assert.equal(found.length, 0);
 });
 
 test('findDialogueReattributions ignores substring false positives at word boundaries', () => {
-  /* "growth" must not match "grow". "Grizela" must not match "Grizel" as a
+  /* "growth" must not match "grow". "Grizela" must not match "Sela" as a
      speaker name (different person). Word-boundary check on both ends. */
   const sentences = [
     { id: 1, chapterId: 1, characterId: 'narrator', text: '"plant,"' },
-    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Grizel said as Grizela watched the growth.' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Sela said as Grizela watched the growth.' },
   ];
-  const found = findDialogueReattributions(sentences, 'Grizel');
-  /* Should hit on the "Grizel said" prefix, not the "Grizela" substring. */
+  const found = findDialogueReattributions(sentences, 'Sela');
+  /* Should hit on the "Sela said" prefix, not the "Grizela" substring. */
   assert.equal(found.length, 1);
   assert.equal(found[0].dialogueSentenceId, 1);
 });
 
 test('buildChangeLogEntry records the manual addition with the right type + actor', () => {
-  const entry = buildChangeLogEntry({ name: 'Grizel', id: 'grizel', role: 'Bodyguard', reattributedCount: 3 });
+  const entry = buildChangeLogEntry({ name: 'Sela', id: 'sela', role: 'Bodyguard', reattributedCount: 3 });
   assert.equal(entry.type, 'character_manually_added');
   assert.equal(entry.actor, 'user-script');
-  assert.match(entry.title, /Grizel/);
+  assert.match(entry.title, /Sela/);
   assert.match(entry.note, /3 dialogue/);
   assert.equal(typeof entry.id, 'number');
   assert.equal(typeof entry.at, 'string');
 });
 
 test('buildChangeLogEntry note says "no dialogue" when count is 0', () => {
-  const entry = buildChangeLogEntry({ name: 'Grizel', id: 'grizel', role: 'Bodyguard', reattributedCount: 0 });
+  const entry = buildChangeLogEntry({ name: 'Sela', id: 'sela', role: 'Bodyguard', reattributedCount: 0 });
   assert.match(entry.note, /No dialogue/i);
 });
 
@@ -199,26 +199,26 @@ test('main --apply writes cast.json + manuscript-edits.json + change-log.json ag
       JSON.stringify({
         sentences: [
           { id: 1, chapterId: 1, characterId: 'narrator', text: '"Stand down,"', confidence: 0.8 },
-          { id: 2, chapterId: 1, characterId: 'narrator', text: 'Grizel said, leveling her sword.', confidence: 0.98 },
+          { id: 2, chapterId: 1, characterId: 'narrator', text: 'Sela said, leveling her sword.', confidence: 0.98 },
           { id: 3, chapterId: 1, characterId: 'narrator', text: '"For now."', confidence: 0.85 },
-          { id: 4, chapterId: 1, characterId: 'narrator', text: 'Grizel added quietly.', confidence: 0.97 },
+          { id: 4, chapterId: 1, characterId: 'narrator', text: 'Sela added quietly.', confidence: 0.97 },
         ],
       }),
     );
 
-    await main([bookDir, '--name', 'Grizel', '--gender', 'female', '--role', 'Bodyguard', '--apply']);
+    await main([bookDir, '--name', 'Sela', '--gender', 'female', '--role', 'Bodyguard', '--apply']);
 
     const cast = JSON.parse(readFileSync(join(audioDir, 'cast.json'), 'utf8'));
-    const grizel = cast.characters.find((c) => c.id === 'grizel');
-    assert.ok(grizel, 'Grizel must be appended to cast.json');
-    assert.equal(grizel.name, 'Grizel');
-    assert.equal(grizel.gender, 'female');
-    assert.equal(grizel.role, 'Bodyguard');
-    assert.equal(grizel.voiceState, 'unassigned');
+    const sela = cast.characters.find((c) => c.id === 'sela');
+    assert.ok(sela, 'Sela must be appended to cast.json');
+    assert.equal(sela.name, 'Sela');
+    assert.equal(sela.gender, 'female');
+    assert.equal(sela.role, 'Bodyguard');
+    assert.equal(sela.voiceState, 'unassigned');
 
     const edits = JSON.parse(readFileSync(join(audioDir, 'manuscript-edits.json'), 'utf8'));
-    /* Sentences 1 and 3 are the dialogue lines preceding the "Grizel said" / "Grizel added" tags. */
-    const flipped = edits.sentences.filter((s) => s.characterId === 'grizel').map((s) => s.id).sort();
+    /* Sentences 1 and 3 are the dialogue lines preceding the "Sela said" / "Sela added" tags. */
+    const flipped = edits.sentences.filter((s) => s.characterId === 'sela').map((s) => s.id).sort();
     assert.deepEqual(flipped, [1, 3]);
     /* The tag sentences themselves remain narrator-attributed — they are
        prose describing who spoke, not dialogue. */
@@ -244,12 +244,12 @@ test('main dry-run does NOT touch any file', async () => {
     writeFileSync(join(audioDir, 'cast.json'), JSON.stringify(initialCast));
     writeFileSync(
       join(audioDir, 'manuscript-edits.json'),
-      JSON.stringify({ sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Grizel said.', confidence: 1 }] }),
+      JSON.stringify({ sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Sela said.', confidence: 1 }] }),
     );
 
     /* Capture stdout — main() logs the plan in dry-run; we don't assert on
        text but we do verify the function completes without throwing. */
-    await main([bookDir, '--name', 'Grizel', '--gender', 'female', '--role', 'Bodyguard']);
+    await main([bookDir, '--name', 'Sela', '--gender', 'female', '--role', 'Bodyguard']);
 
     const cast = JSON.parse(readFileSync(join(audioDir, 'cast.json'), 'utf8'));
     assert.equal(cast.characters.length, 1, 'cast.json must not be modified in dry-run');
@@ -267,7 +267,7 @@ test('main refuses to double-add an existing id', async () => {
     mkdirSync(audioDir, { recursive: true });
     writeFileSync(
       join(audioDir, 'cast.json'),
-      JSON.stringify({ characters: [{ id: 'grizel', name: 'Grizel' }] }),
+      JSON.stringify({ characters: [{ id: 'sela', name: 'Sela' }] }),
     );
     writeFileSync(join(audioDir, 'manuscript-edits.json'), JSON.stringify({ sentences: [] }));
 
@@ -286,7 +286,7 @@ test('main refuses to double-add an existing id', async () => {
       throw new Error('__test_exit__');
     };
     try {
-      await main([bookDir, '--name', 'Grizel', '--gender', 'female', '--role', 'Bodyguard', '--apply']);
+      await main([bookDir, '--name', 'Sela', '--gender', 'female', '--role', 'Bodyguard', '--apply']);
     } catch (err) {
       if (err.message !== '__test_exit__') throw err;
     } finally {

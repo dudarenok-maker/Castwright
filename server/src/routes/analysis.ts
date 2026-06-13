@@ -204,7 +204,7 @@ export function createWatermarkForJob(userSettings?: UserSettings): PhaseWaterma
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
    CHAR_COLORS + CHARACTER_SLOTS). Gemini and humans both like to invent
-   character-specific kebab names like `keefe` that don't exist in the
+   character-specific kebab names like `marlow` that don't exist in the
    palette and fall back to grey. We normalise here: narrator keeps its
    slot; everyone else gets a slot in roster order, cycling after 30.
    Order must match src/lib/colors.ts CHARACTER_SLOTS. */
@@ -822,7 +822,7 @@ export function recordFailedChapter(
    The subset-retry path used to gate stage1 writes on
    `failedChapterIds.length === 0` alone, which is the WRONG predicate when
    the cache covers only a fraction of the book. Example regression seen on
-   "Unlocked" (mns_VoP0mLGvov): chapterCast had entries for chapters 1–28
+   "The Floodmark" (mns_VoP0mLGvov): chapterCast had entries for chapters 1–28
    of a 182-chapter book, failedChapterIds was [], and a subset retry
    rebuilt stage1 from those 28 entries — overwriting a previously-good
    6-character roster with a Narrator-only one because every cached
@@ -908,7 +908,7 @@ export function attributionDriftExceeded(
 
 /* Secondary net for the roster-coverage bug: WARN for any single chapter whose
    demotion rate is high on its own. The book-wide `attributionDriftExceeded`
-   dilutes one damaged chapter below its 5% threshold (the ~30 Stellarlune ch19
+   dilutes one damaged chapter below its 5% threshold (the ~30 The Drowning Bell ch19
    demotions vanished against a whole-book denominator), so it never surfaced.
    WARN-only — informs the user / log, never aborts (a narration-heavy chapter
    can legitimately demote a lot). `demotedByChapter` is accumulated in the
@@ -942,9 +942,9 @@ function warnPerChapterDrift(
    the write unless the caller explicitly opted in. Prevents silent data
    loss when a follow-up run with a worse model collapses the cast.
 
-   Concrete regression motivator (Unlocked, mns_VoP0mLGvov): an earlier
-   Phase 0a run produced 6 characters (narrator + keefe + elwin + biana
-   + alina + sophie — visible in manuscript-edits.json's surviving
+   Concrete regression motivator (The Floodmark, mns_VoP0mLGvov): an earlier
+   Phase 0a run produced 6 characters (narrator + marlow + oduvan + maerin
+   + linnet + wren — visible in manuscript-edits.json's surviving
    attribution); a later subset-retry with Gemini 3.1 Flash Lite hit
    chapters that the model collapsed to Narrator-only, rebuildRoster()
    produced a 1-character stage1, and the write went through silently —
@@ -1051,7 +1051,7 @@ export interface SeriesPriorCharacter {
   description?: string;
   /** Display titles of every prior book in the series whose confirmed
       cast included this character. Multiple entries when a character
-      recurs across volumes (e.g. Sophie Foster across all of KOTLC);
+      recurs across volumes (e.g. Wren Sparrow across all of the Hollow Tide);
       single entry when the character only appears once. The Phase 0a
       prompt renders this as provenance so the model can disambiguate
       cross-book name collisions. */
@@ -1061,7 +1061,7 @@ export interface SeriesPriorCharacter {
 /* Build the per-chapter Phase 0a inbox markdown that drives the
    Gemini / Ollama analyzer. Exported for unit testing — the test asserts
    that the template includes the broadened first-person guidance so
-   journal / registry-file / bio chapters (the Unlocked format) get
+   journal / registry-file / bio chapters (The Floodmark format) get
    detected as their authoring character rather than as Narrator. */
 export function buildStage1ChapterInbox(
   manuscriptId: string,
@@ -1087,9 +1087,9 @@ export function buildStage1ChapterInbox(
      standalones / first-in-series books don't carry a useless empty
      section. The prompt instructs the model to REUSE existing ids when
      a chapter speaker matches a known series character by name or
-     alias — without this guidance Unlocked's per-chapter detector
-     would invent fresh ids like `keefe-2` instead of recognising the
-     `keefe` already confirmed in Bonus Keefe Story / KOTLC. */
+     alias — without this guidance The Floodmark's per-chapter detector
+     would invent fresh ids like `marlow-2` instead of recognising the
+     `marlow` already confirmed in the Coalfall Commission / the Hollow Tide. */
   const priorJson =
     seriesPrior.length > 0
       ? JSON.stringify(
@@ -1137,14 +1137,14 @@ true:
 2. The chapter is a **first-person document** (journal entry, medical
    log, registry file, diary, letter, transcript, bio page) AND the
    author of that document is named or strongly implied — by chapter
-   title (\`Sophie's Memory Log\`), header (\`FILED BY: ELWIN\`),
-   signature (\`—Keefe\`), or the surrounding bio block. In that case
+   title (\`Wren's Memory Log\`), header (\`FILED BY: ODUVAN\`),
+   signature (\`—Marlow\`), or the surrounding bio block. In that case
    the *author* is the character, with their \`id\` set to their name,
    and the document's prose becomes their evidence. \`narrator\` is
    reserved for omniscient third-person prose with no in-fiction author.
 
 **An explicit \`<Name> <speech-verb>\` dialogue tag is binding** — \`"…,"
-Prentice repeated.\`, \`"Fine," Grizel agreed.\`, \`"Where?" Sophie asked.\`
+Lessom repeated.\`, \`"Fine," Sela agreed.\`, \`"Where?" Wren asked.\`
 The tagged Name MUST appear in the output, every time, no matter how few
 lines they have or whether they are mostly *addressed* by others. A single
 tagged line is decisive; omitting a minor-but-tagged speaker dumps their
@@ -3190,7 +3190,7 @@ export async function runMainAnalyzerJob(
           });
         },
       };
-      /* Coverage guard (plan 181 / 2026-06-05 Stellarlune ch12/ch18 forensics):
+      /* Coverage guard (plan 181 / 2026-06-05 The Drowning Bell ch12/ch18 forensics):
          the attribution model can loop-and-truncate — re-emit a span of
          sentences and terminate early — so the chapter is BOTH duplicated and
          missing its tail, yet schema-valid (ids 1..N, no gaps). Validate the
@@ -4250,7 +4250,7 @@ async function runSubsetAnalyzerJob(
       /* #528 — use the same resilient runner as the main route: coverage guard
          + large-chapter chunking. The subset (Re-analyse) path previously made
          a bare runStage2Chapter call with no guard and no chunking, so a large
-         chapter (Stellarlune ch19, 507 sentences) truncated mid-JSON, threw,
+         chapter (The Drowning Bell ch19, 507 sentences) truncated mid-JSON, threw,
          and discarded the whole job — the reported failure. */
       const { sentences: chapterSentences, chunkCount: subsetChunkCount } =
         await attributeChapterStage2({

@@ -6,7 +6,7 @@
    transcript against the manuscript sentence.
 
    The make-or-break for srv-31 is TRUSTWORTHINESS: a gate that false-flags a
-   perfectly good "Sophie Foster" line (Whisper mangles invented names) gets
+   perfectly good "Wren Sparrow" line (Whisper mangles invented names) gets
    switched off, and then garbled chapters ship again. So the verdict logic:
 
      - normalises both strings hard (case / punctuation / contractions / digits)
@@ -107,7 +107,7 @@ export function resolveAsrSampleEvery(): number {
 }
 
 /** Proper-noun allowlist from the cast's display names (+ aliases) so Whisper
-    mangling invented names ("Sophie Foster" → "Sophie Faster") never reads as
+    mangling invented names ("Wren Sparrow" → "Wren Faster") never reads as
     content drift. Structural input so callers needn't import CastCharacter. */
 export function buildCastNameAllowlist(
   characters: readonly { name?: string; aliases?: readonly string[] }[],

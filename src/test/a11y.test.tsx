@@ -74,16 +74,16 @@ const AXE_OPTS = {
 
 const libraryAuthors: LibraryAuthor[] = [
   {
-    name: 'Shannon Messenger',
+    name: 'Della Renwick',
     series: [
       {
-        name: 'Keeper of the Lost Cities',
+        name: 'The Hollow Tide',
         books: [
           {
             bookId: 'b1',
-            title: 'Keeper of the Lost Cities',
-            author: 'Shannon Messenger',
-            series: 'Keeper of the Lost Cities',
+            title: 'The Hollow Tide',
+            author: 'Della Renwick',
+            series: 'The Hollow Tide',
             seriesPosition: 1,
             isStandalone: false,
             status: 'complete',
@@ -115,18 +115,18 @@ const chapters: Chapter[] = [
 const characters: Character[] = [
   { id: 'narrator', name: 'Anders Vale', role: 'Narrator', color: 'narrator' } as Character,
   {
-    id: 'keefe',
-    name: 'Keefe',
+    id: 'marlow',
+    name: 'Marlow',
     role: 'sidekick',
     color: 'eliza',
     lines: 42,
     scenes: 7,
-    voiceId: 'v_keefe',
+    voiceId: 'v_marlow',
     voiceState: 'reused',
     matchedFrom: {
       bookTitle: 'Book One',
       bookId: 'book_one',
-      characterId: 'keefe_lib',
+      characterId: 'marlow_lib',
       confidence: 0.95,
     },
   } as Character,
@@ -134,8 +134,8 @@ const characters: Character[] = [
 
 const library: Voice[] = [
   {
-    id: 'v_keefe',
-    character: 'Keefe',
+    id: 'v_marlow',
+    character: 'Marlow',
     bookTitle: 'Book One',
     bookId: 'book_one',
     attributes: [],
@@ -151,9 +151,9 @@ const library: Voice[] = [
 ];
 
 const meta: EditableBookMeta = {
-  title: 'Bonus Keefe Story',
+  title: 'the Coalfall Commission',
   author: 'Marin Vale',
-  series: 'Keefe Side-Stories',
+  series: 'Marlow Side-Stories',
   narratorCredit: 'Anders Vale',
   genre: 'Fantasy',
   publicationDate: '2026-05-09',
@@ -222,7 +222,7 @@ describe('a11y — confirm-cast view', () => {
         <ConfirmCastView
           characters={characters}
           library={library}
-          title="Bonus Keefe Story"
+          title="the Coalfall Commission"
           onOpenProfile={vi.fn()}
           onConfirm={vi.fn()}
           onReanalyse={vi.fn()}

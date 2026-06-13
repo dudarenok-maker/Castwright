@@ -15,7 +15,7 @@ owner: null
 
 The plan-182 roster-coverage guard ensures a tagged speaker is in the roster, but
 stage-2 attribution still sometimes leaves their *quoted lines on `narrator`*
-(observed: Stellarlune ch16 — `"…," Behnam noted.` with the quote stuck on
+(observed: The Drowning Bell ch16 — `"…," Behnam noted.` with the quote stuck on
 narrator even though Behnam was in the cast). Those 0-line speakers were then
 **deleted by the minor-cast fold** on every re-analysis (#537), so a found
 character never persisted and never spoke (#529). Re-analysing via the UX
@@ -71,7 +71,7 @@ therefore did **not** recover these characters.
 - Vitest (`analysis.test.ts`) green — both fold sites wired.
 
 ### Manual acceptance (live)
-1. Re-analyse a chapter where a speaker is prose-tagged (e.g. Stellarlune ch16
+1. Re-analyse a chapter where a speaker is prose-tagged (e.g. The Drowning Bell ch16
    Behnam): the speaker ends with non-zero lines, stays in the cast, and survives
    a subsequent re-analysis of another chapter. Then design their voice + regen.
 
@@ -93,6 +93,6 @@ a re-analysis fully recover such speakers *with* their lines.
 ## Ship notes
 
 Shipped 2026-06-06 (merge 1accb11, PR #557). Closes #537. Builds on plan 187
-(#528/#529). Refs #519. Live acceptance confirmed: Stellarlune ch16 (Behnam) ends
+(#528/#529). Refs #519. Live acceptance confirmed: The Drowning Bell ch16 (Behnam) ends
 with non-zero lines and survives a subsequent re-analysis of another chapter;
 voice designed + chapter regenerated.

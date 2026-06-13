@@ -102,7 +102,7 @@ async function denormaliseCastReusedVoices(patch: unknown): Promise<unknown> {
 
 /* Fill any incoming character's missing voice-DESIGN fields from the on-disk
    cast.json before the persist (the durable guard against the 2026-06-05
-   Stellarlune strip, where the analysing→cast-confirm flow persisted a
+   The Drowning Bell strip, where the analysing→cast-confirm flow persisted a
    voiceless in-memory cast and erased the designed Qwen voices). INCOMING WINS
    when present; the existing value fills only the gap. Reuse-link fields are
    left to `denormaliseCastReusedVoices` so unlink still works. Tolerates a

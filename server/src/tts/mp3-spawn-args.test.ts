@@ -108,7 +108,7 @@ describe('encodePcmToAudio spawn args', () => {
     expect(args[afIndex + 1]).not.toContain('measured_');
   });
 
-  /* Regression for the ffmpeg 8.x loudnorm sample-rate drift (5 Exile
+  /* Regression for the ffmpeg 8.x loudnorm sample-rate drift (5 The Ebb
      chapters corrupted on 2026-05-21 — 3.05x duration MP3s on 24 kHz
      Kokoro PCM). The loudnorm filter resamples internally to 192 kHz;
      ffmpeg 7.x followed the input rate at the filter output, 8.x did

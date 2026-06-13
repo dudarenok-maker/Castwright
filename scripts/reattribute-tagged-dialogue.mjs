@@ -13,7 +13,7 @@
 
    Usage (from repo root):
      node scripts/reattribute-tagged-dialogue.mjs <bookDir> \
-       --in 19=prentice:Prentice --in 47=prentice:Prentice \
+       --in 19=lessom:Lessom --in 47=lessom:Lessom \
        --in 16=behnam:"Behnam Aria" --in 34=woltzer:Woltzer [--apply]
 
    Each --in is chapterId=id:Name. Name is what appears in the prose tag

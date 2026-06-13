@@ -74,10 +74,10 @@ Per CLAUDE.md "Testing discipline (REQUIRED for every change)": every wave ships
 
 ### Manual acceptance walkthrough
 
-Run with the canonical full-pipeline manuscript `C:\Users\dudar\Downloads\Bonus Keefe Story.txt` (CLAUDE.md "Canonical end-to-end manuscript"). Reboot before any timing assertion (`feedback_reboot_before_perf_baselines.md`).
+Run with the canonical full-pipeline manuscript `server/src/__fixtures__/the-coalfall-commission.md` (CLAUDE.md "Canonical end-to-end manuscript"). Reboot before any timing assertion (`feedback_reboot_before_perf_baselines.md`).
 
 1. **Cold boot at `#/`** → expected stage `{ kind: 'books' }`, library view, top-bar shows no queue chip (queue is empty).
-2. **Upload Keefe + a Pushkin short-story stub.** Analyse both books to completion.
+2. **Upload Marlow + a Pushkin short-story stub.** Analyse both books to completion.
 3. **Enqueue chapter 3 of Book A** from the Generate view's per-chapter "Add to queue" button → toast "Added to queue · 1 entry pending" with a "View queue" CTA. Top-bar queue chip shows `1`.
 4. **Switch to Book B**, enqueue chapter 1 of Book B → toast "Added to queue · 2 entries pending". Queue chip shows `2`.
 5. **Click the queue chip → View queue modal opens.** Two entries visible: `A.ch3` (order 0), `B.ch1` (order 1). The queue auto-drains when unpaused (invariant 8), so `A.ch3` has **already** flipped to `in_progress` and pinned to the top (non-draggable); `B.ch1` is queued behind it. The modal's top-level control is **Pause** (the queue is running) — there is no "start" button.

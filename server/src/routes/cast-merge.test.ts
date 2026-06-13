@@ -1,7 +1,7 @@
 /* Integration tests for the cast-merge router.
 
    Sets up a tempdir workspace with a fake book whose cast contains a known
-   duplicate ("sophie" + "sophie-foster"), drives a POST against the route,
+   duplicate ("wren" + "wren-sparrow"), drives a POST against the route,
    and asserts every persisted file is updated coherently:
      - cast.json drops the source, target gains aliases / evidence / lines
      - manuscript-edits.json sentence attributions are remapped
@@ -30,8 +30,8 @@ let bookId: string;
 let cachePath: string;
 
 const sourceCharacter = {
-  id: 'sophie',
-  name: 'Sophie',
+  id: 'wren',
+  name: 'Wren',
   role: 'protagonist',
   color: 'eliza',
   lines: 5,
@@ -47,8 +47,8 @@ const sourceCharacter = {
 };
 
 const targetCharacter = {
-  id: 'sophie-foster',
-  name: 'Sophie Foster',
+  id: 'wren-sparrow',
+  name: 'Wren Sparrow',
   role: 'protagonist',
   color: 'eliza',
   lines: 12,
@@ -65,8 +65,8 @@ const targetCharacter = {
 };
 
 const otherCharacter = {
-  id: 'keefe',
-  name: 'Keefe Sencen',
+  id: 'marlow',
+  name: 'Marlow Halden',
   role: 'sidekick',
   color: 'halloran',
   lines: 7,
@@ -74,15 +74,15 @@ const otherCharacter = {
 };
 
 const sourceSentences = [
-  { id: 1, chapterId: 1, characterId: 'sophie', text: 'Hello world.' },
-  { id: 2, chapterId: 1, characterId: 'sophie', text: 'Where am I?' },
-  { id: 3, chapterId: 2, characterId: 'sophie', text: 'I have to find him.' },
+  { id: 1, chapterId: 1, characterId: 'wren', text: 'Hello world.' },
+  { id: 2, chapterId: 1, characterId: 'wren', text: 'Where am I?' },
+  { id: 3, chapterId: 2, characterId: 'wren', text: 'I have to find him.' },
 ];
 const targetSentences = [
-  { id: 4, chapterId: 2, characterId: 'sophie-foster', text: 'Take me with you.' },
-  { id: 5, chapterId: 3, characterId: 'sophie-foster', text: 'I will find a way.' },
+  { id: 4, chapterId: 2, characterId: 'wren-sparrow', text: 'Take me with you.' },
+  { id: 5, chapterId: 3, characterId: 'wren-sparrow', text: 'I will find a way.' },
 ];
-const otherSentences = [{ id: 6, chapterId: 1, characterId: 'keefe', text: 'Whoa there.' }];
+const otherSentences = [{ id: 6, chapterId: 1, characterId: 'marlow', text: 'Whoa there.' }];
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cast-merge-test-'));
@@ -177,20 +177,20 @@ describe('cast-merge router', () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge`)
       .set('Content-Type', 'application/json')
-      .send({ sourceId: 'sophie', targetId: 'sophie-foster' });
+      .send({ sourceId: 'wren', targetId: 'wren-sparrow' });
 
     expect(res.status).toBe(200);
     const body = res.body as { characters: Array<{ id: string }> };
-    expect(body.characters.map((c) => c.id)).toEqual(['sophie-foster', 'keefe']);
+    expect(body.characters.map((c) => c.id)).toEqual(['wren-sparrow', 'marlow']);
 
     /* cast.json on disk has the merged target. */
     const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
-    expect(cast.characters.map((c) => c.id)).toEqual(['sophie-foster', 'keefe']);
+    expect(cast.characters.map((c) => c.id)).toEqual(['wren-sparrow', 'marlow']);
 
-    const merged = cast.characters.find((c) => c.id === 'sophie-foster')!;
-    /* Aliases: target's "Foster" preserved, source name "Sophie" appended,
-       target's own name "Sophie Foster" filtered out (no self-alias). */
-    expect(merged.aliases).toEqual(['Foster', 'Sophie']);
+    const merged = cast.characters.find((c) => c.id === 'wren-sparrow')!;
+    /* Aliases: target's "Foster" preserved, source name "Wren" appended,
+       target's own name "Wren Sparrow" filtered out (no self-alias). */
+    expect(merged.aliases).toEqual(['Foster', 'Wren']);
     /* Description: longer wins (target was already longer). */
     expect(merged.description).toMatch(/telepathic/);
     /* Attributes: union dedup, target first. */
@@ -214,15 +214,15 @@ describe('cast-merge router', () => {
     expect(merged.gender).toBe('female');
     expect(merged.ageRange).toBe('teen');
 
-    /* manuscript-edits.json: every sophie sentence now reads sophie-foster. */
+    /* manuscript-edits.json: every wren sentence now reads wren-sparrow. */
     const edits = readDisk<{ sentences: Array<{ id: number; characterId: string }> }>(
       'manuscript-edits.json',
     );
-    expect(edits.sentences.find((s) => s.id === 1)!.characterId).toBe('sophie-foster');
-    expect(edits.sentences.find((s) => s.id === 2)!.characterId).toBe('sophie-foster');
-    expect(edits.sentences.find((s) => s.id === 3)!.characterId).toBe('sophie-foster');
+    expect(edits.sentences.find((s) => s.id === 1)!.characterId).toBe('wren-sparrow');
+    expect(edits.sentences.find((s) => s.id === 2)!.characterId).toBe('wren-sparrow');
+    expect(edits.sentences.find((s) => s.id === 3)!.characterId).toBe('wren-sparrow');
     /* Other characters untouched. */
-    expect(edits.sentences.find((s) => s.id === 6)!.characterId).toBe('keefe');
+    expect(edits.sentences.find((s) => s.id === 6)!.characterId).toBe('marlow');
 
     /* lines/scenes recomputed from the rewritten edits — 5 sentences across
        chapters 1, 2, 3. */
@@ -234,11 +234,11 @@ describe('cast-merge router', () => {
       stage1: { characters: Array<{ id: string }> };
       chapters: Record<string, Array<{ characterId: string }>>;
     };
-    expect(cache.stage1.characters.map((c) => c.id)).toEqual(['sophie-foster', 'keefe']);
-    /* No surviving 'sophie' attribution anywhere in the per-chapter cache. */
+    expect(cache.stage1.characters.map((c) => c.id)).toEqual(['wren-sparrow', 'marlow']);
+    /* No surviving 'wren' attribution anywhere in the per-chapter cache. */
     for (const arr of Object.values(cache.chapters)) {
       for (const s of arr) {
-        expect(s.characterId).not.toBe('sophie');
+        expect(s.characterId).not.toBe('wren');
       }
     }
   });
@@ -246,7 +246,7 @@ describe('cast-merge router', () => {
   it('400s when sourceId equals targetId', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge`)
-      .send({ sourceId: 'keefe', targetId: 'keefe' });
+      .send({ sourceId: 'marlow', targetId: 'marlow' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/must differ/);
   });
@@ -254,14 +254,14 @@ describe('cast-merge router', () => {
   it('400s when either id is missing', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge`)
-      .send({ sourceId: 'keefe' });
+      .send({ sourceId: 'marlow' });
     expect(res.status).toBe(400);
   });
 
   it('404s when the source character is not in the cast', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge`)
-      .send({ sourceId: 'ghost', targetId: 'keefe' });
+      .send({ sourceId: 'ghost', targetId: 'marlow' });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/ghost/);
   });
@@ -338,8 +338,8 @@ describe('cast-merge downgrade to bucket', () => {
             evidence: [{ quote: 'Get behind me.', note: 'protective' }],
           },
           {
-            id: 'sandor',
-            name: 'Sandor',
+            id: 'garrow',
+            name: 'Garrow',
             role: 'Goblin Bodyguard',
             color: 'eliza',
             lines: 9,
@@ -353,7 +353,7 @@ describe('cast-merge downgrade to bucket', () => {
     const sents = [
       { id: 1, chapterId: 1, characterId: 'rescuer', text: 'Get behind me.' },
       { id: 2, chapterId: 2, characterId: 'rescuer', text: 'Stay quiet.' },
-      { id: 3, chapterId: 1, characterId: 'sandor', text: 'On it.' },
+      { id: 3, chapterId: 1, characterId: 'garrow', text: 'On it.' },
     ];
     writeFileSync(
       join(dBookDir, '.audiobook', 'manuscript-edits.json'),
@@ -376,8 +376,8 @@ describe('cast-merge downgrade to bucket', () => {
               gender: 'female',
             },
             {
-              id: 'sandor',
-              name: 'Sandor',
+              id: 'garrow',
+              name: 'Garrow',
               role: 'Goblin Bodyguard',
               color: 'eliza',
               gender: 'male',
@@ -409,9 +409,9 @@ describe('cast-merge downgrade to bucket', () => {
 
     expect(res.status).toBe(200);
     const body = res.body as { characters: Array<Record<string, unknown>> };
-    /* sandor preserved, rescuer folded into a newly-minted unknown-female. */
+    /* garrow preserved, rescuer folded into a newly-minted unknown-female. */
     const ids = body.characters.map((c) => c.id);
-    expect(ids).toContain('sandor');
+    expect(ids).toContain('garrow');
     expect(ids).toContain('unknown-female');
     expect(ids).not.toContain('rescuer');
 
@@ -433,7 +433,7 @@ describe('cast-merge downgrade to bucket', () => {
     const edits = JSON.parse(editsRaw) as { sentences: Array<{ id: number; characterId: string }> };
     expect(edits.sentences.find((s) => s.id === 1)!.characterId).toBe('unknown-female');
     expect(edits.sentences.find((s) => s.id === 2)!.characterId).toBe('unknown-female');
-    expect(edits.sentences.find((s) => s.id === 3)!.characterId).toBe('sandor');
+    expect(edits.sentences.find((s) => s.id === 3)!.characterId).toBe('garrow');
 
     /* Analysis cache stage1 also gained the bucket. */
     const cache = JSON.parse(readFileSync(dCachePath, 'utf8')) as {

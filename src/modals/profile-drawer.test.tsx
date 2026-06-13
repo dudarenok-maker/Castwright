@@ -218,13 +218,13 @@ describe('ProfileDrawer Qwen emotion-variant persistence (regression)', () => {
     const onSave = vi.fn();
     const character: Character = {
       ...baseChar,
-      id: 'keefe',
-      name: 'Keefe Sencen',
-      voiceId: 'keefe',
+      id: 'marlow',
+      name: 'Marlow Halden',
+      voiceId: 'marlow',
       ttsEngine: 'qwen',
       voiceStyle: 'a charming, smooth-talking teenage boy',
       overrideTtsVoices: {
-        qwen: { name: 'qwen-keefe', variants: { whisper: { name: 'qwen-keefe__whisper' } } },
+        qwen: { name: 'qwen-marlow', variants: { whisper: { name: 'qwen-marlow__whisper' } } },
       },
     };
     const store = makeStore();
@@ -245,32 +245,32 @@ describe('ProfileDrawer Qwen emotion-variant persistence (regression)', () => {
     expect(onSave).toHaveBeenCalledTimes(1);
     const next = onSave.mock.calls[0][0] as Character;
     expect(next.overrideTtsVoices?.qwen).toEqual({
-      name: 'qwen-keefe',
-      variants: { whisper: { name: 'qwen-keefe__whisper' } },
+      name: 'qwen-marlow',
+      variants: { whisper: { name: 'qwen-marlow__whisper' } },
     });
   });
 });
 
 describe('ProfileDrawer cast roster (merge + aliases)', () => {
-  const sophie: Character = {
-    id: 'sophie',
-    name: 'Sophie',
+  const wren: Character = {
+    id: 'wren',
+    name: 'Wren',
     role: 'protagonist',
     color: 'eliza',
     lines: 5,
     scenes: 2,
   };
-  const sophieFoster: Character = {
-    id: 'sophie-foster',
-    name: 'Sophie Foster',
+  const wrenFoster: Character = {
+    id: 'wren-sparrow',
+    name: 'Wren Sparrow',
     role: 'protagonist',
     color: 'eliza',
     lines: 12,
     scenes: 4,
   };
-  const keefe: Character = {
-    id: 'keefe',
-    name: 'Keefe Sencen',
+  const marlow: Character = {
+    id: 'marlow',
+    name: 'Marlow Halden',
     role: 'sidekick',
     color: 'halloran',
     lines: 7,
@@ -278,45 +278,45 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
   };
 
   it('renders aliases as chips when the character already has merge history', () => {
-    renderDrawer({ ...sophieFoster, aliases: ['Sophie', 'Foster'] });
+    renderDrawer({ ...wrenFoster, aliases: ['Wren', 'Foster'] });
     /* "Also known as" header is shown plus a pill per alias. */
     expect(screen.getByText(/Also known as/i)).toBeTruthy();
-    expect(screen.getByText('Sophie')).toBeTruthy();
+    expect(screen.getByText('Wren')).toBeTruthy();
     expect(screen.getByText('Foster')).toBeTruthy();
   });
 
   it('hides the merge button when no candidates or onMerge handler are provided', () => {
-    renderDrawer(sophie);
+    renderDrawer(wren);
     /* No expandable picker, no merge button. */
     expect(screen.queryByRole('button', { name: /Merge .* into another character/i })).toBeNull();
   });
 
   it('opens the picker, calls onMerge with (source, target), and surfaces errors', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(sophie, { mergeCandidates: [sophieFoster, keefe], onMerge });
+    renderDrawer(wren, { mergeCandidates: [wrenFoster, marlow], onMerge });
 
     /* Toggle the merge card open. */
-    fireEvent.click(screen.getByRole('button', { name: /Merge Sophie into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
 
     /* Open the SearchablePicker popover off the merge-target trigger. */
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     /* Pick the survivor by clicking its row inside the portalled dialog. */
-    fireEvent.click(screen.getByRole('option', { name: /Sophie Foster/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/i }));
     /* Confirmation sentence appears once a target is picked. */
     expect(screen.getByText(/folded into/i)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     /* Microtask flush so the async onMerge call resolves. */
     await Promise.resolve();
-    expect(onMerge).toHaveBeenCalledWith('sophie', 'sophie-foster');
+    expect(onMerge).toHaveBeenCalledWith('wren', 'wren-sparrow');
   });
 
   it('surfaces an error message when onMerge rejects', async () => {
     const onMerge = vi.fn().mockRejectedValueOnce(new Error('Server said no.'));
-    renderDrawer(sophie, { mergeCandidates: [sophieFoster], onMerge });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Sophie into another character/i }));
+    renderDrawer(wren, { mergeCandidates: [wrenFoster], onMerge });
+    fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
-    fireEvent.click(screen.getByRole('option', { name: /Sophie Foster/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     /* Let the rejected promise settle before assertions. */
     await Promise.resolve();
@@ -326,124 +326,124 @@ describe('ProfileDrawer cast roster (merge + aliases)', () => {
 
   it('typeahead narrows the picker list to the searched character', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(sophie, { mergeCandidates: [sophieFoster, keefe], onMerge });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Sophie into another character/i }));
+    renderDrawer(wren, { mergeCandidates: [wrenFoster, marlow], onMerge });
+    fireEvent.click(screen.getByRole('button', { name: /Merge Wren into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     const searchInput = screen.getByPlaceholderText('Search character…');
-    fireEvent.change(searchInput, { target: { value: 'foster' } });
+    fireEvent.change(searchInput, { target: { value: 'sparrow' } });
     /* Scope to the picker dialog — the drawer also renders native
        <select>s (gender, age) whose <option>s share the option role. */
     const dialog = screen.getByRole('dialog');
     const options = within(dialog).getAllByRole('option');
     expect(options).toHaveLength(1);
-    expect(options[0]).toHaveTextContent(/Sophie Foster/i);
+    expect(options[0]).toHaveTextContent(/Wren Sparrow/i);
     fireEvent.click(options[0]);
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     await Promise.resolve();
-    expect(onMerge).toHaveBeenCalledWith('sophie', 'sophie-foster');
+    expect(onMerge).toHaveBeenCalledWith('wren', 'wren-sparrow');
   });
 });
 
 describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
-  const dexter: Character = {
-    id: 'dexter-alvin-diznee',
-    name: 'Dexter Alvin Diznee',
+  const hartwell: Character = {
+    id: 'hartwell-brennan-vale',
+    name: 'Hartwell Brennan Vale',
     role: 'character',
     color: 'eliza',
     lines: 271,
     scenes: 9,
   };
   const inBookSibling: Character = {
-    id: 'sophie-foster',
-    name: 'Sophie Foster',
+    id: 'wren-sparrow',
+    name: 'Wren Sparrow',
     role: 'protagonist',
     color: 'eliza',
     lines: 12,
     scenes: 4,
   };
-  const priorDex: PriorMergeCandidate = {
-    id: 'dex',
-    name: 'Dex',
-    bookId: 'kotlc_1',
-    bookTitle: 'Keeper of the Lost Cities',
+  const priorHart: PriorMergeCandidate = {
+    id: 'hart',
+    name: 'Hart',
+    bookId: 'the Hollow Tide_1',
+    bookTitle: 'The Hollow Tide',
   };
-  const priorKeefe: PriorMergeCandidate = {
-    id: 'keefe',
-    name: 'Keefe',
-    bookId: 'kotlc_1',
-    bookTitle: 'Keeper of the Lost Cities',
+  const priorMarlow: PriorMergeCandidate = {
+    id: 'marlow',
+    name: 'Marlow',
+    bookId: 'the Hollow Tide_1',
+    bookTitle: 'The Hollow Tide',
   };
 
   it('renders the merge button when only prior candidates are available (no in-book siblings)', () => {
     /* The user might be on a tiny scene with just one new character —
        no in-book candidates, but prior series characters exist. The
        manual-link affordance must still surface. */
-    renderDrawer(dexter, { mergeCandidatesPrior: [priorDex], onLinkPrior: vi.fn() });
+    renderDrawer(hartwell, { mergeCandidatesPrior: [priorHart], onLinkPrior: vi.fn() });
     expect(
-      screen.getByRole('button', { name: /Merge Dexter into another character/i }),
+      screen.getByRole('button', { name: /Merge Hartwell into another character/i }),
     ).toBeTruthy();
   });
 
   it('renders both groups under the prior-books separator when both sets are non-empty', () => {
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [inBookSibling],
-      mergeCandidatesPrior: [priorDex],
+      mergeCandidatesPrior: [priorHart],
       onMerge: vi.fn(),
       onLinkPrior: vi.fn(),
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
     const dialog = screen.getByRole('dialog');
     /* The prior-books separator labels the second group. */
     expect(within(dialog).getByText('From prior books in this series')).toBeInTheDocument();
     /* Both options reachable inside the portalled popover. */
-    expect(within(dialog).getByRole('option', { name: /Sophie Foster/ })).toBeTruthy();
+    expect(within(dialog).getByRole('option', { name: /Wren Sparrow/ })).toBeTruthy();
     expect(
-      within(dialog).getByRole('option', { name: /Dex.*Keeper of the Lost Cities/i }),
+      within(dialog).getByRole('option', { name: /Hart.*The Hollow Tide/i }),
     ).toBeTruthy();
   });
 
   it('routes a prior-option pick to onLinkPrior with (sourceId, targetBookId, targetCharacterId) and a "Link" button label', async () => {
     const onLinkPrior = vi.fn().mockResolvedValueOnce(undefined);
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [inBookSibling],
-      mergeCandidatesPrior: [priorDex, priorKeefe],
+      mergeCandidatesPrior: [priorHart, priorMarlow],
       onMerge: vi.fn(),
       onLinkPrior,
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
-    /* Click the second prior row (Keefe) — picker fires onPickRosterEntry
+    /* Click the second prior row (Marlow) — picker fires onPickRosterEntry
        which writes `prior:1` to mergeTargetId. */
-    fireEvent.click(screen.getByRole('option', { name: /Keefe.*Keeper of the Lost Cities/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Marlow.*The Hollow Tide/i }));
     /* Confirmation copy shifts to the link wording when a prior is picked. */
     expect(screen.getByText(/linked as the same person as/i)).toBeTruthy();
     /* Button label flips from "Merge" to "Link" when a prior is selected. */
     fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));
     await Promise.resolve();
-    expect(onLinkPrior).toHaveBeenCalledWith('dexter-alvin-diznee', 'kotlc_1', 'keefe');
+    expect(onLinkPrior).toHaveBeenCalledWith('hartwell-brennan-vale', 'the Hollow Tide_1', 'marlow');
   });
 
   it('still routes an in-book pick to onMerge when both groups are present', async () => {
     const onMerge = vi.fn().mockResolvedValueOnce(undefined);
     const onLinkPrior = vi.fn();
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [inBookSibling],
-      mergeCandidatesPrior: [priorDex],
+      mergeCandidatesPrior: [priorHart],
       onMerge,
       onLinkPrior,
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
-    fireEvent.click(screen.getByRole('option', { name: /Sophie Foster/ }));
+    fireEvent.click(screen.getByRole('option', { name: /Wren Sparrow/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
     await Promise.resolve();
-    expect(onMerge).toHaveBeenCalledWith('dexter-alvin-diznee', 'sophie-foster');
+    expect(onMerge).toHaveBeenCalledWith('hartwell-brennan-vale', 'wren-sparrow');
     expect(onLinkPrior).not.toHaveBeenCalled();
   });
 
   it('hides the merge button entirely when both groups are empty', () => {
-    renderDrawer(dexter, {
+    renderDrawer(hartwell, {
       mergeCandidates: [],
       mergeCandidatesPrior: [],
       onMerge: vi.fn(),
@@ -454,13 +454,13 @@ describe('ProfileDrawer manual continuity link (prior-series optgroup)', () => {
 
   it('surfaces an error when onLinkPrior rejects', async () => {
     const onLinkPrior = vi.fn().mockRejectedValueOnce(new Error('Cross-series link refused.'));
-    renderDrawer(dexter, {
-      mergeCandidatesPrior: [priorDex],
+    renderDrawer(hartwell, {
+      mergeCandidatesPrior: [priorHart],
       onLinkPrior,
     });
-    fireEvent.click(screen.getByRole('button', { name: /Merge Dexter into another character/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Merge Hartwell into another character/i }));
     fireEvent.click(screen.getByRole('button', { name: /Merge target/i }));
-    fireEvent.click(screen.getByRole('option', { name: /Dex.*Keeper of the Lost Cities/i }));
+    fireEvent.click(screen.getByRole('option', { name: /Hart.*The Hollow Tide/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Link$/i }));
     await Promise.resolve();
     await Promise.resolve();
@@ -517,14 +517,14 @@ describe('ProfileDrawer rename + promote alias', () => {
 });
 
 describe('ProfileDrawer Play sample (auto-load path)', () => {
-  const fitz: Character = {
-    id: 'fitz',
-    name: 'Fitz',
+  const brann: Character = {
+    id: 'brann',
+    name: 'Brann',
     role: 'Telepath',
     color: 'halloran',
     lines: 426,
     scenes: 12,
-    evidence: [{ quote: 'Fitz provides the necessary pressure and support.', note: 'long' }],
+    evidence: [{ quote: 'Brann provides the necessary pressure and support.', note: 'long' }],
   };
 
   it('routes Play through the auto-load helper, not raw api.getVoiceSample', async () => {
@@ -533,7 +533,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={fitz}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -546,7 +546,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     /* The voiceId for an unmatched character is namespaced char-<id> so
        cached sample files for the library voice can't collide with the
        in-progress character voice. */
-    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-fitz');
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-brann');
   });
 
   it('surfaces the inline eviction banner when the helper reports the analyzer was unloaded', async () => {
@@ -562,7 +562,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={fitz}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -582,7 +582,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={fitz}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -604,7 +604,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
     render(
       <Provider store={makeStore()}>
         <ProfileDrawer
-          character={fitz}
+          character={brann}
           voice={undefined}
           onClose={() => {}}
           onSave={() => {}}
@@ -618,7 +618,7 @@ describe('ProfileDrawer Play sample (auto-load path)', () => {
        present. */
     fireEvent.click(screen.getByRole('button', { name: /^Play sample for/i }));
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-fitz');
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('char-brann');
   });
 });
 
@@ -696,9 +696,9 @@ describe('ProfileDrawer downgrade to background bucket', () => {
 });
 
 describe('ProfileDrawer model-voice override picker', () => {
-  const fitz: Character = {
-    id: 'fitz',
-    name: 'Fitz',
+  const brann: Character = {
+    id: 'brann',
+    name: 'Brann',
     role: 'protagonist',
     color: 'eliza',
     lines: 50,
@@ -707,9 +707,9 @@ describe('ProfileDrawer model-voice override picker', () => {
     ageRange: 'teen',
   };
 
-  const fitzVoice: Voice = {
-    id: 'v_fitz',
-    character: 'Fitz',
+  const brannVoice: Voice = {
+    id: 'v_brann',
+    character: 'Brann',
     bookTitle: 'Book One',
     bookId: 'b1',
     attributes: ['Male', 'Teen'],
@@ -726,7 +726,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   ];
 
   it('renders engine tabs (one per available engine) and labels the Auto trigger with the resolved voice', async () => {
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     /* The trigger button shows the Auto label until the user picks an
        explicit override — same content the legacy <select>'s auto
@@ -738,12 +738,12 @@ describe('ProfileDrawer model-voice override picker', () => {
 
   it('persists an override via api.setVoiceOverride when the user picks a base voice', async () => {
     setVoiceOverride.mockClear();
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     fireEvent.click(trigger);
     fireEvent.click(screen.getByRole('option', { name: /Asya Anara/ }));
     await waitFor(() => {
-      expect(setVoiceOverride).toHaveBeenCalledWith('v_fitz', {
+      expect(setVoiceOverride).toHaveBeenCalledWith('v_brann', {
         engine: 'coqui',
         name: 'Asya Anara',
       });
@@ -753,10 +753,10 @@ describe('ProfileDrawer model-voice override picker', () => {
   it('clears the override when the user picks "Auto"', async () => {
     setVoiceOverride.mockClear();
     const overridden: Voice = {
-      ...fitzVoice,
+      ...brannVoice,
       overrideTtsVoices: { coqui: { name: 'Asya Anara' } },
     };
-    renderDrawer(fitz, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
     const trigger = await screen.findByRole('button', { name: /Model voice override/i });
     expect(trigger).toHaveTextContent(/Asya Anara/);
     fireEvent.click(trigger);
@@ -764,7 +764,7 @@ describe('ProfileDrawer model-voice override picker', () => {
        override (passes null to setVoiceOverride). */
     fireEvent.click(screen.getByRole('option', { name: /Auto — currently Coqui/i }));
     await waitFor(() => {
-      expect(setVoiceOverride).toHaveBeenCalledWith('v_fitz', null);
+      expect(setVoiceOverride).toHaveBeenCalledWith('v_brann', null);
     });
   });
 
@@ -772,10 +772,10 @@ describe('ProfileDrawer model-voice override picker', () => {
     /* The "dot" badge on a tab tells the user at a glance which engines
        have a manual assignment without having to click each tab. */
     const overridden: Voice = {
-      ...fitzVoice,
+      ...brannVoice,
       overrideTtsVoices: { gemini: { name: 'Charon' } },
     };
-    renderDrawer(fitz, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: overridden, voices: [overridden], baseVoices: baseCatalog });
     const geminiTab = await screen.findByRole('tab', { name: /Gemini/i });
     /* Filled-slot dot is added inside the tab button when that engine
        has a non-empty slot. */
@@ -783,7 +783,7 @@ describe('ProfileDrawer model-voice override picker', () => {
   });
 
   it("switching tabs swaps which engine's catalog the picker shows", async () => {
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     /* Default tab (Coqui) — open the picker, only Coqui voices listed
        (besides Auto). */
     const coquiTrigger = await screen.findByRole('button', {
@@ -805,9 +805,9 @@ describe('ProfileDrawer model-voice override picker', () => {
 });
 
 describe('ProfileDrawer voice-preview while editing', () => {
-  const fitz: Character = {
-    id: 'fitz',
-    name: 'Fitz',
+  const brann: Character = {
+    id: 'brann',
+    name: 'Brann',
     role: 'protagonist',
     color: 'eliza',
     lines: 50,
@@ -815,9 +815,9 @@ describe('ProfileDrawer voice-preview while editing', () => {
     gender: 'male',
     ageRange: 'teen',
   };
-  const fitzVoice: Voice = {
-    id: 'v_fitz',
-    character: 'Fitz',
+  const brannVoice: Voice = {
+    id: 'v_brann',
+    character: 'Brann',
     bookTitle: 'Book One',
     bookId: 'b1',
     attributes: ['Male', 'Teen'],
@@ -833,7 +833,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   ];
 
   it('keeps the candidate-preview list collapsed by default; toggle expands it', async () => {
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     /* List + textarea are hidden until the user opens the section — keeps
        the drawer tidy on first open. */
     expect(screen.queryByTestId('voice-preview-candidates')).toBeNull();
@@ -849,7 +849,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
 
   it('clicking Play on a candidate row routes through playBaseVoiceSampleWithAutoLoad with the user-edited text', async () => {
     vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     /* User edits the sample line before auditioning. */
     fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
@@ -867,7 +867,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   it('clicking Play on a SECOND candidate forwards the new voice (read-only audition, no commit)', async () => {
     vi.mocked(playBaseVoiceSampleWithAutoLoad).mockClear();
     const onSave = vi.fn();
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
 
     fireEvent.click(screen.getByTestId('voice-preview-play-Asya Anara'));
@@ -888,7 +888,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
   });
 
   it('switching the engine tab swaps which catalog the preview list shows', async () => {
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     /* Default tab (Coqui) lists Asya + Damien but not Charon. */
     expect(screen.getByTestId('voice-preview-row-Asya Anara')).toBeTruthy();
@@ -904,7 +904,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
     /* The drawer is the only consumer; jsdom backs localStorage with an
        in-memory map so the assertion is deterministic. */
     window.localStorage.removeItem('voice-preview-sample-text');
-    renderDrawer(fitz, { voice: fitzVoice, voices: [fitzVoice], baseVoices: baseCatalog });
+    renderDrawer(brann, { voice: brannVoice, voices: [brannVoice], baseVoices: baseCatalog });
     fireEvent.click(screen.getByTestId('voice-preview-toggle'));
     fireEvent.change(screen.getByTestId('voice-preview-sample-text'), {
       target: { value: 'Bespoke preview line.' },
@@ -916,7 +916,7 @@ describe('ProfileDrawer voice-preview while editing', () => {
 describe('ProfileDrawer alias chip editing', () => {
   const charWithAliases: Character = {
     ...baseChar,
-    aliases: ['Sior', 'Jurek', 'Sandor', 'Shopkeeper'],
+    aliases: ['Sior', 'Jurek', 'Garrow', 'Shopkeeper'],
   };
 
   it('renders each alias as a chip with an Unlink X button when onUnlinkAlias is provided', () => {
@@ -926,7 +926,7 @@ describe('ProfileDrawer alias chip editing', () => {
     /* Each alias chip carries its own labelled close button. */
     expect(screen.getByRole('button', { name: 'Unlink Sior' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Unlink Jurek' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Unlink Sandor' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Unlink Garrow' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Unlink Shopkeeper' })).toBeTruthy();
   });
 
@@ -942,9 +942,9 @@ describe('ProfileDrawer alias chip editing', () => {
   it('clicking the X dispatches onUnlinkAlias with the chip name', async () => {
     const onUnlinkAlias = vi.fn().mockResolvedValue(undefined);
     renderDrawer(charWithAliases, { onUnlinkAlias });
-    fireEvent.click(screen.getByRole('button', { name: 'Unlink Sandor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
     await waitFor(() => {
-      expect(onUnlinkAlias).toHaveBeenCalledWith('halloran', 'Sandor');
+      expect(onUnlinkAlias).toHaveBeenCalledWith('halloran', 'Garrow');
     });
   });
 
@@ -957,7 +957,7 @@ describe('ProfileDrawer alias chip editing', () => {
         }),
     );
     renderDrawer(charWithAliases, { onUnlinkAlias });
-    fireEvent.click(screen.getByRole('button', { name: 'Unlink Sandor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
     /* While the promise is pending, every chip's X is disabled. */
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Unlink Sior' })).toHaveProperty('disabled', true);
@@ -972,11 +972,11 @@ describe('ProfileDrawer alias chip editing', () => {
   it('surfaces a server error inline without closing the chip row', async () => {
     const onUnlinkAlias = vi.fn().mockRejectedValue(new Error('Backend exploded'));
     renderDrawer(charWithAliases, { onUnlinkAlias });
-    fireEvent.click(screen.getByRole('button', { name: 'Unlink Sandor' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink Garrow' }));
     await screen.findByText(/Backend exploded/);
     /* Chips still rendered (chip removal is the layout's job via the
        store dispatch; on error nothing changed). */
-    expect(screen.getByRole('button', { name: 'Unlink Sandor' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Unlink Garrow' })).toBeTruthy();
   });
 
   it('shows the "+ Add alias" button when onAddAlias is provided', () => {
@@ -1435,7 +1435,7 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
     voiceId: 'v_qwen_narr',
     voiceState: 'reused',
     matchedFrom: {
-      bookTitle: 'Everblaze',
+      bookTitle: 'The Tidewatcher’s Oath',
       bookId: 'b_prev',
       characterId: 'narrator_prev',
       confidence: 0.95,
@@ -1444,7 +1444,7 @@ describe('ProfileDrawer reused Qwen voice (drawer/table parity)', () => {
   const reusedQwenVoice: Voice = {
     id: 'v_qwen_narr',
     character: 'Narrator',
-    bookTitle: 'Everblaze',
+    bookTitle: 'The Tidewatcher’s Oath',
     bookId: 'b_prev',
     attributes: ['descriptive'],
     gradient: ['#E5B69C', '#C77B5C'],

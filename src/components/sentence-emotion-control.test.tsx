@@ -27,14 +27,14 @@ function makeStore(sentences: any[]) {
 }
 
 const qwenChar = {
-  id: 'sweeney',
-  name: 'Sweeney Todd',
+  id: 'marrow',
+  name: 'Marrow Todd',
   role: 'PoV',
   color: 'narrator',
-  voiceId: 'sweeney',
+  voiceId: 'marrow',
   ttsEngine: 'qwen',
   overrideTtsVoices: {
-    qwen: { name: 'qwen-sweeney', variants: { angry: { name: 'qwen-sweeney-angry' } } },
+    qwen: { name: 'qwen-marrow', variants: { angry: { name: 'qwen-marrow-angry' } } },
   },
 } as unknown as Character;
 
@@ -45,7 +45,7 @@ beforeEach(() => {
 
 describe('fs-25 — SentenceEmotionControl', () => {
   it('renders a discoverable trigger and dispatches a chosen emotion to the store', () => {
-    const store = makeStore([{ id: 2, chapterId: 1, characterId: 'sophie', text: 'Stop.' }]);
+    const store = makeStore([{ id: 2, chapterId: 1, characterId: 'wren', text: 'Stop.' }]);
     render(
       <Provider store={store}>
         <SentenceEmotionControl chapterId={1} sentenceId={2} />
@@ -58,7 +58,7 @@ describe('fs-25 — SentenceEmotionControl', () => {
 
   it('shows the current emotion and clears it via Neutral', () => {
     const store = makeStore([
-      { id: 2, chapterId: 1, characterId: 'sophie', text: 'Stop.', emotion: 'angry' },
+      { id: 2, chapterId: 1, characterId: 'wren', text: 'Stop.', emotion: 'angry' },
     ]);
     render(
       <Provider store={store}>
@@ -89,7 +89,7 @@ describe('fe-31 — emotion preview from the chip', () => {
     expect(preview).toBeEnabled();
     fireEvent.click(preview);
     await waitFor(() => expect(playEmotionVariantSample).toHaveBeenCalledTimes(1));
-    expect(playEmotionVariantSample.mock.calls[0][0]).toMatchObject({ id: 'sweeney' });
+    expect(playEmotionVariantSample.mock.calls[0][0]).toMatchObject({ id: 'marrow' });
     expect(playEmotionVariantSample.mock.calls[0][1]).toBe('angry');
     /* No fallback → no "renders neutral" note. */
     expect(screen.queryByTestId('emotion-preview-note')).toBeNull();
@@ -99,13 +99,13 @@ describe('fe-31 — emotion preview from the chip', () => {
     playEmotionVariantSample.mockResolvedValue({ fellBackToBase: true });
     const noVariant = {
       ...qwenChar,
-      overrideTtsVoices: { qwen: { name: 'qwen-sweeney' } },
+      overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
     } as unknown as Character;
     renderWithChar(noVariant, 'sad');
     fireEvent.click(screen.getByTestId('emotion-preview'));
     await waitFor(() =>
       expect(screen.getByTestId('emotion-preview-note').textContent).toMatch(
-        /no sad variant for Sweeney — renders neutral/i,
+        /no sad variant for Marrow — renders neutral/i,
       ),
     );
   });

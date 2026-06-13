@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** when the auto-fold step (`server/src/analyzer/fold-minor-cast.ts:246-263`) or a manual merge over-grouped a real distinct cast member as an alias chip (e.g. `Sandor` sitting on `Neverseen Figure`), the user could not recover. The chips were append-only. Now every chip carries a dismiss X that splits the alias back into its own standalone cast member, and a sibling `+ Add alias` button stitches in a name the analyzer missed.
+- **User:** when the auto-fold step (`server/src/analyzer/fold-minor-cast.ts:246-263`) or a manual merge over-grouped a real distinct cast member as an alias chip (e.g. `Garrow` sitting on `Saltgrave Figure`), the user could not recover. The chips were append-only. Now every chip carries a dismiss X that splits the alias back into its own standalone cast member, and a sibling `+ Add alias` button stitches in a name the analyzer missed.
 - **Technical:** the merge endpoint at `server/src/routes/cast-merge.ts:141-151` rewrites `sentence.characterId` in place with no lineage column on the Sentence schema (`src/lib/api-types.ts:2121-2128`). Original speaker-name lineage is permanently lost at merge time. We compensate by reading `chapterCast` (the Phase-0a per-chapter raw roster, deliberately preserved across merges — `cast-merge.ts:14` "We deliberately do NOT touch chapterCast") to identify the chapters in which the alias originally appeared, then surfacing those chapters' candidate sentences in a Reattribute Lines modal so the user can move the right lines via the existing per-sentence picker (`manuscriptActions.setSentenceCharacter`).
 - **Architectural:** opens a new pair of contract-internal routes (`cast/unlink-alias`, `cast/add-alias`) sibling to `cast/merge`. Both responses are delta-shaped (`newCharacter` + `impactedChapters` for unlink; `{ characterId, alias, alreadyPresent }` for add) — frontend dispatches `applyUnlinkAlias` / `applyAddAlias` reducers that mutate just the affected rows, rather than the full-cast replacement `applyMerge` does. No openapi.yaml entries (matches the existing `cast/merge`, `cast/link-prior`, `cast/add-from-roster` convention — these endpoints are contract-internal and don't ship in the typed client).
 
@@ -66,14 +66,14 @@ Run in mock mode (`VITE_USE_MOCKS=true` via `npm run dev`) unless noted:
 
 ### Acceptance against the bug that motivated this plan
 
-Originally reported (2026-05-22, screenshot for `Neverseen Figure`): `Sandor`, a real distinct cast member, was wrongly folded into `Neverseen Figure`'s aliases by the auto-fold step. Expected behaviour: open Neverseen's profile → click X on the Sandor chip → modal lists the chapters where Sandor was originally detected → user reassigns Sandor's lines to the freshly-minted standalone Sandor character → manuscript view reflects the change.
+Originally reported (2026-05-22, screenshot for `Saltgrave Figure`): `Garrow`, a real distinct cast member, was wrongly folded into `Saltgrave Figure`'s aliases by the auto-fold step. Expected behaviour: open Saltgrave's profile → click X on the Garrow chip → modal lists the chapters where Garrow was originally detected → user reassigns Garrow's lines to the freshly-minted standalone Garrow character → manuscript view reflects the change.
 
 ## Out of scope
 
 - **Deterministic sentence revert.** A merge journal (a sidecar JSON logging `{sourceId, sourceName, targetId, affectedSentenceIds}` at merge time) would let future un-links rewrite the exact sentences instead of relying on `chapterCast` as a lineage proxy. Worth a BACKLOG entry but not in this PR.
 - **Bulk alias management.** No "Aliases Manager" modal across multiple characters at once — single-character chip edits cover the reported use case.
 - **Re-running Phase 1 analysis on un-link.** Explicitly rejected (quota cost + destroys manual cast tweaks). The Reattribute Lines modal is the explicit user-driven alternative.
-- **Cross-book alias migration.** Adding `Sandor` as an alias on this book does not retroactively update the matcher's behaviour against prior books. Future analyzer runs of *subsequent* books in the series will pick up the alias; for prior books the user would re-link via the existing `cast/link-prior` route.
+- **Cross-book alias migration.** Adding `Garrow` as an alias on this book does not retroactively update the matcher's behaviour against prior books. Future analyzer runs of *subsequent* books in the series will pick up the alias; for prior books the user would re-link via the existing `cast/link-prior` route.
 
 ## Ship notes
 

@@ -125,7 +125,7 @@ The chapter still lands on disk; only the `.lufs.json` sidecar is missing. Real-
 Requires a real chapter generation against a live sidecar (or the cached PCM trick from plan 28).
 
 1. **Set `AUDIO_LOUDNORM_ENABLED=true`** (or unset — default is ON) in `server/.env`. Start the server.
-2. **Generate a chapter** with mixed voices (the canonical Bonus Keefe Story works — multiple speakers per chapter).
+2. **Generate a chapter** with mixed voices (the canonical the Coalfall Commission works — multiple speakers per chapter).
 3. **Confirm the sidecar lands.** Inspect `<workspace>/<bookId>/audio/<chapterSlug>.lufs.json`:
    - File exists.
    - `target: -16`, `twoPass: true`.
@@ -147,7 +147,7 @@ Shipped 2026-05-20 on branch `feat/server-audio-loudnorm`. Implementation adds `
 
 ### Post-ship correction (2026-05-21) — ffmpeg 8.x sample-rate output drift
 
-Bug: 5 chapters of *Exile* regenerated on 2026-05-21 produced MP3s with duration **3.05–3.07× the segments.json `durationSec`**. Audio played at correct pitch and ran the full inflated length on disk (verified: `ffprobe 03-chapter-one-one.mp3` = 2061 s vs `segments.json.durationSec` = 674 s). Chapters generated 2026-05-20 with the same engine / sample rate / loudnorm config were unaffected.
+Bug: 5 chapters of *The Ebb* regenerated on 2026-05-21 produced MP3s with duration **3.05–3.07× the segments.json `durationSec`**. Audio played at correct pitch and ran the full inflated length on disk (verified: `ffprobe 03-chapter-one-one.mp3` = 2061 s vs `segments.json.durationSec` = 674 s). Chapters generated 2026-05-20 with the same engine / sample rate / loudnorm config were unaffected.
 
 Root cause: ffmpeg's `loudnorm` filter resamples internally to 192 kHz for EBU R128 processing. Under ffmpeg 7.x the filter chain reached libmp3lame at the input sample rate; under ffmpeg 8.x (the user upgraded from 7.x to 8.1.1-full_build-www.gyan.dev between the two synth dates) the filter's output stream metadata reached the encoder at the wrong rate, producing the 3.05× duration stretch on 24 kHz mono Kokoro PCM. The MP3 declares 48 kHz / 32 kbps — both wrong (input is 24 kHz, V2 VBR should be ~190 kbps) and both explained by the broken sample-rate pipeline.
 
@@ -155,7 +155,7 @@ Fix: explicit output `-ar String(opts.sampleRate)` in `server/src/tts/mp3.ts` `b
 
 Regression test: `server/src/tts/mp3-spawn-args.test.ts` adds three parameterised cases (mp3 / aac-m4a / opus) asserting an output `-ar` flag exists strictly between `-af` and `-c:a` and carries the input sample rate. Contract-level rather than ffprobe-end-to-end because the bug only manifests on real-speech PCM with non-trivial dynamic range — synthetic sine / noise PCM does not reproduce the 3× stretch even on the broken pipeline.
 
-Backfill: re-synthesize the 5 affected Exile chapters (`03-chapter-one-one`, `04-chapter-two-two`, `05-chapter-three-three`, `06-chapter-four-four`, `08-chapter-six-six`) and delete their stale `.previous.mp3` rollback files (same corrupted bytes — accepting a rollback would replay the bug). Discovery rule for any future audit: broken iff `ffprobe duration / segments.json durationSec > 1.5`.
+Backfill: re-synthesize the 5 affected The Ebb chapters (`03-chapter-one-one`, `04-chapter-two-two`, `05-chapter-three-three`, `06-chapter-four-four`, `08-chapter-six-six`) and delete their stale `.previous.mp3` rollback files (same corrupted bytes — accepting a rollback would replay the bug). Discovery rule for any future audit: broken iff `ffprobe duration / segments.json durationSec > 1.5`.
 
 ### Post-ship correction (2026-05-22) — sidecar `i` was input loudness, not output
 

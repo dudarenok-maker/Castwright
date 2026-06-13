@@ -2,8 +2,8 @@
 
    Context: qwen3.5:4b under Ollama 0.5+ structured output occasionally
    emits unescaped double-quotes inside JSON string values when transcribing
-   dialogue from the manuscript ("quote": "Sophie, let the dog go," Mr.
-   Forkle ordered.",). Ollama's `format:<schema>` enforces JSON Schema
+   dialogue from the manuscript ("quote": "Wren, let the dog go," Mr.
+   Casper ordered.",). Ollama's `format:<schema>` enforces JSON Schema
    *shape* but not string-content escaping. The repair pass walks the text,
    detects each `"` inside a string, and escapes it iff the next non-ws
    char isn't a valid post-value token. Verified against the real broken
@@ -37,12 +37,12 @@ describe('repairUnescapedQuotes', () => {
 
   it('escapes a single unescaped quote inside a string value (the canonical failure)', () => {
     /* Exact pattern from mns_QrZ0LtF0K9-stage1-ch8.attempt2.raw.txt:
-       the model emitted `"quote": "Sophie, let the dog go," Mr. Forkle
+       the model emitted `"quote": "Wren, let the dog go," Mr. Casper
        ordered.",` instead of properly-escaped dialogue. */
-    const broken = '{"quote":"Sophie, let the dog go," Mr. Forkle ordered.","note":"x"}';
+    const broken = '{"quote":"Wren, let the dog go," Mr. Casper ordered.","note":"x"}';
     const repaired = repairUnescapedQuotes(broken);
     const parsed = JSON.parse(repaired);
-    expect(parsed.quote).toBe('Sophie, let the dog go," Mr. Forkle ordered.');
+    expect(parsed.quote).toBe('Wren, let the dog go," Mr. Casper ordered.');
     expect(parsed.note).toBe('x');
   });
 
@@ -66,7 +66,7 @@ describe('repairUnescapedQuotes', () => {
 
   it('handles whitespace between the unescaped quote and the next non-value token', () => {
     /* Real failure raws break with multiple spaces between the false-close
-       `"` and the resumed sentence — e.g. `"...go,"  Mr. Forkle ordered."`
+       `"` and the resumed sentence — e.g. `"...go,"  Mr. Casper ordered."`
        (the model formats dialogue with a space after the close paren). The
        peek must skip whitespace before deciding the next non-ws char. */
     const broken = '{"q":"a,"  Mr. ordered.","n":"x"}';
@@ -190,7 +190,7 @@ describe('parseAndValidate — repair integration', () => {
 
   it('returns ok with repaired:true when the raw needed quote-escape repair', () => {
     /* The canonical qwen3.5:4b failure pattern. */
-    const broken = '{"quote":"Sophie, let the dog go," Mr. Forkle ordered.","note":"x"}';
+    const broken = '{"quote":"Wren, let the dog go," Mr. Casper ordered.","note":"x"}';
     /* Sanity: strict JSON.parse should NOT accept this; otherwise the test
        is verifying the wrong thing. */
     expect(() => JSON.parse(broken)).toThrow();
@@ -199,7 +199,7 @@ describe('parseAndValidate — repair integration', () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.repaired).toBe(true);
-      expect(r.value.quote).toBe('Sophie, let the dog go," Mr. Forkle ordered.');
+      expect(r.value.quote).toBe('Wren, let the dog go," Mr. Casper ordered.');
       expect(r.value.note).toBe('x');
     }
   });
@@ -223,14 +223,14 @@ describe('parseAndValidate — repair integration', () => {
     /* Worst-case: model emits the fence wrapper AND has unescaped dialogue
        quotes inside a string value. Both cleanup passes must run, in order. */
     const fenced =
-      '```json\n{"quote":"Sophie, let the dog go," Mr. Forkle ordered.","note":"x"}\n```';
+      '```json\n{"quote":"Wren, let the dog go," Mr. Casper ordered.","note":"x"}\n```';
     expect(() => JSON.parse(fenced)).toThrow();
 
     const r = parseAndValidate(fenced, schema);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.repaired).toBe(true);
-      expect(r.value.quote).toBe('Sophie, let the dog go," Mr. Forkle ordered.');
+      expect(r.value.quote).toBe('Wren, let the dog go," Mr. Casper ordered.');
       expect(r.value.note).toBe('x');
     }
   });
@@ -262,7 +262,7 @@ describe('parseAndValidate — repair integration', () => {
   });
 
   it('returns ok with repaired:true when the raw had trailing prose after the closing brace (Ch44 shape)', () => {
-    /* Real failure raw from the Bonus Keefe Story run: qwen3.5:4b emitted
+    /* Real failure raw from the the Coalfall Commission run: qwen3.5:4b emitted
        its JSON correctly but appended a free-form sentence after the
        closing brace. trimTrailingProse must locate the outermost balanced
        `}` and slice up to it. */
@@ -307,14 +307,14 @@ describe('parseAndValidate — repair integration', () => {
        repairUnescapedQuotes → trimTrailingProse → repairStructuralPunctuation. */
     const fenced =
       '```json\n' +
-      '{"quote":"Sophie, let the dog go," Mr. Forkle ordered.","note":"x"}\n' +
+      '{"quote":"Wren, let the dog go," Mr. Casper ordered.","note":"x"}\n' +
       '```\n\nNote: this run was on chapter 8.';
     expect(() => JSON.parse(fenced)).toThrow();
     const r = parseAndValidate(fenced, schema);
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.repaired).toBe(true);
-      expect(r.value.quote).toBe('Sophie, let the dog go," Mr. Forkle ordered.');
+      expect(r.value.quote).toBe('Wren, let the dog go," Mr. Casper ordered.');
       expect(r.value.note).toBe('x');
     }
   });

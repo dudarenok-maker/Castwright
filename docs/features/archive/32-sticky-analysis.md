@@ -106,9 +106,9 @@ D2 added an `engine?: 'local' | 'gemini'` field to `AnalysisStreamSnapshot` (`sr
 
 ## Acceptance walkthrough
 
-Manual smoke against the canonical e2e manuscript (`~/Downloads/Bonus Keefe Story.txt`, per CLAUDE.md):
+Manual smoke against the canonical e2e manuscript (`server/src/__fixtures__/the-coalfall-commission.md`, per CLAUDE.md):
 
-1. **Upload + start analysis.** Open `#/books` → drag Bonus Keefe Story onto the upload tray → click through Confirm metadata → land on `#/books/:bookId/analysing` → click Start analysis. Stream begins; `AnalysisPill` appears in the top-bar.
+1. **Upload + start analysis.** Open `#/books` → drag the Coalfall Commission onto the upload tray → click through Confirm metadata → land on `#/books/:bookId/analysing` → click Start analysis. Stream begins; `AnalysisPill` appears in the top-bar.
 2. **Navigate mid-stream.** Click the Books / Voices / Account chrome to leave the analysing view while a phase is in flight. Expected: server log shows no `aborted` line; the analyzer's per-chapter cache writes keep landing. `AnalysisPill` stays visible AND keeps ticking across every navigation (D1 middleware-owned SSE attaches as a second subscriber to the server's in-flight job, so phase progress / ETA refreshes without the view being mounted).
 3. **Click pill to return.** Click the `AnalysisPill` → navigates back to `#/books/:bookId/analysing`. The view re-opens its SSE → server's dispatcher attaches it as a fresh subscriber → catch-up replay delivers `lastPhase` + accumulated log lines + `lastEta` + `lastCastUpdate` + any active `chapter-failed` rows. UI hydrates without a flash of re-init.
 4. **Pause.** Click Pause analysis → middleware fires `POST /api/manuscripts/:id/analysis/pause` → server-side analyzer loop's per-call signal aborts → `runMainAnalyzerJob`'s catch emits `{ kind: 'error', code: 'aborted' }` → all attached subscribers receive it → pill flips to the paused variant.

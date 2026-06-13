@@ -3,7 +3,7 @@
    fields) and overwrites cast.json — dropping each character's designed-voice
    link (`overrideTtsVoices`, `voiceId`, `voiceState`, `matchedFrom`, …). The
    2026-06-05 incident: navigating to the analysing URL re-ran analysis and
-   stripped the Qwen voices from 10 Stellarlune characters.
+   stripped the Qwen voices from 10 The Drowning Bell characters.
 
    `mergeAnalysisResultWithExistingCast` overlays the existing cast's
    voice-design fields onto the fresh roster (by id), so re-attribution updates
@@ -22,17 +22,17 @@ describe('mergeAnalysisResultWithExistingCast', () => {
   it('preserves a designed Qwen voice when the character survives re-analysis', () => {
     const existing: C[] = [
       {
-        id: 'maruca',
-        name: 'Maruca',
+        id: 'berrin',
+        name: 'Berrin',
         voiceState: 'generated',
-        overrideTtsVoices: { qwen: { name: 'qwen-maruca' } },
+        overrideTtsVoices: { qwen: { name: 'qwen-berrin' } },
         lines: 58,
       },
     ];
-    const fresh: C[] = [{ id: 'maruca', name: 'Maruca', lines: 61 }]; // re-attributed, no voice
+    const fresh: C[] = [{ id: 'berrin', name: 'Berrin', lines: 61 }]; // re-attributed, no voice
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
     expect(merged).toHaveLength(1);
-    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-maruca' } });
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-berrin' } });
     expect(merged[0].voiceState).toBe('generated');
     expect(merged[0].lines).toBe(61); // fresh attribution wins
   });
@@ -40,36 +40,36 @@ describe('mergeAnalysisResultWithExistingCast', () => {
   it('preserves a reused-voice link (voiceId/voiceState/matchedFrom)', () => {
     const existing: C[] = [
       {
-        id: 'flori',
-        name: 'Flori',
-        voiceId: 'flori',
+        id: 'wisp',
+        name: 'Wisp',
+        voiceId: 'wisp',
         voiceState: 'reused',
-        matchedFrom: { bookId: 'unlocked', characterId: 'flori', confidence: 0.94 },
-        overrideTtsVoices: { qwen: { name: 'qwen-flori' } },
+        matchedFrom: { bookId: 'unlocked', characterId: 'wisp', confidence: 0.94 },
+        overrideTtsVoices: { qwen: { name: 'qwen-wisp' } },
       },
     ];
-    const fresh: C[] = [{ id: 'flori', name: 'Flori' }];
+    const fresh: C[] = [{ id: 'wisp', name: 'Wisp' }];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged[0].voiceId).toBe('flori');
+    expect(merged[0].voiceId).toBe('wisp');
     expect(merged[0].voiceState).toBe('reused');
-    expect(merged[0].matchedFrom).toEqual({ bookId: 'unlocked', characterId: 'flori', confidence: 0.94 });
-    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-flori' } });
+    expect(merged[0].matchedFrom).toEqual({ bookId: 'unlocked', characterId: 'wisp', confidence: 0.94 });
+    expect(merged[0].overrideTtsVoices).toEqual({ qwen: { name: 'qwen-wisp' } });
   });
 
   it('keeps a brand-new character (not in the old cast) as-is', () => {
-    const existing: C[] = [{ id: 'sophie', voiceId: 'sophie' }];
+    const existing: C[] = [{ id: 'wren', voiceId: 'wren' }];
     const fresh: C[] = [
-      { id: 'sophie' },
+      { id: 'wren' },
       { id: 'newbie', name: 'Newbie' }, // first detected this run
     ];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged.map((c) => c.id)).toEqual(['sophie', 'newbie']);
+    expect(merged.map((c) => c.id)).toEqual(['wren', 'newbie']);
     expect(merged[1].voiceId).toBeUndefined();
   });
 
   it('carries forward a voiced/reused character the re-analysis dropped (srv-13)', () => {
     const existing: C[] = [
-      { id: 'sophie', voiceId: 'sophie' },
+      { id: 'wren', voiceId: 'wren' },
       {
         id: 'gone',
         name: 'Gone',
@@ -78,37 +78,37 @@ describe('mergeAnalysisResultWithExistingCast', () => {
         overrideTtsVoices: { qwen: { name: 'qwen-gone' } },
       },
     ];
-    const fresh: C[] = [{ id: 'sophie' }];
+    const fresh: C[] = [{ id: 'wren' }];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged.map((c) => c.id)).toEqual(['sophie', 'gone']);
+    expect(merged.map((c) => c.id)).toEqual(['wren', 'gone']);
     const gone = merged.find((c) => c.id === 'gone')!;
     expect(gone.overrideTtsVoices).toEqual({ qwen: { name: 'qwen-gone' } });
   });
 
   it('does NOT re-add a dropped character that carries no voice/reuse fields', () => {
     const existing: C[] = [
-      { id: 'sophie', voiceId: 'sophie' },
+      { id: 'wren', voiceId: 'wren' },
       { id: 'extra', name: 'Extra', voiceState: 'generated' }, // nothing to rescue
     ];
-    const fresh: C[] = [{ id: 'sophie' }];
+    const fresh: C[] = [{ id: 'wren' }];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged.map((c) => c.id)).toEqual(['sophie']);
+    expect(merged.map((c) => c.id)).toEqual(['wren']);
   });
 
   it('preserves notLinkedTo (analyzer never emits it)', () => {
     const existing: C[] = [
-      { id: 'sophie', notLinkedTo: [{ bookId: 'b1', characterId: 'sophie-teen' }] },
+      { id: 'wren', notLinkedTo: [{ bookId: 'b1', characterId: 'wren-teen' }] },
     ];
-    const fresh: C[] = [{ id: 'sophie', name: 'Sophie' }];
+    const fresh: C[] = [{ id: 'wren', name: 'Wren' }];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'sophie-teen' }]);
+    expect(merged[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'wren-teen' }]);
   });
 
   it('UNIONS aliases (old ∪ fresh) instead of replacing', () => {
-    const existing: C[] = [{ id: 'keefe', aliases: ['Keefe', 'Lord Hunkyhair'] }];
-    const fresh: C[] = [{ id: 'keefe', name: 'Keefe Sencen', aliases: ['Keefe', 'Mr. Sencen'] }];
+    const existing: C[] = [{ id: 'marlow', aliases: ['Marlow', 'Sir Singe'] }];
+    const fresh: C[] = [{ id: 'marlow', name: 'Marlow Halden', aliases: ['Marlow', 'Mr. Halden'] }];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged[0].aliases).toEqual(['Keefe', 'Lord Hunkyhair', 'Mr. Sencen']);
+    expect(merged[0].aliases).toEqual(['Marlow', 'Sir Singe', 'Mr. Halden']);
   });
 
   it('id drift: a relabelled character carries its voice onto the same-name fresh row (no duplicate)', () => {
@@ -165,15 +165,15 @@ describe('seedReuseGuardsFromPriorCast', () => {
   it('seeds notLinkedTo and matchedFrom onto the fresh roster in place', () => {
     const existing: C[] = [
       {
-        id: 'sophie',
-        notLinkedTo: [{ bookId: 'b1', characterId: 'sophie-teen' }],
-        matchedFrom: { bookId: 'b0', characterId: 'sophie', confidence: 0.9 },
+        id: 'wren',
+        notLinkedTo: [{ bookId: 'b1', characterId: 'wren-teen' }],
+        matchedFrom: { bookId: 'b0', characterId: 'wren', confidence: 0.9 },
       },
     ];
-    const fresh: C[] = [{ id: 'sophie', name: 'Sophie' }];
+    const fresh: C[] = [{ id: 'wren', name: 'Wren' }];
     seedReuseGuardsFromPriorCast(existing, fresh);
-    expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'sophie-teen' }]);
-    expect(fresh[0].matchedFrom).toEqual({ bookId: 'b0', characterId: 'sophie', confidence: 0.9 });
+    expect(fresh[0].notLinkedTo).toEqual([{ bookId: 'b1', characterId: 'wren-teen' }]);
+    expect(fresh[0].matchedFrom).toEqual({ bookId: 'b0', characterId: 'wren', confidence: 0.9 });
   });
 
   it('does not overwrite a guard field the fresh roster already carries', () => {
@@ -187,22 +187,22 @@ describe('seedReuseGuardsFromPriorCast', () => {
 describe('voicedSurvivorsDropped', () => {
   it('lists only voiced/reused characters the fresh roster omitted', () => {
     const existing: C[] = [
-      { id: 'sophie', name: 'Sophie', voiceId: 'sophie' }, // survives
-      { id: 'flori', name: 'Flori', voiceState: 'reused', voiceId: 'flori' }, // dropped + voiced
+      { id: 'wren', name: 'Wren', voiceId: 'wren' }, // survives
+      { id: 'wisp', name: 'Wisp', voiceState: 'reused', voiceId: 'wisp' }, // dropped + voiced
       { id: 'extra', name: 'Extra' }, // dropped but no voice
     ];
-    const fresh: C[] = [{ id: 'sophie' }];
-    expect(voicedSurvivorsDropped(existing, fresh)).toEqual([{ id: 'flori', name: 'Flori' }]);
+    const fresh: C[] = [{ id: 'wren' }];
+    expect(voicedSurvivorsDropped(existing, fresh)).toEqual([{ id: 'wisp', name: 'Wisp' }]);
   });
 
   it("lets a fresh reuse-link stand when the old character had no voice", () => {
     // linkSeriesReuseAtAnalysis may have stamped a NEW reuse on the fresh roster
     // for a character that previously had no voice — don't clobber it with the
     // (absent) old value.
-    const existing: C[] = [{ id: 'dex', name: 'Dex' }]; // no voice
-    const fresh: C[] = [{ id: 'dex', name: 'Dex', voiceId: 'dex', voiceState: 'reused' }];
+    const existing: C[] = [{ id: 'hart', name: 'Hart' }]; // no voice
+    const fresh: C[] = [{ id: 'hart', name: 'Hart', voiceId: 'hart', voiceState: 'reused' }];
     const merged = mergeAnalysisResultWithExistingCast(existing, fresh);
-    expect(merged[0].voiceId).toBe('dex');
+    expect(merged[0].voiceId).toBe('hart');
     expect(merged[0].voiceState).toBe('reused');
   });
 

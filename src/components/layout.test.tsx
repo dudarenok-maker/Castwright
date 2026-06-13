@@ -154,8 +154,8 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       state: {
         bookId: 'b1',
         manuscriptId: 'mns_test',
-        title: 'Bonus Keefe Story',
-        author: 'Shannon Messenger',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
         series: 'Standalones',
         seriesPosition: null,
         isStandalone: true,
@@ -235,9 +235,9 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       state: {
         bookId: 'b1',
         manuscriptId: 'mns_test',
-        title: 'Unlocked',
-        author: 'Shannon Messenger',
-        series: 'Keeper of the Lost Cities',
+        title: 'The Floodmark',
+        author: 'Della Renwick',
+        series: 'The Hollow Tide',
         seriesPosition: 8.5,
         isStandalone: false,
         manuscriptFile: 'manuscript.epub',
@@ -272,7 +272,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       type: 'manuscript/uploadComplete',
       payload: {
         manuscriptId: 'mns_test',
-        title: 'Unlocked',
+        title: 'The Floodmark',
         format: 'epub',
         wordCount: 100,
         sourceText: null,
@@ -283,7 +283,7 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       payload: {
         bookId: 'b1',
         manuscriptId: 'mns_test',
-        title: 'Unlocked',
+        title: 'The Floodmark',
         characters: [],
         chapters: [],
         sentences: [],
@@ -323,8 +323,8 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       state: {
         bookId: 'b1',
         manuscriptId: 'mns_test',
-        title: 'Bonus Keefe Story',
-        author: 'Shannon Messenger',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
         series: 'Standalones',
         seriesPosition: null,
         isStandalone: true,
@@ -373,8 +373,8 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
 describe('Layout — drift modal book-title fallback (plan 91)', () => {
   function makeLibraryBook(over: Partial<LibraryBook> & Pick<LibraryBook, 'bookId' | 'title'>): LibraryBook {
     return {
-      author: 'Shannon Messenger',
-      series: 'Keeper of the Lost Cities',
+      author: 'Della Renwick',
+      series: 'The Hollow Tide',
       seriesPosition: 1,
       isStandalone: false,
       status: 'complete',
@@ -412,18 +412,18 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
 
     /* Two-book seed: book-A has BOTH bookMeta.saved AND library.books;
        book-B has ONLY library.books. The new fallback is what surfaces
-       the clean "Exile" title for book-B; before the fix, book-B's
+       the clean "The Ebb" title for book-B; before the fix, book-B's
        header rendered the raw "book-B-slug" string. */
     const library: LibraryResponse = {
       authors: [
         {
-          name: 'Shannon Messenger',
+          name: 'Della Renwick',
           series: [
             {
-              name: 'Keeper of the Lost Cities',
+              name: 'The Hollow Tide',
               books: [
-                makeLibraryBook({ bookId: 'book-A-slug', title: 'Library title — Keeper' }),
-                makeLibraryBook({ bookId: 'book-B-slug', title: 'Exile' }),
+                makeLibraryBook({ bookId: 'book-A-slug', title: 'Library title — The Hollow Tide' }),
+                makeLibraryBook({ bookId: 'book-B-slug', title: 'The Ebb' }),
               ],
             },
           ],
@@ -437,7 +437,7 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
     store.dispatch(
       bookMetaActions.hydrateFromBookState({
         bookId: 'book-A-slug',
-        state: { title: 'Saved title — Keeper', author: 'Shannon Messenger', series: 'KotLC' },
+        state: { title: 'Saved title — The Hollow Tide', author: 'Della Renwick', series: 'the Hollow Tide' },
       }),
     );
 
@@ -468,17 +468,17 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
     );
 
     /* book-A: saved meta wins over library entry. */
-    expect(await findByText('Saved title — Keeper')).toBeTruthy();
+    expect(await findByText('Saved title — The Hollow Tide')).toBeTruthy();
     /* book-B: library title surfaces (the fix). Without it the header
        would render the raw "book-B-slug". */
-    expect(await findByText('Exile')).toBeTruthy();
+    expect(await findByText('The Ebb')).toBeTruthy();
     /* Neither raw bookId leaks into the modal as a title. */
     expect(queryByText('book-A-slug')).toBeNull();
     expect(queryByText('book-B-slug')).toBeNull();
-    /* The library entry's "Library title — Keeper" must NOT win for
+    /* The library entry's "Library title — The Hollow Tide" must NOT win for
        book-A; the saved-meta short-circuit guards against a regression
        that flipped the priority order. */
-    expect(queryByText('Library title — Keeper')).toBeNull();
+    expect(queryByText('Library title — The Hollow Tide')).toBeNull();
   });
 });
 
@@ -495,8 +495,8 @@ describe('Layout — global TTS pills: per-character Qwen (plan 108)', () => {
       state: {
         bookId: 'b1',
         manuscriptId: 'mns_test',
-        title: 'Bonus Keefe Story',
-        author: 'Shannon Messenger',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
         series: 'Standalones',
         seriesPosition: null,
         isStandalone: true,
@@ -616,8 +616,8 @@ describe('Layout — voices re-hydrate as generation renders chapters', () => {
       state: {
         bookId: 'b1',
         manuscriptId: 'mns_test',
-        title: 'Bonus Keefe Story',
-        author: 'Shannon Messenger',
+        title: 'the Coalfall Commission',
+        author: 'Della Renwick',
         series: 'Standalones',
         seriesPosition: null,
         isStandalone: true,

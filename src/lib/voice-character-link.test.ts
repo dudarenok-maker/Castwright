@@ -25,7 +25,7 @@ const makeChar = (id: string, voiceId?: string): Character => ({
 const makeVoice = (id: string, character: string): Voice => ({
   id,
   character,
-  bookTitle: 'Bonus Keefe Story',
+  bookTitle: 'the Coalfall Commission',
   bookId: 'bks',
   attributes: [],
   gradient: ['#A43C6C', '#3C194F'],
@@ -36,34 +36,34 @@ const makeVoice = (id: string, character: string): Voice => ({
 
 describe('findVoiceForCharacter', () => {
   it('matches by character.id when voiceId is unset (fresh-analysis case)', () => {
-    const c = makeChar('keefe');
-    const library = [makeVoice('narrator', 'Narrator'), makeVoice('keefe', 'Keefe')];
-    expect(findVoiceForCharacter(c, library)?.id).toBe('keefe');
+    const c = makeChar('marlow');
+    const library = [makeVoice('narrator', 'Narrator'), makeVoice('marlow', 'Marlow')];
+    expect(findVoiceForCharacter(c, library)?.id).toBe('marlow');
   });
 
   it('prefers an explicit voiceId match over the character.id fallback', () => {
-    const c = makeChar('keefe', 'v_pemberton');
-    const library = [makeVoice('keefe', 'Keefe'), makeVoice('v_pemberton', 'Pemberton')];
+    const c = makeChar('marlow', 'v_pemberton');
+    const library = [makeVoice('marlow', 'Marlow'), makeVoice('v_pemberton', 'Pemberton')];
     expect(findVoiceForCharacter(c, library)?.id).toBe('v_pemberton');
   });
 
   it('falls back to character.id when the explicit voiceId is stale (voice deleted from library)', () => {
-    const c = makeChar('keefe', 'v_deleted');
-    const library = [makeVoice('keefe', 'Keefe')];
-    expect(findVoiceForCharacter(c, library)?.id).toBe('keefe');
+    const c = makeChar('marlow', 'v_deleted');
+    const library = [makeVoice('marlow', 'Marlow')];
+    expect(findVoiceForCharacter(c, library)?.id).toBe('marlow');
   });
 
   it('returns undefined when no match exists either way', () => {
-    const c = makeChar('keefe');
+    const c = makeChar('marlow');
     expect(findVoiceForCharacter(c, [])).toBeUndefined();
   });
 });
 
 describe('findCharacterForVoice', () => {
   it('matches by character.id when no character has voiceId set (fresh-analysis case)', () => {
-    const v = makeVoice('keefe', 'Keefe');
-    const characters = [makeChar('narrator'), makeChar('keefe')];
-    expect(findCharacterForVoice(v, characters)?.id).toBe('keefe');
+    const v = makeVoice('marlow', 'Marlow');
+    const characters = [makeChar('narrator'), makeChar('marlow')];
+    expect(findCharacterForVoice(v, characters)?.id).toBe('marlow');
   });
 
   it('prefers an explicit voiceId match over the character.id collision', () => {
@@ -77,7 +77,7 @@ describe('findCharacterForVoice', () => {
 
   it('returns undefined when no character claims the voice', () => {
     const v = makeVoice('v_orphan', 'Orphan');
-    const characters = [makeChar('keefe')];
+    const characters = [makeChar('marlow')];
     expect(findCharacterForVoice(v, characters)).toBeUndefined();
   });
 });
@@ -92,35 +92,35 @@ describe('pickMergeSurvivor', () => {
   });
 
   it('picks the containing name as the survivor (substring rule, case-insensitive)', () => {
-    const sophie = makeNamedChar('sophie', 'Sophie');
-    const sophieFoster = makeNamedChar('sophie-foster', 'Sophie Foster');
-    const r1 = pickMergeSurvivor(sophie, sophieFoster);
-    expect(r1.target.id).toBe('sophie-foster');
-    expect(r1.source.id).toBe('sophie');
-    const r2 = pickMergeSurvivor(sophieFoster, sophie);
-    expect(r2.target.id).toBe('sophie-foster');
-    expect(r2.source.id).toBe('sophie');
+    const wren = makeNamedChar('wren', 'Wren');
+    const wrenFoster = makeNamedChar('wren-sparrow', 'Wren Sparrow');
+    const r1 = pickMergeSurvivor(wren, wrenFoster);
+    expect(r1.target.id).toBe('wren-sparrow');
+    expect(r1.source.id).toBe('wren');
+    const r2 = pickMergeSurvivor(wrenFoster, wren);
+    expect(r2.target.id).toBe('wren-sparrow');
+    expect(r2.source.id).toBe('wren');
     const r3 = pickMergeSurvivor(
-      makeNamedChar('a', 'SOPHIE'),
-      makeNamedChar('b', 'sophie foster'),
+      makeNamedChar('a', 'WREN'),
+      makeNamedChar('b', 'wren sparrow'),
     );
     expect(r3.target.id).toBe('b');
   });
 
   it('falls back to longer trimmed name when neither name contains the other', () => {
-    const a = makeNamedChar('a', 'Keefe');
-    const b = makeNamedChar('b', 'Marella Redek');
+    const a = makeNamedChar('a', 'Marlow');
+    const b = makeNamedChar('b', 'Edda Redek');
     const r = pickMergeSurvivor(a, b);
     expect(r.target.id).toBe('b');
     expect(r.source.id).toBe('a');
   });
 
   it('keeps the first-selected character as survivor on a length tie (stable tiebreaker)', () => {
-    const a = makeNamedChar('a', 'Alden');
-    const b = makeNamedChar('b', 'Bronte');
-    /* Equal trimmed length (5 vs 6 → not a tie; use real tie) */
-    const a2 = makeNamedChar('a2', 'Alden');
-    const b2 = makeNamedChar('b2', 'Brant');
+    const a = makeNamedChar('a', 'Wren');
+    const b = makeNamedChar('b', 'Maelor');
+    /* a2/b2 are the same trimmed length (6 vs 6) → a real tie */
+    const a2 = makeNamedChar('a2', 'Castor');
+    const b2 = makeNamedChar('b2', 'Maelor');
     const r = pickMergeSurvivor(a2, b2);
     expect(r.target.id).toBe('a2');
     expect(r.source.id).toBe('b2');

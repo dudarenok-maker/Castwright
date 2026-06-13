@@ -1260,7 +1260,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             </button>
             {selectedVoiceIds.length === 2 && badge === 'same' && (
               /* Merge folds the shorter-named duplicate into the longer
-                 one (e.g. Sophie → Sophie Foster). The button is hidden
+                 one (e.g. Wren → Wren Sparrow). The button is hidden
                  unless both sides resolve to the same base voice; same-
                  book + non-bucket guards live in mergeDisabledReason so
                  the user can see WHY we refuse via the tooltip. */

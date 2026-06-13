@@ -309,7 +309,7 @@ function BookCard({
       <div className="p-5">
         {/* Bug 9 — always-visible metadata strip. Cover art alone can't
             convey the series position ("Book 7"), and even when the title
-            is baked into the artwork (Keeper of the Lost Cities) it's
+            is baked into the artwork (The Hollow Tide) it's
             useful to have a labelled fallback for screen readers and any
             book whose cover is title-less. The old gating on
             `!effectiveCoverUrl || coverLoadFailed` (lines 387–392) hid

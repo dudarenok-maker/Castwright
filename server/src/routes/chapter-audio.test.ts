@@ -80,8 +80,8 @@ beforeAll(async () => {
       modelKey: 'xtts_v2',
       synthesizedAt: new Date().toISOString(),
       segments: [
-        { groupIndex: 0, characterId: 'keefe', sentenceIds: [101, 102], startSec: 0, endSec: 6.2 },
-        { groupIndex: 1, characterId: 'elwin', sentenceIds: [103], startSec: 6.2, endSec: 12.5 },
+        { groupIndex: 0, characterId: 'marlow', sentenceIds: [101, 102], startSec: 0, endSec: 6.2 },
+        { groupIndex: 1, characterId: 'oduvan', sentenceIds: [103], startSec: 6.2, endSec: 12.5 },
       ],
     }),
   );
@@ -191,7 +191,7 @@ function writePreviousSegments() {
       modelKey: 'xtts_v2',
       synthesizedAt: new Date().toISOString(),
       segments: [
-        { groupIndex: 0, characterId: 'keefe', sentenceIds: [101], startSec: 0, endSec: 11 },
+        { groupIndex: 0, characterId: 'marlow', sentenceIds: [101], startSec: 0, endSec: 11 },
       ],
     }),
   );

@@ -82,7 +82,7 @@ int _byPositionThenTitle(LibraryBook a, LibraryBook b) {
 
 /// Case-insensitive filter on title, author, OR series; empty query returns
 /// all. (Series matters: filtering "Keeper" should keep every book in the
-/// "Keeper of the Lost Cities" series, not just the one titled that.)
+/// "The Hollow Tide" series, not just the one titled that.)
 List<LibraryBook> filterBooks(List<LibraryBook> books, String query) {
   final q = query.trim().toLowerCase();
   if (q.isEmpty) return books;

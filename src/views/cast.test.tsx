@@ -55,22 +55,22 @@ const narrator: Character = {
   gender: 'male',
   ageRange: 'adult',
   matchedFrom: {
-    bookTitle: 'Bonus Keefe Story',
+    bookTitle: 'the Coalfall Commission',
     bookId: 'b_prev',
     characterId: 'narrator_prev',
     confidence: 0.92,
   },
 };
 
-const sweeney: Character = {
-  id: 'sweeney',
-  name: 'Mr. Sweeney',
+const marrow: Character = {
+  id: 'marrow',
+  name: 'Mr. Marrow',
   role: 'Teacher',
   color: 'mentor',
   lines: 5,
   scenes: 2,
   attributes: ['impatient'],
-  voiceId: 'v_sweeney',
+  voiceId: 'v_marrow',
   voiceState: 'generated',
   gender: 'male',
   ageRange: 'adult',
@@ -81,7 +81,7 @@ const library: Voice[] = [
     id: 'v_narrator_lib',
     character: 'Narrator',
     bookId: 'b_prev',
-    bookTitle: 'Bonus Keefe Story',
+    bookTitle: 'the Coalfall Commission',
     attributes: ['descriptive'],
     gradient: ['#E5B69C', '#C77B5C'],
     usedIn: 2,
@@ -96,8 +96,8 @@ const library: Voice[] = [
     },
   },
   {
-    id: 'v_sweeney',
-    character: 'Mr. Sweeney',
+    id: 'v_marrow',
+    character: 'Mr. Marrow',
     bookId: 'b_current',
     bookTitle: 'The Northern Star',
     attributes: ['impatient'],
@@ -122,7 +122,7 @@ function renderView(opts: { onOpenProfile?: (id: string | null) => void } = {}) 
   return render(
     <Provider store={store}>
       <CastView
-        characters={[narrator, sweeney]}
+        characters={[narrator, marrow]}
         setCharacters={() => {}}
         library={library}
         title="The Northern Star"
@@ -168,7 +168,7 @@ describe('CastView compare-button visibility', () => {
   it('enables Compare when exactly two rows are selected', () => {
     renderView();
     fireEvent.click(checkboxIn(rowFor('Narrator')));
-    fireEvent.click(checkboxIn(rowFor('Mr. Sweeney')));
+    fireEvent.click(checkboxIn(rowFor('Mr. Marrow')));
     const btn = screen.getByRole('button', { name: /^Compare$/ });
     expect(btn).not.toBeDisabled();
   });
@@ -176,7 +176,7 @@ describe('CastView compare-button visibility', () => {
   it('opens the compare modal when Compare is clicked with two rows selected', () => {
     renderView();
     fireEvent.click(checkboxIn(rowFor('Narrator')));
-    fireEvent.click(checkboxIn(rowFor('Mr. Sweeney')));
+    fireEvent.click(checkboxIn(rowFor('Mr. Marrow')));
     fireEvent.click(screen.getByRole('button', { name: /^Compare$/ }));
     /* Modal heading mounts when the modal opens. */
     expect(screen.getByText('Compare cast members')).toBeInTheDocument();
@@ -192,8 +192,8 @@ describe('CastView voice-column presentation', () => {
   it('shows the prebuilt voice profile line for a generated character', () => {
     renderView();
     /* The TtsVoiceLine renders the underlying actor/profile name + a
-       hyphenated description. For Mr. Sweeney that's "Viktor Menelaos". */
-    const row = rowFor('Mr. Sweeney');
+       hyphenated description. For Mr. Marrow that's "Viktor Menelaos". */
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Viktor Menelaos')).toBeInTheDocument();
   });
 
@@ -205,12 +205,12 @@ describe('CastView voice-column presentation', () => {
        coexist now. */
     const row = rowFor('Narrator');
     expect(within(row).getByText('Aaron Dreschner')).toBeInTheDocument();
-    expect(within(row).getByText(/From Bonus Keefe Story · 92%/)).toBeInTheDocument();
+    expect(within(row).getByText(/From the Coalfall Commission · 92%/)).toBeInTheDocument();
   });
 
   it('keeps the match-source line scoped to the reused row only', () => {
     renderView();
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     /* If the match-source line leaked into the generated row we'd see
        it inside the desktop row container here. */
     expect(within(row).queryByText(/From .* · \d+%/)).toBeNull();
@@ -229,25 +229,25 @@ describe('CastView VoiceSwatch sample playback', () => {
   it('routes a swatch click through the auto-load helper', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
     renderView();
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     /* Swatch is the first <button> inside the row — the row's other
        buttons (match-source link, Play 12s pill) come after it. */
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     expect(swatch).toBeTruthy();
     fireEvent.click(swatch);
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('v_sweeney');
+    expect(vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args.voiceId).toBe('v_marrow');
   });
 
   it('also opens the profile drawer on the same swatch click', async () => {
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     /* The row's onClick is the click target for opening the drawer;
        the swatch click bubbles up so a single click does both things. */
-    expect(onOpenProfile).toHaveBeenCalledWith('sweeney');
+    expect(onOpenProfile).toHaveBeenCalledWith('marrow');
     /* Let the auto-load promise resolve so the row's loading→idle
        transition settles inside act, silencing the warning. */
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalled());
@@ -264,7 +264,7 @@ describe('CastView VoiceSwatch sample playback', () => {
         }),
     );
     renderView();
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     /* aria-busy / aria-label flip the moment rowState.loading is true. */
@@ -313,28 +313,28 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     };
   }
 
-  const sweeneyQwen: Character = {
-    ...sweeney,
+  const marrowQwen: Character = {
+    ...marrow,
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-sweeney' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
   };
 
   it('routes a Qwen-pinned row through the Qwen model key + injects the designed voiceId', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
-    renderChars([sweeneyQwen]);
-    const row = rowFor('Mr. Sweeney');
+    renderChars([marrowQwen]);
+    const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
     const args = vi.mocked(playSampleWithAutoLoad).mock.calls[0][0].args;
     expect(args.modelKey).toBe('qwen3-tts-0.6b');
-    expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-sweeney');
+    expect(args.voice.overrideTtsVoices?.qwen?.name).toBe('qwen-marrow');
   });
 
   it('shows an inline error (no API call) for a Qwen-pinned row with no designed voice', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
-    renderChars([{ ...sweeney, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
-    const row = rowFor('Mr. Sweeney');
+    renderChars([{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
+    const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     await waitFor(() => expect(within(row).getByText(/No Qwen voice designed yet/)).toBeTruthy());
@@ -343,8 +343,8 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
 
   it('keeps the project model key + injects no qwen override for a non-Qwen row', async () => {
     vi.mocked(playSampleWithAutoLoad).mockClear();
-    const { store } = renderChars([sweeney]);
-    const row = rowFor('Mr. Sweeney');
+    const { store } = renderChars([marrow]);
+    const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     await waitFor(() => expect(playSampleWithAutoLoad).toHaveBeenCalledTimes(1));
@@ -357,16 +357,16 @@ describe('CastView Qwen bespoke sample playback (plan 108 fix)', () => {
     /* The id is what tells the user *which* designed voice is assigned —
        previously the row only read "Qwen · Designed voice", forcing a
        drawer open to find it. */
-    renderChars([sweeneyQwen]);
-    const row = rowFor('Mr. Sweeney');
+    renderChars([marrowQwen]);
+    const row = rowFor('Mr. Marrow');
     expect(row.textContent).toContain('Qwen');
-    expect(row.textContent).toContain('qwen-sweeney');
+    expect(row.textContent).toContain('qwen-marrow');
     expect(row.textContent).toContain('Designed voice');
   });
 
   it('omits the voiceId segment for a Qwen row with no designed voice', () => {
-    renderChars([{ ...sweeney, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
-    const row = rowFor('Mr. Sweeney');
+    renderChars([{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]);
+    const row = rowFor('Mr. Marrow');
     expect(row.textContent).toContain('No voice designed yet');
     /* No designed id ⇒ no "qwen-…" segment (guards the `name &&` gate). */
     expect(row.textContent).not.toContain('qwen-');
@@ -400,40 +400,40 @@ describe('CastView Qwen status pill (plan 117)', () => {
     );
   }
 
-  const sweeneyQwen: Character = {
-    ...sweeney,
+  const marrowQwen: Character = {
+    ...marrow,
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-sweeney' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-marrow' } },
   };
 
   it('shows "Needs voice" — not a green "Generated" — for a Qwen row with no designed voice', () => {
-    renderWithLibrary([{ ...sweeney, ttsEngine: 'qwen', overrideTtsVoices: undefined }], library);
-    const row = rowFor('Mr. Sweeney');
+    renderWithLibrary([{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }], library);
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Needs voice')).toBeInTheDocument();
     expect(within(row).queryByText('Generated')).toBeNull();
   });
 
   it('shows "Designed" for a designed Qwen voice that has not rendered audio', () => {
-    /* The matched library voice (v_sweeney) carries no `generated` flag. */
-    renderWithLibrary([sweeneyQwen], library);
-    const row = rowFor('Mr. Sweeney');
+    /* The matched library voice (v_marrow) carries no `generated` flag. */
+    renderWithLibrary([marrowQwen], library);
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Designed')).toBeInTheDocument();
     expect(within(row).queryByText('Generated')).toBeNull();
   });
 
   it('shows "Generated" once the matched library voice is flagged generated', () => {
     const generatedLib = library.map((v) =>
-      v.id === 'v_sweeney' ? { ...v, generated: true } : v,
+      v.id === 'v_marrow' ? { ...v, generated: true } : v,
     );
-    renderWithLibrary([sweeneyQwen], generatedLib);
-    const row = rowFor('Mr. Sweeney');
+    renderWithLibrary([marrowQwen], generatedLib);
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Generated')).toBeInTheDocument();
   });
 
   it('shows "Sampled" for a designed Qwen voice whose matched library voice has a cached audition', () => {
-    const sampledLib = library.map((v) => (v.id === 'v_sweeney' ? { ...v, sampled: true } : v));
-    renderWithLibrary([sweeneyQwen], sampledLib);
-    const row = rowFor('Mr. Sweeney');
+    const sampledLib = library.map((v) => (v.id === 'v_marrow' ? { ...v, sampled: true } : v));
+    renderWithLibrary([marrowQwen], sampledLib);
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Sampled')).toBeInTheDocument();
     expect(within(row).queryByText('Designed')).toBeNull();
   });
@@ -447,14 +447,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
       preloadedState: {
         cast: {
           ...castSlice.getInitialState(),
-          renderedFallbackByCharacter: { [sweeney.id]: 'kokoro' },
+          renderedFallbackByCharacter: { [marrow.id]: 'kokoro' },
         },
       },
     });
     render(
       <Provider store={store}>
         <CastView
-          characters={[{ ...sweeney, ttsEngine: 'qwen', overrideTtsVoices: undefined }]}
+          characters={[{ ...marrow, ttsEngine: 'qwen', overrideTtsVoices: undefined }]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -465,7 +465,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         />
       </Provider>,
     );
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Fallback (Kokoro)')).toBeInTheDocument();
     /* The render-time fact outranks the design lifecycle — no "Needs voice". */
     expect(within(row).queryByText('Needs voice')).toBeNull();
@@ -484,7 +484,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     render(
       <Provider store={store}>
         <CastView
-          characters={[sweeneyQwen]}
+          characters={[marrowQwen]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -495,7 +495,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         />
       </Provider>,
     );
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Designed')).toBeInTheDocument();
     expect(within(row).queryByText('Fallback (Kokoro)')).toBeNull();
   });
@@ -520,7 +520,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     render(
       <Provider store={store}>
         <CastView
-          characters={[sweeneyQwen]}
+          characters={[marrowQwen]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -531,23 +531,23 @@ describe('CastView Qwen status pill (plan 117)', () => {
         />
       </Provider>,
     );
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     const swatch = row.querySelector('button[aria-label^="Play sample"]') as HTMLButtonElement;
     fireEvent.click(swatch);
     await waitFor(() =>
-      expect(store.getState().voices.voices.find((v) => v.id === 'v_sweeney')?.sampled).toBe(true),
+      expect(store.getState().voices.voices.find((v) => v.id === 'v_marrow')?.sampled).toBe(true),
     );
   });
 
   it('renders the lifecycle pill and the Reused badge as separate, coexisting markers', () => {
     renderView();
-    /* sweeney: coqui, voiceState 'generated', no match → "Matched" pill only.
+    /* marrow: coqui, voiceState 'generated', no match → "Matched" pill only.
        narrator: coqui voice, voiceState 'reused' + matchedFrom → "Matched"
        lifecycle pill AND a Reused provenance badge (they no longer collapse
        into a single "Reused" pill). */
-    const sweeneyRow = rowFor('Mr. Sweeney');
-    expect(within(sweeneyRow).getByText('Matched')).toBeInTheDocument();
-    expect(within(sweeneyRow).queryByTestId('reused-badge')).toBeNull();
+    const marrowRow = rowFor('Mr. Marrow');
+    expect(within(marrowRow).getByText('Matched')).toBeInTheDocument();
+    expect(within(marrowRow).queryByTestId('reused-badge')).toBeNull();
 
     const narratorRow = rowFor('Narrator');
     expect(within(narratorRow).getByText('Matched')).toBeInTheDocument();
@@ -566,7 +566,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         id: 'v_qwen_narrator',
         character: 'Narrator',
         bookId: 'b_prev',
-        bookTitle: 'Bonus Keefe Story',
+        bookTitle: 'the Coalfall Commission',
         attributes: ['descriptive'],
         gradient: ['#E5B69C', '#C77B5C'],
         usedIn: 2,
@@ -582,14 +582,14 @@ describe('CastView Qwen status pill (plan 117)', () => {
   });
 
   it('renders a Qwen row without throwing when the library is empty (defensive)', () => {
-    renderWithLibrary([sweeneyQwen], []);
-    const row = rowFor('Mr. Sweeney');
+    renderWithLibrary([marrowQwen], []);
+    const row = rowFor('Mr. Marrow');
     /* No matched voice ⇒ generated unknown ⇒ conservative "Designed". */
     expect(within(row).getByText('Designed')).toBeInTheDocument();
   });
 
   it('shows "Needs voice" for a DEFAULT-engine character on a Qwen project (not a stale "Matched")', () => {
-    /* The Lady Alexine bug: a character with no per-character `ttsEngine`
+    /* The Lady Thorne bug: a character with no per-character `ttsEngine`
        still synthesises via the project default (Qwen), so an undesigned one
        must read "Needs voice" — not the preset "Matched" pill its voiceState
        would otherwise produce. The Status column resolves the effective engine
@@ -599,12 +599,12 @@ describe('CastView Qwen status pill (plan 117)', () => {
     reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
   });
     store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b'));
-    /* sweeney: voiceState 'generated', no ttsEngine, no qwen override; empty
+    /* marrow: voiceState 'generated', no ttsEngine, no qwen override; empty
        library ⇒ no matched voice. */
     render(
       <Provider store={store}>
         <CastView
-          characters={[sweeney]}
+          characters={[marrow]}
           setCharacters={() => {}}
           library={[]}
           title="The Northern Star"
@@ -615,7 +615,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         />
       </Provider>,
     );
-    const row = rowFor('Mr. Sweeney');
+    const row = rowFor('Mr. Marrow');
     expect(within(row).getByText('Needs voice')).toBeInTheDocument();
     expect(within(row).queryByText('Matched')).toBeNull();
   });
@@ -687,8 +687,8 @@ describe('CastView responsive (phone 375x667)', () => {
     /* Both subtrees mount — Tailwind's hidden/visible switch is purely
        CSS, so the React DOM has 2x rows for each character. The test
        asserts the multiplicity directly. */
-    const sweeneyHits = screen.getAllByText('Mr. Sweeney');
-    expect(sweeneyHits.length).toBeGreaterThanOrEqual(2);
+    const marrowHits = screen.getAllByText('Mr. Marrow');
+    expect(marrowHits.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -726,7 +726,7 @@ describe('CastView desktop drag-drop is intact', () => {
     const store = configureStore({
     reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
   });
-    let castRef: Character[] = [narrator, sweeney];
+    let castRef: Character[] = [narrator, marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
     });
@@ -757,10 +757,10 @@ describe('CastView desktop drag-drop is intact', () => {
         dataTransfer: { effectAllowed: 'copy', setData: () => {} },
       });
     });
-    const sweeneyRow = rowFor('Mr. Sweeney');
+    const marrowRow = rowFor('Mr. Marrow');
     act(() => {
-      fireEvent.dragOver(sweeneyRow);
-      fireEvent.drop(sweeneyRow);
+      fireEvent.dragOver(marrowRow);
+      fireEvent.drop(marrowRow);
     });
     expect(setCharacters).toHaveBeenCalled();
   });
@@ -796,7 +796,7 @@ describe('CastView wave-4 tap-to-assign', () => {
     const store = configureStore({
     reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
   });
-    let castRef: Character[] = [narrator, sweeney];
+    let castRef: Character[] = [narrator, marrow];
     const setCharacters = vi.fn((next: Character[] | ((prev: Character[]) => Character[])) => {
       castRef = typeof next === 'function' ? next(castRef) : next;
     });
@@ -818,9 +818,9 @@ describe('CastView wave-4 tap-to-assign', () => {
       name: /^Assign Narrator to a character$/,
     });
     fireEvent.click(assignPills[0]);
-    /* Tap Sweeney's row — applyVoiceToCharacter fires through the same
+    /* Tap Marrow's row — applyVoiceToCharacter fires through the same
        code path as handleDrop. setCharacters should be called. */
-    fireEvent.click(rowFor('Mr. Sweeney'));
+    fireEvent.click(rowFor('Mr. Marrow'));
     expect(setCharacters).toHaveBeenCalled();
     /* Banner clears after assignment. */
     expect(screen.queryByTestId('tap-assign-banner')).toBeNull();
@@ -834,7 +834,7 @@ describe('CastView wave-4 tap-to-assign', () => {
     render(
       <Provider store={store}>
         <CastView
-          characters={[narrator, sweeney]}
+          characters={[narrator, marrow]}
           setCharacters={setCharacters}
           library={library}
           title="The Northern Star"
@@ -881,7 +881,7 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
     render(
       <Provider store={store}>
         <CastView
-          characters={[driftedNarrator, sweeney]}
+          characters={[driftedNarrator, marrow]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -931,13 +931,13 @@ describe('compareCastRows — cast table ordering', () => {
   it('pins unknown-male and unknown-female last regardless of line count', () => {
     const out = [
       mk({ id: 'unknown-male', name: 'Unknown male', lines: 9999 }),
-      mk({ id: 'sophie', name: 'Sophie', lines: 10 }),
+      mk({ id: 'wren', name: 'Wren', lines: 10 }),
       mk({ id: 'unknown-female', name: 'Unknown female', lines: 8888 }),
       mk({ id: 'narrator', name: 'Narrator', lines: 5 }),
     ]
       .sort(compareCastRows)
       .map((c) => c.id);
-    expect(out).toEqual(['sophie', 'narrator', 'unknown-male', 'unknown-female']);
+    expect(out).toEqual(['wren', 'narrator', 'unknown-male', 'unknown-female']);
   });
 
   it('orders the two buckets between themselves by line count', () => {
@@ -1017,7 +1017,7 @@ describe('CastView status filter', () => {
      the row pills are (statusFilterKeys → resolveVoiceStatus), so a chip's
      count always equals its filtered row count. */
 
-  /* Default project engine is kokoro (preset), so narrator + sweeney both
+  /* Default project engine is kokoro (preset), so narrator + marrow both
      resolve to "Matched"; narrator additionally carries the Reused badge. */
   const ghost: Character = {
     id: 'ghost',
@@ -1046,7 +1046,7 @@ describe('CastView status filter', () => {
     return render(
       <Provider store={store}>
         <CastView
-          characters={[narrator, sweeney, ghost, blank]}
+          characters={[narrator, marrow, ghost, blank]}
           setCharacters={() => {}}
           library={library}
           title="The Northern Star"
@@ -1073,7 +1073,7 @@ describe('CastView status filter', () => {
   it('renders one chip per present status with its live count', () => {
     renderFilterView();
     expect(chip(/^Needs voice/).textContent).toContain('1');
-    expect(chip(/^Matched/).textContent).toContain('2'); // narrator + sweeney
+    expect(chip(/^Matched/).textContent).toContain('2'); // narrator + marrow
     expect(chip(/^Unset/).textContent).toContain('1');
     expect(chip(/^Reused/).textContent).toContain('1'); // narrator only
   });
@@ -1083,7 +1083,7 @@ describe('CastView status filter', () => {
     fireEvent.click(chip(/^Needs voice/));
     expect(isPresent('Ghost')).toBe(true);
     expect(isPresent('Narrator')).toBe(false);
-    expect(isPresent('Mr. Sweeney')).toBe(false);
+    expect(isPresent('Mr. Marrow')).toBe(false);
     expect(isPresent('Blank')).toBe(false);
   });
 
@@ -1093,7 +1093,7 @@ describe('CastView status filter', () => {
     fireEvent.click(chip(/^Matched/));
     expect(isPresent('Ghost')).toBe(true); // Needs voice
     expect(isPresent('Narrator')).toBe(true); // Matched
-    expect(isPresent('Mr. Sweeney')).toBe(true); // Matched
+    expect(isPresent('Mr. Marrow')).toBe(true); // Matched
     expect(isPresent('Blank')).toBe(false); // Unset — excluded
   });
 
@@ -1102,7 +1102,7 @@ describe('CastView status filter', () => {
     fireEvent.click(chip(/^Reused/));
     expect(isPresent('Narrator')).toBe(true);
     expect(isPresent('Ghost')).toBe(false);
-    expect(isPresent('Mr. Sweeney')).toBe(false);
+    expect(isPresent('Mr. Marrow')).toBe(false);
     expect(isPresent('Blank')).toBe(false);
   });
 
@@ -1113,7 +1113,7 @@ describe('CastView status filter', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
     expect(isPresent('Ghost')).toBe(true);
     expect(isPresent('Narrator')).toBe(true);
-    expect(isPresent('Mr. Sweeney')).toBe(true);
+    expect(isPresent('Mr. Marrow')).toBe(true);
     expect(isPresent('Blank')).toBe(true);
     /* Clear disappears once no filter is active. */
     expect(screen.queryByRole('button', { name: 'Clear' })).toBeNull();
@@ -1198,7 +1198,7 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
     return render(
       <Provider store={store}>
         <CastView
-          characters={[narrator, sweeney]}
+          characters={[narrator, marrow]}
           setCharacters={() => {}}
           library={library}
           title="Северный путь"
@@ -1256,14 +1256,14 @@ describe('CastView — non-English Qwen banner + auto-load (fe-16)', () => {
 
 describe('CastView — Design full cast button', () => {
   const qwenNeedsVoice: Character = {
-    ...sweeney,
+    ...marrow,
     ttsEngine: 'qwen',
     overrideTtsVoices: undefined,
   };
   const qwenDesigned: Character = {
-    ...sweeney,
+    ...marrow,
     ttsEngine: 'qwen',
-    overrideTtsVoices: { qwen: { name: 'qwen-v_sweeney' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-v_marrow' } },
   };
 
   type DesignActive = {
@@ -1335,9 +1335,9 @@ describe('CastView — Design full cast button', () => {
   });
 
   it('is hidden for a genuinely non-Qwen cast', () => {
-    /* Base Sweeney: no per-character engine + a Coqui library voice ⇒ not a
+    /* Base Marrow: no per-character engine + a Coqui library voice ⇒ not a
        Qwen book on the default Kokoro global, so the button stays hidden. */
-    setup({ chars: [{ ...sweeney, ttsEngine: undefined, overrideTtsVoices: undefined }] });
+    setup({ chars: [{ ...marrow, ttsEngine: undefined, overrideTtsVoices: undefined }] });
     expect(screen.queryByTestId('design-full-cast')).toBeNull();
   });
 
@@ -1370,7 +1370,7 @@ describe('CastView — Design full cast button', () => {
       | { payload: { bookId: string; characterIds: string[]; modelKey: string; scope: string } }
       | undefined;
     expect(a?.payload.bookId).toBe('b1');
-    expect(a?.payload.characterIds).toEqual(['sweeney']);
+    expect(a?.payload.characterIds).toEqual(['marrow']);
     expect(a?.payload.modelKey).toMatch(/qwen/);
     expect(a?.payload.scope).toBe('bases');
     /* Picker closes after picking */
@@ -1378,20 +1378,20 @@ describe('CastView — Design full cast button', () => {
   });
 
   it('opens the scope picker and dispatches a variants-scope design', () => {
-    /* sophie: has a base voice + an in-use emotion missing a variant */
-    const sophie: Character = {
-      id: 'sophie',
-      name: 'Sophie',
+    /* wren: has a base voice + an in-use emotion missing a variant */
+    const wren: Character = {
+      id: 'wren',
+      name: 'Wren',
       role: 'Hero',
       color: 'mentor',
       lines: 20,
       scenes: 5,
       attributes: [],
       ttsEngine: 'qwen',
-      overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: {} } },
+      overrideTtsVoices: { qwen: { name: 'qwen-wren', variants: {} } },
     };
     const variantSents: Sentence[] = [
-      { id: 10, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
+      { id: 10, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
     ];
     const actions2: Array<{ type: string; payload?: unknown }> = [];
     const recorder2 =
@@ -1408,7 +1408,7 @@ describe('CastView — Design full cast button', () => {
     render(
       <Provider store={store2}>
         <CastView
-          characters={[sophie]}
+          characters={[wren]}
           setCharacters={() => {}}
           library={library}
           sentences={variantSents}
@@ -1437,7 +1437,7 @@ describe('CastView — Design full cast button', () => {
     expect(a?.payload.bookId).toBe('b2');
     expect(a?.payload.scope).toBe('variants');
     expect(a?.payload.characterIds).toEqual([]);
-    expect(a?.payload.variantTasks).toEqual([{ characterId: 'sophie', emotions: ['angry'] }]);
+    expect(a?.payload.variantTasks).toEqual([{ characterId: 'wren', emotions: ['angry'] }]);
   });
 
   it('shows a Cancel control while a run for this book is active', () => {
@@ -1450,7 +1450,7 @@ describe('CastView — Design full cast button', () => {
         total: 3,
         done: 1,
         skipped: 0,
-        currentName: 'Mr. Sweeney',
+        currentName: 'Mr. Marrow',
         state: 'running',
         lastTickAt: 1,
         failures: [],
@@ -1611,9 +1611,9 @@ describe('CastView — variant glyph strip in the Status column', () => {
      text hint.  The strip renders inline below the lifecycle pill; the old
      VariantsBadge count and missing-variants-hint span must not appear. */
 
-  const sophie: Character = {
-    id: 'sophie',
-    name: 'Sophie',
+  const wren: Character = {
+    id: 'wren',
+    name: 'Wren',
     role: 'Hero',
     color: 'mentor',
     lines: 20,
@@ -1621,12 +1621,12 @@ describe('CastView — variant glyph strip in the Status column', () => {
     attributes: [],
     ttsEngine: 'qwen',
     overrideTtsVoices: {
-      qwen: { name: 'qwen-sophie', variants: { angry: { name: 'qwen-sophie-angry' } } },
+      qwen: { name: 'qwen-wren', variants: { angry: { name: 'qwen-wren-angry' } } },
     },
   };
-  const sophieSentences: Sentence[] = [
-    { id: 1, chapterId: 1, text: 'No!', characterId: 'sophie', emotion: 'angry' },
-    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'sophie', emotion: 'excited' },
+  const wrenSentences: Sentence[] = [
+    { id: 1, chapterId: 1, text: 'No!', characterId: 'wren', emotion: 'angry' },
+    { id: 2, chapterId: 1, text: 'Amazing!', characterId: 'wren', emotion: 'excited' },
   ];
 
   function renderGlyphTest() {
@@ -1636,10 +1636,10 @@ describe('CastView — variant glyph strip in the Status column', () => {
     return render(
       <Provider store={store}>
         <CastView
-          characters={[sophie]}
+          characters={[wren]}
           setCharacters={() => {}}
           library={library}
-          sentences={sophieSentences}
+          sentences={wrenSentences}
           title="The Northern Star"
           onOpenProfile={() => {}}
           onShowMatchDetail={() => {}}
@@ -1654,7 +1654,7 @@ describe('CastView — variant glyph strip in the Status column', () => {
     renderGlyphTest();
     /* The view renders both a desktop grid row and a mobile card row — scope
        to the desktop grid row (same strategy used by other CastView tests). */
-    const row = rowFor('Sophie');
+    const row = rowFor('Wren');
     /* angry is designed → state=designed; excited is in-use but not in variants → state=needed */
     expect(within(row).getByTestId('variant-glyph-angry')).toHaveAttribute('data-state', 'designed');
     expect(within(row).getByTestId('variant-glyph-excited')).toHaveAttribute('data-state', 'needed');

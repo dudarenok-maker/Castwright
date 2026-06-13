@@ -11,7 +11,7 @@
      during a sidecar restart.
    - gemini: all 30 prebuilt voices from GEMINI_VOICE_DESCRIPTIONS (the
      full published catalog, not just the 16 currently bucketed by
-     GEMINI_PROFILE_VOICES). The user might want to override Fitz to an
+     GEMINI_PROFILE_VOICES). The user might want to override Brann to an
      unbucketed voice like Fenrir.
    - kokoro: live English-subset voice manifest from the sidecar's
      `GET /speakers` `kokoro` key (filtered to af_/am_/bf_/bm_ at the

@@ -161,8 +161,8 @@ def test_speakers_lists_designed_voices(fake_qwen_runtime) -> None:
     client = TestClient(main.app)
     assert client.get("/speakers").json().get("qwen") == []
 
-    engine.design_voice("biana", "a bright, confident teenage girl", "English", None)
-    assert "biana" in client.get("/speakers").json()["qwen"]
+    engine.design_voice("maerin", "a bright, confident teenage girl", "English", None)
+    assert "maerin" in client.get("/speakers").json()["qwen"]
 
 
 # ── design -> clone -> cache -> reuse contract ───────────────────────────
@@ -170,15 +170,15 @@ def test_speakers_lists_designed_voices(fake_qwen_runtime) -> None:
 def test_design_voice_caches_embedding_and_manifest(fake_qwen_runtime) -> None:
     engine = fake_qwen_runtime["engine"]
     voices_dir = fake_qwen_runtime["dir"]
-    result = engine.design_voice("dex", "a witty teenage boy, mid-paced", "English", None)
+    result = engine.design_voice("hart", "a witty teenage boy, mid-paced", "English", None)
 
     # Cached embedding + manifest written, keyed by voiceId.
-    assert (voices_dir / "dex.pt").is_file()
-    assert (voices_dir / "dex.json").is_file()
+    assert (voices_dir / "hart.pt").is_file()
+    assert (voices_dir / "hart.json").is_file()
     import json
 
-    manifest = json.loads((voices_dir / "dex.json").read_text(encoding="utf-8"))
-    assert manifest["voiceId"] == "dex"
+    manifest = json.loads((voices_dir / "hart.json").read_text(encoding="utf-8"))
+    assert manifest["voiceId"] == "hart"
     assert manifest["instruct"] == "a witty teenage boy, mid-paced"
     assert manifest["language"] == "English"
     # Audition preview is real PCM bytes.
@@ -198,7 +198,7 @@ def test_design_voice_references_short_text_but_auditions_supplied_line(fake_qwe
     voices_dir = fake_qwen_runtime["dir"]
     line = "We have to tell the Council before the others wake."
     assert engine.CALIBRATION_TEXT not in line  # guard the test's own premise
-    engine.design_voice("biana", "a poised teenage girl", "English", line)
+    engine.design_voice("maerin", "a poised teenage girl", "English", line)
 
     # Reference clip + clone prompt run on the SHORT pangram (cheap on the 1.7B).
     assert engine._design.design_calls[-1][0] == engine.CALIBRATION_TEXT
@@ -208,7 +208,7 @@ def test_design_voice_references_short_text_but_auditions_supplied_line(fake_qwe
 
     import json
 
-    manifest = json.loads((voices_dir / "biana.json").read_text(encoding="utf-8"))
+    manifest = json.loads((voices_dir / "maerin.json").read_text(encoding="utf-8"))
     # refText records the ACTUAL reference text (the pangram now), not the quote.
     assert manifest["refText"] == engine.CALIBRATION_TEXT
 
@@ -216,7 +216,7 @@ def test_design_voice_references_short_text_but_auditions_supplied_line(fake_qwe
 def test_design_voice_falls_back_to_calibration_pangram_when_unset(fake_qwen_runtime) -> None:
     """No calibrationText → the audition speaks the built-in CALIBRATION_TEXT."""
     engine = fake_qwen_runtime["engine"]
-    engine.design_voice("dex", "a witty teenage boy", "English", None)
+    engine.design_voice("hart", "a witty teenage boy", "English", None)
     assert engine._design.design_calls[-1][0] == engine.CALIBRATION_TEXT
     assert engine._base.clone_calls[-1][0] == [engine.CALIBRATION_TEXT]
 
@@ -249,7 +249,7 @@ def test_design_voice_survives_design_model_freed_in_the_gap(
     monkeypatch.setattr(engine, "_ensure_base_loaded", racing_ensure_base)
 
     # Must NOT raise AttributeError: 'NoneType' … generate_voice_design.
-    result = engine.design_voice("dex", "a witty teenage boy", "English", None)
+    result = engine.design_voice("hart", "a witty teenage boy", "English", None)
 
     assert isinstance(result.pcm, bytes) and len(result.pcm) > 0
     assert result.sample_rate == 24000
@@ -278,8 +278,8 @@ def test_watchdog_does_not_free_design_while_in_flight(fake_qwen_runtime) -> Non
 
 def test_synthesize_reuses_cached_voice(fake_qwen_runtime) -> None:
     engine = fake_qwen_runtime["engine"]
-    engine.design_voice("biana", "a bright, confident teenage girl", "English", None)
-    res = engine.synthesize("qwen3-tts-0.6b", "biana", "Hello there, this is a test.")
+    engine.design_voice("maerin", "a bright, confident teenage girl", "English", None)
+    res = engine.synthesize("qwen3-tts-0.6b", "maerin", "Hello there, this is a test.")
     assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
     # The cached prompt was passed to generate_voice_clone (reuse, not re-design).
     assert engine._base is not None
@@ -324,30 +324,30 @@ def test_synthesize_caches_prompt_across_calls(fake_qwen_runtime, monkeypatch) -
     subsequent synths of the same voice hit the in-memory cache. Without the
     cache this was a torch.load per sentence (hundreds per book)."""
     engine = fake_qwen_runtime["engine"]
-    engine.design_voice("biana", "a bright, confident teenage girl", "English", None)
+    engine.design_voice("maerin", "a bright, confident teenage girl", "English", None)
     calls = _count_torch_loads(monkeypatch)
 
-    engine.synthesize("qwen3-tts-0.6b", "biana", "First sentence.")
-    engine.synthesize("qwen3-tts-0.6b", "biana", "Second sentence.")
-    engine.synthesize("qwen3-tts-0.6b", "biana", "Third sentence.")
+    engine.synthesize("qwen3-tts-0.6b", "maerin", "First sentence.")
+    engine.synthesize("qwen3-tts-0.6b", "maerin", "Second sentence.")
+    engine.synthesize("qwen3-tts-0.6b", "maerin", "Third sentence.")
 
     assert calls["load"] == 1  # one miss, two hits
-    assert "biana" in engine._prompt_cache
+    assert "maerin" in engine._prompt_cache
 
 
 def test_redesign_evicts_cached_prompt(fake_qwen_runtime, monkeypatch) -> None:
     """Re-designing a voiceId must drop its cached embedding so the next
     synth reloads the freshly-written .pt — never serves the stale one."""
     engine = fake_qwen_runtime["engine"]
-    engine.design_voice("dex", "a witty teenage boy", "English", None)
-    engine.synthesize("qwen3-tts-0.6b", "dex", "One.")
-    assert "dex" in engine._prompt_cache  # warmed by the miss
+    engine.design_voice("hart", "a witty teenage boy", "English", None)
+    engine.synthesize("qwen3-tts-0.6b", "hart", "One.")
+    assert "hart" in engine._prompt_cache  # warmed by the miss
 
-    engine.design_voice("dex", "now a gruff old sailor", "English", None)
-    assert "dex" not in engine._prompt_cache  # evicted on re-design
+    engine.design_voice("hart", "now a gruff old sailor", "English", None)
+    assert "hart" not in engine._prompt_cache  # evicted on re-design
 
     calls = _count_torch_loads(monkeypatch)
-    engine.synthesize("qwen3-tts-0.6b", "dex", "Two.")
+    engine.synthesize("qwen3-tts-0.6b", "hart", "Two.")
     assert calls["load"] == 1  # reloaded from disk, not served stale
 
 
@@ -355,8 +355,8 @@ def test_unload_clears_prompt_cache(fake_qwen_runtime) -> None:
     """unload() drops cached prompt tensors too — they hold GPU memory that
     would otherwise survive empty_cache()."""
     engine = fake_qwen_runtime["engine"]
-    engine.design_voice("sophie", "a curious teenage girl", "English", None)
-    engine.synthesize("qwen3-tts-0.6b", "sophie", "Hi.")
+    engine.design_voice("wren", "a curious teenage girl", "English", None)
+    engine.synthesize("qwen3-tts-0.6b", "wren", "Hi.")
     assert engine._prompt_cache
     engine.unload()
     assert engine._prompt_cache == {}
@@ -371,7 +371,7 @@ def test_unload_clears_prompt_cache(fake_qwen_runtime) -> None:
 
 def test_idle_watchdog_frees_only_design_model(fake_qwen_runtime) -> None:
     engine = fake_qwen_runtime["engine"]
-    engine.design_voice("sophie", "a curious teenage girl", "English", None)
+    engine.design_voice("wren", "a curious teenage girl", "English", None)
     assert engine._design is not None  # warm immediately after designing
     assert engine._base is not None
 
@@ -397,10 +397,10 @@ def test_synthesize_frees_resident_design_model(fake_qwen_runtime) -> None:
     freed so it can't squeeze generation VRAM, while Base stays and audio still
     returns."""
     engine = fake_qwen_runtime["engine"]
-    engine.design_voice("sophie", "a curious teenage girl", "English", None)
+    engine.design_voice("wren", "a curious teenage girl", "English", None)
     assert engine._design is not None
 
-    res = engine.synthesize("qwen3-tts-0.6b", "sophie", "Hello there.")
+    res = engine.synthesize("qwen3-tts-0.6b", "wren", "Hello there.")
     assert engine._design is None      # freed on the first real synth
     assert engine._base is not None
     assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
@@ -421,9 +421,9 @@ def test_consecutive_designs_reuse_warm_model(fake_qwen_runtime, monkeypatch) ->
 
     monkeypatch.setattr(engine, "_load_qwen_model", counting_load)
 
-    engine.design_voice("sophie", "a curious teenage girl", "English", None)
-    engine.design_voice("sandor", "a gravelly older man", "English", None)
-    engine.design_voice("dex", "a bright teenage boy", "English", None)
+    engine.design_voice("wren", "a curious teenage girl", "English", None)
+    engine.design_voice("garrow", "a gravelly older man", "English", None)
+    engine.design_voice("hart", "a bright teenage boy", "English", None)
 
     assert design_loads["n"] == 1      # one load, reused across all three
     assert engine._design is not None  # still warm (no synth, within TTL)
@@ -580,14 +580,14 @@ def test_designed_voice_survives_restart_at_env_dir(monkeypatch, tmp_path) -> No
     # First boot: design + cache a voice.
     engine = main.QwenEngine()
     assert engine._voices_dir == str(voices_dir)
-    engine.design_voice("keefe", "a charming, mischievous teenage boy", "English", None)
-    assert (voices_dir / "keefe.pt").is_file()
+    engine.design_voice("marlow", "a charming, mischievous teenage boy", "English", None)
+    assert (voices_dir / "marlow.pt").is_file()
 
     # Simulate a restart: a fresh engine (resident model gone) reading the
     # same env-pointed dir. Synthesis must find the cached embedding.
     restarted = main.QwenEngine()
     assert restarted._base is None
-    res = restarted.synthesize("qwen3-tts-0.6b", "keefe", "Hi there.")
+    res = restarted.synthesize("qwen3-tts-0.6b", "marlow", "Hi there.")
     assert isinstance(res.pcm, bytes) and len(res.pcm) > 0
     assert restarted._base is not None  # loaded on demand, found the .pt
 
@@ -677,7 +677,7 @@ def test_design_voice_route_returns_preview_pcm(fake_qwen_runtime) -> None:
     client = TestClient(main.app)
     resp = client.post(
         "/qwen/design-voice",
-        json={"voiceId": "sophie", "instruct": "a curious, earnest teenage girl"},
+        json={"voiceId": "wren", "instruct": "a curious, earnest teenage girl"},
     )
     assert resp.status_code == 200
     assert resp.headers["X-Sample-Rate"] == "24000"
@@ -715,11 +715,11 @@ def test_synthesize_route_routes_qwen(fake_qwen_runtime) -> None:
     client = TestClient(main.app)
     client.post(
         "/qwen/design-voice",
-        json={"voiceId": "fitz", "instruct": "a calm, kind teenage boy"},
+        json={"voiceId": "brann", "instruct": "a calm, kind teenage boy"},
     )
     resp = client.post(
         "/synthesize",
-        json={"engine": "qwen", "model": "qwen3-tts-0.6b", "voice": "fitz", "text": "Hi."},
+        json={"engine": "qwen", "model": "qwen3-tts-0.6b", "voice": "brann", "text": "Hi."},
     )
     assert resp.status_code == 200
     assert resp.headers["X-Sample-Rate"] == "24000"

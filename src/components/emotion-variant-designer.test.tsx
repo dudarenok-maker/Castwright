@@ -24,23 +24,23 @@ function makeStore(characters: any[]) {
 beforeEach(() => {
   designQwenVoice.mockReset();
   designQwenVoice.mockResolvedValue({
-    voiceId: 'qwen-sophie__angry',
-    previewUrl: '/audio/voices/sophie__angry.mp3',
+    voiceId: 'qwen-wren__angry',
+    previewUrl: '/audio/voices/wren__angry.mp3',
   });
   removeQwenVariant.mockReset();
   removeQwenVariant.mockResolvedValue(undefined);
 });
 
 describe('fs-25 — EmotionVariantDesigner', () => {
-  const baseChar = { id: 'sophie', name: 'Sophie', overrideTtsVoices: { qwen: { name: 'qwen-sophie' } } };
+  const baseChar = { id: 'wren', name: 'Wren', overrideTtsVoices: { qwen: { name: 'qwen-wren' } } };
 
   it('is gated: with no base voice it shows the "design the main voice first" hint', () => {
-    const store = makeStore([{ id: 'sophie', name: 'Sophie' }]);
+    const store = makeStore([{ id: 'wren', name: 'Wren' }]);
     render(
       <Provider store={store}>
         <EmotionVariantDesigner
           bookId="b1"
-          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
+          character={{ id: 'wren', name: 'Wren', attributes: [] } as never}
           sampleVoiceId="v1"
           modelKey="qwen3-tts-0.6b"
           baseDesigned={false}
@@ -58,7 +58,7 @@ describe('fs-25 — EmotionVariantDesigner', () => {
       <Provider store={store}>
         <EmotionVariantDesigner
           bookId="b1"
-          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
+          character={{ id: 'wren', name: 'Wren', attributes: [] } as never}
           sampleVoiceId="v1"
           modelKey="qwen3-tts-0.6b"
           baseDesigned
@@ -70,10 +70,10 @@ describe('fs-25 — EmotionVariantDesigner', () => {
     await waitFor(() =>
       expect(
         (store.getState().cast.characters[0] as unknown as typeof baseChar).overrideTtsVoices.qwen,
-      ).toMatchObject({ variants: { angry: { name: 'qwen-sophie__angry' } } }),
+      ).toMatchObject({ variants: { angry: { name: 'qwen-wren__angry' } } }),
     );
     // the api was called with the emotion + a variant-scoped sample id.
-    expect(designQwenVoice).toHaveBeenCalledWith('b1', 'sophie', {
+    expect(designQwenVoice).toHaveBeenCalledWith('b1', 'wren', {
       sampleVoiceId: 'v1__angry',
       modelKey: 'qwen3-tts-0.6b',
       emotion: 'angry',
@@ -89,11 +89,11 @@ describe('fs-25 — EmotionVariantDesigner', () => {
       <Provider store={store}>
         <EmotionVariantDesigner
           bookId="b1"
-          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
+          character={{ id: 'wren', name: 'Wren', attributes: [] } as never}
           sampleVoiceId="v1"
           modelKey="qwen3-tts-0.6b"
           baseDesigned
-          variants={{ whisper: { name: 'qwen-sophie__whisper' } }}
+          variants={{ whisper: { name: 'qwen-wren__whisper' } }}
         />
       </Provider>,
     );
@@ -105,23 +105,23 @@ describe('fs-25 — EmotionVariantDesigner', () => {
     const store = makeStore([
       {
         ...baseChar,
-        overrideTtsVoices: { qwen: { name: 'qwen-sophie', variants: { whisper: { name: 'qwen-sophie__whisper' } } } },
+        overrideTtsVoices: { qwen: { name: 'qwen-wren', variants: { whisper: { name: 'qwen-wren__whisper' } } } },
       },
     ]);
     render(
       <Provider store={store}>
         <EmotionVariantDesigner
           bookId="b1"
-          character={{ id: 'sophie', name: 'Sophie', attributes: [] } as never}
+          character={{ id: 'wren', name: 'Wren', attributes: [] } as never}
           sampleVoiceId="v1"
           modelKey="qwen3-tts-0.6b"
           baseDesigned
-          variants={{ whisper: { name: 'qwen-sophie__whisper' } }}
+          variants={{ whisper: { name: 'qwen-wren__whisper' } }}
         />
       </Provider>,
     );
     fireEvent.click(screen.getByLabelText('Remove the Whisper variant'));
-    expect(removeQwenVariant).toHaveBeenCalledWith('b1', 'sophie', 'whisper');
+    expect(removeQwenVariant).toHaveBeenCalledWith('b1', 'wren', 'whisper');
     await waitFor(() => {
       const qwen = (store.getState().cast.characters[0] as unknown as typeof baseChar)
         .overrideTtsVoices.qwen as { variants?: unknown };

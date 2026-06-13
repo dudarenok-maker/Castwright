@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** Spotting a roster duplicate like "Sophie" + "Sophie Foster" under the same base voice (`af_aoede`) used to require opening one character's profile drawer, scrolling its merge picker, and selecting the other by name — fine when you know the duplicate exists, terrible for discovery. The Voices view is the only screen that surfaces same-base-voice duplicates side-by-side; promoting Merge onto its selection pill makes the duplicate visually obvious AND collapse-able in two clicks.
+- **User:** Spotting a roster duplicate like "Wren" + "Wren Sparrow" under the same base voice (`af_aoede`) used to require opening one character's profile drawer, scrolling its merge picker, and selecting the other by name — fine when you know the duplicate exists, terrible for discovery. The Voices view is the only screen that surfaces same-base-voice duplicates side-by-side; promoting Merge onto its selection pill makes the duplicate visually obvious AND collapse-able in two clicks.
 - **Technical:** Zero new transport — `api.mergeCharacters` + `castActions.applyMerge` already exist (`src/lib/api.ts:209`, `src/store/cast-slice.ts:100`) and the OpenAPI `Character.aliases[]` schema explicitly anticipates this use case ("Populated when the user merges a duplicate roster entry"). One new pure helper (`pickMergeSurvivor`) and one button.
 - **Architectural:** Establishes the Voices pill as a multi-action surface (Compare + Merge + Clear) without breaking the Compare contract from plan 22a / plan 96. Tighter gating (same book, same base voice, non-bucket / non-narrator) than Compare — cross-book merges have no server route and would silently corrupt; same-base-voice is what makes the duplicate inference safe.
 
@@ -49,16 +49,16 @@ owner: null
 Run in mock mode (`VITE_USE_MOCKS=true`) at `#/voices` for the global path, or `#/books/<id>/library` for the per-book path.
 
 1. Open `#/voices`. Find the `af_aoede` (Kokoro) or `Charon` (Gemini) family with two characters sharing one base voice (mock canned data may need a quick edit to seed a duplicate pair).
-2. Click the radio circles on `Sophie` + `Sophie Foster` (same `bookId`). Pill renders `Selected · 2 · same base voice ✓ · Compare · Merge into Sophie Foster · Clear`.
-3. Click `Merge into Sophie Foster`. Toast appears: `Merged "Sophie" into "Sophie Foster".`. Pill collapses. The standalone `Sophie` card disappears from the family. Open Sophie Foster's profile drawer (click the card) → `Sophie` shows as an alias chip in the drawer's alias section.
+2. Click the radio circles on `Wren` + `Wren Sparrow` (same `bookId`). Pill renders `Selected · 2 · same base voice ✓ · Compare · Merge into Wren Sparrow · Clear`.
+3. Click `Merge into Wren Sparrow`. Toast appears: `Merged "Wren" into "Wren Sparrow".`. Pill collapses. The standalone `Wren` card disappears from the family. Open Wren Sparrow's profile drawer (click the card) → `Wren` shows as an alias chip in the drawer's alias section.
 4. Toggle to dark mode (the existing theme toggle in the top bar). Re-select two duplicate cards. Confirm the `Selected` label, the `2` count badge, the Compare button enabled fill, the Merge button enabled fill, and the `Clear` text all read at full contrast against the dark pill backdrop — no dark-on-dark wash.
-5. Cross-book pair: select one Sophie from book A + one Sophie from book B (same base voice). Pill shows `same base voice ✓` and Compare stays enabled (plan 96), but `Merge into ...` button is **hidden**.
-6. Different-base-voice pair: select Sophie (Charon) + Elwin (Kore). Pill shows `different base voices`. Merge button **hidden**. Compare stays enabled across families.
-7. Narrator-included pair: select Narrator + Sophie Foster, both same base voice. Pill shows `same base voice ✓`, Compare enabled, Merge button **hidden** (narrator is in `UNMERGEABLE_IDS`).
+5. Cross-book pair: select one Wren from book A + one Wren from book B (same base voice). Pill shows `same base voice ✓` and Compare stays enabled (plan 96), but `Merge into ...` button is **hidden**.
+6. Different-base-voice pair: select Wren (Charon) + Oduvan (Kore). Pill shows `different base voices`. Merge button **hidden**. Compare stays enabled across families.
+7. Narrator-included pair: select Narrator + Wren Sparrow, both same base voice. Pill shows `same base voice ✓`, Compare enabled, Merge button **hidden** (narrator is in `UNMERGEABLE_IDS`).
 
 ## Out of scope
 
-- Renaming the survivor to a third user-typed name ("Sophie Foster (Lost Cities)"). Use the existing profile-drawer flow after the merge.
+- Renaming the survivor to a third user-typed name ("Wren Sparrow (Lost Cities)"). Use the existing profile-drawer flow after the merge.
 - Three-way merge in one click. Iterate two at a time — the pill already enforces 2× selection.
 - Undo. The existing profile-drawer merge (`src/components/layout.tsx:1071-1072`) has no undo either; introducing one would need server work and is out of scope.
 - E2E spec. The Compare flow on this same pill ships without one; both should land together as a follow-up once `e2e/voices/` has a baseline file.

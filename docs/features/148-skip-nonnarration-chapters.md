@@ -6,7 +6,7 @@ status: active
 
 ## Problem
 
-On the 2026-05-31 KOTLC full-book Qwen run, the generation queue **stalled for
+On the 2026-05-31 the Hollow Tide full-book Qwen run, the generation queue **stalled for
 ~1 hour, 4 chapters from done**. Root cause was a chain of two defects, both
 around EPUB **back-matter** that the parser admits as ordinary chapters:
 
@@ -51,7 +51,7 @@ Excluded chapters are already skipped by analysis Phase 0a, generation, and ever
 exporter, so flagging them is sufficient — no new skip logic needed.
 
 **Known limitation:** the heuristic is title-based and won't catch every case
-("ONE", "Keep reading for a sneak peek…", "Keeper of the Lost Cities Book Two",
+("ONE", "Keep reading for a sneak peek…", "The Hollow Tide Book Two",
 "About <author name>"). That is *why* Layer B exists — detection is best-effort;
 the pipeline must be robust regardless.
 
@@ -81,7 +81,7 @@ title heuristic caught the chapter.
 - A provider call that never resolves causes the chapter to fail with
   `ChapterSynthTimeoutError` within `callTimeoutMs` (driven by fake timers), the
   derived signal is aborted, and the error is not retried. (automated)
-- Manual: re-import the KOTLC EPUB → chapters 52–59 land pre-excluded; a forced
+- Manual: re-import the Hollow Tide EPUB → chapters 52–59 land pre-excluded; a forced
   generation of an excluded degenerate chapter fails fast instead of hanging.
 
 ## Test plan
@@ -95,6 +95,6 @@ title heuristic caught the chapter.
 
 _(to fill on merge: date + commit SHA)_
 
-Origin: the 2026-05-31 KOTLC stall (monitoring session). See memory
+Origin: the 2026-05-31 the Hollow Tide stall (monitoring session). See memory
 `project_multiworker_qwen_final_batch_stall`. Sibling fixes: plan 146 (Kokoro
 pre-warm / fallback gate), plan 147 (sidecar readiness gate, srv-17b).

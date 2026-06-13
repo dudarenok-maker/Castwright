@@ -13,7 +13,7 @@
         fold bucket.
 
    Rule 2 is why a recurring character detected under divergent ids across
-   books ("Sophie" / "Sophie Foster", "Bronte" / "bron-te") now reads as ONE
+   books ("Wren" / "Wren Sparrow", "Castor" / "bron-te") now reads as ONE
    row even when the books never shared a voiceId. The keystone that keeps this
    honest on APPROVE lives server-side: the rebaseline approve calls
    `voice-override-linked`, which rediscovers the same name/alias group and

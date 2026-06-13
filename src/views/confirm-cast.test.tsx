@@ -11,32 +11,32 @@ import { uiSlice } from '../store/ui-slice';
 import { ConfirmCastView } from './confirm-cast';
 import type { Character, Voice } from '../lib/types';
 
-const keefe: Character = {
-  id: 'keefe',
-  name: 'Keefe',
+const marlow: Character = {
+  id: 'marlow',
+  name: 'Marlow',
   role: 'sidekick',
   color: 'eliza',
   lines: 42,
   scenes: 7,
   attributes: ['playful', 'sarcastic'],
-  voiceId: 'v_keefe',
+  voiceId: 'v_marlow',
   voiceState: 'reused',
   gender: 'male',
   ageRange: 'teen',
   matchedFrom: {
     bookTitle: 'Book One',
     bookId: 'book_one',
-    characterId: 'keefe_lib',
+    characterId: 'marlow_lib',
     confidence: 0.95,
   },
-  matchFactors: [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'Keefe ≡ Keefe' }],
+  matchFactors: [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'Marlow ≡ Marlow' }],
 };
 
-const sophie: Character = {
-  id: 'sophie',
-  name: 'Sophie',
+const wren: Character = {
+  id: 'wren',
+  name: 'Wren',
   role: 'protagonist',
-  color: 'sophie',
+  color: 'wren',
   lines: 120,
   scenes: 15,
   attributes: ['brave'],
@@ -47,8 +47,8 @@ const sophie: Character = {
 
 const library: Voice[] = [
   {
-    id: 'v_keefe',
-    character: 'Keefe',
+    id: 'v_marlow',
+    character: 'Marlow',
     bookTitle: 'Book One',
     bookId: 'book_one',
     attributes: ['playful', 'sarcastic'],
@@ -80,7 +80,7 @@ function renderView(
   return render(
     <Provider store={store}>
       <ConfirmCastView
-        characters={[keefe, sophie]}
+        characters={[marlow, wren]}
         library={library}
         title="Book Two"
         onOpenProfile={overrides.onOpenProfile ?? (() => {})}
@@ -112,10 +112,10 @@ describe('ConfirmCastView — voice-match wiring', () => {
 
   it('renders unmatched characters without a Matched pill', () => {
     renderView();
-    /* Sophie's row should not show any Matched · % pill. */
-    const sophieHeading = screen.getByRole('heading', { name: 'Sophie' });
-    const sophieCard = sophieHeading.closest('article')!;
-    expect(within(sophieCard).queryByText(/Matched · /)).toBeNull();
+    /* Wren's row should not show any Matched · % pill. */
+    const wrenHeading = screen.getByRole('heading', { name: 'Wren' });
+    const wrenCard = wrenHeading.closest('article')!;
+    expect(within(wrenCard).queryByText(/Matched · /)).toBeNull();
   });
 
   it("defaults the matched character's decision to Reuse (continuity message visible)", () => {
@@ -138,7 +138,7 @@ describe('ConfirmCastView — library override toggle', () => {
     rerender(
       <Provider store={configureStore({ reducer: { ui: uiSlice.reducer } })}>
         <ConfirmCastView
-          characters={[keefe, sophie]}
+          characters={[marlow, wren]}
           library={library}
           title="Book Two"
           onOpenProfile={() => {}}
@@ -165,14 +165,14 @@ describe('ConfirmCastView — library override toggle', () => {
        lands here. The checkbox should not render because we have no way
        to address the library record. */
     const oldShape: Character = {
-      ...keefe,
+      ...marlow,
       matchedFrom: { bookTitle: 'Book One', confidence: 0.95 },
     };
     const store = configureStore({ reducer: { ui: uiSlice.reducer } });
     render(
       <Provider store={store}>
         <ConfirmCastView
-          characters={[oldShape, sophie]}
+          characters={[oldShape, wren]}
           library={library}
           title="Book Two"
           onOpenProfile={() => {}}
@@ -207,9 +207,9 @@ describe('ConfirmCastView — library override toggle', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
 
     expect(onOverrideLibrary).toHaveBeenCalledWith({
-      sourceCharacterId: 'keefe',
+      sourceCharacterId: 'marlow',
       targetBookId: 'book_one',
-      targetCharacterId: 'keefe_lib',
+      targetCharacterId: 'marlow_lib',
     });
   });
 
@@ -250,10 +250,10 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        before confirming the cast. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const sophieHeading = screen.getByRole('heading', { name: 'Sophie' });
-    const sophieCard = sophieHeading.closest('article')!;
-    fireEvent.click(sophieCard);
-    expect(onOpenProfile).toHaveBeenCalledWith('sophie');
+    const wrenHeading = screen.getByRole('heading', { name: 'Wren' });
+    const wrenCard = wrenHeading.closest('article')!;
+    fireEvent.click(wrenCard);
+    expect(onOpenProfile).toHaveBeenCalledWith('wren');
   });
 
   it('clicking a MATCHED character card also fires onOpenProfile — drawer opens for matched library reuses too', () => {
@@ -265,10 +265,10 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        or correct the matched profile before confirming. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const keefeHeading = screen.getByRole('heading', { name: 'Keefe' });
+    const marlowHeading = screen.getByRole('heading', { name: 'Marlow' });
     /* Click on the name node itself — the most natural target. */
-    fireEvent.click(keefeHeading);
-    expect(onOpenProfile).toHaveBeenCalledWith('keefe');
+    fireEvent.click(marlowHeading);
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 
   it('clicking the override checkbox on a matched card does NOT open the drawer', () => {
@@ -286,7 +286,7 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        stay local so picking a tile doesn't also open the drawer. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    /* "Generate fresh" tile lives on the matched character (keefe) row. */
+    /* "Generate fresh" tile lives on the matched character (marlow) row. */
     const generateTile = screen.getByRole('button', { name: /Generate fresh/ });
     fireEvent.click(generateTile);
     expect(onOpenProfile).not.toHaveBeenCalled();
@@ -295,10 +295,10 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
   it('pressing Enter on a focused card opens the profile drawer', () => {
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const keefeHeading = screen.getByRole('heading', { name: 'Keefe' });
-    const keefeCard = keefeHeading.closest('article')!;
-    fireEvent.keyDown(keefeCard, { key: 'Enter' });
-    expect(onOpenProfile).toHaveBeenCalledWith('keefe');
+    const marlowHeading = screen.getByRole('heading', { name: 'Marlow' });
+    const marlowCard = marlowHeading.closest('article')!;
+    fireEvent.keyDown(marlowCard, { key: 'Enter' });
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 });
 
@@ -622,7 +622,7 @@ describe('ConfirmCastView — mobile + tablet layout (plan 81 wave 3)', () => {
 
   it('decision-tile panel for an unmatched character is fluid on phone and 340 px on tablet+', () => {
     renderView();
-    /* Sophie has no matchedFrom — the single readonly Generated tile is wrapped
+    /* Wren has no matchedFrom — the single readonly Generated tile is wrapped
        in a panel div whose responsive shape mirrors the matched case. */
     const generatedTile = screen.getByText('Generated').closest('button')!;
     const panel = generatedTile.parentElement!;
@@ -635,7 +635,7 @@ describe('ConfirmCastView — mobile + tablet layout (plan 81 wave 3)', () => {
   it('card grid drops the decision-tile column on phone and restores it on tablet+', () => {
     renderView();
     /* The avatar+info+tiles grid lives one level inside the article. */
-    const article = screen.getByRole('heading', { name: 'Sophie' }).closest('article')!;
+    const article = screen.getByRole('heading', { name: 'Wren' }).closest('article')!;
     const grid = article.querySelector('.grid')!;
     expect(grid.className).toMatch(/grid-cols-\[auto_1fr\]/);
     expect(grid.className).toMatch(/sm:grid-cols-\[auto_1fr_auto\]/);
@@ -644,7 +644,7 @@ describe('ConfirmCastView — mobile + tablet layout (plan 81 wave 3)', () => {
   it('every DecisionTile button declares a ≥44 px minimum tap target (WCAG 2.5.5)', () => {
     renderView();
     const tiles = screen.getAllByRole('button').filter((b) => b.className.includes('rounded-2xl'));
-    /* Two tiles for Keefe (match + generate) + one readonly tile for Sophie. */
+    /* Two tiles for Marlow (match + generate) + one readonly tile for Wren. */
     expect(tiles.length).toBeGreaterThanOrEqual(3);
     for (const tile of tiles) {
       expect(tile.className).toMatch(/(^|\s)min-h-\[44px\](\s|$)/);

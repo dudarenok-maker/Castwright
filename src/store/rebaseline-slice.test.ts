@@ -16,7 +16,7 @@ const reducer = rebaselineSlice.reducer;
 function freshOpen(): RebaselineState {
   return reducer(
     undefined,
-    rebaselineActions.begin({ bookId: 'book-1', selectedCharacterIds: ['biana', 'keefe'] }),
+    rebaselineActions.begin({ bookId: 'book-1', selectedCharacterIds: ['maerin', 'marlow'] }),
   );
 }
 
@@ -25,7 +25,7 @@ describe('rebaselineSlice — begin / setup', () => {
     const s = freshOpen();
     expect(s.status).toBe('setup');
     expect(s.bookId).toBe('book-1');
-    expect(s.selectedCharacterIds).toEqual(['biana', 'keefe']);
+    expect(s.selectedCharacterIds).toEqual(['maerin', 'marlow']);
     expect(s.proposals).toEqual({});
     expect(s.appliedCount).toBe(0);
   });
@@ -36,23 +36,23 @@ describe('rebaselineSlice — begin / setup', () => {
     s = reducer(
       s,
       rebaselineActions.proposalReady({
-        characterId: 'biana',
+        characterId: 'maerin',
         persona: 'p',
-        proposedVoiceId: 'qwen-biana',
+        proposedVoiceId: 'qwen-maerin',
       }),
     );
     expect(Object.keys(s.proposals)).toHaveLength(2);
-    s = reducer(s, rebaselineActions.begin({ bookId: 'book-2', selectedCharacterIds: ['sophie'] }));
+    s = reducer(s, rebaselineActions.begin({ bookId: 'book-2', selectedCharacterIds: ['wren'] }));
     expect(s.proposals).toEqual({});
-    expect(s.selectedCharacterIds).toEqual(['sophie']);
+    expect(s.selectedCharacterIds).toEqual(['wren']);
   });
 
   it('toggleSelected adds and removes', () => {
     let s = freshOpen();
-    s = reducer(s, rebaselineActions.toggleSelected('sophie'));
-    expect(s.selectedCharacterIds).toContain('sophie');
-    s = reducer(s, rebaselineActions.toggleSelected('biana'));
-    expect(s.selectedCharacterIds).not.toContain('biana');
+    s = reducer(s, rebaselineActions.toggleSelected('wren'));
+    expect(s.selectedCharacterIds).toContain('wren');
+    s = reducer(s, rebaselineActions.toggleSelected('maerin'));
+    expect(s.selectedCharacterIds).not.toContain('maerin');
   });
 });
 
@@ -60,19 +60,19 @@ describe('rebaselineSlice — principal-cast default selection', () => {
   it('begin uses selectPrincipalCast output as the default', () => {
     const characters = [
       { id: 'narrator', name: 'Narrator' },
-      { id: 'biana', name: 'Biana' },
-      { id: 'keefe', name: 'Keefe' },
+      { id: 'maerin', name: 'Maerin' },
+      { id: 'marlow', name: 'Marlow' },
       { id: 'bystander', name: 'Bystander' },
     ];
-    const lines = { narrator: 500, biana: 80, keefe: 60, bystander: 2 };
+    const lines = { narrator: 500, maerin: 80, marlow: 60, bystander: 2 };
     const principal = selectPrincipalCast(characters, lines);
     const s = reducer(
       undefined,
       rebaselineActions.begin({ bookId: 'b', selectedCharacterIds: Array.from(principal) }),
     );
     // Narrator excluded; principals carry ≥80% of non-narrator lines.
-    expect(s.selectedCharacterIds).toContain('biana');
-    expect(s.selectedCharacterIds).toContain('keefe');
+    expect(s.selectedCharacterIds).toContain('maerin');
+    expect(s.selectedCharacterIds).toContain('marlow');
     expect(s.selectedCharacterIds).not.toContain('narrator');
   });
 });
@@ -80,14 +80,14 @@ describe('rebaselineSlice — principal-cast default selection', () => {
 describe('rebaselineSlice — propose', () => {
   it('startProposing seeds a pending proposal per selected character', () => {
     let s = freshOpen();
-    s = reducer(s, rebaselineActions.startProposing({ personaSeeds: { biana: 'bright teen' } }));
+    s = reducer(s, rebaselineActions.startProposing({ personaSeeds: { maerin: 'bright teen' } }));
     expect(s.status).toBe('proposing');
-    expect(s.proposals.biana).toMatchObject({
+    expect(s.proposals.maerin).toMatchObject({
       status: 'pending',
       persona: 'bright teen',
       include: true,
     });
-    expect(s.proposals.keefe).toMatchObject({ status: 'pending', persona: '', include: true });
+    expect(s.proposals.marlow).toMatchObject({ status: 'pending', persona: '', include: true });
   });
 
   it('proposalReady fills persona + voiceId + preview', () => {
@@ -96,16 +96,16 @@ describe('rebaselineSlice — propose', () => {
     s = reducer(
       s,
       rebaselineActions.proposalReady({
-        characterId: 'biana',
+        characterId: 'maerin',
         persona: 'a bright, confident teenage girl',
-        proposedVoiceId: 'qwen-biana',
+        proposedVoiceId: 'qwen-maerin',
         previewUrl: 'blob:abc',
       }),
     );
-    expect(s.proposals.biana).toMatchObject({
+    expect(s.proposals.maerin).toMatchObject({
       status: 'ready',
       persona: 'a bright, confident teenage girl',
-      proposedVoiceId: 'qwen-biana',
+      proposedVoiceId: 'qwen-maerin',
       previewUrl: 'blob:abc',
       include: true,
     });
@@ -116,22 +116,22 @@ describe('rebaselineSlice — propose', () => {
     s = reducer(s, rebaselineActions.startProposing({}));
     s = reducer(
       s,
-      rebaselineActions.proposalFailed({ characterId: 'biana', error: 'sidecar down' }),
+      rebaselineActions.proposalFailed({ characterId: 'maerin', error: 'sidecar down' }),
     );
     s = reducer(
       s,
       rebaselineActions.proposalReady({
-        characterId: 'keefe',
+        characterId: 'marlow',
         persona: 'p',
-        proposedVoiceId: 'qwen-keefe',
+        proposedVoiceId: 'qwen-marlow',
       }),
     );
-    expect(s.proposals.biana).toMatchObject({
+    expect(s.proposals.maerin).toMatchObject({
       status: 'failed',
       error: 'sidecar down',
       include: false,
     });
-    expect(s.proposals.keefe.status).toBe('ready');
+    expect(s.proposals.marlow.status).toBe('ready');
   });
 
   it('proposalQueued re-queues a row to pending and clears a prior error', () => {
@@ -139,12 +139,12 @@ describe('rebaselineSlice — propose', () => {
     s = reducer(s, rebaselineActions.startProposing({}));
     s = reducer(
       s,
-      rebaselineActions.proposalFailed({ characterId: 'biana', error: 'sidecar down' }),
+      rebaselineActions.proposalFailed({ characterId: 'maerin', error: 'sidecar down' }),
     );
     // A Re-design/Regenerate re-queues the failed row behind the serial worker.
-    s = reducer(s, rebaselineActions.proposalQueued({ characterId: 'biana' }));
-    expect(s.proposals.biana.status).toBe('pending');
-    expect(s.proposals.biana.error).toBeUndefined();
+    s = reducer(s, rebaselineActions.proposalQueued({ characterId: 'maerin' }));
+    expect(s.proposals.maerin.status).toBe('pending');
+    expect(s.proposals.maerin.error).toBeUndefined();
   });
 
   it('proposalUnchanged marks a row as kept with its existing voiceId (excluded from the write)', () => {
@@ -153,12 +153,12 @@ describe('rebaselineSlice — propose', () => {
     s = reducer(
       s,
       rebaselineActions.proposalUnchanged({
-        characterId: 'biana',
+        characterId: 'maerin',
         proposedVoiceId: 'qwen-existing',
       }),
     );
-    expect(s.proposals.biana.status).toBe('unchanged');
-    expect(s.proposals.biana.proposedVoiceId).toBe('qwen-existing');
+    expect(s.proposals.maerin.status).toBe('unchanged');
+    expect(s.proposals.maerin.proposedVoiceId).toBe('qwen-existing');
     // 'unchanged' is not 'ready', so includedProposals never writes it.
     expect(includedProposals(s)).toHaveLength(0);
   });
@@ -168,9 +168,9 @@ describe('rebaselineSlice — propose', () => {
     s = reducer(s, rebaselineActions.startProposing({}));
     s = reducer(
       s,
-      rebaselineActions.setProposalPersona({ characterId: 'biana', persona: 'edited' }),
+      rebaselineActions.setProposalPersona({ characterId: 'maerin', persona: 'edited' }),
     );
-    expect(s.proposals.biana.persona).toBe('edited');
+    expect(s.proposals.maerin.persona).toBe('edited');
   });
 
   it('toggleProposalInclude flips include for non-failed rows only', () => {
@@ -178,14 +178,14 @@ describe('rebaselineSlice — propose', () => {
     s = reducer(s, rebaselineActions.startProposing({}));
     s = reducer(
       s,
-      rebaselineActions.proposalReady({ characterId: 'biana', persona: 'p', proposedVoiceId: 'v' }),
+      rebaselineActions.proposalReady({ characterId: 'maerin', persona: 'p', proposedVoiceId: 'v' }),
     );
-    s = reducer(s, rebaselineActions.proposalFailed({ characterId: 'keefe', error: 'x' }));
-    s = reducer(s, rebaselineActions.toggleProposalInclude({ characterId: 'biana' }));
-    expect(s.proposals.biana.include).toBe(false);
+    s = reducer(s, rebaselineActions.proposalFailed({ characterId: 'marlow', error: 'x' }));
+    s = reducer(s, rebaselineActions.toggleProposalInclude({ characterId: 'maerin' }));
+    expect(s.proposals.maerin.include).toBe(false);
     // failed row stays excluded — toggle is a no-op
-    s = reducer(s, rebaselineActions.toggleProposalInclude({ characterId: 'keefe' }));
-    expect(s.proposals.keefe.include).toBe(false);
+    s = reducer(s, rebaselineActions.toggleProposalInclude({ characterId: 'marlow' }));
+    expect(s.proposals.marlow.include).toBe(false);
   });
 });
 
@@ -196,17 +196,17 @@ describe('rebaselineSlice — approve', () => {
     s = reducer(
       s,
       rebaselineActions.proposalReady({
-        characterId: 'biana',
+        characterId: 'maerin',
         persona: 'p1',
-        proposedVoiceId: 'qwen-biana',
+        proposedVoiceId: 'qwen-maerin',
       }),
     );
     s = reducer(
       s,
       rebaselineActions.proposalReady({
-        characterId: 'keefe',
+        characterId: 'marlow',
         persona: 'p2',
-        proposedVoiceId: 'qwen-keefe',
+        proposedVoiceId: 'qwen-marlow',
       }),
     );
     s = reducer(s, rebaselineActions.proposingSettled());
@@ -221,8 +221,8 @@ describe('rebaselineSlice — approve', () => {
     let s = readied();
     s = reducer(s, rebaselineActions.startApproving());
     expect(s.status).toBe('approving');
-    s = reducer(s, rebaselineActions.proposalApplied({ characterId: 'biana' }));
-    expect(s.proposals.biana.status).toBe('applied');
+    s = reducer(s, rebaselineActions.proposalApplied({ characterId: 'maerin' }));
+    expect(s.proposals.maerin.status).toBe('applied');
     s = reducer(s, rebaselineActions.approveDone({ appliedCount: 2 }));
     expect(s.status).toBe('done');
     expect(s.appliedCount).toBe(2);
@@ -244,16 +244,16 @@ describe('includedProposals helper', () => {
     s = reducer(
       s,
       rebaselineActions.proposalReady({
-        characterId: 'biana',
+        characterId: 'maerin',
         persona: 'p',
-        proposedVoiceId: 'qwen-biana',
+        proposedVoiceId: 'qwen-maerin',
       }),
     );
-    // keefe stays pending (no voiceId) → excluded
+    // marlow stays pending (no voiceId) → excluded
     const included = includedProposals(s);
-    expect(included.map((p) => p.characterId)).toEqual(['biana']);
-    // untick biana → empty
-    s = reducer(s, rebaselineActions.toggleProposalInclude({ characterId: 'biana' }));
+    expect(included.map((p) => p.characterId)).toEqual(['maerin']);
+    // untick maerin → empty
+    s = reducer(s, rebaselineActions.toggleProposalInclude({ characterId: 'maerin' }));
     expect(includedProposals(s)).toHaveLength(0);
   });
 });

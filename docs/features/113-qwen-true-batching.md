@@ -51,7 +51,7 @@ owner: null
 1. Start the sidecar + server + Vite; open a Qwen-heavy book.
 2. Generate one chapter at `QWEN_BATCH_SIZE=1`, then again at `QWEN_BATCH_SIZE=4` (or higher). Expect: **per-line audio perceptually identical** (no drift), no reordered/wrong-voice lines, and a meaningfully shorter wall-clock at the larger batch size.
 3. During a batch, confirm the Generate view never false-trips "Worker has gone quiet" (the heartbeat ticks every 10 s, under the 30 s watchdog).
-4. If drift or VRAM pressure appears, drop `QWEN_BATCH_SIZE` (or `=1` to disable). Canonical manuscript: `C:\Users\dudar\Downloads\Bonus Keefe Story.txt` (do not commit).
+4. If drift or VRAM pressure appears, drop `QWEN_BATCH_SIZE` (or `=1` to disable). Canonical manuscript: `server/src/__fixtures__/the-coalfall-commission.md` (do not commit).
 
 ### Concurrency-safety fix (2026-05-26)
 

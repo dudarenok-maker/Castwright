@@ -5,7 +5,7 @@
 
    The producer (scanSeriesCharacters) emits one record per character
    per prior book in the same (author, series) — so a regular like
-   Sophie Foster contributes N rows across N prior books. The pill's
+   Wren Sparrow contributes N rows across N prior books. The pill's
    count and the prompt both want unique characters, not raw rows.
 
    The Profile Drawer's manual continuity-link picker
@@ -19,7 +19,7 @@
    (case-insensitive, ignoring punctuation)"): two records merge if
    their normalised name OR any normalised alias overlaps. Implemented
    as union-find so alias chains link transitively across books (Book A
-   stores name "Sophie", Book B stores alias "Sophie Foster" on a
+   stores name "Wren", Book B stores alias "Wren Sparrow" on a
    character named "Foster" — both should collapse into one group). */
 
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
@@ -156,7 +156,7 @@ export function dedupSeriesPrior(
     /* Promote this record's name to an alias on the canonical entry if
        it differs from the canonical name (case/punct-insensitive). The
        analyzer prompt should learn that "Foster" maps to the
-       "Sophie"-rooted entry. */
+       "Wren"-rooted entry. */
     const canonicalNameTok = normaliseToken(entry.name);
     const thisNameTok = normaliseToken(char.name);
     if (thisNameTok && thisNameTok !== canonicalNameTok && !aliasTokens.has(thisNameTok)) {
