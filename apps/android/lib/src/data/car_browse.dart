@@ -1,6 +1,7 @@
 import 'package:audio_service/audio_service.dart';
 
 import '../domain/media_browse_tree.dart';
+import 'art_uri.dart';
 import 'drift_local_library.dart' show BookSummary, DownloadedChapter;
 
 /// The book + chapter the listener is currently on (or most-recently was),
@@ -24,16 +25,13 @@ class CarBrowse {
     required this.current,
     required this.play,
     Uri? Function(String? thumbPath)? art,
-  }) : art = art ?? _fileArt;
+  }) : art = art ?? carArtUri;
 
   final Future<List<BookSummary>> Function() allBooks;
   final Future<List<DownloadedChapter>> Function(String bookId) chaptersForBook;
   final Future<CarCurrent> Function() current;
   final Future<void> Function(String bookId, String uuid) play;
   final Uri? Function(String? thumbPath) art;
-
-  static Uri? _fileArt(String? path) =>
-      (path != null && path.isNotEmpty) ? Uri.file(path) : null;
 
   Future<List<MediaItem>> getChildren(String parentMediaId) async {
     final parsed = parseMediaId(parentMediaId);
