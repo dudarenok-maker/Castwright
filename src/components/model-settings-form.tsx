@@ -10,7 +10,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { PrimaryButton } from './primitives';
 import { FieldRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
-import { SettingsAccordion, SettingsSection } from './settings/settings-accordion';
+import {
+  SettingsAccordion,
+  SettingsSection,
+  type SectionNavItem,
+} from './settings/settings-accordion';
 import { MODEL_OPTION_GROUPS } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { ConfigGroup, TtsModelKey, UserSettingsPatch } from '../lib/types';
@@ -26,7 +30,7 @@ import { ModelPullStatus } from './model-pull-status';
 const GROUP_DEFAULTS: ConfigGroup = {
   id: 'model-defaults',
   label: 'Defaults for new books',
-  help: 'Used the first time you open a book that hasn\'t been touched yet. Per-book choices override these and persist.',
+  help: "Used the first time you open a book that hasn't been touched yet. Per-book choices override these and persist.",
   risk: 'low',
   collapsedByDefault: false,
 };
@@ -47,7 +51,7 @@ const GROUP_VOICE_ENGINE: ConfigGroup = {
 const GROUP_SERVER_CONFIG: ConfigGroup = {
   id: 'model-server-config',
   label: 'Server configuration',
-  help: 'Non-secret overrides for what\'s in server/.env. Voice engine URL and Ollama settings take effect on the next request.',
+  help: "Non-secret overrides for what's in server/.env. Voice engine URL and Ollama settings take effect on the next request.",
   risk: 'low',
   collapsedByDefault: false,
 };
@@ -59,11 +63,35 @@ const GROUP_MODELS_INSTALL: ConfigGroup = {
   collapsedByDefault: false,
 };
 
+/* The form's sections, exported so a host view (the Model Manager) can fold
+   them into a SINGLE side-nav rail instead of nesting a second accordion. */
+export const MODEL_SETTINGS_SECTIONS: SectionNavItem[] = [
+  { id: GROUP_DEFAULTS.id, label: GROUP_DEFAULTS.label, risk: GROUP_DEFAULTS.risk },
+  {
+    id: GROUP_ANALYZER_SPLIT.id,
+    label: GROUP_ANALYZER_SPLIT.label,
+    risk: GROUP_ANALYZER_SPLIT.risk,
+  },
+  { id: GROUP_VOICE_ENGINE.id, label: GROUP_VOICE_ENGINE.label, risk: GROUP_VOICE_ENGINE.risk },
+  { id: GROUP_SERVER_CONFIG.id, label: GROUP_SERVER_CONFIG.label, risk: GROUP_SERVER_CONFIG.risk },
+  {
+    id: GROUP_MODELS_INSTALL.id,
+    label: GROUP_MODELS_INSTALL.label,
+    risk: GROUP_MODELS_INSTALL.risk,
+  },
+];
+
 /* Plan 61 — mirror server/src/ollama/pull-bootstrap.ts DEFAULT_ALLOWED_MODELS
    (static per release; the card renders rows without re-fetching the allowlist). */
-const PULLABLE_MODELS = ['qwen3.5:4b', 'qwen3.5:9b', 'llama3.1:8b', 'llama3.2:3b', 'gemma3:4b'] as const;
+const PULLABLE_MODELS = [
+  'qwen3.5:4b',
+  'qwen3.5:9b',
+  'llama3.1:8b',
+  'llama3.2:3b',
+  'gemma3:4b',
+] as const;
 
-export function ModelSettingsForm() {
+export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } = {}) {
   const dispatch = useAppDispatch();
   const account = useAppSelector((s) => s.account);
 
@@ -85,11 +113,17 @@ export function ModelSettingsForm() {
   const [analyzerPhase1MinLagChapters, setAnalyzerPhase1MinLagChapters] = useState<number | null>(
     account.analyzerPhase1MinLagChapters ?? null,
   );
-  const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(account.autoStartSidecar ?? true);
-  const [dualModelEnabled, setDualModelEnabled] = useState<boolean>(account.dualModelEnabled ?? false);
+  const [autoStartSidecar, setAutoStartSidecar] = useState<boolean>(
+    account.autoStartSidecar ?? true,
+  );
+  const [dualModelEnabled, setDualModelEnabled] = useState<boolean>(
+    account.dualModelEnabled ?? false,
+  );
   const [eagerLoadKokoro, setEagerLoadKokoro] = useState<boolean>(account.eagerLoadKokoro ?? true);
   const [eagerLoadQwen, setEagerLoadQwen] = useState<boolean>(account.eagerLoadQwen ?? true);
-  const [generationWorkers, setGenerationWorkers] = useState<number>(account.generationWorkers ?? 1);
+  const [generationWorkers, setGenerationWorkers] = useState<number>(
+    account.generationWorkers ?? 1,
+  );
   const [showSaved, setShowSaved] = useState(false);
 
   useEffect(() => {
@@ -219,16 +253,8 @@ export function ModelSettingsForm() {
 
   const analyzerSplitOn = !!(analyzerPhase0Model || analyzerPhase1Model);
 
-  return (
-    <SettingsAccordion
-      sections={[
-        { id: GROUP_DEFAULTS.id, label: GROUP_DEFAULTS.label, risk: GROUP_DEFAULTS.risk },
-        { id: GROUP_ANALYZER_SPLIT.id, label: GROUP_ANALYZER_SPLIT.label, risk: GROUP_ANALYZER_SPLIT.risk },
-        { id: GROUP_VOICE_ENGINE.id, label: GROUP_VOICE_ENGINE.label, risk: GROUP_VOICE_ENGINE.risk },
-        { id: GROUP_SERVER_CONFIG.id, label: GROUP_SERVER_CONFIG.label, risk: GROUP_SERVER_CONFIG.risk },
-        { id: GROUP_MODELS_INSTALL.id, label: GROUP_MODELS_INSTALL.label, risk: GROUP_MODELS_INSTALL.risk },
-      ]}
-    >
+  const body = (
+    <>
       <SettingsSection group={GROUP_DEFAULTS} overriddenCount={0}>
         <FieldRow label="Analysis model">
           <select
@@ -283,9 +309,13 @@ export function ModelSettingsForm() {
           {analyzerSplitOn ? (
             <>
               <span className="font-semibold text-emerald-700">Currently ON</span> — Phase 0:{' '}
-              <span className="font-medium text-ink">{analyzerModelLabel(analyzerPhase0Model)}</span>{' '}
+              <span className="font-medium text-ink">
+                {analyzerModelLabel(analyzerPhase0Model)}
+              </span>{' '}
               · Phase 1:{' '}
-              <span className="font-medium text-ink">{analyzerModelLabel(analyzerPhase1Model)}</span>{' '}
+              <span className="font-medium text-ink">
+                {analyzerModelLabel(analyzerPhase1Model)}
+              </span>{' '}
               · lag {analyzerPhase1MinLagChapters ?? 10} chapter
               {(analyzerPhase1MinLagChapters ?? 10) === 1 ? '' : 's'}.
             </>
@@ -293,7 +323,9 @@ export function ModelSettingsForm() {
             <>
               <span className="font-semibold">Currently OFF</span> — both phases run on the default
               analysis model (
-              <span className="font-medium text-ink">{analyzerModelLabel(defaultAnalysisModel)}</span>
+              <span className="font-medium text-ink">
+                {analyzerModelLabel(defaultAnalysisModel)}
+              </span>
               ).
             </>
           )}
@@ -492,7 +524,10 @@ export function ModelSettingsForm() {
       </SettingsSection>
 
       <SettingsSection group={GROUP_SERVER_CONFIG} overriddenCount={0}>
-        <FieldRow label="Voice engine URL" sublabel="Local voice engine endpoint. Default: http://localhost:9000">
+        <FieldRow
+          label="Voice engine URL"
+          sublabel="Local voice engine endpoint. Default: http://localhost:9000"
+        >
           <input
             type="text"
             value={sidecarUrl}
@@ -506,8 +541,8 @@ export function ModelSettingsForm() {
               data-testid="sidecar-url-invalid"
               className="mt-2 text-xs text-rose-700 bg-rose-50 rounded-full px-3 py-1 inline-block"
             >
-              Must be an http(s) URL on a private / loopback host (localhost, 127.x, 10.x, 192.168.x,
-              etc.).
+              Must be an http(s) URL on a private / loopback host (localhost, 127.x, 10.x,
+              192.168.x, etc.).
             </p>
           )}
         </FieldRow>
@@ -540,7 +575,10 @@ export function ModelSettingsForm() {
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           />
         </FieldRow>
-        <GeminiKeyField status={account.apiKeyStatus} onSave={(key) => dispatch(saveGeminiApiKey(key))} />
+        <GeminiKeyField
+          status={account.apiKeyStatus}
+          onSave={(key) => dispatch(saveGeminiApiKey(key))}
+        />
       </SettingsSection>
 
       <SettingsSection group={GROUP_MODELS_INSTALL} overriddenCount={0}>
@@ -560,8 +598,13 @@ export function ModelSettingsForm() {
           <span className="text-xs text-rose-700">{account.error}</span>
         )}
       </div>
-    </SettingsAccordion>
+    </>
   );
+
+  /* Embedded: caller (Model Manager) owns the single side-nav rail, so render
+     the sections bare. Standalone: wrap them in our own accordion nav. */
+  if (embedded) return body;
+  return <SettingsAccordion sections={MODEL_SETTINGS_SECTIONS}>{body}</SettingsAccordion>;
 }
 
 /* Plan 61 — Models card body. In-app installers (Ollama + analyzer pulls).
@@ -569,9 +612,9 @@ export function ModelSettingsForm() {
    /api/ollama/health (bypassing the mock layer) so ModelPullStatus reflects
    real on-disk state. The data-testid is preserved for existing tests. */
 function ModelsCardBody() {
-  const [health, setHealth] = useState<
-    import('./model-pull-status').OllamaHealthEnvelope | null
-  >(null);
+  const [health, setHealth] = useState<import('./model-pull-status').OllamaHealthEnvelope | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
