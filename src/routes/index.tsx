@@ -84,6 +84,7 @@ const HelpView = lazy(() =>
   import('../views/help').then((m) => ({ default: m.HelpView })),
 );
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
+import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
 import type { Character, Stage, View } from '../lib/types';
 
@@ -1035,6 +1036,8 @@ function ReparseResultBody({
           ))}
         </select>
       </label>
+
+      <AnalyzerModelOverrideBadge />
 
       <p className="text-ink/55 text-xs">
         Cast and analysis cache were cleared. Hit "Analyse now" to run character detection +

@@ -313,6 +313,18 @@ export const uiSlice = createSlice({
       s.selectedModel = a.payload;
       s.selectedModelExplicit = true;
     },
+    /* Drop a per-run analyzer-model override and fall back to the saved
+       account default. Clearing `selectedModelExplicit` re-arms the
+       account-defaults seeder (see applyAccountDefaults), so a later
+       settings hydrate/save keeps the picker in sync with the saved
+       default. Fixes the sticky-override bug where an explicit pick (e.g.
+       qwen3.5:4b chosen to dodge a Gemini block) silently shadowed the
+       saved `analysisEngine` on every later run. Powers the "Reset to
+       default" affordance on the override badge. */
+    resetSelectedModelToDefault: (s, a: PayloadAction<string>) => {
+      s.selectedModel = a.payload;
+      s.selectedModelExplicit = false;
+    },
     setTtsModelKey: (s, a: PayloadAction<TtsModelKey>) => {
       s.ttsModelKey = a.payload;
       s.ttsModelKeyExplicit = true;

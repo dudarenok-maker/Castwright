@@ -19,11 +19,13 @@ import { uiSlice } from './ui-slice';
 import { manuscriptSlice } from './manuscript-slice';
 
 describe('UI_PERSIST_WHITELIST', () => {
-  it('contains exactly the stage + user-model-pick fields that should survive refresh', () => {
-    /* Sorted compare so reorder doesn't churn this assertion. */
+  it('contains exactly the stage + TTS-engine-pick + theme fields that should survive refresh', () => {
+    /* Sorted compare so reorder doesn't churn this assertion. NOTE: the
+       analyzer-model selectors (selectedModel / selectedModelExplicit) are
+       intentionally NOT here — they are a per-run override that must revert to
+       the saved default on reload (fix: sticky-model bug). See the transient
+       guard below + persist-whitelist.test.ts. */
     expect([...UI_PERSIST_WHITELIST].sort()).toEqual([
-      'selectedModel',
-      'selectedModelExplicit',
       'stage',
       'themeOverride',
       'ttsModelKey',
@@ -48,6 +50,10 @@ describe('UI_PERSIST_WHITELIST', () => {
       'driftReportCharacterFilter',
       'previewMode',
       'reuploadingBookId',
+      /* Per-run analyzer-model override — transient by design so it can't
+         silently shadow the saved analysisEngine across reloads/books. */
+      'selectedModel',
+      'selectedModelExplicit',
     ];
     for (const key of transientKeys) {
       expect(

@@ -196,6 +196,43 @@ describe('buildModelInventory', () => {
     expect(b.isDefaultEngine).toBe(false);
   });
 
+  it('does not mark a same-family different-size tag as loaded (qwen3.5:4b resident ≠ qwen3.5:9b loaded)', () => {
+    /* Regression: tagMatches over-matched on the family root, so a resident
+       qwen3.5:4b lit up qwen3.5:9b as "Loaded" in the Model Manager even
+       though ollama ps held only the 4b. Different explicit size tags must
+       never be conflated. */
+    const inv = buildModelInventory(
+      baseDeps({
+        ollama: {
+          reachable: true,
+          models: [
+            { name: 'qwen3.5:4b', size: 3_200_000_000 },
+            { name: 'qwen3.5:9b', size: 6_100_000_000 },
+          ],
+          resident: ['qwen3.5:4b'],
+        },
+      }),
+    );
+    const four = inv.items.find((i) => i.id === 'ollama:qwen3.5:4b')!;
+    const nine = inv.items.find((i) => i.id === 'ollama:qwen3.5:9b')!;
+    expect(four.loaded).toBe(true); // actually resident
+    expect(nine.loaded).toBe(false); // NOT resident — must not borrow 4b's residency
+  });
+
+  it('treats a bare family tag as equivalent to :latest (qwen3.5 resident ⇒ qwen3.5:latest loaded)', () => {
+    const inv = buildModelInventory(
+      baseDeps({
+        ollama: {
+          reachable: true,
+          models: [{ name: 'qwen3.5:latest', size: 3_200_000_000 }],
+          resident: ['qwen3.5'],
+        },
+      }),
+    );
+    const latest = inv.items.find((i) => i.id === 'ollama:qwen3.5:latest')!;
+    expect(latest.loaded).toBe(true); // bare 'qwen3.5' resident === ':latest'
+  });
+
   it('flips Kokoro off-default when Qwen is the resolved engine', () => {
     installKokoro();
     const inv = buildModelInventory(baseDeps({ resolvedTtsEngine: 'qwen' }));

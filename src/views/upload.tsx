@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import type { UploadArgs } from '../lib/api';
 import { TAGLINE_SHORT } from '../lib/brand';
 import { AnalysisModelPicker } from '../components/analysis-model-picker';
+import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { libraryActions } from '../store/library-slice';
@@ -289,6 +290,10 @@ export function UploadView() {
             onChange={(id) => dispatch(uiActions.setSelectedModel(id))}
             disabled={busy}
           />
+        </div>
+
+        <div className="mb-5 flex justify-center">
+          <AnalyzerModelOverrideBadge />
         </div>
 
         <div
