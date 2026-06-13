@@ -60,6 +60,11 @@ jobs:
           name: castwright-release-apk
           path: apps/android/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+      # Build-health for the Google Play channel: keep `bundleRelease` green so
+      # the AAB target can't rot. Debug-signed here (no keystore secret in CI) —
+      # NOT a Play upload artifact; the real Play AAB is built locally with the
+      # upload keystore (`android/key.properties`). See apps/android/README.md.
+      - run: flutter build appbundle --release
 
   ios-compile:
     runs-on: macos-latest
