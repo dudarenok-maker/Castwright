@@ -73,11 +73,13 @@ Expected: `Got dependencies!` (or "Resolving… / Got dependencies").
 
 - [ ] **Step 4: Sanity-check the toolchain**
 
+From the worktree root:
+
 ```powershell
-node -e "import('C:/Claude/worktrees/app-companion-brand-finish/node_modules/@playwright/test/index.js').then(()=>console.log('playwright ok'))"
+node -e "import('@playwright/test').then(()=>console.log('playwright ok')).catch(e=>{console.error(e);process.exit(1)})"
 ```
 
-Expected: `playwright ok`.
+Expected: `playwright ok` (bare-specifier import resolves through the junctioned `node_modules`).
 
 ---
 
@@ -93,7 +95,11 @@ Replace the import line and append two tests. The file's full new contents:
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { JOBS, IOS_JOBS } from '../render-brand-pngs.mjs';
+import { JOBS } from '../render-brand-pngs.mjs';
+// Namespace import for the symbol added in Task 3: before it's exported,
+// `brandPngs.IOS_JOBS` is `undefined` (a clean assertion failure) rather than an
+// ESM module-load error that would crash the whole file.
+import * as brandPngs from '../render-brand-pngs.mjs';
 
 // fe-37: the small-size favicons are hand-designed and committed in public/.
 // The render script must NOT regenerate them, or a re-run would clobber the
@@ -135,9 +141,10 @@ const EXPECTED_IOS = [
 ];
 
 test('IOS_JOBS covers every AppIcon size, each square + opaque', () => {
-  assert.equal(IOS_JOBS.length, EXPECTED_IOS.length, 'one job per AppIcon file');
+  assert.ok(Array.isArray(brandPngs.IOS_JOBS), 'IOS_JOBS must be exported');
+  assert.equal(brandPngs.IOS_JOBS.length, EXPECTED_IOS.length, 'one job per AppIcon file');
   for (const [file, px] of EXPECTED_IOS) {
-    const job = IOS_JOBS.find((j) => j[0] === `${IOS_DIR}/${file}`);
+    const job = brandPngs.IOS_JOBS.find((j) => j[0] === `${IOS_DIR}/${file}`);
     assert.ok(job, `missing iOS job for ${file}`);
     const [, , w, h, omit, transform] = job;
     assert.equal(w, px, `${file} width`);
@@ -149,7 +156,8 @@ test('IOS_JOBS covers every AppIcon size, each square + opaque', () => {
 });
 
 test('iOS jobs never clobber the hand-designed favicons', () => {
-  const outs = [...JOBS, ...IOS_JOBS].map((j) => j[0]);
+  const ios = brandPngs.IOS_JOBS ?? [];
+  const outs = [...JOBS, ...ios].map((j) => j[0]);
   for (const f of ['public/favicon-16.png', 'public/favicon-32.png', 'public/favicon.svg']) {
     assert.ok(!outs.includes(f), `${f} must stay hand-designed`);
   }
@@ -164,7 +172,7 @@ From the worktree root (`C:\Claude\worktrees\app-companion-brand-finish`), Power
 node --test scripts/tests/render-brand-pngs.test.mjs
 ```
 
-Expected: FAIL — `IOS_JOBS` is `undefined` (not yet exported), so `IOS_JOBS.length` / `.find` throws. The two pre-existing favicon/og tests still pass.
+Expected: FAIL — exactly one test, `IOS_JOBS covers every AppIcon size…`, fails its first assertion (`IOS_JOBS must be exported` — it isn't an array yet). The favicon, og, and "never clobber" tests still PASS (the last guards the spread with `?? []`). The namespace import keeps this a clean assertion failure, not an ESM module-load crash.
 
 ---
 
@@ -261,7 +269,7 @@ Expected: PASS (this is the runner that includes the render-script test in CI).
 
 ```powershell
 git add scripts/render-brand-pngs.mjs scripts/tests/render-brand-pngs.test.mjs
-git commit -m "feat(app): add iOS AppIcon render jobs to brand-png script (app-15)"
+git commit -m "feat(app): add iOS AppIcon render jobs to brand-png script (app-15)" -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -301,9 +309,7 @@ Open `apps/android/ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1
 
 ```powershell
 git add apps/android/ios/Runner/Assets.xcassets/AppIcon.appiconset/
-git commit -m "feat(app): brand the iOS AppIcon set from castwright-icon.svg (app-15)
-
-Replaces the default blue Flutter logo. Closes #632."
+git commit -m "feat(app): brand the iOS AppIcon set from castwright-icon.svg (app-15)" -m "Replaces the default blue Flutter logo. Closes #632." -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -417,7 +423,7 @@ From the worktree root:
 
 ```powershell
 git add apps/android/lib/src/brand.dart apps/android/lib/src/ui/pairing_screen.dart apps/android/test/ui/pairing_screen_test.dart
-git commit -m "feat(app): add brand constants + pairing-screen tagline (app-16)"
+git commit -m "feat(app): add brand constants + pairing-screen tagline (app-16)" -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -517,7 +523,7 @@ From the worktree root:
 
 ```powershell
 git add apps/android/lib/src/ui/home_screen.dart apps/android/test/ui/home_screen_test.dart
-git commit -m "feat(app): add brand tagline to the empty home state (app-16)"
+git commit -m "feat(app): add brand tagline to the empty home state (app-16)" -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -587,7 +593,7 @@ From the worktree root:
 
 ```powershell
 git add apps/android/test/brand_test.dart
-git commit -m "test(app): guard lib/ against retired brand copy (app-16)"
+git commit -m "test(app): guard lib/ against retired brand copy (app-16)" -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
@@ -610,7 +616,23 @@ Expected: all tests PASS (the three modified/added test files plus the entire ex
 
 - [ ] **Step 2: Drop the app-15 + app-16 rows from the backlog**
 
-Open `docs/BACKLOG.md`, find and delete the two rows referencing `app-15` (#632) and `app-16` (#706). Leave surrounding rows untouched.
+In `docs/BACKLOG.md`, delete the two `####` blocks for app-15 and app-16 — everything from the `#### \`app-15\`` heading down to the app-16 `_Full detail…_` line (they sit between the `app-10` block and the `---` separator). Delete exactly this contiguous text (and the blank line that follows it, so the `app-10` block flows straight into the `---`):
+
+```markdown
+#### `app-15` — legacy (pre-API-26) launcher icon PNGs + iOS app-icon set ([#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632))
+
+- _What:_ The Castwright adaptive icon (PR #629) covers **API 26+** (all modern devices + the emulator); the pre-26 PNG fallback + the iOS `AppIcon.appiconset` are still the Flutter default (no SVG rasterizer was on the build box). Generate them from `brand/castwright-icon.svg` (e.g. `flutter_launcher_icons` with a rasterized PNG source).
+- _Benefit (user):_ a branded icon on the few pre-API-26 Android devices and (with `app-12`) on iOS. Low priority — adaptive covers the vast majority of devices.
+_Full detail + acceptance:_ [#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632) · [plan 188](features/188-android-companion-app.md).
+
+#### `app-16` — Companion-app brand audit (tagline/short-form, no .ai in lockups, engine credits) ([#706](https://github.com/dudarenok-maker/Castwright/issues/706))
+
+- _What:_ Timeboxed (~1h) audit of the Flutter companion's surfaces (pairing, library, player) against the v2 brand checklist — new tagline/short-form (no retired "…effortlessly. Even in your own voice."), no `.ai` inside lockups, engine credits where voices are shown. Split out of `fe-37` (separate `app` scope). Findings → a follow-up `app`-scope fix PR or close-clean.
+- _Benefit (brand):_ the second screen tells the same story as the first.
+_Full detail + acceptance:_ [#706](https://github.com/dudarenok-maker/Castwright/issues/706).
+```
+
+Leave the `app-10` block above and the `---` separator below untouched.
 
 - [ ] **Step 3: Add a ship-note line to plan 188**
 
@@ -627,7 +649,7 @@ In `docs/features/188-android-companion-app.md`, add a short note under its Ship
 
 ```powershell
 git add docs/BACKLOG.md docs/features/188-android-companion-app.md
-git commit -m "docs(docs): retire app-15/app-16 backlog rows, ship-note plan 188"
+git commit -m "docs(docs): retire app-15/app-16 backlog rows, ship-note plan 188" -m "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
 
 ---
