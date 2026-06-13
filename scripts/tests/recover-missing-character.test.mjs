@@ -54,23 +54,23 @@ test('toKebabId matches the analyzer id convention', () => {
      manual recovery using the same convention means a future re-analysis
      with the Layer-2 fix in place would produce the same id and merge
      cleanly without orphaning the manual entry. */
-  assert.equal(toKebabId('Sela'), 'Sela');
-  assert.equal(toKebabId('Garrow'), 'Garrow');
-  assert.equal(toKebabId("Mr. Casper"), 'mr-Casper');
-  assert.equal(toKebabId('Councillor Reld'), 'councillor-Reld');
+  assert.equal(toKebabId('Sela'), 'sela');
+  assert.equal(toKebabId('Garrow'), 'garrow');
+  assert.equal(toKebabId("Mr. Casper"), 'mr-casper');
+  assert.equal(toKebabId('Councillor Reld'), 'councillor-reld');
   assert.equal(toKebabId('Sir Astin'), 'sir-astin');
-  assert.equal(toKebabId('  Hespa  '), 'Hespa');
+  assert.equal(toKebabId('  Hespa  '), 'hespa');
 });
 
 test('buildCharacter produces a Character-shaped entry with the required fields', () => {
   const c = buildCharacter({
-    id: 'Sela',
+    id: 'sela',
     name: 'Sela',
     role: 'Bodyguard',
     gender: 'female',
     ageRange: 'adult',
   });
-  assert.equal(c.id, 'Sela');
+  assert.equal(c.id, 'sela');
   assert.equal(c.name, 'Sela');
   assert.equal(c.role, 'Bodyguard');
   assert.equal(c.gender, 'female');
@@ -145,8 +145,8 @@ test('findDialogueReattributions only flips narrator-attributed tag sentences', 
      observing "Garrow growled"), we don't want to flip the preceding
      dialogue — that's not a tag, it's a third-party observation. */
   const sentences = [
-    { id: 1, chapterId: 1, characterId: 'Wren', text: '"Watch out!"' },
-    { id: 2, chapterId: 1, characterId: 'Wren', text: 'I heard Garrow growled below.' },
+    { id: 1, chapterId: 1, characterId: 'wren', text: '"Watch out!"' },
+    { id: 2, chapterId: 1, characterId: 'wren', text: 'I heard Garrow growled below.' },
   ];
   const found = findDialogueReattributions(sentences, 'Garrow');
   assert.equal(found.length, 0);
@@ -166,7 +166,7 @@ test('findDialogueReattributions ignores substring false positives at word bound
 });
 
 test('buildChangeLogEntry records the manual addition with the right type + actor', () => {
-  const entry = buildChangeLogEntry({ name: 'Sela', id: 'Sela', role: 'Bodyguard', reattributedCount: 3 });
+  const entry = buildChangeLogEntry({ name: 'Sela', id: 'sela', role: 'Bodyguard', reattributedCount: 3 });
   assert.equal(entry.type, 'character_manually_added');
   assert.equal(entry.actor, 'user-script');
   assert.match(entry.title, /Sela/);
@@ -176,7 +176,7 @@ test('buildChangeLogEntry records the manual addition with the right type + acto
 });
 
 test('buildChangeLogEntry note says "no dialogue" when count is 0', () => {
-  const entry = buildChangeLogEntry({ name: 'Sela', id: 'Sela', role: 'Bodyguard', reattributedCount: 0 });
+  const entry = buildChangeLogEntry({ name: 'Sela', id: 'sela', role: 'Bodyguard', reattributedCount: 0 });
   assert.match(entry.note, /No dialogue/i);
 });
 
@@ -209,16 +209,16 @@ test('main --apply writes cast.json + manuscript-edits.json + change-log.json ag
     await main([bookDir, '--name', 'Sela', '--gender', 'female', '--role', 'Bodyguard', '--apply']);
 
     const cast = JSON.parse(readFileSync(join(audioDir, 'cast.json'), 'utf8'));
-    const Sela = cast.characters.find((c) => c.id === 'Sela');
-    assert.ok(Sela, 'Sela must be appended to cast.json');
-    assert.equal(Sela.name, 'Sela');
-    assert.equal(Sela.gender, 'female');
-    assert.equal(Sela.role, 'Bodyguard');
-    assert.equal(Sela.voiceState, 'unassigned');
+    const sela = cast.characters.find((c) => c.id === 'sela');
+    assert.ok(sela, 'Sela must be appended to cast.json');
+    assert.equal(sela.name, 'Sela');
+    assert.equal(sela.gender, 'female');
+    assert.equal(sela.role, 'Bodyguard');
+    assert.equal(sela.voiceState, 'unassigned');
 
     const edits = JSON.parse(readFileSync(join(audioDir, 'manuscript-edits.json'), 'utf8'));
     /* Sentences 1 and 3 are the dialogue lines preceding the "Sela said" / "Sela added" tags. */
-    const flipped = edits.sentences.filter((s) => s.characterId === 'Sela').map((s) => s.id).sort();
+    const flipped = edits.sentences.filter((s) => s.characterId === 'sela').map((s) => s.id).sort();
     assert.deepEqual(flipped, [1, 3]);
     /* The tag sentences themselves remain narrator-attributed — they are
        prose describing who spoke, not dialogue. */
@@ -267,7 +267,7 @@ test('main refuses to double-add an existing id', async () => {
     mkdirSync(audioDir, { recursive: true });
     writeFileSync(
       join(audioDir, 'cast.json'),
-      JSON.stringify({ characters: [{ id: 'Sela', name: 'Sela' }] }),
+      JSON.stringify({ characters: [{ id: 'sela', name: 'Sela' }] }),
     );
     writeFileSync(join(audioDir, 'manuscript-edits.json'), JSON.stringify({ sentences: [] }));
 

@@ -204,7 +204,7 @@ export function createWatermarkForJob(userSettings?: UserSettings): PhaseWaterma
 
 /* Front-end palette has 30 character slots (see src/lib/colors.ts
    CHAR_COLORS + CHARACTER_SLOTS). Gemini and humans both like to invent
-   character-specific kebab names like `Marlow` that don't exist in the
+   character-specific kebab names like `marlow` that don't exist in the
    palette and fall back to grey. We normalise here: narrator keeps its
    slot; everyone else gets a slot in roster order, cycling after 30.
    Order must match src/lib/colors.ts CHARACTER_SLOTS. */
@@ -822,7 +822,7 @@ export function recordFailedChapter(
    The subset-retry path used to gate stage1 writes on
    `failedChapterIds.length === 0` alone, which is the WRONG predicate when
    the cache covers only a fraction of the book. Example regression seen on
-   "Unlocked" (mns_VoP0mLGvov): chapterCast had entries for chapters 1–28
+   "The Floodmark" (mns_VoP0mLGvov): chapterCast had entries for chapters 1–28
    of a 182-chapter book, failedChapterIds was [], and a subset retry
    rebuilt stage1 from those 28 entries — overwriting a previously-good
    6-character roster with a Narrator-only one because every cached
@@ -942,9 +942,9 @@ function warnPerChapterDrift(
    the write unless the caller explicitly opted in. Prevents silent data
    loss when a follow-up run with a worse model collapses the cast.
 
-   Concrete regression motivator (Unlocked, mns_VoP0mLGvov): an earlier
-   Phase 0a run produced 6 characters (narrator + Marlow + Oduvan + Maerin
-   + Linnet + Wren — visible in manuscript-edits.json's surviving
+   Concrete regression motivator (The Floodmark, mns_VoP0mLGvov): an earlier
+   Phase 0a run produced 6 characters (narrator + marlow + oduvan + maerin
+   + linnet + wren — visible in manuscript-edits.json's surviving
    attribution); a later subset-retry with Gemini 3.1 Flash Lite hit
    chapters that the model collapsed to Narrator-only, rebuildRoster()
    produced a 1-character stage1, and the write went through silently —
@@ -1061,7 +1061,7 @@ export interface SeriesPriorCharacter {
 /* Build the per-chapter Phase 0a inbox markdown that drives the
    Gemini / Ollama analyzer. Exported for unit testing — the test asserts
    that the template includes the broadened first-person guidance so
-   journal / registry-file / bio chapters (the Unlocked format) get
+   journal / registry-file / bio chapters (The Floodmark format) get
    detected as their authoring character rather than as Narrator. */
 export function buildStage1ChapterInbox(
   manuscriptId: string,
@@ -1087,9 +1087,9 @@ export function buildStage1ChapterInbox(
      standalones / first-in-series books don't carry a useless empty
      section. The prompt instructs the model to REUSE existing ids when
      a chapter speaker matches a known series character by name or
-     alias — without this guidance Unlocked's per-chapter detector
-     would invent fresh ids like `Marlow-2` instead of recognising the
-     `Marlow` already confirmed in the Coalfall Commission / the Hollow Tide. */
+     alias — without this guidance The Floodmark's per-chapter detector
+     would invent fresh ids like `marlow-2` instead of recognising the
+     `marlow` already confirmed in the Coalfall Commission / the Hollow Tide. */
   const priorJson =
     seriesPrior.length > 0
       ? JSON.stringify(
@@ -1137,7 +1137,7 @@ true:
 2. The chapter is a **first-person document** (journal entry, medical
    log, registry file, diary, letter, transcript, bio page) AND the
    author of that document is named or strongly implied — by chapter
-   title (\`Wren's Memory Log\`), header (\`FILED BY: Oduvan\`),
+   title (\`Wren's Memory Log\`), header (\`FILED BY: ODUVAN\`),
    signature (\`—Marlow\`), or the surrounding bio block. In that case
    the *author* is the character, with their \`id\` set to their name,
    and the document's prose becomes their evidence. \`narrator\` is

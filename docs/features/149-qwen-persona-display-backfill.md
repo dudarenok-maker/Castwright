@@ -44,9 +44,9 @@ The persona was historically persisted only on the voice sidecar `voices/qwen/<n
 
 ### Manual acceptance walkthrough (real backend, `BASE="C:/AudiobookWorkspace"`, The Drowning Bell / Wren)
 
-1. Open Wren's drawer in The Drowning Bell (pre-fix): card shows "Qwen · qwen-Wren · Designed voice", 12s sample plays, but "Voice persona" is BLANK; Design → 400.
+1. Open Wren's drawer in The Drowning Bell (pre-fix): card shows "Qwen · qwen-wren · Designed voice", 12s sample plays, but "Voice persona" is BLANK; Design → 400.
 2. Runtime fallback (route deployed, pre-backfill): re-open Wren → textarea shows "A relatable 15-year-old girl…"; Design synthesises (no 400).
-3. Backfill dry-run → prints `+ Wren … qwen-Wren` for The Drowning Bell + origin; "DRY RUN", no writes.
+3. Backfill dry-run → prints `+ Wren … qwen-wren` for The Drowning Bell + origin; "DRY RUN", no writes.
 4. `--apply` → `.bak` per changed cast.json; `voiceStyle` written.
 5. Re-run dry-run → 0 changed (idempotent). The Drowning Bell cast.json Wren now has `"voiceStyle": "A relatable 15-year-old girl…"`.
 6. Regenerate The Drowning Bell → Narrator/Wren render Qwen (link was already correct), the stale `Fallback (Kokoro)` pill clears.

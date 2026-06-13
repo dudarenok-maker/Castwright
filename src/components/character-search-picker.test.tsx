@@ -16,17 +16,17 @@ import type { SeriesRosterEntry } from '../lib/api';
 
 const characters: Character[] = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
-  { id: 'Wren', name: 'Wren', role: 'character', color: 'peach' },
-  { id: 'lord-Vane', name: 'Lord Vane', role: 'character', color: 'magenta' },
+  { id: 'wren', name: 'Wren', role: 'character', color: 'peach' },
+  { id: 'lord-vane', name: 'Lord Vane', role: 'character', color: 'magenta' },
 ];
 
 const roster: SeriesRosterEntry[] = [
   {
-    id: 'councillor-Linnet',
+    id: 'councillor-linnet',
     name: 'Councillor Linnet',
     bookId: 'the Hollow Tide-1',
     bookTitle: 'The Hollow Tide',
-    voiceId: 'v_Linnet',
+    voiceId: 'v_linnet',
     aliases: ['the Councillor'],
     gender: 'female',
     ageRange: 'adult',
@@ -110,7 +110,7 @@ describe('CharacterSearchPicker', () => {
   it('filters by case-insensitive substring against name', async () => {
     const user = userEvent.setup();
     renderPicker();
-    await user.keyboard('soph');
+    await user.keyboard('wren');
     const picker = screen.getByRole('dialog');
     const options = within(picker).getAllByRole('option');
     expect(options).toHaveLength(1);
@@ -133,15 +133,15 @@ describe('CharacterSearchPicker', () => {
        twice). */
     const localWithAlina: Character[] = [
       ...characters,
-      { id: 'Linnet', name: 'Councillor Linnet', role: 'character', color: 'sage' },
+      { id: 'linnet', name: 'Councillor Linnet', role: 'character', color: 'sage' },
     ];
     renderPicker({ characters: localWithAlina });
     const picker = screen.getByRole('dialog');
     const options = within(picker).getAllByRole('option');
     /* 4 local + 1 roster (Mae Vance only — Linnet deduped) = 5 rows. */
     expect(options).toHaveLength(5);
-    const LinnetOptions = within(picker).getAllByText('Councillor Linnet');
-    expect(LinnetOptions).toHaveLength(1); // only the local row
+    const linnetOptions = within(picker).getAllByText('Councillor Linnet');
+    expect(linnetOptions).toHaveLength(1); // only the local row
   });
 
   it('arrow keys move the highlight and Enter picks the highlighted local row', async () => {
@@ -150,7 +150,7 @@ describe('CharacterSearchPicker', () => {
     /* Default highlight = 0 (Narrator). Down twice → Lord Vane. */
     await user.keyboard('{ArrowDown}{ArrowDown}');
     await user.keyboard('{Enter}');
-    expect(onPick).toHaveBeenCalledWith('lord-Vane');
+    expect(onPick).toHaveBeenCalledWith('lord-vane');
     expect(onClose).toHaveBeenCalled();
     expect(onAddFromSeriesRoster).not.toHaveBeenCalled();
   });
@@ -162,11 +162,11 @@ describe('CharacterSearchPicker', () => {
     await user.keyboard('{ArrowDown}{ArrowDown}{ArrowDown}{Enter}');
     await waitFor(() => {
       expect(onAddFromSeriesRoster).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'councillor-Linnet' }),
+        expect.objectContaining({ id: 'councillor-linnet' }),
       );
     });
     await waitFor(() => {
-      expect(onPick).toHaveBeenCalledWith('councillor-Linnet_local');
+      expect(onPick).toHaveBeenCalledWith('councillor-linnet_local');
     });
     expect(onClose).toHaveBeenCalled();
   });
@@ -175,13 +175,13 @@ describe('CharacterSearchPicker', () => {
     const user = userEvent.setup();
     renderPicker();
     const picker = screen.getByRole('dialog');
-    const LinnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
-    await user.click(LinnetRow);
+    const linnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
+    await user.click(linnetRow);
     await waitFor(() => {
       expect(onAddFromSeriesRoster).toHaveBeenCalled();
     });
     await waitFor(() => {
-      expect(onPick).toHaveBeenCalledWith('councillor-Linnet_local');
+      expect(onPick).toHaveBeenCalledWith('councillor-linnet_local');
     });
   });
 
@@ -264,10 +264,10 @@ describe('CharacterSearchPicker', () => {
     const onPickRosterEntry = vi.fn();
     renderPicker({ onPickRosterEntry });
     const picker = screen.getByRole('dialog');
-    const LinnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
-    await user.click(LinnetRow);
+    const linnetRow = within(picker).getByRole('option', { name: /Councillor Linnet/ });
+    await user.click(linnetRow);
     expect(onPickRosterEntry).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'councillor-Linnet', bookId: 'the Hollow Tide-1' }),
+      expect.objectContaining({ id: 'councillor-linnet', bookId: 'the Hollow Tide-1' }),
     );
     expect(onAddFromSeriesRoster).not.toHaveBeenCalled();
     expect(onPick).not.toHaveBeenCalled();
@@ -279,9 +279,9 @@ describe('CharacterSearchPicker', () => {
     const onPickRosterEntry = vi.fn();
     renderPicker({ onPickRosterEntry });
     const picker = screen.getByRole('dialog');
-    const WrenRow = within(picker).getByRole('option', { name: /Wren/ });
-    await user.click(WrenRow);
-    expect(onPick).toHaveBeenCalledWith('Wren');
+    const wrenRow = within(picker).getByRole('option', { name: /Wren/ });
+    await user.click(wrenRow);
+    expect(onPick).toHaveBeenCalledWith('wren');
     expect(onPickRosterEntry).not.toHaveBeenCalled();
   });
 });

@@ -34,7 +34,7 @@ describe('fs-33 — emotion survives the edits→cache→synth read path', () =>
       JSON.stringify({
         sentences: [
           { id: 1, chapterId: 1, characterId: 'narrator', text: 'The room was quiet.' },
-          { id: 2, chapterId: 1, characterId: 'Wren', text: '“Get down!”', emotion: 'angry' },
+          { id: 2, chapterId: 1, characterId: 'wren', text: '“Get down!”', emotion: 'angry' },
         ],
       }),
     );
@@ -49,16 +49,16 @@ describe('fs-33 — emotion survives the edits→cache→synth read path', () =>
       expect(tagged?.emotion).toBe('angry');
 
       // And it selects the designed variant at synth time.
-      const variants = { angry: { name: 'qwen-v_Wren__angry' } };
-      const picked = pickEmotionVariantVoice('qwen', variants, tagged?.emotion, 'qwen-v_Wren');
-      expect(picked).toBe('qwen-v_Wren__angry');
+      const variants = { angry: { name: 'qwen-v_wren__angry' } };
+      const picked = pickEmotionVariantVoice('qwen', variants, tagged?.emotion, 'qwen-v_wren');
+      expect(picked).toBe('qwen-v_wren__angry');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it('a missing variant falls back to the base voice (non-fatal)', () => {
-    expect(pickEmotionVariantVoice('qwen', {}, 'angry', 'qwen-v_Wren')).toBe('qwen-v_Wren');
+    expect(pickEmotionVariantVoice('qwen', {}, 'angry', 'qwen-v_wren')).toBe('qwen-v_wren');
     expect(pickEmotionVariantVoice('qwen', undefined, 'sad', 'base')).toBe('base');
   });
 

@@ -323,7 +323,7 @@ describe('revisionsSlice — plan 55 timeline', () => {
     let s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
-        pending: [rev('r2', { chapterId: 5, characterId: 'Wren' })],
+        pending: [rev('r2', { chapterId: 5, characterId: 'wren' })],
         drift: [],
       }),
     );
@@ -332,7 +332,7 @@ describe('revisionsSlice — plan 55 timeline', () => {
     expect(s.timeline[5][0]).toMatchObject({
       id: 'r2',
       chapterId: 5,
-      characterId: 'Wren',
+      characterId: 'wren',
       eventKind: 'rejected',
       status: 'active',
     });
@@ -684,28 +684,28 @@ describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', 
       undefined,
       revisionsActions.applyPoll({
         drift: [
-          drift('drift:book-A:3:Marlow:voice', {
+          drift('drift:book-A:3:marlow:voice', {
             bookId: 'book-A',
             chapterId: 3,
-            characterId: 'Marlow',
+            characterId: 'marlow',
             snapshot: snapA,
             current: cur,
             factor: 'voice',
             severity: 'severe',
           }),
-          drift('drift:book-A:3:Marlow:warmth', {
+          drift('drift:book-A:3:marlow:warmth', {
             bookId: 'book-A',
             chapterId: 3,
-            characterId: 'Marlow',
+            characterId: 'marlow',
             snapshot: snapA,
             current: cur,
             factor: 'warmth',
             severity: 'moderate',
           }),
-          drift('drift:book-A:3:Marlow:attributes', {
+          drift('drift:book-A:3:marlow:attributes', {
             bookId: 'book-A',
             chapterId: 3,
-            characterId: 'Marlow',
+            characterId: 'marlow',
             snapshot: snapA,
             current: cur,
             factor: 'attributes',
@@ -722,16 +722,16 @@ describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', 
     const entry = g.chapters[0];
     expect(entry.chapterId).toBe(3);
     expect(entry.eventIds.sort()).toEqual([
-      'drift:book-A:3:Marlow:attributes',
-      'drift:book-A:3:Marlow:voice',
-      'drift:book-A:3:Marlow:warmth',
+      'drift:book-A:3:marlow:attributes',
+      'drift:book-A:3:marlow:voice',
+      'drift:book-A:3:marlow:warmth',
     ]);
     expect(entry.factors.sort()).toEqual(['attributes', 'voice', 'warmth']);
     /* Top severity of the chapter is the max across its events. */
     expect(entry.topSeverity).toBe('severe');
     /* Representative event is the top-severity one (drives the
        DriftListenWidget audio probe). */
-    expect(entry.representativeEvent.id).toBe('drift:book-A:3:Marlow:voice');
+    expect(entry.representativeEvent.id).toBe('drift:book-A:3:marlow:voice');
   });
 
   it('chapters[] sorts by chapterId ascending even when events arrive out of order', () => {

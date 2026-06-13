@@ -101,7 +101,7 @@ describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
     const picked = pickVoiceForEngine(
       'coqui',
       {
-        id: 'char-Brann',
+        id: 'char-brann',
         character: 'Brann',
         attributes: ['Male', 'Teen'],
         overrideTtsVoice: { engine: 'coqui', name: 'Asya Anara' },
@@ -119,7 +119,7 @@ describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
     const picked = pickVoiceForEngine(
       'coqui',
       {
-        id: 'char-Brann',
+        id: 'char-brann',
         character: 'Brann',
         attributes: [],
         overrideTtsVoice: { engine: 'gemini', name: 'Charon' },
@@ -138,7 +138,7 @@ describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
     const picked = pickVoiceForEngine(
       'coqui',
       {
-        id: 'char-Brann',
+        id: 'char-brann',
         character: 'Brann',
         attributes: [],
         overrideTtsVoice: { engine: 'coqui', name: '' },
@@ -158,7 +158,7 @@ describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
     const picked = pickVoiceForEngine(
       'kokoro',
       {
-        id: 'char-Brann',
+        id: 'char-brann',
         character: 'Brann',
         attributes: [],
         overrideTtsVoice: { engine: 'kokoro', name: 'am_onyx' },
@@ -176,7 +176,7 @@ describe('pickVoiceForEngine honours the per-cast overrideTtsVoice', () => {
     const picked = pickVoiceForEngine(
       'kokoro',
       {
-        id: 'char-Brann',
+        id: 'char-brann',
         character: 'Brann',
         attributes: [],
         overrideTtsVoice: { engine: 'coqui', name: 'Aaron Dreschner' },
@@ -212,14 +212,14 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
     const picked = pickVoiceForEngine(
       'qwen',
       {
-        id: 'char-Maerin',
+        id: 'char-maerin',
         character: 'Maerin',
         attributes: ['Female', 'Teen'],
-        overrideTtsVoices: { qwen: { name: 'Maerin-bright-teen' } },
+        overrideTtsVoices: { qwen: { name: 'maerin-bright-teen' } },
       },
       { gender: 'female', ageRange: 'teen' },
     );
-    expect(picked).toBe('Maerin-bright-teen');
+    expect(picked).toBe('maerin-bright-teen');
   });
 
   it('returns "" (no fallback) when no qwen voice has been designed', () => {
@@ -228,7 +228,7 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
        string signals "design one first" to the UI / generation path. */
     const picked = pickVoiceForEngine(
       'qwen',
-      { id: 'char-Maerin', character: 'Maerin', attributes: ['Female', 'Teen'] },
+      { id: 'char-maerin', character: 'Maerin', attributes: ['Female', 'Teen'] },
       { gender: 'female', ageRange: 'teen' },
     );
     expect(picked).toBe('');
@@ -238,7 +238,7 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
     const picked = pickVoiceForEngine(
       'qwen',
       {
-        id: 'char-Maerin',
+        id: 'char-maerin',
         character: 'Maerin',
         attributes: [],
         overrideTtsVoices: { kokoro: { name: 'af_bella' } },
@@ -280,19 +280,19 @@ describe('qwen is a bespoke-voice engine — no catalog inference (plan 108)', (
 });
 
 describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selection)', () => {
-  const variants = { angry: { name: 'Wren__angry' }, whisper: { name: 'Wren__whisper' } };
+  const variants = { angry: { name: 'wren__angry' }, whisper: { name: 'wren__whisper' } };
 
   it('returns the variant voiceId for a tagged emotion on Qwen', () => {
-    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'Wren-base')).toBe('Wren__angry');
+    expect(pickEmotionVariantVoice('qwen', variants, 'angry', 'wren-base')).toBe('wren__angry');
   });
 
   it('falls back to the base voice when the tagged emotion has no variant', () => {
-    expect(pickEmotionVariantVoice('qwen', variants, 'sad', 'Wren-base')).toBe('Wren-base');
+    expect(pickEmotionVariantVoice('qwen', variants, 'sad', 'wren-base')).toBe('wren-base');
   });
 
   it('returns the base for neutral / undefined emotion', () => {
-    expect(pickEmotionVariantVoice('qwen', variants, 'neutral', 'Wren-base')).toBe('Wren-base');
-    expect(pickEmotionVariantVoice('qwen', variants, undefined, 'Wren-base')).toBe('Wren-base');
+    expect(pickEmotionVariantVoice('qwen', variants, 'neutral', 'wren-base')).toBe('wren-base');
+    expect(pickEmotionVariantVoice('qwen', variants, undefined, 'wren-base')).toBe('wren-base');
   });
 
   it('is a STRICT no-op for non-Qwen engines — emotion is never read', () => {
@@ -303,9 +303,9 @@ describe('fs-25 — pickEmotionVariantVoice (Qwen-gated emotion variant selectio
   });
 
   it('handles a missing/empty variants map by returning the base', () => {
-    expect(pickEmotionVariantVoice('qwen', undefined, 'angry', 'Wren-base')).toBe('Wren-base');
-    expect(pickEmotionVariantVoice('qwen', { angry: { name: '  ' } }, 'angry', 'Wren-base')).toBe(
-      'Wren-base',
+    expect(pickEmotionVariantVoice('qwen', undefined, 'angry', 'wren-base')).toBe('wren-base');
+    expect(pickEmotionVariantVoice('qwen', { angry: { name: '  ' } }, 'angry', 'wren-base')).toBe(
+      'wren-base',
     );
   });
 });

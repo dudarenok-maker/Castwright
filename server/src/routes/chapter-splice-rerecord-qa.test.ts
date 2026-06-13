@@ -47,7 +47,7 @@ function tone(durationSec: number, amp: number): Buffer {
 
 vi.mock('../store/analysis-cache.js', () => ({
   loadAnalysisCache: vi.fn(async () => ({
-    chapters: { 1: [{ id: 2, characterId: 'Castor', text: 'A re-recorded line.' }] },
+    chapters: { 1: [{ id: 2, characterId: 'castor', text: 'A re-recorded line.' }] },
   })),
 }));
 
@@ -106,7 +106,7 @@ beforeAll(async () => {
     JSON.stringify({
       characters: [
         { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
-        { id: 'Castor', name: 'Castor', gender: 'female', attributes: [] },
+        { id: 'castor', name: 'Castor', gender: 'female', attributes: [] },
       ],
     }),
   );
@@ -127,7 +127,7 @@ beforeAll(async () => {
       synthesizedAt: new Date().toISOString(),
       segments: [
         { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
-        { groupIndex: 1, characterId: 'Castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
       ],
     }),
   );
@@ -152,7 +152,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-32a QA', ()
   it('reads OK when a length-changing re-record would false-flag under the prior chapter duration', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
-      .send({ mode: 'rerecord', characterId: 'Castor', modelKey: 'kokoro-v1' });
+      .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
 
     const events = parseSse(res.text);
     const done = events.find((e) => e.type === 'splice_complete');

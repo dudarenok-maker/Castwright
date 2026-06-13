@@ -1,5 +1,5 @@
 /* Unit tests for the shared text-match helpers. Companions to the
-   verifier integration tests in routes/analysis.test.ts — the the Hollow Tide
+   verifier integration tests in routes/analysis.test.ts — the Hollow Tide
    regression cases here pin the false-positive shapes that motivated
    the three-tier match (see Phase-0 dropped-quotes ledger 2026-05-15). */
 

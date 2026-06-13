@@ -233,7 +233,7 @@ D. **Existing wrong stamps are repaired by
    `scripts/repair-audio-engine-stamp.mjs`** (dry-run default, `--apply`): it
    recomputes the effective engine from `characterSnapshots` and corrects
    `audioModelKey` only where it disagrees, plus backfills `audioEngines`.
-   First run (2026-06-07) corrected 2 stamps (Unlocked CH12/13, narrator-only
+   First run (2026-06-07) corrected 2 stamps (The Floodmark CH12/13, narrator-only
    Qwen chapters mis-stamped Kokoro) and set 355 breakdowns library-wide.
 
 ## Modal fidelity contract (drift-report-fidelity, 2026-05-19)

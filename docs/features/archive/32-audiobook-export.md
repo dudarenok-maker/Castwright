@@ -70,7 +70,7 @@ LAN URL enumeration (`GET /api/export/lan`) filters out 127.x and 169.254.x — 
 
 ## Acceptance walkthrough (Android, end-to-end)
 
-Use the canonical end-to-end manuscript at `C:\Users\dudar\Downloads\the Coalfall Commission.txt` — see the recipe in [plan 28](28-chapter-audio-format.md). Pre-req: `VITE_USE_MOCKS=false`, sidecar up, ffmpeg on PATH.
+Use the canonical end-to-end manuscript at `server/src/__fixtures__/the-coalfall-commission.md` — see the recipe in [plan 28](28-chapter-audio-format.md). Pre-req: `VITE_USE_MOCKS=false`, sidecar up, ffmpeg on PATH.
 
 1. `npm run start`. Server stdout shows both `Listening on http://localhost:8080` and one or more `[server] LAN URL: http://192.168.x.y:8080` lines.
 2. Import the canonical manuscript, generate every chapter. (Skipping a chapter? Make sure it's marked excluded on the Generate view first.)

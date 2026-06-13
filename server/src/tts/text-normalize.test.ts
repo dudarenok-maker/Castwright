@@ -18,14 +18,14 @@ import {
 
 describe('denormaliseAllCaps', () => {
   it('title-cases a multi-word all-caps chapter opener', () => {
-    expect(denormaliseAllCaps('THE NEXT SECOND WAS A BLUR.')).toBe('The Next Second Was A Blur.');
+    expect(denormaliseAllCaps('THE NEXT SECOND WAS A HAZE.')).toBe('The Next Second Was A Haze.');
   });
 
-  it('title-cases an all-caps run with an apostrophe (e.g. Marrow’S), leaving the 2-letter MR. abbreviation intact', () => {
+  it('title-cases an all-caps run with an apostrophe (e.g. MARROW’S), leaving the 2-letter MR. abbreviation intact', () => {
     /* `MR` is a 2-letter caps run — the regex requires >=3 so it stays.
        That's deliberate: XTTS pronounces "MR." fine as "mister"; only the
        multi-word ALL-CAPS run is the hazard. */
-    expect(denormaliseAllCaps("MR. Marrow'S NASAL voice cut through.")).toBe(
+    expect(denormaliseAllCaps("MR. MARROW'S NASAL voice cut through.")).toBe(
       "MR. Marrow's Nasal voice cut through.",
     );
   });
@@ -44,7 +44,7 @@ describe('denormaliseAllCaps', () => {
   });
 
   it('is idempotent — running twice produces the same output as once', () => {
-    const once = denormaliseAllCaps('THE NEXT SECOND WAS A BLUR.');
+    const once = denormaliseAllCaps('THE NEXT SECOND WAS A HAZE.');
     expect(denormaliseAllCaps(once)).toBe(once);
   });
 
@@ -137,7 +137,7 @@ describe('normaliseForTts (composed)', () => {
        top of `04-chapter-two.mp3` in the canonical e2e manuscript. The fix
        must leave it with no all-caps run AND no em-dashes. */
     const input =
-      'THE NEXT SECOND WAS A BLUR. ' +
+      'THE NEXT SECOND WAS A HAZE. ' +
       'The car swerved right—missing Wren by inches—then jumped the curb and sideswiped a streetlight. ' +
       'The heavy steel lantern cracked from its base and plummeted toward Wren.';
     const output = normaliseForTts(input);
@@ -145,14 +145,14 @@ describe('normaliseForTts (composed)', () => {
     expect(output).not.toMatch(/[A-Z]{3,}/);
     expect(output).not.toMatch(/[—–]/);
     expect(output).toBe(
-      'The Next Second Was A Blur. ' +
+      'The Next Second Was A Haze. ' +
         'The car swerved right, missing Wren by inches, then jumped the curb and sideswiped a streetlight. ' +
         'The heavy steel lantern cracked from its base and plummeted toward Wren.',
     );
   });
 
   it('is idempotent across the composed pipeline', () => {
-    const once = normaliseForTts('THE BLUR—then.');
+    const once = normaliseForTts('THE HAZE—then.');
     expect(normaliseForTts(once)).toBe(once);
   });
 
@@ -170,7 +170,7 @@ describe('normaliseForTts (composed)', () => {
   it('strips the analyzer vocabulary tags so Kokoro / Coqui do not read them aloud', () => {
     /* No current engine in this app interprets bracket markup as prosody.
        The user reported "[emphatic] is being read not being used in voice"
-       on the canonical Keeper book — this is the regression. */
+       on the canonical The Hollow Tide book — this is the regression. */
     expect(normaliseForTts('She said [emphatic] hello.')).toBe('She said hello.');
     expect(normaliseForTts('[shouting] HELP!')).toBe('Help!');
     expect(normaliseForTts('Stay still, [whispers] he murmured.')).toBe(

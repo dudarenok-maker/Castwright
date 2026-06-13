@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-On 2026-06-02 a long Qwen run (book `The Drowning Bell`) silently stalled mid-chapter and a restart got stuck. Forensics: the server cleanly rendered ch46→ch51, began ch52 (a real story chapter), fed 5 synth batches to the sidecar, then made **no further progress** — with **no `generationError`, no crash trace, and no watchdog**. The restart then **adopted the leaked orphan sidecar** (committed ~26 GB; a fresh load is ~10 GB) and wedged. Underneath was the known variable-shape host-memory leak (committed oscillating ~8→39 GB/batch), which peaked ~900 MB below the soft recycle ceiling and never tripped a clean recycle.
+On 2026-06-02 a long Qwen run (book `the drowning bell`) silently stalled mid-chapter and a restart got stuck. Forensics: the server cleanly rendered ch46→ch51, began ch52 (a real story chapter), fed 5 synth batches to the sidecar, then made **no further progress** — with **no `generationError`, no crash trace, and no watchdog**. The restart then **adopted the leaked orphan sidecar** (committed ~26 GB; a fresh load is ~10 GB) and wedged. Underneath was the known variable-shape host-memory leak (committed oscillating ~8→39 GB/batch), which peaked ~900 MB below the soft recycle ceiling and never tripped a clean recycle.
 
 - **User:** a stalled chapter now fails loudly and the queue advances, instead of hanging forever; a restart spins up a clean sidecar instead of inheriting a dying one.
 - **Technical:** three independent layers — a whole-chapter no-progress watchdog (covers the previously-uncovered assembly phase), adopt-fitness gating + supervisor liveness, and finer leak sampling + safer recycle tuning.

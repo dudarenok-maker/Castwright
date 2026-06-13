@@ -38,29 +38,29 @@ afterEach(() => {
 describe('collectRenderedFallbackEngines (fe-16)', () => {
   it('maps a character to kokoro when any rendered chapter stamped the fallback', async () => {
     writeSegments('01-one', {
-      Wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
-      Marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-Marlow' },
+      wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
+      marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-marlow' },
     });
     await expect(collectRenderedFallbackEngines(bookDir, chapters)).resolves.toEqual({
-      Wren: 'kokoro',
+      wren: 'kokoro',
     });
   });
 
   it('wins "any chapter fell back" over a clean render in another chapter', async () => {
     writeSegments('01-one', {
-      Wren: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-Wren' },
+      wren: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-wren' },
     });
     writeSegments('02-two', {
-      Wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
+      wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
     });
     await expect(collectRenderedFallbackEngines(bookDir, chapters)).resolves.toEqual({
-      Wren: 'kokoro',
+      wren: 'kokoro',
     });
   });
 
   it('returns an empty map when nothing fell back', async () => {
     writeSegments('01-one', {
-      Marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-Marlow' },
+      marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-marlow' },
     });
     await expect(collectRenderedFallbackEngines(bookDir, chapters)).resolves.toEqual({});
   });
@@ -72,11 +72,11 @@ describe('collectRenderedFallbackEngines (fe-16)', () => {
 
   it('does not interfere with the Qwen voice-name aggregator', async () => {
     writeSegments('01-one', {
-      Marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-Marlow' },
-      Wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
+      marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-marlow' },
+      wren: { voiceEngine: 'kokoro', renderedFallbackEngine: 'kokoro' },
     });
     await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
-      new Set(['qwen-Marlow']),
+      new Set(['qwen-marlow']),
     );
   });
 });
@@ -95,12 +95,12 @@ describe('collectRenderedSpeakerMaps (#650)', () => {
   it('inverts per-character segments into a sentenceId→characterId map per chapter', async () => {
     writeSegmentsWithBody('01-one', [
       { characterId: 'narrator', sentenceIds: [1, 3] },
-      { characterId: 'Marlow', sentenceIds: [2] },
+      { characterId: 'marlow', sentenceIds: [2] },
     ]);
-    writeSegmentsWithBody('02-two', [{ characterId: 'Wren', sentenceIds: [4, 5] }]);
+    writeSegmentsWithBody('02-two', [{ characterId: 'wren', sentenceIds: [4, 5] }]);
     await expect(collectRenderedSpeakerMaps(bookDir, chapters)).resolves.toEqual({
-      1: { 1: 'narrator', 2: 'Marlow', 3: 'narrator' },
-      2: { 4: 'Wren', 5: 'Wren' },
+      1: { 1: 'narrator', 2: 'marlow', 3: 'narrator' },
+      2: { 4: 'wren', 5: 'wren' },
     });
   });
 
@@ -111,7 +111,7 @@ describe('collectRenderedSpeakerMaps (#650)', () => {
     ]);
     /* Legacy file with no `segments` array at all → omitted entirely (so the
        client doesn't read it as "every sentence reassigned"). */
-    writeSegments('02-two', { Wren: { voiceEngine: 'kokoro' } });
+    writeSegments('02-two', { wren: { voiceEngine: 'kokoro' } });
     await expect(collectRenderedSpeakerMaps(bookDir, chapters)).resolves.toEqual({
       1: { 1: 'narrator' },
     });

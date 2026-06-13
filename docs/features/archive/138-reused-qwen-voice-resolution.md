@@ -21,7 +21,7 @@ A reused character carries only `voiceId` + `matchedFrom` on disk — the reuse
 write paths (`voice-match.ts`, `cast-link-prior.ts`) propagate the identity key
 but **not** `ttsEngine` / `overrideTtsVoices`. The bespoke Qwen voice lives on
 the **source book's** character that designed it (`overrideTtsVoices.qwen.name`,
-e.g. `qwen-Garrow`; the on-disk weights are `voices/qwen/qwen-<voiceId>.pt`).
+e.g. `qwen-garrow`; the on-disk weights are `voices/qwen/qwen-<voiceId>.pt`).
 
 At synthesis, `pickVoiceForEngine('qwen', voice)`
 (`server/src/tts/voice-mapping.ts`) reads **only** `overrideTtsVoices.qwen.name`

@@ -68,16 +68,16 @@ describe('voice-sample router', () => {
     it('synthesises, encodes to MP3, caches; second call short-circuits', async () => {
       const body = {
         modelKey: 'coqui-xtts-v2',
-        voice: { id: 'v_Marlow', character: 'Marlow', attributes: ['Male'] },
+        voice: { id: 'v_marlow', character: 'Marlow', attributes: ['Male'] },
         text: 'Hello world. This is a voice sample.',
       };
 
-      const res1 = await request(app).post('/api/voices/v_Marlow/sample').send(body);
+      const res1 = await request(app).post('/api/voices/v_marlow/sample').send(body);
 
       expect(res1.status).toBe(200);
       expect(res1.body.modelKey).toBe('coqui-xtts-v2');
       expect(res1.body.cached).toBe(false);
-      expect(res1.body.url).toMatch(/^\/audio\/voices\/v_Marlow-coqui-xtts-v2-[a-z0-9]+\.mp3$/);
+      expect(res1.body.url).toMatch(/^\/audio\/voices\/v_marlow-coqui-xtts-v2-[a-z0-9]+\.mp3$/);
       expect(typeof res1.body.durationSec).toBe('number');
       expect(res1.body.durationSec).toBeGreaterThan(0);
 
@@ -89,7 +89,7 @@ describe('voice-sample router', () => {
       expect(synthesize).toHaveBeenCalledTimes(1);
 
       /* Second identical request — disk cache hit, no re-synth. */
-      const res2 = await request(app).post('/api/voices/v_Marlow/sample').send(body);
+      const res2 = await request(app).post('/api/voices/v_marlow/sample').send(body);
 
       expect(res2.status).toBe(200);
       expect(res2.body.cached).toBe(true);
@@ -100,13 +100,13 @@ describe('voice-sample router', () => {
     it('different text under the same voice produces a distinct cache entry', async () => {
       const base = {
         modelKey: 'coqui-xtts-v2',
-        voice: { id: 'v_Oduvan', character: 'Oduvan', attributes: ['Male'] },
+        voice: { id: 'v_oduvan', character: 'Oduvan', attributes: ['Male'] },
       };
       const a = await request(app)
-        .post('/api/voices/v_Oduvan/sample')
+        .post('/api/voices/v_oduvan/sample')
         .send({ ...base, text: 'First line.' });
       const b = await request(app)
-        .post('/api/voices/v_Oduvan/sample')
+        .post('/api/voices/v_oduvan/sample')
         .send({ ...base, text: 'Second different line.' });
 
       expect(a.status).toBe(200);
@@ -121,7 +121,7 @@ describe('voice-sample router', () => {
   describe('validation', () => {
     it('400 invalid_model when modelKey is unknown', async () => {
       const res = await request(app)
-        .post('/api/voices/v_Marlow/sample')
+        .post('/api/voices/v_marlow/sample')
         .send({ modelKey: 'nope', text: 'x' });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('invalid_model');
@@ -129,7 +129,7 @@ describe('voice-sample router', () => {
     });
 
     it('400 invalid_model when modelKey is missing', async () => {
-      const res = await request(app).post('/api/voices/v_Marlow/sample').send({ text: 'x' });
+      const res = await request(app).post('/api/voices/v_marlow/sample').send({ text: 'x' });
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('invalid_model');
       expect(synthesize).not.toHaveBeenCalled();
@@ -321,7 +321,7 @@ describe('voice-sample router', () => {
     it('503 sidecar_down when the sidecar is unreachable', async () => {
       synthesize.mockRejectedValueOnce(new Error('sidecar not reachable at http://localhost:9000'));
       const res = await request(app)
-        .post('/api/voices/v_Marlow/sample')
+        .post('/api/voices/v_marlow/sample')
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(503);
       expect(res.body.code).toBe('sidecar_down');
@@ -330,7 +330,7 @@ describe('voice-sample router', () => {
     it('429 rate_limited when the upstream rate-limits', async () => {
       synthesize.mockRejectedValueOnce(new Error('Gemini returned 429: rate limit exceeded'));
       const res = await request(app)
-        .post('/api/voices/v_Marlow/sample')
+        .post('/api/voices/v_marlow/sample')
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(429);
       expect(res.body.code).toBe('rate_limited');
@@ -339,7 +339,7 @@ describe('voice-sample router', () => {
     it('502 tts_failed on a generic synthesis failure', async () => {
       synthesize.mockRejectedValueOnce(new Error('Something else went wrong.'));
       const res = await request(app)
-        .post('/api/voices/v_Marlow/sample')
+        .post('/api/voices/v_marlow/sample')
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('tts_failed');

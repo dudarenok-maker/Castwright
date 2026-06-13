@@ -168,16 +168,16 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
       JSON.stringify({
         characters: [
           {
-            id: 'Wren',
+            id: 'wren',
             name: 'Wren',
             aliases: ['Wren Sparrow'],
-            voiceId: 'Wren',
+            voiceId: 'wren',
             voiceState: 'reused',
-            matchedFrom: { bookId: 'b0', characterId: 'Wren', confidence: 0.91 },
-            overrideTtsVoices: { qwen: { name: 'qwen-Wren' } },
+            matchedFrom: { bookId: 'b0', characterId: 'wren', confidence: 0.91 },
+            overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
             ttsEngine: 'qwen',
             voiceStyle: 'warm, earnest',
-            notLinkedTo: [{ bookId: 'b1', characterId: 'Wren-teen' }],
+            notLinkedTo: [{ bookId: 'b1', characterId: 'wren-teen' }],
             // analyzer-owned fields that must NOT be snapshotted:
             lines: 99,
             evidence: ['something'],
@@ -196,16 +196,16 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     expect(carry.characters).toHaveLength(1);
     const c = carry.characters[0];
     expect(c).toMatchObject({
-      id: 'Wren',
+      id: 'wren',
       name: 'Wren',
       aliases: ['Wren Sparrow'],
-      voiceId: 'Wren',
+      voiceId: 'wren',
       voiceState: 'reused',
-      matchedFrom: { bookId: 'b0', characterId: 'Wren', confidence: 0.91 },
-      overrideTtsVoices: { qwen: { name: 'qwen-Wren' } },
+      matchedFrom: { bookId: 'b0', characterId: 'wren', confidence: 0.91 },
+      overrideTtsVoices: { qwen: { name: 'qwen-wren' } },
       ttsEngine: 'qwen',
       voiceStyle: 'warm, earnest',
-      notLinkedTo: [{ bookId: 'b1', characterId: 'Wren-teen' }],
+      notLinkedTo: [{ bookId: 'b1', characterId: 'wren-teen' }],
     });
     // analyzer-owned data is NOT carried.
     expect(c.lines).toBeUndefined();
@@ -216,12 +216,12 @@ describe('reparse handler — reuse/voice carryover (srv-13)', () => {
     // Stale carryover from a prior reparse still has the link…
     writeFileSync(
       carryoverPath(),
-      JSON.stringify({ characters: [{ id: 'Wren', voiceState: 'reused', voiceId: 'Wren' }] }),
+      JSON.stringify({ characters: [{ id: 'wren', voiceState: 'reused', voiceId: 'wren' }] }),
     );
     // …but the user has since unlinked Wren in the live cast.
     writeFileSync(
       castPath(),
-      JSON.stringify({ characters: [{ id: 'Wren', name: 'Wren', voiceState: 'generated' }] }),
+      JSON.stringify({ characters: [{ id: 'wren', name: 'Wren', voiceState: 'generated' }] }),
     );
 
     const res = await request(app).post(`/api/books/${bookId}/reparse`);

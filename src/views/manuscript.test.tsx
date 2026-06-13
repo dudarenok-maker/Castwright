@@ -553,7 +553,7 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
         role: 'Cast' as const,
         color: 'narrator' as const,
       })),
-      { id: 'Sela', name: 'Sela', role: 'Cast', color: 'magenta' },
+      { id: 'sela', name: 'Sela', role: 'Cast', color: 'magenta' },
     ];
     const chapter: Chapter = {
       id: 1,
@@ -605,10 +605,10 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
     const picker = screen.getByRole('dialog', { name: /reassign speaker/i });
     /* Sela sits at the end of a 30-row list. Pre-fix it was clipped
        below the inspector card; with the portal it's reachable. */
-    const Sela = within(picker).getByRole('option', { name: /^Sela$/ });
-    await user.click(Sela);
+    const sela = within(picker).getByRole('option', { name: /^Sela$/ });
+    await user.click(sela);
 
-    expect(store.getState().manuscript.sentences[0].characterId).toBe('Sela');
+    expect(store.getState().manuscript.sentences[0].characterId).toBe('sela');
   });
 
   it('row Reassign popover stays open when the pointer leaves the segment row', async () => {

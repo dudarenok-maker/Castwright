@@ -106,7 +106,7 @@ export const generationRouter = Router();
    a poisoned context). */
 const MAX_RECYCLE_RECOVERIES = 2;
 
-/* Per-chapter no-progress watchdog (2026-06-02 The Drowning Bell ch52 stall). A
+/* Per-chapter no-progress watchdog (2026-06-02 the drowning bell ch52 stall). A
    chapter that makes NO forward progress — no group/batch completes and no
    assembly milestone lands — for this long is aborted and recorded as a
    `generationError`, instead of hanging the queue forever with no breadcrumb.
@@ -1056,7 +1056,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     job.lastProgressTick = initialTick;
     broadcast(job, { type: 'progress', ...initialTick });
 
-    /* Per-chapter no-progress watchdog (2026-06-02 The Drowning Bell ch52). A
+    /* Per-chapter no-progress watchdog (2026-06-02 the drowning bell ch52). A
        chapter-scoped controller chained to the job controller: a pause /
        displacement abort still propagates, but the watchdog can also abort
        JUST this chapter without touching sibling work. `bumpProgress` is called

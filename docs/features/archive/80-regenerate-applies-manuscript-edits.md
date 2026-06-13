@@ -45,7 +45,7 @@ owner: null
 Run against the canonical `the Coalfall Commission.txt` manuscript per CLAUDE.md's "Canonical end-to-end manuscript" rule.
 
 1. `npm start`, open the book, analyse + confirm cast, generate one short chapter (≤ 20 sentences so the loop is fast).
-2. Open the manuscript view for that chapter. Reassign 3–5 sentences from their current speaker to a different cast member with an audibly distinct voice. The save indicator should settle (autosave debounce flushes) or click off the chapter to force the plan-79 blur autosave.
+2. Open the manuscript view for that chapter. Reassign 3–5 sentences from their current speaker to a different cast member with an audibly distinct voice. The save indicator should settle (autosave debounce flushes) or click off the chapter to force the plan-79 haze autosave.
 3. Navigate to the Listen view → click **Regenerate this chapter**.
 4. When the regenerate completes, scrub the new audio over the 3–5 reassigned sentences. **Expected:** the voice on those sentences is the new assigned voice, not the original. Pre-fix the voice would have been the original analyzer-assigned one regardless of the edit.
 5. The before/after audio renders should be audibly different at exactly the edited positions and identical elsewhere.

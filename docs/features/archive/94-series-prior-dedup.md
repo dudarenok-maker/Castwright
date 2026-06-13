@@ -38,13 +38,13 @@ owner: null
 
 ### Automated coverage
 
-- Vitest server (`server/src/workspace/series-prior-dedup.test.ts`) — 10 cases covering: empty input, same-name across two books → 1 merged entry with both source titles, alias-overlap merge (Book B alias matches Book A name), punctuation/case-insensitive merge (`Mr. Casper` ↔ `mr Casper`), disjoint characters stay separate, alias union across 3 books with canonical-name collapse, alias-chain transitive merge via union-find, first-seen book-walk output ordering, empty/whitespace aliases do NOT bridge, compact output omits empty aliases.
+- Vitest server (`server/src/workspace/series-prior-dedup.test.ts`) — 10 cases covering: empty input, same-name across two books → 1 merged entry with both source titles, alias-overlap merge (Book B alias matches Book A name), punctuation/case-insensitive merge (`Mr. Casper` ↔ `mr casper`), disjoint characters stay separate, alias union across 3 books with canonical-name collapse, alias-chain transitive merge via union-find, first-seen book-walk output ordering, empty/whitespace aliases do NOT bridge, compact output omits empty aliases.
 - Vitest server (`server/src/routes/analysis.test.ts:~1151`) — asserts `buildStage1ChapterInbox` renders the plural `fromBookTitles` array shape, that the singular legacy field is absent, and that a single-entry case still renders as a one-element array (schema stability for downstream prompt-parity tests).
 
 ### Manual acceptance walkthrough
 
 1. **Cold boot, the Hollow Tide Saltgrave analysis** → start analysis on Saltgrave. Expected: under the "Detecting characters" phase card, the pill reads `Carried in from prior books in this series · ~30-50 characters` (one row per unique character across prior books). The console log entry "Carrying in N characters from prior books in this series (…)" reports the same N. Pre-fix: ~136.
-2. **Profile Drawer continuity-link picker** → in the cast view, open a character's profile and trigger the manual continuity-link picker. Expected: the per-book entries still show up separately (Wren-from-Keeper AND Wren-from-Exile are both selectable). This proves the producer scan + `GET /api/books/:bookId/series-roster` route were NOT affected by the dedup.
+2. **Profile Drawer continuity-link picker** → in the cast view, open a character's profile and trigger the manual continuity-link picker. Expected: the per-book entries still show up separately (Wren-from-Keeper AND Wren-from-The Ebb are both selectable). This proves the producer scan + `GET /api/books/:bookId/series-roster` route were NOT affected by the dedup.
 3. **Standalone book** → start analysis on a standalone (no series siblings). Expected: pill is omitted entirely; the prompt section is omitted entirely. Same behaviour as pre-fix.
 4. **Subset retry** → trigger a single-chapter retry on a series book. Expected: the per-chapter prompt's "Known characters from prior books in this series" section carries the deduped roster (same shape as the main run).
 

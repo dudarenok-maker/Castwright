@@ -5,12 +5,12 @@
 
    Consumed by Phase 0a's per-chapter detection prompt (C2): the analyzer
    gets a "Known characters from prior books in this series" section so
-   Unlocked's per-chapter detector recognises Wren / Marlow / Oduvan /
-   Maerin etc. from the 41 confirmed characters across the Hollow Tide + Bonus
-   Marlow Story rather than re-detecting them as fresh entities.
+   The Floodmark's per-chapter detector recognises Wren / Marlow / Oduvan /
+   Maerin etc. from the confirmed characters across the Hollow Tide +
+   the Coalfall Commission rather than re-detecting them as fresh entities.
 
    Single-series scoped on purpose: cross-series carry-over (e.g. Wren
-   appearing in Keeper + a spinoff in a different series) is a bigger
+   appearing in the Hollow Tide + a spinoff in a different series) is a bigger
    product question -- needs explicit user-driven linking or a per-author
    scan -- tracked as a TBD follow-up in plan 32. */
 

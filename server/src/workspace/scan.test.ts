@@ -133,8 +133,8 @@ describe('scanLibrary derived stats', () => {
     await seedAnalysisCache(`m_${bookId}`, [1]);
     writeCast(bookDir, [
       { id: 'narrator' },
-      { id: 'Marlow', voiceId: 'voice-warm-male' },
-      { id: 'Wren', voiceId: 'voice-bright-young' },
+      { id: 'marlow', voiceId: 'voice-warm-male' },
+      { id: 'wren', voiceId: 'voice-bright-young' },
     ]);
     const books = await flatten();
     const b = books.find((x) => x.title === 'Cast Pending Book')!;
@@ -151,8 +151,8 @@ describe('scanLibrary derived stats', () => {
        voiceCount must be 2 (narrator + the shared voice), not 3. */
     writeCast(bookDir, [
       { id: 'narrator' },
-      { id: 'Hespa', voiceId: 'voice-elder-female' },
-      { id: 'Corvin', voiceId: 'voice-elder-female' },
+      { id: 'hespa', voiceId: 'voice-elder-female' },
+      { id: 'corvin', voiceId: 'voice-elder-female' },
     ]);
     const books = await flatten();
     const b = books.find((x) => x.title === 'Shared Voice Book')!;
@@ -174,7 +174,7 @@ describe('scanLibrary derived stats', () => {
       ],
     });
     await seedAnalysisCache(`m_${bookId}`, [1, 2, 3]);
-    writeCast(bookDir, [{ id: 'narrator' }, { id: 'Marlow', voiceId: 'voice-warm-male' }]);
+    writeCast(bookDir, [{ id: 'narrator' }, { id: 'marlow', voiceId: 'voice-warm-male' }]);
     /* 1500 + 1500 + 600 = 3600 sec = 60 min = '1h 0m' */
     writeSegments(audioRoot, 'ch-01', 1500);
     writeSegments(audioRoot, 'ch-02', 1500);
@@ -278,7 +278,7 @@ describe('scanLibrary derived stats', () => {
     });
     /* 2 of 4 chapters analysed. */
     await seedAnalysisCache(`m_${bookId}`, [1, 2]);
-    writeCast(bookDir, [{ id: 'narrator' }, { id: 'Marlow', voiceId: 'voice-warm-male' }]);
+    writeCast(bookDir, [{ id: 'narrator' }, { id: 'marlow', voiceId: 'voice-warm-male' }]);
     const books = await flatten();
     const b = books.find((x) => x.title === 'Half-Done Book')!;
     expect(b.status).toBe('analysing');
@@ -326,7 +326,7 @@ describe('scanLibrary derived stats', () => {
     );
     /* Cache covers only the active chapters (3 + 4). */
     await seedAnalysisCache(`m_${bookId}`, [3, 4]);
-    writeCast(bookDir, [{ id: 'narrator' }, { id: 'Marlow', voiceId: 'voice-warm-male' }]);
+    writeCast(bookDir, [{ id: 'narrator' }, { id: 'marlow', voiceId: 'voice-warm-male' }]);
     const books = await flatten();
     const b = books.find((x) => x.title === 'Excluded-Heavy Book')!;
     expect(b.status).toBe('cast_pending');

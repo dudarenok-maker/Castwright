@@ -198,7 +198,7 @@ export function validateRosterCoverage(
     const root = key.split(/['’]/)[0];
     if (isStopword(key) || isStopword(root) || ignore.has(key)) continue;
     if (roster.has(key)) continue;
-    // last-token match (tag "Casper" vs roster token "Casper") already covered
+    // last-token match (tag "Casper" vs roster token "casper") already covered
     // because rosterTokenSet stores last tokens too.
     const start = Math.max(0, m.index - t.quoteProximityChars);
     const end = Math.min(body.length, m.index + m[0].length + t.quoteProximityChars);
@@ -438,7 +438,7 @@ export async function runStage1WithRosterGuard<
 
 /* Per-chapter attribution-drift check — the secondary net. The book-wide
    `attributionDriftExceeded` (analysis.ts) dilutes a single damaged chapter
-   below its 5% threshold (the The Drowning Bell ch19 ~30 demotions vanished against a
+   below its 5% threshold (the Drowning Bell ch19 ~30 demotions vanished against a
    whole-book denominator). This flags a chapter whose demotion rate is high on
    its own. WARN-only at the call site — a narration-heavy chapter can
    legitimately demote a lot, so this informs rather than aborts. */

@@ -105,7 +105,7 @@ the mock-chapters gap (to enable the A/B e2e) is the follow-up tracked in
 ### Manual acceptance walkthrough
 
 Run against the real backend (mock mode can't open the A/B player). Canonical
-manuscript: `C:\Users\dudar\Downloads\the Coalfall Commission.txt`.
+manuscript: `server/src/__fixtures__/the-coalfall-commission.md`.
 
 1. Cast view, select 2 characters → floating pill shows **Compare + Clear only**.
 2. Open a character's profile drawer, change the voice, Save → stale-audio banner

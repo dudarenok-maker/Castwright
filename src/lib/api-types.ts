@@ -2846,10 +2846,10 @@ export interface components {
              *         "name": "am_onyx"
              *       },
              *       "qwen": {
-             *         "name": "qwen-Wren",
+             *         "name": "qwen-wren",
              *         "variants": {
              *           "angry": {
-             *             "name": "qwen-Wren__angry"
+             *             "name": "qwen-wren__angry"
              *           }
              *         }
              *       }

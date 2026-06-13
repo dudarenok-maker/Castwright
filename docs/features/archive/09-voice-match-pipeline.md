@@ -82,7 +82,7 @@ Run `VITE_USE_MOCKS=true`. Upload and analyse a book until confirm-cast loads.
 
 ## Cross-book live walkthrough (real backend)
 
-The canonical e2e manuscript for cross-book matching is `~/Downloads/the Coalfall Commission.txt` (do not commit). To exercise the live scoring against a second book in the same series:
+The canonical e2e manuscript for cross-book matching is `server/src/__fixtures__/the-coalfall-commission.md` (do not commit). To exercise the live scoring against a second book in the same series:
 
 1. With a confirmed Keepers book already in the workspace (Marlow present, cast confirmed on disk), import and analyse `the Coalfall Commission.txt`.
 2. **On the confirm page**, the Marlow row should render:

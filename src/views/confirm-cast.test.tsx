@@ -11,32 +11,32 @@ import { uiSlice } from '../store/ui-slice';
 import { ConfirmCastView } from './confirm-cast';
 import type { Character, Voice } from '../lib/types';
 
-const Marlow: Character = {
-  id: 'Marlow',
+const marlow: Character = {
+  id: 'marlow',
   name: 'Marlow',
   role: 'sidekick',
   color: 'eliza',
   lines: 42,
   scenes: 7,
   attributes: ['playful', 'sarcastic'],
-  voiceId: 'v_Marlow',
+  voiceId: 'v_marlow',
   voiceState: 'reused',
   gender: 'male',
   ageRange: 'teen',
   matchedFrom: {
     bookTitle: 'Book One',
     bookId: 'book_one',
-    characterId: 'Marlow_lib',
+    characterId: 'marlow_lib',
     confidence: 0.95,
   },
   matchFactors: [{ id: 'name_exact', label: 'Name match', score: 1, detail: 'Marlow ≡ Marlow' }],
 };
 
-const Wren: Character = {
-  id: 'Wren',
+const wren: Character = {
+  id: 'wren',
   name: 'Wren',
   role: 'protagonist',
-  color: 'Wren',
+  color: 'wren',
   lines: 120,
   scenes: 15,
   attributes: ['brave'],
@@ -47,7 +47,7 @@ const Wren: Character = {
 
 const library: Voice[] = [
   {
-    id: 'v_Marlow',
+    id: 'v_marlow',
     character: 'Marlow',
     bookTitle: 'Book One',
     bookId: 'book_one',
@@ -80,7 +80,7 @@ function renderView(
   return render(
     <Provider store={store}>
       <ConfirmCastView
-        characters={[Marlow, Wren]}
+        characters={[marlow, wren]}
         library={library}
         title="Book Two"
         onOpenProfile={overrides.onOpenProfile ?? (() => {})}
@@ -113,9 +113,9 @@ describe('ConfirmCastView — voice-match wiring', () => {
   it('renders unmatched characters without a Matched pill', () => {
     renderView();
     /* Wren's row should not show any Matched · % pill. */
-    const WrenHeading = screen.getByRole('heading', { name: 'Wren' });
-    const WrenCard = WrenHeading.closest('article')!;
-    expect(within(WrenCard).queryByText(/Matched · /)).toBeNull();
+    const wrenHeading = screen.getByRole('heading', { name: 'Wren' });
+    const wrenCard = wrenHeading.closest('article')!;
+    expect(within(wrenCard).queryByText(/Matched · /)).toBeNull();
   });
 
   it("defaults the matched character's decision to Reuse (continuity message visible)", () => {
@@ -138,7 +138,7 @@ describe('ConfirmCastView — library override toggle', () => {
     rerender(
       <Provider store={configureStore({ reducer: { ui: uiSlice.reducer } })}>
         <ConfirmCastView
-          characters={[Marlow, Wren]}
+          characters={[marlow, wren]}
           library={library}
           title="Book Two"
           onOpenProfile={() => {}}
@@ -165,14 +165,14 @@ describe('ConfirmCastView — library override toggle', () => {
        lands here. The checkbox should not render because we have no way
        to address the library record. */
     const oldShape: Character = {
-      ...Marlow,
+      ...marlow,
       matchedFrom: { bookTitle: 'Book One', confidence: 0.95 },
     };
     const store = configureStore({ reducer: { ui: uiSlice.reducer } });
     render(
       <Provider store={store}>
         <ConfirmCastView
-          characters={[oldShape, Wren]}
+          characters={[oldShape, wren]}
           library={library}
           title="Book Two"
           onOpenProfile={() => {}}
@@ -207,9 +207,9 @@ describe('ConfirmCastView — library override toggle', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
 
     expect(onOverrideLibrary).toHaveBeenCalledWith({
-      sourceCharacterId: 'Marlow',
+      sourceCharacterId: 'marlow',
       targetBookId: 'book_one',
-      targetCharacterId: 'Marlow_lib',
+      targetCharacterId: 'marlow_lib',
     });
   });
 
@@ -250,10 +250,10 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        before confirming the cast. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const WrenHeading = screen.getByRole('heading', { name: 'Wren' });
-    const WrenCard = WrenHeading.closest('article')!;
-    fireEvent.click(WrenCard);
-    expect(onOpenProfile).toHaveBeenCalledWith('Wren');
+    const wrenHeading = screen.getByRole('heading', { name: 'Wren' });
+    const wrenCard = wrenHeading.closest('article')!;
+    fireEvent.click(wrenCard);
+    expect(onOpenProfile).toHaveBeenCalledWith('wren');
   });
 
   it('clicking a MATCHED character card also fires onOpenProfile — drawer opens for matched library reuses too', () => {
@@ -265,10 +265,10 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        or correct the matched profile before confirming. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const MarlowHeading = screen.getByRole('heading', { name: 'Marlow' });
+    const marlowHeading = screen.getByRole('heading', { name: 'Marlow' });
     /* Click on the name node itself — the most natural target. */
-    fireEvent.click(MarlowHeading);
-    expect(onOpenProfile).toHaveBeenCalledWith('Marlow');
+    fireEvent.click(marlowHeading);
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 
   it('clicking the override checkbox on a matched card does NOT open the drawer', () => {
@@ -286,7 +286,7 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
        stay local so picking a tile doesn't also open the drawer. */
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    /* "Generate fresh" tile lives on the matched character (Marlow) row. */
+    /* "Generate fresh" tile lives on the matched character (marlow) row. */
     const generateTile = screen.getByRole('button', { name: /Generate fresh/ });
     fireEvent.click(generateTile);
     expect(onOpenProfile).not.toHaveBeenCalled();
@@ -295,10 +295,10 @@ describe('ConfirmCastView — card click opens profile drawer', () => {
   it('pressing Enter on a focused card opens the profile drawer', () => {
     const onOpenProfile = vi.fn();
     renderView({ onOpenProfile });
-    const MarlowHeading = screen.getByRole('heading', { name: 'Marlow' });
-    const MarlowCard = MarlowHeading.closest('article')!;
-    fireEvent.keyDown(MarlowCard, { key: 'Enter' });
-    expect(onOpenProfile).toHaveBeenCalledWith('Marlow');
+    const marlowHeading = screen.getByRole('heading', { name: 'Marlow' });
+    const marlowCard = marlowHeading.closest('article')!;
+    fireEvent.keyDown(marlowCard, { key: 'Enter' });
+    expect(onOpenProfile).toHaveBeenCalledWith('marlow');
   });
 });
 

@@ -9,22 +9,22 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { CharacterRegenerateModal } from './character-regenerate';
 import type { Character, Chapter } from '../lib/types';
 
-const Marlow = { id: 'Marlow', name: 'Marlow Halden', color: 'narrator', lines: 120 } as Character;
+const marlow = { id: 'marlow', name: 'Marlow Halden', color: 'narrator', lines: 120 } as Character;
 
 const ch = (id: number, characters: Record<string, string>): Chapter =>
   ({ id, title: `Chapter ${id}`, duration: '10:00', state: 'done', progress: 1, characters }) as Chapter;
 
 /* Marlow speaks in 1 + 4; ch2 is narrator-only, ch3 has Marlow skipped. */
 const chapters = [
-  ch(1, { Marlow: 'done', narrator: 'done' }),
+  ch(1, { marlow: 'done', narrator: 'done' }),
   ch(2, { narrator: 'done' }),
-  ch(3, { Marlow: 'skipped', narrator: 'done' }),
-  ch(4, { Marlow: 'done' }),
+  ch(3, { marlow: 'skipped', narrator: 'done' }),
+  ch(4, { marlow: 'done' }),
 ];
 
 describe('CharacterRegenerateModal', () => {
   it('lists only the chapters the character speaks in (skipped/absent excluded)', () => {
-    render(<CharacterRegenerateModal character={Marlow} chapters={chapters} onClose={() => {}} onConfirm={() => {}} />);
+    render(<CharacterRegenerateModal character={marlow} chapters={chapters} onClose={() => {}} onConfirm={() => {}} />);
     const chips = screen.getByTestId('regen-affected-chapters');
     expect(chips.textContent).toMatch(/CH 01/);
     expect(chips.textContent).toMatch(/CH 04/);
@@ -36,10 +36,10 @@ describe('CharacterRegenerateModal', () => {
 
   it('"Regenerate all" fires onConfirm with every affected chapter and preview:false', () => {
     const onConfirm = vi.fn();
-    render(<CharacterRegenerateModal character={Marlow} chapters={chapters} onClose={() => {}} onConfirm={onConfirm} />);
+    render(<CharacterRegenerateModal character={marlow} chapters={chapters} onClose={() => {}} onConfirm={onConfirm} />);
     fireEvent.click(screen.getByTestId('regen-character-all'));
     expect(onConfirm).toHaveBeenCalledWith({
-      characterId: 'Marlow',
+      characterId: 'marlow',
       chapterIds: [1, 4],
       reason: 'voice',
       note: '',
@@ -49,10 +49,10 @@ describe('CharacterRegenerateModal', () => {
 
   it('"Preview first" fires onConfirm with preview:true (first chapter is the sample)', () => {
     const onConfirm = vi.fn();
-    render(<CharacterRegenerateModal character={Marlow} chapters={chapters} onClose={() => {}} onConfirm={onConfirm} />);
+    render(<CharacterRegenerateModal character={marlow} chapters={chapters} onClose={() => {}} onConfirm={onConfirm} />);
     fireEvent.click(screen.getByTestId('regen-character-preview'));
     expect(onConfirm).toHaveBeenCalledWith({
-      characterId: 'Marlow',
+      characterId: 'marlow',
       chapterIds: [1, 4],
       reason: 'voice',
       note: '',
@@ -63,7 +63,7 @@ describe('CharacterRegenerateModal', () => {
   it('disables both actions when the character speaks in no chapters', () => {
     render(
       <CharacterRegenerateModal
-        character={Marlow}
+        character={marlow}
         chapters={[ch(2, { narrator: 'done' })]}
         onClose={() => {}}
         onConfirm={() => {}}
@@ -76,7 +76,7 @@ describe('CharacterRegenerateModal', () => {
   it('estimates the ETA from the affected chapters audio duration × RTF', () => {
     /* Marlow speaks in ch1 + ch4, each 10:00 → 1200s × 2.5 = 3000s = 50 min. */
     render(
-      <CharacterRegenerateModal character={Marlow} chapters={chapters} onClose={() => {}} onConfirm={() => {}} />,
+      <CharacterRegenerateModal character={marlow} chapters={chapters} onClose={() => {}} onConfirm={() => {}} />,
     );
     expect(screen.getByText('≈50 min')).toBeInTheDocument();
   });
@@ -84,7 +84,7 @@ describe('CharacterRegenerateModal', () => {
   it('shows "—" for the ETA when the character speaks in no chapters', () => {
     render(
       <CharacterRegenerateModal
-        character={Marlow}
+        character={marlow}
         chapters={[ch(2, { narrator: 'done' })]}
         onClose={() => {}}
         onConfirm={() => {}}

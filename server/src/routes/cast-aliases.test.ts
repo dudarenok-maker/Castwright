@@ -39,7 +39,7 @@ let bookId: string;
 let cachePath: string;
 
 const sourceCharacter = {
-  id: 'Saltgrave-figure',
+  id: 'saltgrave-figure',
   name: 'Saltgrave Figure',
   role: 'antagonist',
   color: 'eliza',
@@ -54,7 +54,7 @@ const sourceCharacter = {
 };
 
 const otherCharacter = {
-  id: 'Wren',
+  id: 'wren',
   name: 'Wren',
   role: 'protagonist',
   color: 'halloran',
@@ -65,12 +65,12 @@ const otherCharacter = {
    in a chapter Garrow never appeared in originally, so it should NOT
    show as a candidate). Chapter 3 has one Wren line (untouched). */
 const editsSentences = [
-  { id: 1, chapterId: 1, characterId: 'Saltgrave-figure', text: 'The shopkeeper laughed.' },
-  { id: 2, chapterId: 1, characterId: 'Saltgrave-figure', text: '"Garrow said that?"' },
-  { id: 3, chapterId: 1, characterId: 'Saltgrave-figure', text: '"He is one of us."' },
-  { id: 4, chapterId: 2, characterId: 'Saltgrave-figure', text: 'A new line.' },
-  { id: 5, chapterId: 4, characterId: 'Saltgrave-figure', text: 'Chapter 4 line.' },
-  { id: 6, chapterId: 3, characterId: 'Wren', text: 'I have to find him.' },
+  { id: 1, chapterId: 1, characterId: 'saltgrave-figure', text: 'The shopkeeper laughed.' },
+  { id: 2, chapterId: 1, characterId: 'saltgrave-figure', text: '"Garrow said that?"' },
+  { id: 3, chapterId: 1, characterId: 'saltgrave-figure', text: '"He is one of us."' },
+  { id: 4, chapterId: 2, characterId: 'saltgrave-figure', text: 'A new line.' },
+  { id: 5, chapterId: 4, characterId: 'saltgrave-figure', text: 'Chapter 4 line.' },
+  { id: 6, chapterId: 3, characterId: 'wren', text: 'I have to find him.' },
 ];
 
 beforeAll(async () => {
@@ -130,12 +130,12 @@ beforeAll(async () => {
     JSON.stringify({
       chapterCast: {
         1: [
-          { id: 'Garrow', name: 'Garrow', role: 'minor', color: 'halloran' },
-          { id: 'Wren', name: 'Wren', role: 'protagonist', color: 'halloran' },
+          { id: 'garrow', name: 'Garrow', role: 'minor', color: 'halloran' },
+          { id: 'wren', name: 'Wren', role: 'protagonist', color: 'halloran' },
         ],
-        2: [{ id: 'Wren', name: 'Wren', role: 'protagonist', color: 'halloran' }],
-        3: [{ id: 'Wren', name: 'Wren', role: 'protagonist', color: 'halloran' }],
-        4: [{ id: 'Garrow', name: 'Garrow', role: 'minor', color: 'halloran' }],
+        2: [{ id: 'wren', name: 'Wren', role: 'protagonist', color: 'halloran' }],
+        3: [{ id: 'wren', name: 'Wren', role: 'protagonist', color: 'halloran' }],
+        4: [{ id: 'garrow', name: 'Garrow', role: 'minor', color: 'halloran' }],
       },
       chapters: {},
       updatedAt: new Date().toISOString(),
@@ -173,7 +173,7 @@ describe('cast-aliases router — unlink-alias', () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/unlink-alias`)
       .set('Content-Type', 'application/json')
-      .send({ sourceCharacterId: 'Saltgrave-figure', aliasName: 'Garrow' });
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Garrow' });
 
     expect(res.status).toBe(200);
     const body = res.body as UnlinkRes;
@@ -181,7 +181,7 @@ describe('cast-aliases router — unlink-alias', () => {
     /* New standalone character minted. Id is the slug of the alias; name
        preserves chip casing; gender + ageRange inherited from the source
        so the voice picker has something to work with on day one. */
-    expect(body.newCharacter.id).toBe('Garrow');
+    expect(body.newCharacter.id).toBe('garrow');
     expect(body.newCharacter.name).toBe('Garrow');
     expect(body.newCharacter.gender).toBe('male');
     expect(body.newCharacter.ageRange).toBe('adult');
@@ -199,8 +199,8 @@ describe('cast-aliases router — unlink-alias', () => {
     const cast = readDisk<{
       characters: Array<{ id: string; aliases?: string[] }>;
     }>('cast.json');
-    expect(cast.characters.map((c) => c.id)).toEqual(['Saltgrave-figure', 'Wren', 'Garrow']);
-    const source = cast.characters.find((c) => c.id === 'Saltgrave-figure')!;
+    expect(cast.characters.map((c) => c.id)).toEqual(['saltgrave-figure', 'wren', 'garrow']);
+    const source = cast.characters.find((c) => c.id === 'saltgrave-figure')!;
     expect(source.aliases).toEqual(['Sior', 'Jurek', 'Shopkeeper']);
 
     /* manuscript-edits.json is NOT mutated — reattribution is the user's
@@ -209,8 +209,8 @@ describe('cast-aliases router — unlink-alias', () => {
     const edits = readDisk<{ sentences: Array<{ id: number; characterId: string }> }>(
       'manuscript-edits.json',
     );
-    expect(edits.sentences.find((s) => s.id === 1)!.characterId).toBe('Saltgrave-figure');
-    expect(edits.sentences.find((s) => s.id === 5)!.characterId).toBe('Saltgrave-figure');
+    expect(edits.sentences.find((s) => s.id === 1)!.characterId).toBe('saltgrave-figure');
+    expect(edits.sentences.find((s) => s.id === 5)!.characterId).toBe('saltgrave-figure');
   });
 
   it('mints a collision-suffixed id when the slug already exists', async () => {
@@ -225,13 +225,13 @@ describe('cast-aliases router — unlink-alias', () => {
       aliases: [],
     });
     /* Put Shopkeeper back on Saltgrave as an alias to unlink. */
-    const nev = cast.characters.find((c) => c.id === 'Saltgrave-figure')!;
+    const nev = cast.characters.find((c) => c.id === 'saltgrave-figure')!;
     nev.aliases = ['Sior', 'Jurek', 'Shopkeeper'];
     writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
 
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/unlink-alias`)
-      .send({ sourceCharacterId: 'Saltgrave-figure', aliasName: 'Shopkeeper' });
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Shopkeeper' });
 
     expect(res.status).toBe(200);
     const body = res.body as UnlinkRes;
@@ -251,7 +251,7 @@ describe('cast-aliases router — unlink-alias', () => {
 
     const r2 = await request(app)
       .post(`/api/books/${bookId}/cast/unlink-alias`)
-      .send({ sourceCharacterId: 'Saltgrave-figure' });
+      .send({ sourceCharacterId: 'saltgrave-figure' });
     expect(r2.status).toBe(400);
   });
 
@@ -265,7 +265,7 @@ describe('cast-aliases router — unlink-alias', () => {
   it('404s when the alias is not on the source character', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/unlink-alias`)
-      .send({ sourceCharacterId: 'Wren', aliasName: 'Garrow' });
+      .send({ sourceCharacterId: 'wren', aliasName: 'Garrow' });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not on/);
   });
@@ -273,7 +273,7 @@ describe('cast-aliases router — unlink-alias', () => {
   it('404s when the book is unknown', async () => {
     const res = await request(app)
       .post(`/api/books/no-such-book/cast/unlink-alias`)
-      .send({ sourceCharacterId: 'Saltgrave-figure', aliasName: 'Garrow' });
+      .send({ sourceCharacterId: 'saltgrave-figure', aliasName: 'Garrow' });
     expect(res.status).toBe(404);
   });
 });
@@ -287,7 +287,7 @@ describe('cast-aliases router — add-alias', () => {
       JSON.stringify({
         characters: [
           {
-            id: 'Wren',
+            id: 'wren',
             name: 'Wren',
             role: 'protagonist',
             color: 'halloran',
@@ -301,32 +301,32 @@ describe('cast-aliases router — add-alias', () => {
   it('appends a new alias and dedupes case-insensitively', async () => {
     const r1 = await request(app)
       .post(`/api/books/${bookId}/cast/add-alias`)
-      .send({ characterId: 'Wren', aliasName: 'Sofi' });
+      .send({ characterId: 'wren', aliasName: 'Sofi' });
     expect(r1.status).toBe(200);
-    expect(r1.body).toMatchObject({ characterId: 'Wren', alias: 'Sofi', alreadyPresent: false });
+    expect(r1.body).toMatchObject({ characterId: 'wren', alias: 'Sofi', alreadyPresent: false });
     /* cast.json on disk reflects the append. */
     const c1 = readDisk<{ characters: Array<{ id: string; aliases?: string[] }> }>(
       'cast.json',
-    ).characters.find((c) => c.id === 'Wren')!;
+    ).characters.find((c) => c.id === 'wren')!;
     expect(c1.aliases).toEqual(['Foster', 'Sofi']);
 
     /* Idempotent re-add: lowercased dedup is honoured, response flags
        alreadyPresent=true, on-disk list still length 2. */
     const r2 = await request(app)
       .post(`/api/books/${bookId}/cast/add-alias`)
-      .send({ characterId: 'Wren', aliasName: 'sofi' });
+      .send({ characterId: 'wren', aliasName: 'sofi' });
     expect(r2.status).toBe(200);
     expect(r2.body).toMatchObject({ alreadyPresent: true });
     const c2 = readDisk<{ characters: Array<{ id: string; aliases?: string[] }> }>(
       'cast.json',
-    ).characters.find((c) => c.id === 'Wren')!;
+    ).characters.find((c) => c.id === 'wren')!;
     expect(c2.aliases).toEqual(['Foster', 'Sofi']);
   });
 
   it('400s when the alias matches the character\'s own name', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/add-alias`)
-      .send({ characterId: 'Wren', aliasName: 'Wren' });
+      .send({ characterId: 'wren', aliasName: 'Wren' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/own name/);
   });
@@ -334,7 +334,7 @@ describe('cast-aliases router — add-alias', () => {
   it('400s when either field is missing', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/add-alias`)
-      .send({ characterId: 'Wren' });
+      .send({ characterId: 'wren' });
     expect(res.status).toBe(400);
   });
 

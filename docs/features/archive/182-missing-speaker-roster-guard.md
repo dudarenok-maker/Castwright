@@ -118,7 +118,7 @@ ch34 Woltzer, ch47 Lessom again).
 2. Re-run stage1+stage2 for those chapters: `POST
    /api/manuscripts/<mid>/analysis/chapters` `{ "chapterIds": [16,19,33,34,47] }`.
    Watch SSE for the roster-guard auto-add WARN.
-3. Re-audit → clean; `cast.json` now has `Lessom` (+ behnam/cadence/woltzer)
+3. Re-audit → clean; `cast.json` now has `lessom` (+ behnam/cadence/woltzer)
    with non-zero lines; ch19 narrator bucket shrunk from 221.
 4. **[GPU]** Design/assign voices for the recovered characters; regenerate the
    affected (already-rendered) chapters' audio.
@@ -132,5 +132,5 @@ ch34 Woltzer, ch47 Lessom again).
 
 Shipped 2026-06-06 (merge 9bc81e1, PR #520, closes #519). Live acceptance
 confirmed: The Drowning Bell ch16/19/33/34/47 re-analysed; roster-guard recovered
-`Lessom`/`behnam`/`cadence`/`woltzer` with non-zero lines and
+`lessom`/`behnam`/`cadence`/`woltzer` with non-zero lines and
 `npm run audit:missing-speakers -- --book The Drowning Bell` is clean.

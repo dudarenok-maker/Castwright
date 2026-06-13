@@ -19,63 +19,63 @@ const designed = (id: string, name: string): ReuseHydratable => ({
 
 describe('resolveReusedVoiceFields', () => {
   it('returns null when the character already owns a qwen voice', async () => {
-    const c = designed('Garrow', 'qwen-Garrow');
+    const c = designed('garrow', 'qwen-garrow');
     const r = await resolveReusedVoiceFields(c, loaderFrom({}));
     expect(r).toBeNull();
   });
 
   it('returns null when there is no matchedFrom to follow', async () => {
-    const c: ReuseHydratable = { id: 'Vane' };
+    const c: ReuseHydratable = { id: 'vane' };
     expect(await resolveReusedVoiceFields(c, loaderFrom({}))).toBeNull();
   });
 
   it('hydrates from the source book when the reused char has no override', async () => {
     const reused: ReuseHydratable = {
-      id: 'Garrow',
-      matchedFrom: { bookId: 'the Hollow Tide', characterId: 'Garrow' },
+      id: 'garrow',
+      matchedFrom: { bookId: 'the Hollow Tide', characterId: 'garrow' },
     };
     const r = await resolveReusedVoiceFields(
       reused,
-      loaderFrom({ the Hollow Tide: [designed('Garrow', 'qwen-Garrow')] }),
+      loaderFrom({ 'the Hollow Tide': [designed('garrow', 'qwen-garrow')] }),
     );
-    expect(r).toEqual({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-Garrow' } } });
+    expect(r).toEqual({ ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'qwen-garrow' } } });
   });
 
   it('fs-25 — carries the source book\'s emotion variants onto the reused character', async () => {
     const reused: ReuseHydratable = {
-      id: 'Wren',
-      matchedFrom: { bookId: 'book1', characterId: 'Wren' },
+      id: 'wren',
+      matchedFrom: { bookId: 'book1', characterId: 'wren' },
     };
     const source: ReuseHydratable = {
-      id: 'Wren',
+      id: 'wren',
       ttsEngine: 'qwen',
       overrideTtsVoices: {
-        qwen: { name: 'qwen-Wren', variants: { angry: { name: 'qwen-Wren__angry' } } },
+        qwen: { name: 'qwen-wren', variants: { angry: { name: 'qwen-wren__angry' } } },
       },
     };
     const hydrated = await hydrateCharacterVoice(reused, loaderFrom({ book1: [source] }));
     // the variant travels with the base voice into the reused book (Wave 6a).
     expect(hydrated.overrideTtsVoices?.qwen).toEqual({
-      name: 'qwen-Wren',
-      variants: { angry: { name: 'qwen-Wren__angry' } },
+      name: 'qwen-wren',
+      variants: { angry: { name: 'qwen-wren__angry' } },
     });
   });
 
   it('follows a multi-hop matchedFrom chain to the book that holds the override', async () => {
     /* C → B (reused, no override) → A (holds the designed voice). */
-    const inC: ReuseHydratable = { id: 'Garrow', matchedFrom: { bookId: 'B', characterId: 'Garrow' } };
-    const inB: ReuseHydratable = { id: 'Garrow', matchedFrom: { bookId: 'A', characterId: 'Garrow' } };
+    const inC: ReuseHydratable = { id: 'garrow', matchedFrom: { bookId: 'B', characterId: 'garrow' } };
+    const inB: ReuseHydratable = { id: 'garrow', matchedFrom: { bookId: 'A', characterId: 'garrow' } };
     const r = await resolveReusedVoiceFields(
       inC,
-      loaderFrom({ B: [inB], A: [designed('Garrow', 'qwen-Garrow')] }),
+      loaderFrom({ B: [inB], A: [designed('garrow', 'qwen-garrow')] }),
     );
-    expect(r?.overrideTtsVoices.qwen?.name).toBe('qwen-Garrow');
+    expect(r?.overrideTtsVoices.qwen?.name).toBe('qwen-garrow');
   });
 
   it('returns null when the source book is missing', async () => {
     const reused: ReuseHydratable = {
-      id: 'Garrow',
-      matchedFrom: { bookId: 'gone', characterId: 'Garrow' },
+      id: 'garrow',
+      matchedFrom: { bookId: 'gone', characterId: 'garrow' },
     };
     expect(await resolveReusedVoiceFields(reused, loaderFrom({}))).toBeNull();
   });
@@ -83,10 +83,10 @@ describe('resolveReusedVoiceFields', () => {
   it('returns null when no book in the chain carries an override (the Lord Vane case)', async () => {
     /* Every book reuses but none holds the override — runtime resolution can't
        recover it (only the data-recovery migration's on-disk fallback can). */
-    const stell: ReuseHydratable = { id: 'lord-Vane', matchedFrom: { bookId: 'The Tidewatcher's Oath', characterId: 'lord-Vane' } };
-    const The Tidewatcher's Oath: ReuseHydratable = { id: 'lord-Vane' }; // origin, override lost
+    const stell: ReuseHydratable = { id: 'lord-vane', matchedFrom: { bookId: 'the tidewatcher’s oath', characterId: 'lord-vane' } };
+    const tidewatcherOath: ReuseHydratable = { id: 'lord-vane' }; // origin, override lost
     expect(
-      await resolveReusedVoiceFields(stell, loaderFrom({ The Tidewatcher's Oath: [The Tidewatcher's Oath] })),
+      await resolveReusedVoiceFields(stell, loaderFrom({ 'the tidewatcher’s oath': [tidewatcherOath] })),
     ).toBeNull();
   });
 
@@ -118,21 +118,21 @@ describe('resolveReusedVoiceFields', () => {
 describe('hydrateCharacterVoice', () => {
   it('returns the character enriched with the source override', async () => {
     const reused = {
-      id: 'Garrow',
+      id: 'garrow',
       name: 'Garrow',
-      matchedFrom: { bookId: 'the Hollow Tide', characterId: 'Garrow' },
+      matchedFrom: { bookId: 'the Hollow Tide', characterId: 'garrow' },
     };
     const out = await hydrateCharacterVoice(
       reused,
-      loaderFrom({ the Hollow Tide: [designed('Garrow', 'qwen-Garrow')] }),
+      loaderFrom({ 'the Hollow Tide': [designed('garrow', 'qwen-garrow')] }),
     );
     expect(out.ttsEngine).toBe('qwen');
-    expect(out.overrideTtsVoices?.qwen?.name).toBe('qwen-Garrow');
+    expect(out.overrideTtsVoices?.qwen?.name).toBe('qwen-garrow');
     expect((out as { name: string }).name).toBe('Garrow'); // other fields preserved
   });
 
   it('returns the character unchanged when nothing resolves', async () => {
-    const c = { id: 'Vane', name: 'Lord Vane' };
+    const c = { id: 'vane', name: 'Lord Vane' };
     const out = await hydrateCharacterVoice(c, loaderFrom({}));
     expect(out).toBe(c);
   });

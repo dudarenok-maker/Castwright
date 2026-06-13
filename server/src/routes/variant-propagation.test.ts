@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const AUTHOR = 'Della Renwick';
-const SERIES = 'Keeper';
+const SERIES = 'The Hollow Tide';
 const OTHER_SERIES = 'Unrelated';
 
 let workspaceRoot: string;
@@ -61,18 +61,18 @@ function writeBook(
 function readCast(bookDir: string): { characters: Array<Record<string, any>> } {
   return JSON.parse(readFileSync(join(bookDir, '.audiobook', 'cast.json'), 'utf8'));
 }
-function MarlowOf(bookDir: string) {
-  return readCast(bookDir).characters.find((c) => c.id === 'Marlow');
+function marlowOf(bookDir: string) {
+  return readCast(bookDir).characters.find((c) => c.id === 'marlow');
 }
 
-/** Marlow with a designed qwen base — the linked identity is `voiceId: v_Marlow`. */
-function MarlowWithBase() {
+/** Marlow with a designed qwen base — the linked identity is `voiceId: v_marlow`. */
+function marlowWithBase() {
   return {
-    id: 'Marlow',
+    id: 'marlow',
     name: 'Marlow',
-    voiceId: 'v_Marlow',
+    voiceId: 'v_marlow',
     voiceStyle: 'a sardonic, charming teenage boy',
-    overrideTtsVoices: { qwen: { name: 'qwen-v_Marlow' } },
+    overrideTtsVoices: { qwen: { name: 'qwen-v_marlow' } },
   };
 }
 
@@ -94,67 +94,67 @@ beforeEach(() => {
 
 describe('persistEmotionVariant — linked-cast propagation', () => {
   it('travels the variant to every linked character across the series', async () => {
-    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [MarlowWithBase()]);
-    const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [MarlowWithBase()]);
+    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [marlowWithBase()]);
+    const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [marlowWithBase()]);
 
-    await persistEmotionVariant(bookOne, 'Marlow', 'angry', 'qwen-v_Marlow__angry', {
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry', {
       author: AUTHOR,
       series: SERIES,
     });
 
     /* Both linked books carry the variant — the originating book AND its sibling. */
-    expect(MarlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_Marlow__angry',
+    expect(marlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
+      name: 'qwen-v_marlow__angry',
     });
-    expect(MarlowOf(bookTwo)?.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
-      name: 'qwen-v_Marlow__angry',
+    expect(marlowOf(bookTwo)?.overrideTtsVoices?.qwen?.variants?.angry).toEqual({
+      name: 'qwen-v_marlow__angry',
     });
   });
 
   it('does not touch a different series or a standalone book', async () => {
-    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [MarlowWithBase()]);
-    const otherSeries = writeBook(AUTHOR, OTHER_SERIES, 'Spin-off', [MarlowWithBase()]);
-    const standalone = writeBook(AUTHOR, SERIES, 'Standalone', [MarlowWithBase()], {
+    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [marlowWithBase()]);
+    const otherSeries = writeBook(AUTHOR, OTHER_SERIES, 'Spin-off', [marlowWithBase()]);
+    const standalone = writeBook(AUTHOR, SERIES, 'Standalone', [marlowWithBase()], {
       isStandalone: true,
     });
 
-    await persistEmotionVariant(bookOne, 'Marlow', 'angry', 'qwen-v_Marlow__angry', {
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry', {
       author: AUTHOR,
       series: SERIES,
     });
 
-    expect(MarlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
-    expect(MarlowOf(otherSeries)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
-    expect(MarlowOf(standalone)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    expect(marlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
+    expect(marlowOf(otherSeries)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    expect(marlowOf(standalone)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 
   it('bootstraps the qwen base name on a linked sibling that lacks the slot', async () => {
-    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [MarlowWithBase()]);
+    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [marlowWithBase()]);
     /* Sibling has the linked identity but no qwen override yet. */
     const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [
-      { id: 'Marlow', name: 'Marlow', voiceId: 'v_Marlow' },
+      { id: 'marlow', name: 'Marlow', voiceId: 'v_marlow' },
     ]);
 
-    await persistEmotionVariant(bookOne, 'Marlow', 'sad', 'qwen-v_Marlow__sad', {
+    await persistEmotionVariant(bookOne, 'marlow', 'sad', 'qwen-v_marlow__sad', {
       author: AUTHOR,
       series: SERIES,
     });
 
-    const sibling = MarlowOf(bookTwo)?.overrideTtsVoices?.qwen;
-    expect(sibling?.name).toBe('qwen-v_Marlow');
-    expect(sibling?.variants?.sad).toEqual({ name: 'qwen-v_Marlow__sad' });
+    const sibling = marlowOf(bookTwo)?.overrideTtsVoices?.qwen;
+    expect(sibling?.name).toBe('qwen-v_marlow');
+    expect(sibling?.variants?.sad).toEqual({ name: 'qwen-v_marlow__sad' });
   });
 
   it('preserves sibling variants when adding another emotion across the series', async () => {
-    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [MarlowWithBase()]);
-    const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [MarlowWithBase()]);
+    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [marlowWithBase()]);
+    const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [marlowWithBase()]);
     const filter = { author: AUTHOR, series: SERIES };
 
-    await persistEmotionVariant(bookOne, 'Marlow', 'angry', 'qwen-v_Marlow__angry', filter);
-    await persistEmotionVariant(bookOne, 'Marlow', 'sad', 'qwen-v_Marlow__sad', filter);
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry', filter);
+    await persistEmotionVariant(bookOne, 'marlow', 'sad', 'qwen-v_marlow__sad', filter);
 
     for (const dir of [bookOne, bookTwo]) {
-      expect(Object.keys(MarlowOf(dir)?.overrideTtsVoices?.qwen?.variants ?? {}).sort()).toEqual([
+      expect(Object.keys(marlowOf(dir)?.overrideTtsVoices?.qwen?.variants ?? {}).sort()).toEqual([
         'angry',
         'sad',
       ]);
@@ -162,39 +162,39 @@ describe('persistEmotionVariant — linked-cast propagation', () => {
   });
 
   it('stays book-scoped when no seriesFilter is given', async () => {
-    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [MarlowWithBase()]);
-    const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [MarlowWithBase()]);
+    const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [marlowWithBase()]);
+    const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [marlowWithBase()]);
 
-    await persistEmotionVariant(bookOne, 'Marlow', 'angry', 'qwen-v_Marlow__angry');
+    await persistEmotionVariant(bookOne, 'marlow', 'angry', 'qwen-v_marlow__angry');
 
-    expect(MarlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
-    expect(MarlowOf(bookTwo)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
+    expect(marlowOf(bookOne)?.overrideTtsVoices?.qwen?.variants?.angry).toBeDefined();
+    expect(marlowOf(bookTwo)?.overrideTtsVoices?.qwen?.variants).toBeUndefined();
   });
 });
 
 describe('applyOverrideToCastFiles — preserves designed variants', () => {
   it('keeps variants when (re)assigning the base name across the series', async () => {
     const withVariant = () => ({
-      id: 'Marlow',
+      id: 'marlow',
       name: 'Marlow',
-      voiceId: 'v_Marlow',
+      voiceId: 'v_marlow',
       overrideTtsVoices: {
-        qwen: { name: 'qwen-v_Marlow', variants: { angry: { name: 'qwen-v_Marlow__angry' } } },
+        qwen: { name: 'qwen-v_marlow', variants: { angry: { name: 'qwen-v_marlow__angry' } } },
       },
     });
     const bookOne = writeBook(AUTHOR, SERIES, 'Book One', [withVariant()]);
     const bookTwo = writeBook(AUTHOR, SERIES, 'Book Two', [withVariant()]);
 
     await applyOverrideToCastFiles(
-      'v_Marlow',
-      { engine: 'qwen', name: 'qwen-v_Marlow' },
+      'v_marlow',
+      { engine: 'qwen', name: 'qwen-v_marlow' },
       { author: AUTHOR, series: SERIES },
     );
 
     for (const dir of [bookOne, bookTwo]) {
-      const qwen = MarlowOf(dir)?.overrideTtsVoices?.qwen;
-      expect(qwen?.name).toBe('qwen-v_Marlow');
-      expect(qwen?.variants?.angry).toEqual({ name: 'qwen-v_Marlow__angry' });
+      const qwen = marlowOf(dir)?.overrideTtsVoices?.qwen;
+      expect(qwen?.name).toBe('qwen-v_marlow');
+      expect(qwen?.variants?.angry).toEqual({ name: 'qwen-v_marlow__angry' });
     }
   });
 });

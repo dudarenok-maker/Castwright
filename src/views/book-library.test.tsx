@@ -129,7 +129,7 @@ describe('BookLibraryView — loading affordance', () => {
       title: 'Book A',
       seriesPosition: 1,
       voiceCount: 3,
-      voiceIds: ['narrator', 'Wren', 'Marlow'],
+      voiceIds: ['narrator', 'wren', 'marlow'],
     };
     const bookB: LibraryBook = {
       ...oneBook,
@@ -137,14 +137,14 @@ describe('BookLibraryView — loading affordance', () => {
       title: 'Book B',
       seriesPosition: 2,
       voiceCount: 3,
-      voiceIds: ['narrator', 'Wren', 'Brann'],
+      voiceIds: ['narrator', 'wren', 'brann'],
     };
     const author: LibraryAuthor = {
       name: 'Della Renwick',
       series: [{ name: 'The Hollow Tide', books: [bookA, bookB] }],
     };
     renderView({ loaded: true, authors: [author] });
-    /* Union {narrator, Wren, Marlow, Brann} = 4 distinct voices.
+    /* Union {narrator, wren, marlow, brann} = 4 distinct voices.
        The old summing behaviour would have shown 6. */
     const tile = screen.getByTestId('stat-tile-voices');
     expect(tile).toHaveTextContent('4');

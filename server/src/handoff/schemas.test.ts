@@ -109,7 +109,7 @@ describe('fs-33 — emotion-only annotation schema', () => {
   it('rejects a re-attribution attempt — characterId is not allowed (strict)', () => {
     expect(
       emotionAnnotationSchema.safeParse({
-        annotations: [{ sentenceId: 1, emotion: 'sad', characterId: 'Wren' }],
+        annotations: [{ sentenceId: 1, emotion: 'sad', characterId: 'wren' }],
       }).success,
     ).toBe(false);
   });

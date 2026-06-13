@@ -16,7 +16,7 @@ let workspaceRoot: string;
 let app: Express;
 let makeBookIdFn: (a: string, s: string, t: string) => string;
 /* The "current book" we're analysing. It must be a REAL on-disk book in the
-   Keeper series so the (author, series)-scoped matcher resolves its
+   The Hollow Tide series so the (author, series)-scoped matcher resolves its
    series-mates (Book One / Book Two) as eligible candidates. Assigned in
    beforeAll once makeBookId is imported. */
 let CURRENT_BOOK_ID: string;
@@ -90,24 +90,24 @@ beforeAll(async () => {
     makeBookId(AUTHOR, SERIES, 'Book One'),
     [
       {
-        id: 'Marlow',
+        id: 'marlow',
         name: 'Marlow',
-        voiceId: 'v_Marlow',
+        voiceId: 'v_marlow',
         aliases: ['Sir Singe'],
         attributes: ['playful', 'sarcastic'],
         gender: 'male',
         ageRange: 'teen',
       },
       {
-        id: 'Wren',
+        id: 'wren',
         name: 'Wren Sparrow',
-        voiceId: 'v_Wren',
+        voiceId: 'v_wren',
         attributes: ['curious', 'brave'],
         gender: 'female',
         ageRange: 'teen',
       },
       /* Same-series narrator — the legitimate reuse target for a later
-         Keeper book's narrator. */
+         The Hollow Tide book's narrator. */
       { id: 'narrator', name: 'Narrator', voiceId: 'v_narr_the Hollow Tide', gender: 'neutral' },
     ],
     true,
@@ -123,17 +123,17 @@ beforeAll(async () => {
     makeBookId(AUTHOR, SERIES, 'Book Two'),
     [
       {
-        id: 'Marlow',
+        id: 'marlow',
         name: 'Marlow Halden',
-        voiceId: 'v_Marlow_alt',
+        voiceId: 'v_marlow_alt',
         attributes: ['playful', 'rebellious', 'empath'],
         gender: 'male',
         ageRange: 'teen',
       },
       {
-        id: 'Corvin',
+        id: 'corvin',
         name: 'Corvin Reeve',
-        voiceId: 'v_Corvin',
+        voiceId: 'v_corvin',
         attributes: ['gruff'],
         gender: 'male',
         ageRange: 'adult',
@@ -149,14 +149,14 @@ beforeAll(async () => {
     SERIES,
     'Book Three Unconfirmed',
     makeBookId(AUTHOR, SERIES, 'Book Three Unconfirmed'),
-    [{ id: 'Brann', name: 'Brann', voiceId: 'v_Brann_wip', gender: 'male', ageRange: 'teen' }],
+    [{ id: 'brann', name: 'Brann', voiceId: 'v_brann_wip', gender: 'male', ageRange: 'teen' }],
     false,
   );
 
   /* A DIFFERENT author + series, confirmed, with its own narrator. Every
      book's narrator shares the deterministic id/name "narrator", so a
      library-wide exact-name match would let this unrelated-series narrator
-     surface as a candidate for a Keeper book's narrator. It must not. */
+     surface as a candidate for a The Hollow Tide book's narrator. It must not. */
   writeBookOnDisk(
     workspaceRoot,
     'Derek Landy',
@@ -167,7 +167,7 @@ beforeAll(async () => {
     true,
   );
 
-  /* The current book being analysed — a real Keeper-series book on disk so the
+  /* The current book being analysed — a real The Hollow Tide-series book on disk so the
      (author, series) matcher resolves Book One / Book Two as its series-mates.
      Its own cast is empty (and it's excluded as a self-candidate anyway). */
   CURRENT_BOOK_ID = makeBookId(AUTHOR, SERIES, 'Current Book');
@@ -214,7 +214,7 @@ describe('voice-match router', () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
         {
-          id: 'Marlow',
+          id: 'marlow',
           name: 'Marlow',
           attributes: ['playful', 'sarcastic'],
           gender: 'male',
@@ -224,18 +224,18 @@ describe('voice-match router', () => {
     });
     expect(res.status).toBe(200);
     const m = res.body.matches[0];
-    expect(m.characterId).toBe('Marlow');
+    expect(m.characterId).toBe('marlow');
     expect(m.candidates.length).toBeGreaterThan(0);
     const top = m.candidates[0];
     expect(top.score).toBeGreaterThanOrEqual(0.9);
     expect(top.factors[0].id).toBe('name_exact');
     /* Top candidate is Book One's Marlow (exact name match wins over token-overlap). */
-    expect(top.voiceId).toBe('v_Marlow');
+    expect(top.voiceId).toBe('v_marlow');
     expect(top.fromBookTitle).toBe('Book One');
     /* fromBookId + fromCharacterId carry the library record handle so the
        override endpoint can address it without re-walking the tree. */
     expect(top.fromBookId).toBe(makeBookIdFn(AUTHOR, SERIES, 'Book One'));
-    expect(top.fromCharacterId).toBe('Marlow');
+    expect(top.fromCharacterId).toBe('marlow');
   });
 
   it('token-overlap hit: "Marlow Halden" vs library "Marlow" → name_tokens, no name_exact', async () => {
@@ -243,7 +243,7 @@ describe('voice-match router', () => {
        we want the only library Marlow to be the single-token "Marlow" from Book One. */
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'Marlow', name: 'Marlow Halden', attributes: [], gender: 'male', ageRange: 'teen' },
+        { id: 'marlow', name: 'Marlow Halden', attributes: [], gender: 'male', ageRange: 'teen' },
       ],
     });
     expect(res.status).toBe(200);
@@ -275,7 +275,7 @@ describe('voice-match router', () => {
     const m = res.body.matches[0];
     expect(m.candidates.length).toBeGreaterThan(0);
     const top = m.candidates[0];
-    expect(top.voiceId).toBe('v_Marlow');
+    expect(top.voiceId).toBe('v_marlow');
     expect(top.factors[0].id).toBe('name_exact');
     expect(top.score).toBeGreaterThanOrEqual(0.9);
   });
@@ -286,7 +286,7 @@ describe('voice-match router', () => {
        Floor (nameScore < 0.34) must drop every library voice. */
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'Castor', name: 'Castor', attributes: ['stern'], gender: 'male', ageRange: 'adult' },
+        { id: 'castor', name: 'Castor', attributes: ['stern'], gender: 'male', ageRange: 'adult' },
       ],
     });
     expect(res.status).toBe(200);
@@ -300,21 +300,21 @@ describe('voice-match router', () => {
     const bookOneId = makeBookIdFn(AUTHOR, SERIES, 'Book One');
     const res = await callMatch(bookOneId, {
       characters: [
-        { id: 'Marlow', name: 'Marlow', attributes: ['playful'], gender: 'male', ageRange: 'teen' },
+        { id: 'marlow', name: 'Marlow', attributes: ['playful'], gender: 'male', ageRange: 'teen' },
       ],
     });
     expect(res.status).toBe(200);
     const m = res.body.matches[0];
     const voiceIds = m.candidates.map((c: { voiceId: string }) => c.voiceId);
-    expect(voiceIds).not.toContain('v_Marlow'); // own book excluded
-    expect(voiceIds).toContain('v_Marlow_alt'); // other book still in
+    expect(voiceIds).not.toContain('v_marlow'); // own book excluded
+    expect(voiceIds).toContain('v_marlow_alt'); // other book still in
   });
 
   it('unconfirmed books are excluded from the library', async () => {
     /* Book Three (Brann) is castConfirmed: false. Even an exact-name request
        for Brann must return empty candidates. */
     const res = await callMatch(CURRENT_BOOK_ID, {
-      characters: [{ id: 'Brann', name: 'Brann', attributes: [], gender: 'male', ageRange: 'teen' }],
+      characters: [{ id: 'brann', name: 'Brann', attributes: [], gender: 'male', ageRange: 'teen' }],
     });
     expect(res.status).toBe(200);
     expect(res.body.matches[0].candidates).toEqual([]);
@@ -323,15 +323,15 @@ describe('voice-match router', () => {
   it('libraryVoiceIds allow-list restricts candidates to the listed voices', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'Marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' },
+        { id: 'marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' },
       ],
-      libraryVoiceIds: ['v_Marlow_alt'],
+      libraryVoiceIds: ['v_marlow_alt'],
     });
     expect(res.status).toBe(200);
     const m = res.body.matches[0];
-    /* Only v_Marlow_alt was allowed; v_Marlow (Book One's exact match) is filtered out. */
+    /* Only v_marlow_alt was allowed; v_marlow (Book One's exact match) is filtered out. */
     const voiceIds = m.candidates.map((c: { voiceId: string }) => c.voiceId);
-    expect(voiceIds).toEqual(['v_Marlow_alt']);
+    expect(voiceIds).toEqual(['v_marlow_alt']);
   });
 
   it('multiple candidates: exact-name + token-overlap both surface, ranked', async () => {
@@ -341,7 +341,7 @@ describe('voice-match router', () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
         {
-          id: 'Marlow',
+          id: 'marlow',
           name: 'Marlow Halden',
           attributes: ['playful'],
           gender: 'male',
@@ -352,16 +352,16 @@ describe('voice-match router', () => {
     expect(res.status).toBe(200);
     const m = res.body.matches[0];
     expect(m.candidates.length).toBeGreaterThanOrEqual(2);
-    expect(m.candidates[0].voiceId).toBe('v_Marlow_alt'); // Book Two — exact
+    expect(m.candidates[0].voiceId).toBe('v_marlow_alt'); // Book Two — exact
     expect(m.candidates[0].score).toBeGreaterThan(m.candidates[1].score);
     /* The runner-up is Book One's Marlow (token-overlap). */
-    expect(m.candidates[1].voiceId).toBe('v_Marlow');
+    expect(m.candidates[1].voiceId).toBe('v_marlow');
   });
 
   it('processes every input character, even when some have no candidates', async () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
-        { id: 'Marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' },
+        { id: 'marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' },
         {
           id: 'nobody',
           name: 'Some Random Stranger',
@@ -369,18 +369,18 @@ describe('voice-match router', () => {
           gender: 'female',
           ageRange: 'adult',
         },
-        { id: 'Wren', name: 'Wren', attributes: [], gender: 'female', ageRange: 'teen' },
+        { id: 'wren', name: 'Wren', attributes: [], gender: 'female', ageRange: 'teen' },
       ],
     });
     expect(res.status).toBe(200);
     expect(res.body.matches.map((m: { characterId: string }) => m.characterId)).toEqual([
-      'Marlow',
+      'marlow',
       'nobody',
-      'Wren',
+      'wren',
     ]);
-    expect(res.body.matches[0].candidates.length).toBeGreaterThan(0); // Marlow matched
+    expect(res.body.matches[0].candidates.length).toBeGreaterThan(0); // marlow matched
     expect(res.body.matches[1].candidates).toEqual([]); // nobody empty
-    expect(res.body.matches[2].candidates.length).toBeGreaterThan(0); // Wren matched
+    expect(res.body.matches[2].candidates.length).toBeGreaterThan(0); // wren matched
   });
 
   it('generic role (narrator) only matches within the same series', async () => {
@@ -402,7 +402,7 @@ describe('voice-match router', () => {
   it('a real named character does NOT match across a different author/series', async () => {
     /* Auto-match is scoped to the current book's same-author + same-series
        mates — for EVERY character, not just generic role-names. A
-       Skulduggery-series "Marlow" must NOT grab the Keeper-series Marlow's
+       Skulduggery-series "Marlow" must NOT grab The Hollow Tide-series Marlow's
        designed voice: an unrelated author's same-named character is a
        coincidence, not a recurring character. (Cross-series reuse stays
        possible as an explicit Voice-library assignment, just never as a
@@ -410,23 +410,23 @@ describe('voice-match router', () => {
        standalone) wrongly grabbing "Pell" from Della Renwick's Saltgrave. */
     const scepterId = makeBookIdFn('Derek Landy', 'Skulduggery Pleasant', 'Scepter of the Ancients');
     const res = await callMatch(scepterId, {
-      characters: [{ id: 'Marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],
+      characters: [{ id: 'marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],
     });
     expect(res.status).toBe(200);
     const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
-    expect(voiceIds).not.toContain('v_Marlow'); // cross-author/series named char excluded
+    expect(voiceIds).not.toContain('v_marlow'); // cross-author/series named char excluded
   });
 
   it('a real named character STILL matches a same-series sibling book', async () => {
     /* The scope tightening must not break legitimate within-series reuse:
        calling as Book Three (The Hollow Tide), "Marlow" still
-       matches the Keeper-series Marlow designed in Book One / Book Two. */
+       matches The Hollow Tide-series Marlow designed in Book One / Book Two. */
     const bookThreeId = makeBookIdFn(AUTHOR, SERIES, 'Book Three Unconfirmed');
     const res = await callMatch(bookThreeId, {
-      characters: [{ id: 'Marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],
+      characters: [{ id: 'marlow', name: 'Marlow', attributes: [], gender: 'male', ageRange: 'teen' }],
     });
     expect(res.status).toBe(200);
     const voiceIds = res.body.matches[0].candidates.map((c: { voiceId: string }) => c.voiceId);
-    expect(voiceIds.some((v: string) => v === 'v_Marlow' || v === 'v_Marlow_alt')).toBe(true);
+    expect(voiceIds.some((v: string) => v === 'v_marlow' || v === 'v_marlow_alt')).toBe(true);
   });
 });

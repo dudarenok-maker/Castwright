@@ -59,7 +59,7 @@ On a transient throw, while the run is live and `recovery < MAX_RECYCLE_RECOVERI
 
 ### Manual acceptance walkthrough
 
-1. Run a Qwen book (canonical `C:\Users\dudar\Downloads\the Coalfall Commission.txt`) with a deliberately low `SIDECAR_RESTART_MB` to force a recycle mid-chapter.
+1. Run a Qwen book (canonical `server/src/__fixtures__/the-coalfall-commission.md`) with a deliberately low `SIDECAR_RESTART_MB` to force a recycle mid-chapter.
 2. The sidecar log shows `recycling: draining N in-flight synth …` then the code-43 exit; the srv-15 supervisor respawns it.
 3. The in-flight chapter does NOT flip to `failed` in the queue and finishes after the respawn with no manual Retry; `/debug/memory` drops post-respawn.
 4. Set `SIDECAR_DRAIN_GRACE_MS=0` and repeat — half A alone still recovers the chapter (drain disabled → connection drop → in-worker recovery).

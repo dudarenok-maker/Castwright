@@ -24,8 +24,8 @@ describe('engineBreakdownFromSnapshots', () => {
   it('counts distinct speakers per engine for a mixed-engine chapter', () => {
     const breakdown = engineBreakdownFromSnapshots({
       narrator: { voiceEngine: 'kokoro' },
-      Wren: { voiceEngine: 'qwen' },
-      Marlow: { voiceEngine: 'qwen' },
+      wren: { voiceEngine: 'qwen' },
+      marlow: { voiceEngine: 'qwen' },
     });
     expect(breakdown).toEqual({ kokoro: 1, qwen: 2 });
   });
@@ -33,7 +33,7 @@ describe('engineBreakdownFromSnapshots', () => {
   it('attributes a fallen-back character to the engine it ACTUALLY rendered in', () => {
     const breakdown = engineBreakdownFromSnapshots({
       // Configured Qwen, but rendered Kokoro (no designed voice / Qwen down).
-      Wren: { voiceEngine: 'qwen', renderedFallbackEngine: 'kokoro' },
+      wren: { voiceEngine: 'qwen', renderedFallbackEngine: 'kokoro' },
     });
     expect(breakdown).toEqual({ kokoro: 1 });
   });

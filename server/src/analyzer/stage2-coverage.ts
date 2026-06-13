@@ -38,8 +38,8 @@ export interface Stage2CoverageThresholds {
 }
 
 /* minCoverageRatio is deliberately generous (0.6): the attribution legitimately
-   compresses — healthy chapters measured 0.65–1.0 against their prose (Keeper
-   ch22 0.71, Exile ch56 0.78 both reach their true endings). The loop-truncate
+   compresses — healthy chapters measured 0.65–1.0 against their prose (The Hollow Tide
+   ch22 0.71, The Ebb ch56 0.78 both reach their true endings). The loop-truncate
    defect is catastrophic by comparison (The Drowning Bell ch12 0.12, ch18 0.52), and
    a loop that doesn't also truncate is caught by the duplicated-block signal
    regardless of ratio — so a low floor avoids false-flagging normal compression

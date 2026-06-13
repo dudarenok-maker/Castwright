@@ -350,7 +350,7 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 0.05 });
       capturedOpts?.onCastUpdate?.({
-        characters: [makeChar('narrator', 'Narrator'), makeChar('Wren', 'Wren')],
+        characters: [makeChar('narrator', 'Narrator'), makeChar('wren', 'Wren')],
       });
     });
     expect(screen.getByText(/Cast so far · 2 characters/)).toBeInTheDocument();
@@ -362,8 +362,8 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
       capturedOpts?.onCastUpdate?.({
         characters: [
           makeChar('narrator', 'Narrator'),
-          makeChar('Wren', 'Wren'),
-          makeChar('Marlow', 'Marlow'),
+          makeChar('wren', 'Wren'),
+          makeChar('marlow', 'Marlow'),
         ],
       });
     });
@@ -377,7 +377,7 @@ describe('AnalysingView — Phase 0a live cast preview', () => {
     act(() => {
       capturedOpts?.onPhase?.({ phaseId: 0, progress: 1 });
       capturedOpts?.onCastUpdate?.({
-        characters: [makeChar('narrator', 'Narrator'), makeChar('Wren', 'Wren')],
+        characters: [makeChar('narrator', 'Narrator'), makeChar('wren', 'Wren')],
       });
       /* Now Phase 1 (attribution) becomes active. */
       capturedOpts?.onPhase?.({ phaseId: 1, progress: 0.05 });
@@ -733,7 +733,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         series: '',
         seriesPosition: null,
         isStandalone: true,
-        manuscriptFile: 'bonus-Marlow.txt',
+        manuscriptFile: 'bonus-marlow.txt',
         castConfirmed: false,
         chapters: [
           { id: 44, title: 'Chapter Forty-Two', slug: '44-chapter-forty-two', duration: '0:00' },
@@ -993,8 +993,8 @@ describe('AnalysingView — pre-hydrated cast preview on mount', () => {
     store.dispatch(
       castSlice.actions.setCharacters([
         makeChar('narrator', 'Narrator'),
-        makeChar('Wren', 'Wren'),
-        makeChar('Marlow', 'Marlow'),
+        makeChar('wren', 'Wren'),
+        makeChar('marlow', 'Marlow'),
       ]),
     );
 
@@ -1088,21 +1088,21 @@ describe('AnalysingView — dropped-quotes panel', () => {
             affectedCharacters: 2,
             entries: [
               {
-                characterId: 'Wren',
+                characterId: 'wren',
                 characterName: 'Wren',
                 quote: 'fabricated 1',
                 truncated: false,
                 reason: 'not_in_source',
               },
               {
-                characterId: 'Wren',
+                characterId: 'wren',
                 characterName: 'Wren',
                 quote: 'fabricated 2',
                 truncated: false,
                 reason: 'not_in_source',
               },
               {
-                characterId: 'Marlow',
+                characterId: 'marlow',
                 characterName: 'Marlow',
                 quote: '   ',
                 truncated: false,
@@ -1616,7 +1616,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
         series: '',
         seriesPosition: null,
         isStandalone: true,
-        manuscriptFile: 'bonus-Marlow.txt',
+        manuscriptFile: 'bonus-marlow.txt',
         castConfirmed: false,
         chapters: [
           { id: 2, title: 'Chapter Two', slug: '2-chapter-two', duration: '0:00' },

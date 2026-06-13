@@ -1,4 +1,4 @@
-/* Per-chapter no-progress watchdog (2026-06-02 The Drowning Bell ch52 stall).
+/* Per-chapter no-progress watchdog (2026-06-02 the drowning bell ch52 stall).
  *
  * A chapter that makes NO forward progress — no group/batch completes, and no
  * assembly milestone lands — for longer than CHAPTER_NO_PROGRESS_MS must be

@@ -24,8 +24,8 @@ import request from 'supertest';
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const KEEPER_BOOK = 'The Hollow Tide';
-const EXILE_BOOK = 'Exile';
-const The Tidewatcher's Oath_BOOK = 'The Tidewatcher's Oath';
+const EXILE_BOOK = 'The Ebb';
+const TIDEWATCHER_BOOK = 'The Tidewatcher’s Oath';
 const ALIAS_BOOK = 'Saltgrave';
 const OTHER_SERIES_BOOK = 'Different Series Book';
 const STANDALONE = 'Some Standalone';
@@ -34,13 +34,13 @@ let workspaceRoot: string;
 let app: Express;
 let keeperBookId: string;
 let exileBookId: string;
-let The Tidewatcher's OathBookId: string;
+let tidewatcherBookId: string;
 let aliasBookId: string;
 let otherSeriesBookId: string;
 let standaloneBookId: string;
 
-const WrenKeeper = {
-  id: 'Wren',
+const wrenKeeper = {
+  id: 'wren',
   name: 'Wren',
   role: 'character',
   color: 'lilac',
@@ -48,35 +48,35 @@ const WrenKeeper = {
   ageRange: 'teen',
   tone: { warmth: 50, pace: 50, authority: 50, emotion: 50 },
 };
-const WrenExile = {
-  id: 'Wren-foster',
+const wrenExile = {
+  id: 'wren-sparrow',
   name: 'Wren',
   role: 'character',
   color: 'lilac',
   gender: 'female',
   ageRange: 'teen',
 };
-const WrenThe Tidewatcher's Oath = {
-  id: 'Wren-e',
+const wrenThe Tidewatcher's Oath = {
+  id: 'wren-e',
   name: 'Wren',
   role: 'character',
   color: 'lilac',
 };
 /* In this book Wren is recorded as "Foster" (the surname-only nickname)
    with "Wren" as an alias — exercises the alias-match dedup branch. */
-const WrenAliasBook = {
+const wrenAliasBook = {
   id: 'foster',
   name: 'Foster',
   role: 'character',
   color: 'lilac',
   aliases: ['Wren'],
 };
-const HartKeeper = {
-  id: 'Hart',
+const hartKeeper = {
+  id: 'hart',
   name: 'Hart',
   role: 'character',
   color: 'amber',
-  voiceId: 'v_Hart',
+  voiceId: 'v_hart',
 };
 const unrelatedCharacter = {
   id: 'unrelated',
@@ -145,7 +145,7 @@ beforeAll(async () => {
   ]);
   keeperBookId = makeBookId(AUTHOR, SERIES, KEEPER_BOOK);
   exileBookId = makeBookId(AUTHOR, SERIES, EXILE_BOOK);
-  The Tidewatcher's OathBookId = makeBookId(AUTHOR, SERIES, The Tidewatcher's Oath_BOOK);
+  tidewatcherBookId = makeBookId(AUTHOR, SERIES, TIDEWATCHER_BOOK);
   aliasBookId = makeBookId(AUTHOR, SERIES, ALIAS_BOOK);
   otherSeriesBookId = makeBookId(AUTHOR, 'Different Series', OTHER_SERIES_BOOK);
   standaloneBookId = makeBookId(AUTHOR, SERIES, STANDALONE);
@@ -157,14 +157,14 @@ beforeAll(async () => {
 
 beforeEach(() => {
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
-    WrenKeeper,
-    HartKeeper,
+    wrenKeeper,
+    hartKeeper,
   ]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK, exileBookId, [WrenExile]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, The Tidewatcher's Oath_BOOK, The Tidewatcher's OathBookId, [
-    WrenThe Tidewatcher's Oath,
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK, exileBookId, [wrenExile]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, TIDEWATCHER_BOOK, tidewatcherBookId, [
+    wrenThe Tidewatcher's Oath,
   ]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, ALIAS_BOOK, aliasBookId, [WrenAliasBook]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, ALIAS_BOOK, aliasBookId, [wrenAliasBook]);
   writeBookOnDisk(
     workspaceRoot,
     AUTHOR,
@@ -174,7 +174,7 @@ beforeEach(() => {
     [
       /* Same name "Wren" but a different series — must NOT be touched
          by a same-series patch. Locks the (author, series) scope guard. */
-      { id: 'Wren-other', name: 'Wren', role: 'character', color: 'unset' },
+      { id: 'wren-other', name: 'Wren', role: 'character', color: 'unset' },
       unrelatedCharacter,
     ],
   );
@@ -203,25 +203,25 @@ function callPatch(bookId: string, characterId: string, body: object) {
 
 describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
   it('rejects an empty patch body with 400', async () => {
-    const res = await callPatch(keeperBookId, 'Wren', {});
+    const res = await callPatch(keeperBookId, 'wren', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/at least one field/i);
   });
 
   it('rejects an unknown body key with 400', async () => {
-    const res = await callPatch(keeperBookId, 'Wren', { voiceId: 'v_new' });
+    const res = await callPatch(keeperBookId, 'wren', { voiceId: 'v_new' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid patch body/i);
   });
 
   it('rejects an out-of-range tone axis with 400', async () => {
-    const res = await callPatch(keeperBookId, 'Wren', { tone: { warmth: 999 } });
+    const res = await callPatch(keeperBookId, 'wren', { tone: { warmth: 999 } });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/invalid patch body/i);
   });
 
   it('returns 404 for an unknown bookId', async () => {
-    const res = await callPatch('nope', 'Wren', { gender: 'female' });
+    const res = await callPatch('nope', 'wren', { gender: 'female' });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/not found/i);
   });
@@ -233,7 +233,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
   });
 
   it('propagates the patch to all series-mate books containing the same-named character', async () => {
-    const res = await callPatch(keeperBookId, 'Wren', {
+    const res = await callPatch(keeperBookId, 'wren', {
       gender: 'female',
       ageRange: 'teen',
       tone: { warmth: 80 },
@@ -243,7 +243,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
     const updatedBookIds = (res.body.updated as Array<{ bookId: string }>).map((u) => u.bookId);
     expect(updatedBookIds).toContain(keeperBookId);
     expect(updatedBookIds).toContain(exileBookId);
-    expect(updatedBookIds).toContain(The Tidewatcher's OathBookId);
+    expect(updatedBookIds).toContain(tidewatcherBookId);
     expect(updatedBookIds).toContain(aliasBookId);
     expect(updatedBookIds).not.toContain(otherSeriesBookId);
     expect(updatedBookIds).not.toContain(standaloneBookId);
@@ -252,7 +252,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
        cross-series Wren and the standalone are untouched. */
     const keeperCast = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK);
     const exileCast = readCast(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK);
-    const The Tidewatcher's OathCast = readCast(workspaceRoot, AUTHOR, SERIES, The Tidewatcher's Oath_BOOK);
+    const tidewatcherCast = readCast(workspaceRoot, AUTHOR, SERIES, TIDEWATCHER_BOOK);
     const aliasCast = readCast(workspaceRoot, AUTHOR, SERIES, ALIAS_BOOK);
     const otherCast = readCast(workspaceRoot, AUTHOR, 'Different Series', OTHER_SERIES_BOOK);
 
@@ -261,7 +261,7 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
        book that had them; only warmth changed. */
     expect((keeperCast.characters[0].tone as { pace: number }).pace).toBe(50);
     expect((exileCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
-    expect((The Tidewatcher's OathCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
+    expect((tidewatcherCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
     /* Alias-match: the patch reaches the "Foster" row even though name
        differs — alias "Wren" provides the bridge. */
     expect((aliasCast.characters[0].tone as { warmth: number }).warmth).toBe(80);
@@ -283,40 +283,40 @@ describe('POST /api/books/:bookId/cast/:characterId/series-patch', () => {
 
   it('writes only to the source when no series sibling carries a matching name or alias', async () => {
     /* Hart exists only in KEEPER_BOOK in this fixture. */
-    const res = await callPatch(keeperBookId, 'Hart', { ageRange: 'teen' });
+    const res = await callPatch(keeperBookId, 'hart', { ageRange: 'teen' });
     expect(res.status).toBe(200);
     expect(res.body.updated).toEqual([
-      { bookId: keeperBookId, bookTitle: KEEPER_BOOK, characterId: 'Hart' },
+      { bookId: keeperBookId, bookTitle: KEEPER_BOOK, characterId: 'hart' },
     ]);
     expect(res.body.failed).toEqual([]);
   });
 
   it('returns 207 with failed entries when one sibling write throws', async () => {
-    /* Force writeJsonAtomic to fail on the The Tidewatcher's Oath cast.json path so
+    /* Force writeJsonAtomic to fail on the Tidewatcher’s Oath cast.json path so
        the sibling-iteration partial-failure branch executes. */
-    const { The Tidewatcher's OathBookDirPath } = {
-      The Tidewatcher's OathBookDirPath: join(workspaceRoot, 'books', AUTHOR, SERIES, The Tidewatcher's Oath_BOOK),
+    const { tidewatcherBookDirPath } = {
+      tidewatcherBookDirPath: join(workspaceRoot, 'books', AUTHOR, SERIES, TIDEWATCHER_BOOK),
     };
     const stateIo = await import('../workspace/state-io.js');
     const original = stateIo.writeJsonAtomic;
     const spy = vi
       .spyOn(stateIo, 'writeJsonAtomic')
       .mockImplementation(async (path: string, data: unknown) => {
-        if (path.startsWith(The Tidewatcher's OathBookDirPath)) {
+        if (path.startsWith(tidewatcherBookDirPath)) {
           throw new Error('simulated disk-full');
         }
         return original(path, data);
       });
 
     try {
-      const res = await callPatch(keeperBookId, 'Wren', { gender: 'female' });
+      const res = await callPatch(keeperBookId, 'wren', { gender: 'female' });
       expect(res.status).toBe(207);
       const failedBookIds = (res.body.failed as Array<{ bookId: string }>).map((f) => f.bookId);
-      expect(failedBookIds).toContain(The Tidewatcher's OathBookId);
+      expect(failedBookIds).toContain(tidewatcherBookId);
       const updatedBookIds = (res.body.updated as Array<{ bookId: string }>).map((u) => u.bookId);
       expect(updatedBookIds).toContain(keeperBookId);
       expect(updatedBookIds).toContain(exileBookId);
-      expect(updatedBookIds).not.toContain(The Tidewatcher's OathBookId);
+      expect(updatedBookIds).not.toContain(tidewatcherBookId);
     } finally {
       spy.mockRestore();
     }

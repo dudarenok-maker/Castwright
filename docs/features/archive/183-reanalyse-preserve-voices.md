@@ -59,7 +59,7 @@ analysing URL, which is exactly what caused the damage.
   exclude/rollback the un-exclude flow needs).
 - **`scripts/relink-stripped-qwen-voices.mjs`** — committed recovery tool that
   re-points characters at their on-disk `qwen-<id>` voices (dry-run by default).
-  Used to recover the 10 The Drowning Bell + 2 Unlocked casualties of the incident.
+  Used to recover the 10 The Drowning Bell + 2 The Floodmark casualties of the incident.
 - **Reversibility:** the merge is additive (only fills voice fields the analyzer
   omits). Reparse (`book-state.reparse.ts`) still clears cast.json — unchanged.
 

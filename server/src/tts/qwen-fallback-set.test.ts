@@ -14,13 +14,13 @@ const qwenChar = (id: string, over: Partial<CastCharacter> = {}): CastCharacter 
 
 describe('computeQwenKokoroFallbackSet', () => {
   it('includes a Qwen character with NO designed voice', () => {
-    const cast = [qwenChar('Wren')]; // no overrideTtsVoices.qwen
+    const cast = [qwenChar('wren')]; // no overrideTtsVoices.qwen
     const out = computeQwenKokoroFallbackSet(cast, 'qwen');
-    expect(out).toEqual([{ id: 'Wren', name: 'Wren' }]);
+    expect(out).toEqual([{ id: 'wren', name: 'wren' }]);
   });
 
   it('excludes a Qwen character WITH a designed voice', () => {
-    const cast = [qwenChar('Wren', { overrideTtsVoices: { qwen: { name: 'qwen-Wren' } } })];
+    const cast = [qwenChar('wren', { overrideTtsVoices: { qwen: { name: 'qwen-wren' } } })];
     expect(computeQwenKokoroFallbackSet(cast, 'qwen')).toEqual([]);
   });
 
@@ -38,23 +38,23 @@ describe('computeQwenKokoroFallbackSet', () => {
   });
 
   it('honours the legacy singular overrideTtsVoice field', () => {
-    const cast = [qwenChar('Hart', { overrideTtsVoice: { engine: 'qwen', name: 'qwen-Hart' } })];
+    const cast = [qwenChar('hart', { overrideTtsVoice: { engine: 'qwen', name: 'qwen-hart' } })];
     expect(computeQwenKokoroFallbackSet(cast, 'qwen')).toEqual([]);
   });
 
   it('returns a stable id-sorted list across multiple fallbacks', () => {
-    const cast = [qwenChar('zelda'), qwenChar('Varek'), qwenChar('Edda')];
+    const cast = [qwenChar('zelda'), qwenChar('varek'), qwenChar('edda')];
     expect(computeQwenKokoroFallbackSet(cast, 'qwen').map((c) => c.id)).toEqual([
-      'Varek',
-      'Edda',
+      'edda',
+      'varek',
       'zelda',
     ]);
   });
 
   it('is empty for an all-designed cast (the healthy case — no gate)', () => {
     const cast = [
-      qwenChar('Wren', { overrideTtsVoices: { qwen: { name: 'qwen-Wren' } } }),
-      qwenChar('Marlow', { overrideTtsVoices: { qwen: { name: 'qwen-Marlow' } } }),
+      qwenChar('wren', { overrideTtsVoices: { qwen: { name: 'qwen-wren' } } }),
+      qwenChar('marlow', { overrideTtsVoices: { qwen: { name: 'qwen-marlow' } } }),
     ];
     expect(computeQwenKokoroFallbackSet(cast, 'qwen')).toEqual([]);
   });

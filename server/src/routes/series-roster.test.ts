@@ -81,24 +81,24 @@ beforeAll(async () => {
     characters: [
       { id: 'narrator', name: 'Narrator' },
       {
-        id: 'Wren',
+        id: 'wren',
         name: 'Wren',
-        voiceId: 'v_Wren',
+        voiceId: 'v_wren',
         aliases: ['Wren Sparrow'],
         gender: 'female',
         ageRange: 'teen',
       },
-      { id: 'Hart', name: 'Hart', voiceId: 'v_Hart', gender: 'male', ageRange: 'teen' },
+      { id: 'hart', name: 'Hart', voiceId: 'v_hart', gender: 'male', ageRange: 'teen' },
     ],
   });
   bonusBookId = seed(workspaceRoot, AUTHOR, SERIES, 'the Coalfall Commission', {
     confirmed: true,
     characters: [
-      { id: 'Marlow', name: 'Marlow', voiceId: 'v_Marlow' },
-      { id: 'ro', name: 'Ro', voiceId: 'v_ro' },
+      { id: 'marlow', name: 'Marlow', voiceId: 'v_marlow' },
+      { id: 'nim', name: 'Nim', voiceId: 'v_nim' },
     ],
   });
-  unlockedBookId = seed(workspaceRoot, AUTHOR, SERIES, 'Unlocked', {
+  unlockedBookId = seed(workspaceRoot, AUTHOR, SERIES, 'The Floodmark', {
     confirmed: false,
     characters: [{ id: 'narrator', name: 'Narrator' }],
   });
@@ -126,17 +126,17 @@ describe('GET /api/books/:bookId/series-roster', () => {
   it('returns confirmed series-mates for an in-series book, excluding itself', async () => {
     const res = await request(app).get(`/api/books/${keeperBookId}/series-roster`);
     expect(res.status).toBe(200);
-    /* Keeper itself excluded → Bonus Marlow's 2 characters remain. */
+    /* The Hollow Tide itself excluded → Bonus Marlow's 2 characters remain. */
     expect(res.body.characters).toHaveLength(2);
     const names = (res.body.characters as Array<{ name: string }>).map((c) => c.name).sort();
-    expect(names).toEqual(['Marlow', 'Ro']);
+    expect(names).toEqual(['Marlow', 'Nim']);
   });
 
   it('preserves voiceId, aliases, gender, ageRange on each entry', async () => {
-    /* Query from Unlocked's vantage so Keeper #1's full cast surfaces. */
+    /* Query from The Floodmark's vantage so The Hollow Tide #1's full cast surfaces. */
     const res = await request(app).get(`/api/books/${unlockedBookId}/series-roster`);
     expect(res.status).toBe(200);
-    const Wren = (
+    const wren = (
       res.body.characters as Array<{
         name: string;
         voiceId?: string;
@@ -147,23 +147,23 @@ describe('GET /api/books/:bookId/series-roster', () => {
         bookTitle: string;
       }>
     ).find((c) => c.name === 'Wren');
-    expect(Wren).toBeDefined();
-    expect(Wren?.voiceId).toBe('v_Wren');
-    expect(Wren?.aliases).toEqual(['Wren Sparrow']);
-    expect(Wren?.gender).toBe('female');
-    expect(Wren?.ageRange).toBe('teen');
-    expect(Wren?.bookId).toBe(keeperBookId);
-    expect(Wren?.bookTitle).toBe('The Hollow Tide');
+    expect(wren).toBeDefined();
+    expect(wren?.voiceId).toBe('v_wren');
+    expect(wren?.aliases).toEqual(['Wren Sparrow']);
+    expect(wren?.gender).toBe('female');
+    expect(wren?.ageRange).toBe('teen');
+    expect(wren?.bookId).toBe(keeperBookId);
+    expect(wren?.bookTitle).toBe('The Hollow Tide');
   });
 
   it('excludes unconfirmed casts and standalones', async () => {
     const res = await request(app).get(`/api/books/${bonusBookId}/series-roster`);
     expect(res.status).toBe(200);
     const ids = (res.body.characters as Array<{ id: string }>).map((c) => c.id);
-    /* Bonus excluded itself. Keeper #1 surfaces 3. Unlocked is unconfirmed
+    /* Bonus excluded itself. The Hollow Tide #1 surfaces 3. The Floodmark is unconfirmed
        (excluded). Standalone excluded by isStandalone gate. Sibling Book
        is in a different series (excluded). */
-    expect(ids.sort()).toEqual(['Hart', 'narrator', 'Wren']);
+    expect(ids.sort()).toEqual(['hart', 'narrator', 'wren']);
   });
 
   it('excludes books in a different series even when the author matches', async () => {
@@ -177,7 +177,7 @@ describe('GET /api/books/:bookId/series-roster', () => {
     /* A standalone book asking "who else is in my series" can still see
        the series regulars (see series-cast-scan.test.ts §"returns [] for
        a standalone book" — the standalone's own cast is the thing that
-       doesn't flow back). For Some Standalone, sitting under the the Hollow Tide
+       doesn't flow back). For Some Standalone, sitting under the Hollow Tide
        folder, that means it sees the Hollow Tide #1 + Bonus Marlow = 5 characters. */
     const res = await request(app).get(`/api/books/${standaloneBookId}/series-roster`);
     expect(res.status).toBe(200);

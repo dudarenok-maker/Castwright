@@ -38,20 +38,20 @@ let standaloneBookId: string;
 const initialPriorCast = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
   {
-    id: 'councillor-Linnet',
+    id: 'councillor-linnet',
     name: 'Councillor Linnet',
     role: 'character',
     color: 'unset',
-    voiceId: 'v_Linnet',
+    voiceId: 'v_linnet',
     gender: 'female',
     ageRange: 'adult',
   },
-  { id: 'Wren', name: 'Wren', role: 'character', color: 'unset', voiceId: 'v_Wren' },
+  { id: 'wren', name: 'Wren', role: 'character', color: 'unset', voiceId: 'v_wren' },
 ];
 
 const initialSourceCast = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
-  { id: 'lord-Vane', name: 'Lord Vane', role: 'character', color: 'unset' },
+  { id: 'lord-vane', name: 'Lord Vane', role: 'character', color: 'unset' },
 ];
 
 function writeBookOnDisk(
@@ -157,7 +157,7 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
   it('rejects when targetBookId equals the path bookId', async () => {
     const res = await callAdd(sourceBookId, {
       targetBookId: sourceBookId,
-      targetCharacterId: 'lord-Vane',
+      targetCharacterId: 'lord-vane',
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/differ/i);
@@ -166,7 +166,7 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
   it('returns 404 when the source book is unknown', async () => {
     const res = await callAdd('nope', {
       targetBookId: priorBookId,
-      targetCharacterId: 'councillor-Linnet',
+      targetCharacterId: 'councillor-linnet',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source book/i);
@@ -175,7 +175,7 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
   it('returns 404 when the target book is unknown', async () => {
     const res = await callAdd(sourceBookId, {
       targetBookId: 'nope',
-      targetCharacterId: 'councillor-Linnet',
+      targetCharacterId: 'councillor-linnet',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/target book/i);
@@ -216,7 +216,7 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
     );
     const res = await callAdd(sourceBookId, {
       targetBookId: priorBookId,
-      targetCharacterId: 'councillor-Linnet',
+      targetCharacterId: 'councillor-linnet',
     });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/source book has no cast/i);
@@ -225,7 +225,7 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
   it('appends a new character to source.cast.json with matchedFrom + preserved voiceId, returns the full new record', async () => {
     const res = await callAdd(sourceBookId, {
       targetBookId: priorBookId,
-      targetCharacterId: 'councillor-Linnet',
+      targetCharacterId: 'councillor-linnet',
     });
     expect(res.status).toBe(200);
     expect(res.body.character).toMatchObject({
@@ -233,17 +233,17 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
       role: 'character',
       gender: 'female',
       ageRange: 'adult',
-      voiceId: 'v_Linnet',
+      voiceId: 'v_linnet',
       voiceState: 'reused',
       matchedFrom: {
         bookId: priorBookId,
-        characterId: 'councillor-Linnet',
+        characterId: 'councillor-linnet',
         bookTitle: PRIOR_BOOK,
         confidence: 1,
       },
     });
     expect(typeof res.body.character.id).toBe('string');
-    expect(res.body.character.id).not.toBe('councillor-Linnet'); // new local id, not the prior id
+    expect(res.body.character.id).not.toBe('councillor-linnet'); // new local id, not the prior id
 
     const sourceOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, SOURCE_BOOK);
     /* New character appended; old characters untouched. */
@@ -251,7 +251,7 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
     const added = sourceOnDisk.characters.at(-1);
     expect(added).toMatchObject({
       name: 'Councillor Linnet',
-      voiceId: 'v_Linnet',
+      voiceId: 'v_linnet',
       voiceState: 'reused',
     });
   });
@@ -260,7 +260,7 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
     const before = readCast(workspaceRoot, AUTHOR, SERIES, PRIOR_BOOK);
     await callAdd(sourceBookId, {
       targetBookId: priorBookId,
-      targetCharacterId: 'councillor-Linnet',
+      targetCharacterId: 'councillor-linnet',
     });
     const after = readCast(workspaceRoot, AUTHOR, SERIES, PRIOR_BOOK);
     expect(after).toEqual(before);
@@ -269,11 +269,11 @@ describe('POST /api/books/:bookId/cast/add-from-roster', () => {
   it('mints a unique id on repeat calls (no dedupe on the server)', async () => {
     const res1 = await callAdd(sourceBookId, {
       targetBookId: priorBookId,
-      targetCharacterId: 'councillor-Linnet',
+      targetCharacterId: 'councillor-linnet',
     });
     const res2 = await callAdd(sourceBookId, {
       targetBookId: priorBookId,
-      targetCharacterId: 'councillor-Linnet',
+      targetCharacterId: 'councillor-linnet',
     });
     expect(res1.status).toBe(200);
     expect(res2.status).toBe(200);

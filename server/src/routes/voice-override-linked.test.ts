@@ -18,8 +18,8 @@ import request from 'supertest';
 const AUTHOR = 'Della Renwick';
 const SERIES = 'The Hollow Tide';
 const BOOK_A = 'The Hollow Tide';
-const BOOK_B = 'Exile';
-const BOOK_C = 'The Tidewatcher's Oath';
+const BOOK_B = 'The Ebb';
+const BOOK_C = 'The Tidewatcher’s Oath';
 const OTHER_BOOK = 'A Different Saga';
 const STANDALONE = 'A Standalone';
 
@@ -91,22 +91,22 @@ beforeAll(async () => {
 
 beforeEach(() => {
   /* Wren under three divergent identities, NO shared voiceId:
-       A: id 'Wren' (alias "Wren Sparrow")   B: id 'Wren-foster'
-       C: id 'Wren' (no alias). */
+       A: id 'wren' (alias "Wren Sparrow")   B: id 'wren-sparrow'
+       C: id 'wren' (no alias). */
   writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
     { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
-    { id: 'Wren', name: 'Wren', role: 'character', color: 'unset', aliases: ['Wren Sparrow'], lines: 100 },
-    { id: 'Marlow', name: 'Marlow', role: 'character', color: 'unset', voiceId: 'v_Marlow', lines: 80 },
+    { id: 'wren', name: 'Wren', role: 'character', color: 'unset', aliases: ['Wren Sparrow'], lines: 100 },
+    { id: 'marlow', name: 'Marlow', role: 'character', color: 'unset', voiceId: 'v_marlow', lines: 80 },
   ]);
   writeBookOnDisk(AUTHOR, SERIES, BOOK_B, bookB, [
-    { id: 'Wren-foster', name: 'Wren Sparrow', role: 'character', color: 'unset', lines: 90 },
-    { id: 'Marlow-Halden', name: 'Marlow Halden', role: 'character', color: 'unset', voiceId: 'v_Marlow', lines: 60 },
+    { id: 'wren-sparrow', name: 'Wren Sparrow', role: 'character', color: 'unset', lines: 90 },
+    { id: 'marlow-halden', name: 'Marlow Halden', role: 'character', color: 'unset', voiceId: 'v_marlow', lines: 60 },
   ]);
   writeBookOnDisk(AUTHOR, SERIES, BOOK_C, bookC, [
-    { id: 'Wren', name: 'Wren', role: 'character', color: 'unset', lines: 70 },
+    { id: 'wren', name: 'Wren', role: 'character', color: 'unset', lines: 70 },
   ]);
   writeBookOnDisk(AUTHOR, 'A Different Saga', OTHER_BOOK, otherBookId, [
-    { id: 'Wren', name: 'Wren', role: 'character', color: 'unset', lines: 5 },
+    { id: 'wren', name: 'Wren', role: 'character', color: 'unset', lines: 5 },
   ]);
   writeBookOnDisk(AUTHOR, SERIES, STANDALONE, standaloneId, [
     { id: 'loner', name: 'Loner', role: 'character', color: 'unset', lines: 9 },
@@ -127,29 +127,29 @@ function callLinked(bookId: string, characterId: string, body: object) {
 
 describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () => {
   it('unifies voiceId + writes the override across the whole name/alias group', async () => {
-    const res = await callLinked(bookA, 'Wren', {
-      override: { engine: 'qwen', name: 'Wren-designed' },
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'wren-designed' },
     });
     expect(res.status).toBe(200);
-    expect(res.body.canonicalVoiceId).toBe('Wren'); // source.voiceId ?? id
+    expect(res.body.canonicalVoiceId).toBe('wren'); // source.voiceId ?? id
     /* All three Wren rows in THIS series are written + unified. */
     const updatedIds = (res.body.updated as Array<{ characterId: string }>).map((u) => u.characterId).sort();
-    expect(updatedIds).toEqual(['Wren', 'Wren', 'Wren-foster']);
+    expect(updatedIds).toEqual(['wren', 'wren', 'wren-sparrow']);
 
     for (const [title, id] of [
-      [BOOK_A, 'Wren'],
-      [BOOK_B, 'Wren-foster'],
-      [BOOK_C, 'Wren'],
+      [BOOK_A, 'wren'],
+      [BOOK_B, 'wren-sparrow'],
+      [BOOK_C, 'wren'],
     ] as const) {
       const c = findChar(title, id);
-      expect(c?.voiceId).toBe('Wren');
-      expect((c?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name).toBe('Wren-designed');
+      expect(c?.voiceId).toBe('wren');
+      expect((c?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name).toBe('wren-designed');
       expect(c?.ttsEngine).toBe('qwen');
     }
   });
 
   it('does NOT cross series boundaries (the same-named Wren in another saga is untouched)', async () => {
-    await callLinked(bookA, 'Wren', { override: { engine: 'qwen', name: 'Wren-designed' } });
+    await callLinked(bookA, 'wren', { override: { engine: 'qwen', name: 'wren-designed' } });
     const otherPath = join(workspaceRoot, 'books', AUTHOR, 'A Different Saga', OTHER_BOOK, '.audiobook', 'cast.json');
     const other = (JSON.parse(readFileSync(otherPath, 'utf8')) as { characters: Array<Record<string, unknown>> }).characters[0];
     expect(other.overrideTtsVoices).toBeUndefined();
@@ -157,53 +157,53 @@ describe('POST /api/books/:bookId/cast/:characterId/voice-override-linked', () =
   });
 
   it('respects notLinkedTo — a pair marked intentionally different is skipped', async () => {
-    /* Mark A/Wren ↮ B/Wren-foster as different. */
+    /* Mark A/wren ↮ B/wren-sparrow as different. */
     writeBookOnDisk(AUTHOR, SERIES, BOOK_A, bookA, [
       {
-        id: 'Wren',
+        id: 'wren',
         name: 'Wren',
         role: 'character',
         color: 'unset',
         aliases: ['Wren Sparrow'],
-        notLinkedTo: [{ bookId: bookB, characterId: 'Wren-foster' }],
+        notLinkedTo: [{ bookId: bookB, characterId: 'wren-sparrow' }],
         lines: 100,
       },
     ]);
-    const res = await callLinked(bookA, 'Wren', {
-      override: { engine: 'qwen', name: 'Wren-designed' },
+    const res = await callLinked(bookA, 'wren', {
+      override: { engine: 'qwen', name: 'wren-designed' },
     });
     expect(res.status).toBe(200);
-    /* B/Wren-foster is excluded; C/Wren (id-fallback key 'Wren' matches
+    /* B/wren-sparrow is excluded; C/wren (id-fallback key 'wren' matches
        canonical) still gets it. */
-    expect(findChar(BOOK_B, 'Wren-foster')?.overrideTtsVoices).toBeUndefined();
-    expect((findChar(BOOK_C, 'Wren')?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name).toBe('Wren-designed');
+    expect(findChar(BOOK_B, 'wren-sparrow')?.overrideTtsVoices).toBeUndefined();
+    expect((findChar(BOOK_C, 'wren')?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name).toBe('wren-designed');
   });
 
   it('still propagates by shared voiceId across differently-named rows (old behaviour preserved)', async () => {
-    const res = await callLinked(bookA, 'Marlow', {
-      override: { engine: 'qwen', name: 'Marlow-designed' },
+    const res = await callLinked(bookA, 'marlow', {
+      override: { engine: 'qwen', name: 'marlow-designed' },
     });
     expect(res.status).toBe(200);
-    expect(res.body.canonicalVoiceId).toBe('v_Marlow');
-    /* B/Marlow-Halden shares voiceId v_Marlow though its name differs. */
-    expect((findChar(BOOK_B, 'Marlow-Halden')?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name).toBe('Marlow-designed');
-    expect(findChar(BOOK_A, 'Marlow')?.voiceId).toBe('v_Marlow');
+    expect(res.body.canonicalVoiceId).toBe('v_marlow');
+    /* B/marlow-halden shares voiceId v_marlow though its name differs. */
+    expect((findChar(BOOK_B, 'marlow-halden')?.overrideTtsVoices as Record<string, { name: string }>)?.qwen?.name).toBe('marlow-designed');
+    expect(findChar(BOOK_A, 'marlow')?.voiceId).toBe('v_marlow');
   });
 
   it('clears the engine map when override is null', async () => {
-    await callLinked(bookA, 'Wren', { override: { engine: 'qwen', name: 'Wren-designed' } });
-    const res = await callLinked(bookA, 'Wren', { override: null });
+    await callLinked(bookA, 'wren', { override: { engine: 'qwen', name: 'wren-designed' } });
+    const res = await callLinked(bookA, 'wren', { override: null });
     expect(res.status).toBe(200);
-    expect(findChar(BOOK_A, 'Wren')?.overrideTtsVoices).toBeUndefined();
+    expect(findChar(BOOK_A, 'wren')?.overrideTtsVoices).toBeUndefined();
   });
 
   it('400s an invalid override body', async () => {
-    const res = await callLinked(bookA, 'Wren', { override: { engine: 'banjo', name: 'x' } });
+    const res = await callLinked(bookA, 'wren', { override: { engine: 'banjo', name: 'x' } });
     expect(res.status).toBe(400);
   });
 
   it('404s an unknown book or character', async () => {
-    expect((await callLinked('nope', 'Wren', { override: null })).status).toBe(404);
+    expect((await callLinked('nope', 'wren', { override: null })).status).toBe(404);
     expect((await callLinked(bookA, 'ghost', { override: null })).status).toBe(404);
   });
 

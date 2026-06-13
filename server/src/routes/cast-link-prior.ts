@@ -163,7 +163,7 @@ castLinkPriorRouter.post('/:bookId/cast/link-prior', async (req: Request, res: R
      A manual continuity link declares "these are the same person", so the
      reused row should inherit the canonical character's representative quotes
      and descriptors — not just its voice. Without this a roster-carried row
-     (e.g. an Unlocked "Dame Linnet" with zero of its own detected lines) stays
+     (e.g. an The Floodmark "Dame Linnet" with zero of its own detected lines) stays
      blank after linking, which reads as "the link did nothing". Merge rules
      mirror the in-book merge (cast-merge.ts): union the list fields (evidence,
      attributes) source-first so the current book's own quotes lead, and

@@ -147,23 +147,23 @@ describe('persistenceMiddleware — payload shape', () => {
        this persist the matchedFrom lived only in redux and reverted on
        reload, so the Reused badge + merge-picker suppression silently broke. */
     const next = vi.fn((x) => x);
-    const state = baseState({ cast: { characters: [{ id: 'Wren', matchedFrom: { bookId: 'b0' } }] } });
+    const state = baseState({ cast: { characters: [{ id: 'wren', matchedFrom: { bookId: 'b0' } }] } });
     persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyManualMatch' });
     await advance(500);
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'cast',
-      patch: { characters: [{ id: 'Wren', matchedFrom: { bookId: 'b0' } }] },
+      patch: { characters: [{ id: 'wren', matchedFrom: { bookId: 'b0' } }] },
     });
   });
 
   it('persists the full cast on applyAddAlias so the alias is the authoritative last write', async () => {
     const next = vi.fn((x) => x);
-    const state = baseState({ cast: { characters: [{ id: 'Castor', aliases: ['Castor'] }] } });
+    const state = baseState({ cast: { characters: [{ id: 'castor', aliases: ['Castor'] }] } });
     persistenceMiddleware(makeStore(state))(next)({ type: 'cast/applyAddAlias' });
     await advance(500);
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'cast',
-      patch: { characters: [{ id: 'Castor', aliases: ['Castor'] }] },
+      patch: { characters: [{ id: 'castor', aliases: ['Castor'] }] },
     });
   });
 

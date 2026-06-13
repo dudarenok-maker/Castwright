@@ -55,7 +55,7 @@ owner: null
 
 ## A/B result (2026-06-01) — candidate 1 REJECTED
 
-Run on the 8 GB box (cold sidecar each side, voice `qwen-Maerin`, `--batch 16 --mem-sample`):
+Run on the 8 GB box (cold sidecar each side, voice `qwen-maerin`, `--batch 16 --mem-sample`):
 
 - **OFF (`SIDECAR_DISABLE_MKLDNN=0`):** healthy throughput (~120–150 s/batch). The leak reproduced emphatically — committed-private ~20.2 GB @ batch 12 → ~32.9 GB @ batch 23 ≈ **+1,150 MB/batch**, with CUDA also climbing into heavy WDDM spill (reserved 3.3 → 16.2 GB) by ~batch 23, at which point batches stall. (NB: that spill regime is well past production, which never exceeds ~6 GB VRAM — cap A/B runs at ~25 batches.)
 - **ON (`SIDECAR_DISABLE_MKLDNN=1`):** **synth catastrophically slow.** A single 16-sentence batch did **not complete in 31 minutes** (vs ~120 s OFF); the sidecar pegged ~7–8 CPU cores (13,724 cpu-s over ~31 min wall) while the **GPU sat idle (0 %)** — the bottleneck moved to an un-accelerated CPU op in the Qwen audio path (tokenizer / Code2Wav vocoder). The leak slope was unmeasurable because no batch finished.

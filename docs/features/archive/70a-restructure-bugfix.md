@@ -65,7 +65,7 @@ owner: null
 
 ## Out of scope
 
-- **Parser oversplit fix** (decorative POV separators like `- TWELVE - Marlow` emitting empty chapters at parse time). Root cause investigation needs more data than the screenshots provide. The structural prune-pass cleans up the symptom by removing 0-sentence chapters during the next merge / reorder, so the user-visible bug is resolved without a parser change. Reopen if the user reports the symptom returning on fresh imports of a known file. Tracked as a backlog follow-up.
+- **Parser oversplit fix** (decorative POV separators like `- TWELVE - MARLOW` emitting empty chapters at parse time). Root cause investigation needs more data than the screenshots provide. The structural prune-pass cleans up the symptom by removing 0-sentence chapters during the next merge / reorder, so the user-visible bug is resolved without a parser change. Reopen if the user reports the symptom returning on fresh imports of a known file. Tracked as a backlog follow-up.
 - **Frontend `warnings` toast.** The HTTP response now carries the field but the frontend ignores it. Adding a `pushToast` consumer is part of plan 70b along with the rest of the Restructure-view UI work.
 - **Exclude endpoint** (Part C of the larger plan) — landed separately in plan 70b.
 - **Refresh chapter names button** (Part D) — landed separately in plan 70b.

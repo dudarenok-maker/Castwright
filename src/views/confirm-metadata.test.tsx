@@ -98,15 +98,15 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     const user = userEvent.setup();
     renderView([
       libraryBook({
-        bookId: 'shannon-messenger__keeper__exile',
-        title: 'Exile',
+        bookId: 'della-renwick__the-hollow-tide__the-ebb',
+        title: 'The Ebb',
         seriesPosition: 2,
       }),
     ]);
     const bookNum = screen.getByPlaceholderText('1');
     await user.type(bookNum, '2');
     expect(screen.getByText(/heads-up/i)).toBeInTheDocument();
-    expect(screen.getByText(/Exile/)).toBeInTheDocument();
+    expect(screen.getByText(/The Ebb/)).toBeInTheDocument();
   });
 
   it('does not warn when the same number exists in a different series', async () => {
@@ -119,19 +119,19 @@ describe('ConfirmMetadataView — duplicate position warning', () => {
     expect(screen.queryByText(/heads-up/i)).not.toBeInTheDocument();
   });
 
-  it('matches series case-insensitively (so "The Hollow Tide" and "Keeper…" collide)', async () => {
+  it('matches series case-insensitively (so "the hollow tide" and "Keeper…" collide)', async () => {
     const user = userEvent.setup();
     renderView([
       libraryBook({
         bookId: 'lower-case-series',
-        title: 'The Tidewatcher's Oath',
-        series: 'The Hollow Tide',
+        title: 'The Tidewatcher’s Oath',
+        series: 'the hollow tide',
         seriesPosition: 3,
       }),
     ]);
     const bookNum = screen.getByPlaceholderText('1');
     await user.type(bookNum, '3');
-    expect(screen.getByText(/The Tidewatcher's Oath/)).toBeInTheDocument();
+    expect(screen.getByText(/The Tidewatcher’s Oath/)).toBeInTheDocument();
   });
 });
 
@@ -169,7 +169,7 @@ describe('ConfirmMetadataView — seriesFromTitle chip (Bug B)', () => {
       seriesFromTitle: true,
       series: 'The Hollow Tide',
       seriesPosition: 3,
-      title: 'The Tidewatcher's Oath',
+      title: 'The Tidewatcher’s Oath',
     });
     expect(screen.getByText(/auto-extracted from title/i)).toBeInTheDocument();
   });

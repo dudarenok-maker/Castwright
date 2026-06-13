@@ -74,7 +74,7 @@ Per CLAUDE.md "Testing discipline (REQUIRED for every change)": every wave ships
 
 ### Manual acceptance walkthrough
 
-Run with the canonical full-pipeline manuscript `C:\Users\dudar\Downloads\the Coalfall Commission.txt` (CLAUDE.md "Canonical end-to-end manuscript"). Reboot before any timing assertion (`feedback_reboot_before_perf_baselines.md`).
+Run with the canonical full-pipeline manuscript `server/src/__fixtures__/the-coalfall-commission.md` (CLAUDE.md "Canonical end-to-end manuscript"). Reboot before any timing assertion (`feedback_reboot_before_perf_baselines.md`).
 
 1. **Cold boot at `#/`** → expected stage `{ kind: 'books' }`, library view, top-bar shows no queue chip (queue is empty).
 2. **Upload Marlow + a Pushkin short-story stub.** Analyse both books to completion.

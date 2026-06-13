@@ -219,7 +219,7 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
     const start = baseState(
       sentences([
         { id: 1, text: 'a', characterId: 'narrator' },
-        { id: 2, text: 'b', characterId: 'Wren' },
+        { id: 2, text: 'b', characterId: 'wren' },
       ]),
     );
     const tagged = manuscriptSlice.reducer(
@@ -241,8 +241,8 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
       baseState(
         sentences([
           { id: 1, chapterId: 1, text: 'a', characterId: 'narrator' },
-          { id: 2, chapterId: 1, text: 'b', characterId: 'Wren' },
-          { id: 3, chapterId: 1, text: 'c', characterId: 'Marlow', emotion: 'sad' },
+          { id: 2, chapterId: 1, text: 'b', characterId: 'wren' },
+          { id: 3, chapterId: 1, text: 'c', characterId: 'marlow', emotion: 'sad' },
         ]),
       );
 
@@ -271,8 +271,8 @@ describe('manuscriptSlice — setSentenceCharacter / setSentencesCharacter', () 
 
     it('ignores a neutral annotation and is scoped by (chapterId, sentenceId)', () => {
       const withCh2 = baseState([
-        ...sentences([{ id: 1, chapterId: 1, text: 'a', characterId: 'Wren' }]),
-        ...sentences([{ id: 1, chapterId: 2, text: 'a2', characterId: 'Wren' }]),
+        ...sentences([{ id: 1, chapterId: 1, text: 'a', characterId: 'wren' }]),
+        ...sentences([{ id: 1, chapterId: 2, text: 'a2', characterId: 'wren' }]),
       ]);
       const next = manuscriptSlice.reducer(
         withCh2,

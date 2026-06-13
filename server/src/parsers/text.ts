@@ -325,7 +325,7 @@ export function parseText(
 
   /* Series-extraction priority (Bug B): authoritative filename metadata
      wins; otherwise try the title-parenthetical heuristic so a markdown
-     H1 like "The Tidewatcher's Oath (The Hollow Tide Book 3)" still yields
+     H1 like "The Tidewatcher’s Oath (The Hollow Tide Book 3)" still yields
      series + seriesPosition. Strips the parenthetical off the title on
      a hit so the saved manuscript title is clean. */
   let resolvedSeries = fileMeta.series;

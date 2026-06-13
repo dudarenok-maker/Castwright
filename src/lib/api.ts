@@ -6521,13 +6521,13 @@ const mock = {
     /* Newest-first; the first three rows come from a second book so the Admin
        panel's per-book grouping has more than one group to render in mock mode. */
     const books = [
-      { bookId: 'mock-book-The Drowning Bell', bookTitle: 'The Drowning Bell' },
-      { bookId: 'mock-book-The Drowning Bell', bookTitle: 'The Drowning Bell' },
-      { bookId: 'mock-book-The Drowning Bell', bookTitle: 'The Drowning Bell' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
-      { bookId: 'mock-book-unlocked', bookTitle: 'Unlocked' },
+      { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
+      { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
+      { bookId: 'mock-book-the-drowning-bell', bookTitle: 'The Drowning Bell' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
+      { bookId: 'mock-book-unlocked', bookTitle: 'The Floodmark' },
     ];
     const records: ResourceTelemetryRecord[] = [2.41, 2.12, 1.78, 1.5, 1.31, 1.12, 0.94].map(
       (rtf, i) => ({

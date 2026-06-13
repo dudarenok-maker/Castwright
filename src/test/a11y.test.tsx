@@ -115,18 +115,18 @@ const chapters: Chapter[] = [
 const characters: Character[] = [
   { id: 'narrator', name: 'Anders Vale', role: 'Narrator', color: 'narrator' } as Character,
   {
-    id: 'Marlow',
+    id: 'marlow',
     name: 'Marlow',
     role: 'sidekick',
     color: 'eliza',
     lines: 42,
     scenes: 7,
-    voiceId: 'v_Marlow',
+    voiceId: 'v_marlow',
     voiceState: 'reused',
     matchedFrom: {
       bookTitle: 'Book One',
       bookId: 'book_one',
-      characterId: 'Marlow_lib',
+      characterId: 'marlow_lib',
       confidence: 0.95,
     },
   } as Character,
@@ -134,7 +134,7 @@ const characters: Character[] = [
 
 const library: Voice[] = [
   {
-    id: 'v_Marlow',
+    id: 'v_marlow',
     character: 'Marlow',
     bookTitle: 'Book One',
     bookId: 'book_one',

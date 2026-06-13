@@ -74,7 +74,7 @@ const STANDALONE: BookSeriesInfo = {
 
 describe('normaliseDuplicateToken', () => {
   it('lowercases and strips non-alphanumerics', () => {
-    expect(normaliseDuplicateToken('Wren Sparrow')).toBe('Wrenfoster');
+    expect(normaliseDuplicateToken('Wren Sparrow')).toBe('wrensparrow');
     expect(normaliseDuplicateToken("O'Brien")).toBe('obrien');
     expect(normaliseDuplicateToken('  Eliza-Gray  ')).toBe('elizagray');
     expect(normaliseDuplicateToken('')).toBe('');
@@ -84,10 +84,10 @@ describe('normaliseDuplicateToken', () => {
 
 describe('looksLikeSameName', () => {
   it('matches identical normalised tokens', () => {
-    expect(looksLikeSameName('Wren', 'Wren')).toBe(true);
+    expect(looksLikeSameName('wren', 'wren')).toBe(true);
   });
   it('matches when one is a strict substring of the other', () => {
-    expect(looksLikeSameName('Wren', 'Wrenfoster')).toBe(true);
+    expect(looksLikeSameName('wren', 'wrensparrow')).toBe(true);
     expect(looksLikeSameName('elizagray', 'eliza')).toBe(true);
   });
   it('does not match unrelated names', () => {
@@ -98,8 +98,8 @@ describe('looksLikeSameName', () => {
     expect(looksLikeSameName('el', 'eliza')).toBe(false);
   });
   it('does not match empty', () => {
-    expect(looksLikeSameName('', 'Wren')).toBe(false);
-    expect(looksLikeSameName('Wren', '')).toBe(false);
+    expect(looksLikeSameName('', 'wren')).toBe(false);
+    expect(looksLikeSameName('wren', '')).toBe(false);
   });
 });
 
@@ -546,55 +546,55 @@ describe('sameCharacterByNameAlias', () => {
   });
 
   it('matches identical names across books', () => {
-    const a = id({ bookId: 'b1', characterId: 'Wren', name: 'Wren' });
-    const b = id({ bookId: 'b2', characterId: 'Wren', name: 'Wren' });
+    const a = id({ bookId: 'b1', characterId: 'wren', name: 'Wren' });
+    const b = id({ bookId: 'b2', characterId: 'wren', name: 'Wren' });
     expect(sameCharacterByNameAlias(a, b)).toBe(true);
   });
 
   it('matches via a strict substring (Wren ⊂ Wren Sparrow)', () => {
-    const a = id({ bookId: 'b1', characterId: 'Wren', name: 'Wren' });
-    const b = id({ bookId: 'b2', characterId: 'Wren-foster', name: 'Wren Sparrow' });
+    const a = id({ bookId: 'b1', characterId: 'wren', name: 'Wren' });
+    const b = id({ bookId: 'b2', characterId: 'wren-sparrow', name: 'Wren Sparrow' });
     expect(sameCharacterByNameAlias(a, b)).toBe(true);
   });
 
-  it('matches punctuation/case variants of the id-name (Castor ≡ bron-te)', () => {
-    const a = id({ bookId: 'b1', characterId: 'Castor', name: 'Castor' });
-    const b = id({ bookId: 'b2', characterId: 'bron-te', name: 'Bron-te' });
+  it('matches punctuation/case variants of the id-name (Castor ≡ cas-tor)', () => {
+    const a = id({ bookId: 'b1', characterId: 'castor', name: 'Castor' });
+    const b = id({ bookId: 'b2', characterId: 'cas-tor', name: 'Cas-tor' });
     expect(sameCharacterByNameAlias(a, b)).toBe(true);
   });
 
   it('matches through an alias bridge', () => {
-    const a = id({ bookId: 'b1', characterId: 'Wren', name: 'Wren', aliases: ['Wren Sparrow'] });
+    const a = id({ bookId: 'b1', characterId: 'wren', name: 'Wren', aliases: ['Wren Sparrow'] });
     const b = id({ bookId: 'b2', characterId: 'foster', name: 'Foster', aliases: ['Wren Sparrow'] });
     expect(sameCharacterByNameAlias(a, b)).toBe(true);
   });
 
   it('does NOT match unrelated names (typo variants with no shared token)', () => {
     const a = id({ bookId: 'b1', characterId: 'aldan', name: 'Aldan' });
-    const b = id({ bookId: 'b2', characterId: 'Maelor', name: 'Maelor' });
+    const b = id({ bookId: 'b2', characterId: 'maelor', name: 'Maelor' });
     expect(sameCharacterByNameAlias(a, b)).toBe(false);
   });
 
   it('is blocked by notLinkedTo in either direction', () => {
     const a = id({
       bookId: 'b1',
-      characterId: 'Wren',
+      characterId: 'wren',
       name: 'Wren',
-      notLinkedTo: [{ bookId: 'b2', characterId: 'Wren' }],
+      notLinkedTo: [{ bookId: 'b2', characterId: 'wren' }],
     });
-    const b = id({ bookId: 'b2', characterId: 'Wren', name: 'Wren' });
+    const b = id({ bookId: 'b2', characterId: 'wren', name: 'Wren' });
     expect(sameCharacterByNameAlias(a, b)).toBe(false);
     expect(sameCharacterByNameAlias(b, a)).toBe(false);
   });
 
   it('never matches a fold-bucket id', () => {
     const a = id({ bookId: 'b1', characterId: 'unknown-male', name: 'Lord Vane' });
-    const b = id({ bookId: 'b2', characterId: 'lord-Vane', name: 'Lord Vane' });
+    const b = id({ bookId: 'b2', characterId: 'lord-vane', name: 'Lord Vane' });
     expect(sameCharacterByNameAlias(a, b)).toBe(false);
   });
 
   it('does not match the same (book, character) row against itself', () => {
-    const a = id({ bookId: 'b1', characterId: 'Wren', name: 'Wren' });
+    const a = id({ bookId: 'b1', characterId: 'wren', name: 'Wren' });
     expect(sameCharacterByNameAlias(a, { ...a })).toBe(false);
   });
 });

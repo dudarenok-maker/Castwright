@@ -40,20 +40,20 @@ let standaloneBookId: string;
 const initialKeeperCast = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
   {
-    id: 'Hart',
+    id: 'hart',
     name: 'Hart',
     role: 'character',
     color: 'unset',
-    voiceId: 'v_Hart',
+    voiceId: 'v_hart',
     aliases: ['Hartwell'],
   },
-  { id: 'Wren', name: 'Wren', role: 'character', color: 'unset', voiceId: 'v_Wren' },
+  { id: 'wren', name: 'Wren', role: 'character', color: 'unset', voiceId: 'v_wren' },
 ];
 
 const initialNewBookCast = [
   { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
   {
-    id: 'Hartwell-alvin-Vale',
+    id: 'hartwell-brennan-vale',
     name: 'Hartwell Brennan Vale',
     role: 'character',
     color: 'unset',
@@ -156,16 +156,16 @@ function callLink(bookId: string, body: object) {
 
 describe('POST /api/books/:bookId/cast/link-prior', () => {
   it('rejects when any of the three body ids are missing', async () => {
-    const res = await callLink(newBookId, { sourceCharacterId: 'Hartwell-alvin-Vale' });
+    const res = await callLink(newBookId, { sourceCharacterId: 'hartwell-brennan-vale' });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
   });
 
   it('rejects when targetBookId equals the path bookId', async () => {
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: newBookId,
-      targetCharacterId: 'Hartwell-alvin-Vale',
+      targetCharacterId: 'hartwell-brennan-vale',
     });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/differ/i);
@@ -173,9 +173,9 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
 
   it('returns 404 when the source book is unknown', async () => {
     const res = await callLink('nope', {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source book/i);
@@ -183,9 +183,9 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
 
   it('returns 404 when the target book is unknown', async () => {
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: 'nope',
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/target book/i);
@@ -193,7 +193,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
 
   it('returns 404 when target book is in a different series', async () => {
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: otherBookId,
       targetCharacterId: 'unrelated',
     });
@@ -203,7 +203,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
 
   it('returns 404 when target book is a standalone', async () => {
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: standaloneBookId,
       targetCharacterId: 'lonely',
     });
@@ -215,7 +215,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     const res = await callLink(newBookId, {
       sourceCharacterId: 'missing',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/source character/i);
@@ -223,7 +223,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
 
   it('returns 404 when the target character is unknown', async () => {
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
       targetCharacterId: 'missing',
     });
@@ -233,26 +233,26 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
 
   it('appends source.name to target.aliases on disk and returns matchedFrom + voiceId', async () => {
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       matchedFrom: {
         bookId: keeperBookId,
-        characterId: 'Hart',
+        characterId: 'hart',
         bookTitle: KEEPER_BOOK,
         confidence: 1,
       },
-      voiceId: 'v_Hart',
+      voiceId: 'v_hart',
     });
 
-    const HartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'Hart',
+    const hartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'hart',
     );
-    expect(HartOnDisk).toBeDefined();
-    expect(HartOnDisk?.aliases).toEqual(['Hartwell', 'Hartwell Brennan Vale', 'Bren']);
+    expect(hartOnDisk).toBeDefined();
+    expect(hartOnDisk?.aliases).toEqual(['Hartwell', 'Hartwell Brennan Vale', 'Bren']);
   });
 
   it('does not duplicate aliases on a repeat call (case-insensitive dedup)', async () => {
@@ -260,15 +260,15 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
        a no-op on disk. The route still returns 200 with matchedFrom so
        the frontend can re-dispatch applyManualMatch idempotently. */
     await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     const beforeSecond = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK);
     const res2 = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     const afterSecond = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK);
     expect(res2.status).toBe(200);
@@ -277,22 +277,22 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
 
   it("unifies the source character's voiceId to the target's key (plan 122)", async () => {
     const before = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
-      (c) => c.id === 'Hartwell-alvin-Vale',
+      (c) => c.id === 'hartwell-brennan-vale',
     );
     expect(before?.voiceId).toBeUndefined();
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(200);
     /* The source now shares the target's series-override write key — aliases
        alone never did that, so a later "Propose voices" approve would skip
        this book. Other source fields are untouched. */
     const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
-      (c) => c.id === 'Hartwell-alvin-Vale',
+      (c) => c.id === 'hartwell-brennan-vale',
     );
-    expect(after?.voiceId).toBe('v_Hart');
+    expect(after?.voiceId).toBe('v_hart');
     expect(after?.name).toBe('Hartwell Brennan Vale');
     expect(after?.aliases).toEqual(['Bren']);
   });
@@ -301,35 +301,35 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     /* Regression for the reused-Qwen-voice bug: linking a source character to a
        target that carries a designed qwen voice must copy the target's
        ttsEngine + overrideTtsVoices onto the source so it no longer resolves to
-       '' (Kokoro fallback) at generation. Re-seed the keeper target (Hart) with a
+       '' (Kokoro fallback) at generation. Re-seed the keeper target (hart) with a
        designed qwen voice, then link the new book's full-form character to it. */
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
       {
-        id: 'Hart',
+        id: 'hart',
         name: 'Hart',
         role: 'character',
         color: 'unset',
-        voiceId: 'v_Hart',
+        voiceId: 'v_hart',
         aliases: ['Hartwell'],
         ttsEngine: 'qwen',
-        overrideTtsVoices: { qwen: { name: 'qwen-Hart' } },
+        overrideTtsVoices: { qwen: { name: 'qwen-hart' } },
         voiceStyle: 'a quirky, earnest boy genius',
       },
     ]);
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(200);
     const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
-      (c) => c.id === 'Hartwell-alvin-Vale',
+      (c) => c.id === 'hartwell-brennan-vale',
     ) as
       | { ttsEngine?: string; overrideTtsVoices?: { qwen?: { name: string } }; voiceStyle?: string }
       | undefined;
     expect(after?.ttsEngine).toBe('qwen');
-    expect(after?.overrideTtsVoices?.qwen?.name).toBe('qwen-Hart');
+    expect(after?.overrideTtsVoices?.qwen?.name).toBe('qwen-hart');
     /* The persona rides along the voice denormalise (srv-18). */
     expect(after?.voiceStyle).toBe('a quirky, earnest boy genius');
   });
@@ -340,7 +340,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
       {
-        id: 'Hartwell-alvin-Vale',
+        id: 'hartwell-brennan-vale',
         name: 'Hartwell Brennan Vale',
         role: 'character',
         color: 'unset',
@@ -351,28 +351,28 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
       {
-        id: 'Hart',
+        id: 'hart',
         name: 'Hart',
         role: 'character',
         color: 'unset',
-        voiceId: 'v_Hart',
+        voiceId: 'v_hart',
         aliases: ['Hartwell'],
         ttsEngine: 'qwen',
-        overrideTtsVoices: { qwen: { name: 'qwen-Hart' } },
+        overrideTtsVoices: { qwen: { name: 'qwen-hart' } },
         voiceStyle: 'the target persona',
       },
     ]);
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(200);
     const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
-      (c) => c.id === 'Hartwell-alvin-Vale',
+      (c) => c.id === 'hartwell-brennan-vale',
     ) as { voiceStyle?: string; overrideTtsVoices?: { qwen?: { name: string } } } | undefined;
     expect(after?.voiceStyle).toBe('my own edited persona');
-    expect(after?.overrideTtsVoices?.qwen?.name).toBe('qwen-Hart');
+    expect(after?.overrideTtsVoices?.qwen?.name).toBe('qwen-hart');
   });
 
   it("falls back to the target's id when the target has no voiceId", async () => {
@@ -380,36 +380,36 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
        then the target's id, and the source should adopt it. */
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
-      { id: 'Maerin', name: 'Maerin', role: 'character', color: 'unset' },
+      { id: 'maerin', name: 'Maerin', role: 'character', color: 'unset' },
     ]);
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
-      { id: 'Maerin-Vell', name: 'Maerin Vell', role: 'character', color: 'unset' },
+      { id: 'maerin-vell', name: 'Maerin Vell', role: 'character', color: 'unset' },
     ]);
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Maerin-Vell',
+      sourceCharacterId: 'maerin-vell',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Maerin',
+      targetCharacterId: 'maerin',
     });
     expect(res.status).toBe(200);
-    expect(res.body.voiceId).toBe('Maerin');
+    expect(res.body.voiceId).toBe('maerin');
     const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
-      (c) => c.id === 'Maerin-Vell',
+      (c) => c.id === 'maerin-vell',
     );
-    expect(after?.voiceId).toBe('Maerin');
+    expect(after?.voiceId).toBe('maerin');
   });
 
   it('merges the target profile (quotes, attributes, description, tone, gender, age) onto an empty source', async () => {
     /* The carry-over fix: a roster-linked row with NO profile of its own
-       (Unlocked's "Dame Linnet") must inherit the canonical character's
+       (The Floodmark's "Dame Linnet") must inherit the canonical character's
        representative quotes + descriptors at link time, not just its voice. */
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
       {
-        id: 'Hart',
+        id: 'hart',
         name: 'Hart',
         role: 'character',
         color: 'unset',
-        voiceId: 'v_Hart',
+        voiceId: 'v_hart',
         aliases: ['Hartwell'],
         evidence: [{ quote: 'Technopath stuff!', note: 'gadget talk' }],
         attributes: ['inventive', 'loyal'],
@@ -420,9 +420,9 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
       },
     ]);
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(200);
     /* Response echoes the merged profile so the open drawer updates without
@@ -433,7 +433,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     expect(res.body.profile.description).toBe('A boy-genius technopath.');
     /* Source on disk inherited the profile. */
     const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
-      (c) => c.id === 'Hartwell-alvin-Vale',
+      (c) => c.id === 'hartwell-brennan-vale',
     ) as Record<string, unknown> | undefined;
     expect((after?.evidence as unknown[])?.length).toBe(1);
     expect(after?.attributes).toEqual(['inventive', 'loyal']);
@@ -446,7 +446,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
   it("unions quotes/attributes source-first and never clobbers the source's own description", async () => {
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
       {
-        id: 'Hartwell-alvin-Vale',
+        id: 'hartwell-brennan-vale',
         name: 'Hartwell Brennan Vale',
         role: 'character',
         color: 'unset',
@@ -459,24 +459,24 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK, keeperBookId, [
       { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'unset' },
       {
-        id: 'Hart',
+        id: 'hart',
         name: 'Hart',
         role: 'character',
         color: 'unset',
-        voiceId: 'v_Hart',
+        voiceId: 'v_hart',
         evidence: [{ quote: 'Target line.', note: 'canon' }],
         attributes: ['witty', 'brave'],
         description: 'A different, longer canonical description.',
       },
     ]);
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(200);
     const after = readCast(workspaceRoot, AUTHOR, SERIES, NEW_BOOK).characters.find(
-      (c) => c.id === 'Hartwell-alvin-Vale',
+      (c) => c.id === 'hartwell-brennan-vale',
     ) as Record<string, unknown> | undefined;
     const quotes = (after?.evidence as Array<{ quote: string }>).map((e) => e.quote);
     expect(quotes).toEqual(['Source line.', 'Target line.']); // source-first union
@@ -489,7 +489,7 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
        After the merge, target.aliases should NOT list its own name. */
     writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NEW_BOOK, newBookId, [
       {
-        id: 'Hartwell-alvin-Vale',
+        id: 'hartwell-brennan-vale',
         name: 'Hartwell Brennan Vale',
         role: 'character',
         color: 'unset',
@@ -497,16 +497,16 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
       },
     ]);
     const res = await callLink(newBookId, {
-      sourceCharacterId: 'Hartwell-alvin-Vale',
+      sourceCharacterId: 'hartwell-brennan-vale',
       targetBookId: keeperBookId,
-      targetCharacterId: 'Hart',
+      targetCharacterId: 'hart',
     });
     expect(res.status).toBe(200);
-    const HartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
-      (c) => c.id === 'Hart',
+    const hartOnDisk = readCast(workspaceRoot, AUTHOR, SERIES, KEEPER_BOOK).characters.find(
+      (c) => c.id === 'hart',
     );
     /* "Hart" was in source's aliases, but it equals target.name → filtered. */
-    expect(HartOnDisk?.aliases).not.toContain('Hart');
-    expect(HartOnDisk?.aliases).toContain('Hartwell Brennan Vale');
+    expect(hartOnDisk?.aliases).not.toContain('Hart');
+    expect(hartOnDisk?.aliases).toContain('Hartwell Brennan Vale');
   });
 });

@@ -127,7 +127,7 @@ Automated:
 
 ## Acceptance walkthrough (manual)
 
-Canonical end-to-end manuscript: `C:\Users\dudar\Downloads\the Coalfall Commission.txt`
+Canonical end-to-end manuscript: `server/src/__fixtures__/the-coalfall-commission.md`
 (per `CLAUDE.md`).
 
 1. Fresh import via the Books → Start a new book flow. Within ~2 seconds
