@@ -4349,6 +4349,7 @@ components:
         - analyzer-daily-quota
         - analyzer-truncated
         - analyzer-unreachable
+        - analyzer-content-blocked
         - attribution-incomplete
 
     ChapterQaVerdict:

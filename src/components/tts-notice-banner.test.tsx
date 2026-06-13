@@ -48,7 +48,7 @@ describe('TtsNoticeBanner', () => {
     render(
       <TtsNoticeBanner
         evictionNotice="Analyzer unloaded to free VRAM for TTS."
-        loadErrorNotice="TTS model failed to load. Check the sidecar logs."
+        loadErrorNotice="Voice engine failed to load. Check the voice engine logs."
         onDismiss={vi.fn()}
       />,
     );

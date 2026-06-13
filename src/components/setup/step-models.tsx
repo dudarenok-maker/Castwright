@@ -1,7 +1,7 @@
 /* Setup wizard — Step: Models.
-   Composes the in-app installers for the TTS runtime (venv + Kokoro default,
-   Qwen/Coqui as collapsible alternatives) and the analyzer setup (Gemini key
-   recommended, local Ollama as collapsible alternative).
+   Composes the in-app installers for the voice engines (shared Python runtime +
+   Kokoro default, Qwen/Coqui as collapsible alternatives) and the analyzer setup
+   (Gemini key recommended, local Ollama as collapsible alternative).
 
    Each install callback (`onInstalled` / `onBootstrapped`) is wired to
    `onRefetch` so the wizard re-probes readiness after every completed install. */
@@ -76,23 +76,23 @@ export function StepModels({
     <div className="space-y-8">
       <h1 className="text-2xl font-semibold text-ink">Models</h1>
 
-      {/* ── TTS runtime section ─────────────────────────────────────── */}
+      {/* ── Voice engines section ───────────────────────────────────── */}
       <section className="space-y-4">
         <div className="flex items-center gap-3">
-          <SectionHeading>TTS runtime</SectionHeading>
+          <SectionHeading>Voice engines</SectionHeading>
           <BlockerBadge
             status={readiness.blockers.sidecar}
             label={readiness.blockers.sidecar === 'pass' ? 'Runtime ready' : 'Runtime needed'}
           />
           <BlockerBadge
             status={readiness.blockers.tts}
-            label={readiness.blockers.tts === 'pass' ? 'Engine ready' : 'Engine needed'}
+            label={readiness.blockers.tts === 'pass' ? 'Voice ready' : 'Voice needed'}
           />
         </div>
 
         <p className="text-sm text-ink/60">
-          The TTS runtime is a Python environment that runs the voice engines.
-          Set it up once — all engines share it.
+          Voice engines turn your manuscript into speech. They all share one Python
+          runtime — set it up once, then every voice engine can use it.
         </p>
 
         <VenvBootstrap onBootstrapped={onRefetch} />

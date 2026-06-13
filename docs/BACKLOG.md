@@ -57,23 +57,11 @@ _Full detail + acceptance:_ plan [`194-voice-cloning.md`](features/194-voice-clo
 _The onboarding & first-run cluster below was promoted from Could to Must on 2026-06-08 —
 first-run friction is the biggest adoption blocker for non-technical deployers._
 
-#### `fe-28` — Onboarding empty states + first-run checklist ([#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472))
-
-- _What:_ Make first-run guidance explicit: the books-library empty state walks a new user to their first upload, plus a small dismissible first-run checklist (upload → confirm cast → generate → listen). Pure frontend, driven off existing state.
-- _Benefit (user):_ reduces first-session bounce for non-technical deployers.
-_Full detail + acceptance:_ [#472](https://github.com/dudarenok-maker/AudioBook-Generator/issues/472).
-
 #### `fe-27` — In-app update notifier ([#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471))
 
 - _What:_ Check GitHub Releases (via a small server proxy) and surface "vX.Y.Z available" + a changelog link when the running version is behind. Complements `fs-1` (the upgrade *mechanism*) — this is the *prompt*.
 - _Benefit (user):_ closes the distribution loop so testers actually know to upgrade.
 _Full detail + acceptance:_ [#471](https://github.com/dudarenok-maker/AudioBook-Generator/issues/471).
-
-#### `fs-21` — on-box acceptance for the first-run wizard ([#752](https://github.com/dudarenok-maker/Castwright/issues/752))
-
-- _What:_ The fs-21 first-run wizard shipped code-complete + CI-green (Waves 0/1/1b/2/3, merged 2026-06-12; regression plan [210](features/210-fs21-first-run-wizard.md)). This residual tracks the acceptance that can't run in CI / on the Windows dev box: real Kokoro install on Mac+Linux, a fresh venv bootstrap (decision Z), the no-Python degrade, audible Tier-1 smoke + Tier-2 demo generation, and a `cross-os.yml` run before release.
-- _Benefit (user):_ confirms the one-click cross-platform setup actually works on every deployer OS before it ships.
-_Full detail + acceptance:_ [#752](https://github.com/dudarenok-maker/Castwright/issues/752).
 
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/AudioBook-Generator/issues/432))
 

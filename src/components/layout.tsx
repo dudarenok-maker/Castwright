@@ -6,6 +6,7 @@ import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store'
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { fetchAccountSettings } from '../store/account-slice';
+import { fetchTourStatus } from '../store/tour-slice';
 import {
   aggregateStreamsByBook,
   chaptersActions,
@@ -83,6 +84,7 @@ import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
 import { ToastStack } from './toast-stack';
+import { TourOverlay } from './tour/tour-overlay';
 import { RevisionDiffPlayer } from '../views/revision-diff';
 import { RevisionTimelineModal } from './revision-timeline-modal';
 import { IconRefresh, IconWarning } from '../lib/icons';
@@ -451,6 +453,7 @@ export function Layout() {
      read defaults from the account slice. Fires once per app boot. */
   useEffect(() => {
     void dispatch(fetchAccountSettings());
+    void dispatch(fetchTourStatus());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1983,6 +1986,7 @@ export function Layout() {
         />
       )}
       {reverseAnalyzerGuardModal}
+      <TourOverlay />
     </div>
   );
 }

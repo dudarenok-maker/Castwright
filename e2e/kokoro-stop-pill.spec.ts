@@ -36,17 +36,17 @@ test.describe('Kokoro Stop pill — bidirectional Load/Stop in the Status popove
     await openStatusPopover(page);
 
     /* Wait for the first /health probe to resolve and the control to render
-       its real state. The button has aria-label "Stop (tts model)" when the
+       its real state. The button has aria-label "Stop (voice engine)" when the
        engine is ready. The displayed text reads "Kokoro ready" via the
        engineLabel override. */
-    const stopButton = page.getByRole('button', { name: /^stop \(tts model\)$/i }).first();
+    const stopButton = page.getByRole('button', { name: /^stop \(voice engine\)$/i }).first();
     await expect(stopButton).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible();
 
     /* Click Stop — pill should optimistically flip to "idle" before the
        /health repoll comes back, and the Load button replaces Stop. */
     await stopButton.click();
-    const loadButton = page.getByRole('button', { name: /^load model \(tts model\)$/i }).first();
+    const loadButton = page.getByRole('button', { name: /^load model \(voice engine\)$/i }).first();
     await expect(loadButton).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/Kokoro idle/i).first()).toBeVisible();
 
@@ -54,7 +54,7 @@ test.describe('Kokoro Stop pill — bidirectional Load/Stop in the Status popove
        again. The mock loadSidecar resolves after a short wait and the
        hook re-probes /health, picking up kokoroLoaded:true. */
     await loadButton.click();
-    await expect(page.getByRole('button', { name: /^stop \(tts model\)$/i }).first()).toBeVisible({
+    await expect(page.getByRole('button', { name: /^stop \(voice engine\)$/i }).first()).toBeVisible({
       timeout: 5_000,
     });
     await expect(page.getByText(/Kokoro ready/i).first()).toBeVisible();

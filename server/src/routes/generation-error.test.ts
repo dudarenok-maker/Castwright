@@ -16,7 +16,7 @@ describe('describeSynthesisError', () => {
       new Error('fetch failed: connect ECONNREFUSED 127.0.0.1:9000'),
     );
     expect(out.fatal).toBe(true);
-    expect(out.errorReason).toMatch(/sidecar not running/i);
+    expect(out.errorReason).toMatch(/voice engine not running/i);
   });
 
   it('flags sidecar-down ("not reachable" text) as fatal', () => {

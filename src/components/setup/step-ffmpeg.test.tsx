@@ -20,7 +20,12 @@ describe('StepFfmpeg', () => {
   describe('when ffmpeg blocker is pass', () => {
     it('renders a ready / found indication', () => {
       render(<StepFfmpeg readiness={makeReadiness('pass')} onRefetch={vi.fn()} />);
-      expect(screen.getByText(/ffmpeg found/i)).toBeInTheDocument();
+      expect(screen.getByText(/audio assembly ready/i)).toBeInTheDocument();
+    });
+
+    it('uses the plain-language "Audio assembly" heading, not raw "ffmpeg"', () => {
+      render(<StepFfmpeg readiness={makeReadiness('pass')} onRefetch={vi.fn()} />);
+      expect(screen.getByRole('heading', { name: /audio assembly/i })).toBeInTheDocument();
     });
 
     it('does NOT render install instructions', () => {

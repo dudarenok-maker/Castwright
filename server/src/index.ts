@@ -86,6 +86,7 @@ import { venvBootstrapRouter } from './routes/venv-bootstrap.js';
 import { gpuQueueRouter } from './routes/gpu-queue.js';
 import { diagnosticsRouter } from './routes/diagnostics.js';
 import { setupReadinessRouter } from './routes/setup-readiness.js';
+import { tourRouter } from './routes/tour.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
 import { configRouter } from './routes/config.js';
@@ -255,6 +256,7 @@ app.use('/api/gpu', gpuQueueRouter); // mounts GET /queue (semaphore depth + inF
 app.use('/api/diagnostics', diagnosticsRouter); // fs-18 — GET / one-shot health board (admin console)
 app.use('/api/setup', setupReadinessRouter); // fs-21 — first-run readiness probe
 app.use('/api/setup/venv', venvBootstrapRouter); // fs-21 wave 1b — venv bootstrap (decision Z)
+app.use('/api/tour', tourRouter); // guided-tour status + completion
 
 /* Production-mode frontend serving. Helper resolves whether to mount based
    on NODE_ENV=production OR the existence of dist/index.html. Mounted AFTER

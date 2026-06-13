@@ -10,9 +10,13 @@ import { PrimaryButton } from '../primitives';
 export function EmptyLibrary({
   onStartNew,
   onTrySample,
+  onStartTour,
+  tourCompleted,
 }: {
   onStartNew: () => void;
   onTrySample?: () => void;
+  onStartTour?: () => void;
+  tourCompleted?: boolean;
 }) {
   return (
     <div className="bg-white rounded-3xl border border-ink/10 shadow-card p-12 text-center">
@@ -29,12 +33,19 @@ export function EmptyLibrary({
         . Import a manuscript and we'll lay it out for you.
       </p>
       <div className="mt-6">
-        <PrimaryButton variant="dark" onClick={onStartNew}>
-          <span className="inline-flex items-center gap-2">
-            <IconPlus className="w-4 h-4" />
-            Import your first book
-          </span>
-        </PrimaryButton>
+        <div className="flex flex-col gap-3 items-center">
+          {onStartTour && !tourCompleted && (
+            <PrimaryButton variant="dark" onClick={onStartTour}>
+              <span className="inline-flex items-center gap-2">Take the guided tour</span>
+            </PrimaryButton>
+          )}
+          <PrimaryButton variant="dark" onClick={onStartNew}>
+            <span className="inline-flex items-center gap-2">
+              <IconPlus className="w-4 h-4" />
+              Import your first book
+            </span>
+          </PrimaryButton>
+        </div>
         {onTrySample && (
           <button
             onClick={onTrySample}

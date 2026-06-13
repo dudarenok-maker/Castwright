@@ -17,10 +17,10 @@ function makeHandlers() {
 
 describe('ModelControlPill — label per state', () => {
   it.each<[ModelControlState, RegExp]>([
-    ['idle', /TTS model idle/i],
-    ['loading', /loading tts model/i],
-    ['ready', /TTS model ready/i],
-    ['unreachable', /TTS model unavailable/i],
+    ['idle', /Voice engine idle/i],
+    ['loading', /loading voice engine/i],
+    ['ready', /Voice engine ready/i],
+    ['unreachable', /Voice engine unavailable/i],
   ])('renders the canonical label for state %s', (state, labelRegex) => {
     const { onLoad, onStop } = makeHandlers();
     render(<ModelControlPill kind="tts" state={state} onLoad={onLoad} onStop={onStop} />);
@@ -102,9 +102,9 @@ describe('ModelControlPill — label per state', () => {
       />,
     );
     expect(screen.getByText(/Kokoro ready/i)).toBeInTheDocument();
-    /* The default "TTS model ready" must NOT appear when engineLabel is set
+    /* The default "Voice engine ready" must NOT appear when engineLabel is set
        — both rendering would leak the abstraction. */
-    expect(screen.queryByText(/TTS model ready/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Voice engine ready/i)).not.toBeInTheDocument();
   });
 
   it('flips engineLabel into the loading + unavailable copy too', () => {

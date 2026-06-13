@@ -147,7 +147,7 @@ describe('classifyFailure', () => {
     );
     expect(out.code).toBe('sidecar-unreachable');
     expect(out.fatal).toBe(true);
-    expect(out.userMessage).toMatch(/sidecar/i);
+    expect(out.userMessage).toMatch(/voice engine/i);
     expect(out.remediation.length).toBeGreaterThan(0);
   });
 
@@ -254,6 +254,20 @@ describe('analysis-side codes (spec A2)', () => {
     const err = Object.assign(new Error('stream idle'), { name: 'GeminiStreamIdleError' });
     expect(classifyAnalysisError(err).code).toBe('analyzer-unreachable');
   });
+  it('classifies a Gemini empty-response (recitation block) as analyzer-content-blocked', () => {
+    const err = new Error(
+      'Gemini gemini-3.1-flash-lite returned an empty response (reason=RECITATION). A content filter blocked the text.',
+    );
+    expect(classifyAnalysisError(err).code).toBe('analyzer-content-blocked');
+    /* Run-level classifier (no API envelope, no status) routes here too. */
+    expect(classifyAnalysisFailure(err, 'Gemini (gemini-3.1-flash-lite)').code).toBe(
+      'analyzer-content-blocked',
+    );
+  });
+  it("does NOT blame Ollama's same-worded empty response on the recitation filter", () => {
+    const err = new Error('Ollama qwen3.5:4b returned an empty response.');
+    expect(classifyAnalysisError(err).code).not.toBe('analyzer-content-blocked');
+  });
   it('generation path never sees the analysis-only entries', () => {
     const err = Object.assign(new Error('whatever'), { name: 'AnalyzerTruncatedError' });
     expect(classifyFailure(err).code).toBe('unknown');
@@ -267,6 +281,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
   it('has exactly one entry per FailureCode', () => {
     expect(Object.keys(FAILURE_REMEDIATIONS).sort()).toEqual(
       [
+        'analyzer-content-blocked',
         'analyzer-daily-quota',
         'analyzer-rate-limit',
         'analyzer-truncated',

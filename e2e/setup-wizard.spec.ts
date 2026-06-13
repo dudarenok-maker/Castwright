@@ -8,7 +8,7 @@
  * resilient across layout tweaks. Key wizard labels (from setup-wizard.tsx):
  *   - Back button:  "Back"  (disabled on step 1, enabled on step 2+)
  *   - Next button:  "Next"  (hidden on the last step — StepFinish owns
- *                            its own "Finish setup" button instead)
+ *                            its own "Finish & open my library" button instead)
  *   - Progress:     "Step N of 5"
  */
 
@@ -41,7 +41,7 @@ test('wizard can advance through steps (Next is always enabled)', async ({ page 
   await expect(next).toBeVisible();
 });
 
-test('wizard reaches the last step and shows Finish setup', async ({ page }) => {
+test('wizard reaches the last step and shows the finish button', async ({ page }) => {
   await page.goto('/#/?setup=notready');
   await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
 
@@ -53,10 +53,10 @@ test('wizard reaches the last step and shows Finish setup', async ({ page }) => 
     await next.click();
   }
 
-  // On step 5 the wizard's Next is gone; StepFinish owns "Finish setup"
+  // On step 5 the wizard's Next is gone; StepFinish owns the finish button
   await expect(page.getByText(/step 5 of 5/i)).toBeVisible();
   await expect(next).not.toBeVisible();
-  await expect(page.getByRole('button', { name: /finish setup/i })).toBeVisible();
+  await expect(page.getByRole('button', { name: /finish & open my library/i })).toBeVisible();
 });
 
 test('Tier-1 smoke test runs and renders audio (mock)', async ({ page }) => {
@@ -64,7 +64,7 @@ test('Tier-1 smoke test runs and renders audio (mock)', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
 
   // Advance through steps 1 → 2 → 3 → 4 → 5 (Finish) via Next ×4.
-  // On step 5 the wizard's Next is gone; StepFinish owns "Finish setup".
+  // On step 5 the wizard's Next is gone; StepFinish owns the finish button.
   const next = page.getByRole('button', { name: /^next$/i });
   for (let i = 0; i < 4; i++) {
     await next.click();
@@ -79,11 +79,29 @@ test('Tier-1 smoke test runs and renders audio (mock)', async ({ page }) => {
   // Mock api.runSmokeTest returns stub-a.mp3 → audio element appears.
   await expect(page.getByTestId('smoke-audio')).toBeVisible();
 
-  // Finish setup button is also present.
-  await expect(page.getByRole('button', { name: /finish setup/i })).toBeVisible();
+  // The finish button is also present.
+  await expect(page.getByRole('button', { name: /finish & open my library/i })).toBeVisible();
 });
 
 test('boot gate stays out of the way when ready', async ({ page }) => {
   await page.goto('/#/');
   await expect(page).not.toHaveURL(/#\/setup/);
+});
+
+test('re-entry opens on the summary board and drills into the wizard', async ({ page }) => {
+  // Default mock readiness is "complete" → #/setup renders the at-a-glance
+  // summary (re-entry) rather than the linear wizard.
+  await page.goto('/#/setup');
+  await expect(page.getByRole('heading', { name: /set up castwright/i })).toBeVisible();
+  await expect(page.getByTestId('setup-summary-board')).toBeVisible();
+  // No wizard paging at the summary level.
+  await expect(page.getByText(/step 1 of 5/i)).toHaveCount(0);
+
+  // Clicking a summary row drills into that step of the guided flow.
+  await page.getByTestId('setup-summary-row-ffmpeg').click();
+  await expect(page.getByText(/step 2 of 5/i)).toBeVisible();
+
+  // "Setup overview" returns to the summary board.
+  await page.getByRole('button', { name: /setup overview/i }).click();
+  await expect(page.getByTestId('setup-summary-board')).toBeVisible();
 });

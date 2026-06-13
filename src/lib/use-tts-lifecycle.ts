@@ -218,7 +218,7 @@ export function useTtsLifecycle(): TtsLifecycle {
     try {
       const result = await api.loadSidecar({ engine });
       if (result.status === 'error') {
-        setLoadErrorNotice(result.error || 'TTS model failed to load. Check the sidecar logs.');
+        setLoadErrorNotice(result.error || 'Voice engine failed to load. Check the voice engine logs.');
         setPending(engine, null);
       }
     } catch (e) {
