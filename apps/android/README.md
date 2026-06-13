@@ -60,6 +60,77 @@ A signed release APK for sideloading: see **`app-11`** in the plan
 (`flutter build apk --release` — falls back to debug signing unless
 `android/key.properties` is present; copy `android/key.properties.example`).
 
+## Two distribution channels: sideload APK + Play AAB
+
+The companion ships through **two parallel channels** — both built from the same
+signed release config, neither replaces the other:
+
+1. **Sideload APK** (`flutter build apk --release`) — the load-bearing channel.
+   The release pipeline bundles it into the server zip at
+   `companion/castwright-companion.apk`, where `GET /api/companion/apk` serves
+   the in-app **Download .apk** button. This stays the default install path.
+2. **Google Play App Bundle** (`flutter build appbundle --release`) →
+   `build/app/outputs/bundle/release/app-release.aab` — for the Play
+   **internal/closed testing** track. Play requires an **AAB**, not an APK.
+
+```sh
+flutter build appbundle --release   # build/app/outputs/bundle/release/app-release.aab
+```
+
+**Play signing model (Play App Signing):** the `android/key.properties`
+keystore is your **upload key** — you sign every AAB upload with it; Google
+holds the app *signing* key and re-signs what users download. The AAB **must**
+be signed with the real upload key, which Play accepts but a debug-signed bundle
+is rejected.
+
+**Two ways to get a signed AAB:**
+
+- **Release pipeline (preferred for tagged releases).** With the four
+  `ANDROID_UPLOAD_*` repo secrets set (see `android/key.properties.example`),
+  `.github/workflows/release.yml` materialises the keystore, builds the
+  **upload-key-signed** APK *and* AAB, and attaches
+  `castwright-vX.Y.Z.aab` (+ `.sha256`) to the GitHub Release. Without the
+  secrets it falls back to debug signing and skips the AAB attach.
+- **Locally (for ad-hoc Play uploads).** With `android/key.properties` present:
+  `flutter build appbundle --release`.
+
+Verify a build with `keytool -printcert -jarfile app-release.aab` (AABs are
+JAR-signed, so `keytool` reads them; APKs are v2-signed — use
+`apksigner verify --print-certs` for those).
+
+### Iterating internal-test builds (no marketing bump)
+
+Play forbids reusing a **versionCode**, so a second upload of the *same*
+marketing version needs a higher code. `bump-version.mjs` derives the
+versionCode as `(M*10000 + m*100 + p) * 1000` — the `×1000` reserves a 3-digit
+**iteration band** (999 slots) below the next patch's base. So for `1.6.0` the
+base is `10600000`; iterate internal-test uploads by overriding the build
+number:
+
+```sh
+flutter build appbundle --release --build-number=10600001   # 2nd 1.6.0 upload
+flutter build appbundle --release --build-number=10600002   # 3rd, etc.
+```
+
+The tagged **release** uses the base (iteration 0). To ship a tested build to
+production, **promote** the chosen internal build in Play Console (same
+versionCode — no re-upload) rather than re-cutting iteration 0, or bump the
+patch. The iteration band never overlaps the next patch (`1.6.1 → 10601000`).
+
+**versionCode** is derived monotonically from the semver by
+`scripts/bump-version.mjs` (`M*10000 + m*100 + p`, e.g. `1.6.0 → 10600`), so
+each released version uploads cleanly. Play forbids reusing a versionCode —
+**bump the version before re-uploading the same train to a Play track.**
+
+**Two Play caveats** (neither blocks internal testing):
+- **Android Auto** (`app-9`, the `com.google.android.gms.car.application`
+  descriptor) triggers a separate Play "Cars" review before Auto works on a
+  head unit. The app still installs to internal testing without it.
+- **App Links** (`castwright.ai/pair`, `app-17`) need
+  `/.well-known/assetlinks.json` to pin the **Play app-signing key** SHA-256
+  (read it from Play Console *after* enrollment — not the upload-key
+  fingerprint).
+
 ## Pairing to your server
 
 The companion needs the server running in **LAN HTTPS mode with an access
