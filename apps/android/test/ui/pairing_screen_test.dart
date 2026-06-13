@@ -5,6 +5,7 @@ import 'package:castwright/src/data/pairing_service.dart';
 import 'package:castwright/src/data/pairing_store.dart';
 import 'package:castwright/src/domain/paired_server.dart';
 import 'package:castwright/src/ui/pairing_screen.dart';
+import 'package:castwright/src/brand.dart';
 
 class FakeStore implements PairingStore {
   PairedServer? saved;
@@ -70,5 +71,15 @@ void main() {
     expect(store.saved, isNotNull);
     expect(store.saved!.url, 'https://10.0.0.5:8443');
     expect(store.saved!.token, 'tok');
+  });
+
+  testWidgets('shows the brand short-form tagline on first run', (tester) async {
+    final store = FakeStore();
+    final service =
+        PairingService(fetchCa: (url) async => 'pem', verifyTag: (pem, tag) => false);
+    await open(tester, service, store);
+    final tagline = find.byKey(const Key('pair-tagline'));
+    expect(tagline, findsOneWidget);
+    expect(tester.widget<Text>(tagline).data, brandTaglineShort);
   });
 }

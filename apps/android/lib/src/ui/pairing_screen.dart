@@ -4,6 +4,7 @@ import '../data/pairing_service.dart';
 import '../data/pairing_store.dart';
 import '../domain/pairing_qr.dart';
 import 'qr_scan_screen.dart';
+import '../brand.dart';
 
 /// Manual pairing form (app-2). Enter the server host:port + pairing code +
 /// fingerprint tag from the desktop pairing screen; on success the verified
@@ -99,6 +100,16 @@ class _PairingScreenState extends State<PairingScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Text(
+                brandTaglineShort,
+                key: const Key('pair-tagline'),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ),
             const Text('Scan the pairing QR shown on the desktop, or enter the '
                 'details manually.'),
             const SizedBox(height: 12),
