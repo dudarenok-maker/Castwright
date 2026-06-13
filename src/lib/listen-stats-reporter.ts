@@ -48,10 +48,12 @@ export class StatsAccumulator {
     this.addElapsed();
     return {
       sessionPresent: this.byDate.size > 0 || this.playing,
-      days: [...this.byDate.entries()].map(([date, s]) => ({
-        date,
-        seconds: Math.round(s),
-      })),
+      days: [...this.byDate.entries()]
+        .map(([date, s]) => ({
+          date,
+          seconds: Math.round(s),
+        }))
+        .filter(({ seconds }) => seconds > 0),
     };
   }
 
@@ -60,10 +62,12 @@ export class StatsAccumulator {
     this.addElapsed();
     const prior = {
       bookId: this.bookId,
-      days: [...this.byDate.entries()].map(([date, s]) => ({
-        date,
-        seconds: Math.round(s),
-      })),
+      days: [...this.byDate.entries()]
+        .map(([date, s]) => ({
+          date,
+          seconds: Math.round(s),
+        }))
+        .filter(({ seconds }) => seconds > 0),
     };
     this.byDate = new Map();
     this.bookId = nextBookId;

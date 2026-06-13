@@ -45,4 +45,25 @@ describe('StatsAccumulator', () => {
     const acc = new StatsAccumulator('b', () => 0, () => '2026-06-13');
     expect(acc.drain()).toEqual({ sessionPresent: false, days: [] });
   });
+
+  it('double onPause does not double-count', () => {
+    let t = day('2026-06-13T10:00:00');
+    const acc = new StatsAccumulator('b', () => t, () => '2026-06-13');
+    acc.onPlay();
+    t += 10_000;
+    acc.onPause();
+    t += 5_000;
+    acc.onPause(); // no-op, not playing
+    expect(acc.drain().days).toEqual([{ date: '2026-06-13', seconds: 10 }]);
+  });
+
+  it('draining twice while playing does not re-count the same interval', () => {
+    let t = day('2026-06-13T10:00:00');
+    const acc = new StatsAccumulator('b', () => t, () => '2026-06-13');
+    acc.onPlay();
+    t += 10_000;
+    expect(acc.drain().days).toEqual([{ date: '2026-06-13', seconds: 10 }]);
+    t += 5_000;
+    expect(acc.drain().days).toEqual([{ date: '2026-06-13', seconds: 15 }]);
+  });
 });
