@@ -13,7 +13,7 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** a recurring character that the analyzer detected under divergent ids across books (`wren` vs `wren-sparrow`, `Castor` vs `bron-te`) now shows as ONE row in the Rebaseline modal, and approving its voice reaches every book — no more "two Sophies", no more silent skips. Stops the duplicate from re-appearing on every new book.
+- **User:** a recurring character that the analyzer detected under divergent ids across books (`wren` vs `wren-sparrow`, `Castor` vs `bron-te`) now shows as ONE row in the Rebaseline modal, and approving its voice reaches every book — no more "two Wrens", no more silent skips. Stops the duplicate from re-appearing on every new book.
 - **Technical:** the modal's display de-dup and the approve-time write now agree on the same conservative name/alias rule (the one the analyzer's series-prior dedup already uses), so collapse can't desync from propagation.
 - **Architectural:** locks the invariant *"a fold-bucket id never carries a real character's name"* and makes cross-book linking actually unify the propagation key (`voiceId ?? id`), closing the two data-drifts at their source.
 

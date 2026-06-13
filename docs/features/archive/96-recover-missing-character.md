@@ -32,7 +32,7 @@ owner: dudarenok-maker
 1. **kebab-case id convention** matches the analyzer's id shape. `toKebabId('Mr. Casper') === 'mr-casper'`, `'Councillor Reld' → 'councillor-reld'`. A future Phase 0a re-run with [plan 97](97-narrator-only-named-characters.md) in place produces the same id, so the manual entry merges cleanly instead of orphaning.
 2. **Refuses double-add** by checking `cast.characters[].id` collision before write. Prevents accidental duplicate entries on repeat invocations.
 3. **Dialogue re-attribution is bounded to the immediately-preceding sentence** in the same chapter. The script never re-attributes across chapter boundaries (Phase 1 ids are per-chapter scoped) and only flips sentences currently attributed to `narrator` (a tag sentence already attributed to a non-narrator character represents third-party observation, not a true tag — see `findDialogueReattributions` for the rule).
-4. **Word-boundary matching on the speaker name** prevents `'Sela'` matching the substring `'Grizela'` (different person) or `'grow'` matching `'growth'`. Both directions of the boundary are checked.
+4. **Word-boundary matching on the speaker name** prevents `'Sela'` matching the substring `'Selaa'` (different person) or `'grow'` matching `'growth'`. Both directions of the boundary are checked.
 5. **Dry-run by default** — `--apply` is required to write. Matches the convention in `scripts/relufs-existing.mjs`.
 
 ## Test plan
@@ -43,7 +43,7 @@ owner: dudarenok-maker
   - `parseArgs`: arg shape (positional bookDir + named --name/--gender/--role), `--apply` flag, unknown-flag rejection, multiple-positional rejection.
   - `toKebabId`: matches the analyzer id convention across simple names, names with punctuation (`'Mr. Casper'`), accented names (NFD-normalised), and whitespace.
   - `buildCharacter`: shape against the `Character` schema — id / name / role / gender / ageRange, four-axis `tone`, `voiceState: 'unassigned'`, no `matchedFrom`, generated description fallback.
-  - `findDialogueReattributions`: catches `<Name> said` / `growled` / `warned`; multiple verbs in one chapter; chapter-boundary bounded; ignores third-party tags (sentence already attributed to a non-narrator); word-boundary false-positive guard against `'Grizela'` and similar substrings.
+  - `findDialogueReattributions`: catches `<Name> said` / `growled` / `warned`; multiple verbs in one chapter; chapter-boundary bounded; ignores third-party tags (sentence already attributed to a non-narrator); word-boundary false-positive guard against `'Selaa'` and similar substrings.
   - `buildChangeLogEntry`: type `character_manually_added`, actor `user-script`, note text for both 0-line and N-line counts.
   - `main --apply`: end-to-end against a fixture book dir — writes cast.json + manuscript-edits.json (re-attributed) + change-log.json.
   - `main` dry-run: leaves all three files untouched.

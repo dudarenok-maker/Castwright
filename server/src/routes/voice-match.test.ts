@@ -263,7 +263,7 @@ describe('voice-match router', () => {
     const res = await callMatch(CURRENT_BOOK_ID, {
       characters: [
         {
-          id: 'lordhunkyhair',
+          id: 'sirsinge',
           name: 'Sir Singe',
           attributes: [],
           gender: 'male',
