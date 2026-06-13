@@ -9,14 +9,14 @@
    over-merged a real distinct cast member as an alias (e.g. "Garrow"
    folded into "Saltgrave Figure").
 
-   The merge route rewrites sentence.characterId in place with no lineage
-   column on the Sentence schema, so we cannot deterministically recover
-   which sentences originated from a given alias name. We compensate by
-   reading `chapterCast` (the Phase 0a per-chapter raw roster — kept
-   untouched across merges by intent, see cast-merge.ts:14) to identify
-   the chapters in which the alias originally appeared, then surfacing
-   those chapters' candidate sentences to the frontend so the user can
-   reattribute the right lines via the existing per-sentence picker. */
+   The primary lineage path is deterministic: the per-book merge journal
+   (`cast-merges.json`, srv-1) records the exact (chapterId, sentenceId)
+   pairs each merge rewrote, so unlink reads that directly. The journal
+   path falls back to the `chapterCast` heuristic (Phase-0a per-chapter
+   raw roster, kept untouched across merges) only for pre-journal books,
+   chained merges, and manual add-alias chips that never rewrote sentences
+   (see `impactedChaptersFromJournal` / `impactedChaptersFromChapterCast`
+   below). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -59,11 +59,11 @@ interface UnlinkResponse {
       alias from the source and appends this character — no need to
       round-trip the full cast for what is structurally a two-row edit. */
   newCharacter: CharacterOutput;
-  /** Chapters where the alias originally appeared in the Phase-0a roster
-      (preserved-across-merges chapterCast). Each chapter lists the IDs
-      of sentences currently attributed to the source character — the
-      candidates the user reviews + reattributes in the Reattribute Lines
-      modal. */
+  /** Chapters containing sentences this alias's merge rewrote (journal
+      path), or where it appeared in the Phase-0a roster (fallback path).
+      Each chapter lists the IDs of sentences currently attributed to the
+      source character — the candidates the user reviews + reattributes in
+      the Reattribute Lines modal. */
   impactedChapters: ImpactedChapter[];
 }
 
