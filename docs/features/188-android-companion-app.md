@@ -856,3 +856,10 @@ top for the running status):
 CI (android + unsigned-iOS + verify) green on every PR. The remaining work is the **batched
 live-device/head-unit acceptance pass** on the user's real GPU server. Parked follow-ups:
 `srv-33`, `app-12` (iOS release).
+
+- 2026-06-13 — `app-15` (iOS `AppIcon` set rendered square + opaque from
+  `brand/castwright-icon.svg`, replacing the default Flutter logo) + `app-16`
+  (companion brand audit — clean on the hard criteria; added the v2 short-form
+  tagline _"Any book, fully cast."_ to the pairing + empty-home surfaces, plus a
+  `lib/` source-scan guard against retired copy) shipped on
+  `feat/app-companion-brand-finish`. Closes #632, #706.
