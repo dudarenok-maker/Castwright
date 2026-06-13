@@ -277,6 +277,10 @@ class PlayerController {
 
   // fs-16: drive the accumulator from the engine's playing-state stream.
   void _onPlayingChanged(bool isPlaying) {
+    // Accrual is gated on play/pause intent only. Safe because playback is always
+    // from local downloaded files (setFilePath), so there are no sustained buffer
+    // stalls. If streaming (setStreamUrl) is ever wired into the player flow,
+    // additionally gate accrual on processingState == ready (spec fs-16 m7).
     final acc = _accumulator;
     if (acc == null) return;
     if (isPlaying) {
