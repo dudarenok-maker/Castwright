@@ -846,4 +846,6 @@ export type Stage =
   | { kind: 'release-notes' }
   /* fe-29 — offline Help / troubleshooting view. focusCode is an untrusted
      string round-tripped from the URL hash; the view validates it. */
-  | { kind: 'help'; focusCode?: string };
+  | { kind: 'help'; focusCode?: string }
+  /* fs-16 — listening-stats dashboard. */
+  | { kind: 'stats' };

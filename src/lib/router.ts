@@ -39,6 +39,8 @@ export function stageToHash(stage: Stage | null | undefined): string {
       return '#/setup';
     case 'about':
       return '#/about';
+    case 'stats':
+      return '#/stats';
     case 'help': {
       const qs = stage.focusCode ? `?code=${encodeURIComponent(stage.focusCode)}` : '';
       return `#/help${qs}`;

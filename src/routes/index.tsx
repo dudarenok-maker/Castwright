@@ -83,6 +83,9 @@ const ReleaseNotesView = lazy(() =>
 const HelpView = lazy(() =>
   import('../views/help').then((m) => ({ default: m.HelpView })),
 );
+const StatsView = lazy(() =>
+  import('../views/stats').then((m) => ({ default: m.StatsView })),
+);
 import { ChapterExclusionList } from '../components/chapter-exclusion-list';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { isLikelyFrontMatter, chapterSlug } from '../lib/chapter-heuristics';
@@ -468,6 +471,12 @@ function AdvancedRoute() {
 function ReleaseNotesRoute() {
   useHydrateStage({ kind: 'release-notes' }, []);
   return <ReleaseNotesView />;
+}
+
+/* fs-16 — listening-stats dashboard stub. F3 builds the real Tufte view. */
+function StatsRoute() {
+  useHydrateStage({ kind: 'stats' }, []);
+  return <StatsView />;
 }
 
 /* fe-29 — offline help / troubleshooting, reached from the top-bar "?" +
@@ -1112,6 +1121,7 @@ export const router = createHashRouter([
       { path: 'models', element: <ModelManagerRoute /> },
       { path: 'setup', element: <SetupRoute /> },
       { path: 'about', element: <AboutRoute /> },
+      { path: 'stats', element: <StatsRoute /> },
       { path: 'help', element: <HelpRoute /> },
       { path: 'advanced', element: <AdvancedRoute /> },
       { path: 'release-notes', element: <ReleaseNotesRoute /> },
