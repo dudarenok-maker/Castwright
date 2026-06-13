@@ -321,7 +321,7 @@ export async function castMergesExists(bookDir: string): Promise<boolean> {
 - [ ] **Step 5: Run the test to verify it passes**
 
 Run: `cd server && npx vitest run src/store/cast-merges.test.ts`
-Expected: PASS (7 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 6: Commit**
 
