@@ -65,6 +65,8 @@ const putListenProgressMock = vi.fn(
   }),
 );
 
+const putListenStatsMock = vi.fn(async (_bookId: string, _body: unknown) => ({}));
+
 vi.mock('../lib/api', () => ({
   api: {
     getChapterAudio: ({ chapterId }: { chapterId: number }) => {
@@ -80,6 +82,9 @@ vi.mock('../lib/api', () => ({
     getListenProgress: (bookId: string) => getListenProgressMock(bookId),
     putListenProgress: (bookId: string, args: { chapterId: number; currentSec: number }) =>
       putListenProgressMock(bookId, args),
+    /* fs-16 — listen-stats stub. Delegates to a module-level vi.fn() so
+       per-test cases can inspect calls. Default: resolves to {}. */
+    putListenStats: (bookId: string, body: unknown) => putListenStatsMock(bookId, body),
   },
 }));
 
@@ -96,6 +101,8 @@ beforeEach(() => {
     currentSec: args.currentSec,
     updatedAt: new Date().toISOString(),
   }));
+  putListenStatsMock.mockReset();
+  putListenStatsMock.mockResolvedValue({});
   /* jsdom only stubs HTMLMediaElement minimally — load is a no-op and play
      returns undefined synchronously. Replace play with a resolved-promise
      stub so the component's `void el.play().catch(...)` doesn't trip
@@ -721,6 +728,71 @@ describe('MiniPlayer — fe-23 auto-advance onEnded matrix', () => {
       armEndOfChapter: true,
     });
     expect(onNext).not.toHaveBeenCalled();
+  });
+});
+
+describe('MiniPlayer — fs-16 wall-clock listening stats', () => {
+  /* Helper: set currentTime on the element then dispatch timeupdate. */
+  async function fireTimeUpdate(audioEl: HTMLAudioElement, currentTimeSec: number) {
+    Object.defineProperty(audioEl, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: currentTimeSec,
+    });
+    await act(async () => {
+      audioEl.dispatchEvent(new Event('timeupdate'));
+    });
+  }
+
+  it('reports wall-clock listening seconds to putListenStats on the 5 s periodic flush', async () => {
+    /* Use fake timers so Date.now() is deterministic — the accumulator
+       uses () => Date.now() as its clock, and the 5 s debounce gate in
+       onTimeUpdate also reads Date.now(). Start at t=10 000 ms so the
+       very first flush clears the lastSavedAtRef=0 gate (10000 >= 5000). */
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+
+      const { container } = renderPlayer(
+        <MiniPlayer
+          chapter={chapter1}
+          bookId="book-1"
+          onClose={noop}
+          onPrev={noop}
+          onNext={noop}
+          prevAvailable={false}
+          nextAvailable={true}
+        />,
+      );
+      const audioEl = container.querySelector('audio') as HTMLAudioElement;
+
+      /* Let the chapter audio resolve so onTimeUpdate actually gates on `chapter`. */
+      await resolveChapter(1, '/api/books/book-1/chapters/1/audio.mp3');
+
+      /* Wait for the playing=true useEffect to fire onPlay(), then advance
+         the clock by 10 s so the accumulator can attribute 10 s to today. */
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      /* Fire a timeupdate with currentTime > 5 to clear the noise guard,
+         and Date.now() = 10 000 >= lastSavedAtRef(0) + 5 000, so the 5 s
+         gate passes and the flush fires. */
+      await fireTimeUpdate(audioEl, 7);
+
+      expect(putListenStatsMock).toHaveBeenCalledTimes(1);
+      const [calledBookId, calledBody] = (
+        putListenStatsMock.mock.calls[0] as unknown
+      ) as [string, { sessionId: string; days: { date: string; seconds: number }[] }];
+      expect(calledBookId).toBe('book-1');
+      expect(calledBody.sessionId).toBeTruthy();
+      expect(calledBody.sessionId.length).toBeGreaterThan(0);
+      expect(calledBody.days).toHaveLength(1);
+      expect(calledBody.days[0].seconds).toBeGreaterThan(0);
+      expect(calledBody.days[0].date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

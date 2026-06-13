@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
+import { StatsAccumulator } from '../lib/listen-stats-reporter';
 import { useKeyBinding } from '../lib/keybindings';
 import {
   IconBook,
@@ -89,6 +90,33 @@ export function MiniPlayer({
      dispatch (the Listen-view row mirrors it). Independent of the 5 s
      disk-save gate above: this only churns Redux, never the disk. */
   const lastLiveDispatchRef = useRef(0);
+
+  /* fs-16 — wall-clock listening stats. A stable session id minted once
+     per page load; shared across book switches in the same tab so the
+     server can deduplicate within a session. The accumulator measures real
+     elapsed time between play/pause using Date.now(), independent of
+     playback rate or seeks. */
+  const sessionId = useRef(
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `ss_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+  ).current;
+  const accRef = useRef(
+    new StatsAccumulator(
+      bookId,
+      () => Date.now(),
+      () => new Date().toLocaleDateString('en-CA'),
+    ),
+  );
+
+  const flushStats = useCallback(
+    (targetBookId: string, days: { date: string; seconds: number }[]) => {
+      const nz = days.filter((d) => d.seconds > 0);
+      if (!nz.length) return;
+      void api.putListenStats(targetBookId, { sessionId, days: nz }).catch(() => {});
+    },
+    [sessionId],
+  );
 
   /* Plan 53 — playback rate + markers + sleep timer.
 
@@ -322,6 +350,34 @@ export function MiniPlayer({
     }
   }, [playing, audio.url]);
 
+  /* fs-16 — keep the accumulator in sync with the play/pause state.
+     Intentionally separate from the element-reflect effect above so it
+     fires even before audio.url resolves (the user may have started
+     "playing" before the fetch returns). onPlay/onPause are idempotent
+     (no-op if already in the target state). */
+  useEffect(() => {
+    if (playing) {
+      accRef.current.onPlay();
+    } else {
+      accRef.current.onPause();
+    }
+  }, [playing]);
+
+  /* fs-16 — flush the prior book's tally when bookId changes (book switch).
+     The isMounted guard skips the initial render so we only flush on real
+     switches. switchBook() returns the prior book's data and re-targets the
+     accumulator to the new bookId. */
+  const bookSwitchMountedRef = useRef(false);
+  useEffect(() => {
+    if (!bookSwitchMountedRef.current) {
+      bookSwitchMountedRef.current = true;
+      return;
+    }
+    const prior = accRef.current.switchBook(bookId);
+    flushStats(prior.bookId, prior.days);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId]);
+
   /* Plan 53 — playback-rate picker handler. Three fan-outs:
      - local state for instant UI feedback
      - slice update so other surfaces (sidebar pill, future surfaces)
@@ -475,6 +531,34 @@ export function MiniPlayer({
     setPlaying(false);
     setSleepTimer(IDLE);
   }, [sleepTimer]);
+
+  /* fs-16 — keepalive flush on tab hide / page unload. Uses the raw fetch
+     keepalive flag so the request survives navigation. Bypasses the mock
+     api intentionally — the keepalive path is a safety net, not the primary
+     flush; the 5-s periodic flush via api.putListenStats is what matters
+     (and is tested). */
+  useEffect(() => {
+    const onHide = () => {
+      const { days } = accRef.current.drain();
+      const nz = days.filter((d) => d.seconds > 0);
+      if (!nz.length) return;
+      void fetch(`/api/books/${encodeURIComponent(bookId)}/listen-stats`, {
+        method: 'PUT',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, days: nz }),
+      }).catch(() => {});
+    };
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') onHide();
+    };
+    window.addEventListener('pagehide', onHide);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', onHide);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [bookId, sessionId]);
 
   if (!chapter) return null;
   const totalSec = audio.durationSec || parseDuration(chapter.duration);
@@ -837,6 +921,12 @@ export function MiniPlayer({
             void api.putListenProgress(bookId, { chapterId, currentSec: t }).catch((err) => {
               console.warn('[mini-player] listen-progress save failed', (err as Error).message);
             });
+            /* fs-16 — periodic listen-stats flush (same 5 s gate, no extra
+               tick overhead). tick() attributes elapsed wall-clock since the
+               last checkpoint, then drain() returns the accumulated seconds
+               (without clearing) for the flush helper to post. */
+            accRef.current.tick();
+            flushStats(bookId, accRef.current.drain().days);
           }}
           onLoadedMetadata={(e) => {
             const target = e.currentTarget;
@@ -877,6 +967,10 @@ export function MiniPlayer({
                stop playback, not advance). */
             const nextSleep = sleepNotifyChapterEnded(sleepTimer);
             setSleepTimer(nextSleep);
+            /* fs-16 — flush any final accumulated seconds on chapter end.
+               onPause() is idempotent (safe even if already paused). */
+            accRef.current.onPause();
+            flushStats(bookId, accRef.current.drain().days);
             /* fe-23 — auto-advance: roll into the next chapter only when the
                user opted in, there IS a next chapter, and the sleep timer
                didn't just fire on this chapter's end. Keep `playing` true so
