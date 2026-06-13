@@ -124,7 +124,7 @@ void main() {
 
     test('ignores a non-chapter media id', () async {
       var called = false;
-      await makeBrowse(onPlay: (_, __) => called = true)
+      await makeBrowse(onPlay: (_, _) => called = true)
           .playFromMediaId(libraryMediaId);
       expect(called, isFalse);
     });
