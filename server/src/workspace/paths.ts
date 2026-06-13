@@ -143,6 +143,14 @@ export function manuscriptEditsJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'manuscript-edits.json');
 }
 
+/* srv-1 — per-book deterministic merge journal. Each manual merge / auto-fold
+   appends or replaces an entry recording which sentences it rewrote, so the
+   unlink-alias route can surface exactly those sentences instead of guessing
+   from the chapterCast roster. Sibling to manuscript-edits.json. */
+export function castMergesJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'cast-merges.json');
+}
+
 export function revisionsJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'revisions.json');
 }
