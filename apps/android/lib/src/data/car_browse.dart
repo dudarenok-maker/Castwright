@@ -41,8 +41,12 @@ class CarBrowse {
       case MediaIdKind.root:
         return _rootItems();
       case MediaIdKind.current:
-        final bid = (await current()).bookId;
-        return bid == null ? const [] : _chapterItems(bid);
+        final cur = await current();
+        // Rotate so the chapter you're on leads the list (pre-scrolled in the
+        // car); the next chapters follow immediately, wrapping to earlier ones.
+        return cur.bookId == null
+            ? const []
+            : _chapterItems(cur.bookId!, startAtUuid: cur.chapterUuid);
       case MediaIdKind.book:
         return _chapterItems(parsed.bookId!);
       case MediaIdKind.library:
@@ -107,10 +111,21 @@ class CarBrowse {
     );
   }
 
-  Future<List<MediaItem>> _chapterItems(String bookId) async {
-    final chs = await _downloaded(bookId);
+  Future<List<MediaItem>> _chapterItems(String bookId,
+      {String? startAtUuid}) async {
+    var chs = await _downloaded(bookId);
+    if (startAtUuid != null) chs = _rotateToCurrent(chs, startAtUuid);
     final artUri = art(await _coverFor(bookId));
     return [for (final c in chs) await _chapterItem(bookId, c, artUri)];
+  }
+
+  /// Rotate [chs] so the chapter with [currentUuid] is first (forward order,
+  /// wrapping). Unchanged if it's absent or already first.
+  List<DownloadedChapter> _rotateToCurrent(
+      List<DownloadedChapter> chs, String currentUuid) {
+    final i = chs.indexWhere((c) => c.uuid == currentUuid);
+    if (i <= 0) return chs;
+    return [...chs.sublist(i), ...chs.sublist(0, i)];
   }
 
   Future<List<MediaItem>> _libraryItems() async {
