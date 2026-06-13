@@ -160,6 +160,11 @@ export function listenProgressJsonPath(bookDir: string): string {
   return join(dotAudiobook(bookDir), 'listen-progress.json');
 }
 
+/** fs-16 — per-book listening-stats sibling to listen-progress.json. */
+export function listenStatsJsonPath(bookDir: string): string {
+  return join(dotAudiobook(bookDir), 'listen-stats.json');
+}
+
 /* Per-book snapshot of the in-flight analyzer's state — written at phase
    boundaries / on pause / on terminal events. Lets the top-bar
    AnalysisPill rehydrate across browser reload AND server restart
