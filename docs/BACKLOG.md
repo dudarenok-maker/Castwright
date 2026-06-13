@@ -369,20 +369,6 @@ _Full detail + acceptance:_ [#401](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ stays on a supported eslint line; clears the last row of the round-3 `npm outdated`.
 _Full detail + acceptance:_ [#711](https://github.com/dudarenok-maker/AudioBook-Generator/issues/711).
 
-### Listener-app handoffs
-
-#### `fe-3` — Apple Books (iOS / macOS) handoff modal ([#434](https://github.com/dudarenok-maker/AudioBook-Generator/issues/434))
-
-- _What:_ Wire Apple Books tile with the appropriate handoff: macOS supports drag-into-Books; iOS supports AirDrop or sync via Files. Modal shows the platform-specific flow (detect Mac vs other UA, default to "iOS via AirDrop"). Copy-and-instructions only — no direct integration with Apple Books library API (which is restricted).
-- _Benefit (user):_ closes one more "Coming soon" tile.
-_Full detail + acceptance:_ [#434](https://github.com/dudarenok-maker/AudioBook-Generator/issues/434).
-
-#### `fs-8` — PocketBook Cloud direct upload OR `@pbsync.com` email gateway ([#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436))
-
-- _What:_ Research and prototype either (a) PocketBook Cloud upload (protocol is closed — needs reverse-engineering or vendor contact) or (b) sending the exported file as an attachment to `<user>@pbsync.com` (officially marketed for ebooks; audiobook size limits undocumented).
-- _Benefit (user):_ true sideload-free path. Low priority because LAN download + sync folder already work.
-_Full detail + acceptance:_ [#436](https://github.com/dudarenok-maker/AudioBook-Generator/issues/436).
-
 ---
 
 ## Won't (this round) — explicitly parked
@@ -408,6 +394,8 @@ Specific items someone might reasonably re-propose. Each carries a _Why parked_ 
 - `srv-10` — Conflict resolution for two simultaneous `state.json` writers ([#445](https://github.com/dudarenok-maker/AudioBook-Generator/issues/445)). _Why parked:_ single-user-per-workspace assumption; file locking is advisory at best on Windows network shares. _Wake when:_ multi-user collab on a shared workspace becomes a real use case. Pairs with `fe-11` — both wake under the same trigger.
 
 - `srv-5` — Tune per-engine VRAM cost map against real hardware ([#447](https://github.com/dudarenok-maker/AudioBook-Generator/issues/447)). _Why parked:_ most of the original scope dissolved under the Qwen tuning work. The plan-113 fix serialises the Qwen forward per-engine (it isn't thread-safe), so `GPU_VRAM_BUDGET>1` gives **no same-engine Qwen parallelism** — the cost … _Wake when:_ cross-engine packing actually thrashes (spill-to-RAM slowdown, `nvidia-smi` near the card ceiling) on real hardware, or a different/smaller GPU changes the headroom math. …
+
+- `fs-8` — PocketBook Cloud direct upload OR `@pbsync.com` email gateway ([#436](https://github.com/dudarenok-maker/Castwright/issues/436)). _Why parked:_ the sideload-*free* transport isn't worth building — LAN download + the sync-folder path already get a finished book onto a PocketBook, and both candidate routes are unattractive: PocketBook Cloud's protocol is closed (needs reverse-engineering or vendor contact), and `@pbsync.com` is documented for ebooks with undocumented audiobook size limits. The PocketBook *sideload* tile (M4B) stays live and covers the need. _Wake when:_ PocketBook ships a documented upload API, OR enough users ask for a no-sideload PocketBook path to justify the reverse-engineering cost.
 
 ---
 
