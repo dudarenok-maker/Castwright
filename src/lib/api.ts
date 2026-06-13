@@ -1122,7 +1122,15 @@ const MOCK_LISTEN_PROGRESS = new Map<string, ListenProgress>();
 
 export async function mockGetListenProgress(bookId: string): Promise<ListenProgress | null> {
   await wait(15);
-  return MOCK_LISTEN_PROGRESS.get(bookId) ?? null;
+  const fromMap = MOCK_LISTEN_PROGRESS.get(bookId);
+  if (fromMap) return fromMap;
+  /* e2e seam: a spec can prime a bookmark via `page.addInitScript` BEFORE
+     the app boots, so the very first layout hydrate reads it — deterministic,
+     no post-navigation dispatch race. Undefined in normal dev/prod. */
+  const seeded = (
+    globalThis as unknown as { __SEED_LISTEN_PROGRESS__?: Record<string, ListenProgress> }
+  ).__SEED_LISTEN_PROGRESS__?.[bookId];
+  return seeded ?? null;
 }
 
 export async function mockPutListenProgress(
