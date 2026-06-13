@@ -20,6 +20,7 @@ import {
 import { api, type ModelInventoryItem, type ModelInventoryResponse } from '../lib/api';
 import { formatBytes } from '../lib/bytes';
 import { ModelSettingsForm } from '../components/model-settings-form';
+import { SettingsAccordion } from '../components/settings/settings-accordion';
 import { CoquiInstall } from '../components/coqui-install';
 import { KokoroInstall } from '../components/kokoro-install';
 import { QwenInstall } from '../components/qwen-install';
@@ -50,7 +51,7 @@ const INSTALLER_BY_ID: Partial<Record<string, ComponentType<{ onInstalled?: () =
 export function ModelManagerView() {
   const dispatch = useAppDispatch();
   return (
-    <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10">
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
         <button
           type="button"
@@ -64,16 +65,30 @@ export function ModelManagerView() {
           <MixedHeading regular="Model" bold="Manager" level="h1" />
         </div>
         <p className="mt-3 text-ink/60 max-w-xl">
-          Install, remove, and update your local models, see disk usage, and load or unload each into
-          the GPU.
+          Install, remove, and update your local models, see disk usage, and load or unload each
+          into the GPU.
         </p>
       </div>
 
-      <div className="space-y-6">
-        <DevicePanel />
-        <ModelInventory />
-        <ModelSettingsForm />
-      </div>
+      {/* Side-menu of sections (mirrors the Account / Advanced layout) — scroll
+          targets are id="cfg-section-<navId>". */}
+      <SettingsAccordion
+        sections={[
+          { id: 'mm-device', label: 'Device', risk: 'low' },
+          { id: 'mm-models', label: 'Installed models', risk: 'low' },
+          { id: 'mm-settings', label: 'Defaults & engines', risk: 'low' },
+        ]}
+      >
+        <div id="cfg-section-mm-device">
+          <DevicePanel />
+        </div>
+        <div id="cfg-section-mm-models">
+          <ModelInventory />
+        </div>
+        <div id="cfg-section-mm-settings">
+          <ModelSettingsForm />
+        </div>
+      </SettingsAccordion>
     </div>
   );
 }
@@ -129,7 +144,9 @@ function ModelInventory() {
         GPU memory.
       </p>
       {error && (
-        <p className="mt-2 text-xs text-amber-700">Couldn't refresh just now — showing last known.</p>
+        <p className="mt-2 text-xs text-amber-700">
+          Couldn't refresh just now — showing last known.
+        </p>
       )}
 
       <ul className="mt-4 space-y-3">
@@ -338,87 +355,84 @@ function ModelRow({
       className="rounded-xl border border-ink/10 bg-ink/2 p-3 flex flex-col gap-3"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-semibold text-ink">{item.label}</span>
-          {item.isDefaultEngine && (
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-magenta bg-magenta/10 rounded-full px-2 py-0.5">
-              Default
-            </span>
-          )}
-          {item.isFallbackEngine && (
-            <span className="text-[10px] font-semibold uppercase tracking-wide text-ink/55 bg-ink/5 rounded-full px-2 py-0.5">
-              Fallback
-            </span>
-          )}
-          {item.integrity === 'verified' && (
-            <span
-              className="text-[10px] font-semibold text-emerald-700"
-              title="On-disk size matches the pinned release (full SHA256 is verified at install time)"
-            >
-              ✓ verified
-            </span>
-          )}
-          {item.integrity === 'mismatch' && (
-            <span
-              className="text-[10px] font-semibold text-rose-700"
-              title="On-disk size differs from the pinned release — reinstall to restore integrity"
-            >
-              ⚠ size mismatch
-            </span>
-          )}
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-ink">{item.label}</span>
+            {item.isDefaultEngine && (
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-magenta bg-magenta/10 rounded-full px-2 py-0.5">
+                Default
+              </span>
+            )}
+            {item.isFallbackEngine && (
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-ink/55 bg-ink/5 rounded-full px-2 py-0.5">
+                Fallback
+              </span>
+            )}
+            {item.integrity === 'verified' && (
+              <span
+                className="text-[10px] font-semibold text-emerald-700"
+                title="On-disk size matches the pinned release (full SHA256 is verified at install time)"
+              >
+                ✓ verified
+              </span>
+            )}
+            {item.integrity === 'mismatch' && (
+              <span
+                className="text-[10px] font-semibold text-rose-700"
+                title="On-disk size differs from the pinned release — reinstall to restore integrity"
+              >
+                ⚠ size mismatch
+              </span>
+            )}
+          </div>
+          <div className="mt-1 text-xs text-ink/55">
+            {item.present ? formatBytes(item.sizeBytes) : 'not installed'}
+            {item.diskPath && (
+              <>
+                {' · '}
+                <span className="font-mono break-all text-ink/45">{item.diskPath}</span>
+              </>
+            )}
+          </div>
         </div>
-        <div className="mt-1 text-xs text-ink/55">
-          {item.present ? formatBytes(item.sizeBytes) : 'not installed'}
-          {item.diskPath && (
-            <>
-              {' · '}
-              <span className="font-mono break-all text-ink/45">{item.diskPath}</span>
-            </>
-          )}
-        </div>
-      </div>
 
-      <div className="flex items-center gap-2 shrink-0 flex-wrap">
-        <ResidencyBadge item={item} />
-        {hasControl && (
-          <ModelControlPill
-            kind={controlKind}
-            state={controlState}
-            engineLabel={item.label}
-            onLoad={doLoad}
-            onStop={doStop}
-          />
-        )}
-        {Installer && (
-          <button
-            type="button"
-            onClick={() => setInstallerOpen((o) => !o)}
-            data-testid={`model-install-toggle-${item.id}`}
-            aria-expanded={installerOpen}
-            className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-semibold text-ink/70 hover:bg-ink/5"
-          >
-            {item.present ? 'Update' : 'Install'} {installerOpen ? '▴' : '▾'}
-          </button>
-        )}
-        {item.present && item.removable && (
-          <button
-            type="button"
-            onClick={onRemove}
-            data-testid={`model-remove-${item.id}`}
-            className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-rose-200 bg-white text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
-          >
-            Remove
-          </button>
-        )}
-      </div>
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          <ResidencyBadge item={item} />
+          {hasControl && (
+            <ModelControlPill
+              kind={controlKind}
+              state={controlState}
+              engineLabel={item.label}
+              onLoad={doLoad}
+              onStop={doStop}
+            />
+          )}
+          {Installer && (
+            <button
+              type="button"
+              onClick={() => setInstallerOpen((o) => !o)}
+              data-testid={`model-install-toggle-${item.id}`}
+              aria-expanded={installerOpen}
+              className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-ink/15 bg-white text-[11px] font-semibold text-ink/70 hover:bg-ink/5"
+            >
+              {item.present ? 'Update' : 'Install'} {installerOpen ? '▴' : '▾'}
+            </button>
+          )}
+          {item.present && item.removable && (
+            <button
+              type="button"
+              onClick={onRemove}
+              data-testid={`model-remove-${item.id}`}
+              className="min-h-[44px] sm:min-h-0 px-3 py-1 rounded-full border border-rose-200 bg-white text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+            >
+              Remove
+            </button>
+          )}
+        </div>
       </div>
 
       {Installer && installerOpen && (
-        <div
-          data-testid={`model-installer-${item.id}`}
-          className="border-t border-ink/10 pt-3"
-        >
+        <div data-testid={`model-installer-${item.id}`} className="border-t border-ink/10 pt-3">
           <Installer onInstalled={onChanged} />
         </div>
       )}

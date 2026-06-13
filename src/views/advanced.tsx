@@ -111,9 +111,7 @@ function PromptRow({ descriptor }: PromptRowProps) {
       </div>
       <p className="text-xs text-ink/55 mb-2">{descriptor.help}</p>
 
-      {loadError && (
-        <p className="text-xs text-rose-700 mb-2">Couldn't load prompt: {loadError}</p>
-      )}
+      {loadError && <p className="text-xs text-rose-700 mb-2">Couldn't load prompt: {loadError}</p>}
 
       {!editing ? (
         <div className="flex items-center gap-2 flex-wrap">
@@ -173,9 +171,7 @@ function PromptRow({ descriptor }: PromptRowProps) {
 
 export function AdvancedView() {
   const dispatch = useAppDispatch();
-  const { groups, descriptors, values, status, error, hydrated } = useAppSelector(
-    (s) => s.config,
-  );
+  const { groups, descriptors, values, status, error, hydrated } = useAppSelector((s) => s.config);
   const restartPending = useAppSelector(selectRestartPending);
   const restartServerPending = useAppSelector(selectRestartServerPending);
   const [restarting, setRestarting] = useState(false);
@@ -199,7 +195,7 @@ export function AdvancedView() {
   };
 
   return (
-    <div className="max-w-[960px] mx-auto px-4 sm:px-6 py-10">
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 py-10">
       <div className="mb-8">
         <button
           type="button"
@@ -268,7 +264,9 @@ export function AdvancedView() {
             </button>
           </div>
 
-          <SettingsAccordion sections={groups.map((g) => ({ id: g.id, label: g.label, risk: g.risk }))}>
+          <SettingsAccordion
+            sections={groups.map((g) => ({ id: g.id, label: g.label, risk: g.risk }))}
+          >
             {groups.map((group) => {
               const groupDescriptors = descriptors.filter((d) => d.group === group.id);
               const overriddenCount = groupDescriptors.filter(
@@ -289,13 +287,15 @@ export function AdvancedView() {
                       <OverrideRow
                         key={d.key}
                         descriptor={d}
-                        value={values[d.key] ?? {
-                          key: d.key,
-                          effective: d.default,
-                          source: 'default',
-                          locked: false,
-                          overridden: false,
-                        }}
+                        value={
+                          values[d.key] ?? {
+                            key: d.key,
+                            effective: d.default,
+                            source: 'default',
+                            locked: false,
+                            overridden: false,
+                          }
+                        }
                         onChange={(raw) => dispatch(saveOverride({ key: d.key, value: raw }))}
                         onRevert={() => dispatch(resetKnob(d.key))}
                       />

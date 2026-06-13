@@ -19,6 +19,15 @@ vi.mock('../lib/api', () => ({
     getUserSettings: vi.fn(),
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
+    /* UpgradeCard (rendered inside AccountView) checks for updates on mount;
+       fail-open so these tests don't touch the network. */
+    getUpdateStatus: vi.fn().mockResolvedValue({
+      reachable: false,
+      currentVersion: '',
+      latestVersion: null,
+      updateAvailable: false,
+      url: null,
+    }),
   },
 }));
 
@@ -460,7 +469,9 @@ describe('AccountView — settings-accordion shell', () => {
        renders buttons with the same label text, so we look for the aria-expanded
        attribute that only section header toggles carry. */
     const expandedBtns = screen.getAllByRole('button', { expanded: true });
-    const expandedLabels = expandedBtns.map((b) => b.getAttribute('aria-label') ?? b.textContent ?? '');
+    const expandedLabels = expandedBtns.map(
+      (b) => b.getAttribute('aria-label') ?? b.textContent ?? '',
+    );
     expect(expandedLabels.some((l) => /profile/i.test(l))).toBe(true);
     expect(expandedLabels.some((l) => /cast analysis/i.test(l))).toBe(true);
     expect(expandedLabels.some((l) => /workspace/i.test(l))).toBe(true);
@@ -474,5 +485,22 @@ describe('AccountView — settings-accordion shell', () => {
       expect(api.putUserSettings).toHaveBeenCalledTimes(1);
     });
   });
-});
 
+  it('lists the button-only sections in the side-nav too (Models / Advanced / Help / First-run)', () => {
+    /* Regression: these four cards used to sit OUTSIDE the accordion, so the
+       side-nav didn't cover them. They now live inside it with scroll-link ids,
+       so the mobile jump <select> (and desktop rail) carry an entry for each. */
+    renderView();
+    for (const label of [
+      'Models & engines',
+      'Advanced configuration',
+      'Help & troubleshooting',
+      'First-run setup',
+    ]) {
+      expect(screen.getByRole('option', { name: label })).toBeInTheDocument();
+    }
+    /* And each card carries the scroll-target id the nav points at. */
+    expect(document.getElementById('cfg-section-acct-models')).not.toBeNull();
+    expect(document.getElementById('cfg-section-acct-setup')).not.toBeNull();
+  });
+});

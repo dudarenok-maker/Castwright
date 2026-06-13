@@ -206,6 +206,18 @@ export interface AppInfo {
   activeEngine?: string;
 }
 
+/* Result of the "is a newer release available?" check for the Account →
+   Application updates card. FAIL-OPEN: `reachable: false` means the release
+   source couldn't be reached (private repo / offline / rate-limited) — the
+   card then shows only the running version, never an error. */
+export interface UpdateStatus {
+  reachable: boolean;
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  url: string | null;
+}
+
 /* Interim companion-app distribution — availability of the packaged Android
    APK served by GET /api/companion/apk. The Listen-tab banner probes this
    (HEAD) and shows a "Download .apk" button only when `available`. */

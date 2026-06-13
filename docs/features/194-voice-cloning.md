@@ -33,8 +33,10 @@ bedtime story in their own voice while away; a kid hears themselves as the hero.
 2. **Consent on the record** — an explicit, stored consent step naming the person and the
    permitted use; cloning is blocked without it. (See risk below.)
 3. **Clone + cast** — produce a reusable cloned voice (XTTS reference path first; Qwen
-   design-to-target as the second engine) and assign it to a character exactly like a designed
-   voice, held **consistent across the book and series** the way designed voices already are.
+   reference-clip clone via Base `create_voice_clone_prompt` as the second engine — see
+   _Implementation notes_, **not** the 1.7B "design-to-target") and assign it to a character
+   exactly like a designed voice, held **consistent across the book and series** the way
+   designed voices already are.
 4. **Library separation** — cloned voices live in their own section of `#/voices`, never
    intermingled with designed voices, with provenance + consent surfaced and **reuse gated** so
    a person's voice is never offered back to an unrelated book/stranger.
@@ -56,6 +58,37 @@ bedtime story in their own voice while away; a kid hears themselves as the hero.
 - **Reversibility:** the cloned section + capture flow are gated behind a flag; disabling it
   hides capture and leaves designed voices untouched.
 
+## Implementation notes — Qwen clone pipeline (verified against code 2026-06-13)
+
+Scoped against the running sidecar; corrects the "Qwen design-to-target" framing above.
+
+- **Qwen cloning is a pure Base-0.6B operation — the 1.7B VoiceDesign is bypassed.** The clone
+  embedding (`VoiceClonePromptItem`) is created *and* consumed only on Base: real clip +
+  transcript → `Base.create_voice_clone_prompt(ref_audio, ref_text)` → `.pt` →
+  `Base.generate_voice_clone(text, voice_clone_prompt=…)` per sentence. This is the **same
+  back-half already used by `design_voice`** (`server/tts-sidecar/main.py:1436` create +
+  `:1474/:1553/:1632` synth) — voice *design* merely manufactures the reference audio with the
+  1.7B (`generate_voice_design`) first. For cloning, the audio **source** swaps to a real
+  recording; everything downstream is unchanged and already proven (the sidecar log shows
+  hundreds of successful `generate_voice_clone` calls). The Qwen clone work is therefore an
+  **ingest path only**, not net-new ML — drop the "design-to-target" framing.
+- **You cannot clone on the 1.7B and synth on the 0.6B.** Clone embeddings are
+  model-specific — that is *why* `design_voice` routes the 1.7B's **audio** (not an embedding)
+  through `Base.create_voice_clone_prompt`. Cloning never needs the 1.7B loaded, so cloned-voice
+  generation has the **same VRAM profile** as a designed voice (small resident Base only).
+- **The `.pt` is Base-version-specific → persist the raw clip.** The sibling `.json` manifest
+  records `baseModel`; swapping/upgrading the Base model orphans every `.pt`. Keep the **raw
+  reference clip** as the durable source-of-truth so `.pt`s can be re-derived after a Base
+  change — the `.pt` is a regenerable **cache**, the clip is the **master**. (`design_voice`
+  currently *discards* its reference audio after distillation; the clone path must **not** — the
+  clip is also the consent/provenance artifact the risk section requires.)
+- **Whisper ASR supplies `ref_text`.** `create_voice_clone_prompt` needs the transcript of the
+  reference clip; the in-stack Whisper ASR (srv-31) can auto-transcribe the captured sample, so
+  the user need not type what they said.
+- **Net storage per cloned voice:** raw clip (master) + `.pt` (Base-derived cache, regenerable)
+  + `.json` manifest (consent/provenance/`baseModel`) + optional preview MP3 — the designed-voice
+  layout plus the **retained clip**.
+
 ## Risk — consent & IP (must design in, not bolt on)
 
 Cloning a real person (incl. a child) is consent-sensitive and increasingly regulated
@@ -70,7 +103,9 @@ in v1.
 2. **Sample capture** — record/upload + quality checks + consent gate.
 3. **XTTS clone path** — reference-clip → reusable cloned voice → cast assignment + series
    consistency.
-4. **Qwen design-to-target** — second engine for the same cloned-voice contract.
+4. **Qwen reference-clip clone** — second engine for the same cloned-voice contract. Real clip
+   → `Base.create_voice_clone_prompt` (the 1.7B VoiceDesign is **not** used); see
+   _Implementation notes_.
 5. **Polish** — auditions, A/B vs a designed alternative, drift handling for cloned voices.
 
 ## Test plan / acceptance

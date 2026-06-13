@@ -257,6 +257,34 @@ describe('uiSlice — seed defaults from account settings', () => {
   });
 });
 
+describe('uiSlice — analyzer model override is transient + resettable (fix: sticky selectedModel)', () => {
+  it('setSelectedModel marks the pick explicit (a per-run override)', () => {
+    const s = uiSlice.reducer(
+      baseState({ kind: 'books' }),
+      uiActions.setSelectedModel('qwen3.5:4b'),
+    );
+    expect(s.selectedModel).toBe('qwen3.5:4b');
+    expect(s.selectedModelExplicit).toBe(true);
+  });
+
+  it('resetSelectedModelToDefault clears the override and restores the saved default', () => {
+    let s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.setSelectedModel('qwen3.5:4b'));
+    s = uiSlice.reducer(s, uiActions.resetSelectedModelToDefault('gemini-3.1-flash-lite'));
+    expect(s.selectedModel).toBe('gemini-3.1-flash-lite');
+    expect(s.selectedModelExplicit).toBe(false);
+  });
+
+  it('after reset, an account re-hydrate seeds the saved default again (no longer sticky)', () => {
+    let s = uiSlice.reducer(baseState({ kind: 'books' }), uiActions.setSelectedModel('qwen3.5:4b'));
+    s = uiSlice.reducer(s, uiActions.resetSelectedModelToDefault('gemini-3.1-flash-lite'));
+    s = uiSlice.reducer(s, {
+      type: 'account/fetch/fulfilled',
+      payload: { defaultAnalysisModel: 'gemma-4-31b-it', defaultTtsModelKey: 'kokoro-v1' },
+    });
+    expect(s.selectedModel).toBe('gemma-4-31b-it');
+  });
+});
+
 describe('uiSlice — rebaseline modal target bookId', () => {
   it('openRebaselineModal stores the target bookId and opens the modal', () => {
     const start = baseState({ kind: 'voices' });

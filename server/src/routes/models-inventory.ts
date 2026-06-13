@@ -98,11 +98,16 @@ export interface InventoryDeps {
   resolvedOllamaModel: string;
 }
 
-/* Ollama canonicalises tags, so match on either the exact tag or the root. */
+/* Match an Ollama residency tag against an inventory model name. Ollama
+   canonicalises a bare family name to its ':latest' tag, so 'qwen3.5' and
+   'qwen3.5:latest' are the same model — but two DIFFERENT explicit tags that
+   merely share a family root (qwen3.5:4b vs qwen3.5:9b) are NOT. The previous
+   root-only comparison conflated the latter, so a resident qwen3.5:4b lit up
+   qwen3.5:9b as "Loaded" in the Model Manager (residency borrowed across size
+   variants). Normalise the bare-name⇄:latest equivalence only. */
 function tagMatches(tag: string, expected: string): boolean {
-  if (tag === expected) return true;
-  const root = expected.split(':')[0];
-  return tag === root || tag.split(':')[0] === root;
+  const norm = (t: string) => (t.includes(':') ? t : `${t}:latest`);
+  return norm(tag) === norm(expected);
 }
 
 /** Pure inventory builder — all I/O (sidecar/ollama probes, resolver reads) is

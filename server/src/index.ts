@@ -193,6 +193,8 @@ import { upgradeRouter } from './routes/upgrade.js';
 app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
 import { infoRouter } from './routes/info.js';
 app.use('/api/info', infoRouter); // fs-1 — app version + schemas + what's-new state
+import { updatesRouter } from './routes/updates.js';
+app.use('/api/updates', updatesRouter); // GET /latest — fail-open "newer release available?" check
 import { companionRouter } from './routes/companion.js';
 app.use('/api/companion', companionRouter); // interim — GET/HEAD /apk: download the packaged Android APK
 import { samplesRouter } from './routes/samples.js';

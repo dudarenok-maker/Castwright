@@ -6,6 +6,7 @@
 
 import type {
   AppInfo,
+  UpdateStatus,
   CompanionApkAvailability,
   Emotion,
   UpgradeStageResult,
@@ -4756,6 +4757,19 @@ async function realGetAppInfo(): Promise<AppInfo> {
     throw new Error(`App info fetch failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
+/* "Is a newer release available?" check for the Application updates card.
+   FAIL-OPEN: any non-2xx or network error resolves to reachable:false (the
+   server already fails open for the private-repo/offline case; this guards the
+   client leg too). Never throws — the card degrades to the running version. */
+async function realGetUpdateStatus(): Promise<UpdateStatus> {
+  try {
+    const res = await fetch('/api/updates/latest');
+    if (!res.ok) return { reachable: false, currentVersion: '', latestVersion: null, updateAvailable: false, url: null };
+    return res.json();
+  } catch {
+    return { reachable: false, currentVersion: '', latestVersion: null, updateAvailable: false, url: null };
+  }
+}
 /* Interim — HEAD-probe GET /api/companion/apk to learn whether a packaged
    Android APK has been dropped at the server's resolved location. A 404 (or any
    network error) means "no APK"; a 200 carries the byte size via Content-Length.
@@ -4818,6 +4832,18 @@ let mockAppInfo: AppInfo = {
 async function mockGetAppInfo(): Promise<AppInfo> {
   await wait(40);
   return { ...mockAppInfo };
+}
+/* Mock has no release source — report "up to date" on the running version so the
+   card renders its steady state under VITE_USE_MOCKS=true. */
+async function mockGetUpdateStatus(): Promise<UpdateStatus> {
+  await wait(20);
+  return {
+    reachable: true,
+    currentVersion: mockAppInfo.appVersion,
+    latestVersion: mockAppInfo.appVersion,
+    updateAvailable: false,
+    url: null,
+  };
 }
 /* Mock has no real server to host an APK, so the companion download is always
    "unavailable" in mock/dev — the banner stays in its store-only state. */
@@ -6101,6 +6127,7 @@ const real = {
   putUserSettings: realPutUserSettings,
   putGeminiKey: realPutGeminiKey,
   getAppInfo: realGetAppInfo,
+  getUpdateStatus: realGetUpdateStatus,
   checkCompanionApk: realCheckCompanionApk,
   dismissWhatsNew: realDismissWhatsNew,
   upgradeStage: realUpgradeStage,
@@ -6353,6 +6380,7 @@ const mock = {
   putUserSettings: mockPutUserSettings,
   putGeminiKey: mockPutGeminiKey,
   getAppInfo: mockGetAppInfo,
+  getUpdateStatus: mockGetUpdateStatus,
   checkCompanionApk: mockCheckCompanionApk,
   dismissWhatsNew: mockDismissWhatsNew,
   upgradeStage: mockUpgradeStage,
