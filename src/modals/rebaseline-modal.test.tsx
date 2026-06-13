@@ -416,11 +416,11 @@ describe('RebaselineModal — design progress indicators', () => {
        sequential loop has maerin 'designing' while marlow waits as 'pending'.
        Without these indicators the queued rows render blank and the modal
        looks frozen (the bug this guards). */
-    let releaseBiana: () => void = () => {};
+    let releaseMaerin: () => void = () => {};
     designQwenVoice.mockImplementation((_bookId: string, characterId: string) =>
       characterId === 'maerin'
         ? new Promise<{ voiceId: string; previewUrl: string }>((resolve) => {
-            releaseBiana = () => resolve({ voiceId: 'qwen-maerin', previewUrl: 'blob:maerin' });
+            releaseMaerin = () => resolve({ voiceId: 'qwen-maerin', previewUrl: 'blob:maerin' });
           })
         : Promise.resolve({ voiceId: `qwen-${characterId}`, previewUrl: `blob:${characterId}` }),
     );
@@ -453,7 +453,7 @@ describe('RebaselineModal — design progress indicators', () => {
 
     // Releasing maerin drains the run; the modal leaves the busy state.
     await act(async () => {
-      releaseBiana();
+      releaseMaerin();
     });
     await waitFor(() => expect(store.getState().rebaseline.status).toBe('proposed'));
   });

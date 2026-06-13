@@ -153,14 +153,14 @@ test('findDialogueReattributions only flips narrator-attributed tag sentences', 
 });
 
 test('findDialogueReattributions ignores substring false positives at word boundaries', () => {
-  /* "growth" must not match "grow". "Grizela" must not match "Sela" as a
+  /* "growth" must not match "grow". "Selaa" must not match "Sela" as a
      speaker name (different person). Word-boundary check on both ends. */
   const sentences = [
     { id: 1, chapterId: 1, characterId: 'narrator', text: '"plant,"' },
-    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Sela said as Grizela watched the growth.' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Sela said as Selaa watched the growth.' },
   ];
   const found = findDialogueReattributions(sentences, 'Sela');
-  /* Should hit on the "Sela said" prefix, not the "Grizela" substring. */
+  /* Should hit on the "Sela said" prefix, not the "Selaa" substring. */
   assert.equal(found.length, 1);
   assert.equal(found[0].dialogueSentenceId, 1);
 });

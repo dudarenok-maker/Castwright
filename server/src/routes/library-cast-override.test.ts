@@ -31,7 +31,7 @@ let novelBookId: string;
    analyzer only nailed down his name + gender. The voiceId is the
    crucial bit — the novella's chapter audio is bound to it and must
    survive the override. */
-const leanElwin = {
+const leanOduvan = {
   id: 'oduvan',
   name: 'Oduvan',
   role: 'minor character',
@@ -51,7 +51,7 @@ const leanElwin = {
    Heks") — the override should fold the lean target's "Oduvan" form
    into target.aliases so future matches across the series recognise
    either form. */
-const richElwin = {
+const richOduvan = {
   id: 'oduvan',
   name: 'Oduvan Heks',
   role: 'Physician',
@@ -112,8 +112,8 @@ beforeAll(async () => {
   novellaBookId = makeBookId(AUTHOR, SERIES, NOVELLA);
   novelBookId = makeBookId(AUTHOR, SERIES, FULL_NOVEL);
 
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NOVELLA, novellaBookId, [leanElwin]);
-  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, FULL_NOVEL, novelBookId, [richElwin]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, NOVELLA, novellaBookId, [leanOduvan]);
+  writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, FULL_NOVEL, novelBookId, [richOduvan]);
 
   app = express();
   app.use(express.json());
@@ -225,7 +225,7 @@ describe('library-cast override router', () => {
        tone fields merged; role/gender/ageRange from whichever side has
        a value (source wins on conflict). */
     for (const merged of [targetOnDisk, sourceOnDisk]) {
-      expect(merged.description).toBe(richElwin.description);
+      expect(merged.description).toBe(richOduvan.description);
       expect(merged.role).toBe('Physician');
       expect(merged.ageRange).toBe('adult');
       expect(merged.gender).toBe('male');
@@ -260,14 +260,14 @@ describe('library-cast override router', () => {
       id: 'oduvan',
       voiceId: 'v_oduvan_novel',
       name: 'Oduvan Heks',
-      description: richElwin.description,
+      description: richOduvan.description,
       role: 'Physician',
     });
     expect(res.body.target).toMatchObject({
       id: 'oduvan',
       voiceId: 'v_oduvan_novella',
       name: 'Oduvan',
-      description: richElwin.description,
+      description: richOduvan.description,
       role: 'Physician',
     });
   });
