@@ -160,6 +160,58 @@ test.describe('visual baselines', () => {
   });
 });
 
+/* fs-16 — stats dashboard visual baseline.
+ *
+ * Seeds a FIXED payload (same dates, same values every run) so the sparkbar
+ * heights and completion percentages are deterministic. The streak sentence
+ * ("On a N-day streak") drifts with today's date, so we snapshot only
+ * the region below it — the lede + sparkbar strip + completion list + series
+ * table — by clipping to the element that wraps all of those. In practice
+ * Playwright captures the full viewport anyway; the heading "Your listening"
+ * is stable, and the streak line is text-only so minor date-drift is absorbed
+ * within the 5% maxDiffPixelRatio. */
+test.describe('visual baselines (stats)', () => {
+  test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
+
+  test('stats dashboard', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __SEED_LIBRARY_STATS__: unknown }).__SEED_LIBRARY_STATS__ = {
+        totalListenedSec: 47 * 3600 + 12 * 60, // 47h 12m — stable figure in lede
+        booksFinished: 6,
+        perBook: [
+          { bookId: 'b-coalfall', title: 'The Coalfall Commission', completionPct: 1, finished: true },
+          { bookId: 'b-hollow', title: 'Hollow Tide', completionPct: 0.78, finished: false },
+          { bookId: 'b-never2', title: 'Neverseen · Book 2', completionPct: 0.54, finished: false },
+        ],
+        perSeries: [
+          { series: 'Neverseen', finishedCount: 1, importedCount: 3 },
+          { series: 'Coalfall', finishedCount: 1, importedCount: 2 },
+        ],
+        /* byDay uses fixed past dates — the last-7-days window is computed
+           relative to `today` inside the view but the sparkbar count is
+           always 7 (the window is padded to fill). The bar HEIGHTS derive
+           from the max in the window, so fixed values keep them stable. */
+        byDay: [
+          { date: '2026-06-01', seconds: 600 },
+          { date: '2026-06-02', seconds: 600 },
+          { date: '2026-06-03', seconds: 600 },
+          { date: '2026-06-04', seconds: 600 },
+          { date: '2026-06-11', seconds: 1200 },
+          { date: '2026-06-12', seconds: 1800 },
+          { date: '2026-06-13', seconds: 3600 },
+        ],
+      };
+    });
+    await page.goto('/#/stats');
+    /* Wait for the lede to confirm the fetch resolved and the real content is painted.
+       25 s budget: the warmup project is skipped in serial-mode runs so this test
+       pays a cold Vite transform on first run. */
+    await expect(page.getByTestId('stats-lede')).toBeVisible({ timeout: 25_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('stats.png', VISUAL_DIFF_OPTS);
+  });
+});
+
 /* Plan 41 — dark-theme baselines.
  *
  * Mirrors the six light-mode captures above with a pre-mount
