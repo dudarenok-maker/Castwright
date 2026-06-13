@@ -19,6 +19,10 @@ describe('currentStreak (grace = today or yesterday)', () => {
   it('returns 0 for empty', () => {
     expect(currentStreak([], '2026-06-13')).toBe(0);
   });
+  it('breaks the streak at a gap (today active, yesterday inactive)', () => {
+    // today active but yesterday NOT → run ending today is just today = 1, not 3
+    expect(currentStreak(byDay([['2026-06-11', 60], ['2026-06-13', 60]]), '2026-06-13')).toBe(1);
+  });
 });
 
 describe('longestStreak', () => {
@@ -38,5 +42,10 @@ describe('last7Days', () => {
     expect(out[6]).toEqual({ date: '2026-06-13', seconds: 300 });
     expect(out[0].seconds).toBe(0);
     expect(out[0].date).toBe('2026-06-07');
+  });
+  it('preserves a mid-window day and zero-fills the rest', () => {
+    const out = last7Days(byDay([['2026-06-11', 120]]), '2026-06-13');
+    expect(out.find((d) => d.date === '2026-06-11')?.seconds).toBe(120);
+    expect(out.filter((d) => d.seconds === 0)).toHaveLength(6);
   });
 });
