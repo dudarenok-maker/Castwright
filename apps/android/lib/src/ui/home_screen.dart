@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../domain/home_shelf.dart';
+import '../brand.dart';
 
 /// Home surface (`app-14`): a "Continue listening" shelf of in-progress books
 /// (most-recently-played first) plus a recently-updated rail. Tapping a book
@@ -22,10 +23,23 @@ class HomeScreen extends StatelessWidget {
         children: [
           const _Header('Continue listening'),
           if (continueRail.isEmpty)
-            const Padding(
-              key: Key('continue-empty'),
-              padding: EdgeInsets.all(16),
-              child: Text('Nothing in progress yet — start a book from Library.'),
+            Padding(
+              key: const Key('continue-empty'),
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Nothing in progress yet — start a book from Library.'),
+                  const SizedBox(height: 8),
+                  Text(
+                    brandTaglineShort,
+                    key: const Key('home-tagline'),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ],
+              ),
             )
           else
             _Rail(books: continueRail, prefix: 'continue', onOpen: onOpenBook),

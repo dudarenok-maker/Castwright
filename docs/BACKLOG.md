@@ -22,18 +22,6 @@ via `Closes #NN`) and remove its row here; update the source plan's `status:` /
 Ship notes and archive it if `stable`. When you discover a new item, file a
 Backlog-item issue AND add the thin row here linking it, in the same round.
 
-_2026-06-12: added `ops-16` (Pinokio one-click installer) as a third first-class install path in
-the Must onboarding/install group, below `ops-15`. Moved `ops-12` (trademark clearance) and `ops-9`
-(server-side branch protection) out to the private commercialisation backlog — both are
-launch/business machinery, not app work (`ops-9` absorbed into its `com-4` public-repo-opening
-item). Folded the Windows code-signing and macOS notarisation requirements into `ops-1`/`ops-15`
-(the cost/vendor detail stays private)._
-
-_Last reprioritised 2026-06-08 (cleanup round: promoted the onboarding cluster, the
-voices-library/cloning item, and `srv-1` into Must; retired the delivered Android-companion,
-dependency-major, and ASR-verifying-phase rows; archived stale parked items; moved `side-11`
-to monitoring). Prior full pass 2026-06-02 folded in the 29 brainstorm items #458–#486._
-
 ---
 
 ## Must — blocks v1 ship or hurts existing users
@@ -186,18 +174,6 @@ can't ship until its loopback-proxy prerequisite is built._
 - _What:_ The pure pieces shipped (`resolvePlaybackSource` + `AppSettings.streamOverLan` + `AudioEngine.setStreamUrl`, 4 tests) but **cannot be wired**: `just_audio` streams via the platform player (ExoPlayer/AVPlayer) over the **OS** network stack, which can't trust the **app-pinned mkcert CA** (the TLS model deliberately avoids an OS cert install) → streaming `https://<lan>:8443` fails TLS. No `streamOverLan` toggle was wired (no dead control). _Unblock:_ a local loopback proxy that re-serves chapter bytes (fetched via the pinned `ApiClient`) to `just_audio` over `127.0.0.1`.
 - _Benefit (user):_ zero-wait preview before a download. Low urgency — offline-first download/play is unaffected.
 _Full detail + acceptance:_ [#553](https://github.com/dudarenok-maker/AudioBook-Generator/issues/553) · [plan 188](features/188-android-companion-app.md).
-
-#### `app-15` — legacy (pre-API-26) launcher icon PNGs + iOS app-icon set ([#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632))
-
-- _What:_ The Castwright adaptive icon (PR #629) covers **API 26+** (all modern devices + the emulator); the pre-26 PNG fallback + the iOS `AppIcon.appiconset` are still the Flutter default (no SVG rasterizer was on the build box). Generate them from `brand/castwright-icon.svg` (e.g. `flutter_launcher_icons` with a rasterized PNG source).
-- _Benefit (user):_ a branded icon on the few pre-API-26 Android devices and (with `app-12`) on iOS. Low priority — adaptive covers the vast majority of devices.
-_Full detail + acceptance:_ [#632](https://github.com/dudarenok-maker/AudioBook-Generator/issues/632) · [plan 188](features/188-android-companion-app.md).
-
-#### `app-16` — Companion-app brand audit (tagline/short-form, no .ai in lockups, engine credits) ([#706](https://github.com/dudarenok-maker/Castwright/issues/706))
-
-- _What:_ Timeboxed (~1h) audit of the Flutter companion's surfaces (pairing, library, player) against the v2 brand checklist — new tagline/short-form (no retired "…effortlessly. Even in your own voice."), no `.ai` inside lockups, engine credits where voices are shown. Split out of `fe-37` (separate `app` scope). Findings → a follow-up `app`-scope fix PR or close-clean.
-- _Benefit (brand):_ the second screen tells the same story as the first.
-_Full detail + acceptance:_ [#706](https://github.com/dudarenok-maker/Castwright/issues/706).
 
 ---
 
