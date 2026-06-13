@@ -6,7 +6,7 @@ import type { Character } from './types';
 /* A recurring character appears once per prior book (The Tidewatcher’s Oath/The Ebb/The Hollow Tide
    each carry a "Dame Linnet", Saltgrave a "Councillor Linnet") — all sharing the
    canonical voiceId 'dame-linnet'. */
-const LinnetRoster: SeriesRosterEntry[] = [
+const linnetRoster: SeriesRosterEntry[] = [
   { id: 'dame-linnet', name: 'Dame Linnet', bookId: 'the Hollow Tide__the-tidewatchers-oath', bookTitle: 'The Tidewatcher’s Oath', voiceId: 'dame-linnet' },
   { id: 'dame-linnet', name: 'Dame Linnet', bookId: 'the Hollow Tide__exile', bookTitle: 'The Ebb', voiceId: 'dame-linnet' },
   { id: 'linnet', name: 'Councillor Linnet', bookId: 'the Hollow Tide__saltgrave', bookTitle: 'Saltgrave', voiceId: 'dame-linnet' },
@@ -20,7 +20,7 @@ function char(partial: Partial<Character>): Character {
 describe('filterLinkablePriorCandidates', () => {
   it('keeps every candidate when no local character is linked', () => {
     const local = [char({ id: 'dame-linnet_local', name: 'Dame Linnet', voiceId: 'dame-linnet_local' })];
-    expect(filterLinkablePriorCandidates(local, LinnetRoster)).toHaveLength(4);
+    expect(filterLinkablePriorCandidates(local, linnetRoster)).toHaveLength(4);
   });
 
   it('collapses ALL of a person’s prior-book copies once the local row shares their voiceId', () => {
@@ -28,7 +28,7 @@ describe('filterLinkablePriorCandidates', () => {
        voiceId 'dame-linnet'. Every Linnet candidate (across 3 books) must drop
        out, while unrelated candidates (Marlow) stay. */
     const local = [char({ id: 'dame-linnet_from', name: 'Dame Linnet', voiceId: 'dame-linnet', voiceState: 'reused' })];
-    const out = filterLinkablePriorCandidates(local, LinnetRoster);
+    const out = filterLinkablePriorCandidates(local, linnetRoster);
     expect(out.map((p) => p.name)).toEqual(['Marlow']);
   });
 
@@ -49,6 +49,6 @@ describe('filterLinkablePriorCandidates', () => {
 
   it('does not suppress a different person who happens to be unlinked', () => {
     const local = [char({ id: 'wren', name: 'Wren', voiceId: 'wren' })];
-    expect(filterLinkablePriorCandidates(local, LinnetRoster)).toHaveLength(4);
+    expect(filterLinkablePriorCandidates(local, linnetRoster)).toHaveLength(4);
   });
 });
