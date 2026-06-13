@@ -21,7 +21,12 @@ describe('cast-merges store — pure helpers', () => {
       { id: 'mott', name: 'Mott' },
       { id: 'narrator', name: 'Narrator' },
     ];
-    const entries = buildFoldJournalEntries(rewrites, preFold, characters, '2026-06-14T00:00:00.000Z');
+    const entries = buildFoldJournalEntries(
+      rewrites,
+      preFold,
+      characters,
+      '2026-06-14T00:00:00.000Z',
+    );
 
     expect(entries).toHaveLength(2);
     const garrow = entries.find((e) => e.sourceId === 'garrow')!;
@@ -49,12 +54,33 @@ describe('cast-merges store — pure helpers', () => {
     const { replaceFoldEntries } = await import('./cast-merges.js');
     const file = {
       entries: [
-        { ts: 't1', kind: 'manual' as const, sourceId: 'a', sourceName: 'A', targetId: 'b', affected: [] },
-        { ts: 't2', kind: 'fold' as const, sourceId: 'x', sourceName: 'X', targetId: 'unknown-male', affected: [] },
+        {
+          ts: 't1',
+          kind: 'manual' as const,
+          sourceId: 'a',
+          sourceName: 'A',
+          targetId: 'b',
+          affected: [],
+        },
+        {
+          ts: 't2',
+          kind: 'fold' as const,
+          sourceId: 'x',
+          sourceName: 'X',
+          targetId: 'unknown-male',
+          affected: [],
+        },
       ],
     };
     const next = replaceFoldEntries(file, [
-      { ts: 't3', kind: 'fold' as const, sourceId: 'y', sourceName: 'Y', targetId: 'unknown-male', affected: [] },
+      {
+        ts: 't3',
+        kind: 'fold' as const,
+        sourceId: 'y',
+        sourceName: 'Y',
+        targetId: 'unknown-male',
+        affected: [],
+      },
     ]);
     expect(next.entries.map((e) => `${e.kind}:${e.sourceId}`)).toEqual(['manual:a', 'fold:y']);
   });
@@ -63,7 +89,11 @@ describe('cast-merges store — pure helpers', () => {
     const { appendManualEntry } = await import('./cast-merges.js');
     const file = { entries: [] };
     const next = appendManualEntry(file, {
-      ts: 't1', kind: 'manual' as const, sourceId: 'a', sourceName: 'A', targetId: 'b',
+      ts: 't1',
+      kind: 'manual' as const,
+      sourceId: 'a',
+      sourceName: 'A',
+      targetId: 'b',
       affected: [{ chapterId: 1, sentenceId: 2 }],
     });
     expect(next.entries).toHaveLength(1);
@@ -93,7 +123,11 @@ describe('cast-merges store — IO round-trip', () => {
     expect(empty).toEqual({ entries: [] });
 
     const saved = appendManualEntry(empty, {
-      ts: 't1', kind: 'manual', sourceId: 'a', sourceName: 'A', targetId: 'b',
+      ts: 't1',
+      kind: 'manual',
+      sourceId: 'a',
+      sourceName: 'A',
+      targetId: 'b',
       affected: [{ chapterId: 3, sentenceId: 4 }],
     });
     await saveCastMerges(bookDir, saved);
@@ -104,10 +138,13 @@ describe('cast-merges store — IO round-trip', () => {
   });
 
   it('clearCastMerges removes the file and is a no-op when absent', async () => {
-    const { loadCastMerges, saveCastMerges, clearCastMerges, castMergesExists } = await import('./cast-merges.js');
-    await saveCastMerges(bookDir, { entries: [
-      { ts: 't', kind: 'manual', sourceId: 'a', sourceName: 'A', targetId: 'b', affected: [] },
-    ] });
+    const { loadCastMerges, saveCastMerges, clearCastMerges, castMergesExists } =
+      await import('./cast-merges.js');
+    await saveCastMerges(bookDir, {
+      entries: [
+        { ts: 't', kind: 'manual', sourceId: 'a', sourceName: 'A', targetId: 'b', affected: [] },
+      ],
+    });
     expect(await castMergesExists(bookDir)).toBe(true);
     await clearCastMerges(bookDir);
     expect(await castMergesExists(bookDir)).toBe(false);

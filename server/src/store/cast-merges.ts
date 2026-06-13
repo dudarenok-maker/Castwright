@@ -121,6 +121,6 @@ export async function clearCastMerges(bookDir: string): Promise<void> {
 }
 
 /** Test/diagnostic helper — does the journal file exist on disk? */
-export async function castMergesExists(bookDir: string): Promise<boolean> {
+export function castMergesExists(bookDir: string): boolean {
   return existsSync(castMergesJsonPath(bookDir));
 }
