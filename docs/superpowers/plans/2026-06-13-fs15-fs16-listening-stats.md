@@ -12,6 +12,19 @@
 
 **Branch:** `feat/listening-stats-fs15-fs16` (already cut).
 
+## Brand consistency (REQUIRED for all UI — Waves E & F)
+
+Both new surfaces are user-facing and MUST read as Castwright, not as a bolt-on. The Tufte rules and the brand are compatible — the single accent and quiet scaffolding are exactly Tufte's "use color to signal, not decorate."
+
+- **Fonts:** the app's self-hosted families only — **Lora** (serif) for the display lede / headline figures, **General Sans** (sans) for labels, %s, and body. No new font, no system fallback as the primary.
+- **Every colour comes from the brand palette — no exceptions.** The brand guide + colour palette (`brand/` guidelines, local-only; the palette is encoded as the CSS custom properties in `src/styles.css` / `tailwind.config.ts`) is the *sole* source for every fill in these surfaces: text, backgrounds, progress-bar tracks **and** fills, sparkbar bars, the accent, borders/hairlines. **No hex literals, no off-palette shades, no ad-hoc opacity tints that land outside the palette** (CLAUDE.md convention). The mockup's literal hexes (`#fbf3ec`, `#8a7f76`, `#c8336a`) were illustrative ONLY — bind the real tokens. If a shade you want isn't in the palette, do **not** invent one: use the nearest defined token, or stop and raise it — adding a colour is a brand decision, not an implementation choice.
+- **Single accent = the brand accent token** (`--magenta` or the palette's designated accent — confirm the exact token in `styles.css`), used only on the focal/peak datum. Everything else is `--ink` / a defined muted token from the palette.
+- **Reuse existing surfaces, don't reinvent:** card/radii/spacing from `src/components/primitives` and the existing library-chrome / listen-view styling; the rail's book cards should match the existing book-card treatment (cover, title), not a bespoke shape.
+- **A11y + brand together (resolves PL6):** body text and the % labels use AA-compliant `--ink`-family tokens (≥ 4.5:1). The "quiet contrast" treatment is reserved for **non-text only** — progress-bar tracks, sparkline fills, hairline rules. Never ship muted-gray *text* that fails the axe gate.
+- **Copy is on-brand voice** — warm, plain, second-person (matches the existing empty-states / listener copy). The lede reads like a sentence, not a metrics label.
+- **References:** brand design spec `docs/superpowers/specs/2026-06-07-castwright-brand-design.md`; brand guide in `brand/` (local-only); palette tokens in `src/styles.css`.
+- **Acceptance gate (E2 + F3):** before either is "done," (1) `grep` the new component files for hex/`rgb(`/`hsl(` literals — must be zero; every colour is a `var(--…)` / Tailwind token mapping to the palette; (2) visually verify against the real app via the `run-app` skill that the surface matches the brand (fonts, peach ground, magenta accent only on the focal datum).
+
 ---
 
 ## File structure
@@ -407,7 +420,7 @@ describe('PUT /:bookId/listen-stats', () => {
 });
 ```
 
-> If `makeBookFixture` isn't the exact helper name in this file, use whatever fixture helper the existing `listen-progress` describe block uses — read the top of `book-state.test.ts` first and match it.
+> **PL3 — there is NO `makeBookFixture` helper.** `book-state.test.ts` sets fixtures up **inline** (verified): in `beforeAll`, `workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-…-'))` → `process.env.WORKSPACE_DIR = workspaceRoot` → **deferred** `const [{ bookStateRouter }, { makeBookId }] = await Promise.all([import('./book-state.js'), import('../workspace/paths.js')])` (deferred so `paths.ts` reads the env) → `bookId = makeBookId(AUTHOR, SERIES, TITLE)` → `mkdirSync(join(bookDir,'.audiobook'),{recursive:true})` + `writeFileSync` a minimal `state.json` → mount `app = express().use(express.json()).use('/api/books', bookStateRouter)`. Treat `makeBookFixture()` in the snippets above as shorthand for "do that inline setup and expose `app` + `bookId`." Copy the exact preamble from the top of `book-state.test.ts`.
 
 - [ ] **Step 2: Run, verify fail**
 
@@ -769,7 +782,7 @@ git commit -m "feat(server): completion/finished + library-stats aggregation (fs
 
 **The route layer's only job:** enumerate books, read each book's `state.json` (chapters + series meta), `listen-progress.json` (resume), and `listen-stats.json`, assemble `BookStatsInput[]`, and call the pure builders. Reuse the existing workspace book-enumeration helper (the same one `getLibrary` / the sync-manifest uses — find it with `grep -rn "scanBook\|listBooks\|enumerate" server/src/workspace`).
 
-- [ ] **Step 1: Write the failing integration test** (seed 2 books in a temp workspace using the file's existing fixture helpers; assert the GET shapes). Model the setup on `server/src/routes/library-sync-manifest.test.ts`, which already builds a multi-book temp workspace.
+- [ ] **Step 1: Write the failing integration test.** `makeWorkspaceWithBooks` is shorthand — copy the **inline** multi-book temp-workspace setup from `server/src/routes/library-sync-manifest.test.ts` (mkdtemp → `WORKSPACE_DIR` → deferred import of the library router → write each book's `state.json`/`listen-progress.json`), mount the router, and assert the GET shapes. **PL7:** this builds several temp books — if it proves timeout-prone under the default parallel fork pool, route it to `server/vitest.config.slow.ts` (the documented escape hatch, same as the real-`pdf-parse` test) and add it to the `test:server-slow` glob.
 
 ```ts
 // server/src/routes/library-stats.test.ts (skeleton — fill fixtures from sync-manifest.test.ts)
@@ -809,18 +822,30 @@ import { buildLibraryStats, buildContinueListening, type BookStatsInput } from '
 // + the existing book-enumeration helper
 
 async function assembleBookInputs(): Promise<BookStatsInput[]> {
-  const books = await enumerateBooks(); // existing helper → [{ bookId, bookDir }]
+  // PL8 — reuse the SAME workspace scan realGetLibrary uses (in scan.ts) to list
+  // books; do not invent a new enumerator. Confirm the exact exported name.
+  const books = await listWorkspaceBooks(); // → [{ bookId, bookDir }]
   return Promise.all(books.map(async ({ bookId, bookDir }) => {
     const state = await readJson<any>(stateJsonPath(bookDir));
     const resume = await readJson<any>(listenProgressJsonPath(bookDir));
     const statsFile = await readJson<any>(listenStatsJsonPath(bookDir));
+    const chapters = (state?.chapters ?? []).map((c: any) =>
+      ({ id: c.id, uuid: c.uuid, duration: c.duration, excluded: c.excluded, held: c.held }));
+    // PL1 — resolve the resume bookmark's chapterUuid → the chapter's CURRENT id
+    // (mirror GET /listen-progress, book-state.ts:1295-1301). A restructure shifts
+    // positional ids, so the raw stored chapterId can point at the wrong chapter.
+    let resumeChapterId = resume?.chapterId;
+    if (resume?.chapterUuid) {
+      const match = chapters.find((c: any) => c.uuid === resume.chapterUuid);
+      if (match) resumeChapterId = match.id;
+    }
     return {
       bookId,
       title: state?.title ?? bookId,
       series: state?.series ?? null,
       isStandalone: state?.isStandalone ?? !state?.series,
-      chapters: (state?.chapters ?? []).map((c: any) => ({ id: c.id, duration: c.duration, excluded: c.excluded, held: c.held })),
-      resume: resume ? { chapterId: resume.chapterId, currentSec: resume.currentSec, updatedAt: resume.updatedAt } : null,
+      chapters: chapters.map(({ id, duration, excluded, held }: any) => ({ id, duration, excluded, held })),
+      resume: resume ? { chapterId: resumeChapterId, currentSec: resume.currentSec, updatedAt: resume.updatedAt } : null,
       statsFile: statsFile ?? null,
     };
   }));
@@ -919,7 +944,7 @@ async function realGetContinueListening() {
 }
 ```
 
-Mock implementations keep a module-level `Map<bookId, ListenStatsFile>` and apply `mergeStatsDays` (import the pure fn — or duplicate the tiny max-merge) so the mock behaves like the server; `mockGetLibraryStats`/`mockGetContinueListening` read the map + canned books + the seed seams.
+Mock implementations keep a module-level `Map<bookId, ListenStatsFile>` and apply a max-merge so the mock behaves like the server. **PL5 — do NOT import `mergeStatsDays` from `server/src/…`**: the frontend build can't reach server modules (separate tsconfig/package). Duplicate the trivial max-upsert inline in the mock (it's ~8 lines). `mockGetLibraryStats`/`mockGetContinueListening` read the map + canned books + the seed seams (`__SEED_LIBRARY_STATS__` / `__SEED_CONTINUE__`).
 
 - [ ] **Step 4: Run, verify pass.** PASS. Then `npm run typecheck`.
 
@@ -1061,7 +1086,7 @@ git commit -m "feat(frontend): pure wall-clock StatsAccumulator (fs-16)"
 
 Integration points (read the component first — the relevant lines from the spec/grep):
 - `const [playing, setPlaying]` (~line 73) → call `acc.onPlay()` / `acc.onPause()` on transitions (in the `setPlaying` effect or alongside the existing play/pause wiring).
-- `onTimeUpdate` (~line 800), which already has the 5s save gate → call `acc.tick()` and flush the accumulator on the same cadence.
+- `onTimeUpdate` (~line 800): **PL4 — place the stats flush INSIDE the existing once-per-5s `lastSavedAtRef` block** (the same gate that throttles the listen-progress PUT). `onTimeUpdate` fires ~4×/sec; without the gate, `flushStats` would PUT 4×/sec. Inside the 5s block: `accRef.current.tick(); flushStats(bookId, accRef.current.drain().days);`
 - On book change (the existing per-book resume effect keyed on `bookId`) → `acc.switchBook(newBookId)` and flush the returned prior-book days.
 - `onEnded` (~line 871) → `acc.onPause()` + flush.
 - Mint a per-page-load `sessionId` once: `const sessionId = useRef(crypto.randomUUID()).current`.
@@ -1194,7 +1219,7 @@ describe('last7Days', () => {
 
 - [ ] **Step 1:** Render test with a seeded `getLibraryStats` payload — asserts the lede sentence with `totalListenedSec` formatted (use `src/lib/time.ts`), `booksFinished`, the streak sentence (from F1 math against the client's today), the 7-day sparkbars (7 bars, peak gets the accent), the sorted completion list, and the per-series rollup. First-run (all zeros) renders sensible copy, not NaN.
 - [ ] **Step 2:** Verify fail.
-- [ ] **Step 3:** Implement the Reading-column layout from the approved mockup (`.superpowers/brainstorm/.../dashboard-layout-v2.html`, Option A): single column, numbers-in-sentences lede, sparkbars, sorted completion rows with thin bars + right-aligned %, single magenta accent on the focal/peak, by-series small table. **Design tokens only — no hex literals.** Compute streak/last-7 client-side via F1 against `new Date().toLocaleDateString('en-CA')`.
+- [ ] **Step 3:** Implement the Reading-column layout from the approved mockup (`.superpowers/brainstorm/.../dashboard-layout-v2.html`, Option A): single column, numbers-in-sentences lede, sparkbars, sorted completion rows with thin bars + right-aligned %, single accent on the focal/peak, by-series small table. **Brand palette tokens only — no hex literals (see the Brand-consistency section + its acceptance gate).** **PL2 — `today` is an injectable prop** (`today?: string`, defaulting to `new Date().toLocaleDateString('en-CA')`) so F1 streak/last-7 math is deterministic in the render test; the test passes a fixed `today` matching its seeded `byDay`. Fonts: Lora for the lede/figures, General Sans for labels/%s.
 - [ ] **Step 4:** Verify pass + `npm run test -- stats`.
 - [ ] **Step 5:** Commit `feat(frontend): #/stats Reading-column dashboard (fs-16)`.
 
@@ -1202,7 +1227,7 @@ describe('last7Days', () => {
 
 **Files:** `e2e/responsive/coverage.spec.ts` (append a `#/stats` case per the "adding a new view" convention); a stats e2e spec (rail appears → click resumes; `#/stats` renders from a seeded payload via `__SEED_*__`); a visual snapshot spec under `e2e/responsive/visual.spec.ts` for the dashboard.
 
-- [ ] **Step 1–4:** Write the specs; seed via `page.addInitScript` setting `__SEED_CONTINUE__` / `__SEED_LIBRARY_STATS__`. Run `npm run test:e2e` (rail + stats render) and `npm run test:e2e:visual` (dashboard snapshot, `--workers=1` lane — spec m3). Generate the baseline with `--update-snapshots` once, then assert it's stable.
+- [ ] **Step 1–4:** Write the specs; seed via `page.addInitScript` setting `__SEED_CONTINUE__` / `__SEED_LIBRARY_STATS__`. Run `npm run test:e2e` (rail + stats render) and `npm run test:e2e:visual` (dashboard snapshot, `--workers=1` lane — spec m3). **PL9 — generate the baseline once with `--update-snapshots` and COMMIT the snapshot file**; CI's visual lane runs the *check*, never `--update-snapshots`. Eyeball the committed baseline for brand correctness before committing it.
 - [ ] **Step 5:** Commit `test(e2e): continue-listening rail + #/stats coverage + visual (fs-15/fs-16)`.
 
 ---
@@ -1255,3 +1280,5 @@ describe('last7Days', () => {
 - **Spec coverage:** D1–D14 → Waves A–H; S1 (duration source) → B1; S2 (max-upsert) → A2; S3 (finished predicate) → B2; S4/S5 (bounds/past-floor) → A2; S6 (wire↔storage) → A2/A3; S7 (documented) → I1; P1/P2 (final listenable chapter + ε) → B1/B2; P3 (router seams) → F2; P4 (mock surface) → C2; P5 (single-process mutex) → A1/A3.
 - **No placeholders:** logic-bearing tasks (A1–B2, C2, D1, F1) carry full code + tests. Route/UI/Dart tasks give exact integration points and representative code; the engineer reads the named files to match local helpers (called out explicitly where names must be confirmed).
 - **Type consistency:** `ListenStatsFile`/`StatsDay`/`StatsSessionSlot`, `BookStatsInput`/`ResumeInput`, `StatsAccumulator.{onPlay,onPause,tick,drain,switchBook}`, `DrainedDays`, and `ListenStatsPutBody` are used consistently across server, client, and tests.
+- **Adversarial pass on the plan folded in:** PL1 (B3 resolves `chapterUuid`→current id) · PL2 (F3 `today` injectable) · PL3 (real inline test-fixture pattern, A3/B3) · PL4 (D2 flush inside the 5s gate) · PL5 (mock duplicates the merge, no server import) · PL6 (resolved by the Brand-consistency a11y rule) · PL7 (B3 slow-tier fallback) · PL8 (real `scan.ts` enumeration) · PL9 (committed visual baseline).
+- **Brand:** every UI colour binds a brand-palette token (zero hex literals — grep gate in E2/F3), Lora + General Sans, single accent on the focal datum, AA-compliant text; verified against the real app via `run-app`.
