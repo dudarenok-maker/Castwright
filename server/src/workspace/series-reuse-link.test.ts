@@ -334,7 +334,7 @@ describe('pruneStaleReuseLinks', () => {
      `matchedFrom` (+ its denormalised voice) straight from the prior, undoing
      the roster-side prune — the real "Pell Hollis (standalone) keeps Saltgrave's
      Pell voice across every re-analysis" bug. */
-  const staleTamPrior = (): LinkableCharacter[] => [
+  const stalePellPrior = (): LinkableCharacter[] => [
     {
       id: 'pell-hollis',
       name: 'Pell Hollis',
@@ -346,15 +346,15 @@ describe('pruneStaleReuseLinks', () => {
       matchedFrom: { bookId: BONUS, characterId: 'pell', bookTitle: 'Bonus', confidence: 0.48 },
     },
   ];
-  const freshTam = () => [
+  const freshPell = () => [
     { id: 'pell-hollis', name: 'Pell Hollis', voiceState: 'generated' as const },
   ];
   type MergeExisting = Parameters<typeof mergeAnalysisResultWithExistingCast>[0];
 
   it('prune-then-merge: a cross-series link does NOT resurrect via the cast.json merge', async () => {
-    const prior = staleTamPrior();
+    const prior = stalePellPrior();
     await pruneStaleReuseLinks(COALFALL, prior, opts());
-    const merged = mergeAnalysisResultWithExistingCast(prior as unknown as MergeExisting, freshTam());
+    const merged = mergeAnalysisResultWithExistingCast(prior as unknown as MergeExisting, freshPell());
     const t = merged[0] as Record<string, unknown>;
     expect(t.matchedFrom).toBeFalsy();
     expect(t.overrideTtsVoices).toBeFalsy();
@@ -362,8 +362,8 @@ describe('pruneStaleReuseLinks', () => {
 
   it('sanity: WITHOUT the prune, the merge would have carried the stale link', async () => {
     const merged = mergeAnalysisResultWithExistingCast(
-      staleTamPrior() as unknown as MergeExisting,
-      freshTam(),
+      stalePellPrior() as unknown as MergeExisting,
+      freshPell(),
     );
     const t = merged[0] as Record<string, unknown>;
     expect(t.matchedFrom).toBeTruthy();

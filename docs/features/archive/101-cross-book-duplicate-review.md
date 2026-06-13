@@ -25,7 +25,7 @@ owner: null
   1. Same `(ttsVoice.provider, ttsVoice.name)` (a.k.a. same family)
   2. Same `(author, series)`, neither standalone
   3. `a.bookId !== b.bookId`
-  4. Normalised-name match per `server/src/workspace/series-prior-dedup.ts:normaliseToken` rule (lowercase + strip non-alphanumeric), OR one normalised name is a strict substring of the other (e.g. `wren` ⊂ `Wrenfoster`)
+  4. Normalised-name match per `server/src/workspace/series-prior-dedup.ts:normaliseToken` rule (lowercase + strip non-alphanumeric), OR one normalised name is a strict substring of the other (e.g. `wren` ⊂ `wrensparrow`)
   5. Pair NOT in either character's `notLinkedTo` set
   6. Neither character has the other already linked via `aliases` (case-insensitive name match)
 - **Mock-mode parity.** `api.linkPrior` + new `api.notLinkedTo` shipped in `src/lib/api.ts`'s mock branch with realistic latency + symmetric local-store mutation. Mock fixture: the Hollow Tide books 1+2 share a Wren/wren-sparrow unlinked pair to trigger the chip on first load.

@@ -56,7 +56,7 @@ const wrenExile = {
   gender: 'female',
   ageRange: 'teen',
 };
-const wrenThe Tidewatcher's Oath = {
+const wrenTidewatcher = {
   id: 'wren-e',
   name: 'Wren',
   role: 'character',
@@ -162,7 +162,7 @@ beforeEach(() => {
   ]);
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, EXILE_BOOK, exileBookId, [wrenExile]);
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, TIDEWATCHER_BOOK, tidewatcherBookId, [
-    wrenThe Tidewatcher's Oath,
+    wrenTidewatcher,
   ]);
   writeBookOnDisk(workspaceRoot, AUTHOR, SERIES, ALIAS_BOOK, aliasBookId, [wrenAliasBook]);
   writeBookOnDisk(
