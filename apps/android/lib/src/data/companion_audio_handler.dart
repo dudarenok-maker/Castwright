@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:audio_service/audio_service.dart';
 
+import '../domain/media_browse_tree.dart';
 import 'player_controller.dart';
 
 /// Bridges the OS media session (lock screen, notification, Bluetooth/headset,
@@ -14,21 +15,54 @@ import 'player_controller.dart';
 /// Bluetooth next/prev honour the app-13 skip behaviour via [PlayerController.skip].
 ///
 /// app-9: in-car browse comes from the injected [childrenProvider] /
-/// [onPlayMediaId] (the runtime builds these from the live library).
+/// [onPlayMediaId] (the runtime builds these from the live library). Because
+/// Android Auto can bind + query the browser before the async runtime boot
+/// wires those callbacks, [getChildren] waits (bounded) on a readiness
+/// [Completer] and refreshes AA via [_notifyChildrenChanged] once the live tree
+/// is available and whenever the playing chapter/book changes.
 class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
+  CompanionAudioHandler({
+    Duration readyTimeout = const Duration(seconds: 4),
+    Future<void> Function(String parentMediaId)? notifyChildrenChanged,
+  })  : _readyTimeout = readyTimeout,
+        _notifyChildrenChanged = notifyChildrenChanged ?? ((_) async {});
+
+  /// How long [getChildren] waits for [attach] before falling back to the info
+  /// row (so Android Auto never hangs on a cold/unpaired connect).
+  final Duration _readyTimeout;
+
+  /// Seam over `AudioService.notifyChildrenChanged` (no-op default keeps unit
+  /// tests off the platform channel; `main()` wires the real one).
+  final Future<void> Function(String parentMediaId) _notifyChildrenChanged;
+
   PlayerController? _controller;
   Future<List<MediaItem>> Function(String parentMediaId)? _childrenProvider;
   Future<void> Function(String mediaId)? _onPlayMediaId;
   final List<StreamSubscription<Object?>> _subs = [];
 
+  /// Completes when [attach] wires a live provider. Reset on [detach] so a
+  /// post-unpair query waits again rather than seeing a stale "ready".
+  Completer<void> _ready = Completer<void>();
+
+  /// Last book we told Android Auto about — refresh the root (Tab-1 label) only
+  /// when the book actually changes.
+  String? _lastNotifiedBookId;
+
+  /// Shown when Android Auto connects before the runtime is ready (or unpaired).
+  static const MediaItem _infoRow = MediaItem(
+    id: 'info',
+    title: 'Open Castwright on your phone to set up',
+    playable: false,
+  );
+
   /// Wire the live player (+ optional car browse). Idempotent: re-attaching
-  /// detaches the previous player first.
+  /// swaps the player without disturbing an in-flight readiness wait.
   void attach(
     PlayerController controller, {
     Future<List<MediaItem>> Function(String parentMediaId)? childrenProvider,
     Future<void> Function(String mediaId)? onPlayMediaId,
   }) {
-    detach();
+    _cancelSubs();
     _controller = controller;
     _childrenProvider = childrenProvider;
     _onPlayMediaId = onPlayMediaId;
@@ -36,20 +70,39 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
     _subs.add(controller.positionStream.listen((_) => _broadcastState()));
     _subs.add(controller.nowPlayingStream.listen(_onNowPlaying));
     _broadcastState();
+    if (!_ready.isCompleted) _ready.complete();
+    // The root may now expose a current-book tab + real labels.
+    _notify(rootMediaId);
   }
 
   void detach() {
+    _cancelSubs();
+    _controller = null;
+    _childrenProvider = null;
+    _onPlayMediaId = null;
+    _lastNotifiedBookId = null;
+    // Only reset a *completed* readiness gate — never abandon an instance an
+    // in-flight getChildren is still awaiting (attach completes that one).
+    if (_ready.isCompleted) _ready = Completer<void>();
+  }
+
+  void _cancelSubs() {
     for (final s in _subs) {
       s.cancel();
     }
     _subs.clear();
-    _controller = null;
+  }
+
+  /// Fire-and-forget AA refresh — a media-browser hiccup must never break playback.
+  void _notify(String parentMediaId) {
+    _notifyChildrenChanged(parentMediaId).catchError((_) {});
   }
 
   void _onNowPlaying(NowPlaying? np) {
     if (np == null) return;
     mediaItem.add(MediaItem(
-      id: np.id,
+      // Match the browse-tree id so Android Auto highlights the active chapter.
+      id: chapterMediaId(np.bookId, np.id),
       title: np.title,
       album: np.album.isEmpty ? 'Castwright' : np.album,
       duration: np.duration,
@@ -58,6 +111,12 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
           : null,
     ));
     _broadcastState();
+    // Refresh the current-book chapter list (moves the highlight); refresh the
+    // root too when the book changed (updates the Tab-1 label).
+    final bookChanged = np.bookId != _lastNotifiedBookId;
+    _lastNotifiedBookId = np.bookId;
+    _notify(currentMediaId);
+    if (bookChanged) _notify(rootMediaId);
   }
 
   void _broadcastState() {
@@ -106,8 +165,16 @@ class CompanionAudioHandler extends BaseAudioHandler with SeekHandler {
   @override
   Future<List<MediaItem>> getChildren(String parentMediaId,
       [Map<String, dynamic>? options]) async {
+    if (_childrenProvider == null) {
+      // AA queried before the runtime attached — wait (bounded) for it.
+      try {
+        await _ready.future.timeout(_readyTimeout);
+      } on TimeoutException {
+        return [_infoRow];
+      }
+    }
     final provider = _childrenProvider;
-    return provider != null ? await provider(parentMediaId) : const [];
+    return provider != null ? await provider(parentMediaId) : [_infoRow];
   }
 
   @override
