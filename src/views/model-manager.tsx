@@ -19,7 +19,7 @@ import {
 } from '../components/ModelControlPill';
 import { api, type ModelInventoryItem, type ModelInventoryResponse } from '../lib/api';
 import { formatBytes } from '../lib/bytes';
-import { ModelSettingsForm } from '../components/model-settings-form';
+import { ModelSettingsForm, MODEL_SETTINGS_SECTIONS } from '../components/model-settings-form';
 import { SettingsAccordion } from '../components/settings/settings-accordion';
 import { CoquiInstall } from '../components/coqui-install';
 import { KokoroInstall } from '../components/kokoro-install';
@@ -70,13 +70,16 @@ export function ModelManagerView() {
         </p>
       </div>
 
-      {/* Side-menu of sections (mirrors the Account / Advanced layout) — scroll
-          targets are id="cfg-section-<navId>". */}
+      {/* ONE side-nav rail over every section (mirrors Account / Advanced).
+          The settings form is rendered embedded so it folds its own sections
+          into this single rail instead of nesting a second nav. Scroll targets
+          are id="cfg-section-<navId>" — Device/Installed wrap a div with the id;
+          the form's SettingsSections already render their own. */}
       <SettingsAccordion
         sections={[
           { id: 'mm-device', label: 'Device', risk: 'low' },
           { id: 'mm-models', label: 'Installed models', risk: 'low' },
-          { id: 'mm-settings', label: 'Defaults & engines', risk: 'low' },
+          ...MODEL_SETTINGS_SECTIONS,
         ]}
       >
         <div id="cfg-section-mm-device">
@@ -85,9 +88,7 @@ export function ModelManagerView() {
         <div id="cfg-section-mm-models">
           <ModelInventory />
         </div>
-        <div id="cfg-section-mm-settings">
-          <ModelSettingsForm />
-        </div>
+        <ModelSettingsForm embedded />
       </SettingsAccordion>
     </div>
   );
