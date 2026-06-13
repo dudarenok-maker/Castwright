@@ -1565,7 +1565,7 @@ describe('AnalysingView — readiness gate follows the effective per-phase model
     });
     render(
       <Provider store={store}>
-        <AnalysingView manuscriptId="m1" title="Bonus Keefe Story" model="qwen3.5:4b" onComplete={() => {}} />
+        <AnalysingView manuscriptId="m1" title="the Coalfall Commission" model="qwen3.5:4b" onComplete={() => {}} />
       </Provider>,
     );
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
@@ -1587,7 +1587,7 @@ describe('AnalysingView — readiness gate follows the effective per-phase model
     const store = makeStore({ selectedModel: 'qwen3.5:4b' }); // no per-phase split
     render(
       <Provider store={store}>
-        <AnalysingView manuscriptId="m1" title="Bonus Keefe Story" model="qwen3.5:4b" onComplete={() => {}} />
+        <AnalysingView manuscriptId="m1" title="the Coalfall Commission" model="qwen3.5:4b" onComplete={() => {}} />
       </Provider>,
     );
     expect(await screen.findByText(/Ollama not reachable/i)).toBeInTheDocument();
