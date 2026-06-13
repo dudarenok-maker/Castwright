@@ -62,7 +62,7 @@ Create `server/src/store/cast-merges.test.ts`:
    (no IO) plus a load/save/clear round-trip against a tempdir workspace. */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -178,7 +178,7 @@ describe('cast-merges store — IO round-trip', () => {
 });
 ```
 
-> Note: `castMergesExists` is a tiny test-support export defined in Step 4. The test imports it; if you prefer, replace it with a direct `existsSync(castMergesJsonPath(bookDir))` — but the export keeps the test from re-deriving the path. `existsSync` is already imported above for that fallback.
+> Note: `castMergesExists` is a tiny test-support export defined on the store module in Step 4 (so the test never re-derives the journal path). Do NOT import `existsSync` in this test — `castMergesExists` is the only existence check used, and an unused `existsSync` import fails ESLint in `npm run verify`.
 
 - [ ] **Step 3: Run the test to verify it fails**
 
@@ -674,7 +674,7 @@ import { loadCastMerges } from '../store/cast-merges.js';
 
 - [ ] **Step 4: Replace the chapterCast derivation with journal-first lookup**
 
-In `server/src/routes/cast-aliases.ts`, replace the entire block from the comment `/* Derive impacted chapters from the preserved chapterCast …` down to the construction of `impactedChapters` (lines ~164–208, i.e. everything between the `writeJsonAtomic(castJsonPath …)` call and the `console.log('[cast-aliases] …')` call) with:
+In `server/src/routes/cast-aliases.ts`, replace the **entire tail of the unlink route** — from the comment `/* Derive impacted chapters from the preserved chapterCast …` (line ~164) **through the route's closing `);` (line ~217)**. This deletion INCLUDES the old inline `cache` load, the `impactedChapterIds` loop, the inline `edits` read, the `byChapter` build, the `impactedChapters` const, **AND the existing `console.log` and `return res.json(...)` and the route's closing `},` `);`** — the replacement below re-supplies the log, the return, and the route close. (Stopping at line 208 would leave the old `console.log`/`return`/braces duplicated → syntax error.) Replace with:
 
 ```ts
     /* srv-1 — prefer the deterministic merge journal. A journal entry that
@@ -1035,10 +1035,17 @@ git add docs/features/213-cast-merge-journal.md docs/features/INDEX.md
 git commit -m "docs(docs): regression plan 213 for srv-1 merge journal"
 ```
 
-- [ ] **Step 4: Run the full verification gate**
+- [ ] **Step 4: Format, then run the full verification gate**
+
+`npm run verify` runs ESLint + Prettier `--check` and fails on any unformatted file, so format the new/changed files first (the pasted code blocks above are close but not guaranteed Prettier-exact):
+
+Run: `npx prettier --write server/src/store/cast-merges.ts server/src/store/cast-merges.test.ts server/src/routes/cast-merge.ts server/src/routes/cast-merge.test.ts server/src/routes/cast-aliases.ts server/src/routes/cast-aliases.journal.test.ts server/src/routes/analysis.ts server/src/workspace/paths.ts`
+Expected: prettier rewrites any non-conformant files (or reports them unchanged).
 
 Run: `npm run verify`
-Expected: PASS — typecheck + all tests + e2e + build green. If a leg fails, triage per CLAUDE.md (related → fix here; pre-existing → surface, do not bypass).
+Expected: PASS — lint + typecheck + all tests + e2e + build green. If a leg fails, triage per CLAUDE.md (related → fix here; pre-existing → surface, do not bypass).
+
+> If `npx prettier --write` reformatted a file, fold that into the relevant task's commit (or amend), so each commit stays self-consistent.
 
 - [ ] **Step 5: Open the PR (draft)**
 
