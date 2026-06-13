@@ -126,7 +126,16 @@ jobs:
             echo "signed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          # Strip stray CR before use: a secret set via a PowerShell pipe can
+          # carry a trailing \r\n, which corrupts the base64 decode (GNU base64
+          # chokes on \r) and turns values like the key alias into "upload\r"
+          # (breaking the gradle keyAlias lookup). Belt-and-suspenders even
+          # though the secrets are currently set cleanly via `gh secret set --body`.
+          KEYSTORE_BASE64=${KEYSTORE_BASE64//$'\r'/}
+          KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD//$'\r'/}
+          KEY_PASSWORD=${KEY_PASSWORD//$'\r'/}
+          KEY_ALIAS=${KEY_ALIAS//$'\r'/}
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
           {
             echo "storePassword=$KEYSTORE_PASSWORD"
             echo "keyPassword=$KEY_PASSWORD"
