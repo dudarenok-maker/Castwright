@@ -6,6 +6,7 @@ import {
   mockPutListenStats,
   mockGetLibraryStats,
   mockGetContinueListening,
+  mockSetShelfStatus,
   _resetMockListenStats,
 } from './api';
 
@@ -87,5 +88,26 @@ describe('mock listen-stats client', () => {
   it('getContinueListening returns empty array when no seed', async () => {
     const out = await mockGetContinueListening();
     expect(out).toEqual([]);
+  });
+
+  it('setShelfStatus(finished) prunes the seeded shelf so a refetch drops the book', async () => {
+    (globalThis as any).__SEED_CONTINUE__ = [
+      { bookId: 'keep', title: 'Keep', chapterId: 1, currentSec: 90, remainingSec: 600, completionPct: 0.1, updatedAt: '2026-06-13T00:00:00Z' },
+      { bookId: 'gone', title: 'Gone', chapterId: 1, currentSec: 90, remainingSec: 600, completionPct: 0.1, updatedAt: '2026-06-13T00:00:00Z' },
+    ];
+    const rec = await mockSetShelfStatus('gone', { finished: true });
+    expect(rec.finished).toBe(true);
+    const out = await mockGetContinueListening();
+    expect(out.map((x: any) => x.bookId)).toEqual(['keep']);
+    delete (globalThis as any).__SEED_CONTINUE__;
+  });
+
+  it('setShelfStatus(hidden) also prunes the shelf', async () => {
+    (globalThis as any).__SEED_CONTINUE__ = [
+      { bookId: 'h', title: 'H', chapterId: 1, currentSec: 90, remainingSec: 600, completionPct: 0.1, updatedAt: '2026-06-13T00:00:00Z' },
+    ];
+    await mockSetShelfStatus('h', { hidden: true });
+    expect(await mockGetContinueListening()).toEqual([]);
+    delete (globalThis as any).__SEED_CONTINUE__;
   });
 });

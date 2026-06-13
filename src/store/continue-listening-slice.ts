@@ -29,6 +29,13 @@ export const continueListeningSlice = createSlice({
     hydrate: (s, a: PayloadAction<ContinueItem[]>) => {
       s.items = a.payload;
     },
+    /** fs-15 shelf controls — optimistically drop one book from the shelf
+        (after the user marks it finished or hides it). The server fetch on the
+        next mount is the source of truth; this just makes the card vanish
+        immediately. */
+    dismiss: (s, a: PayloadAction<string>) => {
+      s.items = s.items.filter((i) => i.bookId !== a.payload);
+    },
   },
 });
 

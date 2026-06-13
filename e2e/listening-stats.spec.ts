@@ -95,6 +95,25 @@ test.describe('fs-15 continue-listening rail', () => {
     await expect(page).toHaveURL(/#\/books\/sb\/listen/, { timeout: 10_000 });
   });
 
+  test('marking a card finished from the ⋯ menu removes it from the rail', async ({ page }) => {
+    await page.addInitScript((seed) => {
+      (window as unknown as { __SEED_CONTINUE__: unknown }).__SEED_CONTINUE__ = seed;
+    }, CONTINUE_SEED);
+    await page.goto('/');
+
+    const card = page.getByRole('button', { name: /Continue listening to Solway Bay/i });
+    await card.waitFor({ state: 'visible', timeout: 25_000 });
+
+    /* Hover reveals the ⋯ control on pointer devices; open it and finish. */
+    await card.hover();
+    await page.getByRole('button', { name: /Continue-listening options/i }).click();
+    await page.getByRole('menuitem', { name: /Mark as finished/i }).click();
+
+    /* Optimistic dismiss drops the only card → the whole rail unmounts. */
+    await expect(card).toHaveCount(0, { timeout: 5_000 });
+    await expect(page.getByRole('heading', { name: /Continue listening/i })).not.toBeVisible();
+  });
+
   test('does NOT render the rail when __SEED_CONTINUE__ is empty', async ({ page }) => {
     /* No seed script — the mock returns [] by default. */
     await page.goto('/');

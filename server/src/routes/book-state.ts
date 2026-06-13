@@ -1249,6 +1249,15 @@ interface ListenProgressFile {
   /* Plan 53 — user-placed bookmarks. Optional; absent on pre-plan-53
      records. */
   markers?: ListenMarker[];
+  /* fs-15 shelf controls — explicit Continue-listening flags, set via
+     POST /:bookId/shelf-status. `finished` (sticky: preserved across a
+     subsequent progress PUT) counts toward booksFinished and drops the book
+     off the rail; `hidden` (cleared on the next progress PUT — resuming
+     un-hides) only drops it off the rail. */
+  finished?: boolean;
+  finishedAt?: string;
+  hidden?: boolean;
+  dismissedAt?: string;
 }
 
 /* Plan 53 — bounds on playback rate. Mirrors the openapi.yaml
@@ -1395,6 +1404,11 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
        a legacy book without uuids) — GET then keeps the stored chapterId. */
     const stateForUuid = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
     const chapterUuid = stateForUuid?.chapters.find((c) => c.id === body.chapterId)?.uuid;
+    /* fs-15 shelf controls — merge the prior record's shelf flags rather than
+       clobbering them: `finished` is sticky (a user "Mark as finished" survives
+       later progress saves), while `hidden` is intentionally NOT carried over —
+       a fresh resume position un-hides the book from the Continue-listening rail. */
+    const prior = await readJson<ListenProgressFile>(listenProgressJsonPath(located.bookDir));
     const record: ListenProgressFile = {
       chapterId: body.chapterId,
       ...(chapterUuid ? { chapterUuid } : {}),
@@ -1402,12 +1416,60 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
       updatedAt: effectiveUpdatedAt,
       ...(playbackRate !== undefined ? { playbackRate } : {}),
       ...(markers !== undefined ? { markers } : {}),
+      ...(prior?.finished
+        ? { finished: true, ...(prior.finishedAt ? { finishedAt: prior.finishedAt } : {}) }
+        : {}),
     };
     await writeJsonAtomic(listenProgressJsonPath(located.bookDir), record);
     res.json(record);
   } catch (e) {
     console.error('[book-state] PUT listen-progress failed', e);
     res.status(500).json({ error: (e as Error).message || 'Failed to write listen-progress.' });
+  }
+});
+
+/* fs-15 shelf controls — POST /:bookId/shelf-status { finished?, hidden? }.
+   Read-modify-write the Continue-listening shelf flags on the listen-progress
+   record. Body must carry at least one boolean; setting a flag to false clears
+   it (cheap reversibility). The resume position is carried forward untouched. */
+bookStateRouter.post('/:bookId/shelf-status', async (req: Request, res: Response) => {
+  try {
+    const located = await findBookByBookId(req.params.bookId);
+    if (!located) return res.status(404).json({ error: 'Book not found.' });
+    const body = req.body as Partial<{ finished: unknown; hidden: unknown }> | undefined;
+    const hasFinished = !!body && typeof body.finished === 'boolean';
+    const hasHidden = !!body && typeof body.hidden === 'boolean';
+    if (!hasFinished && !hasHidden) {
+      return res.status(400).json({ error: 'Body must include a boolean `finished` and/or `hidden`.' });
+    }
+    const now = new Date().toISOString();
+    const prior = await readJson<ListenProgressFile>(listenProgressJsonPath(located.bookDir));
+    /* Fall back to a cold record so a book with no prior bookmark can still be
+       flagged (e.g. marking finished after a failed sync). */
+    const record: ListenProgressFile = { ...(prior ?? { chapterId: 0, currentSec: 0, updatedAt: now }) };
+    if (hasFinished) {
+      if (body!.finished) {
+        record.finished = true;
+        record.finishedAt = now;
+      } else {
+        delete record.finished;
+        delete record.finishedAt;
+      }
+    }
+    if (hasHidden) {
+      if (body!.hidden) {
+        record.hidden = true;
+        record.dismissedAt = now;
+      } else {
+        delete record.hidden;
+        delete record.dismissedAt;
+      }
+    }
+    await writeJsonAtomic(listenProgressJsonPath(located.bookDir), record);
+    res.json(record);
+  } catch (e) {
+    console.error('[book-state] POST shelf-status failed', e);
+    res.status(500).json({ error: (e as Error).message || 'Failed to write shelf-status.' });
   }
 });
 

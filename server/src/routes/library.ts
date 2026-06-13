@@ -26,7 +26,15 @@ import {
 
 export const libraryRouter = Router();
 
-type ResumeBookmark = { chapterId: number; currentSec: number; updatedAt: string; chapterUuid?: string };
+type ResumeBookmark = {
+  chapterId: number;
+  currentSec: number;
+  updatedAt: string;
+  chapterUuid?: string;
+  /* fs-15 shelf controls — explicit Continue-listening flags. */
+  finished?: boolean;
+  hidden?: boolean;
+};
 type MappedChapter = { id: number; uuid?: string; duration?: string; excluded?: boolean; held?: boolean };
 
 async function assembleBookInputs(): Promise<BookStatsInput[]> {
@@ -67,6 +75,9 @@ async function assembleBookInputs(): Promise<BookStatsInput[]> {
         })),
         resume: resumeObject,
         statsFile: statsFile ?? null,
+        /* fs-15 shelf controls — explicit flags drive auto-hide + finished stats. */
+        finished: resume?.finished,
+        hidden: resume?.hidden,
       };
     }),
   );

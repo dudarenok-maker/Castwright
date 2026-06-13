@@ -706,6 +706,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/shelf-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set the Continue-listening shelf flags for a book
+         * @description fs-15 shelf controls — read-modify-write the `finished` / `hidden`
+         *     flags on the book's `listen-progress.json`. Body must include at least
+         *     one boolean; setting a flag to `false` clears it. `finished` ("Mark as
+         *     finished") is sticky and counts toward library stats; `hidden` ("Hide
+         *     from shelf") only removes the book from the rail and is cleared on the
+         *     next progress save. The resume position is carried forward untouched;
+         *     a book with no prior bookmark can still be flagged (cold record).
+         */
+        post: operations["setShelfStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/listen-stats": {
         parameters: {
             query?: never;
@@ -2271,6 +2297,30 @@ export interface components {
              *     pre-plan-53 records.
              */
             markers?: components["schemas"]["ListenMarker"][];
+            /**
+             * @description fs-15 shelf controls — set by POST /shelf-status when the user picks
+             *     "Mark as finished". Sticky (preserved across later progress saves);
+             *     drops the book off the Continue-listening rail AND counts it toward
+             *     the library "books finished" stat.
+             */
+            finished?: boolean;
+            /**
+             * Format: date-time
+             * @description fs-15 — server-stamped ISO time the book was marked finished.
+             */
+            finishedAt?: string;
+            /**
+             * @description fs-15 shelf controls — set by POST /shelf-status when the user picks
+             *     "Hide from shelf". Drops the book off the Continue-listening rail
+             *     WITHOUT counting it as finished, and is cleared on the next progress
+             *     save (resuming un-hides the book).
+             */
+            hidden?: boolean;
+            /**
+             * Format: date-time
+             * @description fs-15 — server-stamped ISO time the book was hidden from the shelf.
+             */
+            dismissedAt?: string;
         };
         /**
          * @description Plan 53 — user-placed bookmark inside a book. The listen-view
@@ -5001,6 +5051,49 @@ export interface operations {
                 };
             };
             /** @description Body missing chapterId or currentSec */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    setShelfStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    finished?: boolean;
+                    hidden?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The updated listen-progress record with the new shelf flags */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListenProgress"];
+                };
+            };
+            /** @description Body includes neither a boolean `finished` nor a boolean `hidden` */
             400: {
                 headers: {
                     [name: string]: unknown;

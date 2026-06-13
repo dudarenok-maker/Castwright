@@ -1233,6 +1233,21 @@ export async function mockGetContinueListening() {
   return seeded ?? [];
 }
 
+/* fs-15 shelf controls — mock mirror. Marking a book finished or hiding it
+   prunes the seeded shelf so a refetch reflects the removal; clearing a flag
+   is a no-op on the seed. */
+export async function mockSetShelfStatus(
+  bookId: string,
+  body: ShelfStatusArgs,
+): Promise<ListenProgress> {
+  await wait(15);
+  const g = globalThis as unknown as { __SEED_CONTINUE__?: ContinueListeningItem[] };
+  if ((body.finished || body.hidden) && Array.isArray(g.__SEED_CONTINUE__)) {
+    g.__SEED_CONTINUE__ = g.__SEED_CONTINUE__.filter((x) => x.bookId !== bookId);
+  }
+  return { chapterId: 0, currentSec: 0, updatedAt: new Date().toISOString(), ...body };
+}
+
 export function _resetMockListenStats(): void {
   MOCK_LISTEN_STATS.clear();
 }
@@ -1914,6 +1929,17 @@ export interface ListenProgress {
   /* Plan 53. */
   playbackRate?: number;
   markers?: ListenProgressMarker[];
+  /* fs-15 shelf controls — Continue-listening flags set via setShelfStatus. */
+  finished?: boolean;
+  finishedAt?: string;
+  hidden?: boolean;
+  dismissedAt?: string;
+}
+
+/** fs-15 shelf controls — POST /shelf-status body. At least one boolean. */
+export interface ShelfStatusArgs {
+  finished?: boolean;
+  hidden?: boolean;
 }
 
 /* Plan 53 — PUT body extension. chapterId/currentSec stay required so
@@ -1980,6 +2006,20 @@ async function realGetContinueListening() {
   if (!res.ok)
     throw new Error(
       `continue-listening GET failed (${res.status}): ${(await res.text()) || res.statusText}`,
+    );
+  return res.json();
+}
+
+/* fs-15 shelf controls — mark a book finished / hide it from the rail. */
+async function realSetShelfStatus(bookId: string, body: ShelfStatusArgs): Promise<ListenProgress> {
+  const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/shelf-status`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok)
+    throw new Error(
+      `shelf-status POST failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   return res.json();
 }
@@ -6258,6 +6298,7 @@ const real = {
   putListenStats: realPutListenStats,
   getLibraryStats: realGetLibraryStats,
   getContinueListening: realGetContinueListening,
+  setShelfStatus: realSetShelfStatus,
   findCoverCandidates: realFindCoverCandidates,
   setCover: realSetCover,
   removeCover: realRemoveCover,
@@ -6514,6 +6555,7 @@ const mock = {
   putListenStats: mockPutListenStats,
   getLibraryStats: mockGetLibraryStats,
   getContinueListening: mockGetContinueListening,
+  setShelfStatus: mockSetShelfStatus,
   findCoverCandidates: mockFindCoverCandidates,
   setCover: mockSetCover,
   removeCover: mockRemoveCover,

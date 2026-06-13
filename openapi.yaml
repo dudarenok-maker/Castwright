@@ -1039,6 +1039,39 @@ paths:
         '400': { description: Body missing chapterId or currentSec, or contains non-numeric values, or contains a marker with an unrecognised kind }
         '404': { description: Book not found }
 
+  /api/books/{bookId}/shelf-status:
+    post:
+      summary: Set the Continue-listening shelf flags for a book
+      operationId: setShelfStatus
+      description: |
+        fs-15 shelf controls — read-modify-write the `finished` / `hidden`
+        flags on the book's `listen-progress.json`. Body must include at least
+        one boolean; setting a flag to `false` clears it. `finished` ("Mark as
+        finished") is sticky and counts toward library stats; `hidden` ("Hide
+        from shelf") only removes the book from the rail and is cleared on the
+        next progress save. The resume position is carried forward untouched;
+        a book with no prior bookmark can still be flagged (cold record).
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                finished: { type: boolean }
+                hidden: { type: boolean }
+      responses:
+        '200':
+          description: The updated listen-progress record with the new shelf flags
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListenProgress' }
+        '400': { description: Body includes neither a boolean `finished` nor a boolean `hidden` }
+        '404': { description: Book not found }
+
   /api/books/{bookId}/listen-stats:
     put:
       summary: Append per-day listening seconds for a book
@@ -2947,6 +2980,28 @@ components:
             Plan 53 — user-placed bookmarks. Optional / absent on
             pre-plan-53 records.
           items: { $ref: '#/components/schemas/ListenMarker' }
+        finished:
+          type: boolean
+          description: |
+            fs-15 shelf controls — set by POST /shelf-status when the user picks
+            "Mark as finished". Sticky (preserved across later progress saves);
+            drops the book off the Continue-listening rail AND counts it toward
+            the library "books finished" stat.
+        finishedAt:
+          type: string
+          format: date-time
+          description: 'fs-15 — server-stamped ISO time the book was marked finished.'
+        hidden:
+          type: boolean
+          description: |
+            fs-15 shelf controls — set by POST /shelf-status when the user picks
+            "Hide from shelf". Drops the book off the Continue-listening rail
+            WITHOUT counting it as finished, and is cleared on the next progress
+            save (resuming un-hides the book).
+        dismissedAt:
+          type: string
+          format: date-time
+          description: 'fs-15 — server-stamped ISO time the book was hidden from the shelf.'
 
     ListenMarker:
       type: object
