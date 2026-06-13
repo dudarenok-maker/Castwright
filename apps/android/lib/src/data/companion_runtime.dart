@@ -10,6 +10,7 @@ import '../domain/storage_policy.dart';
 import 'api_client.dart';
 import 'car_browse.dart';
 import 'auto_sync_service.dart';
+import 'listen_stats_service.dart';
 import 'chapter_downloader.dart';
 import 'companion_audio_handler.dart';
 import 'download_foreground_service.dart';
@@ -96,7 +97,8 @@ class CompanionRuntime {
 
     final api = ApiClient(connection);
     final fs = const DiskFileStore();
-    final library = DriftLocalLibrary(LibraryDatabase.open(), fs, root: root);
+    final db = LibraryDatabase.open();
+    final library = DriftLocalLibrary(db, fs, root: root);
     final downloader = ChapterDownloader(api.pinnedRangeFetch(), fs);
 
     Uri resolve(String path) => Uri.parse('${connection.server.url}$path');
@@ -108,11 +110,24 @@ class CompanionRuntime {
       urlResolver: resolve,
     );
 
+    // fs-16: per-app-launch session id — a compact ms-epoch string, stable for
+    // the process lifetime. Injected into the player so tests can override it.
+    final sessionId =
+        DateTime.now().millisecondsSinceEpoch.toRadixString(36).toUpperCase();
+
     final player = PlayerController(
       audioEngine: JustAudioEngine(),
       playbackStore: library,
       playlistLoader: (bookId) async => sync.playlistFor(bookId),
       clock: DateTime.now,
+      statsDb: db,
+      sessionId: sessionId,
+      localDate: () {
+        final n = DateTime.now();
+        return '${n.year.toString().padLeft(4, '0')}-'
+            '${n.month.toString().padLeft(2, '0')}-'
+            '${n.day.toString().padLeft(2, '0')}';
+      },
     );
 
     final thumbnails = ThumbnailCache(
@@ -143,6 +158,9 @@ class CompanionRuntime {
       },
     );
 
+    // fs-16: listen-stats flush service — PUTs buffered absolutes to the server.
+    final statsFlush = ListenStatsFlushService(api: api.listenStatsApi, db: db);
+
     // app-8: auto-sync on reconnect — flush resume for all local books when the
     // device returns to a usable, reachable network (gated; token stays on LAN).
     final autoSync = AutoSyncService(
@@ -160,6 +178,7 @@ class CompanionRuntime {
         final books = await library.listBooks();
         await resumeSync.syncAll([for (final b in books) b.bookId]);
       },
+      flushStats: statsFlush.flush,
     );
     final connectivitySub =
         Connectivity().onConnectivityChanged.listen((_) => autoSync.maybeSync());

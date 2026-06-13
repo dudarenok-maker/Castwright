@@ -4,6 +4,7 @@ import 'dart:io';
 
 import '../domain/sync_manifest.dart';
 import 'chapter_downloader.dart' show RangeFetch, RangeResponse;
+import 'listen_stats_service.dart' show ListenStatsApi, StatDay;
 import 'pairing_service.dart' show Connection;
 import 'resume_sync_service.dart' show ListenProgressApi, RemoteProgress;
 import 'sync_engine.dart' show ManifestApi;
@@ -87,6 +88,9 @@ class ApiClient {
   /// Adapter so this client satisfies the resume sync's [ListenProgressApi].
   ListenProgressApi get listenProgressApi => _ApiListenProgressApi(this);
 
+  /// Adapter so this client satisfies the stats flush's [ListenStatsApi].
+  ListenStatsApi get listenStatsApi => _ApiListenStatsApi(this);
+
   /// CA-pinned, authenticated GET returning the full response bytes (e.g. a
   /// book cover). Throws [ApiException] on >= 400 (404 = no cover).
   Future<List<int>> getBytes(String path) async {
@@ -162,6 +166,33 @@ class ApiClient {
     }
   }
 
+  /// PUT absolute listening-time accruals (fs-16). Body: `{ sessionId, days }`.
+  /// CA-pinned, same transport as [putListenProgress].
+  Future<void> putListenStats(
+    String bookId, {
+    required String sessionId,
+    required List<StatDay> days,
+  }) async {
+    final client = _pinnedHttpClient(connection);
+    try {
+      final req = await client.putUrl(_u('/api/books/$bookId/listen-stats'));
+      req.headers.set(
+          HttpHeaders.authorizationHeader, 'Bearer ${connection.server.token}');
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({
+        'sessionId': sessionId,
+        'days': [for (final d in days) {'date': d.date, 'seconds': d.seconds}],
+      }));
+      final res = await req.close();
+      await res.drain<void>();
+      if (res.statusCode >= 400) {
+        throw ApiException(res.statusCode, 'listen-stats PUT failed');
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   /// A range-capable, CA-pinned, authenticated byte fetcher for chapter audio
   /// downloads — the engine's [RangeFetch] seam. Streams the response body so
   /// large chapters never buffer fully in memory; the `Range` header (set by the
@@ -191,6 +222,20 @@ class _ApiManifestApi implements ManifestApi {
   @override
   Future<SyncManifestBookDetail> bookDetail(String bookId) =>
       _client.syncManifestBookDetail(bookId);
+}
+
+/// Wraps [ApiClient] as the stats flush's [ListenStatsApi].
+class _ApiListenStatsApi implements ListenStatsApi {
+  _ApiListenStatsApi(this._client);
+  final ApiClient _client;
+
+  @override
+  Future<void> putListenStats(
+    String bookId, {
+    required String sessionId,
+    required List<StatDay> days,
+  }) =>
+      _client.putListenStats(bookId, sessionId: sessionId, days: days);
 }
 
 /// Wraps [ApiClient] as the resume sync's [ListenProgressApi].

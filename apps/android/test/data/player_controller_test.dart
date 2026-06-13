@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/audio_engine.dart';
+import 'package:castwright/src/data/library_database.dart';
 import 'package:castwright/src/data/player_controller.dart';
 import 'package:castwright/src/data/playback_store.dart';
 import 'package:castwright/src/domain/skip_behavior.dart';
@@ -111,6 +113,30 @@ PlayerController make(
     skipBehavior: behavior,
     clock: now ?? () => DateTime.utc(2026, 6, 6, 12),
     saveInterval: const Duration(seconds: 10),
+  );
+}
+
+/// Build a player wired to the stats accumulator. [nowMs] is a mutable box —
+/// the caller changes it between steps to advance the injected clock.
+PlayerController makeWithStats(
+  FakeAudioEngine engine,
+  MemPlaybackStore store,
+  LibraryDatabase db,
+  List<int> nowMs, {
+  String sessionId = 'sess1',
+  String localDate = '2026-06-14',
+  Map<String, List<PlayableChapter>>? playlists,
+}) {
+  final lists = playlists ?? {'b1': playlistB1};
+  return PlayerController(
+    audioEngine: engine,
+    playbackStore: store,
+    playlistLoader: (bookId) async => lists[bookId] ?? const [],
+    clock: () => DateTime.fromMillisecondsSinceEpoch(nowMs[0]),
+    saveInterval: const Duration(seconds: 10),
+    statsDb: db,
+    sessionId: sessionId,
+    localDate: () => localDate,
   );
 }
 
@@ -271,6 +297,93 @@ void main() {
       expect(pc.isInUse('u1'), isTrue);
       expect(pc.isInUse('u2'), isFalse);
       await pc.dispose();
+    });
+  });
+
+  // ── fs-16: listen-stats accumulator wiring ────────────────────────────────
+
+  group('PlayerController stats accumulator (fs-16)', () {
+    test('autosave tick upserts accrual when playing', () async {
+      final engine = FakeAudioEngine();
+      final db = LibraryDatabase(NativeDatabase.memory());
+      final nowMs = [0]; // mutable clock box
+      final pc = makeWithStats(engine, MemPlaybackStore(), db, nowMs);
+
+      await pc.openBook('b1');
+      // Start playing (triggers onPlay via playingStream).
+      await engine.play();
+      await Future<void>.delayed(Duration.zero);
+
+      // Advance clock by 15 s and fire the position stream to cross the autosave
+      // interval. The stats tick should drain ~15 s into the buffer.
+      nowMs[0] = 15000;
+      engine.emit(const Duration(seconds: 15));
+      await Future<void>.delayed(Duration.zero);
+
+      final pending = await db.pendingByBook();
+      expect(pending.containsKey('b1'), isTrue);
+      final days = pending['b1']!['sess1']!;
+      expect(days.length, 1);
+      expect(days.single.date, '2026-06-14');
+      expect(days.single.seconds, greaterThan(0));
+
+      await pc.dispose();
+      await db.close();
+    });
+
+    test('buffering (not playing) does not accrue', () async {
+      final engine = FakeAudioEngine();
+      final db = LibraryDatabase(NativeDatabase.memory());
+      final nowMs = [0];
+      final pc = makeWithStats(engine, MemPlaybackStore(), db, nowMs);
+
+      await pc.openBook('b1');
+      // Do NOT call engine.play() — engine stays paused.
+      nowMs[0] = 15000;
+      engine.emit(const Duration(seconds: 15));
+      await Future<void>.delayed(Duration.zero);
+
+      // No stats should have been buffered.
+      expect(await db.pendingByBook(), isEmpty);
+
+      await pc.dispose();
+      await db.close();
+    });
+
+    test('book switch persists prior book stats before retargeting', () async {
+      final engine = FakeAudioEngine();
+      final db = LibraryDatabase(NativeDatabase.memory());
+      final nowMs = [0];
+      final pc = makeWithStats(
+        engine,
+        MemPlaybackStore(),
+        db,
+        nowMs,
+        playlists: {
+          'b1': playlistB1,
+          'b2': const [PlayableChapter(uuid: 'x1', path: '/b2/x1/audio.mp3')],
+        },
+      );
+
+      await pc.openBook('b1');
+      await engine.play();
+      await Future<void>.delayed(Duration.zero);
+
+      // Advance 20 s, fire tick to accrue b1 stats.
+      nowMs[0] = 20000;
+      engine.emit(const Duration(seconds: 20));
+      await Future<void>.delayed(Duration.zero);
+
+      // Switch to b2 — should flush b1 stats into the buffer.
+      await pc.switchBook('b2');
+
+      final pending = await db.pendingByBook();
+      expect(pending.containsKey('b1'), isTrue,
+          reason: 'b1 stats must be flushed to buffer on switch');
+      expect(pending['b1']!['sess1']!.single.seconds, greaterThan(0));
+
+      await pc.dispose();
+      await db.close();
     });
   });
 }

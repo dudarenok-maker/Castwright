@@ -3,6 +3,20 @@ import 'package:drift_flutter/drift_flutter.dart';
 
 part 'library_database.g.dart';
 
+/// One row per (sessionId, bookId, date) accrual — the offline buffer for
+/// listening-stats flushing (fs-16 H-b). Seconds are stored as absolute
+/// totals; upsert is max(existing, incoming) so re-sending is idempotent,
+/// matching the server's own max() upsert on `PUT /api/books/:id/listen-stats`.
+class ListenStatsBuffer extends Table {
+  TextColumn get sessionId => text()();
+  TextColumn get bookId => text()();
+  TextColumn get date => text()(); // 'YYYY-MM-DD'
+  IntColumn get seconds => integer()();
+
+  @override
+  Set<Column<Object>> get primaryKey => {sessionId, bookId, date};
+}
+
 /// One row per synced book (the phone's local mirror of the server library).
 class Books extends Table {
   TextColumn get bookId => text()();
@@ -65,7 +79,7 @@ class Playback extends Table {
   Set<Column<Object>> get primaryKey => {bookId};
 }
 
-@DriftDatabase(tables: [Books, Chapters, Playback])
+@DriftDatabase(tables: [Books, Chapters, Playback, ListenStatsBuffer])
 class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase(super.e);
 
@@ -74,7 +88,7 @@ class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase.open() : this(driftDatabase(name: 'library'));
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -82,6 +96,57 @@ class LibraryDatabase extends _$LibraryDatabase {
         onUpgrade: (m, from, to) async {
           if (from < 2) await m.createTable(playback);
           if (from < 3) await m.addColumn(chapters, chapters.durationSec);
+          if (from < 4) await m.createTable(listenStatsBuffer);
         },
       );
+
+  // ── listen-stats buffer DAO ────────────────────────────────────────────
+
+  /// Upsert an absolute accrual: stores max(existing.seconds, [seconds]).
+  /// Uses a single raw SQL upsert so there is no race between read and write.
+  Future<void> upsertListenStatAccrual({
+    required String sessionId,
+    required String bookId,
+    required String date,
+    required int seconds,
+  }) =>
+      customStatement(
+        'INSERT INTO listen_stats_buffer (session_id, book_id, date, seconds) '
+        'VALUES (?, ?, ?, ?) '
+        'ON CONFLICT (session_id, book_id, date) DO UPDATE '
+        'SET seconds = MAX(excluded.seconds, listen_stats_buffer.seconds)',
+        [sessionId, bookId, date, seconds],
+      );
+
+  /// All buffered rows, grouped by (bookId, sessionId). Returns a map
+  /// `bookId → sessionId → List<(date, seconds)>`.
+  Future<Map<String, Map<String, List<({String date, int seconds})>>>>
+      pendingByBook() async {
+    final rows = await select(listenStatsBuffer).get();
+    final result =
+        <String, Map<String, List<({String date, int seconds})>>>{};
+    for (final r in rows) {
+      result
+          .putIfAbsent(r.bookId, () => {})
+          .putIfAbsent(r.sessionId, () => [])
+          .add((date: r.date, seconds: r.seconds));
+    }
+    return result;
+  }
+
+  /// Delete the rows that were successfully flushed.
+  Future<void> clearFlushedListenStats({
+    required String sessionId,
+    required String bookId,
+    required List<String> dates,
+  }) async {
+    await (delete(listenStatsBuffer)
+          ..where(
+            (t) =>
+                t.sessionId.equals(sessionId) &
+                t.bookId.equals(bookId) &
+                t.date.isIn(dates),
+          ))
+        .go();
+  }
 }

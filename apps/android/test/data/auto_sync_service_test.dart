@@ -7,14 +7,17 @@ void main() {
   group('AutoSyncService.maybeSync', () {
     late int probes;
     late int syncs;
+    late int flushes;
 
     AutoSyncService make({
       AppSettings? settings,
       NetworkType network = NetworkType.wifiUnmetered,
       bool reachable = true,
+      bool withFlush = false,
     }) {
       probes = 0;
       syncs = 0;
+      flushes = 0;
       return AutoSyncService(
         loadSettings: () async => settings ?? AppSettings.defaults,
         currentNetwork: () async => network,
@@ -23,6 +26,7 @@ void main() {
           return reachable;
         },
         runSync: () async => syncs++,
+        flushStats: withFlush ? () async => flushes++ : null,
       );
     }
 
@@ -60,6 +64,23 @@ void main() {
       expect(await svc.maybeSync(), isFalse);
       expect(probes, 1);
       expect(syncs, 0);
+    });
+
+    // fs-16: listen-stats flush on reconnect.
+    test('flushStats is invoked on a successful sync (fs-16)', () async {
+      final svc = make(withFlush: true);
+      expect(await svc.maybeSync(), isTrue);
+      expect(syncs, 1);
+      expect(flushes, 1);
+    });
+
+    test('flushStats is not invoked when sync is skipped', () async {
+      final svc = make(
+        settings: AppSettings.defaults.copyWith(autoSyncOnReconnect: false),
+        withFlush: true,
+      );
+      expect(await svc.maybeSync(), isFalse);
+      expect(flushes, 0);
     });
   });
 }
