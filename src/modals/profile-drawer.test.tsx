@@ -1044,7 +1044,7 @@ describe('ProfileDrawer per-character engine + Qwen bespoke voice (plan 108)', (
   }
 
   function selectQwen() {
-    const select = screen.getByLabelText('TTS engine for this character');
+    const select = screen.getByLabelText('Voice engine for this character');
     fireEvent.change(select, { target: { value: 'qwen' } });
   }
 

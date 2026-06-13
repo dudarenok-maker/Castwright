@@ -801,6 +801,7 @@ export function ProfileDrawer({
           Clicking the dimmed area below the header still closes it. */}
       <div onClick={onClose} className="fixed inset-x-0 top-16 bottom-0 bg-ink/30 z-40 fade-in" />
       <aside
+        data-tour-id="profile-drawer"
         className="fixed top-16 right-0 bottom-0 w-full max-w-[520px] bg-white shadow-drawer z-50 overflow-y-auto scrollbar-thin slide-in-right"
         style={{ ['--scrollbar-thin-radius' as string]: '0px' } as React.CSSProperties}
       >
@@ -1268,7 +1269,7 @@ export function ProfileDrawer({
             </div>
             <p className="mt-2 text-[11px] text-ink/50">
               Drives the gender + register slot in the voice picker. If the engine picked the wrong
-              voice for this character, correct these and Save — the TTS voice line above updates
+              voice for this character, correct these and Save — the voice line above updates
               immediately.
             </p>
           </section>
@@ -1730,7 +1731,7 @@ function sampleLoadingLabel(status: SampleStatus | 'idle', modelKey: TtsModelKey
     case 'evicting':
       return 'Evicting analyzer to free VRAM…';
     case 'loading-tts':
-      return 'Loading TTS model (~30s)…';
+      return 'Loading voice engine (~30s)…';
     case 'synthesizing':
     case 'idle':
     default:

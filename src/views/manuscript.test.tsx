@@ -17,6 +17,8 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { changeLogSlice } from '../store/change-log-slice';
+import { tourSlice } from '../store/tour-slice';
+import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
 
@@ -859,5 +861,62 @@ describe('ManuscriptView — virtualisation threshold (plan 92)', () => {
   it('switches to the virtualised container above the threshold', () => {
     renderWithSentenceCount(120);
     expect(screen.getByTestId('manuscript-virtual-container')).toBeInTheDocument();
+  });
+});
+
+describe('ManuscriptView — guided-tour demonstrations (fe-38)', () => {
+  const tourChars: Character[] = [
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+    { id: 'oduvan', name: 'Master Oduvan', role: 'Blacksmith', color: 'mentor' },
+  ];
+  const tourChapter: Chapter = {
+    id: 2,
+    title: 'The Knock',
+    duration: '05:00',
+    state: 'done',
+    progress: 1,
+    characters: { narrator: 'done', oduvan: 'done' },
+  };
+  const tourSentences: Sentence[] = [
+    { id: 1, chapterId: 2, characterId: 'narrator', text: 'The forge had gone cold.' },
+    { id: 2, chapterId: 2, characterId: 'oduvan', text: 'Leave it.' },
+  ];
+
+  function renderAtStep(stepId: string) {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        tour: tourSlice.reducer,
+      },
+    });
+    store.dispatch(tourSlice.actions.startTour({ tourId: 'linear', mode: 'linear' }));
+    store.dispatch(tourSlice.actions.setStepIndex(TOUR_STEPS.findIndex((s) => s.id === stepId)));
+    return render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={tourChars}
+          chapters={[tourChapter]}
+          currentChapterId={2}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={tourSentences}
+        />
+      </Provider>,
+    );
+  }
+
+  it('s4 "Who says each line" dims the manuscript to one speaker (filter active)', () => {
+    renderAtStep('s4-line');
+    /* The filtered speaker's Detected row flips to the "Clear filter" affordance. */
+    expect(screen.getByTitle('Clear filter')).toBeInTheDocument();
+    /* No line is selected on this step, so the inspector stays closed. */
+    expect(screen.queryByLabelText('Close inspector')).toBeNull();
+  });
+
+  it('s5 "Chapters & paragraphs" opens the side-drawer on a character line', () => {
+    renderAtStep('s5-boundary');
+    expect(screen.getAllByLabelText('Close inspector').length).toBeGreaterThan(0);
+    /* The speaker dim is cleared on this step. */
+    expect(screen.queryByTitle('Clear filter')).toBeNull();
   });
 });

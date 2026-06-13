@@ -119,7 +119,7 @@ chapterSpliceRouter.post(
         return fail(`gainDb must be between ${GAIN_DB_MIN} and ${GAIN_DB_MAX} dB.`);
       }
     } else if (!isTtsModelKey(body.modelKey)) {
-      return fail('modelKey must be a supported TTS model id for a re-record.');
+      return fail('modelKey must be a supported voice-engine model id for a re-record.');
     } else {
       reqModelKey = body.modelKey;
     }

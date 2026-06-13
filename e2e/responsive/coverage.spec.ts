@@ -249,4 +249,18 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await page.waitForTimeout(300);
     await expectNoHorizontalScroll(page);
   });
+
+  test('guided-tour overlay (tour bubble visible across viewports)', async ({ page }) => {
+    /* Start the linear tour via the ? menu. loadSample resolves in ~150 ms
+       (mock); the bubble portals to document.body so it is never clipped by
+       the top-bar's overflow-x-clip. Asserting the bubble is visible (not
+       overflowed off-screen) is sufficient — horizontal-scroll is the main
+       risk at narrow viewports. */
+    await page.goto('/#/');
+    await page.getByTestId('topbar-help').click();
+    await page.getByRole('menuitem', { name: /take the tour/i }).click();
+    await page.getByTestId('tour-bubble').waitFor({ state: 'visible', timeout: 12_000 });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
 });

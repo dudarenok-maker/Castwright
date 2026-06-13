@@ -294,25 +294,41 @@ function ModelRow({
   const [installerOpen, setInstallerOpen] = useState(false);
   const Installer = INSTALLER_BY_ID[item.id];
   const engine = TTS_ENGINE_BY_ID[item.id];
-  const isAnalyzerDefault = item.kind === 'analyzer' && item.isDefaultEngine;
-  /* A Load/Unload pill is meaningful only for the sidecar TTS engines and the
-     default analyzer model (Ollama). Qwen VoiceDesign / Whisper load
-     transiently or lazily, and non-default Ollama models aren't load targets. */
-  const hasControl = item.present && (engine !== undefined || isAnalyzerDefault);
+  const isAnalyzer = item.kind === 'analyzer';
+  /* A Load/Unload pill is meaningful for the sidecar TTS engines and for every
+     installed Ollama analyzer model (all analyzer rows are Ollama; cloud Gemini
+     is not a disk artifact and never appears in the inventory). */
+  const hasControl = item.present && (engine !== undefined || isAnalyzer);
 
-  const controlState: ModelControlState = !sidecarReachable
+  /* Analyzer residency depends on the Ollama daemon, not the voice engine
+     (sidecar) — an unreachable daemon already yields zero analyzer rows, so
+     analyzer rows are never 'unreachable' here. Only TTS rows gate on sidecar
+     reachability. */
+  const reachable = isAnalyzer ? true : sidecarReachable;
+  const controlState: ModelControlState = !reachable
     ? 'unreachable'
     : busy
       ? 'loading'
       : item.loaded
         ? 'ready'
         : 'idle';
-  const controlKind: ModelKind = item.kind === 'analyzer' ? 'analyzer' : 'tts';
+  const controlKind: ModelKind = isAnalyzer ? 'analyzer' : 'tts';
 
+  /* Ollama tags contain colons (ollama:qwen3.5:4b) — slice the prefix, never
+     split(':'). Mirrors performRemoval in models-inventory.ts. */
+  const analyzerModel = isAnalyzer ? item.id.slice('ollama:'.length) : undefined;
   const doLoad = () =>
-    onAction(() => (engine ? api.loadSidecar({ engine }) : api.loadAnalyzer()));
+    onAction(() =>
+      engine
+        ? api.loadSidecar({ engine })
+        : api.loadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
+    );
   const doStop = () =>
-    onAction(() => (engine ? api.unloadSidecar({ engine }) : api.unloadAnalyzer()));
+    onAction(() =>
+      engine
+        ? api.unloadSidecar({ engine })
+        : api.unloadAnalyzer(analyzerModel ? { model: analyzerModel } : undefined),
+    );
 
   return (
     <li

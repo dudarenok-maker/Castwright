@@ -22,6 +22,7 @@ import { ListenView } from '../views/listen';
 
 import { accountSlice } from '../store/account-slice';
 import { librarySlice } from '../store/library-slice';
+import { tourSlice } from '../store/tour-slice';
 import { uiSlice } from '../store/ui-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { exportsSlice } from '../store/exports-slice';
@@ -163,7 +164,7 @@ const meta: EditableBookMeta = {
 describe('a11y — book library view', () => {
   it('has no axe violations', async () => {
     const store = configureStore({
-      reducer: { account: accountSlice.reducer, library: librarySlice.reducer },
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
       preloadedState: {
         library: {
           loaded: true,

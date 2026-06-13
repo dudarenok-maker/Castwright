@@ -32,6 +32,7 @@ import { exportsSlice } from '../store/exports-slice';
 import { analysisSlice } from '../store/analysis-slice';
 import { castDesignSlice } from '../store/cast-design-slice';
 import { queueSlice } from '../store/queue-slice';
+import { tourSlice } from '../store/tour-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
@@ -87,6 +88,9 @@ vi.mock('../lib/api', () => ({
         blockers: { sidecar: 'pass', ffmpeg: 'pass', tts: 'pass', analyzer: 'pass' },
         info: { gpu: 'cuda · 1.2 / 8.0 GB reserved' },
       }),
+    /* Guided-tour boot fetch — resolve to not-completed so the tour slice
+       stays inactive (overlay renders null) and the test harness is unaffected. */
+    getTourStatus: vi.fn(async () => ({ completedAt: null })),
   },
   AnalysisError: class extends Error {},
   ExportIncompleteError: class extends Error {
@@ -129,6 +133,7 @@ function makeStore() {
       analysis: analysisSlice.reducer,
       castDesign: castDesignSlice.reducer,
       queue: queueSlice.reducer,
+      tour: tourSlice.reducer,
     },
   });
 }

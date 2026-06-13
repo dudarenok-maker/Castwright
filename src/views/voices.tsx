@@ -900,7 +900,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         playback,
         onStatus: (status) => {
           if (status === 'evicting') setFamilyStatus({ key: family.key, label: 'Freeing memory…' });
-          if (status === 'loading-tts') setFamilyStatus({ key: family.key, label: 'Loading TTS…' });
+          if (status === 'loading-tts') setFamilyStatus({ key: family.key, label: 'Loading voice engine…' });
           if (status === 'synthesizing')
             setFamilyStatus({ key: family.key, label: 'Synthesising…' });
         },
@@ -924,7 +924,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         playback,
         onStatus: (status) => {
           if (status === 'evicting') setFamilyStatus({ key, label: 'Freeing memory…' });
-          if (status === 'loading-tts') setFamilyStatus({ key, label: 'Loading TTS…' });
+          if (status === 'loading-tts') setFamilyStatus({ key, label: 'Loading voice engine…' });
           if (status === 'synthesizing') setFamilyStatus({ key, label: 'Synthesising…' });
         },
       });
@@ -1941,7 +1941,7 @@ function BaseVoiceCatalogPanel({
             <span className="text-xs text-ink/50">{list.length} voices</span>
             {engine !== activeEngine && (
               <span className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                Not the active engine — switch your TTS model to assign these
+                Not the active engine — switch your voice engine to assign these
               </span>
             )}
           </header>

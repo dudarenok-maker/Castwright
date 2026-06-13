@@ -11,12 +11,13 @@
    scrolls to + highlights that taxonomy entry; unknown codes are ignored. */
 
 import { useEffect, useRef } from 'react';
-import { useAppSelector } from '../store';
+import { useAppSelector, useAppDispatch } from '../store';
 import { SectionLabel, MixedHeading } from '../components/primitives';
 import { stageToHash } from '../lib/router';
 import { formatKeyLabel } from '../lib/keybindings';
 import { HELP_FAILURE_ENTRIES } from '../data/help-failures';
 import { HELP_TOPICS } from '../data/help-topics';
+import { startLinearTour } from '../store/tour-slice';
 
 /* Jump-nav targets. Plain in-page `href="#id"` anchors would fight the hash
    router (the fragment IS the route), so the links scroll programmatically. */
@@ -103,6 +104,7 @@ function JumpLink({
 }
 
 export function HelpView() {
+  const dispatch = useAppDispatch();
   const stage = useAppSelector((s) => s.ui.stage);
   const focusCode = stage.kind === 'help' ? stage.focusCode : undefined;
   /* Rebindable shortcuts — read defensively (mirrors mini-player.tsx) so a
@@ -169,6 +171,13 @@ export function HelpView() {
             <p className="mt-3 text-ink/60 max-w-prose">
               From manuscript to a full-cast performance in six steps.
             </p>
+            <button
+              type="button"
+              onClick={() => dispatch(startLinearTour())}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-ink text-canvas px-4 py-2 text-sm font-semibold min-h-[44px] sm:min-h-0"
+            >
+              Take the tour
+            </button>
             <ol className="mt-6 space-y-6">
               {GETTING_STARTED.map((step, i) => (
                 <li key={step.title} className="flex gap-4">

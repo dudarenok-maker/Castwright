@@ -528,12 +528,17 @@ export class GeminiAnalyzer implements Analyzer {
          (or SAFETY/RECITATION) means the response was cut off — see the
          post-loop truncation check (#528). */
       let finishReason: string | undefined;
+      /* Prompt-level block reason (e.g. SAFETY) — distinct from the
+         candidate's finishReason. Set when the model rejects the *prompt*
+         outright and returns no candidate at all. */
+      let blockReason: string | undefined;
       const iterator = (stream as AsyncIterable<{ text?: string }>)[Symbol.asyncIterator]();
       while (true) {
         const next = (await Promise.race([iterator.next(), abortPromise])) as IteratorResult<{
           text?: string;
           usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
           candidates?: Array<{ finishReason?: string }>;
+          promptFeedback?: { blockReason?: string };
         }>;
         if (next.done) break;
         armIdleTimer();
@@ -548,6 +553,8 @@ export class GeminiAnalyzer implements Analyzer {
         }
         const chunkFinish = chunk.candidates?.[0]?.finishReason;
         if (chunkFinish) finishReason = chunkFinish;
+        const chunkBlock = chunk.promptFeedback?.blockReason;
+        if (chunkBlock) blockReason = chunkBlock;
         if (!text) continue;
         buf += text;
         const now = Date.now();
@@ -560,7 +567,25 @@ export class GeminiAnalyzer implements Analyzer {
         lastChunkAt = now;
       }
       if (!buf) {
-        throw new Error(`Gemini ${this.model} returned an empty response.`);
+        /* The stream finished with zero text. The usual cause on a `gemini-*`
+           model is a content-filter block: the model emits a candidate carrying
+           the stop reason (RECITATION on memorised/copyrighted source text, or
+           SAFETY) but no text — or rejects the prompt outright with a
+           promptFeedback.blockReason. Splitting the chapter won't help (the
+           sub-bodies are still blocked), so we fail fast with a *plain* Error
+           (no retry, no chunk-split) and NAME the reason so the operator can
+           act. Reordered ahead of nothing — historically this branch threw a
+           bare "empty response" and discarded the reason captured below. */
+        const stopReason = finishReason ?? blockReason;
+        const named =
+          stopReason && stopReason !== 'FINISH_REASON_UNSPECIFIED' ? ` (reason=${stopReason})` : '';
+        const hint =
+          stopReason && stopReason !== 'FINISH_REASON_UNSPECIFIED'
+            ? ' A content filter blocked the text — gemini-* models block copyrighted' +
+              ' source via RECITATION. Switch GEMINI_MODEL to a gemma-* model or set' +
+              ' ANALYZER=local (Ollama).'
+            : '';
+        throw new Error(`Gemini ${this.model} returned an empty response${named}.${hint}`);
       }
       /* Truncation gate (#528): the stream completed but the model stopped
          because it hit the output cap (or a safety/recitation block), not

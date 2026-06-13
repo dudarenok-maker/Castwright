@@ -115,7 +115,7 @@ function labelFor(
 }
 
 function kindNoun(kind: ModelKind): string {
-  return kind === 'tts' ? 'TTS model' : 'Analyzer';
+  return kind === 'tts' ? 'Voice engine' : 'Analyzer';
 }
 
 function actionFor(state: ModelControlState): {

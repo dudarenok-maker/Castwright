@@ -36,7 +36,7 @@ describe('VenvBootstrap', () => {
     await waitFor(() =>
       expect(screen.getByTestId('venv-bootstrap-setup')).toBeInTheDocument(),
     );
-    expect(screen.getByRole('button', { name: /set up the tts engine/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /set up the voice engine runtime/i })).toBeInTheDocument();
   });
 
   it('renders manual instructions when pythonFound false and venv absent', async () => {
@@ -69,7 +69,7 @@ describe('VenvBootstrap', () => {
     await waitFor(() =>
       expect(screen.getByTestId('venv-bootstrap-ready')).toBeInTheDocument(),
     );
-    expect(screen.getByText(/TTS engine ready/i)).toBeInTheDocument();
+    expect(screen.getByText(/voice engine runtime ready/i)).toBeInTheDocument();
   });
 
   it('clicking "Set up" POSTs bootstrap and renders the job progress card', async () => {
@@ -90,7 +90,7 @@ describe('VenvBootstrap', () => {
     await waitFor(() =>
       expect(screen.getByTestId('venv-bootstrap-setup')).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /set up the tts engine/i }));
+    fireEvent.click(screen.getByRole('button', { name: /set up the voice engine runtime/i }));
     await waitFor(() =>
       expect(screen.getByTestId('venv-bootstrap-job')).toBeInTheDocument(),
     );
@@ -121,7 +121,7 @@ describe('VenvBootstrap', () => {
     await waitFor(() =>
       expect(screen.getByTestId('venv-bootstrap-setup')).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /set up the tts engine/i }));
+    fireEvent.click(screen.getByRole('button', { name: /set up the voice engine runtime/i }));
     await waitFor(() => expect(onBootstrapped).toHaveBeenCalledTimes(1), { timeout: 5000 });
   });
 
@@ -143,7 +143,7 @@ describe('VenvBootstrap', () => {
     await waitFor(() =>
       expect(screen.getByTestId('venv-bootstrap-setup')).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /set up the tts engine/i }));
+    fireEvent.click(screen.getByRole('button', { name: /set up the voice engine runtime/i }));
     await waitFor(() =>
       expect(screen.getByTestId('venv-bootstrap-error')).toBeInTheDocument(),
     );

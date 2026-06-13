@@ -40,6 +40,7 @@ import {
 } from './top-bar';
 import { uiSlice } from '../store/ui-slice';
 import { accountSlice } from '../store/account-slice';
+import { tourSlice } from '../store/tour-slice';
 
 const IDLE_SUMMARY: StatusSummary = { label: 'Status', tone: 'neutral', icon: 'clock' };
 
@@ -83,6 +84,7 @@ function renderWithStore(ui: React.ReactElement) {
     reducer: {
       ui: uiSlice.reducer,
       account: accountSlice.reducer,
+      tour: tourSlice.reducer,
     },
   });
   return render(<Provider store={store}>{ui}</Provider>);
@@ -117,10 +119,14 @@ describe('TopBar — global nav', () => {
 });
 
 describe('TopBar — persistent Help affordance (fe-29)', () => {
-  it('renders the persistent Help affordance linking to #/help (fe-29)', () => {
+  it('renders the Help menu trigger and opens a popover with the three actions', () => {
     renderWithStore(<TopBar {...makeProps()} />);
-    const help = screen.getByRole('link', { name: /^help$/i });
-    expect(help).toHaveAttribute('href', '#/help');
+    const trigger = screen.getByTestId('topbar-help');
+    expect(trigger.tagName).toBe('BUTTON');
+    fireEvent.click(trigger);
+    expect(screen.getByRole('menuitem', { name: /^help$/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /take the tour/i })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /show me this screen/i })).toBeInTheDocument();
   });
 });
 

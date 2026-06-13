@@ -206,7 +206,7 @@ chapterQaRepairRouter.post(
         : isTtsModelKey(segFile.modelKey)
           ? (segFile.modelKey as TtsModelKey)
           : null;
-      if (!modelKey) return fail('modelKey must be a supported TTS model id to repair.');
+      if (!modelKey) return fail('modelKey must be a supported voice-engine model id to repair.');
       const maxRerecords = resolveMaxRerecords(body.maxRerecords);
 
       const cast = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
