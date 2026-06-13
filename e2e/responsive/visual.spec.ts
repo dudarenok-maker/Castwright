@@ -160,6 +160,61 @@ test.describe('visual baselines', () => {
   });
 });
 
+/* fs-16 — stats dashboard visual baseline.
+ *
+ * Seeds a FIXED payload (same dates, same values every run) AND freezes the
+ * page clock to 2026-06-13T12:00:00 so StatsView's `today` default
+ * (`new Date().toLocaleDateString('en-CA')`) is deterministic. Without the
+ * clock freeze the streak sentence ("On a N-day streak") and the 7-day
+ * sparkbar window shift day-to-day, breaking the baseline within 1–2 days. */
+test.describe('visual baselines (stats)', () => {
+  test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
+
+  test('stats dashboard', async ({ page }) => {
+    /* Freeze the page clock BEFORE navigation so the app sees a fixed
+       `new Date()` from the first render. 2026-06-13 is the seed's latest
+       active day, giving a deterministic 3-day consecutive streak
+       (Jun 11 / 12 / 13) and a fully stable sparkbar window. */
+    await page.clock.install({ time: new Date('2026-06-13T12:00:00') });
+    await page.addInitScript(() => {
+      (window as unknown as { __SEED_LIBRARY_STATS__: unknown }).__SEED_LIBRARY_STATS__ = {
+        totalListenedSec: 47 * 3600 + 12 * 60, // 47h 12m — stable figure in lede
+        booksFinished: 6,
+        perBook: [
+          { bookId: 'b-coalfall', title: 'The Coalfall Commission', completionPct: 1, finished: true },
+          { bookId: 'b-hollow', title: 'Hollow Tide', completionPct: 0.78, finished: false },
+          { bookId: 'b-never2', title: 'Neverseen · Book 2', completionPct: 0.54, finished: false },
+        ],
+        perSeries: [
+          { series: 'Neverseen', finishedCount: 1, importedCount: 3 },
+          { series: 'Coalfall', finishedCount: 1, importedCount: 2 },
+        ],
+        /* byDay uses fixed dates. The clock is frozen to 2026-06-13, so the
+           last-7-days window is always Jun 7–13. Jun 11/12/13 have activity,
+           yielding a stable 3-day streak; Jun 13 is the peak (3 600 s) and
+           always renders the single magenta bar. Earlier dates fall outside
+           the window and are intentionally absent. */
+        byDay: [
+          { date: '2026-06-01', seconds: 600 },
+          { date: '2026-06-02', seconds: 600 },
+          { date: '2026-06-03', seconds: 600 },
+          { date: '2026-06-04', seconds: 600 },
+          { date: '2026-06-11', seconds: 1200 },
+          { date: '2026-06-12', seconds: 1800 },
+          { date: '2026-06-13', seconds: 3600 },
+        ],
+      };
+    });
+    await page.goto('/#/stats');
+    /* Wait for the lede to confirm the fetch resolved and the real content is painted.
+       25 s budget: the warmup project is skipped in serial-mode runs so this test
+       pays a cold Vite transform on first run. */
+    await expect(page.getByTestId('stats-lede')).toBeVisible({ timeout: 25_000 });
+    await page.waitForTimeout(300);
+    await expect(page).toHaveScreenshot('stats.png', VISUAL_DIFF_OPTS);
+  });
+});
+
 /* Plan 41 — dark-theme baselines.
  *
  * Mirrors the six light-mode captures above with a pre-mount

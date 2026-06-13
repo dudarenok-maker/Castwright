@@ -250,6 +250,32 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test('stats (global) view', async ({ page }) => {
+    /* Seed a minimal payload so the view renders real content (lede, sparkbars)
+       rather than the loading skeleton — the mock returns __SEED_LIBRARY_STATS__
+       when set before boot, identical to the listen-resume seeding pattern. */
+    await page.addInitScript(() => {
+      (window as unknown as { __SEED_LIBRARY_STATS__: unknown }).__SEED_LIBRARY_STATS__ = {
+        totalListenedSec: 3600,
+        booksFinished: 1,
+        perBook: [
+          { bookId: 'sb', title: 'Solway Bay', completionPct: 1, finished: true },
+        ],
+        perSeries: [],
+        byDay: [
+          { date: '2026-06-13', seconds: 3600 },
+        ],
+      };
+    });
+    await page.goto('/#/stats');
+    /* Lede resolves once the async getLibraryStats() fetch completes.
+       Cold Vite transform on the first run of this spec can push past
+       10 s — use the same 15 s budget other data-dependent views use. */
+    await expect(page.getByTestId('stats-lede')).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+  });
+
   test('guided-tour overlay (tour bubble visible across viewports)', async ({ page }) => {
     /* Start the linear tour via the ? menu. loadSample resolves in ~150 ms
        (mock); the bubble portals to document.body so it is never clipped by

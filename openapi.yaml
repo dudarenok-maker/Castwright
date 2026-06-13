@@ -397,6 +397,41 @@ paths:
         '404':
           description: The requested `bookId` does not exist.
 
+  /api/library/stats:
+    get:
+      summary: Aggregate listening statistics across the whole library
+      operationId: getLibraryStats
+      description: |
+        Returns rolled-up listening totals across all books (fs-15/fs-16,
+        plan 196): total seconds listened, books finished, per-book and
+        per-series breakdowns, and a `byDay` time series suitable for a
+        calendar heat-map. Derived by scanning all `listen-stats.json` files
+        in the workspace.
+      responses:
+        '200':
+          description: Aggregate library listening stats
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LibraryStats' }
+
+  /api/library/continue-listening:
+    get:
+      summary: Ordered list of in-progress books to resume
+      operationId: getContinueListening
+      description: |
+        Returns books with an active listen-progress record, ordered by most
+        recently updated, suitable for a "Continue Listening" shelf
+        (fs-15/fs-16, plan 196). Each entry carries the resume chapter,
+        position, remaining seconds, and completion percentage.
+      responses:
+        '200':
+          description: Continue-listening shelf, most-recently-updated first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ContinueListeningItem' }
+
   /api/import:
     post:
       summary: Parse a manuscript and stage it for confirmation
@@ -1002,6 +1037,31 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ListenProgress' }
         '400': { description: Body missing chapterId or currentSec, or contains non-numeric values, or contains a marker with an unrecognised kind }
+        '404': { description: Book not found }
+
+  /api/books/{bookId}/listen-stats:
+    put:
+      summary: Append per-day listening seconds for a book
+      operationId: putListenStats
+      description: |
+        Merges one or more `{ date, seconds }` day-buckets into the book's
+        `listen-stats.json` file (fs-15/fs-16, plan 196). The caller supplies
+        a `sessionId` so the server can deduplicate re-posted payloads from
+        an offline-reconnecting companion. Returns the full updated stats file.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ListenStatsPutBody' }
+      responses:
+        '200':
+          description: The full updated listen-stats file for this book
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListenStatsFile' }
+        '400': { description: Body missing sessionId or days, or a day entry is malformed }
         '404': { description: Book not found }
 
   /api/voices/base:
@@ -4925,3 +4985,167 @@ components:
                   code: { $ref: '#/components/schemas/FailureCode' }
                   message: { type: string }
                   remediation: { type: string }
+
+    # --- Listening stats (fs-15 / fs-16) ----------------------------
+    ListenStatsPutBody:
+      type: object
+      required: [sessionId, days]
+      description: |
+        Request body for PUT /api/books/{bookId}/listen-stats. The caller
+        supplies a stable `sessionId` (e.g. a UUID) so the server can
+        deduplicate re-posted payloads from an offline-reconnecting client.
+      properties:
+        sessionId:
+          type: string
+          description: Client-minted session identifier used for deduplication.
+        days:
+          type: array
+          description: One entry per calendar day containing seconds listened in this session.
+          items:
+            type: object
+            required: [date, seconds]
+            properties:
+              date:
+                type: string
+                format: date
+                description: 'Calendar day in YYYY-MM-DD format.'
+              seconds:
+                type: number
+                minimum: 0
+                description: Seconds listened on this day within this session.
+
+    ListenStatsFile:
+      type: object
+      required: [schema, perDay]
+      description: |
+        On-disk `listen-stats.json` structure (fs-15/fs-16). The `schema`
+        integer allows future migrations. `perDay` lists every calendar day
+        that has at least one listening session for this book.
+      properties:
+        schema:
+          type: integer
+          enum: [1]
+          description: File schema version. Always 1 for the initial format.
+        perDay:
+          type: array
+          description: Per-day session buckets.
+          items:
+            type: object
+            required: [date, sessions]
+            properties:
+              date:
+                type: string
+                format: date
+                description: 'Calendar day in YYYY-MM-DD format.'
+              sessions:
+                type: array
+                description: One entry per session that contributed seconds on this day.
+                items:
+                  type: object
+                  required: [sessionId, seconds]
+                  properties:
+                    sessionId:
+                      type: string
+                      description: Session identifier supplied by the client.
+                    seconds:
+                      type: number
+                      minimum: 0
+                      description: Seconds listened in this session on this day.
+
+    LibraryStats:
+      type: object
+      required: [totalListenedSec, booksFinished, perBook, perSeries, byDay]
+      description: |
+        Aggregate listening statistics across the whole library
+        (fs-15/fs-16). Returned by GET /api/library/stats.
+      properties:
+        totalListenedSec:
+          type: number
+          description: Total seconds listened across all books and all time.
+        booksFinished:
+          type: integer
+          description: Number of books with `finished = true`.
+        perBook:
+          type: array
+          description: One entry per book in the library; unlistened books appear with completionPct 0 and finished false.
+          items:
+            type: object
+            required: [bookId, title, completionPct, finished]
+            properties:
+              bookId: { type: string }
+              title: { type: string }
+              completionPct:
+                type: number
+                minimum: 0
+                maximum: 1
+                description: Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage).
+              finished:
+                type: boolean
+                description: True when the book is considered fully listened.
+        perSeries:
+          type: array
+          description: All non-standalone series in the workspace, keyed by series name; finishedCount may be 0.
+          items:
+            type: object
+            required: [series, finishedCount, importedCount]
+            properties:
+              series:
+                type: string
+                description: Series name.
+              finishedCount:
+                type: integer
+                description: Number of books in this series marked finished.
+              importedCount:
+                type: integer
+                description: Total number of books in this series in the workspace.
+        byDay:
+          type: array
+          description: Daily totals across all books, suitable for a calendar heat-map.
+          items:
+            type: object
+            required: [date, seconds]
+            properties:
+              date:
+                type: string
+                format: date
+                description: 'Calendar day in YYYY-MM-DD format.'
+              seconds:
+                type: number
+                minimum: 0
+                description: Total seconds listened across all books on this day.
+
+    ContinueListeningItem:
+      type: object
+      required: [bookId, title, chapterId, currentSec, remainingSec, completionPct, updatedAt]
+      description: |
+        One entry in the "Continue Listening" shelf (fs-15/fs-16).
+        Returned as an array by GET /api/library/continue-listening,
+        ordered by most-recently-updated first.
+      properties:
+        bookId:
+          type: string
+          description: Book identifier.
+        title:
+          type: string
+          description: Book title.
+        chapterId:
+          type: integer
+          minimum: 0
+          description: Chapter to resume playback from.
+        currentSec:
+          type: number
+          minimum: 0
+          description: Playback position within the resume chapter, in seconds.
+        remainingSec:
+          type: number
+          minimum: 0
+          description: Estimated seconds remaining in the book from the current position.
+        completionPct:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage).
+        updatedAt:
+          type: string
+          format: date-time
+          description: ISO timestamp when the listen-progress record was last updated.

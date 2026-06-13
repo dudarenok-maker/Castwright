@@ -8,14 +8,23 @@ import { render, screen, act, fireEvent, waitFor } from '@testing-library/react'
 import { accountSlice } from '../store/account-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { tourSlice } from '../store/tour-slice';
+import { uiSlice } from '../store/ui-slice';
+import { continueListeningSlice } from '../store/continue-listening-slice';
 import { BookLibraryView } from './book-library';
 import type { ActiveAnalysisSummary, LibraryAuthor, LibraryBook } from '../lib/types';
+
+import type { ContinueItem } from '../store/continue-listening-slice';
+
+const mockGetContinueListening = vi.fn<() => Promise<ContinueItem[]>>(
+  () => Promise.resolve([]),
+);
 
 vi.mock('../lib/api', () => ({
   api: {
     /* WorkspacePathRow fires this on mount. Never resolve — the row just
        stays hidden, which is fine for these assertions. */
     getWorkspaceInfo: () => new Promise(() => {}),
+    getContinueListening: () => mockGetContinueListening(),
   },
 }));
 
@@ -47,6 +56,7 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
       account: accountSlice.reducer,
       library: librarySlice.reducer,
       tour: tourSlice.reducer,
+      continueListening: continueListeningSlice.reducer,
     },
     preloadedState: {
       library: {
@@ -79,6 +89,9 @@ function renderView({ loaded, authors }: { loaded: boolean; authors: LibraryAuth
 describe('BookLibraryView — loading affordance', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    /* Reset to the default (empty) response so individual tests that
+       don't care about the rail don't need to stub it themselves. */
+    mockGetContinueListening.mockResolvedValue([]);
   });
 
   it('renders skeleton while library.loaded is false (no empty-state flash)', () => {
@@ -450,6 +463,92 @@ describe('BookLibraryView — loading affordance', () => {
   it('omits the Import button entirely when onImportPortable is not provided (backward-compat)', () => {
     renderView({ loaded: true, authors: [] });
     expect(screen.queryByTestId('library-import-portable-button')).not.toBeInTheDocument();
+  });
+
+  describe('continue-listening rail (fs-15 E2)', () => {
+    it('fetches rail data on mount, renders the rail, and navigates to listen view at the saved chapter on card click', async () => {
+      mockGetContinueListening.mockResolvedValue([
+        {
+          bookId: 'book-1',
+          title: 'A',
+          chapterId: 2,
+          currentSec: 120,
+          remainingSec: 600,
+          completionPct: 0.3,
+          updatedAt: '2026-06-13T00:00:00Z',
+        },
+      ]);
+
+      /* Build a store that includes ui + continueListening so we can assert
+         navigation by inspecting ui.stage after the card click. */
+      const store = configureStore({
+        reducer: {
+          account: accountSlice.reducer,
+          library: librarySlice.reducer,
+          tour: tourSlice.reducer,
+          ui: uiSlice.reducer,
+          continueListening: continueListeningSlice.reducer,
+        },
+        preloadedState: {
+          library: { loaded: true, authors: [], books: [], pausedSnapshots: {} },
+        },
+      });
+
+      render(
+        <Provider store={store}>
+          <BookLibraryView
+            authors={[]}
+            activeBookId={null}
+            onOpenBook={vi.fn()}
+            onDeleteBook={vi.fn()}
+            onReparseBook={vi.fn()}
+            onReplaceManuscript={vi.fn()}
+            onEditBook={vi.fn()}
+            onStartNew={vi.fn()}
+          />
+        </Provider>,
+      );
+
+      /* Wait for the async getContinueListening to resolve and the rail to paint. */
+      await waitFor(() => {
+        expect(screen.getByText('Continue listening')).toBeInTheDocument();
+      });
+
+      /* The card for the single item should be visible. */
+      expect(screen.getByRole('button', { name: /Continue listening to A/i })).toBeInTheDocument();
+
+      /* Click the card — should navigate to the listen view at chapter 2. */
+      fireEvent.click(screen.getByRole('button', { name: /Continue listening to A/i }));
+
+      const stage = store.getState().ui.stage;
+      expect(stage).toEqual({
+        kind: 'ready',
+        bookId: 'book-1',
+        view: 'listen',
+        currentChapterId: 2,
+        openProfileId: null,
+      });
+    });
+
+    it('does not render the rail when getContinueListening returns empty', async () => {
+      mockGetContinueListening.mockResolvedValue([]);
+
+      renderView({ loaded: true, authors: [] });
+
+      /* Give the mount effect a tick to resolve. */
+      await act(async () => {});
+
+      expect(screen.queryByText('Continue listening')).not.toBeInTheDocument();
+    });
+  });
+
+  it('delete confirm dialog (grid/BookCard) warns that listening history will be removed (fs-16/D14)', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    /* Open the book card's options menu. */
+    fireEvent.click(screen.getByLabelText(/Book options/i));
+    /* Click the Delete book menu item to open the ConfirmDialog. */
+    fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+    expect(screen.getByText(/listening history/i)).toBeInTheDocument();
   });
 
   it('renders the search input above the grid (plan 73)', () => {

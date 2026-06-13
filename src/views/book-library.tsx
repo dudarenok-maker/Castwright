@@ -24,6 +24,8 @@ import { api, type WorkspaceInfo } from '../lib/api';
 import { parseRuntime } from '../lib/time';
 import { useAppSelector, useAppDispatch } from '../store';
 import { startLinearTour } from '../store/tour-slice';
+import { uiActions } from '../store/ui-slice';
+import { continueListeningActions, selectContinueListening } from '../store/continue-listening-slice';
 import { useDebouncedValue } from '../lib/use-debounced-value';
 import {
   LibraryChrome,
@@ -31,6 +33,7 @@ import {
 } from '../components/library/library-chrome';
 import { LibraryGrid } from '../components/library/library-grid';
 import { LibraryTable } from '../components/library/library-table';
+import { ContinueListeningRail } from '../components/library/continue-listening-rail';
 import { filterBooks, selectAllTags, selectPresentLanguages } from '../store/library-slice';
 import { PrimaryButton } from '../components/primitives';
 import { IconClose } from '../lib/icons';
@@ -115,6 +118,29 @@ export function BookLibraryView({
 }: Props) {
   const dispatch = useAppDispatch();
   const tourCompleted = useAppSelector((s) => s.tour.completedAt != null);
+
+  /* fs-15 E2 — fetch the continue-listening shelf on mount and hydrate
+     the slice. Failures are swallowed silently — the rail just stays hidden. */
+  useEffect(() => {
+    api
+      .getContinueListening()
+      .then((items) => dispatch(continueListeningActions.hydrate(items)))
+      .catch(() => {});
+  }, [dispatch]);
+
+  const continueListeningItems = useAppSelector(selectContinueListening);
+
+  const handleOpenContinue = (bookId: string, chapterId: number) => {
+    dispatch(
+      uiActions.hydrateFromUrl({
+        kind: 'ready',
+        bookId,
+        view: 'listen',
+        currentChapterId: chapterId,
+        openProfileId: null,
+      }),
+    );
+  };
   const [filter, setFilter] = useState<Filter>('all');
   /* Plan 73 — raw input fires every keystroke, debouncedSearch lags by
      ~150ms so the filter chain doesn't re-run mid-word. activeTags is
@@ -292,6 +318,7 @@ export function BookLibraryView({
         toggleLanguage={toggleLanguage}
         clearFilters={clearFilters}
       />
+      <ContinueListeningRail items={continueListeningItems} onOpen={handleOpenContinue} />
       {showNoResults ? (
         <NoResults onClear={clearFilters} />
       ) : effectiveViewMode === 'card' ? (

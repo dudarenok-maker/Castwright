@@ -210,6 +210,7 @@ export function AccountView() {
             { id: 'acct-models', label: 'Models & engines', risk: 'low' },
             { id: 'acct-advanced', label: 'Advanced configuration', risk: 'low' },
             { id: 'acct-help', label: 'Help & troubleshooting', risk: 'low' },
+            { id: 'acct-stats', label: 'Listening stats', risk: 'low' },
             { id: 'acct-setup', label: 'First-run setup', risk: 'low' },
           ]}
         >
@@ -493,6 +494,25 @@ export function AccountView() {
               className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
             >
               Open Help →
+            </a>
+          </section>
+
+          <section
+            id="cfg-section-acct-stats"
+            className="rounded-2xl border border-ink/10 bg-white p-6 shadow-card flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div>
+              <h2 className="text-base font-semibold text-ink">Listening stats</h2>
+              <p className="mt-1 text-xs text-ink/55 max-w-prose">
+                Your hours listened, current streak, and per-book progress across the library.
+              </p>
+            </div>
+            <a
+              href="#/stats"
+              data-testid="account-stats-pointer"
+              className="shrink-0 min-h-[44px] sm:min-h-0 px-4 py-2 rounded-xl bg-ink text-canvas text-sm font-medium hover:bg-ink-soft inline-flex items-center"
+            >
+              Open Listening stats →
             </a>
           </section>
 

@@ -10,6 +10,7 @@ import type { Stage } from './types';
      #/account                           → { kind: 'account' }
      #/admin                             → { kind: 'admin' }
                                            (#/worktrees kept as an inbound alias)
+     #/stats                             → { kind: 'stats' }
      #/help?code=                        → { kind: 'help', focusCode? }
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
      #/books/:bookId/confirm?profile=    → { kind: 'confirm',   bookId,
@@ -39,6 +40,8 @@ export function stageToHash(stage: Stage | null | undefined): string {
       return '#/setup';
     case 'about':
       return '#/about';
+    case 'stats':
+      return '#/stats';
     case 'help': {
       const qs = stage.focusCode ? `?code=${encodeURIComponent(stage.focusCode)}` : '';
       return `#/help${qs}`;

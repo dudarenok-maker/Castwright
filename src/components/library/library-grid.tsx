@@ -510,6 +510,7 @@ function BookCard({
           body={
             <div className="space-y-2">
               <p>This removes the book directory from disk and discards any cached analysis.</p>
+              <p>This also permanently removes this book's listening history and stats.</p>
               <p className="text-red-700/80 font-medium">Can't be undone.</p>
             </div>
           }

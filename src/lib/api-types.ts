@@ -266,6 +266,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/library/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Aggregate listening statistics across the whole library
+         * @description Returns rolled-up listening totals across all books (fs-15/fs-16,
+         *     plan 196): total seconds listened, books finished, per-book and
+         *     per-series breakdowns, and a `byDay` time series suitable for a
+         *     calendar heat-map. Derived by scanning all `listen-stats.json` files
+         *     in the workspace.
+         */
+        get: operations["getLibraryStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/library/continue-listening": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ordered list of in-progress books to resume
+         * @description Returns books with an active listen-progress record, ordered by most
+         *     recently updated, suitable for a "Continue Listening" shelf
+         *     (fs-15/fs-16, plan 196). Each entry carries the resume chapter,
+         *     position, remaining seconds, and completion percentage.
+         */
+        get: operations["getContinueListening"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/import": {
         parameters: {
             query?: never;
@@ -652,6 +699,29 @@ export interface paths {
          *     [47](docs/features/archive/47-listen-progress.md).
          */
         put: operations["putListenProgress"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/listen-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Append per-day listening seconds for a book
+         * @description Merges one or more `{ date, seconds }` day-buckets into the book's
+         *     `listen-stats.json` file (fs-15/fs-16, plan 196). The caller supplies
+         *     a `sessionId` so the server can deduplicate re-posted payloads from
+         *     an offline-reconnecting companion. Returns the full updated stats file.
+         */
+        put: operations["putListenStats"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3686,6 +3756,114 @@ export interface components {
                 };
             };
         };
+        /**
+         * @description Request body for PUT /api/books/{bookId}/listen-stats. The caller
+         *     supplies a stable `sessionId` (e.g. a UUID) so the server can
+         *     deduplicate re-posted payloads from an offline-reconnecting client.
+         */
+        ListenStatsPutBody: {
+            /** @description Client-minted session identifier used for deduplication. */
+            sessionId: string;
+            /** @description One entry per calendar day containing seconds listened in this session. */
+            days: {
+                /**
+                 * Format: date
+                 * @description Calendar day in YYYY-MM-DD format.
+                 */
+                date: string;
+                /** @description Seconds listened on this day within this session. */
+                seconds: number;
+            }[];
+        };
+        /**
+         * @description On-disk `listen-stats.json` structure (fs-15/fs-16). The `schema`
+         *     integer allows future migrations. `perDay` lists every calendar day
+         *     that has at least one listening session for this book.
+         */
+        ListenStatsFile: {
+            /**
+             * @description File schema version. Always 1 for the initial format.
+             * @enum {integer}
+             */
+            schema: 1;
+            /** @description Per-day session buckets. */
+            perDay: {
+                /**
+                 * Format: date
+                 * @description Calendar day in YYYY-MM-DD format.
+                 */
+                date: string;
+                /** @description One entry per session that contributed seconds on this day. */
+                sessions: {
+                    /** @description Session identifier supplied by the client. */
+                    sessionId: string;
+                    /** @description Seconds listened in this session on this day. */
+                    seconds: number;
+                }[];
+            }[];
+        };
+        /**
+         * @description Aggregate listening statistics across the whole library
+         *     (fs-15/fs-16). Returned by GET /api/library/stats.
+         */
+        LibraryStats: {
+            /** @description Total seconds listened across all books and all time. */
+            totalListenedSec: number;
+            /** @description Number of books with `finished = true`. */
+            booksFinished: number;
+            /** @description One entry per book in the library; unlistened books appear with completionPct 0 and finished false. */
+            perBook: {
+                bookId: string;
+                title: string;
+                /** @description Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage). */
+                completionPct: number;
+                /** @description True when the book is considered fully listened. */
+                finished: boolean;
+            }[];
+            /** @description All non-standalone series in the workspace, keyed by series name; finishedCount may be 0. */
+            perSeries: {
+                /** @description Series name. */
+                series: string;
+                /** @description Number of books in this series marked finished. */
+                finishedCount: number;
+                /** @description Total number of books in this series in the workspace. */
+                importedCount: number;
+            }[];
+            /** @description Daily totals across all books, suitable for a calendar heat-map. */
+            byDay: {
+                /**
+                 * Format: date
+                 * @description Calendar day in YYYY-MM-DD format.
+                 */
+                date: string;
+                /** @description Total seconds listened across all books on this day. */
+                seconds: number;
+            }[];
+        };
+        /**
+         * @description One entry in the "Continue Listening" shelf (fs-15/fs-16).
+         *     Returned as an array by GET /api/library/continue-listening,
+         *     ordered by most-recently-updated first.
+         */
+        ContinueListeningItem: {
+            /** @description Book identifier. */
+            bookId: string;
+            /** @description Book title. */
+            title: string;
+            /** @description Chapter to resume playback from. */
+            chapterId: number;
+            /** @description Playback position within the resume chapter, in seconds. */
+            currentSec: number;
+            /** @description Estimated seconds remaining in the book from the current position. */
+            remainingSec: number;
+            /** @description Fraction of the book's listenable duration consumed, 0–1 (multiply by 100 for a percentage). */
+            completionPct: number;
+            /**
+             * Format: date-time
+             * @description ISO timestamp when the listen-progress record was last updated.
+             */
+            updatedAt: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -4043,6 +4221,46 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    getLibraryStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Aggregate library listening stats */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryStats"];
+                };
+            };
+        };
+    };
+    getContinueListening: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Continue-listening shelf, most-recently-updated first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContinueListeningItem"][];
+                };
             };
         };
     };
@@ -4783,6 +5001,46 @@ export interface operations {
                 };
             };
             /** @description Body missing chapterId or currentSec */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    putListenStats: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ListenStatsPutBody"];
+            };
+        };
+        responses: {
+            /** @description The full updated listen-stats file for this book */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListenStatsFile"];
+                };
+            };
+            /** @description Body missing sessionId or days */
             400: {
                 headers: {
                     [name: string]: unknown;

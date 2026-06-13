@@ -618,6 +618,11 @@ export type ChangeLogType =
   | 'library_add'
   | 'reparse';
 
+/* fs-15/fs-16 — listening stats + continue-listening shapes. Source of truth:
+   openapi.yaml components.schemas.LibraryStats / ContinueListeningItem. */
+export type LibraryStats = components['schemas']['LibraryStats'];
+export type ContinueListeningItem = components['schemas']['ContinueListeningItem'];
+
 export interface ChangeLogEvent {
   id: number;
   /** ISO timestamp for events produced at runtime. The view formats this into
@@ -846,4 +851,6 @@ export type Stage =
   | { kind: 'release-notes' }
   /* fe-29 — offline Help / troubleshooting view. focusCode is an untrusted
      string round-tripped from the URL hash; the view validates it. */
-  | { kind: 'help'; focusCode?: string };
+  | { kind: 'help'; focusCode?: string }
+  /* fs-16 — listening-stats dashboard. */
+  | { kind: 'stats' };

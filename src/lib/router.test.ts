@@ -34,6 +34,10 @@ describe('stageToHash', () => {
     expect(stageToHash({ kind: 'about' })).toBe('#/about');
   });
 
+  it('stats → #/stats (fs-16)', () => {
+    expect(stageToHash({ kind: 'stats' })).toBe('#/stats');
+  });
+
   it('maps the setup stage to #/setup', () => {
     expect(stageToHash({ kind: 'setup' })).toBe('#/setup');
   });
