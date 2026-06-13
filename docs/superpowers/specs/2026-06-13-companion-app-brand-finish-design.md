@@ -56,8 +56,22 @@ in-script, exactly as `sized()` already rewrites the root `<svg>`.
 
 > **Worktree note:** because `brand/` is git-ignored, the SVG master is not
 > present in a fresh worktree checkout. Copy `brand/castwright-icon.svg` (and any
-> other `brand/*.svg` the script reads) from the primary checkout into the
-> worktree's `brand/` before running the render script.
+> other `brand/*.svg` the script reads — `renderJobs` only needs the icon, but
+> `renderAll` also reads `castwright-og.svg`) from the primary checkout into the
+> worktree's `brand/` before running the render script. Also junction the root
+> `node_modules` into the worktree so `@playwright/test` resolves (the chromium
+> binary itself is machine-global under `%LOCALAPPDATA%\ms-playwright`).
+
+> **Render the iOS subset ONLY (scope discipline).** `renderAll()` also rewrites
+> `public/icon-512.png`, `public/icon-192.png`, `public/apple-touch-icon.png`,
+> `public/og.png`, and the five Android `mipmap-*/ic_launcher.png` files. Running
+> the full battery would churn all of those into a PR that should only touch iOS.
+> So the script is refactored to expose `renderJobs(jobs)` and this task renders
+> **only** the iOS jobs:
+> `node -e "import('./scripts/render-brand-pngs.mjs').then(m => m.renderJobs(m.IOS_JOBS))"`.
+> After rendering, `git status` must show only new/changed
+> `ios/Runner/Assets.xcassets/AppIcon.appiconset/*.png` — nothing under `public/`
+> or `mipmap-*`. If anything else changed, `git restore` it.
 
 ### iOS variant transform
 
@@ -77,12 +91,23 @@ So the iOS job:
 
 The waveform artwork keeps its existing coordinates (it already has safe padding
 inside the 512 box), so the only visible change vs. the Android render is the
-corners filling dark.
+corners filling dark. The tile rect is `<rect width="512" height="512" rx="118"
+fill="#0f0e0d"/>` — confirmed the only `rx="118"` in the file (the waveform bars
+use `rx="15"`), so the replace is safe and unambiguous.
+
+This is implemented **data-driven**, not by branching in the loop: each job tuple
+gains an optional 6th element `transform` (an `svg => svg` function applied after
+`sized()`). The existing `JOBS` entries stay 5-element (no transform); the iOS
+jobs carry `transform: squareTile` where
+`squareTile = (svg) => svg.replace('rx="118"', 'rx="0"')`. `JOBS` itself is
+untouched.
 
 ### Sizes
 
-Add an `IOS_JOBS` array (or extend `JOBS`) emitting every filename already
-referenced by
+Add a new exported `IOS_JOBS` array (the loop is extracted into an exported
+`renderJobs(jobs)`; `renderAll()` becomes `renderJobs([...JOBS, ...IOS_JOBS])`
+so the canonical "render everything" path stays correct, while this task can
+render `IOS_JOBS` alone). `IOS_JOBS` emits every filename already referenced by
 `apps/android/ios/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json`, each
 at its exact pixel dimensions:
 
@@ -109,58 +134,81 @@ are replaced.
 
 ### Test (Part A)
 
-Extend the render-script spec (`node --test`):
+Extend the existing `scripts/tests/render-brand-pngs.test.mjs` (runs via
+`npm run test:hooks` → `node scripts/run-hooks-tests.mjs`; it imports the job
+arrays without launching chromium):
 
-- The iOS jobs are present with the correct filenames and pixel sizes.
-- Each iOS job is flagged square + opaque (the `rx`→0 transform applied,
-  `omitBackground: false`).
-- The existing hand-designed-favicon no-clobber invariant still holds (the
-  script never emits `public/favicon-16.png`, `favicon-32.png`, `favicon.svg`).
+- `IOS_JOBS` has all 15 entries with the correct filenames and pixel sizes,
+  each writing under `apps/android/ios/Runner/Assets.xcassets/AppIcon.appiconset/`.
+- Each iOS job is square + opaque: `omitBackground` is `false` and its
+  `transform` turns `rx="118"` into `rx="0"` (assert by applying the transform
+  to a sample string).
+- The existing hand-designed-favicon no-clobber invariant still holds across
+  **both** `JOBS` and `IOS_JOBS` (neither emits `public/favicon-16.png`,
+  `favicon-32.png`, or `favicon.svg`).
 
 ## Part B — short-form tagline (app-16 / #706)
 
 ### Brand constants
 
-New `apps/android/lib/src/brand.dart` (mirrors the web app's `src/lib/brand.ts`):
+New `apps/android/lib/src/brand.dart` (mirrors the web app's `src/lib/brand.ts`).
+Names use the codebase's descriptive lowerCamelCase top-level-const convention
+(e.g. `companionAudioServiceConfig`, `demoBooks`) — **no `k` prefix**:
 
 ```dart
 /// Castwright brand copy — single source for the companion app.
-const String kTagline =
+const String brandTagline =
     'Any book, performed by a full cast — kept true, kept yours, book after book.';
-const String kTaglineShort = 'Any book, fully cast.';
+const String brandTaglineShort = 'Any book, fully cast.';
 ```
 
 ### Surfaces
 
-Show `kTaglineShort` on the two first-run brand moments:
+Show `brandTaglineShort` on the two first-run brand moments, each wrapped in a
+keyed `Text` so the widget tests can find it:
 
-- **Pairing screen** (`lib/src/ui/pairing_screen.dart`) — as a subtitle under
-  the "Pair a device" header, the genuine first-run moment.
-- **Empty home state** (`lib/src/ui/home_screen.dart`) — alongside the existing
-  "Nothing in progress yet — start a book from Library." copy.
+- **Pairing screen** (`lib/src/ui/pairing_screen.dart`) — as a subtitle at the
+  top of the body (above the "Scan the pairing QR…" instruction), keyed
+  `Key('pair-tagline')`. This is the genuine first-run moment.
+- **Empty home state** (`lib/src/ui/home_screen.dart`) — inside the existing
+  `Key('continue-empty')` block, alongside "Nothing in progress yet — start a
+  book from Library.", keyed `Key('home-tagline')`.
 
 Keep it small and quiet (secondary text style) — this is a utility client, not a
 marketing page.
 
 ### Test (Part B)
 
-Dart tests under `apps/android/test/`:
+Dart tests under `apps/android/test/`, reusing existing pump scaffolding:
 
-- A widget test pumping `PairingScreen` and the empty `HomeScreen` asserts
-  `kTaglineShort` is rendered on each.
-- A constant test asserts the brand strings contain none of the banned words
-  (`effortlessly`, `seamless`, `even in your own voice`) — the companion mirror
-  of the web app's "no retired tagline survives" guard.
+- **Extend `test/ui/pairing_screen_test.dart`** — its `open()` helper already
+  pumps `PairingScreen` with a `FakeStore` + `PairingService`; add a case
+  asserting `find.byKey(const Key('pair-tagline'))` is `findsOneWidget` and
+  carries `brandTaglineShort`.
+- **Extend `test/ui/home_screen_test.dart`** — its "empty state" case already
+  pumps `HomeScreen(books: [sb('x')], …)`; add an assertion that
+  `find.byKey(const Key('home-tagline'))` is `findsOneWidget`.
+- **New `test/brand_test.dart`** — a guard that walks `lib/**/*.dart` (via
+  `dart:io`; `flutter test`'s cwd is the package root) and asserts no source
+  file contains a retired-tagline phrase (`effortlessly`, `even in your own
+  voice`) or banned word (`seamless`). Stronger than a constant-only check —
+  it is the companion mirror of the web app's "no retired tagline survives
+  anywhere" guard.
 
 ## Verification
 
-- **Node:** `node --test` for the render-script spec; then
-  `node scripts/render-brand-pngs.mjs` to regenerate (writes the new iOS PNGs;
-  confirms the Android legacy PNGs are byte-unchanged).
+- **Node:** `npm run test:hooks` for the render-script spec; then render the
+  iOS subset only —
+  `node -e "import('./scripts/render-brand-pngs.mjs').then(m => m.renderJobs(m.IOS_JOBS))"` —
+  and confirm `git status` shows only `AppIcon.appiconset/*.png` changed
+  (nothing under `public/` or `mipmap-*`; `git restore` anything else).
 - **Flutter:** `flutter test` in `apps/android` (run manually — Flutter is not
-  in the Node `verify` battery; invoke `flutter.bat` under PowerShell).
-- **Visual sanity:** open one regenerated iOS PNG to confirm a square, opaque,
-  Castwright-branded icon (not the blue Flutter logo).
+  in the Node `verify` battery; invoke `flutter.bat` under PowerShell). No new
+  pub dependency, so no `flutter pub get` needed.
+- **Visual sanity:** open the regenerated `Icon-App-1024x1024@1x.png` to confirm
+  a square, opaque, Castwright-branded icon (not the blue Flutter logo). The
+  iOS *build* can't be exercised on Windows (no iOS target until app-12), so
+  acceptance is the visual asset check, not an `xcodebuild`/`flutter build ios`.
 
 ## Closeout
 
