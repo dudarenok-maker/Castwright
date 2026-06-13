@@ -22,6 +22,13 @@ import {
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import {
+  loadCastMerges,
+  saveCastMerges,
+  clearCastMerges,
+  replaceFoldEntries,
+  buildFoldJournalEntries,
+} from '../store/cast-merges.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
   runStage2ChapterChunked,
@@ -74,11 +81,7 @@ import {
 import { stampStateSchema } from '../workspace/state-migrate.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { findBookByManuscriptId, bookStateLanguage } from '../workspace/scan.js';
-import {
-  markAnalysisBusy,
-  clearAnalysisBusy,
-  isDesignBusy,
-} from '../tts/design-lock.js';
+import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy } from '../tts/design-lock.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import { dedupSeriesPrior } from '../workspace/series-prior-dedup.js';
 import { linkSeriesReuseAtAnalysis, pruneStaleReuseLinks } from '../workspace/series-reuse-link.js';
@@ -96,7 +99,11 @@ import {
   type DroppedQuotesBatch,
 } from '../store/dropped-quotes.js';
 import { configValue } from '../config/resolver.js';
-import { classifyAnalysisFailure, tryParseApiError, FAILURE_REMEDIATIONS } from './failure-taxonomy.js';
+import {
+  classifyAnalysisFailure,
+  tryParseApiError,
+  FAILURE_REMEDIATIONS,
+} from './failure-taxonomy.js';
 
 /* srv-13 — the existing cast's voice/reuse fields to overlay onto a fresh
    analysis roster. Prefer cast.json; when it's absent (a reparse just deleted
@@ -400,8 +407,7 @@ export function dropEvidencelessCast(
     }
     if ((c.evidence?.length ?? 0) === 0) {
       const tagged =
-        taggedTokens.size > 0 &&
-        [...nameTokensForDrop(c.name)].some((t) => taggedTokens.has(t));
+        taggedTokens.size > 0 && [...nameTokensForDrop(c.name)].some((t) => taggedTokens.has(t));
       if (tagged) {
         rescuedNames.push(c.name);
         kept.push(c);
@@ -1380,7 +1386,16 @@ export interface AnalysisJobReplayState {
   /** Active failed-chapter records, keyed by chapterId. chapter-failed
       adds entries; chapter-resolved removes them. Replayed so a
       reconnecting client sees the right set of Retry rows. */
-  failedByChapterId: Map<number, { kind: 'chapter-failed'; chapterId: number; message: string; code?: string; remediation?: string }>;
+  failedByChapterId: Map<
+    number,
+    {
+      kind: 'chapter-failed';
+      chapterId: number;
+      message: string;
+      code?: string;
+      remediation?: string;
+    }
+  >;
   /** One-shot series-cast prior event emitted at Phase 0 entry. Cached
       here so a subscriber that attaches AFTER Phase 0 entry receives
       the carry-over surface in its catch-up replay (otherwise the
@@ -1957,8 +1972,7 @@ export async function runMainAnalyzerJob(
   const phase1Analyzer = phase1Selection.analyzer;
   const phase1ModelId = phase1Selection.model;
   const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
-  const pipelinedPerPhase =
-    !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
+  const pipelinedPerPhase = !opts.requestedModel && isPerPhaseModelSelectionActive(userSettings);
   if (pipelinedPerPhase) {
     console.log(
       `[analysis] manuscript=${manuscriptId} pipelined ` +
@@ -2010,9 +2024,7 @@ export async function runMainAnalyzerJob(
        re-analysis (#518 — re-attribution must not strip designed voices).
        `fresh` (Start fresh) intentionally discards them, so capture nothing. */
     const priorCastForMerge: Array<{ id: string } & Record<string, unknown>> =
-      !requestedFresh && recordRef.bookDir
-        ? await readPriorCastForMerge(recordRef.bookDir)
-        : [];
+      !requestedFresh && recordRef.bookDir ? await readPriorCastForMerge(recordRef.bookDir) : [];
 
     /* Heal cross-series/author reuse links carried in the prior cast BEFORE it
        feeds the seed + every cast.json merge below. pruneStaleReuseLinks on the
@@ -2044,6 +2056,9 @@ export async function runMainAnalyzerJob(
         /* Start fresh intentionally discards reuse continuity — drop the
            reparse carryover too so it can't resurrect links (srv-13). */
         await rm(castReuseCarryoverJsonPath(recordRef.bookDir), { force: true });
+        /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
+           meaningless; drop the merge journal too. */
+        await clearCastMerges(recordRef.bookDir);
       }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
@@ -2480,70 +2495,72 @@ export async function runMainAnalyzerJob(
             log,
             call: () =>
               analyzer.runStage1Chapter(
-            manuscriptId,
-            ch.id,
-            buildStage1ChapterInbox(
-              manuscriptId,
-              recordRef.title,
-              ch,
-              Array.from(rebuildRoster().values()),
-              seriesPrior,
-            ),
-            {
-              signal: abortController.signal,
-              language: bookLanguage,
-              onWaiting: (elapsed) => {
-                const slot = castInFlight.get(i);
-                if (slot) slot.elapsedMs = elapsed;
-                sendCastLiveTick();
-                /* Silence watchdog. Without this the user has no idea
+                manuscriptId,
+                ch.id,
+                buildStage1ChapterInbox(
+                  manuscriptId,
+                  recordRef.title,
+                  ch,
+                  Array.from(rebuildRoster().values()),
+                  seriesPrior,
+                ),
+                {
+                  signal: abortController.signal,
+                  language: bookLanguage,
+                  onWaiting: (elapsed) => {
+                    const slot = castInFlight.get(i);
+                    if (slot) slot.elapsedMs = elapsed;
+                    sendCastLiveTick();
+                    /* Silence watchdog. Without this the user has no idea
                    whether a slow Phase 0a call is rate-limited, hung, or
                    just slow on free-tier Gemma. Warn once per silence
                    stretch, re-arm on the next chunk. */
-                const sinceLastChunk = Date.now() - lastChunkAt;
-                if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
-                  if (
-                    warnedSilenceAt === null ||
-                    Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS
-                  ) {
-                    warnedSilenceAt = Date.now();
-                    log(
-                      0,
-                      `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`,
-                    );
-                  }
-                } else {
-                  warnedSilenceAt = null;
-                }
-              },
-              onChunk: (info) => {
-                lastChunkAt = Date.now();
-                const now = lastChunkAt;
-                if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
-                lastHeartbeatAt = now;
-                const charsPerSec =
-                  info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
-                send({
-                  kind: 'heartbeat',
-                  phaseId: 0,
-                  receivedBytes: info.receivedBytes,
-                  charsPerSec,
-                  elapsedMs: info.elapsedMs,
-                  sinceLastChunkMs: info.sinceLastChunkMs,
-                  chapterIndex: i + 1,
-                });
-              },
-              onThrottle: (waitMs, reason) => {
-                send({
-                  kind: 'throttle',
-                  phaseId: 0,
-                  chapterIndex: i + 1,
-                  model: activeModelId,
-                  waitMs,
-                  reason,
-                });
-              },
-            },
+                    const sinceLastChunk = Date.now() - lastChunkAt;
+                    if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
+                      if (
+                        warnedSilenceAt === null ||
+                        Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS
+                      ) {
+                        warnedSilenceAt = Date.now();
+                        log(
+                          0,
+                          `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`,
+                        );
+                      }
+                    } else {
+                      warnedSilenceAt = null;
+                    }
+                  },
+                  onChunk: (info) => {
+                    lastChunkAt = Date.now();
+                    const now = lastChunkAt;
+                    if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+                    lastHeartbeatAt = now;
+                    const charsPerSec =
+                      info.elapsedMs > 0
+                        ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
+                        : 0;
+                    send({
+                      kind: 'heartbeat',
+                      phaseId: 0,
+                      receivedBytes: info.receivedBytes,
+                      charsPerSec,
+                      elapsedMs: info.elapsedMs,
+                      sinceLastChunkMs: info.sinceLastChunkMs,
+                      chapterIndex: i + 1,
+                    });
+                  },
+                  onThrottle: (waitMs, reason) => {
+                    send({
+                      kind: 'throttle',
+                      phaseId: 0,
+                      chapterIndex: i + 1,
+                      model: activeModelId,
+                      waitMs,
+                      reason,
+                    });
+                  },
+                },
               ),
           });
         } catch (chErr) {
@@ -2781,11 +2798,17 @@ export async function runMainAnalyzerJob(
             seedReuseGuardsFromPriorCast(priorCastForMerge, characters);
             const staleDropped = await pruneStaleReuseLinks(recordRef.bookId, characters);
             if (staleDropped > 0) {
-              log(0, `Cleared ${staleDropped} stale reuse link${staleDropped === 1 ? '' : 's'} pointing at a book no longer in this series.`);
+              log(
+                0,
+                `Cleared ${staleDropped} stale reuse link${staleDropped === 1 ? '' : 's'} pointing at a book no longer in this series.`,
+              );
             }
             const linked = await linkSeriesReuseAtAnalysis(recordRef.bookId, characters);
             if (linked > 0) {
-              log(0, `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`);
+              log(
+                0,
+                `Linked ${linked} recurring character${linked === 1 ? '' : 's'} to prior books in this series (Reused).`,
+              );
             }
           } catch (linkErr) {
             console.warn('[analysis] series reuse-link pass failed', linkErr);
@@ -3442,7 +3465,10 @@ export async function runMainAnalyzerJob(
     const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters);
     if (recovered.flipped > 0) {
       const summary = [...recovered.byId.entries()].map(([id, n]) => `${id}=${n}`).join(', ');
-      log(1, `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`);
+      log(
+        1,
+        `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`,
+      );
     }
     const folded = foldMinorCast(stage1.characters, recovered.sentences, {
       minLines: userSettings.minorCastMinLines,
@@ -3479,7 +3505,10 @@ export async function runMainAnalyzerJob(
     const demotedByChapter = new Map<number, number>();
     const reconciled = reconcileSentenceCharacterIds(folded.sentences, phase1ValidIds, {
       onDemote: ({ sentence, originalId }) => {
-        demotedByChapter.set(sentence.chapterId, (demotedByChapter.get(sentence.chapterId) ?? 0) + 1);
+        demotedByChapter.set(
+          sentence.chapterId,
+          (demotedByChapter.get(sentence.chapterId) ?? 0) + 1,
+        );
         log(
           1,
           `Sentence in ch${sentence.chapterId} attributed to unknown character "${originalId}" — demoted to narrator.`,
@@ -3540,6 +3569,28 @@ export async function runMainAnalyzerJob(
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: reconciled.sentences,
         });
+        /* srv-1 — record this fold pass's lineage. Co-located with the edits
+           write so the journal is persisted iff the sentences it describes are
+           (edits are written even on drift; cast.json is the file skipped).
+           Replace-all keeps fold entries in lockstep with the current edits;
+           manual entries are preserved. Non-fatal. */
+        try {
+          const journal = await loadCastMerges(record.bookDir);
+          await saveCastMerges(
+            record.bookDir,
+            replaceFoldEntries(
+              journal,
+              buildFoldJournalEntries(
+                folded.rewrites,
+                recovered.sentences,
+                stage1.characters,
+                new Date().toISOString(),
+              ),
+            ),
+          );
+        } catch (journalErr) {
+          console.warn('[analysis] failed to write cast-merges journal', journalErr);
+        }
         if (phase1DriftExceeded) {
           log(
             1,
@@ -3640,7 +3691,12 @@ export async function runMainAnalyzerJob(
       message: (e as Error)?.message,
       details: parsedLog?.details,
     });
-    const { code, userMessage: message, remediation, detail } = classifyAnalysisFailure(e, analyzerLabel);
+    const {
+      code,
+      userMessage: message,
+      remediation,
+      detail,
+    } = classifyAnalysisFailure(e, analyzerLabel);
     endJob(job, { kind: 'error', code, message, remediation, detail });
   }
 }
@@ -3825,7 +3881,11 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   let phase1Selection: AnalyzerSelection;
   try {
     selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });
-    phase1Selection = selectAnalyzerForPhase({ phase: 'phase1', model: requestedModel, userSettings });
+    phase1Selection = selectAnalyzerForPhase({
+      phase: 'phase1',
+      model: requestedModel,
+      userSettings,
+    });
   } catch (e) {
     send({ kind: 'error', message: (e as Error).message });
     clearInterval(keepAlive);
@@ -3875,7 +3935,14 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   /* Run the subset analyzer in the background. The route response is
      held open by the detached promise's broadcast loop until endJob
      fires res.end() on every subscriber. */
-  void runSubsetAnalyzerJob(job, record, selection, phase1Selection, toRun, allowStage1ShrinkSubset);
+  void runSubsetAnalyzerJob(
+    job,
+    record,
+    selection,
+    phase1Selection,
+    toRun,
+    allowStage1ShrinkSubset,
+  );
 });
 
 /* Detached subset-retry analyzer body. Extracted from the request
@@ -4141,11 +4208,7 @@ async function runSubsetAnalyzerJob(
     const verified = verifyEvidenceAgainstSource(rawCharacters, record.sourceText, (msg) =>
       log(0, msg),
     );
-    const characters = dropEvidencelessCast(
-      rawCharacters,
-      (msg) => log(0, msg),
-      record.sourceText,
-    );
+    const characters = dropEvidencelessCast(rawCharacters, (msg) => log(0, msg), record.sourceText);
     const stage1: Stage1Output = {
       characters,
       chapters: record.chapterHints.map((c) => ({ id: c.id, title: c.title })),
@@ -4334,7 +4397,10 @@ async function runSubsetAnalyzerJob(
     const recovered = recoverTaggedNarratorLines(allSentences, stage1.characters);
     if (recovered.flipped > 0) {
       const summary = [...recovered.byId.entries()].map(([id, n]) => `${id}=${n}`).join(', ');
-      log(1, `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`);
+      log(
+        1,
+        `Recovered ${recovered.flipped} narrator-attributed line(s) to tagged speakers (${summary}).`,
+      );
     }
     /* Re-fold the cast against the merged sentence set so the bucket
        attributions stay coherent with the new chapters' attributions. */
@@ -4444,6 +4510,26 @@ async function runSubsetAnalyzerJob(
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: subsetReconciled.sentences,
         });
+        /* srv-1 — record this fold pass's lineage (see the main route's same
+           block). Subset fold runs over the full whole-book sentence set, so
+           replace-all is correct. Gated by !isAborted() with the edits write. */
+        try {
+          const journal = await loadCastMerges(record.bookDir);
+          await saveCastMerges(
+            record.bookDir,
+            replaceFoldEntries(
+              journal,
+              buildFoldJournalEntries(
+                folded.rewrites,
+                recovered.sentences,
+                stage1.characters,
+                new Date().toISOString(),
+              ),
+            ),
+          );
+        } catch (journalErr) {
+          console.warn('[analysis] failed to write cast-merges journal', journalErr);
+        }
         if (subsetDriftExceeded) {
           log(
             1,
@@ -4518,7 +4604,12 @@ async function runSubsetAnalyzerJob(
       });
       return;
     }
-    const { code, userMessage: message, remediation, detail } = classifyAnalysisFailure(e, analyzerLabel);
+    const {
+      code,
+      userMessage: message,
+      remediation,
+      detail,
+    } = classifyAnalysisFailure(e, analyzerLabel);
     console.error('[analysis-subset] failed', {
       manuscriptId,
       code,
