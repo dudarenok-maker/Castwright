@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:audio_service/audio_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/audio_engine.dart';
 import 'package:castwright/src/data/companion_audio_handler.dart';
 import 'package:castwright/src/data/playback_store.dart';
 import 'package:castwright/src/data/player_controller.dart';
+import 'package:castwright/src/domain/media_browse_tree.dart';
 import 'package:castwright/src/domain/skip_behavior.dart';
 
 class FakeAudioEngine implements AudioEngine {
@@ -84,6 +86,63 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(handler.mediaItem.value?.album, 'The Hollow Tide');
+    });
+  });
+
+  group('CompanionAudioHandler Android Auto browse', () {
+    test('now-playing media id is the browse chapter id (enables AA highlight)',
+        () async {
+      final handler = CompanionAudioHandler();
+      final controller = makeController();
+      handler.attach(controller);
+      await controller.openBook('b1');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(handler.mediaItem.value?.id, chapterMediaId('b1', 'u1'));
+      await controller.dispose();
+    });
+
+    test('getChildren waits for attach, then returns the provider result', () async {
+      final handler = CompanionAudioHandler();
+      final pending = handler.getChildren(rootMediaId); // queried before attach
+      handler.attach(makeController(),
+          childrenProvider: (_) async => [const MediaItem(id: 'x', title: 'X')]);
+
+      expect((await pending).map((m) => m.id), ['x']);
+    });
+
+    test('getChildren returns an info row when the runtime never attaches', () async {
+      final handler =
+          CompanionAudioHandler(readyTimeout: const Duration(milliseconds: 20));
+
+      final result = await handler.getChildren(rootMediaId);
+      expect(result.single.playable, isFalse);
+      expect(result.single.title, contains('Castwright'));
+    });
+
+    test('notifies AA (root + current) when the playing chapter changes', () async {
+      final notified = <String>[];
+      final handler = CompanionAudioHandler(
+          notifyChildrenChanged: (id) async => notified.add(id));
+      final controller = makeController();
+      handler.attach(controller);
+      await controller.openBook('b1');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(notified, containsAll(<String>[rootMediaId, currentMediaId]));
+      await controller.dispose();
+    });
+
+    test('after detach (unpair) a query waits again instead of returning stale',
+        () async {
+      final handler =
+          CompanionAudioHandler(readyTimeout: const Duration(milliseconds: 20));
+      handler.attach(makeController(),
+          childrenProvider: (_) async => [const MediaItem(id: 'x', title: 'X')]);
+      handler.detach();
+
+      final result = await handler.getChildren(rootMediaId);
+      expect(result.single.playable, isFalse); // info row, not stale ['x']
     });
   });
 }
