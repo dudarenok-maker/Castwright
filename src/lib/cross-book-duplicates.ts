@@ -29,7 +29,7 @@ export function normaliseDuplicateToken(s: string | undefined): string {
    Rule:
    - Identical → match
    - One is a strict, non-empty substring of the other → match (e.g.
-     'wren' ⊂ 'Wrenfoster')
+     'wren' ⊂ 'wrensparrow')
    - Otherwise no match. Token-Jaccard, edit-distance, etc. are
      deliberately out of scope — false positives erode trust faster than
      a missed pair. */
@@ -71,7 +71,7 @@ function identityTokens(x: { name: string; aliases?: string[] }): string[] {
 
 /* Are two same-series characters the same person, judged by name/alias?
    True when any pair of their normalised name/alias tokens `looksLikeSameName`
-   (exact or strict-substring — e.g. "wren" ⊂ "Wrenfoster", "Castor" ≡
+   (exact or strict-substring — e.g. "wren" ⊂ "wrensparrow", "Castor" ≡
    "bron-te"). Returns FALSE when either side has marked the other
    `notLinkedTo` — the user's "intentionally different" escape hatch — or when
    the two refer to the same (book, character) row. A bucket id on either side
