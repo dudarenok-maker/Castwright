@@ -1335,9 +1335,9 @@ describe('CastView — Design full cast button', () => {
   });
 
   it('is hidden for a genuinely non-Qwen cast', () => {
-    /* Base Sweeney: no per-character engine + a Coqui library voice ⇒ not a
+    /* Base Marrow: no per-character engine + a Coqui library voice ⇒ not a
        Qwen book on the default Kokoro global, so the button stays hidden. */
-    setup({ chars: [{ ...sweeney, ttsEngine: undefined, overrideTtsVoices: undefined }] });
+    setup({ chars: [{ ...marrow, ttsEngine: undefined, overrideTtsVoices: undefined }] });
     expect(screen.queryByTestId('design-full-cast')).toBeNull();
   });
 
