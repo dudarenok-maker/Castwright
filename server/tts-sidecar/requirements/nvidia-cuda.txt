@@ -11,6 +11,18 @@
 # for audio I/O (the symbols `torchaudio.load`/`save` moved out of core).
 coqui-tts[codec]>=0.24.0
 
+# torch — EXPLICIT. It was previously pulled in transitively by coqui-tts, but
+# coqui-tts 0.27.5 (what `>=0.24.0` now resolves to) NO LONGER declares torch.
+# Nothing else in the base/overlay pulls it (qwen-tts, the only other torch
+# source, is installed separately by install-qwen3.mjs), so a fresh venv would
+# have NO torch — and Coqui XTTS + Qwen synth import torch in ~10 places in
+# main.py and would fail (Kokoro = onnxruntime, unaffected). Floor kept loose so
+# pip co-resolves a torch compatible with coqui-tts + the [codec] torchcodec
+# extra (torchcodec pins torch upward anyway). On a plain PyPI install this is
+# the CUDA-bundled wheel on Windows/Linux x86_64 and the CPU/mps build on macOS.
+# Verify the resolved version at acceptance; pin it exactly once confirmed.
+torch>=2.6
+
 # NOTE on DeepSpeed: not in requirements because its setup.py needs the
 # standalone NVIDIA CUDA Toolkit (with nvcc) at install time — the CUDA
 # runtime libraries that ship inside the PyTorch wheel aren't enough. On

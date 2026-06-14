@@ -46,3 +46,14 @@ def test_no_bare_unmarked_onnxruntime_gpu():
         if l.startswith("onnxruntime-gpu") and ";" not in l:
             raise AssertionError(
                 f"bare unmarked onnxruntime-gpu line will break macOS pip install: {l!r}")
+
+
+def test_torch_is_explicit():
+    """torch MUST be an explicit requirement. It used to arrive transitively via
+    coqui-tts, but coqui-tts 0.27.5 dropped that declaration — without an explicit
+    line a fresh venv has NO torch and Coqui XTTS + Qwen synth (which import torch
+    throughout main.py) fail. Kokoro (onnxruntime) is unaffected, so the sidecar
+    would start but those engines would be silently broken."""
+    assert any(l.split("[")[0].split(">")[0].split("=")[0].strip() == "torch"
+               for l in _lines()), \
+        "expected an explicit torch requirement — coqui-tts no longer pulls it transitively"

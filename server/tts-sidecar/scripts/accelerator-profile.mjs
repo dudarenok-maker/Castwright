@@ -100,16 +100,16 @@ export function ortProviders(profile, platform) {
 }
 
 /**
- * Install recipe per (profile, platform). Verified against the CURRENT install
- * (P1): NVIDIA pulls torch transitively from PyPI (CUDA-bundled default) via
- * qwen-tts / coqui-tts — there is NO cu124 index step today — and gets
- * onnxruntime-gpu via kokoro-onnx[gpu]. So `torchPreinstall` is null for NVIDIA
- * (the regression fence: do nothing extra). AMD must install a ROCm torch wheel
- * BEFORE the engine packages so they see torch already satisfied — that wheel URL
- * is a marked S0.2 spike placeholder, never fabricated here. The CPU recipe
- * (cpu-only torch) is a Phase-2 IMPROVEMENT over today (today CPU boxes also get
- * the PyPI torch + onnxruntime-gpu set), shipped only when the requirements
- * restructure lands.
+ * Install recipe per (profile, platform). NVIDIA installs torch from PyPI as an
+ * EXPLICIT requirement in `requirements/nvidia-cuda.txt` (the CUDA-bundled wheel
+ * on win/linux x86_64) — NOT a separate-wheel pre-install step, so
+ * `torchPreinstall` is null (= "the requirements file handles torch"). NB: torch
+ * USED to arrive transitively via coqui-tts, but coqui-tts 0.27.5 dropped that
+ * declaration, so it is now pinned explicitly in the overlay; null here means
+ * "nothing extra beyond the requirements," not "torch is transitive." NVIDIA ORT
+ * is `onnxruntime-gpu` via kokoro-onnx[gpu]. AMD must pre-install a ROCm torch
+ * wheel BEFORE the engine packages — a marked S0.2 spike placeholder, never
+ * fabricated here. The CPU recipe (cpu-index torch) is a Phase-2 improvement.
  * @returns {{torchPreinstall: null | 'PENDING_SPIKE' | {source:string,url:string}, ortPackage: string}}
  */
 export function installRecipe(profile, platform) {
