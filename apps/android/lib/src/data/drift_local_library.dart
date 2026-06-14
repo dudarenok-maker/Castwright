@@ -193,6 +193,41 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
     ];
   }
 
+  /// Persist a chapter's waveform peaks (JSON-encoded). Keyed by [uuid]; a
+  /// no-op when no such chapter row exists.
+  Future<void> savePeaks(String uuid, List<double> peaks) async {
+    await (_db.update(_db.chapters)..where((c) => c.uuid.equals(uuid)))
+        .write(ChaptersCompanion(peaks: Value(jsonEncode(peaks))));
+  }
+
+  /// A chapter's persisted peaks, or null when none have been saved.
+  Future<List<double>?> loadPeaks(String uuid) async {
+    final row = await (_db.select(_db.chapters)..where((c) => c.uuid.equals(uuid)))
+        .getSingleOrNull();
+    final raw = row?.peaks;
+    if (raw == null) return null;
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return null;
+    return [for (final e in decoded) (e as num).toDouble()];
+  }
+
+  /// Downloaded chapters (real chapterId, audio present) that have no persisted
+  /// peaks yet — the work-list for the connect-time backfill sweep. Excludes
+  /// audio-less rows (nothing to show) and id-0 legacy rows (no usable URL).
+  Future<List<({String bookId, String uuid, int chapterId})>>
+      chaptersMissingPeaks() async {
+    final rows = await (_db.select(_db.chapters)
+          ..where((c) =>
+              c.peaks.isNull() &
+              c.fingerprint.isNotNull() &
+              c.chapterId.isBiggerThanValue(0)))
+        .get();
+    return [
+      for (final r in rows)
+        (bookId: r.bookId, uuid: r.uuid, chapterId: r.chapterId),
+    ];
+  }
+
   @override
   Future<void> setBookUpdatedAt(String bookId, String updatedAt) async {
     await _ensureBook(bookId);

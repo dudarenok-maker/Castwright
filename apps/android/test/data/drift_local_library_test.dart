@@ -118,6 +118,46 @@ void main() {
       expect(await fs.exists('/data/books/b1/u1/audio.mp3'), isFalse);
       await lib.close();
     });
+
+    test('savePeaks + loadPeaks round-trips; loadPeaks is null when unsaved', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1]);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+
+      expect(await lib.loadPeaks('u1'), isNull); // nothing saved yet
+      await lib.savePeaks('u1', [0.0, 0.5, 1.0]);
+      expect(await lib.loadPeaks('u1'), [0.0, 0.5, 1.0]);
+      await lib.close();
+    });
+
+    test('chaptersMissingPeaks returns only audio chapters (chapterId>0) lacking peaks', () async {
+      final fs = InMemoryFileStore();
+      final lib = makeLib(fs);
+      await fs.writeBytes('/data/books/b1/u1/audio.mp3', [1]);
+      await fs.writeBytes('/data/books/b1/u2/audio.mp3', [2]);
+      // u1: has audio, no peaks → SHOULD appear.
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+      // u2: has audio + peaks already → SHOULD NOT appear.
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u2', chapterId: 2, title: 'Two',
+          fingerprint: 'fp2', urlSuffix: 'audio.mp3', durationSec: 10);
+      await lib.savePeaks('u2', [1.0]);
+      // u3: legacy/sync-engine row with chapterId 0 (no usable peaks URL) →
+      // SHOULD NOT appear (excluded by the chapterId > 0 filter).
+      await fs.writeBytes('/data/books/b1/u3/audio.mp3', [3]);
+      await lib.recordChapter('b1', 'u3', 'fp3', 'audio.mp3'); // chapterId 0
+
+      final missing = await lib.chaptersMissingPeaks();
+      expect(missing.map((c) => c.uuid), ['u1']);
+      expect(missing.single.bookId, 'b1');
+      expect(missing.single.chapterId, 1);
+      await lib.close();
+    });
   });
 
   group('DriftLocalLibrary (app-4 store)', () {
