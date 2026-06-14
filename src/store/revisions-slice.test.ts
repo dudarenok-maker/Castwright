@@ -6,6 +6,7 @@ import {
   revisionsActions,
   selectDriftByBook,
   selectDriftGroupsByBook,
+  distinctDriftChapterCount,
 } from './revisions-slice';
 import type { Revision, DriftEvent, RevisionsResponse } from '../lib/types';
 
@@ -38,6 +39,38 @@ describe('revisionsSlice — initial state', () => {
       timeline: {},
       loaded: false,
     });
+  });
+});
+
+describe('distinctDriftChapterCount — headline count dedupes to chapters', () => {
+  it('counts a chapter once even when multiple cast members drift in it', () => {
+    /* The real-world bug: chapter 5 has Halloran AND Marcus drifting. Raw
+       event count = 2, but regenerating chapter 5 clears both → 1 chapter. */
+    const events = [
+      drift('d1', { chapterId: 5, characterId: 'halloran' }),
+      drift('d2', { chapterId: 5, characterId: 'marcus' }),
+    ];
+    expect(distinctDriftChapterCount(events)).toBe(1);
+  });
+
+  it('counts a chapter once even when one character drifts on multiple factors', () => {
+    const events = [
+      drift('d1', { chapterId: 7, characterId: 'eliza', factor: 'register' }),
+      drift('d2', { chapterId: 7, characterId: 'eliza', factor: 'pace' }),
+    ];
+    expect(distinctDriftChapterCount(events)).toBe(1);
+  });
+
+  it('keeps the same chapter number distinct across books', () => {
+    const events = [
+      drift('d1', { bookId: 'book-A', chapterId: 3 }),
+      drift('d2', { bookId: 'book-B', chapterId: 3 }),
+    ];
+    expect(distinctDriftChapterCount(events)).toBe(2);
+  });
+
+  it('returns 0 for no events', () => {
+    expect(distinctDriftChapterCount([])).toBe(0);
   });
 });
 

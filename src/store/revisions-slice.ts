@@ -476,6 +476,19 @@ export function groupDriftEvents(events: DriftEvent[]): DriftGroup[] {
   });
 }
 
+/* Count of DISTINCT flagged chapters across a set of drift events.
+
+   Drift's unit of action is the chapter: regenerating a chapter clears
+   drift for EVERY cast member in it. So every "{N} chapters" headline must
+   dedupe to unique `(book, chapter)` pairs — counting raw events (which are
+   chapter × character × factor) over-reports whenever a chapter has more than
+   one drifting character, or one character drifts on multiple factors. Keyed
+   by `bookId|chapterId` so the same chapter number in two books stays
+   distinct. */
+export function distinctDriftChapterCount(events: DriftEvent[]): number {
+  return new Set(events.map((e) => `${e.bookId ?? ''}|${e.chapterId}`)).size;
+}
+
 /* Selector: collapse the flat drift list into `(book × character ×
    snapshot)` groups. Replaces the per-event card render in the Drift
    Report modal — 300 events typically collapse to ~6–18 groups because

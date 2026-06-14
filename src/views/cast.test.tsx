@@ -18,7 +18,7 @@ import { voicesSlice } from '../store/voices-slice';
 import { CastView, compareCastRows } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { api } from '../lib/api';
-import type { Character, Voice, TtsModelKey, Sentence } from '../lib/types';
+import type { Character, Voice, TtsModelKey, Sentence, DriftEvent } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -914,6 +914,52 @@ describe('CastView drift pill — per-character entry to the Voice Drift Detecto
     fireEvent.click(pills[0]);
     expect(onShowDrift).toHaveBeenCalledTimes(1);
     expect(onShowDrift).toHaveBeenCalledWith('narrator');
+  });
+
+  it('banner counts DISTINCT chapters, not raw drift events', () => {
+    /* The Everblaze bug: two characters drift in the SAME chapter. Raw event
+       count = 2, but regenerating the chapter clears both, so the banner —
+       and each character's row pill — must report 1 chapter, not 2. */
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, castDesign: castDesignSlice.reducer },
+    });
+    const mkDrift = (characterId: string, factor: string): DriftEvent =>
+      ({
+        id: `d:${characterId}:${factor}`,
+        bookId: 'b1',
+        characterId,
+        chapterId: 2,
+        chapterTitle: 'Chapter 2',
+        severity: 'severe',
+        factor,
+        factorLabel: factor,
+        description: 'drift',
+        autoQueueable: true,
+        detected: '2026-01-01T00:00:00Z',
+        suggestedAction: 'regenerate_chapter',
+      }) as unknown as DriftEvent;
+    render(
+      <Provider store={store}>
+        <CastView
+          characters={[{ ...narrator, id: 'narrator' }, marrow]}
+          setCharacters={() => {}}
+          library={library}
+          title="The Northern Star"
+          onOpenProfile={() => {}}
+          onShowMatchDetail={() => {}}
+          driftEvents={[
+            mkDrift('narrator', 'voice'),
+            mkDrift('narrator', 'pace'),
+            mkDrift('marrow', 'voice'),
+          ]}
+          onShowDrift={() => {}}
+        />
+      </Provider>,
+    );
+    /* Banner: 3 events across 2 characters + 2 factors, all in chapter 2 → 1. */
+    expect(screen.getByText(/Voice drift detected in 1 chapter\b/)).toBeInTheDocument();
+    /* narrator's row pill: 2 factor-events, 1 chapter. */
+    expect(screen.getAllByTitle(/1 chapter with voice drift/).length).toBeGreaterThan(0);
   });
 });
 

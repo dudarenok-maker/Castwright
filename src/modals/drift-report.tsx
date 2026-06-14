@@ -5,7 +5,11 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { api } from '../lib/api';
 import { useAppSelector } from '../store';
-import type { DriftGroup, DriftChapterEntry } from '../store/revisions-slice';
+import {
+  distinctDriftChapterCount,
+  type DriftGroup,
+  type DriftChapterEntry,
+} from '../store/revisions-slice';
 import type { DriftEvent, Character, CharColor, Voice } from '../lib/types';
 
 /* The modal renders one card per `(book × character × snapshot)` group
@@ -107,14 +111,14 @@ export function DriftReportModal({
   const filterCharacterName = filterCharacterId
     ? findFilterCharacterName(groupsByBook, filterCharacterId)
     : null;
-  /* Total = unique flagged chapters across every visible group. Pre-
-     correction (plan 91 archive) this counted per-factor events, which
-     inflated the "{N} chapters flagged" label whenever the server
-     emitted multiple drift factors for the same chapter (voice + tone
-     + attributes on the same Marlow chapter → 3× count). */
-  const totalCount = visibleGroupsByBook.reduce(
-    (acc, g) => acc + g.groups.reduce((sub, gr) => sub + gr.chapters.length, 0),
-    0,
+  /* Total = unique flagged chapters across every visible group. Dedupe by
+     (book, chapter): a chapter can drift for several cast members AND several
+     factors, but regenerating it clears all of them, so it counts once.
+     Summing per-character `chapters.length` (the prior shape) double-counted a
+     chapter shared by two characters; counting raw events also multiplied by
+     factor. distinctDriftChapterCount collapses both dimensions. */
+  const totalCount = distinctDriftChapterCount(
+    visibleGroupsByBook.flatMap((g) => g.groups.flatMap((gr) => gr.events)),
   );
   /* Edge case: filter is set but the matching character has zero
      chapters (race between dispatch + drift slice update). Render
@@ -219,7 +223,7 @@ function DriftBookSection({
     return acc;
   }, [view.groups]);
   const totalChapters = useMemo(
-    () => view.groups.reduce((acc, g) => acc + g.chapters.length, 0),
+    () => distinctDriftChapterCount(view.groups.flatMap((g) => g.events)),
     [view.groups],
   );
   const findChar = (id: string) => view.characters.find((c) => c.id === id);

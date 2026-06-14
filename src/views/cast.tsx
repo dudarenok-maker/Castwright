@@ -39,6 +39,7 @@ import type {
 import { useAppSelector, useAppDispatch } from '../store';
 import { voicesActions } from '../store/voices-slice';
 import { castDesignActions } from '../store/cast-design-slice';
+import { distinctDriftChapterCount } from '../store/revisions-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { sampleScopeFor } from '../lib/sample-scope';
@@ -231,7 +232,11 @@ export function CastView({
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
   const driftByChar = (id: string) => driftEvents.filter((d) => d.characterId === id);
-  const totalDriftEvents = driftEvents.length;
+  /* Headline + per-row counts are DISTINCT chapters, not raw events: a chapter
+     can drift for several cast members (or several factors), but regenerating
+     it clears all of them, so the actionable unit is the chapter. */
+  const driftChapterCountFor = (id: string) => distinctDriftChapterCount(driftByChar(id));
+  const totalDriftChapters = distinctDriftChapterCount(driftEvents);
   const findVoice = (id?: string) => library.find((v) => v.id === id);
   /* A character's effective engine = its per-character override, else the
      project default. Qwen is the only override that diverges from the project
@@ -661,7 +666,7 @@ export function CastView({
           </div>
         )}
 
-        {totalDriftEvents > 0 && (
+        {totalDriftChapters > 0 && (
           <button
             onClick={() => onShowDrift()}
             className="w-full mb-4 p-4 rounded-3xl border border-amber-200 bg-amber-50/60 hover:bg-amber-50 transition-colors flex items-center gap-4 text-left"
@@ -671,8 +676,8 @@ export function CastView({
             </span>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-bold text-ink">
-                Voice drift detected in {totalDriftEvents} chapter
-                {totalDriftEvents === 1 ? '' : 's'}
+                Voice drift detected in {totalDriftChapters} chapter
+                {totalDriftChapters === 1 ? '' : 's'}
               </p>
               <p className="text-xs text-ink/65 mt-0.5">
                 Some chapters have voices that don't match their established profiles. Click to
@@ -828,9 +833,9 @@ export function CastView({
                   <span className="min-w-0">
                     <span className="flex items-center gap-1.5">
                       <span className="font-semibold text-ink truncate">{c.name}</span>
-                      {driftByChar(c.id).length > 0 && (
+                      {driftChapterCountFor(c.id) > 0 && (
                         <span
-                          title={`${driftByChar(c.id).length} chapter${driftByChar(c.id).length === 1 ? '' : 's'} with voice drift`}
+                          title={`${driftChapterCountFor(c.id)} chapter${driftChapterCountFor(c.id) === 1 ? '' : 's'} with voice drift`}
                           onClick={(e) => {
                             e.stopPropagation();
                             onShowDrift(c.id);
@@ -838,7 +843,7 @@ export function CastView({
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold"
                         >
                           <IconAlertTri className="w-2.5 h-2.5" />
-                          {driftByChar(c.id).length}
+                          {driftChapterCountFor(c.id)}
                         </span>
                       )}
                     </span>
@@ -1026,9 +1031,9 @@ export function CastView({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-semibold text-ink truncate">{c.name}</span>
-                      {driftByChar(c.id).length > 0 && (
+                      {driftChapterCountFor(c.id) > 0 && (
                         <span
-                          title={`${driftByChar(c.id).length} chapter${driftByChar(c.id).length === 1 ? '' : 's'} with voice drift`}
+                          title={`${driftChapterCountFor(c.id)} chapter${driftChapterCountFor(c.id) === 1 ? '' : 's'} with voice drift`}
                           onClick={(e) => {
                             e.stopPropagation();
                             onShowDrift(c.id);
@@ -1036,7 +1041,7 @@ export function CastView({
                           className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold"
                         >
                           <IconAlertTri className="w-2.5 h-2.5" />
-                          {driftByChar(c.id).length}
+                          {driftChapterCountFor(c.id)}
                         </span>
                       )}
                     </div>
