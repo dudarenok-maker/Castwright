@@ -1782,10 +1782,13 @@ function ChapterRow({
                     )}
                   </span>
                   {status !== 'skipped' && (
-                    /* Hover-reveal is desktop-only; on touch (`hover: none`)
-                        the button stays visible so users can actually reach it.
-                        Touch target hits 44×44 via min-w/min-h on phone, while
-                        desktop keeps the compact 28px hover-revealed swatch. */
+                    /* Hover-reveal is mouse-only. Gate the hide on `fine-pointer:`
+                       (mice) rather than the `sm:` width breakpoint: `fine-pointer`
+                       and `coarse-pointer` are mutually-exclusive media queries, so
+                       touch devices (incl. tablets ≥640px) keep the button visible at
+                       its full 44×44 target, while a mouse hides it until group-hover
+                       and shrinks it to the compact 28px swatch. The old `sm:` proxy
+                       hid the action on touch tablets — fe-5. */
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1793,7 +1796,7 @@ function ChapterRow({
                       }}
                       title={`Regenerate ${c.name} in this chapter`}
                       aria-label={`Regenerate ${c.name} in this chapter`}
-                      className="sm:opacity-0 sm:group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:w-7 sm:h-7 rounded-full hover:bg-ink/6 transition-all"
+                      className="opacity-100 fine-pointer:opacity-0 fine-pointer:group-hover:opacity-100 text-ink/40 hover:text-magenta grid place-items-center min-w-[44px] min-h-[44px] fine-pointer:min-w-0 fine-pointer:min-h-0 fine-pointer:w-7 fine-pointer:h-7 rounded-full hover:bg-ink/6 transition-all"
                     >
                       <IconRefresh className="w-3.5 h-3.5" />
                     </button>
