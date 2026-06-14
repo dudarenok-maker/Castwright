@@ -131,6 +131,15 @@ describe('BookLibraryView — loading affordance', () => {
     expect(screen.queryByText(/your library is empty/i)).not.toBeInTheDocument();
   });
 
+  it('book-options menu trigger is revealed on touch (coarse pointer) — fe-5', () => {
+    renderView({ loaded: true, authors: [oneAuthor] });
+    const trigger = screen.getAllByLabelText(/Book options/i)[0];
+    expect(trigger).toHaveClass('coarse-pointer:opacity-100');
+    // Desktop hover-reveal behavior preserved.
+    expect(trigger).toHaveClass('opacity-0');
+    expect(trigger).toHaveClass('group-hover:opacity-100');
+  });
+
   /* Regression — the "Voices" totals tile must count DISTINCT voices across
      the whole library (deduped by voiceId), not sum each book's per-book
      count. A voice reused across a series was previously counted once per

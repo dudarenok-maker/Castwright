@@ -247,7 +247,7 @@ function BookCard({
               setMenuOpen((o) => !o);
             }}
             aria-label="Book options"
-            className="w-7 h-7 grid place-items-center rounded-full bg-black/30 hover:bg-black/50 text-white opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+            className="w-7 h-7 grid place-items-center rounded-full bg-black/30 hover:bg-black/50 text-white opacity-0 group-hover:opacity-100 coarse-pointer:opacity-100 focus:opacity-100 transition-opacity"
           >
             <IconMore className="w-4 h-4" />
           </button>

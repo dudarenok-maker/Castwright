@@ -238,6 +238,26 @@ describe('GenerationView — chapter & character metadata (regression for screen
     expect(screen.getByText(/2 lines · 11 words/)).toBeInTheDocument(); // marlow in ch 1
   });
 
+  it('regenerate-in-chapter button stays visible + 44px on touch (fe-5)', () => {
+    renderView();
+    // Chapters render collapsed; expand Chapter 1 so the per-character rows
+    // (and their regenerate buttons) mount — mirrors the sibling test above.
+    fireEvent.click(screen.getByText('Chapter 1'));
+    // The regenerate buttons are labelled `Regenerate {name} in this chapter`.
+    const btn = screen.getAllByRole('button', { name: /Regenerate .+ in this chapter/i })[0];
+    // Touch fallback: base opacity-100 + the fine-pointer-gated hide (mouse only),
+    // NOT the old sm: width-proxy that hid the action on tablets.
+    expect(btn).toHaveClass('opacity-100');
+    expect(btn).toHaveClass('fine-pointer:opacity-0');
+    expect(btn).toHaveClass('fine-pointer:group-hover:opacity-100');
+    expect(btn.className).not.toContain('sm:opacity-0');
+    // WCAG 2.5.5: keep the 44px target on touch; mouse shrinks via fine-pointer.
+    expect(btn).toHaveClass('min-w-[44px]');
+    expect(btn).toHaveClass('min-h-[44px]');
+    expect(btn).toHaveClass('fine-pointer:w-7');
+    expect(btn).toHaveClass('fine-pointer:h-7');
+  });
+
   it('reports overall progress including Done chapters with no totalLines (the 4 % bug)', () => {
     /* Chapter 1 done (progress 1, 3 sentences in the manuscript), Chapter 2
        queued (progress 0, 1 sentence). Weighted by manuscript sentence count:
