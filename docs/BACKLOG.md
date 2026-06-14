@@ -28,12 +28,6 @@ Backlog-item issue AND add the thin row here linking it, in the same round.
 
 ### Voice & cast
 
-#### `srv-1` — Merge journal for deterministic alias un-link ([#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397))
-
-- _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.
-- _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
-_Full detail + acceptance:_ [#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397).
-
 #### `fs-38` — Voices library: standalone voice authoring + voice cloning (designed & cloned) ([#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
 
 - _What:_ A first-class `#/voices` library that authors **both designed and cloned** standalone voices, not tied to a single character — the **next big release**. Two axes share one library + tagging + pinning + assignment surface, kept distinct by a cloned-vs-designed provenance split: **(a) Standalone authoring** (folds in former `fs-12`, [#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419)) — design a voice from a persona or a reference clip on top of the per-character Qwen design flow (plan 108), name + tag + pin it, reuse it across books, with optional fine-tuning of an already-designed voice. **(b) Voice cloning** (former `fs-38`) — clone a real person's voice from a short in-app sample (XTTS reference first, then Qwen design-to-target) and cast it like any other voice, held consistent across a book/series; explicit consent on the record, cloned voices excluded from the cross-book reuse matcher, local-only.
@@ -64,6 +58,14 @@ _Full detail + acceptance:_ [#432](https://github.com/dudarenok-maker/AudioBook-
 - _Depends on:_ a paid **Apple Developer account** (~$99/yr) + a Developer ID Application cert for signing/notarization — external prerequisite that blocks the notarized half (Gatekeeper **hard-blocks** unnotarized internet-downloaded apps on Apple Silicon — not a click-through); unsigned `.dmg` mechanics can be built ahead of that. The same membership is the only iOS distribution path (`app-12`). _(Account procurement is tracked privately.)_
 - _Benefit (user):_ friction-free install for non-developer Mac users — the other primary deployer platform alongside Windows. Reduces a read-INSTALL.md-and-run-shell-commands bootstrap to drag-and-drop.
 _Full detail + acceptance:_ [#735](https://github.com/dudarenok-maker/Castwright/issues/735).
+
+#### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
+
+- _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/castwright:vX.Y.Z` on tag push.
+- _First-run setup (consistency with `ops-1`/`ops-15`):_ a headless/Docker deploy still serves the web UI, so first-run setup + model install flow through the same `fs-21` wizard (at `:5173`) — no Linux-specific install script. **Mount a persistent volume for the model dirs** (Kokoro/Qwen weights + the Ollama store) so wizard-installed models survive container rebuilds.
+- _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case. Linux is the third primary deployer platform alongside Windows (`ops-1`) and macOS (`ops-15`).
+- _Companion coherence (plan 188):_ if the companion is used against a Dockerised server, (a) **mount a persistent volume for the mkcert CA** (`mkcert -CAROOT` dir) so the pinned `caFingerprint` survives container rebuilds (else every update forces a re-pair), and (b) honour a **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads `os.networkInterfaces()` → container bridge IPs like `172.18.0.x`) so the pairing QR carries the host's real LAN IP.
+_Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
 
 #### `ops-16` — Pinokio one-click installer ([#738](https://github.com/dudarenok-maker/Castwright/issues/738))
 
@@ -354,14 +356,6 @@ _Full detail + acceptance:_ [#428](https://github.com/dudarenok-maker/AudioBook-
 _Full detail + acceptance:_ [#427](https://github.com/dudarenok-maker/AudioBook-Generator/issues/427).
 
 ### Ops, CI & distribution
-
-#### `ops-2` — Docker image + compose file for headless / Linux deployment ([#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433))
-
-- _What:_ Add a multi-stage `Dockerfile` (frontend build → node runtime stage → sidecar Python stage) and a `docker-compose.yml` that wires the three services on `:5173 / :8080 / :9000`. Document the NVIDIA Container Toolkit GPU-passthrough prereq. Resolve whether `WORKSPACE_DIR` is bind-mounted from the host or held in a named volume (host-bind recommended — keeps per-book `.audiobook/state.json` portable across container rebuilds). Extend `release.yml` with `docker/build-push-action` to publish the image to `ghcr.io/dudarenok-maker/castwright:vX.Y.Z` on tag push.
-- _First-run setup (consistency with `ops-1`/`ops-15`):_ a headless/Docker deploy still serves the web UI, so first-run setup + model install flow through the same `fs-21` wizard (at `:5173`) — no Linux-specific install script. **Mount a persistent volume for the model dirs** (Kokoro/Qwen weights + the Ollama store) so wizard-installed models survive container rebuilds.
-- _Benefit (user):_ enables hosting on a Linux box with a GPU (home server, single-tenant VPS) — the Windows-only PowerShell orchestration is the current ceiling for that use case.
-- _Companion coherence (plan 188):_ if the companion is used against a Dockerised server, (a) **mount a persistent volume for the mkcert CA** (`mkcert -CAROOT` dir) so the pinned `caFingerprint` survives container rebuilds (else every update forces a re-pair), and (b) honour a **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads `os.networkInterfaces()` → container bridge IPs like `172.18.0.x`) so the pairing QR carries the host's real LAN IP.
-_Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
 
 #### `fe-1` — In-app LAN HTTPS banner under dev settings ([#401](https://github.com/dudarenok-maker/AudioBook-Generator/issues/401))
 
