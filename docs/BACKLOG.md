@@ -28,12 +28,6 @@ Backlog-item issue AND add the thin row here linking it, in the same round.
 
 ### Voice & cast
 
-#### `srv-1` — Merge journal for deterministic alias un-link ([#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397))
-
-- _What:_ At every cast-merge call site (manual merge route, fold-minor-cast post-stage-2 pass), append a record to a per-book journal file `<bookDir>/.audiobook/cast-merges.json` of shape `{ ts, kind: 'manual' | 'fold', sourceId, sourceName, targetId, affectedSentenceIds: number[] }`. The unlink-alias route then reads this journal to compute `impactedChapters.candidateSentenceIds` as the exact sentences originally rewritten by the merge — no `chapterCast` heuristic, no per-chapter listing of sentences that may belong to a third party.
-- _Benefit (user):_ reattribute modal becomes a precise checklist instead of a scoped review — every row the user sees is provably their merge's work, no third-party sentences to skip over. Big quality-of-life win for series-2-into-1 cleanups where merges pile up.
-_Full detail + acceptance:_ [#397](https://github.com/dudarenok-maker/AudioBook-Generator/issues/397).
-
 #### `fs-38` — Voices library: standalone voice authoring + voice cloning (designed & cloned) ([#624](https://github.com/dudarenok-maker/AudioBook-Generator/issues/624))
 
 - _What:_ A first-class `#/voices` library that authors **both designed and cloned** standalone voices, not tied to a single character — the **next big release**. Two axes share one library + tagging + pinning + assignment surface, kept distinct by a cloned-vs-designed provenance split: **(a) Standalone authoring** (folds in former `fs-12`, [#419](https://github.com/dudarenok-maker/AudioBook-Generator/issues/419)) — design a voice from a persona or a reference clip on top of the per-character Qwen design flow (plan 108), name + tag + pin it, reuse it across books, with optional fine-tuning of an already-designed voice. **(b) Voice cloning** (former `fs-38`) — clone a real person's voice from a short in-app sample (XTTS reference first, then Qwen design-to-target) and cast it like any other voice, held consistent across a book/series; explicit consent on the record, cloned voices excluded from the cross-book reuse matcher, local-only.
