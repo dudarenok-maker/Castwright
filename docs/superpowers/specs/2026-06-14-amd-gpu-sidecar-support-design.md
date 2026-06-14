@@ -1,10 +1,12 @@
 # AMD GPU support for the TTS sidecar (Windows + Linux)
 
 - **Date:** 2026-06-14
-- **Status:** draft — **Phase 1 (dormant scaffolding, zero behavior change) is plannable
-  now**; **Phase 2 (the 3.12 flip + AMD + VRAM change, shipped together) is gated on the
-  Section 0 verification spike.** The phase boundary is drawn on *behavior change*, so the
-  3.12 migration tax never ships ahead of the AMD benefit. See "Delivery sequencing."
+- **Status:** draft — **REVISED sequencing**: **Phase 1 = Python 3.12 + NVIDIA-latest torch +
+  the venv migration, shipped in the next beta package** (no AMD; fully author-verifiable on
+  NVIDIA/CPU/mac) so beta users migrate to 3.12 **once, now** and are never force-migrated
+  later. **Phase 2 = the AMD cohort as a follow-up small release** (gated on the Section 0
+  on-AMD acceptance) that forces **no** further migration on existing users. See "Delivery
+  sequencing (REVISED)."
 - **Ships in:** the release after v1.7.0 (open beta) — so the upgrade migration path is
   first-class, not an afterthought.
 - **Goal posture:** broaden the open beta to AMD-GPU owners. Best-effort, since the
@@ -39,20 +41,26 @@ rebuild on upgrade from v1.7.0.
   wheels "change regularly (nightly)" and recommends **pinned wheels from
   `repo.radeon.com`** for a specific ROCm release (e.g. torch 2.8.0 / ROCm 6.4.4).
   Treat ROCm torch like the flash-attn **manual-wheel-URL** pattern, not `--index-url`.
-- **Torch version is dictated by the ROCm release** (2.8/2.9), **not** our NVIDIA pin
-  (2.6/cu124). The AMD and NVIDIA profiles therefore run **different torch versions** —
-  this is a first-class constraint, not an edge case (see C3).
+- **We do NOT pin NVIDIA's torch version (corrected).** Torch is pulled *transitively from
+  PyPI* by `qwen-tts`/`coqui-tts` — there is no `torch==` pin and no index. The only place a
+  torch version appears is the *filename* of the **opt-in, non-fatal** flash-attn wheel; and
+  the `coqui-tts[codec]` extra (torchcodec, required by torch **≥2.9**) implies today's
+  default NVIDIA torch is already **~2.9**, not 2.6. So the honest statement is: **NVIDIA torch
+  = PyPI default (verify exact version on a real venv — likely ~2.9); AMD torch = the pinned
+  ROCm 2.8 wheel** (because ROCm-Windows only ships specific builds). This is two profiles each
+  taking their natural torch, **not** a version skew we manage (see C3, downgraded).
 - **ONNX Runtime on Windows AMD:** the ROCm EP is not available on Windows; **DirectML**
   (DX12) is the GPU path. **But Kokoro-on-DirectML has a documented `ConvTranspose`
   failure** (works on CPU, errors on DML) — the central Windows value prop is unproven.
 - **`onnxruntime` vs `onnxruntime-directml` collide** — both provide the `onnxruntime`
   module; `kokoro-onnx` pulls base `onnxruntime`, so installing DirectML alongside needs
   explicit `--no-deps` / uninstall-then-install ordering (see H1).
-- **cp312 wheel availability (the unify-on-3.12 gate):** `torch 2.6.0+cu124` (NVIDIA),
-  `coqui-tts` (supports 3.10–3.13), `transformers<5`, `kokoro-onnx`/`onnxruntime`,
-  `faster-whisper`, and the hand-sourced flash-attn (`…cp312-cp312-win_amd64.whl`) all
-  have cp312 wheels. Nothing in the *NVIDIA* stack blocks the bump. (AMD-side torch
-  compat with coqui-tts/qwen-tts on torch 2.8/2.9 is a **spike item**, not verified.)
+- **cp312 wheel availability (the unify-on-3.12 gate):** the NVIDIA PyPI torch (whatever
+  version resolves), `coqui-tts` (supports 3.10–3.13), `transformers<5`,
+  `kokoro-onnx`/`onnxruntime`, `faster-whisper`, and the hand-sourced flash-attn (a
+  `…cp312…win_amd64.whl` exists for torch 2.6 and for 2.8/2.9 cu128/cu130) all have cp312
+  wheels. Nothing in the *NVIDIA* stack blocks the 3.12 bump. (AMD-side torch compat with
+  coqui-tts/qwen-tts on the ROCm 2.8 *alpha* wheel is a **spike item**, not verified.)
 
 ### Known, accepted limitations (stated, never silently degraded)
 
@@ -148,9 +156,12 @@ Done without AMD hardware (web/desk + packaging facts). 🔴 on-box confirmation
     installs `coqui-tts` WITHOUT the `[codec]` extra** → no torchcodec dependency → **Coqui
     likely survives on AMD** (vs the spec's earlier "Coqui may drop"). N8 drop-priority still
     stands as a fallback if the import check fails.
-  - **Per-profile torch versions CONFIRMED:** NVIDIA torch 2.6 (PyPI, transitive) vs AMD torch
-    2.8 (ROCm wheel). The Phase-1 `installRecipe` AMD `torchPreinstall: 'PENDING_SPIKE'` can be
-    filled in Phase 2 with the torch + torchaudio URLs above, once import-ability is confirmed.
+  - **Torch sourcing clarified (NOT a managed skew):** NVIDIA torch = **PyPI default,
+    unpinned** (we never pin it; likely ~2.9 today — confirm on a real venv); AMD torch = the
+    pinned ROCm **2.8 alpha** wheel above (ROCm-Windows ships only specific builds). Same-minor
+    alignment is incidental, not engineered. The Phase-1 `installRecipe` AMD
+    `torchPreinstall: 'PENDING_SPIKE'` is filled in Phase 2 with the torch + torchaudio URLs
+    above, once import-ability is confirmed.
   - 🟡→🔴 OWED: install the two wheels in a Python 3.12 venv and verify `import torch`,
     `coqui-tts` (no `[codec]`), and `qwen-tts` import (P4: confirm whether the ROCm-**Windows**
     wheel imports at all on a non-AMD box, or hard-requires the AMD runtime — that decides
@@ -172,54 +183,62 @@ Done without AMD hardware (web/desk + packaging facts). 🔴 on-box confirmation
     Intel-iGPU+AMD-dGPU) and add any surprising branding string (e.g. a bare "Advanced Micro
     Devices" line with no `[AMD/ATI]` bracket, P7) as a parser test case.
 
-**Gate verdict:** S0.1 + S0.2 both resolved favorably at desk level → **Phase 2 is plannable.**
-Per the delivery model, the 3.12 flip + AMD enablement still **release** only after the 🔴
-on-AMD acceptance (S0.1 DML run, S0.2 import + synth) passes.
+**Gate verdict:** S0.1 + S0.2 both resolved favorably at desk level. Phase 2 (AMD) is
+plannable; its on-AMD bits stay gated on the 🔴 acceptance — but the **Python 3.12 migration
+no longer waits for AMD** (see the revised sequencing below).
 
-## Delivery sequencing (cut on BEHAVIOR CHANGE, not "hardware independence" — A2/A11)
+## Delivery sequencing (REVISED — ship the 3.12 migration NOW, AMD as a follow-up)
 
-The disruptive part of this feature is the Python 3.11→3.12 migration (a forced venv
-rebuild + ~2.5 GB torch re-download for **every** user — NVIDIA, mac, CPU alike). Its
-*only* justification is AMD (ROCm-Windows needs 3.12). Therefore the phase boundary is
-drawn so the **migration tax and the AMD benefit ship together**, never the tax first.
+**Decision (supersedes the earlier A2 "ship the tax only with the benefit" cut).** The beta
+is shipping packages regularly, and we *know* 3.12 is needed eventually (for AMD). Rather
+than force every beta user through the venv migration *later* as a one-off, we **fold it into
+the next package now**, while the beta is small and users already accept churn. Two wins:
+1. **Each beta user migrates to 3.12 exactly once, now** — no second forced upgrade when AMD
+   lands (AMD then changes nothing for existing users: `pythonTag` stays `cp312` and their
+   `profile` stays `nvidia`/`cpu`/`apple`, so `decideVenvAction` returns `noop`/`pip-in-place`
+   on the AMD-release upgrade — **no re-rebuild**).
+2. **The risky migration code is battle-tested on the FRIENDLY path first** — the author can
+   fully verify the 3.12 + latest-torch rebuild on real NVIDIA/CPU/mac hardware (no AMD box
+   needed) before AMD complexity is layered on.
 
-**Delivery model (B6): Phase 1 is "merged to `main`, NOT released until Phase 2."** It is
-reviewed + tested code that lands on `main` but is exposed by **no release** until Phase 2
-is ready. This closes A2 with no compromise: users get the 3.12 migration tax and the AMD
-benefit in the **same** release, and we never ship unused code in a build. **Coupling
-consequence (state it):** the 3.12 bump is therefore gated on AMD validation — if an AMD
-tester never materialises, the 3.12 flip never releases. Acceptable, since 3.12 has zero
-NVIDIA/mac/CPU-side benefit on its own.
+*Why this reverses A2 honestly:* A2's premise was that the migration is a standalone tax with
+no user benefit until AMD. That premise changes when the migration is amortised into ongoing
+beta packaging AND decoupling de-risks it. The cost — the migration ships as the headline
+change of a release affecting everyone — is acceptable **only because it is fully
+author-verifiable on the friendly path**; so Phase 1 acceptance must prove the NVIDIA/CPU/mac
+rebuild end-to-end before release.
 
-- **Phase 1 — Pure, dormant foundation (plan + build now, no AMD HW; merged-not-released):**
-  - The pure-function **resolver + detection** (`accelerator-profile.mjs`, Section 1) —
-    present + exhaustively unit-tested, but nothing in a shipped path consumes it yet.
-  - The **migration core** (Section 2) as **pure, fully-faked, unit-tested functions** — the
-    stamp model, the three-way decision, the build-new-then-swap ordering — **NOT wired into
-    the live `apply.ts` flow.**
-  - **That's it.** Phase 1 deliberately **excludes** the requirements restructure (B5 — a
-    real `cpu.txt` would change what CPU users install today; the `reqHash`-source change
-    would fire a pip re-check for everyone), the `/health` enum change, the VRAM change, and
-    the Python flip. All of those are behavior changes → Phase 2.
-  - **Python stays 3.11; CI stays 3.11; install + telemetry + `/health` unchanged.** Value:
-    the hard pure logic lands, locked by tests + reviewed *separately* from the scary
-    integration, with zero risk to any shipped path.
-- **Spike — Section 0** (S0.1–S0.4) runs in parallel with / after Phase 1.
-- **Phase 2 — Behavior changes + AMD, shipped together (post-spike):**
-  - The **requirements restructure** (Section 3: `base.txt` + `nvidia-cuda.txt`/`cpu.txt`/
-    `amd-rocm.txt`, `reqHash` over resolved-overlay text) — first behavior-touching step.
-  - **Flip Python to 3.12** — *triggers* the migration core; integration into the live
-    `apply.ts` flow as a **resumable upgrade stage** (A3) lands here, as does the **runtime
-    profile-switch rebuild flow** (A7/A8).
-  - Verified ROCm `torchSpec` + repo.radeon.com wheel handling; DirectML ORT ordering +
-    provider selection + cached self-test; the (possibly re-exported) **universal Kokoro
-    model**; the **`/health` `rocm`/`directml` enum**; the **torch-first VRAM telemetry**
-    change (A10); AMD wizard/about/Help messaging; CI → 3.12.
-  - The 3.12 tax and the AMD payoff arrive in the same release.
+- **Phase 1 — Python 3.12 + NVIDIA latest + the venv migration (SHIP in the next package; no
+  AMD; author-verifiable):**
+  - The **resolver + detection** (`accelerator-profile.mjs`) — **consumed** for profile
+    resolution; on existing hardware it resolves to `nvidia`/`cpu`/`apple` (today's behavior).
+    AMD branches exist but are unreachable (no `amd-rocm` overlay shipped yet).
+  - The **migration core + its live wiring**: `bootstrap-venv.mjs` + `apply.ts` consume the
+    three-way decision; the **resumable rebuild stage** (A3), `migration-in-progress` marker +
+    resume-on-boot, build-`.venv-next`-then-swap, disk pre-flight abort, `.venv-prev` rollback.
+  - The **requirements restructure** for NVIDIA/CPU only (`base.txt` + `nvidia-cuda.txt` ==
+    today + `cpu.txt`); `reqHash` over resolved-overlay text. **No `amd-rocm.txt`.**
+  - **Flip the sidecar to Python 3.12** (the trigger) → NVIDIA/CPU/mac torch resolves to the
+    **PyPI latest** on the rebuild (no pin); Python-3.12 acquisition (auto-install + guided
+    fallback, H3); CI → 3.12.
+  - The **migration UX prompt + progress** (Section 6). `/health` `rocm`/`directml` enum may
+    land here **dormant** (no engine emits them yet) to avoid a second sidecar touch later.
+  - **Acceptance (author, no AMD):** fresh install + **upgrade-from-v1.7.0 on NVIDIA, CPU, and
+    macOS** — one prompt, atomic rebuild, books/voices intact, ends on 3.12 + latest torch;
+    failed/aborted rebuild leaves v1.7.0 working; resumable across relaunch. This is the gate
+    to ship Phase 1.
+- **Spike — Section 0** (S0.1–S0.4) runs in parallel; gates Phase 2 only.
+- **Phase 2 — AMD cohort (follow-up SMALL release; gated on 🔴 on-AMD acceptance):**
+  - Adds the **`amd-rocm` overlay**, the **ROCm torch pre-install** (pinned wheels), the
+    **DirectML ORT ordering + provider selection + cached self-test**, the **AMD `/health`
+    families going live**, the **torch-first VRAM telemetry** change (A10), the **AMD
+    wizard/about/Help** rows, and the **runtime profile-switch rebuild** (A7/A8).
+  - **Forces NO migration on existing users** (3.12 already shipped; profile unchanged). Only
+    a user who *switches* to the `amd` profile triggers a (job-coordinated) profile rebuild.
+  - Releases only after the Wave H 🔴 acceptance (DML run, ROCm import+synth) passes.
 
-**Engine-drop priority (N8):** if S0.2 forces a cut on the AMD profile, preserve in this
-order — **Kokoro (default narration) > Qwen (voice design) > Coqui (alternate)**. Coqui is
-the first to drop; Kokoro CPU-fallback is preferable to losing the engine entirely.
+**Engine-drop priority (N8):** if the AMD compat check forces a cut, preserve in this order —
+**Kokoro (default narration) > Qwen (voice design) > Coqui (alternate)**.
 
 ## Architecture
 
@@ -277,15 +296,16 @@ consumer of spawn-time env. This is the load-bearing architecture decision for t
 
 | vendor × OS | torch engines (Coqui/Qwen) | Kokoro (onnxruntime) |
 |---|---|---|
-| nvidia (any) | `cuda` — torch **2.6/cu124** wheels | CUDA EP (`onnxruntime-gpu`) |
-| amd + Windows | `rocm` — torch **2.8/2.9 ROCm** (repo.radeon.com wheel, HIP→`device="cuda"`) | **DirectML EP IF S0.1 passes, else CPU EP** |
-| amd + Linux | `rocm` — torch ROCm (Linux index) | ROCm/MIGraphX EP if present, else CPU EP |
+| nvidia (any) | `cuda` — torch **PyPI default** (unpinned; transitive via engine pkgs) | CUDA EP (`onnxruntime-gpu`) |
+| amd + Windows | `rocm` — torch **2.8 alpha ROCm** (repo.radeon.com wheel, HIP→`device="cuda"`) | **DirectML EP IF S0.1 passes, else CPU EP** |
+| amd + Linux | `rocm` — torch ROCm (Linux wheel) | ROCm/MIGraphX EP if present, else CPU EP |
 | apple | `mps` (existing, untouched) | CoreML/CPU EP (existing) |
 | cpu / unknown | `cpu` | CPU EP |
 
-Note the **per-profile torch version** (2.6 NVIDIA vs 2.8/2.9 AMD): the resolver returns
-a torch *spec* (version + source), not just a flag. Coqui/Qwen inclusion on AMD is
-contingent on S0.2.
+Note the torch sourcing differs by profile **only because each takes its natural torch**, not
+because we manage a version: NVIDIA = PyPI default (unpinned, `torchPreinstall: null`); AMD =
+an explicit pinned ROCm wheel (`torchPreinstall: { wheels: [...] }`). Coqui/Qwen inclusion on
+AMD is contingent on S0.2 (the ROCm-2.8-alpha compat check).
 
 ## Section 1 — Accelerator profile resolver
 
@@ -398,11 +418,12 @@ but it raises the bar on the migration's test coverage and the rollback guarante
    - **The `reqHash` in `apply.ts` is computed over the resolved overlay's full
      transitive content (overlay + base), NOT a static root shim (H2).** A root
      `requirements.txt` may remain only as a human pointer; it is not the hash source.
-2. **Torch install is resolver-driven and profile-versioned.** NVIDIA: torch 2.6/cu124
-   via the cu124 index (unchanged) + cp312 flash-attn (opt-in, non-fatal). **AMD: torch
-   2.8/2.9 from the pinned repo.radeon.com wheel URL(s)** (manual-wheel pattern, like
-   flash-attn), version per S0.2; flash-attn skipped (no ROCm wheel; SDPA default);
-   DeepSpeed skipped.
+2. **Torch install is resolver-driven; NVIDIA is unpinned, AMD pre-installs a wheel.**
+   NVIDIA/CPU: torch arrives **transitively from PyPI** via `qwen-tts`/`coqui-tts` (no index,
+   no pin — `torchPreinstall: null`) + the opt-in, non-fatal cp312 flash-attn wheel. **AMD:
+   pre-install the pinned repo.radeon.com ROCm torch + torchaudio wheels BEFORE the engine
+   packages** (manual-wheel pattern, like flash-attn), per the spike; flash-attn skipped (no
+   ROCm wheel; SDPA default); DeepSpeed skipped.
 3. **Kokoro/onnxruntime install ordering (H1).** AMD-Windows: install `kokoro-onnx`
    **without** its `onnxruntime` dep (or uninstall the pulled-in CPU `onnxruntime`), then
    install `onnxruntime-directml` — exact recipe pinned in S0.3. NVIDIA:
@@ -543,7 +564,7 @@ hardware-bound rest is an explicit owed acceptance matrix.
 |---|---|---|
 | C1 | Kokoro-on-DirectML `ConvTranspose` may not run → default engine no GPU on AMD-Win | **S0.1 spike gate**; CPU default + load-time self-test before enabling DML; honest /health |
 | C2 | ROCm-Win torch is nightly/manual-wheel, not a stable index | Model as manual-wheel URL (S0.2); resolver returns a torch *spec* |
-| C3 | AMD torch (2.8/2.9) ≠ NVIDIA torch (2.6); coqui-tts/qwen-tts compat unverified | **S0.2 spike**; per-profile torch versions; drop Coqui from AMD if incompatible |
+| C3 (downgraded) | ~~Version skew we manage~~ — corrected: we don't pin NVIDIA torch (PyPI default, ~2.9); only AMD's ROCm 2.8-alpha wheel is pinned. Real residue = does coqui-tts/qwen-tts work on the ROCm 2.8 alpha | **S0.2 spike** (AMD-side compat check only); drop Coqui from AMD if incompatible (N8) |
 | H1 | `onnxruntime` + `onnxruntime-directml` double-install conflict | S0.3 recipe; `--no-deps` / uninstall-then-install ordering encoded in `ortInstallSteps` |
 | H2 | Static root-shim reqHash misses overlay changes | Hash the resolved overlay's transitive content |
 | H3 | Windows Python auto-install needs UAC + PATH refresh | Install → relaunch → resume; guided fallback on winget-less editions |
