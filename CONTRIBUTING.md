@@ -422,8 +422,10 @@ A labeled PR run is scope-filtered to the legs the diff touched (plan 103); a
 manual dispatch runs the full battery. What still runs automatically on its own:
 `pr-title-lint.yml` on every PR, `app.yml` on `apps/android/**` changes,
 `release.yml` on a `vX.Y.Z` tag, and `cross-os.yml` (macOS + Windows + mobile
-e2e) on its weekly cron + manual dispatch — fire that one before any release
-announce, since high-risk / cross-platform changes are exactly what it covers.
+e2e) on its weekly cron + manual dispatch. **Every release tag runs the complete
+cross-platform battery before publishing** (full `npm run verify` + mobile e2e on
+Ubuntu, plus `verify:quick`+build on macOS and Windows — see `release.yml`), so
+cross-OS coverage for a release is automatic, not a manual pre-announce step.
 Rationale + measurements:
 [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md),
 [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).

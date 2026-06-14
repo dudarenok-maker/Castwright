@@ -8,10 +8,15 @@ name: Cross-OS Verify
 # the per-PR E2E Mobile workflow billed ~2 min on EVERY PR push while being
 # non-blocking (continue-on-error). Both are now folded here and fired on a
 # WEEKLY cron + on-demand via workflow_dispatch instead of per-release /
-# per-PR. The deployer spread is still Windows + macOS + Linux, so fire this
-# MANUALLY (Actions tab → Cross-OS Verify → Run workflow) before announcing
-# any release that ships a zip to alpha testers.
-# See docs/features/103-ci-cost-reduction.md.
+# per-PR.
+#
+# Plan 215 — release tags now run their OWN complete cross-OS + mobile battery
+# in release.yml (publish is gated on macOS + Windows + Ubuntu-full + mobile
+# e2e), so cross-OS coverage for a release is automatic. This workflow is no
+# longer the pre-release manual step; it's the between-releases pulse — a weekly
+# cron catches cross-OS / mobile regressions on `main`, and the manual dispatch
+# stays for ad-hoc / high-risk checks off a release boundary.
+# See docs/features/103-ci-cost-reduction.md and 215-ci-label-gated-verify.md.
 
 on:
   workflow_dispatch:

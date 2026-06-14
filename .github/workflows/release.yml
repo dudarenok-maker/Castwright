@@ -14,23 +14,26 @@ permissions:
   contents: write
 
 jobs:
-  # Sanity-net: confirm the tagged commit builds + tests on Ubuntu before
-  # publish. If verify fails, the publish job is skipped and the release does
-  # NOT land.
+  # Sanity-net: a release tag must pass COMPLETE verification on every deployer
+  # OS before it publishes. `publish` is gated on all of the verification legs
+  # below (`needs: [verify, cross-os-verify, mobile-e2e, companion-apk-build]`);
+  # if any fails, the publish job is skipped and the release does NOT land.
   #
-  # Plan 103 — the per-release cross-OS matrix (macOS + Windows) was retired
-  # from this workflow: macOS bills at a 10× multiplier on a <4-min job, so
-  # each release tag was paying ~46 billed minutes for cross-OS smoke that
-  # scales with release cadence. The macOS + Windows verify smoke now lives
-  # in cross-os.yml (workflow_dispatch + weekly cron on main). Fire that
-  # workflow MANUALLY before announcing any release that ships a zip to
-  # alpha testers — the deployer spread is still Windows + macOS + Linux.
-  # See docs/features/103-ci-cost-reduction.md.
+  # Plan 215 — CI is opt-in on PRs (no per-PR cloud run), so the full + cross-OS
+  # battery is concentrated HERE, at the infrequent release boundary. Releases
+  # are public-beta, so paying the cost per tag (macOS bills at 10×) is the
+  # point. Plan 103 had moved cross-OS OFF the per-release path to cross-os.yml;
+  # 215 brings it back ON the tag — cross-os.yml stays for the weekly `main`
+  # pulse + ad-hoc dispatch. See docs/features/215-ci-label-gated-verify.md.
+
+  # Leg 1/4 — full `npm run verify` on Ubuntu (typecheck + lint + all tests +
+  # e2e + a11y + build): the complete single-OS battery.
   verify:
-    name: Verify (ubuntu-latest)
+    name: Verify (ubuntu-latest, full)
     runs-on: ubuntu-latest
-    # Explicit cap (default is 360 min). (CI cost round 2.)
-    timeout-minutes: 20
+    # 30 (not 20): the full battery + e2e runs ~15-20 min on a cold runner, past
+    # the 20-min PR cap. Releases are rare, so the headroom costs nothing.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -53,11 +56,13 @@ jobs:
 
       # The server pretest hook (`scripts/preflight-ffmpeg.cjs`) refuses to
       # run when ffmpeg isn't on PATH — the MP3 encoder in
-      # `server/src/tts/mp3.ts` shells out to it. `SKIP_FFMPEG_PREFLIGHT=1`
-      # exists as an escape hatch but it makes `mp3.test.ts` silently skip —
-      # we want the gate.
+      # `server/src/tts/mp3.ts` shells out to it; the e2e audio paths need it too.
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # `npm run verify` runs the e2e suite, which needs the chromium engine.
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
 
       # fe-37 — a hand-cut tag must not publish empty/placeholder user-facing
       # notes. The committed RELEASE_NOTES.md top section must lead with the tag
@@ -65,15 +70,87 @@ jobs:
       - name: Guard — committed release notes are real
         run: node scripts/release-notes-gate.mjs "${{ github.ref_name }}"
 
+      # Full battery (incl. build). Sidecar pytest + Pester skip with a banner on
+      # a fresh runner (no venv / no Pester 5), as the old verify:quick leg did.
+      - name: Verify
+        run: npm run verify
+
+  # Leg 2/4 — cross-OS smoke (macOS + Windows): verify:quick + build. Ubuntu is
+  # covered by `verify` above. Mirrors cross-os.yml's cross-os-verify job; no
+  # cross-OS e2e (Playwright font-hinting drift is unreliable off-Linux).
+  cross-os-verify:
+    name: Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Node 24 + npm/node_modules caches + `npm ci` (root + server) — shared
+      # composite with verify.yml / cross-os.yml.
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      - name: Install ffmpeg (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install ffmpeg
+
+      - name: Install ffmpeg (Windows)
+        if: matrix.os == 'windows-latest'
+        run: choco install ffmpeg -y --no-progress
+
       # `verify:quick` is `test:all` (hooks + frontend + server + scripts +
-      # sidecar). Sidecar tests skip with a banner if the venv isn't
-      # bootstrapped (which it won't be on a fresh runner — that's fine,
-      # we don't ship a sidecar test gate for the release pipeline).
+      # sidecar; sidecar/Pester skip with a banner on a fresh runner).
       - name: Verify
         run: npm run verify:quick
 
       - name: Build
         run: npm run build
+
+  # Leg 3/4 — mobile + tablet viewport e2e (Pixel 7 / iPad Pro 11), Ubuntu /
+  # chromium. Mirrors cross-os.yml's mobile-e2e job but runs UNCONDITIONALLY on a
+  # release tag (no change-window gate — every public-beta tag gets it).
+  mobile-e2e:
+    name: npm run test:e2e:mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-
+
+      - name: Install Playwright chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E Mobile
+        run: npm run test:e2e:mobile
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-mobile-release
+          path: playwright-report/
+          retention-days: 7
 
   # Build the companion artifacts ONCE (versioned in lockstep via
   # bump-version.mjs → pubspec) and hand them to `publish` as a workflow
@@ -172,10 +249,12 @@ jobs:
 
   # Publish: builds the zip + SHA-256 on Ubuntu (the zip is platform-
   # independent, no need to build it three times) and uploads them to the
-  # GitHub Release. Gated on verify AND the APK build so the zip can bundle it.
+  # GitHub Release. Gated on the COMPLETE verification spread (Ubuntu full +
+  # mobile e2e + macOS/Windows smoke) AND the APK build so the zip can bundle it
+  # — a red leg on any deployer OS blocks the public-beta release.
   publish:
     name: Publish release zip
-    needs: [verify, companion-apk-build]
+    needs: [verify, cross-os-verify, mobile-e2e, companion-apk-build]
     runs-on: ubuntu-latest
     # Explicit cap (default is 360 min). (CI cost round 2.)
     timeout-minutes: 15
