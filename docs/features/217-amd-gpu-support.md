@@ -98,11 +98,11 @@ New behaviour landed paired tests in the same waves (all run under `npm run test
 
 1. **A0. Sidecar pytest green on Python 3.12** — ✅ **DONE** (2026-06-15): `npm run test:sidecar` → **256 passed / 4 deselected** on a bootstrapped Python **3.12.10** venv (+ `requirements-dev.txt` = pytest 8.4.2 / httpx 0.28.1). The 3.11→3.12 bump didn't break the suite.
 2. **A. Fresh install on 3.12 — NVIDIA** — ✅ **DONE** (2026-06-15, RTX 4070 Laptop): venv 3.12.10 stamped; **`torch 2.8.0+cu128` + `torchaudio 2.8.0+cu128`** (matched), `cuda.is_available()=True`, CUDA 12.8.0; **torchcodec absent** (in-core torchaudio I/O, no FFmpeg dep); **all three engines import — Kokoro ✅ · Qwen ✅ · Coqui ✅** (`from TTS.api import TTS` OK, `torchaudio.save/load` in-core); old Python 3.11 removed.
-3. **B. Fresh install on 3.12 — CPU-only box** — ⏳ owed.
-4. **C. Fresh install on 3.12 — macOS / Apple Silicon** — ⏳ owed.
-5. **D. Alpha detect-and-reinstall + data gate** — partially exercised: the 3.11 venv was detected + removed and rebuilt fresh on 3.12 (engines green) — explicit "books/cast/voices preserved" confirmation still owed.
-6. **E. Python-3.12-absent fresh box** — ⏳ owed.
-7. **F. Dual-GPU box (AMD iGPU + NVIDIA dGPU)** — ⏳ owed.
+3. **B. Fresh install on 3.12 — CPU-only box** — ◑ partial (2026-06-15): resolver returns `cpu` under `ACCELERATOR=cpu`, and the sole nvidia-cuda install path is CPU-safe (CUDA torch falls back to CPU; Kokoro has a CPU EP). A true no-GPU-box synth is ⏳ owed (this box has a GPU).
+4. **C. Fresh install on 3.12 — macOS / Apple Silicon** — ⏳ owed (no Mac available).
+5. **D. Alpha detect-and-reinstall + data gate** — ✅ **DONE** (2026-06-15): a simulated cp311 venv classifies `needs-reinstall`, prints the guidance, exits non-zero, and **leaves the venv untouched** (no pip). `WORKSPACE_DIR=C:\AudiobookWorkspace` is external to the install and holds the real `books`/`voices` → a reinstall preserves user content.
+6. **E. Python-3.12-absent fresh box** — ◑ partial: `decidePythonAcquisition` decision unit-tested (use / winget auto-install / guided fallback); the live winget auto-install is ⏳ owed (this box has 3.12).
+7. **F. Dual-GPU box (AMD iGPU + NVIDIA dGPU)** — ✅ **DONE** (2026-06-15): on real dual-GPU silicon (NVIDIA RTX 4070 Laptop + AMD Radeon 780M iGPU) the end-to-end resolver resolves to **`nvidia`** (NVIDIA-present-wins). Env override verified: `ACCELERATOR=cpu`→`cpu`, `ACCELERATOR=amd`→`amd`/`directml` (env beats detection).
 
 ## Out of scope
 
