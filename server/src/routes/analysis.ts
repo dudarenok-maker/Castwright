@@ -22,6 +22,13 @@ import {
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import {
+  loadCastMerges,
+  saveCastMerges,
+  clearCastMerges,
+  replaceFoldEntries,
+  buildFoldJournalEntries,
+} from '../store/cast-merges.js';
 import { recoverTaggedNarratorLines } from '../analyzer/recover-tagged-lines.js';
 import {
   runStage2ChapterChunked,
@@ -636,6 +643,27 @@ export function buildInterimCast(
    them prematurely would drop legitimate characters who simply
    haven't been processed yet. The full fold runs at Phase 1's tail
    with sentence counts in hand. */
+/* srv-1 — persist a fold pass's lineage to the merge journal. Replace-all keeps
+   kind:'fold' entries in lockstep with the current manuscript-edits.json
+   (manual entries are preserved). Co-locate the CALL with the edits write so the
+   journal is persisted iff the sentences it describes are. Non-fatal at the call
+   site. */
+async function writeFoldJournal(
+  bookDir: string,
+  rewrites: Record<string, string>,
+  preFoldSentences: ReadonlyArray<{ id: number; chapterId: number; characterId: string }>,
+  characters: ReadonlyArray<{ id: string; name: string }>,
+): Promise<void> {
+  const journal = await loadCastMerges(bookDir);
+  await saveCastMerges(
+    bookDir,
+    replaceFoldEntries(
+      journal,
+      buildFoldJournalEntries(rewrites, preFoldSentences, characters, new Date().toISOString()),
+    ),
+  );
+}
+
 function previewFoldForLiveView(characters: CharacterOutput[]): CharacterOutput[] {
   return foldMinorCast(characters, [], { nameOnly: true }).characters;
 }
@@ -2044,6 +2072,9 @@ export async function runMainAnalyzerJob(
         /* Start fresh intentionally discards reuse continuity — drop the
            reparse carryover too so it can't resurrect links (srv-13). */
         await rm(castReuseCarryoverJsonPath(recordRef.bookDir), { force: true });
+        /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
+           meaningless; drop the merge journal too. */
+        await clearCastMerges(recordRef.bookDir);
       }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
@@ -3540,6 +3571,18 @@ export async function runMainAnalyzerJob(
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: reconciled.sentences,
         });
+        /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
+           a journal failure must never fail the analysis persist. */
+        try {
+          await writeFoldJournal(
+            record.bookDir,
+            folded.rewrites,
+            recovered.sentences,
+            stage1.characters,
+          );
+        } catch (journalErr) {
+          console.warn('[analysis] failed to write cast-merges journal', journalErr);
+        }
         if (phase1DriftExceeded) {
           log(
             1,
@@ -4444,6 +4487,18 @@ async function runSubsetAnalyzerJob(
         await writeJsonAtomic(manuscriptEditsJsonPath(record.bookDir), {
           sentences: subsetReconciled.sentences,
         });
+        /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
+           a journal failure must never fail the analysis persist. */
+        try {
+          await writeFoldJournal(
+            record.bookDir,
+            folded.rewrites,
+            recovered.sentences,
+            stage1.characters,
+          );
+        } catch (journalErr) {
+          console.warn('[analysis] failed to write cast-merges journal', journalErr);
+        }
         if (subsetDriftExceeded) {
           log(
             1,

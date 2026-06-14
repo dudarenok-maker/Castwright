@@ -22,6 +22,7 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
+import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { normaliseForMatch } from './analysis.js';
 import { makeBucket, MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
@@ -137,11 +138,16 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
   let editsTouched = false;
   let editsAfter: SentenceOutput[] | null = null;
+  /* srv-1 — chapter-qualified ids of the sentences this merge rewrites
+     source → target. Sentence ids are unique only within a chapter, so we
+     keep the chapterId alongside each id. */
+  const affected: Array<{ chapterId: number; sentenceId: number }> = [];
   if (edits?.sentences?.length) {
     let changed = 0;
     editsAfter = edits.sentences.map((s) => {
       if (s.characterId === sourceId) {
         changed += 1;
+        affected.push({ chapterId: s.chapterId, sentenceId: s.id });
         return { ...s, characterId: targetId };
       }
       return s;
@@ -215,6 +221,27 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
   }
   if (cacheTouched) {
     await saveAnalysisCache(state.manuscriptId, cache);
+  }
+
+  /* srv-1 — append this merge to the deterministic lineage journal so the
+     unlink-alias route can later surface exactly these sentences. Non-fatal:
+     cast.json / edits / cache already persisted above, so a journal failure
+     must never fail the merge (mirrors the reuse-link precedent). */
+  try {
+    const journal = await loadCastMerges(bookDir);
+    await saveCastMerges(
+      bookDir,
+      appendManualEntry(journal, {
+        ts: new Date().toISOString(),
+        kind: 'manual',
+        sourceId,
+        sourceName: source.name,
+        targetId,
+        affected,
+      }),
+    );
+  } catch (journalErr) {
+    console.warn('[cast-merge] failed to write cast-merges journal', journalErr);
   }
 
   console.log(
