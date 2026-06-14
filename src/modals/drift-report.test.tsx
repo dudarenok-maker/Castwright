@@ -624,6 +624,39 @@ describe('DriftReportModal — consolidated (book × character × snapshot) grou
     expect(screen.getAllByTestId(/^drift-group-/).length).toBeGreaterThanOrEqual(2);
   });
 
+  it('counts a chapter once when two different cast members drift in it', () => {
+    /* The Everblaze bug: chapter 5 drifts for BOTH Eliza and Sten — two
+       separate per-character groups. Pre-fix the header summed each group's
+       chapter list → "2 chapters flagged" for what is a single regeneration
+       (regenerating chapter 5 clears drift for all cast in it). Must read 1. */
+    render(
+      <DriftReportModal
+        groupsByBook={[
+          group([
+            makeEvent({
+              id: 'drift:book-A:5:eliza:voice',
+              characterId: 'eliza',
+              chapterId: 5,
+              snapshot: { voiceId: 'eliza-old', tone: { warmth: 40, pace: 50 }, attributes: [] },
+            }),
+            makeEvent({
+              id: 'drift:book-A:5:sten:voice',
+              characterId: 'sten',
+              chapterId: 5,
+              snapshot: { voiceId: 'sten-old', tone: { warmth: 60, pace: 50 }, attributes: [] },
+            }),
+          ]),
+        ]}
+        onClose={vi.fn()}
+        onRegenerateChapter={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    /* Header dedupes across characters → 1, even though there are 2 cards. */
+    expect(screen.getByText(/1 chapter flagged/)).toBeInTheDocument();
+    expect(screen.getAllByTestId(/^drift-group-/).length).toBeGreaterThanOrEqual(2);
+  });
+
   /* Regression for the Voice Drift Detector "duplicated chapter rows"
      bug — multi-factor events on the same chapter must collapse to one
      row in the chapter strip, and the header count must reflect unique
