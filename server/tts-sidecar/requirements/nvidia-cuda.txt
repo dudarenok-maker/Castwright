@@ -1,0 +1,42 @@
+# NVIDIA-CUDA overlay (Phase 1: the SOLE install path — equals today's set).
+# Pulls the vendor-neutral base, then the torch-engine deps. cpu/amd overlays
+# + profile-based selection are Phase 2.
+-r base.txt
+
+# Use the maintained Coqui fork (the original `TTS` package was discontinued
+# in early 2024 and won't install on Python >=3.12). `coqui-tts` keeps the
+# `from TTS.api import TTS` import surface and supports Python 3.10–3.13.
+# Pinned soft-floor to a recent stable; let pip pick the best 3.x compatible
+# wheel. The `[codec]` extra pulls torchcodec, which PyTorch 2.9+ requires
+# for audio I/O (the symbols `torchaudio.load`/`save` moved out of core).
+coqui-tts[codec]>=0.24.0
+
+# NOTE on DeepSpeed: not in requirements because its setup.py needs the
+# standalone NVIDIA CUDA Toolkit (with nvcc) at install time — the CUDA
+# runtime libraries that ship inside the PyTorch wheel aren't enough. On
+# Windows boxes without the toolkit, `pip install deepspeed` fails at
+# metadata-generation. If you have (or are willing to install) the CUDA
+# Toolkit from https://developer.nvidia.com/cuda-downloads, then:
+#   DS_BUILD_OPS=0 ./.venv/Scripts/python.exe -m pip install --no-build-isolation "deepspeed>=0.15,<0.16"
+# and set COQUI_DEEPSPEED=1 in server/.env. The sidecar already handles
+# both states — it logs a warning and continues in vanilla mode if
+# DeepSpeed isn't available.
+
+# Kokoro v1 — quality-tuned local TTS engine, eagerly loaded at sidecar startup.
+# The [gpu] extra pulls onnxruntime-gpu ONLY on x86_64 non-macOS (kokoro-onnx's
+# own platform marker); plain onnxruntime always comes from the core dep, so a
+# macOS / Apple Silicon install gets the CPU/CoreML runtime and `pip install`
+# succeeds. Run scripts/install-kokoro.{ps1,sh} once to fetch the model + voices
+# manifest into voices/kokoro/ (gitignored, ~330 MB).
+kokoro-onnx[gpu]>=0.4.0,<0.5.0
+
+# Qwen3-TTS — per-character bespoke voices via design -> clone -> cache ->
+# reuse (plan 108). NOT a fixed-voice catalog like Kokoro; voices are designed
+# from a persona once and reused for consistency. Pulls torch + soundfile.
+# Left unpinned here because the weights + exact wheel are fetched by
+# scripts/install-qwen3.mjs (a few GB, gitignored under voices/qwen/), not on a
+# plain `pip install -r`. NOTE: qwen-tts may pull a transformers newer than the
+# `<5.0` cap coqui-tts needs above — if pip reports a conflict at install time,
+# run the sidecar with EITHER Coqui OR Qwen in its venv, or pin transformers to
+# a version both accept (verified empirically when the model is downloaded).
+# qwen-tts
