@@ -76,6 +76,10 @@ New behaviour landed paired tests in the same waves (all run under `npm run test
 
 **CI does NOT run the sidecar pytest suite** — `run-tests.ps1` exits 0 with a SKIP banner when the venv is absent (always true on a runner), by design (sidecar validation = author-hardware acceptance). So the "pytest green on 3.12" check is an author-acceptance item (A0 below), not CI.
 
+**Residual-risk updates (post final-review):**
+- **reqHash-only-hashed-the-shim → FIXED** (commit `00a396ca`). `zip-validate` now computes `reqHash = computeReqHash([nvidia-cuda.txt, base.txt])` from the zip — byte-identical to the venv stamp's hash — so a future overlay/base pin edit triggers the upgrade pip-install, and `ctx.reqHash` no longer diverges from the stamp. A test proves a shim-only edit does NOT change the hash while an overlay/base edit does.
+- **Flash-attn → SDPA on 3.12 (benign, flag at acceptance):** the pinned FlashAttention-2 wheel is `cp311`-only, so on a 3.12 venv `install-qwen3.mjs` skips it and Qwen uses the SDPA attention backend. Correctly gated + tested; the only effect is that anyone who had opted into FA2 loses that speedup after the 3.12 move. Note it in the A-series acceptance so it isn't a surprise.
+
 ### Manual acceptance walkthrough — Phase 1 ship gate (author hardware, NO AMD)
 
 > Green unit tests are necessary but NOT sufficient. These are real runs on the author's hardware — the gate to ship the public-beta-enabling package. Record results here when run (live-GPU acceptance currently **owed**).
