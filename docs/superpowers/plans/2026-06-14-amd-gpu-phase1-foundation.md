@@ -26,7 +26,8 @@
 | `server/src/tts/venv-migration.test.ts` (create) | Vitest tests for the decision core + stamp I/O |
 | `server/tts-sidecar/requirements/{base,nvidia-cuda}.txt` (create) | Layered structure; `nvidia-cuda.txt` == today (regression fence). **`requirements.txt` → `-r requirements/nvidia-cuda.txt` is the SOLE install path** (R1: no profile-based overlay selection in Phase 1; no `cpu.txt`/`amd-rocm.txt` — those + selection are Phase 2). |
 | `server/tts-sidecar/scripts/bootstrap-venv.mjs` (modify) | Target Python 3.12; consult `decideVenvAction`; on mismatch → **detect-and-reinstall guidance**, never in-place rebuild. Stamps the **effective install profile (`'nvidia'`)** — Phase 1 does NOT select an overlay by hardware (R1). |
-| `server/src/upgrade/apply.ts` (modify) | Upgrade-path guard (R2): classify before `pipInstall`; on `needs-reinstall` (py mismatch) abort + signal reinstall, never pip into a 3.11 venv |
+| `server/src/upgrade/apply.ts` (modify) | Upgrade-path guard (R2): classify before `pipInstall`; on `needs-reinstall` (py mismatch) abort + signal reinstall, never pip into a 3.11 venv. Imports `classifyVenvState` from the pure `venv-migration.mjs` per the Task-0 mechanic (S1/S5). |
+| `server/tts-sidecar/python-tag.txt` (create) | Single source of truth for this release's required Python tag (`cp312`); read from the extracted `releaseDir` by the apply.ts guard (S2) — not hard-coded in the running old code |
 | `server/tts-sidecar/scripts/ensure-python312.mjs` (create) | Discover/auto-install/guide Python 3.12 for **fresh installs** |
 | `.github/workflows/*.yml` (modify) | Sidecar Python → 3.12 |
 | `docs/features/<N>-amd-gpu-support.md` + INDEX + BACKLOG (create/modify) | Regression plan (`status: active`) + backlog issue |
@@ -1008,12 +1009,14 @@ describe('decidePythonAcquisition', () => {
 
 ## Task 13: `bootstrap-venv.mjs` — target 3.12 + detect-and-reinstall (NO in-place rebuild)
 
-**Files:** Modify `server/tts-sidecar/scripts/bootstrap-venv.mjs`; extend `server/src/tts/bootstrap-venv-helpers.test.ts`. Add a pure helper `classifyVenvState` exported from `bootstrap-venv.mjs`.
+**Files:** Modify `server/tts-sidecar/scripts/venv-migration.mjs` (add the pure `classifyVenvState`), `server/tts-sidecar/scripts/bootstrap-venv.mjs` (consume it); extend `server/src/tts/venv-migration.test.ts` + `bootstrap-venv-helpers.test.ts`.
 
-- [ ] **Step 1: Write the failing test** (pure classifier — composes `readStamp`/`decideVenvAction` into the Phase-1 actions):
+> **S5:** `classifyVenvState` lives in the **pure `venv-migration.mjs`** (alongside `decideVenvAction`/`readStamp`), NOT in `bootstrap-venv.mjs`. Both `bootstrap-venv.mjs` AND `apply.ts` (Task 13B) import it from there — so `apply.ts` pulls in a pure decision module, not the bootstrap CLI module (simplifies the S1 import too).
+
+- [ ] **Step 1: Write the failing test** in `venv-migration.test.ts` (pure classifier — composes `readStamp`/`decideVenvAction` into the Phase-1 actions):
 
 ```ts
-import { classifyVenvState } from '../../tts-sidecar/scripts/bootstrap-venv.mjs';
+import { classifyVenvState } from '../../tts-sidecar/scripts/venv-migration.mjs';
 
 const required = { pythonTag: 'cp312', profile: 'nvidia', reqHash: 'h' };
 describe('classifyVenvState (Phase 1: detect-and-reinstall, no rebuild)', () => {
@@ -1033,7 +1036,7 @@ describe('classifyVenvState (Phase 1: detect-and-reinstall, no rebuild)', () => 
 });
 ```
 
-- [ ] **Step 2–4:** run-fail; implement `classifyVenvState` (maps `decideVenvAction`'s `rebuild` → **`needs-reinstall`** in Phase 1, never an in-place teardown). Wire `main()`:
+- [ ] **Step 2–4:** run-fail; implement `classifyVenvState` **in `venv-migration.mjs`** (maps `decideVenvAction`'s `rebuild` → **`needs-reinstall`** in Phase 1, never an in-place teardown; `!venvExists` → `fresh-bootstrap`). Then in `bootstrap-venv.mjs` import it and wire `main()`:
   - **fresh-bootstrap** builds a **3.12** venv (python from `ensure-python312`), `pip install -r requirements.txt` (the nvidia-cuda shim — the SOLE path, R1), then writes `.venv-stamp.json` with `{ pythonTag: 'cp312', profile: 'nvidia', reqHash: computeReqHash([<nvidia-cuda.txt text>, <base.txt text>]), builtVersion }`. **`profile` is the EFFECTIVE install ('nvidia'), not the detected vendor** — Phase 1 does not select an overlay by hardware, so the stamp records what was actually built (keeps `decideVenvAction` predictable; detection lands unit-tested but unconsumed by the install path until Phase 2).
   - **needs-reinstall** → print the reinstall guidance + exit non-zero, **without touching the venv**.
   - **pip-in-place** / **noop** → as today.
@@ -1074,7 +1077,10 @@ it('still pip-installs in place when pythonTag matches and reqHash changed', asy
 
 - [ ] **Step 2: Run** `npm --prefix server run test -- upgrade/apply` → FAIL.
 
-- [ ] **Step 3: Implement** — add a `'needs-reinstall'` value to `ApplyPhase`; in `applyUpgrade`, after `npm-ci` and before `pip-install`, read the shared-venv stamp (via a new injected `readStamp` step) and run `classifyVenvState` (imported from `bootstrap-venv.mjs` per the Task-0 mechanic). On `needs-reinstall`: return `{ ok: false, phase: 'needs-reinstall', … }` **without** `pipInstall` or `flipPointer` (the old release stays current); the caller surfaces the reinstall message (Section 6 UX). Other classifications proceed as today.
+- [ ] **Step 3: Implement.** Add a `'needs-reinstall'` value to `ApplyPhase`; in `applyUpgrade`, after `npm-ci` and before `pip-install`, read the shared-venv stamp (via a new injected `readStamp` step) and run `classifyVenvState`. On `needs-reinstall`: return `{ ok: false, phase: 'needs-reinstall', … }` **without** `pipInstall` or `flipPointer` (old release stays current); the caller surfaces the reinstall message (Section 6 UX). Other classifications proceed as today.
+  - **S1 — import mechanic (contingent on Task 0):** import `classifyVenvState`/`readStamp` from the pure `venv-migration.mjs` (S5). Use whatever Task 0 found works for server→`.mjs` at runtime: a **static `import`** if `server/dist` is ESM, else a **dynamic `await import(...)`** inside the (already-async) `applyUpgrade`/`createApplySteps`. If neither is clean, fall back to a **~5-line TS re-impl of the classify** in `apply.ts` (it's a trivial pure mapping) — do NOT block on the import.
+  - **S2 — source of the required `pythonTag`:** the candidate release must declare what Python it needs. Read a `PYTHON_TAG` constant shipped *inside the extracted release* (e.g. a small `server/tts-sidecar/python-tag.txt` or an exported const in `venv-migration.mjs` of that release) from `releaseDir` — NOT a hard-coded `'cp312'` in the running (old) code. So the guard compares "the stamp's pythonTag" vs "the candidate release's declared pythonTag." Add `python-tag.txt` (or the const) as a Phase-1 shipped file.
+  - **S3 — shared reqHash:** when this path needs a reqHash (the `pip-in-place` vs `noop` branch), compute it with the **same `computeReqHash` over the same resolved overlay text** that `bootstrap-venv.mjs` uses — one shared helper, never reimplemented, or the two paths' decisions diverge.
 
 - [ ] **Step 4: Run** → PASS. **Step 5: Commit** `feat(server): apply.ts refuses 3.11->3.12 self-upgrade, signals reinstall (phase 1)`.
 
