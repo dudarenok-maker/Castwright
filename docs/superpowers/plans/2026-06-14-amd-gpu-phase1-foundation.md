@@ -1069,9 +1069,11 @@ it('still pip-installs in place when pythonTag matches and reqHash changed', asy
 
 ## Task 14: CI sidecar Python → 3.12
 
-**Files:** `.github/workflows/verify.yml`, `cross-os.yml`, `release.yml` (sidecar setup steps).
+**Files:** none — **NO-OP (corrected during execution).**
 
-- [ ] **Step 1:** set the sidecar Python to 3.12 in each workflow's sidecar setup. **Step 2:** run `npm run test:sidecar` locally on a 3.12 venv to confirm the existing pytest suite is green on 3.12. **Step 3: Commit** `chore(sidecar): CI sidecar Python → 3.12 (phase 1)`.
+> **Finding:** CI has **no sidecar Python setup at all** — no `setup-python`, no venv bootstrap, in any workflow. The sidecar pytest suite is *intentionally skipped* in CI (`run-tests.ps1` exits 0 with a SKIP banner when the venv is absent, which it always is on a runner; the workflows' own comments document this). So there is no CI Python version to bump. Adding a real `setup-python` + venv-bootstrap + heavy-ML-dep CI leg would be scope creep that contradicts the design (sidecar validation = author-hardware acceptance, not CI). **No edit, no commit.**
+>
+> The "pytest green on 3.12" check therefore moves to **Task 17 acceptance** (author runs `npm run test:sidecar` on a 3.12 venv). Record in the regression plan (Task 16) that CI skips the sidecar suite by design.
 
 ---
 
@@ -1098,6 +1100,7 @@ it('still pip-installs in place when pythonTag matches and reqHash changed', asy
 
 > Green unit tests are necessary but NOT sufficient — these are real runs on the author's hardware. This is the gate to ship the public-beta-enabling package.
 
+- [ ] **A0. Sidecar pytest green on Python 3.12:** on a bootstrapped 3.12 venv, `npm run test:sidecar` passes (the existing suite must survive the 3.11→3.12 bump). CI skips this by design (Task 14 finding), so it's verified here.
 - [ ] **A. Fresh install on 3.12 — NVIDIA:** clean install builds a 3.12 venv, pulls latest PyPI torch, and synthesises a chapter (Kokoro + a Qwen design). `/health` reports `cuda`.
 - [ ] **B. Fresh install on 3.12 — CPU-only box:** installs, synthesises (Kokoro CPU). `/health` reports `cpu`.
 - [ ] **C. Fresh install on 3.12 — macOS/Apple-Silicon:** installs, synthesises (Qwen on `mps`, Kokoro CPU). mps path unchanged.
