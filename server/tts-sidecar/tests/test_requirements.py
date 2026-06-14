@@ -1,14 +1,39 @@
 """Lock the onnxruntime dependency strategy: the GPU runtime must be pulled via
 kokoro-onnx's platform-gated [gpu] extra, NOT a bare unmarked onnxruntime-gpu
-line (which has no macOS wheel and aborts `pip install` on Apple Silicon)."""
+line (which has no macOS wheel and aborts `pip install` on Apple Silicon).
+
+requirements.txt is a layered structure (a shim that `-r`-includes
+requirements/nvidia-cuda.txt, which `-r`-includes requirements/base.txt), so the
+checks below resolve the `-r` include chain and assert against the flattened
+dependency set — independent of which overlay file a line happens to live in."""
 from pathlib import Path
 
 REQ = Path(__file__).resolve().parent.parent / "requirements.txt"
 
 
+def _resolve(path, seen=None):
+    """Flatten a requirements file, following `-r <relative>` includes, into the
+    list of dependency lines (comments/blank stripped). Relative `-r` paths
+    resolve against the including file's directory, as pip does."""
+    seen = set() if seen is None else seen
+    path = path.resolve()
+    if path in seen:
+        return []
+    seen.add(path)
+    out = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("-r "):
+            out.extend(_resolve(path.parent / line[3:].strip(), seen))
+        else:
+            out.append(line)
+    return out
+
+
 def _lines():
-    return [l.strip() for l in REQ.read_text(encoding="utf-8").splitlines()
-            if l.strip() and not l.strip().startswith("#")]
+    return _resolve(REQ)
 
 
 def test_kokoro_uses_gpu_extra():
