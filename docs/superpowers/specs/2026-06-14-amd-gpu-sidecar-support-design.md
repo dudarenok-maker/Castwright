@@ -189,44 +189,49 @@ no longer waits for AMD** (see the revised sequencing below).
 
 ## Delivery sequencing (REVISED — ship the 3.12 migration NOW, AMD as a follow-up)
 
-**Decision (supersedes the earlier A2 "ship the tax only with the benefit" cut).** The beta
-is shipping packages regularly, and we *know* 3.12 is needed eventually (for AMD). Rather
-than force every beta user through the venv migration *later* as a one-off, we **fold it into
-the next package now**, while the beta is small and users already accept churn. Two wins:
-1. **Each beta user migrates to 3.12 exactly once, now** — no second forced upgrade when AMD
-   lands (AMD then changes nothing for existing users: `pythonTag` stays `cp312` and their
-   `profile` stays `nvidia`/`cpu`/`apple`, so `decideVenvAction` returns `noop`/`pip-in-place`
-   on the AMD-release upgrade — **no re-rebuild**).
-2. **The risky migration code is battle-tested on the FRIENDLY path first** — the author can
-   fully verify the 3.12 + latest-torch rebuild on real NVIDIA/CPU/mac hardware (no AMD box
-   needed) before AMD complexity is layered on.
+**Decision (supersedes the earlier A2 "ship the tax only with the benefit" cut).** **Public
+beta is gated on Phase 1.** So Phase 1 ships the Python-3.12 transition to the **small,
+coordinated alpha cohort** (who upgrade once, via detect-and-reinstall), and **everyone in
+public beta installs fresh on 3.12 from day one** — they never run a migration. Three wins:
+1. **The upgrade/migration blast radius shrinks to a handful of friendly testers** — the
+   public-beta majority gets the simple fresh-install path. This is what lets us drop the
+   in-place rebuild entirely (Section 2) and use detect-and-reinstall (v1.6.0 precedent).
+2. **No second forced migration when AMD lands** — AMD changes nothing for existing users:
+   `pythonTag` stays `cp312`, `profile` stays `nvidia`/`cpu`/`apple` → `decideVenvAction`
+   returns `noop`/`pip-in-place` on the AMD-release upgrade.
+3. **The 3.12 + latest-torch stack is shaken out on the FRIENDLY path first** — fully
+   author-verifiable on real NVIDIA/CPU/mac hardware before AMD complexity is layered on.
 
-*Why this reverses A2 honestly:* A2's premise was that the migration is a standalone tax with
-no user benefit until AMD. That premise changes when the migration is amortised into ongoing
-beta packaging AND decoupling de-risks it. The cost — the migration ships as the headline
-change of a release affecting everyone — is acceptable **only because it is fully
-author-verifiable on the friendly path**; so Phase 1 acceptance must prove the NVIDIA/CPU/mac
-rebuild end-to-end before release.
+*Why this reverses A2 honestly:* A2's premise was a standalone migration tax forced on a large
+base. Public-beta-gating removes the "large base" entirely (majority = fresh installs), and
+detect-and-reinstall removes the "risky in-place rebuild." What remains for Phase 1 is small
+and friendly. **Two consequences to own:** (a) Phase 1 is now on the **public-beta-launch
+critical path** — the launch waits on it landing + its acceptance; (b) **AMD-owning public-beta
+users get CPU fallback until the Phase 2 follow-up** — acceptable for best-effort AMD, but a
+known, communicated launch limitation.
 
 - **Phase 1 — Python 3.12 + NVIDIA latest + the venv migration (SHIP in the next package; no
   AMD; author-verifiable):**
   - The **resolver + detection** (`accelerator-profile.mjs`) — **consumed** for profile
     resolution; on existing hardware it resolves to `nvidia`/`cpu`/`apple` (today's behavior).
     AMD branches exist but are unreachable (no `amd-rocm` overlay shipped yet).
-  - The **migration core + its live wiring**: `bootstrap-venv.mjs` + `apply.ts` consume the
-    three-way decision; the **resumable rebuild stage** (A3), `migration-in-progress` marker +
-    resume-on-boot, build-`.venv-next`-then-swap, disk pre-flight abort, `.venv-prev` rollback.
+  - The **stamp + three-way decision** (`venv-migration.mjs`, pure, unit-tested) wired into
+    `bootstrap-venv.mjs` + the upgrade detect path — but as **detect-and-reinstall, NOT an
+    in-place rebuild**: a `pythonTag` mismatch / no-stamp → refuse the auto-upgrade and guide
+    a **fresh reinstall** (v1.6.0-style). **No resumable `apply.ts` surgery, no atomic swap, no
+    mid-upgrade Python auto-install** — that highest-risk code is OUT of Phase 1.
   - The **requirements restructure** for NVIDIA/CPU only (`base.txt` + `nvidia-cuda.txt` ==
     today + `cpu.txt`); `reqHash` over resolved-overlay text. **No `amd-rocm.txt`.**
-  - **Flip the sidecar to Python 3.12** (the trigger) → NVIDIA/CPU/mac torch resolves to the
-    **PyPI latest** on the rebuild (no pin); Python-3.12 acquisition (auto-install + guided
-    fallback, H3); CI → 3.12.
-  - The **migration UX prompt + progress** (Section 6). `/health` `rocm`/`directml` enum may
-    land here **dormant** (no engine emits them yet) to avoid a second sidecar touch later.
-  - **Acceptance (author, no AMD):** fresh install + **upgrade-from-v1.7.0 on NVIDIA, CPU, and
-    macOS** — one prompt, atomic rebuild, books/voices intact, ends on 3.12 + latest torch;
-    failed/aborted rebuild leaves v1.7.0 working; resumable across relaunch. This is the gate
-    to ship Phase 1.
+  - **Sidecar bootstrap targets Python 3.12** (fresh installs build a 3.12 venv) → NVIDIA/CPU/
+    mac torch resolves to **PyPI latest** (no pin); Python-3.12 acquisition for fresh installs
+    (auto-install + guided fallback, H3); CI → 3.12.
+  - The **"needs reinstall" UX** for the alpha-upgrade path (Section 6). `/health`
+    `rocm`/`directml` enum may land here **dormant** to avoid a second sidecar touch later.
+  - **Acceptance (author, no AMD) — the ship gate:** (a) **fresh install on 3.12** synthesises
+    on NVIDIA, CPU, and macOS; (b) the **alpha detect-and-reinstall path** shows the reinstall
+    guidance and a fresh reinstall **preserves all user content** (the verified
+    external-`WORKSPACE_DIR` gate, Section 2 §4). Green unit tests are necessary but NOT
+    sufficient — these three real runs are the gate.
 - **Spike — Section 0** (S0.1–S0.4) runs in parallel; gates Phase 2 only.
 - **Phase 2 — AMD cohort (follow-up SMALL release; gated on 🔴 on-AMD acceptance):**
   - Adds the **`amd-rocm` overlay**, the **ROCm torch pre-install** (pinned wheels), the
@@ -340,74 +345,52 @@ not `.ts`). The whole matrix is unit-testable with zero AMD hardware.
 
 Resolved profile + torch spec are logged at install and at sidecar boot.
 
-## Section 2 — Venv lifecycle & the open-beta upgrade migration
+## Section 2 — Venv lifecycle: detect-and-reinstall (Phase 1); in-place rebuild deferred
 
-**The problem:** the self-upgrade (`server/src/upgrade/apply.ts`) reuses **one shared
-venv** and only `pip install`s when the requirements hash changes (`.req-hash` gate,
-`apply.ts:77`). A venv is bound to the Python it was created with, so a v1.7.0
-(Python 3.11) box upgrading to v1.8.0 would pip-install into a 3.11 interpreter →
-failure. There is **no path to change the interpreter**, and `bootstrap-venv.mjs` is
-idempotent on existence alone (`bootstrap-venv.mjs:62`).
+**The problem:** the self-upgrade (`server/src/upgrade/apply.ts`) reuses **one shared venv**
+and only `pip install`s when the requirements hash changes (`apply.ts:77`). A venv is bound to
+the Python it was created with, so a v1.7.0 (Python 3.11) box can't be pip-upgraded into 3.12;
+`bootstrap-venv.mjs` is idempotent on existence alone (`bootstrap-venv.mjs:62`).
 
-**Goals:** automatic, atomic, **never destroys a working environment**, preserves model
-weights, communicates honestly. One prompt, no manual venv commands.
+**Strategic reframe (public beta gated on Phase 1):** because public beta is gated on this
+work, only a **tiny, coordinated alpha cohort** ever hits the *upgrade* path — **everyone in
+public beta installs fresh on 3.12 from the start** and never touches migration code. With
+that blast radius, we **do NOT build the seamless in-place venv rebuild** for the 3.12
+transition. Instead we follow the existing **v1.6.0 precedent** ("cannot self-upgrade across
+the change — alpha installs reinstall fresh", per CLAUDE.md):
 
-1. **Stamp the venv.** `.venv-stamp.json` in the venv dir: `{ pythonTag, profile,
-   reqHash, builtVersion }`. **Missing stamp (a v1.7.0 venv has `.req-hash` but no
-   stamp) ⇒ treat as mismatch ⇒ rebuild (M2).**
-2. **Three-way decision** — the **pure, Phase-1 unit-tested core** (a function, no I/O),
-   consumed by both trigger paths below:
-   - `pythonTag` or `profile` mismatch (or no stamp) → **full teardown + rebuild**.
+1. **Stamp the venv.** `.venv-stamp.json` in the venv dir: `{ pythonTag, profile, reqHash,
+   builtVersion }`. **Missing stamp (a v1.7.0 venv) ⇒ treated as a mismatch (M2).**
+2. **Three-way decision** — the **pure, unit-tested core** (a function, no I/O):
+   - `pythonTag` or `profile` mismatch (or no stamp) → **needs-reinstall** (Phase 1) /
+     rebuild (deferred — see below).
    - `reqHash` changed only → **pip install in place** (today's behavior).
    - all match → **no-op**.
-   - **`reqHash` is computed over the concatenated *text* of the resolved overlay + its
-     `-r base.txt` (H2/A9)** — i.e. the requirements *file contents*, not a pip-resolved
-     dependency tree (same fidelity as today's single-file hash, just multi-file). Not the
-     static root shim.
-3. **Build-new-then-swap (atomicity, mirrors the release-dir pattern) — the pure ordering
-   is Phase-1 tested; live wiring is Phase 2:**
-   - **Pre-flight (a):** locate a suitable Python 3.12 (Section 3); if none and
-     auto-install fails → **stop before touching anything**; old venv intact.
-   - **Pre-flight (b) disk check (M3/N1/A6):** the transient peak is **three** venvs —
-     `.venv` (current) + `.venv-next` (building) + `.venv-prev` (retained after swap) ≈
-     **3× venv size (~7 GB)**. Require that headroom up front; **if tight, ABORT with a
-     clear "free N GB and retry" — never teardown-then-build.** The "never destroy a working
-     environment" guarantee is absolute.
-   - Build `.venv-next`, pip-install, **smoke-check with a timeout** (imports torch within N
-     seconds, reports expected backend; Kokoro DML self-test only per Section 4). A
-     smoke-check failure/timeout **aborts the migration and leaves the old venv in place** —
-     it never silently swaps in an unverified venv.
-   - On green only: atomically swap `.venv-next` → `.venv` and keep the old as `.venv-prev`.
-   - **`.venv-prev` lifecycle:** deleted on the **next** successful boot that confirms
-     `.venv` imports cleanly (rollback window = one boot), so disk returns to 1× promptly.
-4. **Weights preserved** — `voices/` lives outside the venv; rebuild re-fetches pip
-   packages (torch ~2–2.5 GB) but **not** the multi-GB model weights.
-5. **One honest prompt** (Section 6), then automatic progress.
+   - `reqHash` is the concatenated *text* of the resolved overlay + `-r base.txt` (H2/A9).
+3. **Detect-and-reinstall (Phase 1, the 3.12 transition):** on a `pythonTag` mismatch / no
+   stamp, the app **does NOT attempt an in-place rebuild**. It **refuses the auto-pip-upgrade
+   and surfaces a clear "this version needs a fresh reinstall" message + link** (Section 6),
+   exactly like v1.6.0. A **fresh install** simply has `bootstrap-venv.mjs` build a 3.12 venv
+   from scratch (the simple, well-trodden path the public-beta majority runs).
+4. **Data is preserved across reinstall — VERIFIED, not assumed.** User content (books,
+   `cast.json`, designed voices, queue, telemetry) lives under `WORKSPACE_ROOT`, which the
+   **packaged build must point OUTSIDE the versioned install** via `WORKSPACE_DIR` /
+   `workspaceDirOverride` (the dev default resolves relative to `server/`, so the *packaged*
+   config is what matters). **Phase-1 acceptance VERIFIES** a reinstall preserves all user
+   content — data loss is unforgiving, so this is a hard gate, not a footnote.
 
-**Two trigger paths (both consume the pure core above; both are Phase 2):**
+**Deferred to Phase 2 — the in-place rebuild (build-new-then-swap), only if the AMD runtime
+profile-switch needs it:** the one place "reinstall" is poor UX is toggling `ACCELERATOR`
+nvidia↔amd at runtime. *If* Phase 2 implements a seamless profile-switch (vs. "switching
+profiles needs a re-setup"), it builds the atomic machinery THEN — `.venv-next` build →
+timeout smoke-check → atomic swap → `.venv-prev` rollback (one-boot window) → 3× disk
+pre-flight that **aborts** rather than teardown-then-build (N1) — coordinated with the
+`design-lock` busy registry so it never tears down a venv under a running job (A8). **None of
+this is in Phase 1.** Cutting it removes the single highest-risk, highest-complexity chunk
+from the public-beta-gating critical path.
 
-- **(i) Self-upgrade (`apply.ts`) — a resumable, multi-stage upgrade (A3).** Today's flow is
-  single-shot (extract → npmCi → pipInstall → flip → restart). The migration inserts a
-  **rebuild stage before the flip**: extract → npmCi → **[ensure py3.12 → build `.venv-next`
-  → smoke → swap]** → flip → restart. Because an auto-installed Python 3.12 is typically not
-  on the running process's PATH and may need UAC (H3), the rebuild stage can **pause**: it
-  writes a `migration-in-progress` marker, asks the user to relaunch, and on next boot the
-  server **detects the marker and resumes** the rebuild. **The pointer is flipped only after
-  the rebuild + smoke-check succeed**, so a failed/aborted migration always leaves the
-  prior release + its working venv current.
-- **(ii) Runtime profile switch (A7/A8) — a separate, NON-upgrade flow.** Flipping
-  `ACCELERATOR` via the wizard/#advanced changes the `profile`, which the three-way decision
-  sees as a mismatch → rebuild. This is **not** an upgrade, so it does **not** go through
-  `apply.ts`; it is a dedicated server action. **It MUST coordinate with in-flight work:**
-  before tearing anything down it checks the existing generation/voice-design busy registry
-  (`design-lock`) and **refuses (or queues until idle)** if a job is running — tearing down
-  `.venv` under a live sidecar would crash the job. After a green swap it restarts the
-  sidecar with the new venv.
-
-**Risk acknowledgment (H4):** unify-on-3.12 forces *every existing NVIDIA beta user*
-through this rebuild — the highest-risk new code, imposed on the users the feature does
-not benefit. Accepted deliberately (single-version maintenance > one-time rebuild cost),
-but it raises the bar on the migration's test coverage and the rollback guarantee.
+**Model weights** (`voices/`) live outside the venv regardless, so neither reinstall nor a
+future rebuild re-downloads them.
 
 ## Section 3 — Install layer
 
@@ -567,11 +550,12 @@ hardware-bound rest is an explicit owed acceptance matrix.
 | C3 (downgraded) | ~~Version skew we manage~~ — corrected: we don't pin NVIDIA torch (PyPI default, ~2.9); only AMD's ROCm 2.8-alpha wheel is pinned. Real residue = does coqui-tts/qwen-tts work on the ROCm 2.8 alpha | **S0.2 spike** (AMD-side compat check only); drop Coqui from AMD if incompatible (N8) |
 | H1 | `onnxruntime` + `onnxruntime-directml` double-install conflict | S0.3 recipe; `--no-deps` / uninstall-then-install ordering encoded in `ortInstallSteps` |
 | H2 | Static root-shim reqHash misses overlay changes | Hash the resolved overlay's transitive content |
-| H3 | Windows Python auto-install needs UAC + PATH refresh | Install → relaunch → resume; guided fallback on winget-less editions |
-| H4 | Migration taxes the verified NVIDIA majority; riskiest code | Atomic build-new-then-swap; rollback; heavy migration test coverage |
+| H3 | Windows Python auto-install needs UAC + PATH refresh | Fresh-install path only (Phase 1); guided fallback on winget-less editions. (No mid-upgrade auto-install — detect-and-reinstall.) |
+| H4 (resolved) | ~~Migration taxes the verified majority; riskiest code~~ | **Neutralized:** public-beta-gating → majority installs fresh; alpha cohort uses **detect-and-reinstall** (v1.6.0 precedent). The in-place rebuild is OUT of Phase 1. |
 | M1/N6 | Dual-GPU mis-detection | NVIDIA-present-wins priority rule (generalized), pinned in S0.4 |
-| M2 | Missing-stamp v1.7.0 venv | No stamp ⇒ rebuild |
-| M3/N1 | `.venv-prev` doubles disk | Disk pre-flight; **abort if tight (never teardown-then-build)** — atomicity is absolute |
+| M2 | Missing-stamp v1.7.0 venv | No stamp ⇒ needs-reinstall (Phase 1) |
+| M3/N1/A3/A6 (deferred) | `.venv-prev` disk / resumable upgrade / atomic swap | **Deferred to Phase 2** (only if the AMD profile-switch needs an in-place rebuild). Not in Phase 1. |
+| DATA | Reinstall could lose user content | **Phase-1 acceptance VERIFIES** packaged `WORKSPACE_DIR` is external to the install → reinstall preserves books/voices |
 | M4 | AMD slower than NVIDIA even when working | Set expectation in UI ("experimental"); no flash-attn/DeepSpeed on AMD |
 | N2 | Second Kokoro model artifact + selection | Prefer a single corrected model shipped to ALL profiles (re-pin hash); two artifacts explicitly rejected |
 | N3 | DML self-test latency / driver hang per boot | Cached + engine-conditional; lazy on first DML load, re-run only on profile/driver change |
@@ -590,18 +574,27 @@ hardware-bound rest is an explicit owed acceptance matrix.
 - `rocm-smi` dev-box contention probe.
 - Apple/mps behavior changes — named for completeness, untouched.
 
-## Acceptance (owed — requires an AMD-owning tester)
+## Acceptance
+
+### Phase 1 — author-verifiable, NO AMD hardware (the public-beta ship gate)
+
+- [ ] **Fresh install on 3.12** synthesises end-to-end on **NVIDIA**, **CPU**, and **macOS**
+      (latest PyPI torch).
+- [ ] **Alpha detect-and-reinstall path:** a v1.7.0 (3.11) install is detected as needing a
+      reinstall, shows the clear guidance (no in-place rebuild attempted), and a **fresh
+      reinstall preserves all user content** (books, `cast.json`, designed voices) — the
+      external-`WORKSPACE_DIR` data gate.
+- [ ] **Python-3.12-absent box (fresh install):** auto-install (or guided fallback + relaunch)
+      lands a working 3.12 venv.
+- [ ] Dual-GPU box (AMD iGPU + NVIDIA dGPU): resolves to NVIDIA by default (CPU/NVIDIA only —
+      no AMD path shipped yet).
+
+### Phase 2 — owed, requires an AMD-owning tester
 
 - [ ] AMD-Windows fresh install: Qwen/Coqui report ROCm in /about and generate audio;
       Kokoro reports DirectML **if S0.1 passed**, else CPU (honestly).
 - [ ] AMD-Linux fresh install: Qwen/Coqui=ROCm, Kokoro=CPU.
-- [ ] Upgrade from v1.7.0 on an **NVIDIA** box: one prompt, automatic atomic rebuild,
-      books + designed voices intact, ends on Python 3.12; failed/aborted rebuild leaves
-      v1.7.0 working; resumable across a relaunch.
-- [ ] Upgrade from v1.7.0 on **macOS/Apple-Silicon** (A13): same migration succeeds; mps
-      path unchanged afterwards.
-- [ ] Python-3.12-absent box: auto-install (or guided fallback + relaunch) works; the
-      working install is never broken mid-flight.
-- [ ] Dual-GPU box (AMD iGPU + NVIDIA dGPU): resolves to NVIDIA by default.
-- [ ] Override: `ACCELERATOR=cpu` on an AMD box triggers a rebuild **and refuses while a
-      generation/design job is running (A8)**, then reports CPU after the swap.
+- [ ] AMD release upgrade on an existing NVIDIA install: **forces NO migration** (`noop`/
+      `pip-in-place`), books/voices untouched.
+- [ ] Override / profile switch: `ACCELERATOR=amd` triggers the (job-coordinated) profile
+      re-setup; reports the AMD backends after.
