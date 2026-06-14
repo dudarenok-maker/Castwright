@@ -36,7 +36,7 @@ describe('VenvBootstrap', () => {
     const b = new VenvBootstrap({
       repoRoot: '/repo',
       detectVenvFn: () => true,
-      findPythonFn: () => ({ cmd: 'python3.11', args: [] }),
+      findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
       spawnFn: () => {
         spawned++;
         return makeFakeChild(0) as never;
@@ -53,7 +53,7 @@ describe('VenvBootstrap', () => {
     const b = new VenvBootstrap({
       repoRoot: '/repo',
       detectVenvFn: () => false,
-      findPythonFn: () => ({ cmd: 'py', args: ['-3.11'] }),
+      findPythonFn: () => ({ cmd: 'py', args: ['-3.12'] }),
       spawnFn: () => {
         spawned++;
         return makeFakeChild(0, { stdout: '[bootstrap-venv] creating venv\n' }) as never;
@@ -69,7 +69,7 @@ describe('VenvBootstrap', () => {
     // (final step may be overwritten, but spawn happened)
   });
 
-  it('venv absent + NO python → job status error with "Python 3.11" in error, NO spawn', async () => {
+  it('venv absent + NO python → job status error with "Python 3.12" + ensure-python312 in error, NO spawn', async () => {
     let spawned = 0;
     const b = new VenvBootstrap({
       repoRoot: '/repo',
@@ -83,7 +83,8 @@ describe('VenvBootstrap', () => {
     const job = b.start();
     await until(() => b.getJob(job.id)?.status === 'error');
     expect(b.getJob(job.id)?.status).toBe('error');
-    expect(b.getJob(job.id)?.error).toMatch(/Python 3\.11/);
+    expect(b.getJob(job.id)?.error).toMatch(/Python 3\.12/);
+    expect(b.getJob(job.id)?.error).toMatch(/ensure-python312/);
     expect(spawned).toBe(0);
   });
 
@@ -91,7 +92,7 @@ describe('VenvBootstrap', () => {
     const b = new VenvBootstrap({
       repoRoot: '/repo',
       detectVenvFn: () => false,
-      findPythonFn: () => ({ cmd: 'py', args: ['-3.11'] }),
+      findPythonFn: () => ({ cmd: 'py', args: ['-3.12'] }),
       spawnFn: () =>
         makeFakeChild(0, { stdout: '[bootstrap-venv] creating venv\n' }) as never,
     });
@@ -110,7 +111,7 @@ describe('VenvBootstrap', () => {
     const b = new VenvBootstrap({
       repoRoot: '/repo',
       detectVenvFn: () => false,
-      findPythonFn: () => ({ cmd: 'py', args: ['-3.11'] }),
+      findPythonFn: () => ({ cmd: 'py', args: ['-3.12'] }),
       spawnFn: () =>
         makeFakeChild(1, { stderr: 'ERROR: pip install failed\n' }) as never,
     });
@@ -124,7 +125,7 @@ describe('VenvBootstrap', () => {
     const bPresent = new VenvBootstrap({
       repoRoot: '/repo',
       detectVenvFn: () => true,
-      findPythonFn: () => ({ cmd: 'py', args: ['-3.11'] }),
+      findPythonFn: () => ({ cmd: 'py', args: ['-3.12'] }),
     });
     const result = await bPresent.detect();
     expect(result.venvPresent).toBe(true);
@@ -149,7 +150,7 @@ describe('VenvBootstrap', () => {
     const b = new VenvBootstrap({
       repoRoot: '/repo',
       detectVenvFn: () => venvPresent,
-      findPythonFn: () => ({ cmd: 'py', args: ['-3.11'] }),
+      findPythonFn: () => ({ cmd: 'py', args: ['-3.12'] }),
       spawnFn: () => makeFakeChild(0) as never,
     });
     // detectVenvFn always false → exit 0 but post-check false → error

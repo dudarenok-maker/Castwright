@@ -1,7 +1,7 @@
 /* In-app venv bootstrap (fs-21 decision Z). Spawns
  * server/tts-sidecar/scripts/bootstrap-venv.mjs and surfaces its
  * `[bootstrap-venv]` step lines so a deployer can bootstrap the Python venv
- * from Account → Models without a terminal. When Python 3.11 is not found,
+ * from Account → Models without a terminal. When Python 3.12 is not found,
  * the job immediately fails with per-OS manual instructions (no spawn).
  *
  * State machine:
@@ -9,8 +9,13 @@
  *               └─ error ↗
  *
  * Venv state is BINARY: either present (`present`) or absent (`absent`).
- * Detection is two-pronged: venv presence on disk + Python 3.11 reachability.
+ * Detection is two-pronged: venv presence on disk + Python 3.12 reachability.
  * No Python → immediate `error` with manual instructions; no spawn attempted.
+ *
+ * Phase 1 pins the sidecar to Python 3.12 (python-tag.txt = cp312). The finder
+ * accepts ONLY 3.12, so a fresh install builds a cp312 venv whose stamp matches
+ * — the next detect/classify returns noop, not the needs-reinstall loop a 3.11
+ * venv would cause.
  *
  * Dependency-injectable (`spawnFn`, `detectVenvFn`, `findPythonFn`) so the
  * vitest harness runs the whole machine offline with no real Python spawn.
@@ -19,7 +24,7 @@
 import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
-import { findPython311 } from './python-discovery.js';
+import { findPython312 } from './python-discovery.js';
 
 export type VenvBootstrapState = 'present' | 'absent';
 
@@ -47,15 +52,20 @@ export interface VenvBootstrapOptions {
   spawnFn?: VenvSpawnFn;
   /** Stubbable venv-presence probe (offline tests). Defaults to sidecarVenvPresent. */
   detectVenvFn?: (repoRoot: string) => boolean;
-  /** Stubbable Python 3.11 finder (offline tests). Defaults to findPython311. */
+  /** Stubbable Python 3.12 finder (offline tests). Defaults to findPython312. */
   findPythonFn?: () => { cmd: string; args: string[] } | null;
 }
 
-/** Canonical degrade instructions for missing Python (decision Z). */
+/** Canonical degrade instructions for missing Python (decision Z). Phase 1
+    requires EXACTLY Python 3.12 — `node server/tts-sidecar/scripts/ensure-python312.mjs`
+    auto-installs it (winget on Windows) or prints package-manager guidance. */
 const NO_PYTHON_INSTRUCTIONS =
-  'No Python 3.11 found. Install Python 3.11, then run:\n' +
+  'No Python 3.12 found (the sidecar requires exactly 3.12). The quickest path is:\n' +
+  '  node server/tts-sidecar/scripts/ensure-python312.mjs\n' +
+  '  (auto-installs 3.12 via winget on Windows, or prints package-manager guidance)\n' +
+  'Or install Python 3.12 from https://www.python.org/downloads/ and bootstrap manually:\n' +
   '  cd server/tts-sidecar\n' +
-  '  py -3.11 -m venv .venv   (Windows)  /  python3.11 -m venv .venv   (macOS/Linux)\n' +
+  '  py -3.12 -m venv .venv   (Windows)  /  python3.12 -m venv .venv   (macOS/Linux)\n' +
   '  .venv/Scripts/python -m pip install -r requirements.txt   (Windows)  /  ' +
   '.venv/bin/python -m pip install -r requirements.txt   (macOS/Linux)';
 
@@ -73,7 +83,7 @@ export class VenvBootstrap {
     this.repoRoot = opts.repoRoot;
     this.spawnFn = opts.spawnFn ?? (realSpawn as unknown as VenvSpawnFn);
     this.detectVenvFn = opts.detectVenvFn ?? sidecarVenvPresent;
-    this.findPythonFn = opts.findPythonFn ?? (() => findPython311());
+    this.findPythonFn = opts.findPythonFn ?? (() => findPython312());
   }
 
   /** Probe state without kicking off a job. Used by GET /detect. */
