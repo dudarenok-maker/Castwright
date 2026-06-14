@@ -4,19 +4,38 @@ FastAPI process that the Node backend talks to when a user picks a local
 TTS engine (default: Coqui XTTS v2). Lives in its own venv so the Coqui +
 torch dependency tree doesn't leak into Node tooling.
 
+## Key versions
+
+| Component | Version | Notes |
+|---|---|---|
+| **Python** | **3.12** (exactly) | bootstrap probes for 3.12 and refuses anything else; venv stamped `cp312` |
+| **PyTorch** | **`torch>=2.6`** (explicit in `requirements/nvidia-cuda.txt`) | pip co-resolves with `coqui-tts[codec]`/`torchcodec` to a recent 2.x; needed by Coqui + Qwen (Kokoro doesn't use torch) |
+| → NVIDIA GPU | PyPI default = CUDA-bundled wheel; or `--index-url https://download.pytorch.org/whl/cu130` for **CUDA 13.0** | ~2.5 GB |
+| → CPU / macOS | PyPI default = CPU / MPS build | |
+| coqui-tts | `[codec]>=0.24.0` (resolves ~0.27.x) | dropped its transitive torch in 0.27.5 → torch is now explicit |
+| kokoro-onnx | `[gpu]>=0.4.0,<0.5.0` | onnxruntime-gpu via the platform-gated extra; no torch |
+| transformers | `>=4.45,<5.0` | coqui-tts compat cap |
+
 ## Python version
 
-Coqui TTS (and its torch dependency) need **Python 3.10, 3.11, or 3.12**.
-Python 3.13 and 3.14 don't have wheels available for the ML deps yet.
-3.11 is the safest choice.
+The sidecar requires **Python 3.12** (exactly). The installer/bootstrap probes
+for a 3.12 interpreter and refuses anything else, because the venv is stamped with
+its Python tag (`cp312`) and a mismatch triggers a forced reinstall. Python ≤3.11
+and ≥3.13 are not accepted (3.13/3.14 also still lack wheels for some ML deps).
 
-Install Python 3.11 alongside whatever else you have:
+Install Python 3.12 alongside whatever else you have:
 
 ```powershell
-winget install --id Python.Python.3.11
+winget install --id Python.Python.3.12
 ```
 
-Confirm it's available — `py -3.11 --version` should print `Python 3.11.x`.
+Confirm it's available — `py -3.12 --version` should print `Python 3.12.x`.
+
+> **Upgrading from an older install (pre-3.12 venv)?** A venv is bound to the
+> Python it was built with, so a 3.11 venv can't be upgraded in place. Delete it
+> and re-bootstrap (`Remove-Item -Recurse -Force .venv`). Your books and designed
+> voices are **safe** — they live in the workspace dir, not the venv. The app
+> detects a mismatched venv and guides you to reinstall.
 
 ## One-time setup
 
@@ -26,39 +45,62 @@ default `Restricted` execution policy.
 
 ```powershell
 cd server\tts-sidecar
-# Use the Python 3.11 launcher explicitly so the venv binds to 3.11.
-py -3.11 -m venv .venv
+# Use the Python 3.12 launcher explicitly so the venv binds to 3.12.
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-# Install PyTorch separately — coqui-tts deliberately excludes it from its
-# dependencies so you choose CPU vs CUDA. See "GPU install" below for the
-# fast path; the CPU index works everywhere as a fallback.
-.\.venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-# Then the rest of the requirements.
+# Install everything, including PyTorch. torch is now an EXPLICIT requirement
+# (torch>=2.6) — recent coqui-tts no longer pulls it transitively, so the
+# requirements install handles it for you. On Windows / Linux x86_64 PyPI gives
+# the CUDA-bundled torch wheel; on macOS the CPU/MPS build. No separate torch
+# step is needed for the common case.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-If the venv was already created against the wrong Python (e.g. 3.14), delete
-the folder first: `Remove-Item -Recurse -Force .venv`.
+The CUDA-bundled torch download is ~2.5 GB. `pip` co-resolves torch with
+`coqui-tts[codec]` + `torchcodec` to a compatible recent 2.x.
 
-## GPU install (recommended if you have an NVIDIA card)
+If the venv was created against the wrong Python (e.g. 3.11/3.14), delete the
+folder first: `Remove-Item -Recurse -Force .venv`.
+
+### Forcing a specific torch build (optional)
+
+The requirements install pulls the PyPI-default torch (CUDA-bundled on
+Windows/Linux, CPU/MPS on macOS), which is what most setups want. If you need a
+**specific** build — e.g. a CPU-only torch on a GPU box, or a particular CUDA
+toolkit — pre-install it BEFORE the requirements (pip won't override an
+already-satisfied `torch>=2.6`):
+
+```powershell
+# CPU-only (smaller; no CUDA libs):
+.\.venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# …then:
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+## GPU install (NVIDIA)
 
 XTTS v2 on CPU runs at real-time factor ~3× (one second of audio ≈ three
 seconds of compute). On a modern NVIDIA GPU with the CUDA PyTorch wheel
 plus `COQUI_HALF=1` and `COQUI_DEEPSPEED=1`, RTF drops to ~0.1–0.2× —
 **10–25× faster** for the same code path.
 
-If you already installed the CPU wheel above, uninstall it first:
+**On Windows / Linux x86_64 the default requirements install already gives you a
+CUDA-bundled torch** (the PyPI-default wheel), so GPU works out of the box — no
+separate step. You only need the explicit index below to pick a **specific** CUDA
+toolkit version.
+
+### Picking a specific CUDA build (e.g. CUDA 13.0)
+
+PyTorch ships per-CUDA wheels behind `--index-url`. Choose the one matching your
+driver/toolkit and pre-install it BEFORE the requirements (pip then leaves the
+`torch>=2.6` requirement satisfied). Run `nvidia-smi` first to confirm a GPU.
 
 ```powershell
+# Replace any default torch first if you want to switch CUDA builds:
 .\.venv\Scripts\python.exe -m pip uninstall -y torch torchaudio torchcodec
-```
-
-Then install the CUDA build. The `cu124` index matches CUDA 12.4 (the
-broadest-compatible recent toolkit; works fine with newer NVIDIA drivers).
-Run `nvidia-smi` first to confirm a GPU is present:
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+# CUDA 13.0:
+.\.venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130
+# (for a different CUDA toolkit, swap cu130 for the matching index from pytorch.org/get-started)
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
@@ -505,25 +547,28 @@ $resp.Headers['X-Sample-Rate']
   the hard watchdog's drain→exit path verbatim (idempotent), and `/health` also
   carries `committed_mb` for boundary-decision observability.
 
-## FlashAttention-2 (optional, Windows / Python 3.11)
+## FlashAttention-2 (optional)
 
 FlashAttention-2 is the attention backend `qwen_tts` is built for — its model
 classes set `_supports_flash_attn = True` and the upstream `qwen-tts-demo`
 defaults `--flash-attn` on. We still default to **SDPA**: it needs no extra
-dependency and is the right call for the autoregressive decode loop. FA2 is
-installable here if you want to benchmark it.
+dependency, is the right call for the autoregressive decode loop, and benchmarks
+at parity on TTS-decode-bound workloads — so skipping FA2 costs nothing measurable.
 
-Upstream `flash-attn` ships **no Windows wheel** on PyPI and the source build is
-a notorious Windows headache. The install script instead pins a community
-prebuilt wheel that matches our exact stack (torch 2.6.0/cu124, CPython 3.11,
-win_amd64). It's **opt-in** and **non-fatal** — any other platform/Python skips,
-and a failed install just leaves you on SDPA:
+> **Not available on the current Python 3.12 stack.** Upstream `flash-attn` ships
+> no Windows wheel on PyPI, so the install script pins a community prebuilt — but
+> that wheel is `cp311 + torch-2.6 + cu124`-only and **does not load on the
+> sidecar's Python 3.12 / current-torch stack**. So `--flash-attn` **auto-skips**
+> and Qwen runs on SDPA. To use FA2 on 3.12 you'd have to source a matching
+> prebuilt wheel (e.g. a `cp312` build for your exact torch/CUDA, such as the
+> `cu130torch2.x` builds some community repos publish) and `pip install` it
+> directly. It's **opt-in** and **non-fatal** either way.
 
 ```powershell
-# folded into the normal install:
+# folded into the normal install (auto-skips if no compatible wheel for your stack):
 node scripts\install-qwen3.mjs --flash-attn
-# or into an already-installed venv:
-.\.venv\Scripts\python.exe -m pip install https://huggingface.co/lldacing/flash-attention-windows-wheel/resolve/main/flash_attn-2.7.4+cu124torch2.6.0cxx11abiFALSE-cp311-cp311-win_amd64.whl
+# or, if you've sourced a wheel matching your exact cp312 + torch + CUDA:
+.\.venv\Scripts\python.exe -m pip install <path-or-url-to-your-cp312-flash_attn-wheel>
 ```
 
 Then activate it: set `QWEN_ATTN_IMPL=flash_attention_2` in the sidecar env and
