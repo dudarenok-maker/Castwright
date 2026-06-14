@@ -556,6 +556,11 @@ describe('spawnSidecar', () => {
       eagerLoadKokoro: true,
       eagerLoadQwen: true,
       repoRoot,
+      // This case asserts the Windows spawn shape (powershell.exe + start.ps1),
+      // so pin the platform — otherwise it fails on the Linux/macOS CI runners
+      // where the production code (correctly) spawns `bash start.sh`. The POSIX
+      // shape has its own case below. The env assertions are platform-agnostic.
+      platform: 'win32',
       spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
       probeFn,
       log,
@@ -584,6 +589,35 @@ describe('spawnSidecar', () => {
       'expandable_segments:True,max_split_size_mb:256,garbage_collection_threshold:0.8',
     );
     expect(options.windowsHide).toBe(true);
+  });
+
+  it('spawns via bash start.sh on POSIX (same kokoro env contract)', async () => {
+    const handle = await spawnSidecar({
+      autoStart: true,
+      modelKey: 'kokoro-v1',
+      eagerLoadKokoro: true,
+      eagerLoadQwen: true,
+      repoRoot,
+      platform: 'linux',
+      spawnFn: spawnFn as unknown as typeof import('node:child_process').spawn,
+      probeFn,
+      log,
+      warn,
+    });
+
+    expect(handle).not.toBeNull();
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    const [cmd, args, options] = spawnFn.mock.calls[0];
+    // POSIX spawns `bash <repo>/server/tts-sidecar/start.sh`, not powershell.
+    expect(cmd).toBe('bash');
+    expect(args).toEqual([expect.stringMatching(/start\.sh$/)]);
+    // detached → own process group so killTree reaps the uvicorn grandchild
+    // that `bash start.sh` spawns.
+    expect(options.detached).toBe(true);
+    expect(options.windowsHide).toBe(true);
+    // The env contract is platform-agnostic — same kokoro preload as Windows.
+    expect(options.env.PRELOAD_COQUI).toBe('0');
+    expect(options.env.PRELOAD_KOKORO).toBe('1');
   });
 
   it('lets an explicit PYTORCH_CUDA_ALLOC_CONF override the default', async () => {
