@@ -20,20 +20,28 @@ if (-not (Test-Path $venvPython)) {
     Write-Host "SKIP: sidecar pytest -- venv not found at $venvPython"
     Write-Host "      Bootstrap once to enable this block in the gate:"
     Write-Host "        cd server\tts-sidecar"
-    Write-Host "        python -m venv .venv"
+    Write-Host "        py -3.12 -m venv .venv"
     Write-Host "        .\.venv\Scripts\python.exe -m pip install -r requirements.txt"
+    Write-Host "        .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt   # pytest + httpx (tests)"
     Write-Host ""
     exit 0
 }
 
 # Probe pytest. `--version` is a fast no-op that fails cheaply if pytest
-# isn't installed in the venv yet.
+# isn't installed in the venv yet. NOTE: temporarily relax ErrorActionPreference
+# around the probe -- when pytest is missing the native command writes to stderr,
+# and under 'Stop' PowerShell 5.1 wraps that in a NativeCommandError and THROWS
+# before we can branch on $LASTEXITCODE (so the SKIP below never fired and the
+# gate failed instead of skipping). 'Continue' lets the exit code drive the skip.
+$ErrorActionPreference = 'Continue'
 & $venvPython -m pytest --version *> $null
-if ($LASTEXITCODE -ne 0) {
+$pytestProbe = $LASTEXITCODE
+$ErrorActionPreference = 'Stop'
+if ($pytestProbe -ne 0) {
     Write-Host ""
     Write-Host "SKIP: sidecar pytest -- pytest not installed in the sidecar venv."
-    Write-Host "      Install with:"
-    Write-Host "        .\.venv\Scripts\python.exe -m pip install -r server\tts-sidecar\requirements.txt"
+    Write-Host "      Test deps are separate from the runtime requirements; install with:"
+    Write-Host "        .\.venv\Scripts\python.exe -m pip install -r server\tts-sidecar\requirements-dev.txt"
     Write-Host ""
     exit 0
 }
