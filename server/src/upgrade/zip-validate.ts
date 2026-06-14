@@ -7,10 +7,10 @@
    the entry-name list so they're exhaustively unit-testable without a real zip;
    readUpgradeZip is the thin yauzl reader that feeds it. */
 
-import { createHash } from 'node:crypto';
 import yauzl from 'yauzl';
 
 import { compareVersions } from '../app-version.js';
+import { computeReqHash } from '../../tts-sidecar/scripts/venv-migration.mjs';
 
 /** Files that MUST be present (relative to the top dir) for a zip to be a
     plausible release — a pre-built frontend + server bundle, the runtime
@@ -50,11 +50,19 @@ export function validateUpgradeManifest(input: {
     entryNames.map((n) => n.replace(/\\/g, '/').split('/')[0]).filter(Boolean),
   );
   if (topSegments.size !== 1) {
-    return { ok: false, code: 'bad-structure', reason: `expected a single top-level directory, found ${topSegments.size}` };
+    return {
+      ok: false,
+      code: 'bad-structure',
+      reason: `expected a single top-level directory, found ${topSegments.size}`,
+    };
   }
   const topDir = [...topSegments][0];
   if (!TOP_DIR_RE.test(topDir)) {
-    return { ok: false, code: 'bad-structure', reason: `top-level directory "${topDir}" is not castwright-vX.Y.Z` };
+    return {
+      ok: false,
+      code: 'bad-structure',
+      reason: `top-level directory "${topDir}" is not castwright-vX.Y.Z`,
+    };
   }
 
   // Required artefacts present under the top dir.
@@ -68,7 +76,12 @@ export function validateUpgradeManifest(input: {
   // Version must parse and be well-formed.
   const candidateVersion = (packageJsonVersion ?? '').trim();
   if (!/^\d+\.\d+\.\d+/.test(candidateVersion)) {
-    return { ok: false, code: 'bad-version', reason: `package.json version "${candidateVersion}" is not semver`, topDir };
+    return {
+      ok: false,
+      code: 'bad-version',
+      reason: `package.json version "${candidateVersion}" is not semver`,
+      topDir,
+    };
   }
 
   const cmp = compareVersions(candidateVersion, runningVersion);
@@ -90,7 +103,10 @@ export function validateUpgradeManifest(input: {
 export interface ZipReadResult {
   entryNames: string[];
   packageJsonText: string | null;
-  requirementsText: string | null;
+  /** Text of the resolved overlay (requirements/nvidia-cuda.txt), null if absent. */
+  reqOverlayText: string | null;
+  /** Text of the vendor-neutral base (requirements/base.txt), null if absent. */
+  reqBaseText: string | null;
   topDir: string | null;
 }
 
@@ -104,22 +120,27 @@ function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 }
 
 /** Read a zip's entry names + the bytes of the top-level package.json and the
-    sidecar requirements.txt (used for the venv-reinstall hash). yauzl streaming
-    so a 30 MB bundle never lands fully in memory. */
+    *resolved* sidecar requirements files — the nvidia-cuda overlay and its base
+    (used for the venv-reinstall hash). We hash the resolved set rather than the
+    requirements.txt shim (which is just `-r requirements/nvidia-cuda.txt`), so an
+    edit to a real pin in the overlay/base re-triggers a pip install. yauzl
+    streaming so a 30 MB bundle never lands fully in memory. */
 export function readUpgradeZip(zipPath: string): Promise<ZipReadResult> {
   return new Promise((resolve, reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
       if (err || !zip) return reject(err ?? new Error('failed to open zip'));
       const entryNames: string[] = [];
       let packageJsonText: string | null = null;
-      let requirementsText: string | null = null;
+      let reqOverlayText: string | null = null;
+      let reqBaseText: string | null = null;
       let topDir: string | null = null;
 
-      const want = (name: string) => name.endsWith('/package.json') && name.split('/').length === 2
-        ? 'pkg'
-        : name.endsWith('/server/tts-sidecar/requirements.txt')
-          ? 'req'
-          : null;
+      const want = (name: string): 'pkg' | 'overlay' | 'base' | null => {
+        if (name.endsWith('/package.json') && name.split('/').length === 2) return 'pkg';
+        if (name.endsWith('/server/tts-sidecar/requirements/nvidia-cuda.txt')) return 'overlay';
+        if (name.endsWith('/server/tts-sidecar/requirements/base.txt')) return 'base';
+        return null;
+      };
 
       zip.on('entry', (entry: yauzl.Entry) => {
         const name = entry.fileName.replace(/\\/g, '/');
@@ -131,8 +152,10 @@ export function readUpgradeZip(zipPath: string): Promise<ZipReadResult> {
             if (e || !stream) return zip.readEntry();
             streamToBuffer(stream)
               .then((buf) => {
-                if (which === 'pkg') packageJsonText = buf.toString('utf8');
-                else requirementsText = buf.toString('utf8');
+                const text = buf.toString('utf8');
+                if (which === 'pkg') packageJsonText = text;
+                else if (which === 'overlay') reqOverlayText = text;
+                else reqBaseText = text;
               })
               .catch(() => {})
               .finally(() => zip.readEntry());
@@ -141,7 +164,9 @@ export function readUpgradeZip(zipPath: string): Promise<ZipReadResult> {
           zip.readEntry();
         }
       });
-      zip.on('end', () => resolve({ entryNames, packageJsonText, requirementsText, topDir }));
+      zip.on('end', () =>
+        resolve({ entryNames, packageJsonText, reqOverlayText, reqBaseText, topDir }),
+      );
       zip.on('error', reject);
       zip.readEntry();
     });
@@ -152,9 +177,12 @@ export interface ValidatedZip extends ManifestResult {
   reqHash: string | null;
 }
 
-/** Read + validate a staged zip. Returns the manifest verdict plus a sha256 of
-    the sidecar requirements.txt (null when absent) so apply can decide whether a
-    pip reinstall into the shared venv is needed. */
+/** Read + validate a staged zip. Returns the manifest verdict plus the resolved
+    requirements hash (computeReqHash over the overlay THEN base text — byte-for-byte
+    the same hash resolveRequired writes into the venv stamp) so apply can decide
+    whether a pip reinstall into the shared venv is needed. null when either
+    resolved file is absent (a malformed release): matches the prior "don't gate on
+    hash" behaviour rather than firing a pip install off a partial read. */
 export async function validateUpgradeZip(
   zipPath: string,
   runningVersion: string,
@@ -175,8 +203,12 @@ export async function validateUpgradeZip(
     runningVersion,
     allowDowngrade: opts.allowDowngrade,
   });
-  const reqHash = read.requirementsText
-    ? createHash('sha256').update(read.requirementsText).digest('hex')
-    : null;
+  // Hash the resolved set in resolveRequired's order (overlay THEN base) so
+  // ctx.reqHash is byte-identical to the venv stamp's reqHash. If either file is
+  // missing we can't reproduce that hash, so fall back to null (= no hash gate).
+  const reqHash =
+    read.reqOverlayText !== null && read.reqBaseText !== null
+      ? computeReqHash([read.reqOverlayText, read.reqBaseText])
+      : null;
   return { ...manifest, reqHash };
 }
