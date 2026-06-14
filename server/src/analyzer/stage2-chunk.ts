@@ -39,8 +39,36 @@ import {
    chars keeps a chunk's expected output comfortably under the 8192-token
    default cap with headroom for the splitting overhead. Tunable via env. */
 export const DEFAULT_STAGE2_CHUNK_CHAR_BUDGET = 9000;
-export function resolveStage2ChunkCharBudget(): number {
-  return configValue<number>('analyzer.stage2.chunkCharBudget');
+
+/* Size the per-chunk input budget so the output has room inside the model's
+   context window. Stage-2 output ≈ the chapter prose re-emitted as JSON, so
+   input + output land in the same order of magnitude and SHARE the num_ctx
+   window — a fat input chunk starves the output and truncates (the 2026-06-14
+   qwen3.5:4b report: a 9000-char chunk overflowed because its real window is
+   smaller than the requested num_ctx). For local engines, derive a budget from
+   num_ctx (~2 chars/token, ~30% of the window reserved for input so most is
+   left for output + prompt) and take the MIN with the configured value — this
+   only ever LOWERS the budget, never raises it past the safe default. Cloud
+   engines keep the configured budget unchanged. A residual truncation is still
+   caught by the sentence-split fallback in runStage2ChapterChunked. */
+export function stage2ChunkBudgetForEngine(
+  configured: number,
+  numCtxTokens: number,
+  engine: 'gemini' | 'local',
+): number {
+  if (engine !== 'local') return configured;
+  const numCtxDerived = Math.floor(numCtxTokens * 2 * 0.3);
+  return Math.max(1000, Math.min(configured, numCtxDerived));
+}
+
+export function resolveStage2ChunkCharBudget(engine?: 'gemini' | 'local'): number {
+  const configured = configValue<number>('analyzer.stage2.chunkCharBudget');
+  if (engine !== 'local') return configured;
+  return stage2ChunkBudgetForEngine(
+    configured,
+    configValue<number>('analyzer.ollama.numCtx'),
+    'local',
+  );
 }
 
 /** Split `body` into chunks at blank-line (paragraph) boundaries, each ≤
@@ -72,6 +100,39 @@ export function splitBodyIntoChunks(body: string, charBudget: number): string[] 
   }
   if (cur) chunks.push(cur);
   return chunks.length > 0 ? chunks : [body];
+}
+
+/** Split a SINGLE paragraph (no blank-line boundaries) at sentence boundaries,
+    greedily packing whole sentences up to `charBudget`. This is the last-resort
+    fallback for an over-cap paragraph that `splitBodyIntoChunks` can't divide
+    (it never cuts inside a paragraph): without it, a model whose output cap is
+    smaller than one paragraph's attribution output truncates and fails the
+    whole chapter (2026-06-14 qwen3.5:4b report).
+
+    Boundary = sentence-ending punctuation (.!?) plus an optional closing quote
+    or bracket, followed by whitespace. NOT byte-lossless (run-of-whitespace
+    between sentences collapses to a single space on rejoin) — acceptable here
+    because the stage-2 coverage guard is word-overlap based (whitespace-
+    insensitive) and this path only fires as a recovery from a hard failure.
+    Returns `[para]` unchanged when it fits, or when there is no sentence
+    boundary to split on (a single huge sentence still surfaces the truncation
+    loudly rather than being cut mid-sentence). */
+export function splitParagraphIntoSentences(para: string, charBudget: number): string[] {
+  if (para.length <= charBudget) return [para];
+  const sentences = para.split(/(?<=[.!?]["')\]]?)\s+/).filter(Boolean);
+  if (sentences.length <= 1) return [para]; // no boundary — nothing to split
+  const chunks: string[] = [];
+  let cur = '';
+  for (const s of sentences) {
+    if (cur && cur.length + s.length + 1 > charBudget) {
+      chunks.push(cur);
+      cur = s;
+    } else {
+      cur = cur ? `${cur} ${s}` : s;
+    }
+  }
+  if (cur) chunks.push(cur);
+  return chunks.length > 0 ? chunks : [para];
 }
 
 /** Last `n` paragraphs of `text`, trimmed and rejoined — used as the read-only
@@ -125,6 +186,17 @@ export async function runStage2ChapterChunked(
   const contextParagraphs = opts.contextParagraphs ?? 2;
   const maxSplitDepth = opts.maxSplitDepth ?? 3;
 
+  /* Split an over-cap span for a retry: paragraph boundaries first (lossless),
+     then — when the span is a single paragraph that won't divide — sentence
+     boundaries. Returns [span] only when neither can split it (a single huge
+     sentence), which propagates the truncation loudly. */
+  const splitSpanForRetry = (span: string): string[] => {
+    const half = Math.max(1, Math.floor(span.length / 2));
+    const byParagraph = splitBodyIntoChunks(span, half);
+    if (byParagraph.length > 1) return byParagraph;
+    return splitParagraphIntoSentences(span, half);
+  };
+
   /* Attribute one span, splitting it further if the model truncates on it. */
   const attributeSpan = async (
     span: string,
@@ -142,7 +214,7 @@ export async function runStage2ChapterChunked(
       return result.sentences;
     } catch (err) {
       if (err instanceof AnalyzerTruncatedError && depth < maxSplitDepth) {
-        const sub = splitBodyIntoChunks(span, Math.max(1, Math.floor(span.length / 2)));
+        const sub = splitSpanForRetry(span);
         if (sub.length > 1) {
           const out: SentenceOutput[] = [];
           let prev = preceding;
@@ -199,8 +271,8 @@ export async function runStage2ChapterChunked(
       return { sentences: result.sentences, coverage, chunkCount: 1 };
     } catch (err) {
       if (!(err instanceof AnalyzerTruncatedError)) throw err;
-      const forced = splitBodyIntoChunks(opts.body, Math.max(1, Math.floor(opts.body.length / 2)));
-      if (forced.length <= 1) throw err; // single paragraph: nothing to split
+      const forced = splitSpanForRetry(opts.body);
+      if (forced.length <= 1) throw err; // single un-splittable sentence: surface it
       return runChunks(forced);
     }
   }

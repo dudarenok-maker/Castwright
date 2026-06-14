@@ -41,10 +41,21 @@ export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) 
     (s) =>
       (s as { ui?: { selectedModel?: string } }).ui?.selectedModel || s.account.defaultAnalysisModel,
   );
+  /* A per-run override (an explicit pick on the analysis-failed card, e.g.
+     qwen3.5:4b chosen to dodge a Gemini block) wins over the saved per-phase
+     models AND collapses both phases onto the single override — exactly what
+     the server does (analysis.ts precedence priority 2: a per-request `model`
+     short-circuits the per-phase split). When it's active the chip must show
+     that override for both phases, not the now-shadowed saved phase model.
+     Mirrors `requestModel` in analysing.tsx. */
+  const overrideActive = useAppSelector(
+    (s) => (s as { ui?: { selectedModelExplicit?: boolean } }).ui?.selectedModelExplicit === true,
+  );
   if (phaseId === 2) return null;
 
-  const serverDefault = splitActive && !phaseModel;
-  const modelId = splitActive ? phaseModel : effectiveSingleModel;
+  const useSingle = overrideActive || !splitActive;
+  const serverDefault = !useSingle && !phaseModel;
+  const modelId = useSingle ? effectiveSingleModel : phaseModel;
   const label = serverDefault
     ? 'Server default'
     : (MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId ?? 'Server default');
@@ -67,7 +78,7 @@ export function PhaseModelChip({ phaseId, state, prefix }: PhaseModelChipProps) 
      Phase 1 simply waits for all of Phase 0, so don't promise a handoff.
      PhaseCard already gates the `warming` state on splitActive; this is a
      belt-and-suspenders guard so the sticky bar can't surface it either. */
-  const showWarmup = state === 'warming' && phaseId === 1 && splitActive;
+  const showWarmup = state === 'warming' && phaseId === 1 && splitActive && !overrideActive;
   const title = showWarmup ? `Warms up after chapter ${minLag}` : undefined;
 
   return (

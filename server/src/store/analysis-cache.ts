@@ -83,6 +83,15 @@ export interface AnalysisCache {
       under-estimates the budget by 3-5×. */
   castDurations?: Record<number, number>;
   stage2Durations?: Record<number, number>;
+  /** Engine that produced the currently-stored durations for each phase
+      ('gemini' | 'local'). The observed-rate seed is only valid when the
+      resumed run uses the SAME engine — a Gemini-paced duration mis-seeds a
+      Qwen run's ETA by ~10× (2026-06-14 model-switch report). On a mismatch
+      the route discards that phase's stale durations and re-stamps the engine.
+      Undefined on caches written before this field existed → treated as a
+      mismatch (don't seed), which is the safe default. */
+  castDurationsEngine?: string;
+  stage2DurationsEngine?: string;
   /** Chapter ids whose Phase 0a cast detection threw after the analyzer's
       built-in retry. The matching `chapterCast[id]` entry is `[]` (the
       failure marker — see analysis.ts catch path), but storing the id list
@@ -119,6 +128,8 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
     chapters: cache.chapters ?? {},
     castDurations: cache.castDurations ?? undefined,
     stage2Durations: cache.stage2Durations ?? undefined,
+    castDurationsEngine: cache.castDurationsEngine ?? undefined,
+    stage2DurationsEngine: cache.stage2DurationsEngine ?? undefined,
     failedChapterIds: cache.failedChapterIds ?? undefined,
     failedChapterErrors: cache.failedChapterErrors ?? undefined,
     updatedAt: cache.updatedAt,
