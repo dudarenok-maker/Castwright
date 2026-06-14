@@ -1,16 +1,19 @@
 name: Verify
 
 # Plan 60 — CI verify-on-PR. Plan 103 — per-PR cost reduction.
+# Plan 215 — CI is OPT-IN: this battery no longer runs automatically on PRs.
 #
-# Runs the verify battery on every PR targeting main so red tests block
-# merge, but only the LEGS whose scope actually changed. A single job does
-# setup once, detects which scopes the PR touched (git diff against the PR
-# base), then gates each expensive leg (server tests, e2e, build, …) behind
-# an `if:` on that scope. A PR that touches only `src/**` skips the server
-# tests; a server-only PR skips the frontend unit suite + Playwright e2e;
-# etc. The local pre-push hook still runs the FULL `npm run verify` battery,
-# so CI only trusts the path-filter for the scoped subset — nothing is
-# permanently un-covered. See docs/features/103-ci-cost-reduction.md.
+# Runs the verify battery ON DEMAND — when a PR carries the `run-ci` label or
+# the workflow is dispatched manually (see the `on:`/`if:` blocks below). It
+# runs only the LEGS whose scope actually changed. A single job does setup
+# once, detects which scopes the PR touched (git diff against the PR base),
+# then gates each expensive leg (server tests, e2e, build, …) behind an `if:`
+# on that scope. A PR that touches only `src/**` skips the server tests; a
+# server-only PR skips the frontend unit suite + Playwright e2e; etc. The
+# local pre-push hook runs the FULL `npm run verify` battery on every push, so
+# the per-PR cloud run is redundant insurance, not the gate — nothing is
+# permanently un-covered. See docs/features/103-ci-cost-reduction.md and
+# docs/features/215-ci-label-gated-verify.md.
 #
 # Why one job with conditional steps (not a job-per-leg matrix): GitHub bills
 # each job's wall-clock separately, summed, rounded UP to the minute per job.
@@ -24,18 +27,23 @@ name: Verify
 # See docs/features/archive/101-docs-only-ci-skip.md.
 
 on:
+  # The job `if:` below is the real gate; these triggers just decide WHEN the
+  # workflow is *evaluated*. `labeled` lets adding the `run-ci` label to an
+  # existing PR fire a run immediately; `synchronize` re-runs on new pushes
+  # while the label stays on; `ready_for_review` covers promoting a labeled
+  # draft. An unlabeled PR still evaluates the workflow but the job no-ops.
   pull_request:
-    # `ready_for_review` is REQUIRED alongside the draft-skip `if:` on the
-    # job: a job skipped by `if:` reports no status, so a draft PR's required
-    # `verify` check would be absent and block merge. Firing on
-    # `ready_for_review` re-triggers the run the moment a draft is promoted,
-    # so the gate appears exactly when the PR becomes mergeable.
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     branches: [main]
     paths-ignore:
       - 'docs/**'
       - '*.md'
       - '.github/*.md'
+  # Manual on-demand run: Actions tab → Verify → Run workflow, or
+  # `gh workflow run verify.yml --ref <branch>`. A dispatch has no PR diff to
+  # scope against, so it runs the FULL battery (every leg) — see the scope
+  # detector below.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -48,16 +56,22 @@ concurrency:
 
 jobs:
   verify:
-    # NOTE: keep this `name:` value EXACTLY "npm run verify" — it is the
-    # branch-protection required status-check name. The job no longer runs
-    # the literal `npm run verify` command (it runs the scoped subset of
-    # legs), but renaming it would silently drop the required check and let
-    # un-verified PRs merge. Do not rename without flipping branch protection.
+    # NOTE: the `name:` "npm run verify" is the historical status-check name.
+    # Branch protection on `main` deliberately does NOT require it as a status
+    # check (the staged ruleset excludes required checks so opt-in/doc-only PRs
+    # can't deadlock — see brand/ruleset-main.json / com-4), so a no-op run on
+    # an unlabeled PR never blocks merge. Keep the name stable anyway in case a
+    # required check is added later.
     name: npm run verify
     runs-on: ubuntu-latest
-    # Skip drafts — they re-fire every check on `ready_for_review` (see the
-    # trigger note above), so running on every draft push is pure waste.
-    if: github.event.pull_request.draft == false
+    # Opt-in gate: run ONLY on a manual dispatch, or a non-draft PR carrying
+    # the `run-ci` label. Unlabeled PRs evaluate the workflow but the job is
+    # skipped here → zero runner minutes billed. Local pre-push already runs
+    # the full battery, so this cloud run is on-demand insurance.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       contains(github.event.pull_request.labels.*.name, 'run-ci'))
     # 20 (not 15): a run that dies AT the cap bills the full cap for nothing and
     # forces a re-run = double charge. Full-scope runs sit ~13-15 min, so 15 rode
     # the edge. Headroom is bounded by the cancel-in-progress concurrency above.
@@ -78,6 +92,15 @@ jobs:
       - name: Detect changed scopes
         id: changes
         run: |
+          # A manual dispatch has no PR base/head to diff against — run the
+          # FULL battery (every scope true) and skip the diff logic.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            for k in frontend server sidecar e2e scripts hooks shared; do
+              echo "$k=true" >> "$GITHUB_OUTPUT"
+              echo "scope $k=true (workflow_dispatch → full run)"
+            done
+            exit 0
+          fi
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
           FILES="$(git diff --name-only "$BASE" "$HEAD")"
@@ -138,7 +161,11 @@ jobs:
       # See docs/features/118-ci-cost-round-2.md.
       - name: Frontend tests + a11y
         if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
-        run: npx vitest run --changed "${{ github.event.pull_request.base.sha }}" && npm run test:a11y
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          # On a manual dispatch BASE is empty (no PR) → run the full suite.
+          if [ -n "$BASE" ]; then npx vitest run --changed "$BASE"; else npx vitest run; fi
+          npm run test:a11y
 
       # ffmpeg is needed by the server MP3 encoder (server/src/tts/mp3.ts
       # shells out to it) and by the e2e suite's audio paths. Install it only
@@ -157,8 +184,15 @@ jobs:
         if: steps.changes.outputs.server == 'true' || steps.changes.outputs.sidecar == 'true' || steps.changes.outputs.shared == 'true'
         run: |
           cd server
-          npx vitest run --changed "${{ github.event.pull_request.base.sha }}"
-          npx vitest run --config vitest.config.slow.ts --changed "${{ github.event.pull_request.base.sha }}"
+          BASE="${{ github.event.pull_request.base.sha }}"
+          # On a manual dispatch BASE is empty (no PR) → run the full suite.
+          if [ -n "$BASE" ]; then
+            npx vitest run --changed "$BASE"
+            npx vitest run --config vitest.config.slow.ts --changed "$BASE"
+          else
+            npx vitest run
+            npx vitest run --config vitest.config.slow.ts
+          fi
 
       - name: Cache Playwright browsers
         if: steps.changes.outputs.frontend == 'true' || steps.changes.outputs.e2e == 'true' || steps.changes.outputs.shared == 'true'
