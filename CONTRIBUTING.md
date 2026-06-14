@@ -459,16 +459,16 @@ Rationale + measurements:
 
 ### Server-side enforcement (branch protection)
 
-The repo is now on **GitHub Pro**, so branch-protection rulesets are available
-(they 403'd on the old Free private plan). Enabling protection on `main` is
-tracked as `com-4` in the commercialisation backlog and staged via
-`brand/enable-branch-protection.sh` / `brand/ruleset-main.json`. The staged
-ruleset blocks force-push + deletion and **deliberately excludes required
-status checks** — so it stays compatible with opt-in CI (plan 215) and the
-doc-only `paths-ignore` skip without deadlocking PRs that never run `verify`.
-Until it's enabled, the local `guard-protected-push.mjs` pre-push hook
-(plan 163) is the stand-in. The conventions above remain soft enforcement plus
-the `pr-title-lint.yml` workflow.
+`main` has **server-side branch protection** as of 2026-06-14: a GitHub ruleset
+(`id 17654264`, `enforcement: active`) blocks force-push + deletion, enabled
+after the **GitHub Pro** upgrade (the feature 403'd on the old Free private
+plan). It **deliberately excludes required status checks** — so it stays
+compatible with opt-in CI (plan 215) and the doc-only `paths-ignore` skip
+without deadlocking PRs that never run `verify` — and adds no required-PR rule,
+so direct-to-`main` trivial fixes and tag-based releases keep working. The local
+`guard-protected-push.mjs` pre-push hook (plan 163) is now belt-and-suspenders.
+Enablement + the ruleset JSON live in `com-4` / `brand/ruleset-main.json`. The
+conventions above remain soft enforcement plus the `pr-title-lint.yml` workflow.
 
 ### Doc-only PR fast-path
 

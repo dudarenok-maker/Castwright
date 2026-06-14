@@ -93,10 +93,10 @@ config + docs only.
 
 ## Out of scope
 
-- Enabling server-side branch protection on `main` — tracked as `com-4`
-  (commercialisation backlog), now unblocked by the GitHub Pro upgrade; staged
-  via `brand/enable-branch-protection.sh`. The ruleset already excludes required
-  status checks, so it composes with this plan.
+- Server-side branch protection on `main` — **enabled 2026-06-14** (ruleset
+  id 17654264, after the GitHub Pro upgrade; tracked as `com-4`). The ruleset
+  excludes required status checks, so it composes with this plan — no required
+  check means opt-in PRs that never run `verify` can't deadlock.
 - Changing `cross-os.yml` cadence, `app.yml`, or `pr-title-lint.yml` — left
   as-is by decision.
 

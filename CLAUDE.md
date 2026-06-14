@@ -350,10 +350,12 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   `npm run verify:fast` (no scope filter) remains for a manual full fast run.
 - **pre-push** (`.husky/pre-push`): first runs `scripts/guard-protected-push.mjs`,
   which refuses a force-push or deletion of a protected branch (`main`) before
-  the battery even starts (local stand-in for GitHub branch protection, which
-  this private repo's plan can't enable server-side — see
+  the battery even starts (a local guard; since 2026-06-14 `main` ALSO has
+  server-side branch protection — a GitHub ruleset blocking force-push +
+  deletion, enabled after the Pro upgrade per `com-4` — so this hook is now
+  belt-and-suspenders; see
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
-  bypass intentionally with `git push --no-verify`). Then runs `npm run verify`
+  bypass the local hook intentionally with `git push --no-verify`). Then runs `npm run verify`
   — typecheck + all tests + e2e + build. Refuses the push if any step fails.
 
 `npm run verify` is cache-aware (see
