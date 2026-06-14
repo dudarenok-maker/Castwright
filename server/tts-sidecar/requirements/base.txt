@@ -1,0 +1,37 @@
+# Vendor-neutral sidecar dependencies (Phase 1 layered-requirements groundwork).
+# These install the same on every box; the torch-engine deps live in the
+# vendor overlay (nvidia-cuda.txt today). Lines moved verbatim from the old
+# flat requirements.txt — same packages, same pins.
+
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.32
+
+# Numpy 2.x is required by kokoro-onnx>=0.4.0; coqui-tts 0.27.x only floors
+# at numpy>=1.26 (no upper cap) so the bump is safe. The earlier `<2.0`
+# pin was defensive (predates coqui-tts updating its compat layer); lifting
+# it is the price of admission for installing Kokoro alongside.
+numpy>=1.26,<3.0
+
+# psutil — process RSS / committed-private bytes for the host-memory watchdog +
+# /debug/memory readout (the 2026-05-30 host-RAM leak guard). Already arrives
+# transitively via accelerate, but the watchdog now depends on it directly, so
+# pin it explicitly rather than rely on a transitive that a future install could
+# drop. Tiny, pure-bookkeeping dep; no native build.
+psutil>=5.9
+
+# faster-whisper — ASR (speech-to-text) for the per-sentence content-QA gate
+# (srv-31): transcribe a synthesised sentence and word-error-rate it against the
+# manuscript text to catch "fluent but wrong words" generations the signal-based
+# segment QA can't see. CTranslate2 backend — small wheel, int8, CPU-fast and
+# GPU-optional. CPU-first by default (ASR_DEVICE=cpu → zero VRAM); ASR_DEVICE=cuda
+# opts into the GPU with a tiny/base int8 model (~150–400 MB). The model weights
+# (~145 MB for `base`) are fetched by faster-whisper on first load from its own
+# cache, not on a plain `pip install -r`. Off by default at the server (SEG_ASR_
+# ENABLED=0), so this dep is dormant until the gate is switched on.
+faster-whisper>=1.0,<2.0
+
+# coqui-tts internals import `isin_mps_friendly` from transformers.pytorch_utils,
+# which is a 4.x-line private util. transformers 5.x removed/renamed it, so
+# pip happily resolves to a too-new wheel and the import explodes at runtime.
+# Pin to the 4.x line until coqui-tts updates its compat layer.
+transformers>=4.45,<5.0

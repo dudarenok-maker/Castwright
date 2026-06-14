@@ -9,19 +9,23 @@ After install you'll have a single command (`npm run start:prod`) that brings up
 ## Prerequisites (all platforms)
 
 - **Node.js 20.19 or newer** (Vite 8 needs ≥20.19 / ≥22.12; the repo targets Node 24) — <https://nodejs.org>
-- **Python 3.11**
-  - Windows: <https://python.org> installer (tick "Add to PATH" during setup)
-  - macOS: `brew install python@3.11`
-  - Linux (Ubuntu / Debian): `sudo apt install python3.11 python3.11-venv`
-  - Linux (Fedora / RHEL): `sudo dnf install python3.11`
+- **Python 3.12** (exactly — the sidecar bootstrap probes for 3.12 and refuses other versions)
+  - Windows: `winget install --id Python.Python.3.12` (or the <https://python.org> installer — tick "Add to PATH")
+  - macOS: `brew install python@3.12`
+  - Linux (Ubuntu / Debian): `sudo apt install python3.12 python3.12-venv`
+  - Linux (Fedora / RHEL): `sudo dnf install python3.12`
 - **ffmpeg on PATH** (server encodes chapter audio to MP3)
   - Windows: `winget install Gyan.FFmpeg`
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` (or `sudo dnf install ffmpeg`)
-- **~3 GB free disk** (Kokoro TTS weights ~1.1 GB, plus the Node modules and Python virtual environment)
+- **~6 GB free disk** (Kokoro TTS weights ~1.1 GB + PyTorch ~2.5 GB + Node modules + the Python venv)
 - **A GPU is optional but strongly recommended** (Kokoro on CPU is ~10× slower than on a modest GPU):
-  - Windows / Linux: an **NVIDIA GPU + recent drivers** (CUDA).
+  - Windows / Linux: an **NVIDIA GPU + recent drivers** (CUDA). PyTorch installs automatically with the sidecar requirements — the default PyPI wheel is CUDA-bundled, so GPU works out of the box; for a **specific CUDA toolkit** (e.g. CUDA 12.8) see "PyTorch / CUDA" below.
   - macOS: **Apple Silicon (M-series)** is used automatically via Metal (`mps`) — no drivers, no CUDA, no config. Intel Macs fall back to CPU.
+
+> **PyTorch / CUDA.** `torch==2.8.0` + `torchaudio==2.8.0` (a matched pair) are explicit sidecar requirements (recent `coqui-tts` no longer pulls torch transitively) and install with `pip install -r requirements.txt` — used by the Coqui XTTS and Qwen engines (Kokoro uses ONNX Runtime, no torch). The 2.8 line is chosen deliberately: torch **<2.9** keeps `torchaudio`'s audio I/O in-core, so we **drop coqui-tts's `[codec]` extra** and avoid `torchcodec` entirely (torchcodec only supports FFmpeg 4–7 and would fail against FFmpeg 8). On Windows/Linux x86_64 the default is the CUDA-bundled wheel; on macOS the CPU/MPS build. To pin a **specific** CUDA build, pre-install the pair before the requirements — e.g. **CUDA 12.8**: `pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128` (swap `cu128` for another CUDA index from pytorch.org, or use `…/whl/cpu` to force CPU-only).
+
+> **Upgrading an existing install?** A venv is bound to its Python, so a pre-3.12 (e.g. 3.11) venv can't be upgraded in place — the app detects the mismatch and asks you to reinstall fresh. Delete the old venv (`server/tts-sidecar/.venv`) and re-bootstrap; **your books and designed voices are safe** (they live in `WORKSPACE_DIR`, outside the install).
 
 > **Note for Linux deployers**: validated on Ubuntu 22.04+. The same scripts should work on any glibc Linux with `bash`, `curl`, and the prereqs above. Snap-installed ffmpeg sometimes ends up at `/snap/bin/ffmpeg` instead of `/usr/bin/ffmpeg`; if `which ffmpeg` returns empty after `apt install`, prepend `/snap/bin` to your PATH.
 
@@ -36,9 +40,9 @@ Open PowerShell in the extracted folder, then run:
 npm ci
 npm --prefix server ci
 
-# 2. Bootstrap the Python sidecar.
+# 2. Bootstrap the Python sidecar (Python 3.12; installs PyTorch ~2.5 GB).
 cd server\tts-sidecar
-python -m venv .venv
+py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
 # 3. Fetch the Kokoro TTS weights (~1.1 GB, one-time download).
@@ -71,9 +75,9 @@ Open Terminal in the extracted folder, then run:
 npm ci
 npm --prefix server ci
 
-# 2. Bootstrap the Python sidecar.
+# 2. Bootstrap the Python sidecar (Python 3.12; installs PyTorch ~2.5 GB).
 cd server/tts-sidecar
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
 # 3. Fetch the Kokoro TTS weights (~1.1 GB).
@@ -111,9 +115,9 @@ Open a terminal in the extracted folder, then run:
 npm ci
 npm --prefix server ci
 
-# 2. Bootstrap the Python sidecar.
+# 2. Bootstrap the Python sidecar (Python 3.12; installs PyTorch ~2.5 GB).
 cd server/tts-sidecar
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt
 
 # 3. Fetch the Kokoro TTS weights (~1.1 GB).
@@ -268,7 +272,7 @@ Qwen3-TTS designs a unique voice per character from the cast persona instead of 
    node server/tts-sidecar/scripts/install-qwen3.mjs --flash-attn
    ```
 
-   The script auto-skips on macOS / Linux / non-`cp311` Python / non-`torch-2.6 + cu124` — a wheel that can't load doesn't get installed. Once installed, activate it by setting `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
+   The pinned prebuilt wheel is `cp311 + torch-2.6 + cu124`-only, so the script **auto-skips on the current Python 3.12 (cp312) stack** (and on macOS / Linux) — a wheel that can't load doesn't get installed, and Qwen runs on SDPA. (A matching cp312 / newer-torch wheel would have to be sourced to use FA2 on 3.12.) When a compatible wheel *is* installed, activate it by setting `QWEN_ATTN_IMPL=flash_attention_2` in `server/.env`.
 
 3. **Switch a book to Qwen3.** Start the app and go to **Account → Defaults for new books → Voice engine** → "Local (free)" → **Voice model** → pick the Qwen3 entry. Save. For an existing book opened under Kokoro / Coqui, use the cast view's "Rebaseline the series" modal to design Qwen voices for the principal cast with current-vs-proposed audition before regenerating.
 

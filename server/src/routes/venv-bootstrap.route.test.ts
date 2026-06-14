@@ -58,7 +58,7 @@ describe('GET /api/setup/venv/detect', () => {
       new VenvBootstrap({
         repoRoot: '/repo',
         detectVenvFn: () => true,
-        findPythonFn: () => ({ cmd: 'python3.11', args: [] }),
+        findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
       }),
     );
     const res = await request(makeApp()).get('/api/setup/venv/detect');
@@ -90,7 +90,7 @@ describe('POST /api/setup/venv/bootstrap + poll', () => {
       new VenvBootstrap({
         repoRoot: '/repo',
         detectVenvFn: () => true,
-        findPythonFn: () => ({ cmd: 'python3.11', args: [] }),
+        findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
       }),
     );
     const app = makeApp();
@@ -108,7 +108,7 @@ describe('POST /api/setup/venv/bootstrap + poll', () => {
         /* First call (pre-install probe) → absent; second call (post-
            bootstrap probe) → present. */
         detectVenvFn: () => calls++ > 0,
-        findPythonFn: () => ({ cmd: 'python3.11', args: [] }),
+        findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
         spawnFn: () => fakeChild(0) as never,
       }),
     );
@@ -125,7 +125,7 @@ describe('POST /api/setup/venv/bootstrap + poll', () => {
       new VenvBootstrap({
         repoRoot: '/repo',
         detectVenvFn: () => true,
-        findPythonFn: () => ({ cmd: 'python3.11', args: [] }),
+        findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
       }),
     );
     const res = await request(makeApp()).get('/api/setup/venv/bootstrap/does-not-exist');
@@ -158,7 +158,7 @@ describe('POST /api/setup/venv/bootstrap/:id/recheck', () => {
       new VenvBootstrap({
         repoRoot: '/repo',
         detectVenvFn: () => present,
-        findPythonFn: () => ({ cmd: 'python3.11', args: [] }),
+        findPythonFn: () => ({ cmd: 'python3.12', args: [] }),
         spawnFn: () => fakeChild(0) as never,
       }),
     );

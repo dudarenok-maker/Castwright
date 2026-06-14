@@ -13,6 +13,12 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync, 
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import yauzl from 'yauzl';
+import {
+  classifyVenvState,
+  readStamp,
+  resolveRequired,
+  type VenvStamp,
+} from '../../tts-sidecar/scripts/venv-migration.mjs';
 
 export interface ApplyContext {
   installRoot: string;
@@ -37,6 +43,10 @@ export interface ApplySteps {
   /** The shared venv's recorded requirements hash (null if never installed). */
   readReqHash: () => string | null;
   writeReqHash: (hash: string) => void;
+  /** The shared venv's stamp (null on a missing/corrupt/old-v1.7.0 stamp). */
+  readStamp: () => VenvStamp | null;
+  /** What the CANDIDATE release requires, read from its extracted sidecar dir. */
+  resolveRequired: (sidecarDir: string) => VenvStamp;
   /** Atomic .current-version pointer flip — the commit point. */
   flipPointer: (installRoot: string, version: string) => Promise<void>;
   /** Spawn the detached restarter (waits for oldPid, then runs launch.mjs). */
@@ -44,7 +54,14 @@ export interface ApplySteps {
   log?: (msg: string) => void;
 }
 
-export type ApplyPhase = 'extract' | 'npm-ci' | 'pip-install' | 'flip' | 'restart' | 'done';
+export type ApplyPhase =
+  | 'extract'
+  | 'npm-ci'
+  | 'needs-reinstall'
+  | 'pip-install'
+  | 'flip'
+  | 'restart'
+  | 'done';
 
 export interface ApplyResult {
   ok: boolean;
@@ -72,6 +89,39 @@ export async function applyUpgrade(ctx: ApplyContext, steps: ApplySteps): Promis
     phase = 'npm-ci';
     log('[upgrade] npm ci (root + server)');
     await steps.npmCi(releaseDir);
+
+    // Detect-and-reinstall guard (R2): compare the SHARED venv's stamp against
+    // the CANDIDATE release's declared requirements (read from the extracted
+    // release's sidecar dir — not this running old code). A Python/profile
+    // mismatch (e.g. an alpha box's 3.11 venv vs a 3.12 release) classifies as
+    // 'needs-reinstall' — we must NOT pip the new deps into the old interpreter.
+    // Bail before pip-install/flip so the OLD release stays current (fail-safe).
+    const required = steps.resolveRequired(join(releaseDir, 'server', 'tts-sidecar'));
+    const { action } = classifyVenvState({
+      venvExists: true,
+      stamp: steps.readStamp(),
+      required,
+    });
+    if (action === 'needs-reinstall') {
+      phase = 'needs-reinstall';
+      log('[upgrade] shared venv is incompatible with the candidate release — reinstall required');
+      // Drop the extracted candidate; the old release (pointer untouched) stays current.
+      try {
+        if (steps.exists(releaseDir)) await steps.rmDir(releaseDir);
+      } catch {
+        /* best-effort cleanup */
+      }
+      return {
+        ok: false,
+        version: ctx.candidateVersion,
+        releaseDir,
+        phase,
+        error:
+          'The installed Python environment is incompatible with this release. ' +
+          'A fresh reinstall is required (your books and voices are preserved).',
+        pipRan,
+      };
+    }
 
     phase = 'pip-install';
     if (ctx.reqHash && ctx.reqHash !== steps.readReqHash()) {
@@ -186,6 +236,11 @@ export function createApplySteps(opts: { venvDir: string; log?: (m: string) => v
       mkdirSync(dirname(reqHashFile), { recursive: true });
       writeFileSync(reqHashFile, hash, 'utf8');
     },
+    // Read the shared venv's stamp + the candidate release's required descriptor
+    // via the pure venv-migration core (the same functions bootstrap-venv.mjs
+    // uses), so the two install paths can never disagree (S3).
+    readStamp: () => readStamp(opts.venvDir),
+    resolveRequired: (sidecarDir) => resolveRequired(sidecarDir),
     flipPointer: async (installRoot, version) => {
       const pointer = join(installRoot, '.current-version');
       const tmp = `${pointer}.tmp`;

@@ -183,6 +183,12 @@ Sub-groups and the items within them are ranked top = highest priority.
 - _Benefit (architectural):_ frees the 8 GB GPU entirely for TTS (serves the concurrent multi-book invariant) and lifts the local analyzer model-size ceiling for better fiction attribution. Trade: slower CPU analysis (~minutes/chapter) — fine as a GPU-free background step.
 _Full detail + acceptance:_ [#507](https://github.com/dudarenok-maker/AudioBook-Generator/issues/507) · plan `docs/features/178-cpu-only-analyzer.md`.
 
+#### `side-15` — AMD GPU support (Phase 2: AMD enablement; Phase 1 shipped) ([#813](https://github.com/dudarenok-maker/Castwright/issues/813))
+
+- _What:_ Bring up AMD GPUs for the TTS sidecar. **Phase 1 shipped** (the public-beta ship gate): the Python 3.11→3.12 transition + NVIDIA-latest torch + a layered-requirements structure + a detect-and-reinstall alpha path, with all AMD code paths **dormant + unit-tested** so Phase 2 is a flip not a rewrite (pure `accelerator-profile.mjs` resolver + `venv-migration.mjs` decision core + `python-tag.txt`/`ensure-python312.mjs`; NVIDIA install set unchanged; `apply.ts` refuses a 3.11→3.12 in-place upgrade). **Phase 2 (this item)** wires the AMD branches live: a ROCm torch wheel + `amd-rocm.txt`/`cpu.txt` overlays + profile-based overlay selection, DirectML for Kokoro on Windows (gated by spike S0.1), the `/health` backend enum, VRAM telemetry, and a profile-switch with the in-place rebuild — requires an **AMD-owning tester** for acceptance.
+- _Benefit (user):_ unlocks the currently-excluded AMD-GPU deployer cohort without regressing NVIDIA/CPU/macOS. The shipped Phase-1 groundwork makes the AMD half an incremental enablement rather than new plumbing.
+_Full detail + acceptance:_ [#813](https://github.com/dudarenok-maker/Castwright/issues/813) · plan [`217-amd-gpu-support.md`](features/217-amd-gpu-support.md) · spec [`2026-06-14-amd-gpu-sidecar-support-design.md`](superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md).
+
 #### `srv-36` — Calibrate voice-drift detection thresholds against a labelled dataset ([#665](https://github.com/dudarenok-maker/AudioBook-Generator/issues/665))
 
 - _What:_ The per-chapter drift comparator surfaces Severe / Moderate / Mild tiers, but its metric set and severity cutoffs are **placeholder** — never calibrated against ground truth. Gather a labelled drifted-vs-not chapter-audio set and tune the metric weights + tier thresholds so severity tracks perceived drift, with a regression test pinning the calibrated cutoffs.
