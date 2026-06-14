@@ -1,9 +1,10 @@
 # AMD GPU support for the TTS sidecar (Windows + Linux)
 
 - **Date:** 2026-06-14
-- **Status:** draft — the **spike-independent foundation (Phase 1) is plannable now**; the
-  **AMD-specific Phase 2 is gated on the Section 0 verification spike** (two critical
-  assumptions are unproven without it). See "Delivery sequencing."
+- **Status:** draft — **Phase 1 (dormant scaffolding, zero behavior change) is plannable
+  now**; **Phase 2 (the 3.12 flip + AMD + VRAM change, shipped together) is gated on the
+  Section 0 verification spike.** The phase boundary is drawn on *behavior change*, so the
+  3.12 migration tax never ships ahead of the AMD benefit. See "Delivery sequencing."
 - **Ships in:** the release after v1.7.0 (open beta) — so the upgrade migration path is
   first-class, not an afterthought.
 - **Goal posture:** broaden the open beta to AMD-GPU owners. Best-effort, since the
@@ -119,24 +120,41 @@ implementation plan until S0.1 and S0.2 resolve.**
 Spike output: a short findings note appended here, then the AMD-specific plan is written
 against **verified** mechanics, not assumptions.
 
-## Delivery sequencing (foundation first, AMD-specifics behind the spike)
+## Delivery sequencing (cut on BEHAVIOR CHANGE, not "hardware independence" — A2/A11)
 
-The work splits cleanly along the spike boundary, so the foundation is buildable **now**
-without any AMD hardware or spike outcome:
+The disruptive part of this feature is the Python 3.11→3.12 migration (a forced venv
+rebuild + ~2.5 GB torch re-download for **every** user — NVIDIA, mac, CPU alike). Its
+*only* justification is AMD (ROCm-Windows needs 3.12). Therefore the phase boundary is
+drawn so the **migration tax and the AMD benefit ship together**, never the tax first.
 
-- **Phase 1 — Spike-independent foundation (plan + build now):** the pure-function
-  accelerator-profile resolver + detection (Section 1), the layered-requirements scaffold
-  with the NVIDIA/CPU recipes (Section 3), the venv stamp + three-way decision +
-  build-new-then-swap migration (Section 2), the `/health` family-vocabulary +
-  torch-first VRAM telemetry (Sections 4–5, NVIDIA/CPU paths), the Python-3.12 unification
-  (incl. NVIDIA cp312 flash-attn tag), and the **entire test backbone** (Section 7). This
-  delivers the 3.11→3.12 migration and the architecture even before AMD is enabled — and is
-  independently valuable (vendor-neutral VRAM telemetry, atomic venv migration).
+- **Phase 1 — Dormant scaffolding (ships with ZERO user-visible behavior change; plan +
+  build now, no AMD HW):**
+  - The pure-function **resolver + detection** (`accelerator-profile.ts`, Section 1) —
+    present, exhaustively unit-tested, but on existing hardware it resolves to exactly
+    today's effective behavior (nvidia/cpu/apple).
+  - The **migration machinery** (Section 2) as **pure, fully-faked, unit-tested functions**
+    — the stamp model, the three-way decision, the build-new-then-swap ordering — **but NOT
+    wired into the live `apply.ts` flow as a trigger.** Phase 1 ships **no** `pythonTag` or
+    requirements change, so the decision always returns no-op/pip-in-place exactly as today.
+  - The **layered-requirements *structure*** (Section 3) where the **NVIDIA/CPU overlays are
+    byte-identical in effect to today's `requirements.txt`** → the install is unchanged.
+  - The **`/health` family-enum extension** (`rocm`/`directml` added to the vocabulary) —
+    inert, since no engine emits them yet.
+  - The **full test backbone** (Section 7).
+  - **Python stays 3.11; CI stays 3.11; VRAM telemetry source unchanged (still
+    `nvidia-smi`).** Nothing a current user can observe changes. Value: the hard pure logic
+    lands and is locked by tests + reviewed *separately* from the scary integration.
 - **Spike — Section 0** (S0.1–S0.4) runs in parallel with / after Phase 1.
-- **Phase 2 — AMD enablement (plan + build post-spike):** the verified ROCm `torchSpec` +
-  repo.radeon.com wheel handling, the DirectML ORT install ordering + provider selection +
-  cached self-test, the (possibly re-exported) universal Kokoro model, and the AMD rows of
-  the wizard/about/Help messaging — all written against S0 findings.
+- **Phase 2 — Behavior changes + AMD, shipped together (post-spike):**
+  - **Flip Python to 3.12** — this is what finally *triggers* the migration machinery; the
+    integration into the live `apply.ts` flow as a **resumable upgrade stage** (A3) lands
+    here, as does the **runtime profile-switch rebuild flow** (A7/A8).
+  - Verified ROCm `torchSpec` + repo.radeon.com wheel handling; DirectML ORT ordering +
+    provider selection + cached self-test; the (possibly re-exported) **universal Kokoro
+    model**; the **torch-first VRAM telemetry** change (A10 — kept out of Phase 1 so the
+    fragile recycle/ceiling math isn't disturbed for no benefit); AMD wizard/about/Help
+    messaging; CI → 3.12.
+  - The 3.12 tax and the AMD payoff arrive in the same release.
 
 **Engine-drop priority (N8):** if S0.2 forces a cut on the AMD profile, preserve in this
 order — **Kokoro (default narration) > Qwen (voice design) > Coqui (alternate)**. Coqui is
@@ -157,6 +175,29 @@ detect vendor ──► resolveProfile(override, detected, platform) ──► p
    engine, platform)             engine, platform)            platform)
 ```
 
+### Cross-runtime hand-off (A1 — the resolver is Node-only; Python consumes, never re-derives)
+
+The resolver is used by three runtimes, and **Python cannot import a Node module**, so a
+literal single module is impossible. The contract that keeps it a single source of truth:
+
+- **The resolver is one TypeScript module** — `server/src/tts/accelerator-profile.ts`
+  (pure functions, vitest-tested), matching the existing `*-helpers.ts` pattern in
+  `server/src/tts/`. The Node **server** imports it directly; the Node **install scripts**
+  (`install-*.mjs`) import its compiled output (`server/dist/tts/accelerator-profile.js`).
+  No second copy in Node.
+- **Python (`main.py`) never imports the resolver and never re-derives the matrix.** The
+  server resolves the profile and **injects concrete, already-decided values into the
+  sidecar at spawn** (`server/src/tts/spawn-sidecar.ts`) via env:
+  - `CASTWRIGHT_ACCELERATOR_PROFILE` (e.g. `nvidia` | `amd` | `cpu` | `apple`)
+  - `KOKORO_ORT_PROVIDERS` (the resolved ordered provider list, JSON) — Python passes it
+    through to the ONNX Runtime session; it does not compute it.
+- **The one thing Python decides for itself is pure runtime introspection, not matrix
+  logic:** the reported device *family* via `torch.version.hip is not None` → `rocm` vs
+  `cuda` (Section 4). That's reading the loaded torch build, not duplicating the resolver.
+
+So: install recipes + the provider list live once in TS; the sidecar is a thin consumer of
+spawn-time env. This is the load-bearing architecture decision for the whole feature.
+
 ### The (vendor × OS × engine) matrix the resolver owns
 
 | vendor × OS | torch engines (Coqui/Qwen) | Kokoro (onnxruntime) |
@@ -173,8 +214,9 @@ contingent on S0.2.
 
 ## Section 1 — Accelerator profile resolver
 
-**New module:** `server/tts-sidecar/scripts/accelerator-profile.mjs`, all **pure
-functions** so the whole matrix is unit-testable with zero AMD hardware.
+**New module:** `server/src/tts/accelerator-profile.ts` (TS, pure functions, vitest-tested
+— see the cross-runtime hand-off above for why it lives here and not in `scripts/`). The
+whole matrix is unit-testable with zero AMD hardware.
 
 - `detectVendor({ platform, exec })` → `'nvidia' | 'amd' | 'apple' | 'cpu' | 'unknown'`.
   - Windows: `Get-CimInstance Win32_VideoController`; Linux: `lspci` + `rocminfo` /
@@ -212,29 +254,54 @@ weights, communicates honestly. One prompt, no manual venv commands.
 1. **Stamp the venv.** `.venv-stamp.json` in the venv dir: `{ pythonTag, profile,
    reqHash, builtVersion }`. **Missing stamp (a v1.7.0 venv has `.req-hash` but no
    stamp) ⇒ treat as mismatch ⇒ rebuild (M2).**
-2. **Three-way decision** (shared by `apply.ts` and `bootstrap-venv.mjs`):
+2. **Three-way decision** — the **pure, Phase-1 unit-tested core** (a function, no I/O),
+   consumed by both trigger paths below:
    - `pythonTag` or `profile` mismatch (or no stamp) → **full teardown + rebuild**.
    - `reqHash` changed only → **pip install in place** (today's behavior).
    - all match → **no-op**.
-   - **`reqHash` is computed over the RESOLVED overlay's contents (Section 3), not the
-     static root shim (H2)** — otherwise overlay edits go undetected.
-3. **Build-new-then-swap (atomicity, mirrors the release-dir pattern):**
+   - **`reqHash` is computed over the concatenated *text* of the resolved overlay + its
+     `-r base.txt` (H2/A9)** — i.e. the requirements *file contents*, not a pip-resolved
+     dependency tree (same fidelity as today's single-file hash, just multi-file). Not the
+     static root shim.
+3. **Build-new-then-swap (atomicity, mirrors the release-dir pattern) — the pure ordering
+   is Phase-1 tested; live wiring is Phase 2:**
    - **Pre-flight (a):** locate a suitable Python 3.12 (Section 3); if none and
      auto-install fails → **stop before touching anything**; old venv intact.
-   - **Pre-flight (b) disk check (M3/N1):** a full second venv (torch ~2–2.5 GB) is built at
-     `.venv-next` before the swap. Verify free space first; **if tight, ABORT with a clear
-     "free N GB and retry" message — never teardown-then-build.** The "never destroy a
-     working environment" guarantee is absolute; a mid-download failure of a multi-GB ROCm
-     wheel after teardown would leave the user with no venv, which is exactly the outcome
-     this section exists to prevent.
-   - Build `.venv-next`, pip-install, smoke-check (imports torch, reports expected
-     backend, Kokoro self-test for DML if applicable).
-   - On green only: atomically swap `.venv-next` → `.venv` (keep old as `.venv-prev` for
-     one cycle as rollback). Failed rebuild leaves the running environment working.
+   - **Pre-flight (b) disk check (M3/N1/A6):** the transient peak is **three** venvs —
+     `.venv` (current) + `.venv-next` (building) + `.venv-prev` (retained after swap) ≈
+     **3× venv size (~7 GB)**. Require that headroom up front; **if tight, ABORT with a
+     clear "free N GB and retry" — never teardown-then-build.** The "never destroy a working
+     environment" guarantee is absolute.
+   - Build `.venv-next`, pip-install, **smoke-check with a timeout** (imports torch within N
+     seconds, reports expected backend; Kokoro DML self-test only per Section 4). A
+     smoke-check failure/timeout **aborts the migration and leaves the old venv in place** —
+     it never silently swaps in an unverified venv.
+   - On green only: atomically swap `.venv-next` → `.venv` and keep the old as `.venv-prev`.
+   - **`.venv-prev` lifecycle:** deleted on the **next** successful boot that confirms
+     `.venv` imports cleanly (rollback window = one boot), so disk returns to 1× promptly.
 4. **Weights preserved** — `voices/` lives outside the venv; rebuild re-fetches pip
    packages (torch ~2–2.5 GB) but **not** the multi-GB model weights.
 5. **One honest prompt** (Section 6), then automatic progress.
-6. **Profile-switch reuses the same machinery** (a `profile` mismatch).
+
+**Two trigger paths (both consume the pure core above; both are Phase 2):**
+
+- **(i) Self-upgrade (`apply.ts`) — a resumable, multi-stage upgrade (A3).** Today's flow is
+  single-shot (extract → npmCi → pipInstall → flip → restart). The migration inserts a
+  **rebuild stage before the flip**: extract → npmCi → **[ensure py3.12 → build `.venv-next`
+  → smoke → swap]** → flip → restart. Because an auto-installed Python 3.12 is typically not
+  on the running process's PATH and may need UAC (H3), the rebuild stage can **pause**: it
+  writes a `migration-in-progress` marker, asks the user to relaunch, and on next boot the
+  server **detects the marker and resumes** the rebuild. **The pointer is flipped only after
+  the rebuild + smoke-check succeed**, so a failed/aborted migration always leaves the
+  prior release + its working venv current.
+- **(ii) Runtime profile switch (A7/A8) — a separate, NON-upgrade flow.** Flipping
+  `ACCELERATOR` via the wizard/#advanced changes the `profile`, which the three-way decision
+  sees as a mismatch → rebuild. This is **not** an upgrade, so it does **not** go through
+  `apply.ts`; it is a dedicated server action. **It MUST coordinate with in-flight work:**
+  before tearing anything down it checks the existing generation/voice-design busy registry
+  (`design-lock`) and **refuses (or queues until idle)** if a job is running — tearing down
+  `.venv` under a live sidecar would crash the job. After a green swap it restarts the
+  sidecar with the new venv.
 
 **Risk acknowledgment (H4):** unify-on-3.12 forces *every existing NVIDIA beta user*
 through this rebuild — the highest-risk new code, imposed on the users the feature does
@@ -310,11 +377,14 @@ strings; add `HIP error` / `rocBLAS` / `hipBLAS` so a poisoned ROCm context self
 Extend the existing per-engine probe (side-14: `_compute_device_predictions`,
 `_normalize_device_family`, `/health` → `devices` + `devices_state`).
 
-1. **Add `rocm` + `directml` families.** Torch engines: `torch.version.hip` → `rocm` not
+1. **Add `rocm` + `directml` families.** *(Enum addition is **Phase 1, dormant** — nothing
+   emits the new values until AMD lands.)* Torch engines: `torch.version.hip` → `rocm` not
    `cuda`. Kokoro: map session providers `DmlExecutionProvider→directml`,
    `CUDAExecutionProvider→cuda`, `ROCMExecutionProvider→rocm`, else `cpu` (both loaded and
    prediction paths). /about panel shows "ROCm" / "DirectML" via a label map.
-2. **VRAM telemetry — measure what we can, say `unknown` for the rest.**
+2. **VRAM telemetry — measure what we can, say `unknown` for the rest. *(Phase 2 — A10:
+   kept OUT of Phase 1 so the tuned recycle/ceiling math on the proven NVIDIA path is not
+   disturbed for zero Phase-1 benefit; NVIDIA keeps `nvidia-smi` until this lands.)***
    - Prefer `torch.cuda.mem_get_info()` for resident torch-engine VRAM (works under
      ROCm/HIP; vendor-neutral). Optional whole-GPU `rocm-smi` where present.
    - DirectML VRAM unmeasurable → **`unknown`, never `0`**.
@@ -341,6 +411,10 @@ Help/failure taxonomy).
    Qwen: ROCm · Coqui: ROCm · Whisper: CPU — with an inline "AMD GPU support is in
    preview" note.
 4. **#/advanced surfaces `ACCELERATOR`** with locked-by-`.env` + drift-guard behavior.
+   **Special knob (A15):** unlike every other config knob (which trigger a sidecar
+   *restart*), changing `ACCELERATOR` requires a venv **rebuild** via the runtime
+   profile-switch flow (Section 2, path ii) — the registry must model "rebuild on change,"
+   not just restart, and the UI must warn that the change is not instant.
 5. **Failure messaging:** a "GPU acceleration unavailable — running on CPU" remediation
    entry (driver/Adrenalin version, unsupported gfx, preview-wheel, DML-op fallback). Keeps
    the FailureCode lockstep discipline (taxonomy + remediations + openapi + help titles +
@@ -369,7 +443,9 @@ hardware-bound rest is an explicit owed acceptance matrix.
    teardown+rebuild with **build-`.venv-next`-then-swap order** + **old venv preserved on
    failure**; profile mismatch → rebuild; reqHash-only (over **resolved overlay**, H2) →
    pip-in-place; all-match → no-op; **Python-3.12-missing → abort pre-flight, `rmDir`
-   never called**; **low-disk (M3) → teardown-then-build fallback with warning**.
+   never called**; **low-disk (M3/N1) → abort with "free N GB", `rmDir` never called**;
+   **smoke-check failure/timeout → no swap, old venv retained**; **resume-after-marker (A3)
+   continues a paused rebuild**; **profile-switch refuses while a job is busy (A8)**.
 5. **Installer-recipe tests** — extend pure `resolveFlashAttnInstall` (cp312 + amd-skip);
    assert resolver-driven torch spec (manual wheel URL for AMD), ORT install ordering
    (H1), per profile with `spawn` faked.
@@ -398,6 +474,11 @@ hardware-bound rest is an explicit owed acceptance matrix.
 | N2 | Second Kokoro model artifact + selection | Prefer a single corrected model shipped to ALL profiles (re-pin hash); two artifacts explicitly rejected |
 | N3 | DML self-test latency / driver hang per boot | Cached + engine-conditional; lazy on first DML load, re-run only on profile/driver change |
 | N7 | Env vs wizard-choice precedence | Env beats wizard beats detection (locked-by-`.env` semantics) |
+| A1 | "Single resolver" can't span Node + Python | Resolver is Node/TS only; sidecar consumes spawn-time env (`CASTWRIGHT_ACCELERATOR_PROFILE`, `KOKORO_ORT_PROVIDERS`); Python only introspects `torch.version.hip` |
+| A2/A11 | 3.12 migration tax would ship before AMD benefit | Re-cut phases on behavior change; Phase 1 dormant; 3.12 flip + AMD + VRAM ship together in Phase 2 |
+| A3 | Upgrade becomes multi-stage + needs PATH relaunch | Resumable rebuild stage with `migration-in-progress` marker; flip only after green |
+| A7/A8 | Profile switch is non-upgrade + collides with live jobs | Dedicated runtime rebuild action; refuses/queues against `design-lock` busy registry |
+| A6 | Transient disk is 3× venv, not 2× | Pre-flight requires ~3× headroom; `.venv-prev` deleted on next clean boot |
 
 ## Out of scope
 
@@ -412,9 +493,13 @@ hardware-bound rest is an explicit owed acceptance matrix.
 - [ ] AMD-Windows fresh install: Qwen/Coqui report ROCm in /about and generate audio;
       Kokoro reports DirectML **if S0.1 passed**, else CPU (honestly).
 - [ ] AMD-Linux fresh install: Qwen/Coqui=ROCm, Kokoro=CPU.
-- [ ] Upgrade from v1.7.0: one prompt, automatic atomic rebuild, books + designed voices
-      intact, ends on Python 3.12; failed rebuild leaves v1.7.0 working.
+- [ ] Upgrade from v1.7.0 on an **NVIDIA** box: one prompt, automatic atomic rebuild,
+      books + designed voices intact, ends on Python 3.12; failed/aborted rebuild leaves
+      v1.7.0 working; resumable across a relaunch.
+- [ ] Upgrade from v1.7.0 on **macOS/Apple-Silicon** (A13): same migration succeeds; mps
+      path unchanged afterwards.
 - [ ] Python-3.12-absent box: auto-install (or guided fallback + relaunch) works; the
       working install is never broken mid-flight.
 - [ ] Dual-GPU box (AMD iGPU + NVIDIA dGPU): resolves to NVIDIA by default.
-- [ ] Override: `ACCELERATOR=cpu` on an AMD box triggers a rebuild and reports CPU.
+- [ ] Override: `ACCELERATOR=cpu` on an AMD box triggers a rebuild **and refuses while a
+      generation/design job is running (A8)**, then reports CPU after the swap.
