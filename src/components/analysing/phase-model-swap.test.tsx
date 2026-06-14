@@ -5,6 +5,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { accountSlice } from '../../store/account-slice';
+import { uiSlice } from '../../store/ui-slice';
 import { PhaseModelSwap } from './phase-model-swap';
 
 const putUserSettingsMock = vi.fn();
@@ -32,17 +33,24 @@ beforeEach(() => {
   putUserSettingsMock.mockReset();
 });
 
-function mountStore(initial: Partial<{
-  analyzerPhase0Model: string | null;
-  analyzerPhase1Model: string | null;
-}>) {
+function mountStore(
+  initial: Partial<{
+    analyzerPhase0Model: string | null;
+    analyzerPhase1Model: string | null;
+  }>,
+  ui?: Partial<{ selectedModel: string; selectedModelExplicit: boolean }>,
+) {
   return configureStore({
-    reducer: { account: accountSlice.reducer },
+    reducer: { account: accountSlice.reducer, ui: uiSlice.reducer },
     preloadedState: {
       account: {
         ...accountSlice.getInitialState(),
         ...initial,
       } as ReturnType<typeof accountSlice.getInitialState>,
+      ui: {
+        ...uiSlice.getInitialState(),
+        ...ui,
+      } as ReturnType<typeof uiSlice.getInitialState>,
     },
   });
 }
@@ -93,6 +101,60 @@ describe('PhaseModelSwap', () => {
     fireEvent.change(select, { target: { value: '' } });
     await waitFor(() => {
       expect(putUserSettingsMock).toHaveBeenCalledWith({ analyzerPhase0Model: null });
+    });
+  });
+
+  describe('per-run override active — the per-phase swap is shadowed', () => {
+    /* When the user picks a per-run override (e.g. qwen3.5:4b on the
+       analysis-failed card) the server collapses both phases to it, so the
+       saved per-phase model is moot for this run. The dropdown must show the
+       override and be disabled (the saved setting stays editable only after
+       Reset to default) so it can't contradict the phase chip. */
+    it('renders the override model, disabled, when an explicit per-run pick is active', () => {
+      const store = mountStore(
+        { analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: true },
+      );
+      render(
+        <Provider store={store}>
+          <PhaseModelSwap phaseId={1} isActive={true} />
+        </Provider>,
+      );
+      const el = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
+      expect(el.disabled).toBe(true);
+      expect(el.textContent).toContain('Qwen3.5 4B');
+      expect(el.getAttribute('title')).toContain('Per-run override');
+    });
+
+    it('does not persist a per-phase change while the override shadows it', async () => {
+      const store = mountStore(
+        { analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: true },
+      );
+      render(
+        <Provider store={store}>
+          <PhaseModelSwap phaseId={1} isActive={true} />
+        </Provider>,
+      );
+      const el = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
+      /* Disabled selects don't fire onChange, but assert the guard anyway. */
+      fireEvent.change(el, { target: { value: 'gemma-4-31b-it' } });
+      await act(async () => {});
+      expect(putUserSettingsMock).not.toHaveBeenCalled();
+    });
+
+    it('stays an editable picker when the pick is not explicit (seeded default)', () => {
+      const store = mountStore(
+        { analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: false },
+      );
+      render(
+        <Provider store={store}>
+          <PhaseModelSwap phaseId={1} isActive={false} />
+        </Provider>,
+      );
+      const el = screen.getByTestId('phase-model-swap-1') as HTMLSelectElement;
+      expect(el.disabled).toBe(false);
     });
   });
 

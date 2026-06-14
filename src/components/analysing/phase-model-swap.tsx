@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MODEL_OPTION_GROUPS } from '../../lib/models';
+import { MODEL_OPTIONS, MODEL_OPTION_GROUPS } from '../../lib/models';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   saveAccountSettings,
@@ -30,6 +30,18 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
   const rawValue = useAppSelector((s) =>
     phaseId === 0 ? s.account.analyzerPhase0Model : s.account.analyzerPhase1Model,
   );
+  /* A per-run override (explicit pick on the analysis-failed card) collapses
+     both phases onto the override server-side, so the saved per-phase model
+     is moot for this run. Show the override, disabled, so this dropdown can't
+     contradict the phase chip — editing the saved setting is only meaningful
+     once the override is cleared via "Reset to default". Defensive read: some
+     legacy test harnesses mount without the ui slice. */
+  const overrideActive = useAppSelector(
+    (s) => (s as { ui?: { selectedModelExplicit?: boolean } }).ui?.selectedModelExplicit === true,
+  );
+  const overrideModelId = useAppSelector(
+    (s) => (s as { ui?: { selectedModel?: string } }).ui?.selectedModel ?? '',
+  );
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
@@ -52,6 +64,26 @@ export function PhaseModelSwap({ phaseId, isActive }: PhaseModelSwapProps) {
         : 'Applies from next chapter',
     );
   };
+
+  if (overrideActive) {
+    const overrideLabel =
+      MODEL_OPTIONS.find((m) => m.id === overrideModelId)?.label ?? overrideModelId ?? 'override';
+    return (
+      <span className="inline-flex items-center gap-2">
+        <select
+          value="__override__"
+          disabled
+          data-testid={`phase-model-swap-${phaseId}`}
+          title="Per-run override active — reset it to default to edit the per-phase model."
+          className="px-2.5 py-1 rounded-full border border-ink/10 bg-ink/5 text-[11px] font-medium text-ink/50 cursor-not-allowed"
+          aria-label={`Phase ${phaseId} model (per-run override active)`}
+          onChange={() => {}}
+        >
+          <option value="__override__">{overrideLabel}</option>
+        </select>
+      </span>
+    );
+  }
 
   return (
     <span className="inline-flex items-center gap-2">

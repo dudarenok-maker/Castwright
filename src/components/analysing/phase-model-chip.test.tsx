@@ -16,7 +16,7 @@ function mountStore(
     analyzerPhase1MinLagChapters: number | null;
     defaultAnalysisModel: string;
   }>,
-  ui?: Partial<{ selectedModel: string }>,
+  ui?: Partial<{ selectedModel: string; selectedModelExplicit: boolean }>,
 ) {
   return configureStore({
     reducer: { account: accountSlice.reducer, ui: uiSlice.reducer },
@@ -129,6 +129,57 @@ describe('PhaseModelChip', () => {
         { phaseId: 1, state: 'streaming' },
       );
       expect(screen.getByTestId('phase-model-chip-1').textContent).toContain('Server default');
+    });
+  });
+
+  describe('per-run override active (selectedModelExplicit) — collapses the split', () => {
+    /* Regression for the 2026-06-14 report: with a per-phase split saved
+       (Gemini for both phases), picking a per-run override (qwen3.5:4b) on
+       the analysis-failed card made the run execute on Qwen (server log:
+       "via Ollama (qwen3.5:4b)") but the chip kept showing the saved phase
+       model. The server collapses both phases to a per-run override
+       (analysis.ts precedence priority 2), so the chip must mirror that. */
+    it('shows the override model for phase 0 even when the split is on', () => {
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { phaseId: 0, state: 'streaming' },
+        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: true },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.textContent).toContain('Qwen3.5 4B');
+      expect(chip.textContent).not.toContain('Gemma');
+    });
+
+    it('shows the override model for phase 1 even when the split is on', () => {
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { phaseId: 1, state: 'streaming' },
+        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: true },
+      );
+      const chip = screen.getByTestId('phase-model-chip-1');
+      expect(chip.textContent).toContain('Qwen3.5 4B');
+      expect(chip.textContent).not.toContain('Flash Lite');
+    });
+
+    it('does NOT promise a warm-up handoff while an override is collapsing the split', () => {
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { phaseId: 1, state: 'warming' },
+        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: true },
+      );
+      const chip = screen.getByTestId('phase-model-chip-1');
+      expect(chip.textContent).not.toContain('warms up');
+    });
+
+    it('ignores the override when it is not explicit (split still wins)', () => {
+      /* selectedModelExplicit false = the value is just the seeded default,
+         not a real per-run pick, so the saved phase model still governs. */
+      renderChip(
+        { analyzerPhase0Model: 'gemma-4-31b-it', analyzerPhase1Model: 'gemini-3.1-flash-lite' },
+        { phaseId: 0, state: 'streaming' },
+        { selectedModel: 'qwen3.5:4b', selectedModelExplicit: false },
+      );
+      expect(screen.getByTestId('phase-model-chip-0').textContent).toContain('Gemma 4 31B');
     });
   });
 
