@@ -9,9 +9,6 @@
 import { pathToFileURL } from 'node:url';
 import { spawnSync, execSync } from 'node:child_process';
 
-/** The Python tag/version this release targets. */
-export const REQUIRED_PYTHON = '3.12';
-
 /**
  * Decide how to acquire Python 3.12 from a discovery result. Pure — no I/O.
  * Precedence: an interpreter already on PATH always wins (`use`). Otherwise, on
