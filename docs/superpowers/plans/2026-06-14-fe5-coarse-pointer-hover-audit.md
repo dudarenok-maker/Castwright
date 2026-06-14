@@ -16,6 +16,7 @@
 
 - The variant is already defined: `src/styles.css:53` — `@custom-variant coarse-pointer (@media (pointer: coarse));` and `:54` `fine-pointer (@media (pointer: fine))`. No CSS/config change is needed; just use the variants in `className` strings.
 - **Tailwind v4 ordering fact this plan relies on:** an *unprefixed* utility (`opacity-0`) always emits earlier in the generated stylesheet than any *variant* utility (`coarse-pointer:opacity-100`), so the variant wins by source order at equal specificity. But *two* variant utilities (`sm:opacity-0` vs `coarse-pointer:opacity-100`) have no guaranteed order — that is why `generation.tsx` is refactored instead of patched additively.
+  - **This additive pattern is already shipped and working in-repo** — `src/views/manuscript.tsx:1368` and `src/components/library/continue-listening-rail.tsx:145` both use `opacity-0 group-hover:opacity-100 coarse-pointer:opacity-NN`. Tasks 2 & 3 copy that proven pattern. **Task 1's `fine-pointer:`-gated hide is the only mechanism with no in-repo precedent** — it's the one to scrutinise in review (manually confirm on a tablet emulator that the button is visible and 44px, and that a desktop mouse still hides-until-hover).
 - **Playwright gotcha:** `toBeVisible()` does **not** consider `opacity` — an `opacity:0` element still reports visible. Assertions MUST read `getComputedStyle(el).opacity`.
 - **Pointer emulation:** `mobile-chrome` (Pixel 7) reports `pointer: coarse`; `chromium` (Desktop Chrome) reports `pointer: fine`. The e2e branches on the *runtime* `matchMedia('(pointer: coarse)')` result so it is self-consistent on every project; `mobile-chrome` guarantees the coarse path is exercised.
 - **The books grid renders on every viewport.** `src/views/book-library.tsx:199` forces `effectiveViewMode='card'` on mobile, and the default stored mode is `'card'`, so `<LibraryGrid>` (with its `aria-label="Book options"` button) is present on chromium/mobile/tablet. The table view's menu uses `aria-label="Actions for {title}"`, so `"Book options"` unambiguously targets the grid card.
@@ -52,6 +53,9 @@ regenerate buttons). Place it after the existing
 ```tsx
   it('regenerate-in-chapter button stays visible + 44px on touch (fe-5)', () => {
     renderView();
+    // Chapters render collapsed; expand Chapter 1 so the per-character rows
+    // (and their regenerate buttons) mount — mirrors the sibling test above.
+    fireEvent.click(screen.getByText('Chapter 1'));
     // The regenerate buttons are labelled `Regenerate {name} in this chapter`.
     const btn = screen.getAllByRole('button', { name: /Regenerate .+ in this chapter/i })[0];
     // Touch fallback: base opacity-100 + the fine-pointer-gated hide (mouse only),
@@ -144,18 +148,14 @@ git commit -m "fix(frontend): reveal regenerate button on touch via fine-pointer
 
 - [ ] **Step 1: Write the failing unit test**
 
-Add this test in `src/views/book-library.test.tsx`. The file already renders the populated
-grid and clicks `getByLabelText(/Book options/i)` (see the existing delete-confirm test), so
-the harness is in place. Add a standalone `it(...)` near that test (inside the same top-level
-`describe`):
+Add this test in `src/views/book-library.test.tsx`. The file already has a module-level
+`renderView({ loaded, authors })` helper and a `oneAuthor` fixture (one book → one grid
+card), and an existing test reaches the card menu via `getByLabelText(/Book options/i)`.
+Reuse them verbatim. Add a standalone `it(...)` inside the top-level `describe`:
 
 ```tsx
   it('book-options menu trigger is revealed on touch (coarse pointer) — fe-5', () => {
-    render(
-      <Provider store={makeStoreWithBooks()}>
-        <BookLibrary {...defaultProps} />
-      </Provider>,
-    );
+    renderView({ loaded: true, authors: [oneAuthor] });
     const trigger = screen.getAllByLabelText(/Book options/i)[0];
     expect(trigger).toHaveClass('coarse-pointer:opacity-100');
     // Desktop hover-reveal behavior preserved.
@@ -164,10 +164,9 @@ the harness is in place. Add a standalone `it(...)` near that test (inside the s
   });
 ```
 
-NOTE: reuse whatever store/props helper the surrounding tests already use to render a
-populated grid (the delete-confirm test at the `getByLabelText(/Book options/i)` line shows
-the exact setup in this file — mirror it; do not invent `makeStoreWithBooks`/`defaultProps`
-if the file names them differently).
+(`renderView` and `oneAuthor` are already defined at the top of this file — do not redefine
+them. jsdom's default 1024px width keeps `effectiveViewMode='card'`, so the grid card and its
+`aria-label="Book options"` trigger render.)
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -235,17 +234,23 @@ Change it to add `coarse-pointer:opacity-100` and a stable `data-testid` hook:
 - [ ] **Step 2: Write the test**
 
 Add this test to `src/components/mini-player.test.tsx` in a new `describe` block at the end
-of the file. Use the file's existing `renderPlayer(ui)` helper and mirror the props an
-existing test passes to `<MiniPlayer>` (copy the prop object from any nearby
-`renderPlayer(<MiniPlayer … />)` call in this file — the thumb renders whenever the player
-mounts with a chapter):
+of the file. The file already defines `renderPlayer(ui)`, `noop`, and `chapter1`; the thumb
+span renders unconditionally whenever the player mounts (no duration gating). Use this exact
+prop set (copied from the resume test in this file):
 
 ```tsx
 describe('MiniPlayer — scrubber thumb touch fallback (fe-5)', () => {
   it('thumb carries the coarse-pointer reveal fallback', () => {
     const { getByTestId } = renderPlayer(
-      /* mirror an existing <MiniPlayer …props/> from this file */
-      <MiniPlayer {/* …same props as a neighbouring test… */} />,
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
     );
     const thumb = getByTestId('scrubber-thumb');
     expect(thumb).toHaveClass('coarse-pointer:opacity-100');
