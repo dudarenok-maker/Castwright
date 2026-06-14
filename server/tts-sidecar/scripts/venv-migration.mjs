@@ -1,10 +1,10 @@
-// venv-migration.mjs — pure decision core for the venv stamp + rebuild logic.
-// Consumed (in Phase 2) by both apply.ts (self-upgrade) and bootstrap-venv.mjs
-// (dev/source). Phase 1 ships these pure functions + tests only; nothing wires
-// them into a live flow beyond the detect-and-reinstall classifier. Tested from
-// server/src/tts/venv-migration.test.ts which imports it directly. This is a
-// plain synchronous ESM library (no CLI guard, no top-level await) so a server
-// .ts can statically import classifyVenvState/readStamp from it inertly.
+// venv-migration.mjs — pure decision core for the venv stamp + detect-and-reinstall
+// logic. Consumed live in Phase 1 by BOTH bootstrap-venv.mjs (fresh-install path)
+// and apply.ts (self-upgrade guard) via `resolveRequired` + `classifyVenvState` +
+// `readStamp` — they share this one module so the two paths can't classify the same
+// venv differently. Tested from server/src/tts/venv-migration.test.ts which imports
+// it directly. Plain synchronous ESM library (no CLI guard, no top-level await) so a
+// server .ts can statically import from it inertly (a sibling .d.mts supplies types).
 
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
