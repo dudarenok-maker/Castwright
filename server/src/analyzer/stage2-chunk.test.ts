@@ -10,6 +10,8 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import {
   splitBodyIntoChunks,
+  splitParagraphIntoSentences,
+  stage2ChunkBudgetForEngine,
   tailParagraphs,
   runStage2ChapterChunked,
 } from './stage2-chunk.js';
@@ -64,6 +66,46 @@ describe('splitBodyIntoChunks', () => {
     expect(chunks.some((c) => c.includes(huge))).toBe(true);
     // The huge paragraph is not fragmented across chunks.
     expect(chunks.filter((c) => c.includes(huge))).toHaveLength(1);
+  });
+});
+
+describe('splitParagraphIntoSentences', () => {
+  it('returns the paragraph unchanged when it fits the budget', () => {
+    const para = 'One sentence. Two sentence.';
+    expect(splitParagraphIntoSentences(para, 10_000)).toEqual([para]);
+  });
+
+  it('splits a long single paragraph at sentence boundaries under budget', () => {
+    const para = Array.from({ length: 6 }, (_, i) => `Sentence ${i + 1} has a few words.`).join(' ');
+    const chunks = splitParagraphIntoSentences(para, 40);
+    expect(chunks.length).toBeGreaterThan(1);
+    // Every chunk ends at a sentence boundary (no mid-sentence cut).
+    for (const c of chunks) expect(c.trim()).toMatch(/[.!?]["')\]]?$/);
+    // No sentence is dropped — each appears in exactly one chunk.
+    for (let i = 1; i <= 6; i += 1) {
+      expect(chunks.filter((c) => c.includes(`Sentence ${i} has a few words.`))).toHaveLength(1);
+    }
+  });
+
+  it('returns the blob unchanged when there is no sentence boundary to split on', () => {
+    const blob = 'word '.repeat(40).trim(); // no terminal punctuation
+    expect(splitParagraphIntoSentences(blob, 10)).toEqual([blob]);
+  });
+});
+
+describe('stage2ChunkBudgetForEngine (num_ctx-aware budget sizing)', () => {
+  it('leaves the configured budget unchanged for cloud engines', () => {
+    expect(stage2ChunkBudgetForEngine(9000, 16384, 'gemini')).toBe(9000);
+  });
+  it('lowers the budget for local engines with a small num_ctx', () => {
+    // 4096 tokens × 2 chars/token × 0.3 = 2457 < 9000 → budget tightens.
+    expect(stage2ChunkBudgetForEngine(9000, 4096, 'local')).toBe(2457);
+  });
+  it('never raises the budget above the configured value (large num_ctx)', () => {
+    expect(stage2ChunkBudgetForEngine(9000, 65536, 'local')).toBe(9000);
+  });
+  it('keeps a sane floor for a tiny num_ctx', () => {
+    expect(stage2ChunkBudgetForEngine(9000, 512, 'local')).toBe(1000);
   });
 });
 
@@ -170,6 +212,32 @@ describe('runStage2ChapterChunked', () => {
     await expect(
       runStage2ChapterChunked({ body, charBudget: 10_000, coverageRetries: 1, callForBody: call }),
     ).rejects.toBeInstanceOf(AnalyzerTruncatedError);
+  });
+
+  it('sentence-splits a single oversized paragraph that truncates (no paragraph boundary)', async () => {
+    /* The 2026-06-14 hard-fail: qwen3.5:4b truncated on a chapter whose
+       over-cap span was a SINGLE paragraph — paragraph-splitting had nothing
+       to cut, so the adaptive re-split gave up and failed the whole chapter.
+       It must now fall back to sentence boundaries and recover. */
+    const para = Array.from({ length: 10 }, (_, i) => `Sentence number ${i + 1} carries a few words.`).join(' ');
+    let truncations = 0;
+    const call = vi.fn(async (subBody: string) => {
+      if (subBody.length > 90) {
+        truncations += 1;
+        throw new AnalyzerTruncatedError('ollama', 'length', subBody.length);
+      }
+      return fakeAttribute(subBody);
+    });
+    const out = await runStage2ChapterChunked({
+      body: para, // one paragraph, no blank lines
+      charBudget: 10_000, // single-call path first; whole paragraph truncates
+      coverageRetries: 1,
+      callForBody: call,
+    });
+    expect(truncations).toBeGreaterThan(0); // truncation path exercised
+    expect(out.chunkCount).toBeGreaterThan(1); // recovered via sentence split
+    expect(out.sentences.length).toBeGreaterThan(1);
+    expect(out.coverage.ok).toBe(true);
   });
 
   it('retries a chunk whose first attempt has low coverage', async () => {

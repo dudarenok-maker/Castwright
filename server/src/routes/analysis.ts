@@ -1343,6 +1343,11 @@ function attributeChapterStage2(opts: {
   stage1: Stage1Output;
   chapter: { id: number; title: string; body: string };
   stageCall: StageCall;
+  /* Phase-1 analyzer engine — sizes the chunk budget against num_ctx for local
+     Ollama so a fat input chunk doesn't starve the output window (#528 follow-
+     up; 2026-06-14 qwen3.5:4b truncation). Defaults to the configured budget
+     when omitted. */
+  engine?: 'gemini' | 'local';
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
   onChunk?: (info: { index: number; total: number; chars: number }) => void;
 }): Promise<Stage2ChunkRunResult> {
@@ -1367,7 +1372,7 @@ function attributeChapterStage2(opts: {
   };
   return runStage2ChapterChunked({
     body: opts.chapter.body,
-    charBudget: resolveStage2ChunkCharBudget(),
+    charBudget: resolveStage2ChunkCharBudget(opts.engine),
     coverageRetries: resolveStage2CoverageRetries(),
     callForBody,
     onRetry: opts.onCoverageRetry,
@@ -3251,6 +3256,7 @@ export async function runMainAnalyzerJob(
         stage1: phase1Stage1,
         chapter: ch,
         stageCall: stage2Call,
+        engine: phase1Selection.engine,
         onCoverageRetry: (attempt, verdict) =>
           log(
             1,
@@ -4311,6 +4317,7 @@ async function runSubsetAnalyzerJob(
           title: record.title,
           stage1,
           chapter: ch,
+          engine: phase1Selection.engine,
           stageCall: {
             signal: abortController.signal,
             language: bookLanguage,
