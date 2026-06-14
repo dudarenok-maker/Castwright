@@ -13,9 +13,10 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  /* Cold Vite compile of the SPA + posed render can exceed Playwright's stock
-     30s per-test default, especially under GPU/CPU contention. */
-  timeout: 90_000,
+  /* Cold Vite compile of the SPA + posed render + full image decode can exceed
+     Playwright's stock 30s default, especially on the first (cold) test under
+     GPU/CPU contention. */
+  timeout: 120_000,
   reporter: 'list',
   use: { baseURL, navigationTimeout: 60_000 },
   expect: { toHaveScreenshot: { animations: 'disabled' } },

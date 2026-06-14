@@ -27,12 +27,29 @@ const onlyScene = process.env.CAPTURE_SCENE; // optional single-scene filter
    PNGs and won't be painted within a fixed settle. Non-fatal (a broken image
    shouldn't abort the run). */
 async function waitForImages(page: import('@playwright/test').Page) {
+  /* Force lazy images (e.g. the continue-listening rail covers) to fetch even
+     below the fold. A full-page capture resizes the viewport AFTER this, which
+     would otherwise trigger a deferred lazy fetch and paint the cover mid-decode
+     (the Coalfall rail cover did exactly this). */
+  await page
+    .evaluate(() => {
+      for (const img of Array.from(document.images)) if (img.loading === 'lazy') img.loading = 'eager';
+    })
+    .catch(() => {});
+
+  /* Every <img> has finished loading... */
   await page
     .waitForFunction(
       () => Array.from(document.images).every((img) => img.complete && img.naturalWidth > 0),
       undefined,
       { timeout: 20_000 },
     )
+    .catch(() => {});
+
+  /* ...AND finished decoding. `complete` can be true before the bitmap is
+     decoded/painted, so await decode() on each to guarantee a clean frame. */
+  await page
+    .evaluate(() => Promise.all(Array.from(document.images).map((img) => img.decode().catch(() => {}))))
     .catch(() => {});
 }
 
