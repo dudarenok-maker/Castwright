@@ -25,6 +25,13 @@ free + private, with the desired rule being simply **block force-push +
 deletion of `main`**. The only enforcement point we control on the free plan is
 the **local `pre-push` hook**, so this plan adds a guard there.
 
+**Update 2026-06-14:** the repo upgraded to **GitHub Pro** and the server-side
+ruleset is now live on `main` (id 17654264 — blocks force-push + deletion; no
+required status checks, per opt-in CI / plan 215; tracked as `com-4`). This
+local guard is now **belt-and-suspenders** rather than the sole mechanism — it
+still protects checkouts/worktrees before the verify battery and any clone whose
+remote isn't the protected repo.
+
 - **User:** an accidental `git push --force` or `git push origin :main` against
   `main` is refused instantly with a clear message, before the ~15-min verify
   battery even starts — instead of silently rewriting/deleting history.

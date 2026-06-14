@@ -350,10 +350,12 @@ Three-tier automated gate, enforced by husky hooks in `.husky/`:
   `npm run verify:fast` (no scope filter) remains for a manual full fast run.
 - **pre-push** (`.husky/pre-push`): first runs `scripts/guard-protected-push.mjs`,
   which refuses a force-push or deletion of a protected branch (`main`) before
-  the battery even starts (local stand-in for GitHub branch protection, which
-  this private repo's plan can't enable server-side — see
+  the battery even starts (a local guard; since 2026-06-14 `main` ALSO has
+  server-side branch protection — a GitHub ruleset blocking force-push +
+  deletion, enabled after the Pro upgrade per `com-4` — so this hook is now
+  belt-and-suspenders; see
   [docs/features/163-protected-push-guard.md](docs/features/163-protected-push-guard.md);
-  bypass intentionally with `git push --no-verify`). Then runs `npm run verify`
+  bypass the local hook intentionally with `git push --no-verify`). Then runs `npm run verify`
   — typecheck + all tests + e2e + build. Refuses the push if any step fails.
 
 `npm run verify` is cache-aware (see
@@ -367,26 +369,32 @@ core views) — see [docs/features/archive/46-lint-format-a11y.md](docs/features
 for the rulesets, the autofix-baseline shape, and the rationale for each
 relaxed rule.
 
-**CI fast-path for doc-only PRs (plan 101)**: PRs that touch only `docs/**`,
-root-level `*.md`, or `.github/*.md` skip `verify.yml` via `paths-ignore`. The
-PR title lint + GitHub's native conflict check still apply.
-See [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
+**GitHub CI is OPT-IN (plan 215)**: the `verify.yml` battery does **not** run
+automatically on PRs. The local pre-push hook already runs the FULL `npm run
+verify` battery on every push, so a per-PR cloud run is redundant spend on
+Actions minutes. Push freely — every PR push bills **0 CI minutes** by default.
+Run the cloud battery on demand when you want a clean-room check: add the
+**`run-ci`** label to the PR (fires one run; re-runs on each new push while the
+label is on), or dispatch it manually (Actions tab → Verify → Run workflow, or
+`gh workflow run verify.yml --ref <branch>`). A manual dispatch runs the full
+battery; a labeled PR runs only the **scope-filtered** legs the diff touched
+(plan 103 — `git diff` against the PR base; a frontend-only PR skips server
+tests, a server-only PR skips Playwright e2e + the frontend unit suite, a root
+`package.json`/`package-lock.json` change runs every leg).
 
-**Per-PR path-filtered CI (plan 103)**: for non-doc PRs, `verify.yml` is a
-single `verify` job that detects which scopes the diff touched (`git diff`
-against the PR base) and runs only the matching legs — a frontend-only PR
-skips the server tests, a server-only PR skips the Playwright e2e + frontend
-unit suite, etc. A root `package.json`/`package-lock.json` change runs every
-leg. **The local pre-push hook still runs the FULL `npm run verify` battery**,
-so CI only trusts the path-filter for the scoped subset — nothing is
-permanently un-covered. The job also skips drafts (re-fires on
-`ready_for_review`) and reuses a cached `node_modules`. Cross-OS verify
-(macOS + Windows) and the mobile/tablet e2e left the per-release / per-PR
-pipelines and now live in `.github/workflows/cross-os.yml` (`workflow_dispatch`
-+ weekly Sunday cron on `main`) — **fire it manually before announcing any
-release that ships a zip to alpha testers**, since the deployer spread is still
-Windows + macOS + Linux. `release.yml` verifies Ubuntu-only before publish.
-See [docs/features/103-ci-cost-reduction.md](docs/features/103-ci-cost-reduction.md).
+What still runs automatically: `pr-title-lint.yml` on every PR, `app.yml` on
+`apps/android/**` changes (the only automated coverage for the Flutter
+companion — no local hook runs `flutter analyze`/`test`), `release.yml` on a
+`vX.Y.Z` tag, and `cross-os.yml` on its weekly Sunday cron. Cross-OS verify
+(macOS + Windows) + mobile/tablet e2e live on `cross-os.yml` (`workflow_dispatch`
++ weekly cron on `main`) — **fire it manually before announcing any release
+that ships a zip to alpha testers** (deployer spread is still Windows + macOS +
+Linux). `release.yml` verifies Ubuntu-only before publish. The doc-only
+`paths-ignore` fast-path (plan 101) is a second layer — a `run-ci`-labeled PR
+whose files are all docs still won't spin up the battery.
+See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md),
+[103](docs/features/103-ci-cost-reduction.md), and
+[archive/101](docs/features/archive/101-docs-only-ci-skip.md).
 
 Branching model and the full commit convention (allowed types, allowed scopes,
 multi-scope syntax, worktrees for parallel agent work) are documented in
@@ -424,15 +432,17 @@ repo level) and the head branch is auto-deleted on merge. Full spec:
 [CONTRIBUTING.md "Pull requests"](CONTRIBUTING.md#pull-requests). Regression
 plan: [docs/features/archive/44-pr-hygiene.md](docs/features/archive/44-pr-hygiene.md).
 
-**Open PRs as draft and verify once (CI-cost default).** `verify.yml` skips
-draft PRs entirely (`if: draft == false`) and re-fires the moment a draft is
-promoted (`ready_for_review`). The cost-minimising flow is therefore:
-`gh pr create --draft` → push freely while developing (**0 CI minutes**) → run
-`npm run verify` locally until green → `gh pr ready <n>`, which fires **exactly
-one** billed verify run right before merge. Opening a PR ready-from-the-start
-bills a run on every push instead. Only skip the draft for a trivial change you
-intend to merge immediately. Rationale + measurements:
-[docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
+**Requesting a CI run on a PR (plan 215).** CI is opt-in (see "Commit gate"
+above): push freely — drafts and ready PRs alike bill **0 Actions minutes**.
+The local pre-push hook is the real gate and runs the full `npm run verify`
+battery on every push. When you want a clean-room cloud check (typically right
+before merge, or to confirm something you couldn't verify locally), add the
+**`run-ci`** label to the PR or dispatch `verify.yml` manually — the labeled
+run is insurance, not the gate. (Draft status no longer affects CI cost, so the
+old draft-by-default dance is unnecessary; still open as draft if you simply
+want to signal work-in-progress.) Rationale + measurements:
+[docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md)
+and [215](docs/features/215-ci-label-gated-verify.md).
 
 ### Parallel agents
 

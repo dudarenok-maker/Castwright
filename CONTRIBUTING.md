@@ -120,11 +120,12 @@ When N parallel agent branches finish:
    default disposition for a round — not one PR per agent branch), then delete
    the agent branches once it merges.
 
-Open that integration PR as a **draft** and `gh pr ready` only when the final
-`npm run verify` on the integration branch is green (see
-[§ Draft until verified](#draft-until-verified-ci-cost-default)). The whole round
-then bills a **single** CI verify run rather than one (or several) per agent
-branch — the largest CI-cost lever. See
+Reconcile on the integration branch, run `npm run verify` locally until green,
+and only then (if you want a cloud check) add the **`run-ci`** label to the
+integration PR or dispatch `verify.yml` — see
+[§ Requesting a CI run](#requesting-a-ci-run-ci-is-opt-in). The whole round then
+bills at most a **single** CI verify run, on demand, rather than one (or
+several) per agent branch. See
 [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
 
 If a merge breaks `verify` and the fix isn't obvious, drop the offending branch
@@ -403,25 +404,28 @@ The template's HTML comments are guidance — strip them before submitting, or
 leave them; they don't render. The Summary and Test plan headings are the
 load-bearing structure that reviewers (and future-me) skim first.
 
-### Draft until verified (CI-cost default)
+### Requesting a CI run (CI is opt-in)
 
-`verify.yml` skips draft PRs entirely (`if: github.event.pull_request.draft ==
-false`) and re-fires the instant a draft is promoted (the workflow listens for
-`ready_for_review`). That makes the cost-minimising lifecycle:
+The `verify.yml` battery does **not** run automatically on PRs (plan 215). The
+pre-push husky hook already runs the full `npm run verify` battery on every
+push, so a per-PR cloud run is redundant spend on Actions minutes. Push freely
+— every PR push (draft or ready) bills **0 CI minutes** by default. When you
+want a clean-room cloud check (typically right before merge, or to sanity-check
+a change you couldn't fully verify locally):
 
-1. `gh pr create --draft` (or open the PR and mark it draft).
-2. Push freely while developing — draft pushes queue **no** `verify` run, so
-   they bill **0 CI minutes**.
-3. Run `npm run verify` locally until green (the pre-push hook runs the full
-   battery anyway).
-4. `gh pr ready <n>` → fires **exactly one** billed `verify` run, right before
-   merge.
+- add the **`run-ci`** label to the PR — fires one run, and re-runs on each new
+  push while the label stays on; **or**
+- dispatch it manually: Actions tab → Verify → Run workflow, or
+  `gh workflow run verify.yml --ref <branch>`.
 
-A PR opened ready-from-the-start bills a `verify` run on **every** push instead
-(only `cancel-in-progress` claws back the overlapping ones). Reserve
-ready-from-the-start for a trivial change you intend to merge immediately.
-Because GitHub's free Actions tier is exhausted on a heavy PR cadence, this is
-the single highest-leverage cost control. Rationale + measurements:
+A labeled PR run is scope-filtered to the legs the diff touched (plan 103); a
+manual dispatch runs the full battery. What still runs automatically on its own:
+`pr-title-lint.yml` on every PR, `app.yml` on `apps/android/**` changes,
+`release.yml` on a `vX.Y.Z` tag, and `cross-os.yml` (macOS + Windows + mobile
+e2e) on its weekly cron + manual dispatch — fire that one before any release
+announce, since high-risk / cross-platform changes are exactly what it covers.
+Rationale + measurements:
+[docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md),
 [docs/features/118-ci-cost-round-2.md](docs/features/118-ci-cost-round-2.md).
 
 ### Merge policy
@@ -453,14 +457,18 @@ the single highest-leverage cost control. Rationale + measurements:
 - The end-of-turn summary names the branch + commit SHAs so the reviewer can
   jump straight to the diff.
 
-### Server-side enforcement (private repo on Free plan)
+### Server-side enforcement (branch protection)
 
-Branch protection rules (required status checks, required reviews, no
-force-push) are not available on the current GitHub plan — `gh api
-repos/.../branches/main/protection` returns 403. The conventions above are
-soft enforcement plus the PR-title workflow. When the repo flips to GitHub
-Pro or goes public, enable branch protection on `main` and require the PR
-title check.
+`main` has **server-side branch protection** as of 2026-06-14: a GitHub ruleset
+(`id 17654264`, `enforcement: active`) blocks force-push + deletion, enabled
+after the **GitHub Pro** upgrade (the feature 403'd on the old Free private
+plan). It **deliberately excludes required status checks** — so it stays
+compatible with opt-in CI (plan 215) and the doc-only `paths-ignore` skip
+without deadlocking PRs that never run `verify` — and adds no required-PR rule,
+so direct-to-`main` trivial fixes and tag-based releases keep working. The local
+`guard-protected-push.mjs` pre-push hook (plan 163) is now belt-and-suspenders.
+Enablement + the ruleset JSON live in `com-4` / `brand/ruleset-main.json`. The
+conventions above remain soft enforcement plus the `pr-title-lint.yml` workflow.
 
 ### Doc-only PR fast-path
 
@@ -471,9 +479,11 @@ A PR whose changed-file set lives entirely under `docs/**`, root-level
 The PR still requires a valid title (`pr-title-lint.yml` runs on every
 PR) and GitHub's native `mergeable` status still surfaces conflicts —
 the gate stays "PR required + title valid + no conflicts", just without
-the 10–15 min full battery. The moment a non-doc file is touched in the
-same PR, the full verify runs as normal. Rationale and the exact glob
-list: [docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
+the 10–15 min full battery. Since plan 215 CI is opt-in for *every* PR, this
+`paths-ignore` is now a second layer — it additionally ensures that even a
+`run-ci`-labeled PR whose files are all docs won't spin up the battery.
+Rationale and the exact glob list:
+[docs/features/archive/101-docs-only-ci-skip.md](docs/features/archive/101-docs-only-ci-skip.md).
 
 ## When you ship a change
 
