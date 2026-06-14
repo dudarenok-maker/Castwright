@@ -171,6 +171,16 @@ test.describe('visual baselines (stats)', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
 
   test('stats dashboard', async ({ page }) => {
+    /* TODO(#811): the Linux stats visual baseline isn't committed yet
+       (regen-visual-baselines.yml hasn't run since the fs-16 stats view
+       landed). Self-healing quarantine — fires ONLY while this platform /
+       project's stats.png is absent, so it auto-clears the moment the regen
+       PR commits the baseline. Coverage is retained wherever the baseline
+       already exists (e.g. local Windows). */
+    test.skip(
+      !existsSync(resolve(BASELINE_DIR, test.info().project.name, 'stats.png')),
+      'stats baseline not committed for this platform/project yet — see #811',
+    );
     /* Freeze the page clock BEFORE navigation so the app sees a fixed
        `new Date()` from the first render. 2026-06-13 is the seed's latest
        active day, giving a deterministic 3-day consecutive streak
