@@ -1,16 +1,18 @@
-# AMD GPU Support — Phase 1 (Pure Dormant Foundation) Implementation Plan
+# AMD GPU Support — Phase 1: Python 3.12 + NVIDIA-latest + detect-and-reinstall
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the pure, fully-tested decision logic for AMD GPU support — the accelerator-profile resolver and the venv-migration core — as dormant code on `main`, consumed by no shipped path and changing zero user-visible behavior.
+**Goal:** Ship (in the next beta package) the Python **3.12** transition + **NVIDIA-latest torch** + the layered-requirements structure (NVIDIA/CPU only) + a **detect-and-reinstall** path for the alpha cohort. **Public beta is gated on this.** No AMD code ships here; everything is fully author-verifiable on NVIDIA/CPU/mac with no AMD hardware.
 
-**Architecture:** Two new plain-ESM `.mjs` modules under `server/tts-sidecar/scripts/`, each a set of side-effect-guarded pure functions, vitest-tested from sibling `server/src/tts/*.test.ts` files that import the `.mjs` directly (the codebase's established pattern, e.g. `install-qwen3.mjs` ↔ `install-qwen3-helpers.test.ts`). Nothing in a shipped code path imports these yet; Python stays 3.11, CI stays 3.11, install + telemetry + `/health` are untouched.
+**Strategy (why no in-place migration):** public-beta-gating means only a tiny, coordinated alpha cohort ever *upgrades*; the public-beta majority installs **fresh on 3.12**. So we DROP the highest-risk code (resumable `apply.ts` rebuild, atomic swap, mid-upgrade Python auto-install) and instead **detect a Python mismatch and guide a fresh reinstall** (the v1.6.0 precedent). User data survives because the packaged `WORKSPACE_DIR` is external to the install — a **verified** acceptance gate, not an assumption.
 
-**Tech Stack:** Node ESM (`.mjs`), Vitest (server project, `node` env), `node:crypto`, `node:fs`. Tests run under `npm run test:server`.
+**Architecture:** Two new plain-ESM `.mjs` modules under `server/tts-sidecar/scripts/` (resolver + venv-migration decision core), pure + vitest-tested from sibling `server/src/tts/*.test.ts` (the codebase pattern, e.g. `install-qwen3.mjs` ↔ `install-qwen3-helpers.test.ts`); plus layered `requirements/`, a Python-3.12 bootstrap/acquisition path, and a detect-and-reinstall guard.
 
-**Spec:** `docs/superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md` (Sections 1, 2; "Cross-runtime hand-off"; "Delivery sequencing" → Phase 1).
+**Tech Stack:** Node ESM (`.mjs`) + TS server (Vitest, `node` env), `node:crypto`/`node:fs`, Python 3.12 sidecar (pytest), GitHub Actions YAML. Tests under `npm run test:server` / `npm run test:sidecar`.
 
-**Delivery model:** This branch is **merged to `main` but exposed by no release** until Phase 2. Do not bump any version, do not change `requirements.txt`, do not flip Python, do not touch `apply.ts` runtime flow.
+**Spec:** `docs/superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md` — Sections 1–3, "Cross-runtime hand-off", "Delivery sequencing (REVISED)" → Phase 1, and the Phase-1 Acceptance.
+
+**Ships:** yes — this is the public-beta gate. AMD (`amd-rocm.txt`, ROCm torch, DirectML, profile-switch, in-place rebuild) is all **Phase 2**.
 
 ---
 
@@ -18,11 +20,15 @@
 
 | File | Responsibility |
 |---|---|
-| `server/tts-sidecar/scripts/accelerator-profile.mjs` (create) | Pure profile resolver: vendor parsing, profile precedence, per-engine runtime backend, ORT provider list, install recipe |
+| `server/tts-sidecar/scripts/accelerator-profile.mjs` (create) | Pure profile resolver (vendor parse, precedence, backend, ORT providers, install recipe). NVIDIA/CPU live; AMD branches present-but-unreached. |
 | `server/src/tts/accelerator-profile.test.ts` (create) | Vitest matrix tests importing the `.mjs` directly |
-| `server/tts-sidecar/scripts/venv-migration.mjs` (create) | Pure venv-migration core: reqHash, three-way decision, disk-headroom decision; thin stamp read/write I/O |
-| `server/src/tts/venv-migration.test.ts` (create) | Vitest tests for the migration core + stamp I/O (tmp dirs) |
-| `docs/superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md` (modify) | Append the Task 0 server↔.mjs import-mechanic finding |
+| `server/tts-sidecar/scripts/venv-migration.mjs` (create) | Pure venv decision core: `computeReqHash`, `decideVenvAction`, stamp I/O. (Disk pre-flight is **deferred to Phase 2** with the in-place rebuild.) |
+| `server/src/tts/venv-migration.test.ts` (create) | Vitest tests for the decision core + stamp I/O |
+| `server/tts-sidecar/requirements/{base,nvidia-cuda,cpu}.txt` (create) | Layered requirements; `nvidia-cuda.txt` == today (regression fence). **No `amd-rocm.txt` in Phase 1.** |
+| `server/tts-sidecar/scripts/bootstrap-venv.mjs` (modify) | Target Python 3.12; consult `decideVenvAction`; on mismatch → **detect-and-reinstall guidance**, never in-place rebuild |
+| `server/tts-sidecar/scripts/ensure-python312.mjs` (create) | Discover/auto-install/guide Python 3.12 for **fresh installs** |
+| `.github/workflows/*.yml` (modify) | Sidecar Python → 3.12 |
+| `docs/features/<N>-amd-gpu-support.md` + INDEX + BACKLOG (create/modify) | Regression plan (`status: active`) + backlog issue |
 
 ---
 
@@ -719,9 +725,14 @@ git commit -m "feat(sidecar): add decideVenvAction three-way migration decision 
 
 ---
 
-## Task 9: `decideDiskAction` — 3× headroom pre-flight (A6/N1)
+## Task 9: `decideDiskAction` — 3× headroom pre-flight (A6/N1) — **DEFERRED to Phase 2**
 
-**Files:**
+> **SKIP in Phase 1.** This is the disk pre-flight for the **in-place rebuild**, which Phase 1
+> no longer does (detect-and-reinstall instead). It moves to Phase 2 with the rebuild
+> machinery (only if the AMD profile-switch needs it). Left here for traceability; do not
+> implement it in this phase.
+
+**Files (Phase 2):**
 - Modify: `server/tts-sidecar/scripts/venv-migration.mjs`
 - Modify: `server/src/tts/venv-migration.test.ts`
 
@@ -875,81 +886,164 @@ git commit -m "feat(sidecar): add venv stamp read/write I/O (null on missing/cor
 
 ---
 
-## Task 11: Full-suite green + lint + final review
+## Task 11: Layered requirements (base + nvidia-cuda + cpu; NVIDIA == today)
 
-**Files:** none (verification)
+**Files:**
+- Create: `server/tts-sidecar/requirements/base.txt`, `nvidia-cuda.txt`, `cpu.txt`
+- Modify: `server/tts-sidecar/requirements.txt` → pointer shim
+- Test: `server/src/tts/requirements-layout.test.ts`
 
-- [ ] **Step 1: Run the server suite**
+- [ ] **Step 1: Write the failing test**
 
-Run: `npm run test:server`
-Expected: PASS, including the two new test files.
+```ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+const REQ = join(__dirname, '../../tts-sidecar/requirements');
 
-- [ ] **Step 2: Run lint + typecheck** (the new `.mjs` + `.test.ts` must pass the gate)
-
-Run: `npm run lint && npm run typecheck`
-Expected: PASS. Fix any ESLint ESM nits (the `require` → `import` swaps noted in Tasks 6/10).
-
-- [ ] **Step 3: Confirm dormancy — nothing shipped imports the new modules**
-
-Run: `npm run typecheck` is green AND grep shows the new modules are referenced only by their tests + their own CLI guard:
-`grep -rn "accelerator-profile.mjs\|venv-migration.mjs" server/src server/tts-sidecar --include=*.ts --include=*.mjs | grep -v ".test.ts"`
-Expected: only the `.mjs` self-references / CLI. No production import. (This is the dormancy guarantee.)
-
-- [ ] **Step 4: Commit any lint fixes**
-
-```bash
-git add -A && git commit -m "chore(sidecar): lint/typecheck fixes for AMD phase-1 modules"
+describe('layered requirements (Phase 1: nvidia/cpu only)', () => {
+  it('nvidia/cpu overlays each -r base.txt', () => {
+    for (const f of ['nvidia-cuda.txt', 'cpu.txt'])
+      expect(readFileSync(join(REQ, f), 'utf8')).toMatch(/^-r base\.txt/m);
+  });
+  it('base.txt has vendor-neutral deps, no torch/onnxruntime', () => {
+    const b = readFileSync(join(REQ, 'base.txt'), 'utf8');
+    expect(b).toMatch(/fastapi/); expect(b).toMatch(/faster-whisper/);
+    expect(b).not.toMatch(/onnxruntime/); expect(b).not.toMatch(/^torch/m);
+  });
+  it('nvidia overlay == TODAY: coqui-tts[codec] + kokoro-onnx[gpu] (regression fence)', () => {
+    const n = readFileSync(join(REQ, 'nvidia-cuda.txt'), 'utf8');
+    expect(n).toMatch(/coqui-tts\[codec\]/); expect(n).toMatch(/kokoro-onnx\[gpu\]/);
+  });
+  it('NO amd-rocm.txt in Phase 1', () => {
+    expect(() => readFileSync(join(REQ, 'amd-rocm.txt'), 'utf8')).toThrow();
+  });
+});
 ```
+
+- [ ] **Step 2: Run** `npm --prefix server run test -- requirements-layout` → FAIL.
+
+- [ ] **Step 3: Create the files** (move today's vendor-neutral lines to `base.txt`; `nvidia-cuda.txt` = `-r base.txt` + `coqui-tts[codec]>=0.24.0` + `kokoro-onnx[gpu]>=0.4.0,<0.5.0` — byte-equivalent to today; `cpu.txt` = `-r base.txt` + `coqui-tts[codec]` + `kokoro-onnx` + `onnxruntime`). Replace `requirements.txt` body with `-r requirements/nvidia-cuda.txt` + a pointer comment (preserves the legacy NVIDIA default). See spec Section 3 / Phase-2-plan Task A1 for the exact line contents (minus `amd-rocm.txt`).
+
+- [ ] **Step 4: Run** → PASS. **Step 5: Commit** `feat(sidecar): layered requirements base+nvidia+cpu (phase 1)`.
 
 ---
 
-## Task 12: Project regression plan + backlog issue (CLAUDE.md shipping convention) (Q3)
+## Task 12: `ensure-python312.mjs` — discover / auto-install / guide Python 3.12 (fresh install)
 
-**Why:** the repo's "Before-shipping checklist" + "The backlog" require a `docs/features/` regression plan (frontmatter `status:`) with an `INDEX.md` entry, and a GitHub backlog issue (`<prefix>-<n>`) for substantial work. The `docs/superpowers/` spec+plans are design artifacts and do **not** satisfy that convention. One regression-plan doc covers the whole AMD-GPU effort (Phase 1 + Phase 2); Phase 1 lands it as `scaffolded`.
+**Files:** Create `server/tts-sidecar/scripts/ensure-python312.mjs`; Test `server/src/tts/ensure-python312-helpers.test.ts`.
 
-**Files:**
-- Create: `docs/features/<next-N>-amd-gpu-support.md` (from `docs/features/TEMPLATE.md`)
-- Modify: `docs/features/INDEX.md` (new entry under the relevant area)
-- Modify: `docs/BACKLOG.md` (thin row linking the issue)
+- [ ] **Step 1: Write the failing test** for the pure decision:
 
-- [ ] **Step 1: Determine the next plan number**
+```ts
+import { describe, it, expect } from 'vitest';
+import { decidePythonAcquisition } from '../../tts-sidecar/scripts/ensure-python312.mjs';
 
-Run: `ls docs/features/ | grep -oE '^[0-9]+' | sort -n | tail -1`
-Use the next integer as `<next-N>`. (Do not reuse an archived number.)
-
-- [ ] **Step 2: Create the regression plan from the template**
-
-Copy `docs/features/TEMPLATE.md` to `docs/features/<next-N>-amd-gpu-support.md`. Fill:
-- frontmatter `status: scaffolded` (Phase 1 is dormant scaffolding).
-- Link the design spec (`docs/superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md`) and both plans.
-- Document the invariants this phase locks: the resolver matrix (incl. NVIDIA regression fence, dual-GPU priority), the three-way venv decision, the disk-abort safety property, dormancy (no shipped consumer).
-- Add the **manual AMD acceptance matrix** from the spec as the `OWED` section (Phase 2 / AMD tester).
-
-- [ ] **Step 3: Add the INDEX entry**
-
-Add a one-line entry for `<next-N>-amd-gpu-support.md` under its area in `docs/features/INDEX.md` (per `docs/features/archive/README.md` placement rules).
-
-- [ ] **Step 4: File the backlog issue + BACKLOG.md row**
-
-Create a GitHub Backlog-item issue titled `<prefix>-<n> — AMD GPU support (Windows ROCm + DirectML, Linux ROCm)` with `area:`/`moscow:`/`type:` labels per `CONTRIBUTING.md` "Issues" (suggest `area:server`, `moscow:could`, `type:feature`). Add the thin linking row to `docs/BACKLOG.md`. Record the issue number in the regression plan + reference it from the delivering PR (`Refs #NN`, since Phase 1 is partial delivery).
-
-> If `gh` issue creation isn't available in this environment, write the exact issue title + body into the regression plan's header as a `TODO(issue)` line so a human files it — do not skip the BACKLOG.md row.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add docs/features docs/BACKLOG.md
-git commit -m "docs(sidecar): regression plan + backlog issue for AMD GPU support (phase 1)"
+describe('decidePythonAcquisition', () => {
+  it('found on PATH → use it', () => {
+    expect(decidePythonAcquisition({ found: 'py -3.12', platform: 'win32', wingetAvailable: true }))
+      .toEqual({ action: 'use', cmd: 'py -3.12' });
+  });
+  it('absent + winget (Windows) → auto-install', () => {
+    expect(decidePythonAcquisition({ found: null, platform: 'win32', wingetAvailable: true }))
+      .toEqual({ action: 'auto-install', method: 'winget' });
+  });
+  it('absent + no winget → guided fallback', () => {
+    expect(decidePythonAcquisition({ found: null, platform: 'win32', wingetAvailable: false }))
+      .toEqual({ action: 'guide', method: 'official-installer' });
+  });
+  it('absent on Linux → guided (never silent sudo)', () => {
+    expect(decidePythonAcquisition({ found: null, platform: 'linux', wingetAvailable: false }))
+      .toEqual({ action: 'guide', method: 'package-manager' });
+  });
+});
 ```
+
+- [ ] **Step 2–4:** run-fail; implement the pure `decidePythonAcquisition` + a guarded CLI (top sync imports, no top-level await — Q1 house-style) that runs `winget install Python.Python.3.12` and, after install, **prints the relaunch instruction** (the new interpreter isn't on the running PATH — H3); run-pass.
+- [ ] **Step 5: Commit** `feat(sidecar): Python 3.12 acquisition decision + fresh-install auto-install/guide (phase 1)`.
+
+---
+
+## Task 13: `bootstrap-venv.mjs` — target 3.12 + detect-and-reinstall (NO in-place rebuild)
+
+**Files:** Modify `server/tts-sidecar/scripts/bootstrap-venv.mjs`; extend `server/src/tts/bootstrap-venv-helpers.test.ts`. Add a pure helper `classifyVenvState` exported from `bootstrap-venv.mjs`.
+
+- [ ] **Step 1: Write the failing test** (pure classifier — composes `readStamp`/`decideVenvAction` into the Phase-1 actions):
+
+```ts
+import { classifyVenvState } from '../../tts-sidecar/scripts/bootstrap-venv.mjs';
+
+const required = { pythonTag: 'cp312', profile: 'nvidia', reqHash: 'h' };
+describe('classifyVenvState (Phase 1: detect-and-reinstall, no rebuild)', () => {
+  it('no venv → fresh-bootstrap', () => {
+    expect(classifyVenvState({ venvExists: false, stamp: null, required }).action).toBe('fresh-bootstrap');
+  });
+  it('venv on cp311 (or no stamp) → needs-reinstall (NOT rebuild)', () => {
+    expect(classifyVenvState({ venvExists: true, stamp: { pythonTag: 'cp311', profile: 'nvidia', reqHash: 'h' }, required }).action).toBe('needs-reinstall');
+    expect(classifyVenvState({ venvExists: true, stamp: null, required }).action).toBe('needs-reinstall');
+  });
+  it('cp312 + reqHash changed → pip-in-place', () => {
+    expect(classifyVenvState({ venvExists: true, stamp: { pythonTag: 'cp312', profile: 'nvidia', reqHash: 'old' }, required }).action).toBe('pip-in-place');
+  });
+  it('all match → noop', () => {
+    expect(classifyVenvState({ venvExists: true, stamp: { ...required }, required }).action).toBe('noop');
+  });
+});
+```
+
+- [ ] **Step 2–4:** run-fail; implement `classifyVenvState` (maps `decideVenvAction`'s `rebuild` → **`needs-reinstall`** in Phase 1, never an in-place teardown). Wire `main()`: fresh-bootstrap builds a **3.12** venv (python from `ensure-python312`) + writes the `.venv-stamp.json`; `needs-reinstall` **prints the reinstall guidance and exits non-zero without touching the venv**; `pip-in-place`/`noop` as today. run-pass.
+- [ ] **Step 5: Commit** `feat(sidecar): bootstrap targets 3.12 + detect-and-reinstall on python mismatch (phase 1)`.
+
+> The packaged self-upgrade (`apply.ts`) gets the same guard: on a `needs-reinstall` classification it **refuses the auto-upgrade and surfaces the reinstall message** (Section 6 UX) — it does NOT pip into a 3.11 venv. This is a small guard, not the resumable-rebuild surgery (which is Phase 2).
+
+---
+
+## Task 14: CI sidecar Python → 3.12
+
+**Files:** `.github/workflows/verify.yml`, `cross-os.yml`, `release.yml` (sidecar setup steps).
+
+- [ ] **Step 1:** set the sidecar Python to 3.12 in each workflow's sidecar setup. **Step 2:** run `npm run test:sidecar` locally on a 3.12 venv to confirm the existing pytest suite is green on 3.12. **Step 3: Commit** `chore(sidecar): CI sidecar Python → 3.12 (phase 1)`.
+
+---
+
+## Task 15: Full-suite green + lint
+
+- [ ] **Step 1:** `npm run test:server` → PASS (incl. all new test files). **Step 2:** `npm run lint && npm run typecheck` → PASS (fix any ESM nits). **Step 3:** commit any fixes.
+
+---
+
+## Task 16: Regression plan + backlog issue (CLAUDE.md convention) — **status: active**
+
+**Files:** Create `docs/features/<next-N>-amd-gpu-support.md` (from TEMPLATE); modify `INDEX.md`, `docs/BACKLOG.md`.
+
+- [ ] **Step 1:** next number via `ls docs/features/ | grep -oE '^[0-9]+' | sort -n | tail -1`.
+- [ ] **Step 2:** create the plan, frontmatter **`status: active`** (Phase 1 SHIPS — not scaffolded); link the spec + both plans; document the invariants (resolver matrix incl. NVIDIA fence + dual-GPU priority; three-way decision; **detect-and-reinstall + the external-`WORKSPACE_DIR` data gate**); add the Phase-1 acceptance (Task 17) + the owed Phase-2 AMD matrix.
+- [ ] **Step 3:** INDEX entry. **Step 4:** **No GitHub during a release freeze** — if `gh` is unavailable or the user is mid-release, write the exact issue title/body as a `TODO(issue)` block in the plan header + add the `docs/BACKLOG.md` row; a human files it later. Suggested labels `area:server`/`moscow:could`/`type:feature`.
+- [ ] **Step 5: Commit** `docs(sidecar): regression plan + backlog row for AMD GPU support (phase 1, active)`.
+
+---
+
+## Task 17: Phase-1 acceptance — the public-beta SHIP GATE (author, no AMD)
+
+**Files:** none (manual acceptance; record results in the regression plan).
+
+> Green unit tests are necessary but NOT sufficient — these are real runs on the author's hardware. This is the gate to ship the public-beta-enabling package.
+
+- [ ] **A. Fresh install on 3.12 — NVIDIA:** clean install builds a 3.12 venv, pulls latest PyPI torch, and synthesises a chapter (Kokoro + a Qwen design). `/health` reports `cuda`.
+- [ ] **B. Fresh install on 3.12 — CPU-only box:** installs, synthesises (Kokoro CPU). `/health` reports `cpu`.
+- [ ] **C. Fresh install on 3.12 — macOS/Apple-Silicon:** installs, synthesises (Qwen on `mps`, Kokoro CPU). mps path unchanged.
+- [ ] **D. Alpha detect-and-reinstall:** point the app at a v1.7.0 (3.11) install → it classifies `needs-reinstall`, shows the guidance, and does **not** pip into the 3.11 venv. Then do a fresh reinstall and **confirm books + `cast.json` + designed voices are all preserved** (the external-`WORKSPACE_DIR` gate). **If any user content is lost, STOP — the packaged `WORKSPACE_DIR` is not external and the strategy must be revisited.**
+- [ ] **E. Python-3.12-absent fresh box:** `ensure-python312` auto-installs (or guides + relaunch) and the bootstrap then succeeds on 3.12.
+- [ ] **F. Dual-GPU box (AMD iGPU + NVIDIA dGPU):** resolves to `nvidia` (CPU/NVIDIA only — no AMD path shipped).
 
 ---
 
 ## Self-review checklist (run before handing off)
 
-- **Spec coverage:** Section 1 resolver (Tasks 1–6) ✓; Section 2 migration core — stamp/three-way/disk (Tasks 7–10) ✓; cross-runtime hand-off mechanic recorded (Task 0) ✓; project regression plan + backlog issue (Task 12) ✓. Deferred-to-Phase-2 items (requirements restructure, Python flip, apply.ts wiring, /health enum, VRAM, AMD wheels, DirectML, messaging) are intentionally absent — correct for a dormant Phase 1.
-- **Provisional values flagged:** AMD-Kokoro `runtimeBackend`/`ortProviders` = DirectML are both marked S0.1-pending (Q2); the AMD `torchPreinstall` is `PENDING_SPIKE` (S0.2). No spike-gated value is presented as settled.
-- **House-style:** the CLI guard uses a top-of-module sync `import { execSync }` (no top-level await, no `require`), matching `install-qwen3.mjs`/`bootstrap-venv.mjs` (Q1).
-- **Placeholder scan:** the only `PENDING_SPIKE` is a deliberate, tested AMD `torchPreinstall` stub (S0.2 fills it in Phase 2) — not a plan placeholder. The provisional AMD-Kokoro `directml` value (Task 4) is explicitly flagged as S0.1-pending.
-- **P1 fence honesty:** the NVIDIA `installRecipe` was corrected to match the *verified* current install (no torch index; `torchPreinstall: null`; `onnxruntime-gpu`), so the regression fence asserts reality, not an invented cu124 index.
-- **Type/name consistency:** `parseVendorFromProbe`, `detectVendor`, `resolveProfile`, `runtimeBackend`, `ortProviders`, `installRecipe`, `describeResolved`, `computeReqHash`, `decideVenvAction`, `decideDiskAction`, `readStamp`/`writeStamp`/`stampPath` — used consistently across tasks and tests.
-- **Dormancy:** Task 11 Step 3 mechanically proves no shipped path consumes the new code.
+- **Spec coverage (Phase 1):** Section 1 resolver (Tasks 1–6) ✓; Section 2 stamp + three-way decision + detect-and-reinstall (Tasks 7–8, 10, 13) ✓; Section 3 layered requirements nvidia/cpu (Task 11) + Python 3.12 acquisition (Task 12) ✓; cross-runtime mechanic (Task 0) ✓; CI 3.12 (Task 14) ✓; docs (Task 16) ✓; acceptance gate (Task 17) ✓.
+- **Correctly deferred to Phase 2:** `decideDiskAction` (Task 9, skipped), the in-place rebuild / resumable `apply.ts` / atomic swap, `amd-rocm.txt`, ROCm torch, DirectML, `/health` enum live, VRAM change, AMD messaging, profile-switch. Absent by design.
+- **No in-place migration:** `classifyVenvState` maps a Python/profile mismatch to **`needs-reinstall`**, never a teardown — the H4 risk is gone, and the data gate (Task 17.D) is a hard STOP.
+- **Provisional AMD values flagged:** AMD-Kokoro `runtimeBackend`/`ortProviders` = DirectML marked S0.1-pending; AMD `torchPreinstall` = `PENDING_SPIKE`. These ship **unreached** (no `amd-rocm.txt`, no AMD detection path active on shipped HW).
+- **P1 fence honesty:** NVIDIA recipe == verified today (no cu124 index; transitive PyPI torch; `nvidia-cuda.txt` byte-equivalent).
+- **House-style:** all `.mjs` CLI guards use top-of-module sync imports, no top-level await / no `require` (Q1).
+- **Ship gate is real runs, not green CI:** Task 17 A–F on author hardware, with the data-preservation STOP.
