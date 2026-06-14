@@ -41,14 +41,17 @@ rebuild on upgrade from v1.7.0.
   wheels "change regularly (nightly)" and recommends **pinned wheels from
   `repo.radeon.com`** for a specific ROCm release (e.g. torch 2.8.0 / ROCm 6.4.4).
   Treat ROCm torch like the flash-attn **manual-wheel-URL** pattern, not `--index-url`.
-- **We do NOT pin NVIDIA's torch version (corrected).** Torch is pulled *transitively from
-  PyPI* by `qwen-tts`/`coqui-tts` — there is no `torch==` pin and no index. The only place a
-  torch version appears is the *filename* of the **opt-in, non-fatal** flash-attn wheel; and
-  the `coqui-tts[codec]` extra (torchcodec, required by torch **≥2.9**) implies today's
-  default NVIDIA torch is already **~2.9**, not 2.6. So the honest statement is: **NVIDIA torch
-  = PyPI default (verify exact version on a real venv — likely ~2.9); AMD torch = the pinned
-  ROCm 2.8 wheel** (because ROCm-Windows only ships specific builds). This is two profiles each
-  taking their natural torch, **not** a version skew we manage (see C3, downgraded).
+- **NVIDIA torch is now an EXPLICIT requirement (re-corrected, Phase 1).** Torch *used to be*
+  purely transitive via `coqui-tts`, but **`coqui-tts 0.27.5` (what `>=0.24.0` resolves to)
+  dropped the torch declaration** — so a fresh venv had NO torch and Coqui/Qwen broke (a
+  pre-existing gap on `main`, exposed by the 3.12 reinstall). Phase 1 adds an explicit
+  `torch>=2.6` to `requirements/nvidia-cuda.txt`; pip co-resolves it with `coqui-tts[codec]`/
+  `torchcodec` (CUDA-bundled wheel on win/linux x86_64, cpu/mps on macOS). There is still no
+  `torch==` hard pin and no index for NVIDIA (PyPI default), and `installRecipe`'s
+  `torchPreinstall` stays `null` (= "the requirements file installs torch," not a separate
+  wheel pre-install). **AMD torch = the pinned ROCm 2.8 wheel** (ROCm-Windows ships specific
+  builds). Two profiles, each taking its torch from the right source — **not** a managed
+  version skew (see C3, downgraded).
 - **ONNX Runtime on Windows AMD:** the ROCm EP is not available on Windows; **DirectML**
   (DX12) is the GPU path. **But Kokoro-on-DirectML has a documented `ConvTranspose`
   failure** (works on CPU, errors on DML) — the central Windows value prop is unproven.
@@ -156,9 +159,11 @@ Done without AMD hardware (web/desk + packaging facts). 🔴 on-box confirmation
     installs `coqui-tts` WITHOUT the `[codec]` extra** → no torchcodec dependency → **Coqui
     likely survives on AMD** (vs the spec's earlier "Coqui may drop"). N8 drop-priority still
     stands as a fallback if the import check fails.
-  - **Torch sourcing clarified (NOT a managed skew):** NVIDIA torch = **PyPI default,
-    unpinned** (we never pin it; likely ~2.9 today — confirm on a real venv); AMD torch = the
-    pinned ROCm **2.8 alpha** wheel above (ROCm-Windows ships only specific builds). Same-minor
+  - **Torch sourcing clarified (NOT a managed skew):** NVIDIA torch = **PyPI default, now an
+    EXPLICIT `torch>=2.6` line** in `nvidia-cuda.txt` (no `==` pin, no index; coqui-tts 0.27.5
+    no longer pulls it transitively — see the re-correction above; confirm the resolved version
+    on a real venv); AMD torch = the pinned ROCm **2.8 alpha** wheel above (ROCm-Windows ships
+    only specific builds). Same-minor
     alignment is incidental, not engineered. The Phase-1 `installRecipe` AMD
     `torchPreinstall: 'PENDING_SPIKE'` is filled in Phase 2 with the torch + torchaudio URLs
     above, once import-ability is confirmed.

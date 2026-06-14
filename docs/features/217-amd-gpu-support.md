@@ -77,6 +77,12 @@ New behaviour landed paired tests in the same waves (all run under `npm run test
 **CI does NOT run the sidecar pytest suite** — `run-tests.ps1` exits 0 with a SKIP banner when the venv is absent (always true on a runner), by design (sidecar validation = author-hardware acceptance). So the "pytest green on 3.12" check is an author-acceptance item (A0 below), not CI.
 
 **Residual-risk updates (post final-review):**
+- **torch was only transitive → FIXED** (commit `e8d0468d`). `coqui-tts 0.27.5` dropped its torch
+  declaration, so a fresh venv had **no torch** and Coqui XTTS + Qwen synth (≈10 `import torch`
+  sites in `main.py`) would fail — a **pre-existing gap on `main`**, exposed by the 3.12 reinstall
+  (old venvs carried torch from an older coqui-tts). Fix: explicit `torch>=2.6` in
+  `nvidia-cuda.txt`; the `installRecipe` "torch is transitive" premise was corrected;
+  `test_requirements.py::test_torch_is_explicit` locks it. Kokoro (onnxruntime) was never affected.
 - **reqHash-only-hashed-the-shim → FIXED** (commit `00a396ca`). `zip-validate` now computes `reqHash = computeReqHash([nvidia-cuda.txt, base.txt])` from the zip — byte-identical to the venv stamp's hash — so a future overlay/base pin edit triggers the upgrade pip-install, and `ctx.reqHash` no longer diverges from the stamp. A test proves a shim-only edit does NOT change the hash while an overlay/base edit does.
 - **Flash-attn → SDPA on 3.12 (benign, flag at acceptance):** the pinned FlashAttention-2 wheel is `cp311`-only, so on a 3.12 venv `install-qwen3.mjs` skips it and Qwen uses the SDPA attention backend. Correctly gated + tested; the only effect is that anyone who had opted into FA2 loses that speedup after the 3.12 move. Note it in the A-series acceptance so it isn't a surprise.
 
@@ -85,7 +91,7 @@ New behaviour landed paired tests in the same waves (all run under `npm run test
 > Green unit tests are necessary but NOT sufficient. These are real runs on the author's hardware — the gate to ship the public-beta-enabling package. Record results here when run (live-GPU acceptance currently **owed**).
 
 1. **A0. Sidecar pytest green on Python 3.12** — on a bootstrapped 3.12 venv, `npm run test:sidecar` passes (the existing suite survives the 3.11→3.12 bump). CI skips this by design.
-2. **A. Fresh install on 3.12 — NVIDIA** — clean install builds a 3.12 venv, pulls latest PyPI torch, synthesises a chapter (Kokoro + a Qwen design); `/health` reports `cuda`.
+2. **A. Fresh install on 3.12 — NVIDIA** — clean install builds a 3.12 venv with **explicit torch present** (`pip show torch` after bootstrap), synthesises a chapter on **all three torch-dependent paths: Kokoro + a Qwen design + a Coqui XTTS render** (Coqui is the engine the dropped-torch gap specifically broke, so it MUST be exercised — not just Kokoro/Qwen); `/health` reports `cuda`.
 3. **B. Fresh install on 3.12 — CPU-only box** — installs, synthesises (Kokoro CPU); `/health` reports `cpu`.
 4. **C. Fresh install on 3.12 — macOS / Apple Silicon** — installs, synthesises (Qwen on `mps`, Kokoro CPU); mps path unchanged.
 5. **D. Alpha detect-and-reinstall + data gate** — point the app at a v1.7.0 (3.11) install → classifies `needs-reinstall`, shows guidance, does **not** pip into the 3.11 venv. Then do a fresh reinstall and confirm books + `cast.json` + designed voices are all preserved. **If any user content is lost, STOP** (see the data-preservation gate above).
