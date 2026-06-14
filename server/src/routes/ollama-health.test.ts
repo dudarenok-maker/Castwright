@@ -7,6 +7,7 @@ import express from 'express';
 import request from 'supertest';
 import {
   ollamaHealthRouter,
+  detectOllamaDevice,
   setOllamaBootstraps,
   _resetOllamaBootstraps,
 } from './ollama-health.js';
@@ -50,6 +51,36 @@ function mockOllamaProbes(opts: { tags: Array<{ name: string }>; ps?: Array<{ na
     return Promise.resolve(new Response('', { status: 404 }));
   });
 }
+
+describe('detectOllamaDevice (first-chapter ETA rate seed)', () => {
+  const mockPs = (models: unknown[] | null, status = 200) => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.endsWith('/api/ps')) {
+        return Promise.resolve(
+          new Response(models === null ? 'nope' : JSON.stringify({ models }), { status }),
+        );
+      }
+      return Promise.resolve(new Response('', { status: 404 }));
+    });
+  };
+
+  it('reports cuda when a resident model has size_vram > 0', async () => {
+    mockPs([{ name: 'qwen3.5:4b', size: 4_000_000_000, size_vram: 4_000_000_000 }]);
+    expect(await detectOllamaDevice()).toBe('cuda');
+  });
+  it('reports cpu when the resident model has zero size_vram', async () => {
+    mockPs([{ name: 'qwen3.5:4b', size: 4_000_000_000, size_vram: 0 }]);
+    expect(await detectOllamaDevice()).toBe('cpu');
+  });
+  it('reports unknown when no model is resident', async () => {
+    mockPs([]);
+    expect(await detectOllamaDevice()).toBe('unknown');
+  });
+  it('reports unknown on a non-200 / unreachable daemon', async () => {
+    mockPs(null, 500);
+    expect(await detectOllamaDevice()).toBe('unknown');
+  });
+});
 
 describe('GET /api/ollama/health', () => {
   it('returns reachable with the models array when the daemon answers 200', async () => {

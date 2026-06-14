@@ -56,7 +56,39 @@ interface OllamaTagsResponse {
 const LOAD_TIMEOUT_MS = 30_000;
 
 interface OllamaPsResponse {
-  models?: Array<{ name?: string; model?: string; expires_at?: string }>;
+  models?: Array<{
+    name?: string;
+    model?: string;
+    expires_at?: string;
+    /** Total model size (bytes) and the portion resident in VRAM. Ollama
+        reports size_vram === 0 for a CPU-only load, > 0 when (partly) on GPU. */
+    size?: number;
+    size_vram?: number;
+  }>;
+}
+
+/** Best-effort GPU/CPU detection from Ollama /api/ps (`size_vram`). Seeds the
+    analyzer's first-chapter ETA rate before any wall-clock sample exists —
+    local Ollama runs ~10× faster on CUDA than CPU (user-measured ≈150 vs
+    ≈15 chars/s). Returns 'unknown' on any failure (no model resident, daemon
+    down, parse error); the caller defaults to the GPU rate and the estimate
+    self-corrects from observed pace within the first chapter regardless. */
+export async function detectOllamaDevice(): Promise<'cuda' | 'cpu' | 'unknown'> {
+  const url = getResolvedOllamaUrl();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const resp = await fetch(`${url}/api/ps`, { method: 'GET', signal: controller.signal });
+    if (!resp.ok) return 'unknown';
+    const body = (await resp.json().catch(() => ({}))) as OllamaPsResponse;
+    const models = Array.isArray(body.models) ? body.models : [];
+    if (models.length === 0) return 'unknown';
+    return models.some((m) => (m.size_vram ?? 0) > 0) ? 'cuda' : 'cpu';
+  } catch {
+    return 'unknown';
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /* Shape returned by probeOllamaHealth(). The /health route forwards this

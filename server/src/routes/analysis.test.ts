@@ -7,6 +7,9 @@ import {
   chapterEstFromObserved,
   clampStageEstMs,
   durationsForEngine,
+  engineFallbackMsPerChar,
+  localFallbackMsPerChar,
+  projectChapterEstMsFromOutput,
   projectRemainingMs,
   buildInterimCast,
   clearFailedChapterId,
@@ -616,6 +619,50 @@ describe('durationsForEngine (model-switch ETA staleness guard)', () => {
   });
   it('returns an empty map when there are no cached durations', () => {
     expect(durationsForEngine(undefined, 'local', 'local')).toEqual({});
+  });
+});
+
+describe('engine/device-aware first-chapter fallback rate', () => {
+  it('uses the fast CUDA rate for local on GPU', () => {
+    expect(localFallbackMsPerChar('cuda')).toBe(1.2);
+  });
+  it('uses the ~10x slower rate for local on CPU', () => {
+    expect(localFallbackMsPerChar('cpu')).toBe(12);
+  });
+  it('defaults unknown-device local to the GPU rate (the app target box)', () => {
+    expect(localFallbackMsPerChar('unknown')).toBe(1.2);
+  });
+  it('keeps the Gemini rate for cloud regardless of device', () => {
+    expect(engineFallbackMsPerChar('gemini', 'cpu')).toBe(0.5);
+    expect(engineFallbackMsPerChar('gemini', 'cuda')).toBe(0.5);
+  });
+  it('routes local through the device-aware resolver', () => {
+    expect(engineFallbackMsPerChar('local', 'cpu')).toBe(12);
+    expect(engineFallbackMsPerChar('local', 'cuda')).toBe(1.2);
+  });
+});
+
+describe('projectChapterEstMsFromOutput (mid-chapter live ETA refinement)', () => {
+  it('returns null before enough time has elapsed', () => {
+    expect(projectChapterEstMsFromOutput(5_000, 10_000, 100_000, 1.2)).toBeNull();
+  });
+  it('returns null with too few output bytes', () => {
+    expect(projectChapterEstMsFromOutput(20_000, 500, 100_000, 1.2)).toBeNull();
+  });
+  it('projects total time from throughput once the signal is strong', () => {
+    /* 100k input × 1.2 ratio = 120k expected output bytes. 30k received in
+       60s → 25% done → ~240s total. */
+    const out = projectChapterEstMsFromOutput(60_000, 30_000, 100_000, 1.2);
+    expect(out).toBe(240_000);
+  });
+  it('caps apparent completion at 95% so a near-done chapter does not under-shoot', () => {
+    // received >> expected → frac clamps to 0.95, not >1.
+    const out = projectChapterEstMsFromOutput(60_000, 1_000_000, 100_000, 1.2);
+    expect(out).toBe(Math.round(60_000 / 0.95));
+  });
+  it('returns null on a degenerate ratio or input', () => {
+    expect(projectChapterEstMsFromOutput(60_000, 30_000, 0, 1.2)).toBeNull();
+    expect(projectChapterEstMsFromOutput(60_000, 30_000, 100_000, 0)).toBeNull();
   });
 });
 

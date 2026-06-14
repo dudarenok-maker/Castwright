@@ -21,6 +21,7 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
+import { detectOllamaDevice } from './ollama-health.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
 import {
   loadCastMerges,
@@ -769,10 +770,49 @@ const PHASE0_PER_CHAPTER_BASELINE_MS = 30_000;
    constant under-estimates one or over-estimates the other. Once any
    chapter completes (or a prior run's cached durations seed the
    trackers), this is ignored. */
-const ENGINE_FALLBACK_MS_PER_CHAR: Record<'gemini' | 'local', number> = {
-  gemini: 0.5,
-  local: 5.0,
-};
+const GEMINI_FALLBACK_MS_PER_CHAR = 0.5;
+/* Local Ollama first-chapter rate (ms per INPUT char), split by device because
+   CUDA runs ~10× faster than CPU (user-measured ≈150 vs ≈15 chars/s on
+   qwen3.5:4b). These feed the Phase-0 per-chapter fallback and the Phase-1
+   projection (× STAGE2_STRETCH); both are replaced by the observed wall-clock
+   rate the moment any chapter completes, and refined mid-chapter from live
+   output throughput (projectChapterEstMsFromOutput). */
+const LOCAL_FALLBACK_MS_PER_CHAR_CUDA = 1.2;
+const LOCAL_FALLBACK_MS_PER_CHAR_CPU = 12;
+export function localFallbackMsPerChar(device: 'cuda' | 'cpu' | 'unknown'): number {
+  return device === 'cpu' ? LOCAL_FALLBACK_MS_PER_CHAR_CPU : LOCAL_FALLBACK_MS_PER_CHAR_CUDA;
+}
+export function engineFallbackMsPerChar(
+  engine: 'gemini' | 'local',
+  device: 'cuda' | 'cpu' | 'unknown',
+): number {
+  return engine === 'local' ? localFallbackMsPerChar(device) : GEMINI_FALLBACK_MS_PER_CHAR;
+}
+
+/* Mid-chapter ETA refinement (issue 3, 2026-06-14). Project a chapter's total
+   wall-clock from how much OUTPUT has streamed so far, WITHOUT waiting for the
+   chapter to finish. Stage-2 output ≈ input chars × an output:input ratio that
+   self-calibrates from completed chapters (DEFAULT_STAGE2_OUTPUT_RATIO until
+   then). Returns null when the signal is too weak to trust (too little time
+   elapsed, too few bytes, or sub-2% apparent completion) so the caller keeps
+   the prior estimate rather than jittering. */
+export const DEFAULT_STAGE2_OUTPUT_RATIO = 1.2;
+const MIN_REFINE_ELAPSED_MS = 8_000;
+const MIN_REFINE_BYTES = 2_048;
+export function projectChapterEstMsFromOutput(
+  elapsedMs: number,
+  receivedBytes: number,
+  inputChars: number,
+  outputRatio: number,
+): number | null {
+  if (elapsedMs < MIN_REFINE_ELAPSED_MS) return null;
+  if (receivedBytes < MIN_REFINE_BYTES) return null;
+  if (inputChars <= 0 || outputRatio <= 0) return null;
+  const expectedOutputBytes = inputChars * outputRatio;
+  const frac = Math.min(0.95, receivedBytes / expectedOutputBytes);
+  if (frac < 0.02) return null;
+  return Math.max(MIN_EST_MS, Math.round(elapsedMs / frac));
+}
 /* Stage 2 chapter concurrency. Default 2 keeps us well under Gemini's
    free-tier RPM limits while roughly halving wall-clock time vs sequential.
    Bump via STAGE2_CONCURRENCY env if your tier (or the model) allows; cap
@@ -2027,6 +2067,15 @@ export async function runMainAnalyzerJob(
   }
   const watermark: PhaseWatermark = createWatermarkForJob(userSettings);
 
+  /* Best-effort GPU/CPU detection for the first-chapter ETA rate (issue 3).
+     Only meaningful for local Ollama; cloud engines pass 'unknown' → the
+     Gemini rate. Failures degrade to 'unknown' → the CUDA rate (the app's
+     target box), and the estimate self-corrects from observed pace anyway. */
+  const analyzerDevice: 'cuda' | 'cpu' | 'unknown' =
+    selection.engine === 'local' || phase1Selection.engine === 'local'
+      ? await detectOllamaDevice()
+      : 'unknown';
+
   const send = (payload: unknown) => {
     broadcastToJob(job, payload);
     trackForReplay(job, payload);
@@ -2289,7 +2338,7 @@ export async function runMainAnalyzerJob(
        any chapter completes. Uses cached durations when present (typical
        resume case); otherwise falls back to the per-engine ms/char rate. */
     {
-      const fallbackMsPerChar = ENGINE_FALLBACK_MS_PER_CHAR[selection.engine] ?? 0.5;
+      const fallbackMsPerChar = engineFallbackMsPerChar(selection.engine, analyzerDevice);
       const phase0CharsRemainingInitial = Math.max(0, totalCastCharsAll - castActualCharsTotal);
       const initialRemainingMs = projectRemainingMs({
         phase0WallClockMs: 0,
@@ -2514,7 +2563,7 @@ export async function runMainAnalyzerJob(
            ~0:40 even when prior chapters averaged 4-5ms/char. Falls
            back to the TTFT-dominated baseline only on the first
            chapter of the phase, when no samples exist yet. */
-        const msPerCharFallback = ENGINE_FALLBACK_MS_PER_CHAR[selection.engine] ?? 0.5;
+        const msPerCharFallback = engineFallbackMsPerChar(selection.engine, analyzerDevice);
         const fallback = PHASE0_PER_CHAPTER_BASELINE_MS + msPerCharFallback * ch.body.length;
         const chapterEstMs = chapterEstFromObserved(
           ch.body.length,
@@ -2990,6 +3039,14 @@ export async function runMainAnalyzerJob(
     const totalStage2Chars = record.chapterHints.reduce((sum, c) => sum + c.body.length, 0);
     let actualMsTotal = 0;
     let actualCharsTotal = 0;
+    /* Self-calibrating stage-2 output:input ratio for the mid-chapter ETA
+       refinement (issue 3). Seeded from DEFAULT_STAGE2_OUTPUT_RATIO and
+       refined from each completed chapter's final output bytes vs its input
+       chars, so the in-flight projection tightens as the run proceeds. */
+    let stage2OutBytesTotal = 0;
+    let stage2InCharsTotal = 0;
+    const currentOutputRatio = (): number =>
+      stage2InCharsTotal > 0 ? stage2OutBytesTotal / stage2InCharsTotal : DEFAULT_STAGE2_OUTPUT_RATIO;
     /* Seed from prior-run stage 2 durations so a resumed run already has
        per-chapter ETA samples — same rationale as the cast pass above. */
     const stage2Durations: Record<number, number> = durationsForEngine(
@@ -3103,6 +3160,9 @@ export async function runMainAnalyzerJob(
       chapterEstMs: number;
       startedAt: number;
       elapsedMs: number;
+      /** Latest streamed output bytes for this chapter (from the heartbeat) —
+          drives the mid-chapter ETA projection in tickOverall. */
+      receivedBytes: number;
     }
     const inFlight = new Map<number, InFlight>();
 
@@ -3175,11 +3235,26 @@ export async function runMainAnalyzerJob(
         chapterEstMs,
         startedAt,
         elapsedMs: 0,
+        receivedBytes: 0,
       });
 
       const tickOverall = (elapsed: number) => {
         const slot = inFlight.get(i);
-        if (slot) slot.elapsedMs = elapsed;
+        if (slot) {
+          slot.elapsedMs = elapsed;
+          /* Mid-chapter ETA refinement (issue 3): once enough output has
+             streamed, project the chapter's total time from live throughput so
+             the "X of ~Y" ticker tightens instead of staying pinned to the
+             start-of-chapter estimate. Returns null when the signal is too
+             weak, in which case the prior estMs is kept. */
+          const projected = projectChapterEstMsFromOutput(
+            elapsed,
+            slot.receivedBytes,
+            ch.body.length,
+            currentOutputRatio(),
+          );
+          if (projected !== null) slot.chapterEstMs = projected;
+        }
         sendLiveTick();
         /* Over-budget log thresholds — fire once per chapter. */
         for (const t of OVERAGE_LOG_THRESHOLDS) {
@@ -3237,9 +3312,26 @@ export async function runMainAnalyzerJob(
            on each chapter. Stage 2's existing wall-clock heartbeat log
            lines already cover the silence-watchdog purpose. */
         onChunk: (info) => {
+          /* Track the running output bytes every chunk (cheap) so the
+             mid-chapter ETA projection has fresh data even when onWaiting is
+             quiet during active streaming. */
+          const liveSlot = inFlight.get(i);
+          if (liveSlot) liveSlot.receivedBytes = info.receivedBytes;
           const now = Date.now();
           if (now - chapterLastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
           chapterLastHeartbeatAt = now;
+          /* Refine the displayed per-chapter estimate from live throughput on
+             the throttled cadence, then push a live tick so "X of ~Y" updates. */
+          if (liveSlot) {
+            const projected = projectChapterEstMsFromOutput(
+              now - liveSlot.startedAt,
+              liveSlot.receivedBytes,
+              ch.body.length,
+              currentOutputRatio(),
+            );
+            if (projected !== null) liveSlot.chapterEstMs = projected;
+            sendLiveTick();
+          }
           const charsPerSec =
             info.elapsedMs > 0 ? Math.round((info.receivedBytes * 1000) / info.elapsedMs) : 0;
           send({
@@ -3353,6 +3445,14 @@ export async function runMainAnalyzerJob(
         }
       }
       const chDuration = Date.now() - startedAt;
+      /* Calibrate the stage-2 output:input ratio from this chapter's final
+         streamed bytes so subsequent chapters' mid-chapter projections use a
+         book/model-specific ratio rather than the default. */
+      const finalBytes = inFlight.get(i)?.receivedBytes ?? 0;
+      if (finalBytes > 0 && ch.body.length > 0) {
+        stage2OutBytesTotal += finalBytes;
+        stage2InCharsTotal += ch.body.length;
+      }
       completedSet.add(i);
       inFlight.delete(i);
       log(
