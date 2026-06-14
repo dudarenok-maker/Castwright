@@ -58,6 +58,12 @@ class Chapters extends Table {
   /// player + library show durations + listener progress OFFLINE.
   RealColumn get durationSec => real().nullable()();
 
+  /// Waveform peaks for the player (the server's 240 normalized RMS bins),
+  /// JSON-encoded as a `List<double>`. Null until fetched — persisted so the
+  /// waveform survives offline / screen recreation / restart instead of being
+  /// re-fetched live every time.
+  TextColumn get peaks => text().nullable()();
+
   /// Whether the user has finished this chapter — drives auto-delete-finished
   /// eviction (the row stays; only the audio file is dropped).
   BoolColumn get finished => boolean().withDefault(const Constant(false))();
@@ -88,7 +94,7 @@ class LibraryDatabase extends _$LibraryDatabase {
   LibraryDatabase.open() : this(driftDatabase(name: 'library'));
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -97,6 +103,7 @@ class LibraryDatabase extends _$LibraryDatabase {
           if (from < 2) await m.createTable(playback);
           if (from < 3) await m.addColumn(chapters, chapters.durationSec);
           if (from < 4) await m.createTable(listenStatsBuffer);
+          if (from < 5) await m.addColumn(chapters, chapters.peaks);
         },
       );
 

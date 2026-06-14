@@ -17,15 +17,25 @@ class SyncController {
     required DriftLocalLibrary localLibrary,
     required ChapterDownloader chapterDownloader,
     required Uri Function(String path) urlResolver,
+    Future<List<double>> Function(String bookId, int chapterId)? peaksFetcher,
   })  : _api = manifestApi,
         _library = localLibrary,
         _downloader = chapterDownloader,
-        _resolveUrl = urlResolver;
+        _resolveUrl = urlResolver,
+        _peaksFetcher = peaksFetcher ?? ((b, c) async => const []);
 
   final ManifestApi _api;
   final DriftLocalLibrary _library;
   final ChapterDownloader _downloader;
   final Uri Function(String path) _resolveUrl;
+
+  /// Fetches a chapter's server-side waveform peaks (empty when absent/offline).
+  /// Defaults to a no-op so non-networked construction (tests/demo) is unchanged.
+  final Future<List<double>> Function(String bookId, int chapterId) _peaksFetcher;
+
+  /// Re-entrancy guard: the initial-connect sweep and an auto-sync reconnect
+  /// sweep can fire near-simultaneously — without this they'd double-fetch.
+  bool _backfilling = false;
 
   /// Last fetched detail per book — drives the player playlist in-session.
   final Map<String, SyncManifestBookDetail> _details = {};
@@ -104,6 +114,8 @@ class SyncController {
         urlSuffix: c.urlSuffix!,
         durationSec: c.durationSec,
       );
+      final peaks = await _peaksFetcher(bookId, c.id);
+      if (peaks.isNotEmpty) await _library.savePeaks(c.uuid, peaks);
       done++;
       onProgress?.call(done, total);
     }
@@ -183,5 +195,51 @@ class SyncController {
             durationSec: c.durationSec,
           ),
     ];
+  }
+
+  /// Peaks for a chapter, local-first: returns persisted peaks when present,
+  /// else fetches from the server (when reachable), persists, and returns them.
+  /// Empty when neither source has them (offline + never cached) — the caller
+  /// then shows the plain bar.
+  Future<List<double>> peaksFor(String bookId, String uuid, int chapterId) async {
+    final local = await _library.loadPeaks(uuid);
+    if (local != null && local.isNotEmpty) return local;
+    final List<double> remote;
+    try {
+      remote = await _peaksFetcher(bookId, chapterId);
+    } catch (_) {
+      return const []; // fetcher failed (offline) → caller shows the plain bar
+    }
+    if (remote.isNotEmpty) await _library.savePeaks(uuid, remote);
+    return remote;
+  }
+
+  /// Fetch + persist peaks for every locally-stored chapter that lacks them
+  /// (e.g. downloaded before peaks were persisted). Best-effort and idempotent:
+  /// an empty/failed fetch leaves that chapter for the next connect; once every
+  /// chapter has peaks it is a no-op. Re-entrancy guarded so overlapping connect
+  /// + reconnect sweeps don't double-fetch. Returns the number newly filled.
+  Future<int> backfillMissingPeaks() async {
+    if (_backfilling) return 0; // a sweep is already running
+    _backfilling = true;
+    try {
+      final missing = await _library.chaptersMissingPeaks();
+      var filled = 0;
+      for (final c in missing) {
+        List<double> peaks;
+        try {
+          peaks = await _peaksFetcher(c.bookId, c.chapterId);
+        } catch (_) {
+          continue; // fetcher failed (offline) → leave for the next connect
+        }
+        if (peaks.isNotEmpty) {
+          await _library.savePeaks(c.uuid, peaks);
+          filled++;
+        }
+      }
+      return filled;
+    } finally {
+      _backfilling = false;
+    }
   }
 }

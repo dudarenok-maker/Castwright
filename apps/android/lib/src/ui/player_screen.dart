@@ -33,10 +33,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   List<SyncManifestChapter> _chapters = const [];
   final Map<String, List<double>> _peaks = {}; // chapter uuid -> RMS peaks
 
-  /// Fetch + cache a chapter's waveform peaks (best-effort; needs the server).
+  /// Fetch + cache a chapter's waveform peaks. Local-first (survives offline +
+  /// screen recreation + restart); falls back to a live fetch (and persists)
+  /// only when nothing is cached locally.
   Future<void> _ensurePeaks(String uuid, int chapterId) async {
     if (_peaks.containsKey(uuid)) return;
-    final peaks = await widget.runtime.api.getChapterPeaks(widget.bookId, chapterId);
+    final peaks =
+        await widget.runtime.sync.peaksFor(widget.bookId, uuid, chapterId);
     if (peaks.isNotEmpty && mounted) setState(() => _peaks[uuid] = peaks);
   }
 

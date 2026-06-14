@@ -108,6 +108,7 @@ class CompanionRuntime {
       localLibrary: library,
       chapterDownloader: downloader,
       urlResolver: resolve,
+      peaksFetcher: api.getChapterPeaks,
     );
 
     // fs-16: per-app-launch session id — a compact ms-epoch string, stable for
@@ -177,6 +178,7 @@ class CompanionRuntime {
       runSync: () async {
         final books = await library.listBooks();
         await resumeSync.syncAll([for (final b in books) b.bookId]);
+        await sync.backfillMissingPeaks();
       },
       flushStats: statsFlush.flush,
     );
@@ -216,6 +218,11 @@ class CompanionRuntime {
       childrenProvider: carBrowse.getChildren,
       onPlayMediaId: carBrowse.playFromMediaId,
     );
+
+    // Fill waveforms for any chapters downloaded before peaks were persisted.
+    // Best-effort + idempotent: a no-op offline (getChapterPeaks swallows the
+    // error) and once every chapter has peaks.
+    unawaited(sync.backfillMissingPeaks());
 
     return CompanionRuntime._(api, library, sync, player, thumbnails,
         settingsStore, settings, resumeSync, sleepTimer, handler,

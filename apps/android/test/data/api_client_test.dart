@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/api_client.dart';
@@ -88,6 +89,24 @@ void main() {
       expect(decodedDays.length, 2);
       expect(decodedDays[0], {'date': '2026-06-14', 'seconds': 120});
       expect(decodedDays[1], {'date': '2026-06-13', 'seconds': 60});
+    });
+
+    test('getChapterPeaks parses the peaks array', () async {
+      final api = ApiClient(conn(),
+          send: (_, _, _) async => const HttpResult(200, '{"peaks":[0,0.5,1]}'));
+      expect(await api.getChapterPeaks('b1', 3), [0.0, 0.5, 1.0]);
+    });
+
+    test('getChapterPeaks returns empty offline (transport throws), never rethrows',
+        () async {
+      final api = ApiClient(conn(),
+          send: (_, _, _) async => throw SocketException('offline'));
+      expect(await api.getChapterPeaks('b1', 3), isEmpty);
+    });
+
+    test('getChapterPeaks returns empty on a 404 (no audio meta)', () async {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(404, ''));
+      expect(await api.getChapterPeaks('b1', 3), isEmpty);
     });
   });
 }

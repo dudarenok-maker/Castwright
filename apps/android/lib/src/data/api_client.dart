@@ -107,7 +107,11 @@ class ApiClient {
   }
 
   /// Per-chapter waveform peaks (240 normalized RMS bins) from the existing
-  /// chapter-audio meta endpoint. Empty list when absent/unreachable.
+  /// chapter-audio meta endpoint. Empty list on ANY failure — a missing or
+  /// non-List `peaks` field, an HTTP error (ApiException), or a transport
+  /// failure when the server is unreachable/offline (SocketException /
+  /// TimeoutException). Callers treat "no peaks" as "show the plain bar", so
+  /// this never throws.
   Future<List<double>> getChapterPeaks(String bookId, int chapterId) async {
     try {
       final j = await getJson('/api/books/$bookId/chapters/$chapterId/audio');
@@ -115,8 +119,8 @@ class ApiClient {
       if (raw is List) {
         return [for (final e in raw) (e as num).toDouble()];
       }
-    } on ApiException {
-      /* no audio meta / offline → no waveform */
+    } catch (_) {
+      /* HTTP error, offline transport, or malformed body → no waveform */
     }
     return const [];
   }

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/chapter_downloader.dart';
@@ -43,7 +45,11 @@ void main() {
   late InMemoryFileStore fs;
   late DriftLocalLibrary lib;
 
-  SyncController make(ManifestApi api, Map<String, List<int>> serverBytes) {
+  SyncController make(
+    ManifestApi api,
+    Map<String, List<int>> serverBytes, {
+    Future<List<double>> Function(String bookId, int chapterId)? peaksFetcher,
+  }) {
     final downloader = ChapterDownloader(
       (url, headers) async =>
           RangeResponse(statusCode: 200, body: Stream.value(serverBytes[url.path]!)),
@@ -55,6 +61,7 @@ void main() {
       localLibrary: lib,
       chapterDownloader: downloader,
       urlResolver: (p) => Uri.parse('https://s$p'),
+      peaksFetcher: peaksFetcher,
     );
   }
 
@@ -177,5 +184,114 @@ void main() {
     final local = await make(_ThrowingApi(), {}).loadLocalLibrary();
     expect(local.single.bookId, 'b1');
     expect(local.single.title, 'B');
+  });
+
+  // NOTE: this file's setUp builds `lib` at FS root '/d' (not '/data'), and
+  // recordChapterMeta tolerates a missing audio file (bytes → 0). The peaks
+  // policy doesn't depend on bytes, so these tests deliberately skip writing
+  // audio fixtures.
+  group('peaks policy', () {
+    test('peaksFor returns persisted peaks without fetching', () async {
+      var fetches = 0;
+      final c = make(_ThrowingApi(), {}, peaksFetcher: (b, id) async {
+        fetches++;
+        return const [];
+      });
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+      await lib.savePeaks('u1', [0.25, 0.75]);
+
+      expect(await c.peaksFor('b1', 'u1', 1), [0.25, 0.75]);
+      expect(fetches, 0); // local hit → no server call
+    });
+
+    test('peaksFor fetches + persists when not local, then returns them', () async {
+      final c = make(_ThrowingApi(), {},
+          peaksFetcher: (b, id) async => [0.1, 0.2, 0.3]);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+
+      expect(await c.peaksFor('b1', 'u1', 1), [0.1, 0.2, 0.3]);
+      expect(await lib.loadPeaks('u1'), [0.1, 0.2, 0.3]); // persisted for next time
+    });
+
+    test('peaksFor returns empty when the fetcher throws (offline), never rethrows',
+        () async {
+      final c = make(_ThrowingApi(), {},
+          peaksFetcher: (b, id) async => throw SocketException('offline'));
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+      expect(await c.peaksFor('b1', 'u1', 1), isEmpty);
+    });
+
+    test('backfillMissingPeaks tolerates a throwing fetcher (offline) → 0, no throw',
+        () async {
+      final c = make(_ThrowingApi(), {},
+          peaksFetcher: (b, id) async => throw SocketException('offline'));
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+      expect(await c.backfillMissingPeaks(), 0);
+    });
+
+    test('downloadBook persists peaks for each downloaded chapter', () async {
+      final detail = SyncManifestBookDetail(
+        schemaVersion: 1, bookId: 'b1', updatedAt: 't1',
+        chapters: [ch('b1', 'u1', 1, 'fp1', dur: 10)],
+        activeChapterUuids: const ['u1'],
+      );
+      final api = _FakeApi(SyncManifestIndex(schemaVersion: 1, books: const [],
+          activeBookIds: const ['b1']), {'b1': detail});
+      final c = make(api, {'/api/books/b1/chapters/1/audio.mp3': [1, 2, 3]},
+          peaksFetcher: (b, id) async => [0.4, 0.6]);
+
+      await c.downloadBook('b1');
+      expect(await lib.loadPeaks('u1'), [0.4, 0.6]);
+    });
+
+    test('backfillMissingPeaks fills missing, skips empties, returns count', () async {
+      var calls = <int>[];
+      final c = make(_ThrowingApi(), {}, peaksFetcher: (b, id) async {
+        calls.add(id);
+        return id == 1 ? [1.0, 0.5] : const []; // ch1 has peaks, ch2 doesn't
+      });
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u2', chapterId: 2, title: 'Two',
+          fingerprint: 'fp2', urlSuffix: 'audio.mp3', durationSec: 10);
+
+      final filled = await c.backfillMissingPeaks();
+      expect(filled, 1);
+      expect(calls..sort(), [1, 2]); // both attempted
+      expect(await lib.loadPeaks('u1'), [1.0, 0.5]);
+      expect(await lib.loadPeaks('u2'), isNull);
+      // second pass is a no-op: u1 now has peaks, u2 still returns empty
+      expect(await c.backfillMissingPeaks(), 0);
+    });
+
+    test('backfillMissingPeaks is re-entrancy guarded (concurrent call is a no-op)',
+        () async {
+      var fetchCalls = 0;
+      final c = make(_ThrowingApi(), {}, peaksFetcher: (b, id) async {
+        fetchCalls++;
+        return [0.5];
+      });
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+
+      // A Dart async body runs synchronously up to its first await, so `first`
+      // claims the guard before `second` is invoked — deterministic, no timers.
+      final first = c.backfillMissingPeaks();
+      final second = await c.backfillMissingPeaks(); // guarded → no-op
+      expect(second, 0);
+      expect(await first, 1);
+      expect(fetchCalls, 1); // only the first sweep actually fetched
+    });
   });
 }
