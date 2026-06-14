@@ -24,8 +24,9 @@
 | `server/src/tts/accelerator-profile.test.ts` (create) | Vitest matrix tests importing the `.mjs` directly |
 | `server/tts-sidecar/scripts/venv-migration.mjs` (create) | Pure venv decision core: `computeReqHash`, `decideVenvAction`, stamp I/O. (Disk pre-flight is **deferred to Phase 2** with the in-place rebuild.) |
 | `server/src/tts/venv-migration.test.ts` (create) | Vitest tests for the decision core + stamp I/O |
-| `server/tts-sidecar/requirements/{base,nvidia-cuda,cpu}.txt` (create) | Layered requirements; `nvidia-cuda.txt` == today (regression fence). **No `amd-rocm.txt` in Phase 1.** |
-| `server/tts-sidecar/scripts/bootstrap-venv.mjs` (modify) | Target Python 3.12; consult `decideVenvAction`; on mismatch → **detect-and-reinstall guidance**, never in-place rebuild |
+| `server/tts-sidecar/requirements/{base,nvidia-cuda}.txt` (create) | Layered structure; `nvidia-cuda.txt` == today (regression fence). **`requirements.txt` → `-r requirements/nvidia-cuda.txt` is the SOLE install path** (R1: no profile-based overlay selection in Phase 1; no `cpu.txt`/`amd-rocm.txt` — those + selection are Phase 2). |
+| `server/tts-sidecar/scripts/bootstrap-venv.mjs` (modify) | Target Python 3.12; consult `decideVenvAction`; on mismatch → **detect-and-reinstall guidance**, never in-place rebuild. Stamps the **effective install profile (`'nvidia'`)** — Phase 1 does NOT select an overlay by hardware (R1). |
+| `server/src/upgrade/apply.ts` (modify) | Upgrade-path guard (R2): classify before `pipInstall`; on `needs-reinstall` (py mismatch) abort + signal reinstall, never pip into a 3.11 venv |
 | `server/tts-sidecar/scripts/ensure-python312.mjs` (create) | Discover/auto-install/guide Python 3.12 for **fresh installs** |
 | `.github/workflows/*.yml` (modify) | Sidecar Python → 3.12 |
 | `docs/features/<N>-amd-gpu-support.md` + INDEX + BACKLOG (create/modify) | Regression plan (`status: active`) + backlog issue |
@@ -886,25 +887,34 @@ git commit -m "feat(sidecar): add venv stamp read/write I/O (null on missing/cor
 
 ---
 
-## Task 11: Layered requirements (base + nvidia-cuda + cpu; NVIDIA == today)
+## Task 11: Layered requirements structure (base + nvidia-cuda ONLY; NVIDIA == today) (R1/R3/R4)
+
+> **R1:** Phase 1 ships ONLY `base.txt` + `nvidia-cuda.txt`, and `requirements.txt` →
+> `-r requirements/nvidia-cuda.txt` is the **sole** install path. No `cpu.txt`, no
+> `amd-rocm.txt`, **no profile-based overlay selection** — those are Phase 2. This keeps every
+> box (NVIDIA/CPU/AMD) on the today-equivalent install + 3.12, and makes it impossible to route
+> a fresh AMD-box install to a non-existent overlay. The split is structural groundwork for
+> Phase 2; behaviorally it equals today.
 
 **Files:**
-- Create: `server/tts-sidecar/requirements/base.txt`, `nvidia-cuda.txt`, `cpu.txt`
-- Modify: `server/tts-sidecar/requirements.txt` → pointer shim
+- Create: `server/tts-sidecar/requirements/base.txt`, `server/tts-sidecar/requirements/nvidia-cuda.txt`
+- Modify: `server/tts-sidecar/requirements.txt` → pointer shim (`-r requirements/nvidia-cuda.txt`)
 - Test: `server/src/tts/requirements-layout.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing test** (R3: derive the dir from `import.meta.url`, NOT `__dirname` — the latter isn't defined in the server's ESM Vitest context)
 
 ```ts
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-const REQ = join(__dirname, '../../tts-sidecar/requirements');
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
-describe('layered requirements (Phase 1: nvidia/cpu only)', () => {
-  it('nvidia/cpu overlays each -r base.txt', () => {
-    for (const f of ['nvidia-cuda.txt', 'cpu.txt'])
-      expect(readFileSync(join(REQ, f), 'utf8')).toMatch(/^-r base\.txt/m);
+const HERE = dirname(fileURLToPath(import.meta.url)); // server/src/tts
+const REQ = join(HERE, '..', '..', 'tts-sidecar', 'requirements');
+
+describe('layered requirements (Phase 1: base + nvidia-cuda only)', () => {
+  it('nvidia-cuda overlay -r base.txt', () => {
+    expect(readFileSync(join(REQ, 'nvidia-cuda.txt'), 'utf8')).toMatch(/^-r base\.txt/m);
   });
   it('base.txt has vendor-neutral deps, no torch/onnxruntime', () => {
     const b = readFileSync(join(REQ, 'base.txt'), 'utf8');
@@ -915,7 +925,12 @@ describe('layered requirements (Phase 1: nvidia/cpu only)', () => {
     const n = readFileSync(join(REQ, 'nvidia-cuda.txt'), 'utf8');
     expect(n).toMatch(/coqui-tts\[codec\]/); expect(n).toMatch(/kokoro-onnx\[gpu\]/);
   });
-  it('NO amd-rocm.txt in Phase 1', () => {
+  it('requirements.txt shim points at the nvidia-cuda overlay (sole install path)', () => {
+    const shim = readFileSync(join(REQ, '..', 'requirements.txt'), 'utf8');
+    expect(shim).toMatch(/^-r requirements\/nvidia-cuda\.txt/m);
+  });
+  it('NO cpu.txt / amd-rocm.txt in Phase 1', () => {
+    expect(() => readFileSync(join(REQ, 'cpu.txt'), 'utf8')).toThrow();
     expect(() => readFileSync(join(REQ, 'amd-rocm.txt'), 'utf8')).toThrow();
   });
 });
@@ -923,9 +938,36 @@ describe('layered requirements (Phase 1: nvidia/cpu only)', () => {
 
 - [ ] **Step 2: Run** `npm --prefix server run test -- requirements-layout` → FAIL.
 
-- [ ] **Step 3: Create the files** (move today's vendor-neutral lines to `base.txt`; `nvidia-cuda.txt` = `-r base.txt` + `coqui-tts[codec]>=0.24.0` + `kokoro-onnx[gpu]>=0.4.0,<0.5.0` — byte-equivalent to today; `cpu.txt` = `-r base.txt` + `coqui-tts[codec]` + `kokoro-onnx` + `onnxruntime`). Replace `requirements.txt` body with `-r requirements/nvidia-cuda.txt` + a pointer comment (preserves the legacy NVIDIA default). See spec Section 3 / Phase-2-plan Task A1 for the exact line contents (minus `amd-rocm.txt`).
+- [ ] **Step 3: Create the files** (R4 — exact contents inline, by moving today's `requirements.txt` lines):
 
-- [ ] **Step 4: Run** → PASS. **Step 5: Commit** `feat(sidecar): layered requirements base+nvidia+cpu (phase 1)`.
+`server/tts-sidecar/requirements/base.txt` (the vendor-neutral lines lifted verbatim from today's `requirements.txt`):
+```
+fastapi>=0.115,<0.116
+uvicorn[standard]>=0.30,<0.32
+numpy>=1.26,<3.0
+soundfile
+psutil>=5.9
+faster-whisper>=1.0,<2.0
+transformers>=4.45,<5.0
+```
+
+`server/tts-sidecar/requirements/nvidia-cuda.txt` (the engine lines — byte-equivalent to today):
+```
+-r base.txt
+coqui-tts[codec]>=0.24.0
+kokoro-onnx[gpu]>=0.4.0,<0.5.0
+```
+
+Replace the body of `server/tts-sidecar/requirements.txt` with the pointer shim (keep the file's leading explanatory comments if helpful):
+```
+# Layered requirements. Phase 1 ships base + nvidia-cuda only; this shim is the sole
+# install path and preserves today's NVIDIA set. cpu/amd overlays + profile selection = Phase 2.
+-r requirements/nvidia-cuda.txt
+```
+
+> Cross-check the exact version pins against the current `requirements.txt` before deleting lines from it — `base.txt` + `nvidia-cuda.txt` together must reproduce today's installed set exactly (the regression fence). Note today's `transformers<5` pin + the `[codec]`/torchcodec comment move with the relevant lines.
+
+- [ ] **Step 4: Run** → PASS. **Step 5: Commit** `feat(sidecar): layered requirements base+nvidia-cuda (sole path == today) (phase 1)`.
 
 ---
 
@@ -991,10 +1033,50 @@ describe('classifyVenvState (Phase 1: detect-and-reinstall, no rebuild)', () => 
 });
 ```
 
-- [ ] **Step 2–4:** run-fail; implement `classifyVenvState` (maps `decideVenvAction`'s `rebuild` → **`needs-reinstall`** in Phase 1, never an in-place teardown). Wire `main()`: fresh-bootstrap builds a **3.12** venv (python from `ensure-python312`) + writes the `.venv-stamp.json`; `needs-reinstall` **prints the reinstall guidance and exits non-zero without touching the venv**; `pip-in-place`/`noop` as today. run-pass.
+- [ ] **Step 2–4:** run-fail; implement `classifyVenvState` (maps `decideVenvAction`'s `rebuild` → **`needs-reinstall`** in Phase 1, never an in-place teardown). Wire `main()`:
+  - **fresh-bootstrap** builds a **3.12** venv (python from `ensure-python312`), `pip install -r requirements.txt` (the nvidia-cuda shim — the SOLE path, R1), then writes `.venv-stamp.json` with `{ pythonTag: 'cp312', profile: 'nvidia', reqHash: computeReqHash([<nvidia-cuda.txt text>, <base.txt text>]), builtVersion }`. **`profile` is the EFFECTIVE install ('nvidia'), not the detected vendor** — Phase 1 does not select an overlay by hardware, so the stamp records what was actually built (keeps `decideVenvAction` predictable; detection lands unit-tested but unconsumed by the install path until Phase 2).
+  - **needs-reinstall** → print the reinstall guidance + exit non-zero, **without touching the venv**.
+  - **pip-in-place** / **noop** → as today.
+  run-pass.
 - [ ] **Step 5: Commit** `feat(sidecar): bootstrap targets 3.12 + detect-and-reinstall on python mismatch (phase 1)`.
 
-> The packaged self-upgrade (`apply.ts`) gets the same guard: on a `needs-reinstall` classification it **refuses the auto-upgrade and surfaces the reinstall message** (Section 6 UX) — it does NOT pip into a 3.11 venv. This is a small guard, not the resumable-rebuild surgery (which is Phase 2).
+---
+
+## Task 13B: `apply.ts` upgrade-path detect-and-reinstall guard (R2)
+
+**Why:** the self-upgrade (`apply.ts`) currently `pipInstall`s into the existing shared venv when the reqHash changed (`apply.ts:77`). On the 3.12 release, an alpha box on a 3.11 venv would have it **pip 3.12 deps into the 3.11 interpreter → failure**. This guard is the upgrade-path half of detect-and-reinstall — it must exist and be tested, not just noted.
+
+**Files:** Modify `server/src/upgrade/apply.ts` (+ `createApplySteps`); Modify `server/src/upgrade/apply.test.ts`.
+
+- [ ] **Step 1: Write the failing test** (the `ApplySteps` are injectable — extend the fakes):
+
+```ts
+it('aborts with needs-reinstall when the shared venv pythonTag != required (3.11 -> 3.12)', async () => {
+  const steps = makeFakeSteps({
+    readStamp: () => ({ pythonTag: 'cp311', profile: 'nvidia', reqHash: 'x' }),
+    requiredPythonTag: 'cp312',
+  });
+  const res = await applyUpgrade(ctx, steps);
+  expect(res.ok).toBe(false);
+  expect(res.phase).toBe('needs-reinstall');
+  expect(steps.pipInstall).not.toHaveBeenCalled();   // never pip into a 3.11 venv
+  expect(steps.flipPointer).not.toHaveBeenCalled();  // old release stays current
+});
+it('still pip-installs in place when pythonTag matches and reqHash changed', async () => {
+  const steps = makeFakeSteps({
+    readStamp: () => ({ pythonTag: 'cp312', profile: 'nvidia', reqHash: 'old' }),
+    requiredPythonTag: 'cp312',
+  });
+  await applyUpgrade(ctx, steps);
+  expect(steps.pipInstall).toHaveBeenCalled();
+});
+```
+
+- [ ] **Step 2: Run** `npm --prefix server run test -- upgrade/apply` → FAIL.
+
+- [ ] **Step 3: Implement** — add a `'needs-reinstall'` value to `ApplyPhase`; in `applyUpgrade`, after `npm-ci` and before `pip-install`, read the shared-venv stamp (via a new injected `readStamp` step) and run `classifyVenvState` (imported from `bootstrap-venv.mjs` per the Task-0 mechanic). On `needs-reinstall`: return `{ ok: false, phase: 'needs-reinstall', … }` **without** `pipInstall` or `flipPointer` (the old release stays current); the caller surfaces the reinstall message (Section 6 UX). Other classifications proceed as today.
+
+- [ ] **Step 4: Run** → PASS. **Step 5: Commit** `feat(server): apply.ts refuses 3.11->3.12 self-upgrade, signals reinstall (phase 1)`.
 
 ---
 
@@ -1040,9 +1122,10 @@ describe('classifyVenvState (Phase 1: detect-and-reinstall, no rebuild)', () => 
 
 ## Self-review checklist (run before handing off)
 
-- **Spec coverage (Phase 1):** Section 1 resolver (Tasks 1–6) ✓; Section 2 stamp + three-way decision + detect-and-reinstall (Tasks 7–8, 10, 13) ✓; Section 3 layered requirements nvidia/cpu (Task 11) + Python 3.12 acquisition (Task 12) ✓; cross-runtime mechanic (Task 0) ✓; CI 3.12 (Task 14) ✓; docs (Task 16) ✓; acceptance gate (Task 17) ✓.
-- **Correctly deferred to Phase 2:** `decideDiskAction` (Task 9, skipped), the in-place rebuild / resumable `apply.ts` / atomic swap, `amd-rocm.txt`, ROCm torch, DirectML, `/health` enum live, VRAM change, AMD messaging, profile-switch. Absent by design.
-- **No in-place migration:** `classifyVenvState` maps a Python/profile mismatch to **`needs-reinstall`**, never a teardown — the H4 risk is gone, and the data gate (Task 17.D) is a hard STOP.
+- **Spec coverage (Phase 1):** Section 1 resolver (Tasks 1–6) ✓; Section 2 stamp + three-way decision + detect-and-reinstall (Tasks 7–8, 10, 13) + the upgrade-path guard (Task 13B, R2) ✓; Section 3 layered structure **base+nvidia-cuda only, sole shim path** (Task 11, R1) + Python 3.12 acquisition (Task 12) ✓; cross-runtime mechanic (Task 0) ✓; CI 3.12 (Task 14) ✓; docs (Task 16) ✓; acceptance gate (Task 17) ✓.
+- **R1 — no profile-based overlay selection in Phase 1:** every box installs the `nvidia-cuda` shim (== today + 3.12); `cpu.txt`/`amd-rocm.txt` + selection are Phase 2. A fresh AMD-box install therefore CANNOT route to a missing overlay; the stamp records the **effective** profile (`'nvidia'`), not the detected vendor.
+- **Correctly deferred to Phase 2:** `decideDiskAction` (Task 9, skipped), the in-place rebuild / resumable `apply.ts` / atomic swap, `cpu.txt`/`amd-rocm.txt` + overlay selection, ROCm torch, DirectML, `/health` enum live, VRAM change, AMD messaging, profile-switch. Absent by design.
+- **No in-place migration:** `classifyVenvState` maps a Python/profile mismatch to **`needs-reinstall`** (both in `bootstrap-venv.mjs` AND `apply.ts`, Task 13B), never a teardown — the H4 risk is gone, and the data gate (Task 17.D) is a hard STOP.
 - **Provisional AMD values flagged:** AMD-Kokoro `runtimeBackend`/`ortProviders` = DirectML marked S0.1-pending; AMD `torchPreinstall` = `PENDING_SPIKE`. These ship **unreached** (no `amd-rocm.txt`, no AMD detection path active on shipped HW).
 - **P1 fence honesty:** NVIDIA recipe == verified today (no cu124 index; transitive PyPI torch; `nvidia-cuda.txt` byte-equivalent).
 - **House-style:** all `.mjs` CLI guards use top-of-module sync imports, no top-level await / no `require` (Q1).
