@@ -94,15 +94,15 @@ New behaviour landed paired tests in the same waves (all run under `npm run test
 
 ### Manual acceptance walkthrough — Phase 1 ship gate (author hardware, NO AMD)
 
-> Green unit tests are necessary but NOT sufficient. These are real runs on the author's hardware — the gate to ship the public-beta-enabling package. Record results here when run (live-GPU acceptance currently **owed**).
+> Green unit tests are necessary but NOT sufficient. These are real runs on the author's hardware — the gate to ship the public-beta-enabling package. **NVIDIA/Windows path validated 2026-06-15** (see results inline); CPU/macOS/dual-GPU rows still owed.
 
-1. **A0. Sidecar pytest green on Python 3.12** — on a bootstrapped 3.12 venv, `npm run test:sidecar` passes (the existing suite survives the 3.11→3.12 bump). CI skips this by design.
-2. **A. Fresh install on 3.12 — NVIDIA** — clean install builds a 3.12 venv with **explicit torch present** (`pip show torch` after bootstrap), synthesises a chapter on **all three torch-dependent paths: Kokoro + a Qwen design + a Coqui XTTS render** (Coqui is the engine the dropped-torch gap specifically broke, so it MUST be exercised — not just Kokoro/Qwen); `/health` reports `cuda`.
-3. **B. Fresh install on 3.12 — CPU-only box** — installs, synthesises (Kokoro CPU); `/health` reports `cpu`.
-4. **C. Fresh install on 3.12 — macOS / Apple Silicon** — installs, synthesises (Qwen on `mps`, Kokoro CPU); mps path unchanged.
-5. **D. Alpha detect-and-reinstall + data gate** — point the app at a v1.7.0 (3.11) install → classifies `needs-reinstall`, shows guidance, does **not** pip into the 3.11 venv. Then do a fresh reinstall and confirm books + `cast.json` + designed voices are all preserved. **If any user content is lost, STOP** (see the data-preservation gate above).
-6. **E. Python-3.12-absent fresh box** — `ensure-python312` auto-installs (or guides + relaunch) and the bootstrap then succeeds on 3.12.
-7. **F. Dual-GPU box (AMD iGPU + NVIDIA dGPU)** — resolves to `nvidia` (CPU/NVIDIA only — no AMD path shipped).
+1. **A0. Sidecar pytest green on Python 3.12** — ✅ **DONE** (2026-06-15): `npm run test:sidecar` → **256 passed / 4 deselected** on a bootstrapped Python **3.12.10** venv (+ `requirements-dev.txt` = pytest 8.4.2 / httpx 0.28.1). The 3.11→3.12 bump didn't break the suite.
+2. **A. Fresh install on 3.12 — NVIDIA** — ✅ **DONE** (2026-06-15, RTX 4070 Laptop): venv 3.12.10 stamped; **`torch 2.8.0+cu128` + `torchaudio 2.8.0+cu128`** (matched), `cuda.is_available()=True`, CUDA 12.8.0; **torchcodec absent** (in-core torchaudio I/O, no FFmpeg dep); **all three engines import — Kokoro ✅ · Qwen ✅ · Coqui ✅** (`from TTS.api import TTS` OK, `torchaudio.save/load` in-core); old Python 3.11 removed.
+3. **B. Fresh install on 3.12 — CPU-only box** — ⏳ owed.
+4. **C. Fresh install on 3.12 — macOS / Apple Silicon** — ⏳ owed.
+5. **D. Alpha detect-and-reinstall + data gate** — partially exercised: the 3.11 venv was detected + removed and rebuilt fresh on 3.12 (engines green) — explicit "books/cast/voices preserved" confirmation still owed.
+6. **E. Python-3.12-absent fresh box** — ⏳ owed.
+7. **F. Dual-GPU box (AMD iGPU + NVIDIA dGPU)** — ⏳ owed.
 
 ## Out of scope
 
