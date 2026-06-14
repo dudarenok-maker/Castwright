@@ -332,7 +332,9 @@ describe('ortProviders', () => {
   it('nvidia → CUDA then CPU', () => {
     expect(ortProviders('nvidia', 'win32')).toEqual(['CUDAExecutionProvider', 'CPUExecutionProvider']);
   });
-  it('amd+win → DirectML then CPU', () => {
+  // PROVISIONAL (P2/Q2): same S0.1 gate as runtimeBackend — if DirectML can't run the
+  // Kokoro model, Phase 2 flips this to ['CPUExecutionProvider']. Dormant, so safe.
+  it('amd+win → DirectML then CPU [provisional, S0.1]', () => {
     expect(ortProviders('amd', 'win32')).toEqual(['DmlExecutionProvider', 'CPUExecutionProvider']);
   });
   it('amd+linux and cpu → CPU only', () => {
@@ -379,6 +381,8 @@ export function runtimeBackend(profile, engine, platform) {
  */
 export function ortProviders(profile, platform) {
   if (profile === 'nvidia') return ['CUDAExecutionProvider', 'CPUExecutionProvider'];
+  // PROVISIONAL (P2/Q2): amd+win DirectML is gated by spike S0.1 — Phase 2 flips this to
+  // ['CPUExecutionProvider'] if DirectML can't run the Kokoro model. Dormant in Phase 1.
   if (profile === 'amd' && platform === 'win32')
     return ['DmlExecutionProvider', 'CPUExecutionProvider'];
   return ['CPUExecutionProvider'];
@@ -530,10 +534,8 @@ export function describeResolved({ envOverride, wizardChoice, detected, platform
 }
 
 // Side-effect guard: only runs when invoked directly (`node accelerator-profile.mjs`),
-// stays inert on import so tests/consumers don't trigger I/O. `require` does NOT exist
-// in an ESM .mjs (P3) — use a dynamic import; the guarded block is async.
+// stays inert on import so tests/consumers don't trigger I/O.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const { execSync } = await import('node:child_process');
   const detected = detectVendor({
     platform: process.platform,
     exec: (cmd) => execSync(cmd, { encoding: 'utf8' }),
@@ -548,7 +550,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 ```
 
-> Top-level `await` is valid in an ESM `.mjs` module, so the guarded block can `await import(...)` directly. The exported functions stay synchronous and pure.
+> **No top-level `await` / no `require` (Q1):** add `import { execSync } from 'node:child_process';` to the **top** of the module alongside `import { pathToFileURL } from 'node:url';` — matching how `install-qwen3.mjs`/`bootstrap-venv.mjs` import their sync node builtins. This keeps `accelerator-profile.mjs` a plain *synchronous* ESM module (no async-module semantics for importers), and the exported functions stay synchronous and pure.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -901,9 +903,52 @@ git add -A && git commit -m "chore(sidecar): lint/typecheck fixes for AMD phase-
 
 ---
 
+## Task 12: Project regression plan + backlog issue (CLAUDE.md shipping convention) (Q3)
+
+**Why:** the repo's "Before-shipping checklist" + "The backlog" require a `docs/features/` regression plan (frontmatter `status:`) with an `INDEX.md` entry, and a GitHub backlog issue (`<prefix>-<n>`) for substantial work. The `docs/superpowers/` spec+plans are design artifacts and do **not** satisfy that convention. One regression-plan doc covers the whole AMD-GPU effort (Phase 1 + Phase 2); Phase 1 lands it as `scaffolded`.
+
+**Files:**
+- Create: `docs/features/<next-N>-amd-gpu-support.md` (from `docs/features/TEMPLATE.md`)
+- Modify: `docs/features/INDEX.md` (new entry under the relevant area)
+- Modify: `docs/BACKLOG.md` (thin row linking the issue)
+
+- [ ] **Step 1: Determine the next plan number**
+
+Run: `ls docs/features/ | grep -oE '^[0-9]+' | sort -n | tail -1`
+Use the next integer as `<next-N>`. (Do not reuse an archived number.)
+
+- [ ] **Step 2: Create the regression plan from the template**
+
+Copy `docs/features/TEMPLATE.md` to `docs/features/<next-N>-amd-gpu-support.md`. Fill:
+- frontmatter `status: scaffolded` (Phase 1 is dormant scaffolding).
+- Link the design spec (`docs/superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md`) and both plans.
+- Document the invariants this phase locks: the resolver matrix (incl. NVIDIA regression fence, dual-GPU priority), the three-way venv decision, the disk-abort safety property, dormancy (no shipped consumer).
+- Add the **manual AMD acceptance matrix** from the spec as the `OWED` section (Phase 2 / AMD tester).
+
+- [ ] **Step 3: Add the INDEX entry**
+
+Add a one-line entry for `<next-N>-amd-gpu-support.md` under its area in `docs/features/INDEX.md` (per `docs/features/archive/README.md` placement rules).
+
+- [ ] **Step 4: File the backlog issue + BACKLOG.md row**
+
+Create a GitHub Backlog-item issue titled `<prefix>-<n> — AMD GPU support (Windows ROCm + DirectML, Linux ROCm)` with `area:`/`moscow:`/`type:` labels per `CONTRIBUTING.md` "Issues" (suggest `area:server`, `moscow:could`, `type:feature`). Add the thin linking row to `docs/BACKLOG.md`. Record the issue number in the regression plan + reference it from the delivering PR (`Refs #NN`, since Phase 1 is partial delivery).
+
+> If `gh` issue creation isn't available in this environment, write the exact issue title + body into the regression plan's header as a `TODO(issue)` line so a human files it — do not skip the BACKLOG.md row.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add docs/features docs/BACKLOG.md
+git commit -m "docs(sidecar): regression plan + backlog issue for AMD GPU support (phase 1)"
+```
+
+---
+
 ## Self-review checklist (run before handing off)
 
-- **Spec coverage:** Section 1 resolver (Tasks 1–6) ✓; Section 2 migration core — stamp/three-way/disk (Tasks 7–10) ✓; cross-runtime hand-off mechanic recorded (Task 0) ✓. Deferred-to-Phase-2 items (requirements restructure, Python flip, apply.ts wiring, /health enum, VRAM, AMD wheels, DirectML, messaging) are intentionally absent — correct for a dormant Phase 1.
+- **Spec coverage:** Section 1 resolver (Tasks 1–6) ✓; Section 2 migration core — stamp/three-way/disk (Tasks 7–10) ✓; cross-runtime hand-off mechanic recorded (Task 0) ✓; project regression plan + backlog issue (Task 12) ✓. Deferred-to-Phase-2 items (requirements restructure, Python flip, apply.ts wiring, /health enum, VRAM, AMD wheels, DirectML, messaging) are intentionally absent — correct for a dormant Phase 1.
+- **Provisional values flagged:** AMD-Kokoro `runtimeBackend`/`ortProviders` = DirectML are both marked S0.1-pending (Q2); the AMD `torchPreinstall` is `PENDING_SPIKE` (S0.2). No spike-gated value is presented as settled.
+- **House-style:** the CLI guard uses a top-of-module sync `import { execSync }` (no top-level await, no `require`), matching `install-qwen3.mjs`/`bootstrap-venv.mjs` (Q1).
 - **Placeholder scan:** the only `PENDING_SPIKE` is a deliberate, tested AMD `torchPreinstall` stub (S0.2 fills it in Phase 2) — not a plan placeholder. The provisional AMD-Kokoro `directml` value (Task 4) is explicitly flagged as S0.1-pending.
 - **P1 fence honesty:** the NVIDIA `installRecipe` was corrected to match the *verified* current install (no torch index; `torchPreinstall: null`; `onnxruntime-gpu`), so the regression fence asserts reality, not an invented cu124 index.
 - **Type/name consistency:** `parseVendorFromProbe`, `detectVendor`, `resolveProfile`, `runtimeBackend`, `ortProviders`, `installRecipe`, `describeResolved`, `computeReqHash`, `decideVenvAction`, `decideDiskAction`, `readStamp`/`writeStamp`/`stampPath` — used consistently across tasks and tests.
