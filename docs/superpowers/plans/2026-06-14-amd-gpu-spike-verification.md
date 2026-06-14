@@ -31,7 +31,8 @@ Capture: is there a known fix (newer ORT? newer opset? a re-export)? Record vers
 
 - [ ] **Step 2: 🟢 Inspect the shipped model's opset**
 
-On any box with the model present (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx`):
+On any box with the model present (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx` —
+it's git-ignored, so **run `scripts/install-kokoro.{ps1,sh}` first if absent**, P8):
 Run a tiny Python snippet in the sidecar venv: `import onnx; m = onnx.load(path); print(m.opset_import)`.
 Capture: the current opset. Cross-reference whether DirectML's ConvTranspose support requires a higher opset.
 
@@ -43,7 +44,14 @@ Capture: does it succeed on DML, error at ConvTranspose, or silently fall back t
 
 - [ ] **Step 4: 🟡 If a re-export is required — verify the universal-model claim (N2)**
 
-If S0.1 needs a re-exported / higher-opset model: re-export (or obtain) it, then on a **non-AMD** box confirm it loads + synthesizes correctly on **CPU** and (on the NVIDIA dev box) **CUDA** EPs, byte-plausible audio. This proves we can ship ONE corrected model to ALL profiles rather than maintaining two artifacts.
+If S0.1 needs a re-exported / higher-opset model: **first establish whether we can even
+produce one (P5).** We consume a community ONNX export from the `kokoro-onnx` releases — we
+do **not** own the PyTorch→ONNX export pipeline, so a re-export may depend on
+**upstream** (onnx-community / kokoro-onnx) publishing a corrected model. If we can obtain
+a corrected model: on a **non-AMD** box confirm it loads + synthesizes correctly on **CPU**
+and (on the NVIDIA dev box) **CUDA** EPs — proving we can ship ONE corrected model to ALL
+profiles. **If no corrected universal model is obtainable**, the realistic outcomes collapse
+to PASS(run the current model as-is) or FAIL → CPU; we do not block on producing our own export.
 
 - [ ] **Step 5: Record the decision in the spec**
 
@@ -63,10 +71,19 @@ Append to "Spike findings" one of:
 From AMD's docs (`https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/windows/install-pytorch.html`) and `repo.radeon.com`, identify the **stable, versioned** ROCm-Windows torch wheel(s) for a specific ROCm release (e.g. torch 2.8.0 / ROCm 6.4.4). Capture: exact wheel URL(s) for cp312-win_amd64 (torch + torchaudio/torchvision as needed), the torch version, and the required Adrenalin driver version.
 Decide: is there a **stable URL to hash-pin**, or must the AMD profile take the documented **unpinned-torch exception** (N5)? Record the choice.
 
-- [ ] **Step 2: 🟡 Compat — import coqui-tts / qwen-tts / torchcodec on the ROCm torch version**
+- [ ] **Step 2: 🟡→🔴 Compat — import coqui-tts / qwen-tts / torchcodec on the ROCm torch version**
 
-On any box (ROCm torch CPU-imports even without an AMD GPU; `torch.cuda.is_available()` will be `False`, which is fine for an *import/resolve* check): create a throwaway Python 3.12 venv, install the ROCm torch wheel from Step 1, then `pip install coqui-tts[codec] transformers<5 qwen-tts` (or the project's pins) and verify **all three import** without a version conflict. Pay special attention to **`torchcodec`** (N4 — it is torch-version-coupled and `coqui-tts[codec]` pulls it).
-Capture: which install cleanly, which conflict, exact error messages.
+**First verify import-ability without AMD hardware (P4):** the ROCm-**Windows** preview wheel
+may hard-require the AMD driver/HIP runtime DLLs *just to import* (unlike Linux ROCm wheels,
+which typically import with `cuda.is_available()` → `False`). In a throwaway Python 3.12 venv,
+install the ROCm torch wheel from Step 1 and try `python -c "import torch"`.
+- **If it imports on a non-AMD box (🟡):** proceed here — `pip install coqui-tts[codec]
+  transformers<5 qwen-tts` and verify **all three import** without a version conflict, paying
+  special attention to **`torchcodec`** (N4 — torch-version-coupled, pulled by
+  `coqui-tts[codec]`). Capture which install cleanly, which conflict, exact errors.
+- **If it will NOT import without the AMD runtime (🔴):** this whole compat check moves to an
+  AMD box — note that S0.2 is then *fully* AMD-hardware-gated, which materially shrinks the
+  "desk-doable" portion of the spike. Record this explicitly.
 
 - [ ] **Step 3: 🔴 AMD box — confirm actual synthesis (sanity)**
 
@@ -103,8 +120,11 @@ Gather real `(Get-CimInstance Win32_VideoController).Name` output (Windows) and 
 
 - [ ] **Step 2: 🟢 Validate the Phase-1 parser against the samples**
 
-Feed each sample into `parseVendorFromProbe` (the Phase-1 function) and confirm the verdict matches intent. Add any sample that surprises as a new test case to `server/src/tts/accelerator-profile.test.ts`.
-Capture: any rule adjustment needed (e.g. an unusual AMD branding string the regex misses).
+**Depends on Phase 1 Task 1** (`parseVendorFromProbe` must exist) — P9. Feed each sample into
+`parseVendorFromProbe` and confirm the verdict matches intent. Add any sample that surprises
+as a new test case to `server/src/tts/accelerator-profile.test.ts` (lands on the Phase-1
+branch). Capture: any rule adjustment needed — e.g. a bare `Advanced Micro Devices` line with
+no `[AMD/ATI]` bracket, which the current regex would miss (P7).
 
 - [ ] **Step 3: Record the decision in the spec**
 

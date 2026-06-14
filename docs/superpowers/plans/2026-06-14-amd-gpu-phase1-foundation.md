@@ -312,7 +312,9 @@ describe('runtimeBackend', () => {
   it('amd torch engines → rocm (HIP aliases cuda at runtime)', () => {
     expect(runtimeBackend('amd', 'qwen', 'win32')).toBe('rocm');
   });
-  it('amd Kokoro on Windows → directml; on Linux → cpu', () => {
+  // PROVISIONAL (P2): 'directml' is the INTENDED value but is what spike S0.1 tests;
+  // Phase 2 flips this to 'cpu' if DirectML can't run the Kokoro model. Dormant, so safe.
+  it('amd Kokoro on Windows → directml [provisional, S0.1]; on Linux → cpu', () => {
     expect(runtimeBackend('amd', 'kokoro', 'win32')).toBe('directml');
     expect(runtimeBackend('amd', 'kokoro', 'linux')).toBe('cpu');
   });
@@ -356,10 +358,15 @@ Expected: FAIL — functions not exported.
  */
 export function runtimeBackend(profile, engine, platform) {
   const isTorch = engine === 'qwen' || engine === 'coqui';
-  if (profile === 'nvidia') return isTorch ? 'cuda' : 'cuda';
+  if (profile === 'nvidia') return 'cuda';
   if (profile === 'apple') return isTorch ? 'mps' : 'cpu';
   if (profile === 'amd') {
     if (isTorch) return 'rocm';
+    // PROVISIONAL (P2): the AMD-Windows Kokoro backend is exactly what spike S0.1
+    // tests. We encode the INTENDED 'directml' here, but if S0.1 finds DirectML
+    // can't run the Kokoro model (the ConvTranspose issue), Phase 2 flips this — and
+    // this test case — to 'cpu'. The value is dormant in Phase 1, so a later flip is
+    // a one-line change + one test edit, not a behavior regression.
     return platform === 'win32' ? 'directml' : 'cpu'; // Kokoro: DML only on Windows
   }
   return 'cpu';
@@ -398,7 +405,7 @@ git commit -m "feat(sidecar): add runtimeBackend + ortProviders matrix (AMD phas
 - Modify: `server/tts-sidecar/scripts/accelerator-profile.mjs`
 - Modify: `server/src/tts/accelerator-profile.test.ts`
 
-> Note: the AMD `torchSpec` exact wheel URL + version is a **spike output (S0.2)** — Phase 1 returns a clearly-marked `'PENDING_SPIKE'` placeholder for AMD so the shape is testable now without fabricating a URL. NVIDIA/CPU are real and pinned.
+> **VERIFIED current install (P1):** torch is **not** installed via any `--index-url` today — it is pulled **transitively from PyPI** (CUDA-bundled default) by `qwen-tts` (`install-qwen3.mjs:230`) and `coqui-tts[codec]` (`requirements.txt`). `onnxruntime-gpu` arrives via `kokoro-onnx[gpu]`. So the honest NVIDIA recipe does **no explicit torch step** (`torchPreinstall: null` = the regression fence). AMD must **pre-install** a ROCm torch wheel *before* the engine packages so they see torch already satisfied — that wheel URL is the S0.2 spike placeholder. The `engine` param is dropped (P10): `ortPackage` depends only on `(profile, platform)`, `torchPreinstall` only on `profile`.
 
 - [ ] **Step 1: Write the failing test** (append)
 
@@ -406,20 +413,22 @@ git commit -m "feat(sidecar): add runtimeBackend + ortProviders matrix (AMD phas
 import { installRecipe } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
 
 describe('installRecipe', () => {
-  it('nvidia matches TODAY: cu124 torch index + onnxruntime-gpu (regression fence)', () => {
-    const r = installRecipe('nvidia', 'kokoro', 'win32');
-    expect(r.torchSpec).toEqual({ version: '2.6.0', source: 'index', url: 'https://download.pytorch.org/whl/cu124' });
+  // Verified against the ACTUAL current install (P1): no cu124 index exists today;
+  // torch is transitive from PyPI; onnxruntime-gpu via kokoro-onnx[gpu].
+  it('nvidia == TODAY: NO explicit torch preinstall + onnxruntime-gpu (regression fence)', () => {
+    const r = installRecipe('nvidia', 'win32');
+    expect(r.torchPreinstall).toBeNull(); // engine packages pull torch from PyPI, unchanged
     expect(r.ortPackage).toBe('onnxruntime-gpu');
   });
-  it('cpu uses the cpu torch index + plain onnxruntime', () => {
-    const r = installRecipe('cpu', 'kokoro', 'linux');
-    expect(r.torchSpec.url).toBe('https://download.pytorch.org/whl/cpu');
-    expect(r.ortPackage).toBe('onnxruntime');
+  it('amd torchPreinstall is a marked spike placeholder (S0.2); ORT directml on win, onnxruntime on linux', () => {
+    expect(installRecipe('amd', 'win32').torchPreinstall).toBe('PENDING_SPIKE');
+    expect(installRecipe('amd', 'win32').ortPackage).toBe('onnxruntime-directml');
+    expect(installRecipe('amd', 'linux').ortPackage).toBe('onnxruntime');
   });
-  it('amd torchSpec is a marked spike placeholder (S0.2), ORT is directml on win', () => {
-    const r = installRecipe('amd', 'kokoro', 'win32');
-    expect(r.torchSpec.source).toBe('PENDING_SPIKE');
-    expect(r.ortPackage).toBe('onnxruntime-directml');
+  it('cpu is a Phase-2 IMPROVEMENT (not today): cpu torch preinstall + plain onnxruntime', () => {
+    const r = installRecipe('cpu', 'linux');
+    expect(r.torchPreinstall).toEqual({ source: 'index', url: 'https://download.pytorch.org/whl/cpu' });
+    expect(r.ortPackage).toBe('onnxruntime');
   });
 });
 ```
@@ -433,27 +442,29 @@ Expected: FAIL — `installRecipe` not exported.
 
 ```js
 /**
- * Install recipe per profile. NVIDIA/CPU are real + pinned (NVIDIA == today, the
- * regression fence). AMD's torchSpec is a marked placeholder until the S0.2 spike
- * pins the repo.radeon.com wheel URL + version — never fabricate it here.
- * @returns {{torchSpec: object, ortPackage: string}}
+ * Install recipe per (profile, platform). Verified against the CURRENT install
+ * (P1): NVIDIA pulls torch transitively from PyPI (CUDA-bundled default) via
+ * qwen-tts / coqui-tts — there is NO cu124 index step today — and gets
+ * onnxruntime-gpu via kokoro-onnx[gpu]. So `torchPreinstall` is null for NVIDIA
+ * (the regression fence: do nothing extra). AMD must install a ROCm torch wheel
+ * BEFORE the engine packages so they see torch already satisfied — that wheel URL
+ * is a marked S0.2 spike placeholder, never fabricated here. The CPU recipe
+ * (cpu-only torch) is a Phase-2 IMPROVEMENT over today (today CPU boxes also get
+ * the PyPI torch + onnxruntime-gpu set), shipped only when the requirements
+ * restructure lands.
+ * @returns {{torchPreinstall: null | 'PENDING_SPIKE' | {source:string,url:string}, ortPackage: string}}
  */
-export function installRecipe(profile, engine, platform) {
-  if (profile === 'nvidia') {
-    return {
-      torchSpec: { version: '2.6.0', source: 'index', url: 'https://download.pytorch.org/whl/cu124' },
-      ortPackage: 'onnxruntime-gpu',
-    };
-  }
+export function installRecipe(profile, platform) {
+  if (profile === 'nvidia') return { torchPreinstall: null, ortPackage: 'onnxruntime-gpu' };
   if (profile === 'amd') {
     return {
-      torchSpec: { version: 'PENDING_SPIKE', source: 'PENDING_SPIKE', url: 'PENDING_SPIKE' },
+      torchPreinstall: 'PENDING_SPIKE',
       ortPackage: platform === 'win32' ? 'onnxruntime-directml' : 'onnxruntime',
     };
   }
-  // cpu / apple
+  // cpu / apple — Phase-2 improvement, not today's behavior
   return {
-    torchSpec: { version: '2.6.0', source: 'index', url: 'https://download.pytorch.org/whl/cpu' },
+    torchPreinstall: { source: 'index', url: 'https://download.pytorch.org/whl/cpu' },
     ortPackage: 'onnxruntime',
   };
 }
@@ -519,15 +530,13 @@ export function describeResolved({ envOverride, wizardChoice, detected, platform
 }
 
 // Side-effect guard: only runs when invoked directly (`node accelerator-profile.mjs`),
-// stays inert on import so tests/consumers don't trigger I/O.
+// stays inert on import so tests/consumers don't trigger I/O. `require` does NOT exist
+// in an ESM .mjs (P3) — use a dynamic import; the guarded block is async.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const { execSync } = await import('node:child_process');
   const detected = detectVendor({
     platform: process.platform,
-    exec: (cmd) => {
-      // Lazy import to keep the module import-pure.
-      // eslint-disable-next-line no-undef
-      return require('node:child_process').execSync(cmd, { encoding: 'utf8' });
-    },
+    exec: (cmd) => execSync(cmd, { encoding: 'utf8' }),
   });
   const summary = describeResolved({
     envOverride: process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? null,
@@ -539,7 +548,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 }
 ```
 
-> If ESLint flags `require` in ESM, replace the CLI's `exec` with `import('node:child_process')` (async) — the guarded block can be `async`. Keep the exported functions synchronous and pure.
+> Top-level `await` is valid in an ESM `.mjs` module, so the guarded block can `await import(...)` directly. The exported functions stay synchronous and pure.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -779,7 +788,7 @@ git commit -m "feat(sidecar): add decideDiskAction 3x-headroom abort pre-flight 
 
 ```ts
 import { readStamp, writeStamp, stampPath } from '../../tts-sidecar/scripts/venv-migration.mjs';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -804,7 +813,7 @@ describe('stamp I/O', () => {
   it('returns null for a corrupt stamp rather than throwing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'venv-stamp-'));
     try {
-      require('node:fs').writeFileSync(stampPath(dir), '{not json', 'utf8');
+      writeFileSync(stampPath(dir), '{not json', 'utf8'); // P3: top-level import, no require in ESM
       expect(readStamp(dir)).toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -848,7 +857,7 @@ export function writeStamp(venvDir, stamp) {
 }
 ```
 
-> Move the `import` lines to the top of the file with the other imports (ESM requires top-level imports). If ESLint rejects the test's `require`, swap it for a top `import { writeFileSync } from 'node:fs'`.
+> Place these `import` lines at the **top** of `venv-migration.mjs` alongside the existing `import { createHash } from 'node:crypto'` (ESM hoists imports; keep them grouped at top for lint cleanliness) — do not leave them mid-file.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -895,6 +904,7 @@ git add -A && git commit -m "chore(sidecar): lint/typecheck fixes for AMD phase-
 ## Self-review checklist (run before handing off)
 
 - **Spec coverage:** Section 1 resolver (Tasks 1–6) ✓; Section 2 migration core — stamp/three-way/disk (Tasks 7–10) ✓; cross-runtime hand-off mechanic recorded (Task 0) ✓. Deferred-to-Phase-2 items (requirements restructure, Python flip, apply.ts wiring, /health enum, VRAM, AMD wheels, DirectML, messaging) are intentionally absent — correct for a dormant Phase 1.
-- **Placeholder scan:** the only `PENDING_SPIKE` is a deliberate, tested AMD `torchSpec` stub (S0.2 fills it in Phase 2) — not a plan placeholder.
+- **Placeholder scan:** the only `PENDING_SPIKE` is a deliberate, tested AMD `torchPreinstall` stub (S0.2 fills it in Phase 2) — not a plan placeholder. The provisional AMD-Kokoro `directml` value (Task 4) is explicitly flagged as S0.1-pending.
+- **P1 fence honesty:** the NVIDIA `installRecipe` was corrected to match the *verified* current install (no torch index; `torchPreinstall: null`; `onnxruntime-gpu`), so the regression fence asserts reality, not an invented cu124 index.
 - **Type/name consistency:** `parseVendorFromProbe`, `detectVendor`, `resolveProfile`, `runtimeBackend`, `ortProviders`, `installRecipe`, `describeResolved`, `computeReqHash`, `decideVenvAction`, `decideDiskAction`, `readStamp`/`writeStamp`/`stampPath` — used consistently across tasks and tests.
 - **Dormancy:** Task 11 Step 3 mechanically proves no shipped path consumes the new code.

@@ -250,9 +250,14 @@ not `.ts`). The whole matrix is unit-testable with zero AMD hardware.
   **`ACCELERATOR` env beats the persisted wizard choice beats detection beats the `cpu`
   fallback** — consistent with the existing `#/advanced` locked-by-`.env` semantics.
   `unknown` → `cpu` (never silently "tries AMD").
-- `installRecipe(profile, engine, platform)` → `{ torchSpec, pipExtras, ortPackage,
-  ortInstallSteps, flashAttnTag? }`. `torchSpec` carries version + source (index URL or
-  manual wheel URL — ROCm uses the latter). `ortInstallSteps` encodes the H1 ordering.
+- `installRecipe(profile, platform)` → `{ torchPreinstall, ortPackage, ortInstallSteps,
+  flashAttnTag? }`. **Verified current reality (P1):** torch is NOT installed via an
+  index today — it is pulled transitively from PyPI by `qwen-tts`/`coqui-tts[codec]`, so
+  NVIDIA's `torchPreinstall` is `null` (do nothing extra — the regression fence).
+  **AMD must pre-install a ROCm torch wheel BEFORE the engine packages** (so they see torch
+  satisfied); that wheel URL is the S0.2 manual-wheel placeholder. `ortInstallSteps` encodes
+  the H1 ordering. (`engine` dropped — `ortPackage` keys on `(profile, platform)`,
+  `torchPreinstall` on `profile`.)
 - `runtimeBackend(profile, engine, platform)` → `'cuda' | 'rocm' | 'directml' | 'cpu' |
   'mps'`.
 - `ortProviders(profile, platform)` → ordered ONNX Runtime provider list.
