@@ -120,6 +120,62 @@ implementation plan until S0.1 and S0.2 resolve.**
 Spike output: a short findings note appended here, then the AMD-specific plan is written
 against **verified** mechanics, not assumptions.
 
+### Spike findings — desk pass (2026-06-14)
+
+Done without AMD hardware (web/desk + packaging facts). 🔴 on-box confirmations remain
+**OWED** before a Phase-2 *release*, but both critical gates (S0.1, S0.2) resolved
+**favorably**, so Phase 2 can be *planned* against these mechanics.
+
+- **S0.1 — Kokoro on DirectML → LIKELY PASS (runtime-only; no re-export, no 2nd artifact).**
+  The `ConvTranspose` failure is an **opset-17 + older-ORT-DML** problem; a **ConvTranspose
+  bias-validation fix landed in onnxruntime** (TS + C++), and the latest `onnxruntime-directml`
+  (released 2026-03-17) should carry it. **Decision:** enable DirectML for AMD-Windows Kokoro,
+  gated by (a) **pinning `onnxruntime-directml` ≥ the release carrying the fix** and (b) the
+  cached load-time self-test already in the design. **N2 dissolves favorably** — no model
+  re-export, no second artifact. The Phase-1 provisional `directml` values (Task 4
+  `runtimeBackend`/`ortProviders`) are now **likely to STAND**, not flip to CPU.
+  - 🔴 OWED: confirm on an AMD-Windows box with the pinned ORT-DML version against the actual
+    opset-17 `kokoro-v1.0.onnx`; capture `session.get_providers()` to prove DML actually bound.
+
+- **S0.2 — ROCm-Windows torch + compat → FAVORABLE; Coqui likely SURVIVES.**
+  - **Pinned wheels (stable versioned URLs → hash-pin; resolves N5 toward pinning, not an
+    unpinned exception):**
+    - torch: `https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torch-2.8.0a0+gitfc14c65-cp312-cp312-win_amd64.whl`
+    - torchaudio: `https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl`
+    - Note: **alpha (`a0`) preview** builds; unusual torch 2.8 / torchaudio 2.6 pairing (AMD-shipped); needs **ROCm 6.4.4 + matching Adrenalin driver**; a known "Windows Preview PyTorch crashing" report (ROCm #5440) reinforces the **"experimental"** UI labelling.
+  - **torchcodec landmine (N4) DISSOLVES:** torchcodec is only required for torch **2.9+**;
+    AMD ships torch **2.8**, which retains in-core `torchaudio.load/save`. **The AMD profile
+    installs `coqui-tts` WITHOUT the `[codec]` extra** → no torchcodec dependency → **Coqui
+    likely survives on AMD** (vs the spec's earlier "Coqui may drop"). N8 drop-priority still
+    stands as a fallback if the import check fails.
+  - **Per-profile torch versions CONFIRMED:** NVIDIA torch 2.6 (PyPI, transitive) vs AMD torch
+    2.8 (ROCm wheel). The Phase-1 `installRecipe` AMD `torchPreinstall: 'PENDING_SPIKE'` can be
+    filled in Phase 2 with the torch + torchaudio URLs above, once import-ability is confirmed.
+  - 🟡→🔴 OWED: install the two wheels in a Python 3.12 venv and verify `import torch`,
+    `coqui-tts` (no `[codec]`), and `qwen-tts` import (P4: confirm whether the ROCm-**Windows**
+    wheel imports at all on a non-AMD box, or hard-requires the AMD runtime — that decides
+    whether the compat check is 🟡 or fully 🔴).
+
+- **S0.3 — onnxruntime/DirectML packaging → recipe approach known; exact recipe OWED.**
+  Confirmed the conflict is real (`kokoro-onnx` pulls base `onnxruntime`; it collides with
+  `onnxruntime-directml` — both provide the `onnxruntime` module). **Recipe approach:** install
+  `kokoro-onnx`, then `pip uninstall -y onnxruntime` and `pip install onnxruntime-directml`
+  (≥ the S0.1 fixed version); OR `kokoro-onnx --no-deps` + its other deps + `onnxruntime-directml`.
+  - 🟡 OWED: run the recipe on a Windows box; confirm `onnxruntime.get_available_providers()`
+    lists `DmlExecutionProvider` with a single, non-conflicting `onnxruntime` install. Pin the
+    exact ordered `ortInstallSteps` for the Phase-1 `installRecipe` AMD shape.
+
+- **S0.4 — dual-GPU detection → rule sound; real-sample validation OWED (no blocker).**
+  The Phase-1 `parseVendorFromProbe` rule (NVIDIA-present-wins; AMD-only → amd; else cpu) is
+  sound for canonical `Win32_VideoController` / `lspci` output. No desk-level counter-example.
+  - 🟢/tester OWED: collect real multi-GPU probe strings (AMD-iGPU+NVIDIA-dGPU laptop;
+    Intel-iGPU+AMD-dGPU) and add any surprising branding string (e.g. a bare "Advanced Micro
+    Devices" line with no `[AMD/ATI]` bracket, P7) as a parser test case.
+
+**Gate verdict:** S0.1 + S0.2 both resolved favorably at desk level → **Phase 2 is plannable.**
+Per the delivery model, the 3.12 flip + AMD enablement still **release** only after the 🔴
+on-AMD acceptance (S0.1 DML run, S0.2 import + synth) passes.
+
 ## Delivery sequencing (cut on BEHAVIOR CHANGE, not "hardware independence" — A2/A11)
 
 The disruptive part of this feature is the Python 3.11→3.12 migration (a forced venv
