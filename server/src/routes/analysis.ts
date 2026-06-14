@@ -807,6 +807,22 @@ export function clampStageEstMs(ms: number): number {
   return Math.max(MIN_EST_MS, Math.round(ms));
 }
 
+/* Decide whether cached per-chapter durations may seed this run's observed-
+   rate tracker. The samples are only valid when the resumed run uses the SAME
+   analyzer engine that produced them — a Gemini-paced duration would mis-seed
+   a local-Qwen run's ETA by ~10× (2026-06-14 model-switch report). On a
+   mismatch (or an untagged legacy cache) we discard the stale samples and
+   start clean; the caller re-stamps the engine so future resumes match.
+   Returns a fresh, possibly-empty duration map to accumulate into. */
+export function durationsForEngine(
+  durations: Record<number, number> | undefined,
+  storedEngine: string | undefined,
+  currentEngine: string,
+): Record<number, number> {
+  if (durations && storedEngine === currentEngine) return durations;
+  return {};
+}
+
 /* Remove `chapterId` from `cache.failedChapterIds` if present, mutating
    the cache in place. Returns whether the id was actually in the list —
    the caller uses that to decide whether to emit a `chapter-resolved`
@@ -2247,7 +2263,13 @@ export async function runMainAnalyzerJob(
        durations were saved by past runs of this exact route on this
        manuscript, so they're the best available signal for what this
        model+book combo will take. */
-    const castDurations: Record<number, number> = cache.castDurations ?? {};
+    const castDurations: Record<number, number> = durationsForEngine(
+      cache.castDurations,
+      cache.castDurationsEngine,
+      selection.engine,
+    );
+    cache.castDurations = castDurations;
+    cache.castDurationsEngine = selection.engine;
     for (const idStr of Object.keys(castDurations)) {
       const id = Number(idStr);
       const ch = record.chapterHints.find((c) => c.id === id);
@@ -2970,7 +2992,13 @@ export async function runMainAnalyzerJob(
     let actualCharsTotal = 0;
     /* Seed from prior-run stage 2 durations so a resumed run already has
        per-chapter ETA samples — same rationale as the cast pass above. */
-    const stage2Durations: Record<number, number> = cache.stage2Durations ?? {};
+    const stage2Durations: Record<number, number> = durationsForEngine(
+      cache.stage2Durations,
+      cache.stage2DurationsEngine,
+      phase1Selection.engine,
+    );
+    cache.stage2Durations = stage2Durations;
+    cache.stage2DurationsEngine = phase1Selection.engine;
     for (const idStr of Object.keys(stage2Durations)) {
       const id = Number(idStr);
       const ch = record.chapterHints.find((c) => c.id === id);

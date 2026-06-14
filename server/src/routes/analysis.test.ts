@@ -6,6 +6,7 @@ import {
   mergeRosterChapter,
   chapterEstFromObserved,
   clampStageEstMs,
+  durationsForEngine,
   projectRemainingMs,
   buildInterimCast,
   clearFailedChapterId,
@@ -598,6 +599,23 @@ describe('clampStageEstMs (whole-stage estimate — floor only, no 10-min cap)',
   });
   it('rounds fractional milliseconds', () => {
     expect(clampStageEstMs(123_456.7)).toBe(123_457);
+  });
+});
+
+describe('durationsForEngine (model-switch ETA staleness guard)', () => {
+  it('seeds the cached durations when the engine matches', () => {
+    const d = { 1: 30_000, 2: 45_000 };
+    expect(durationsForEngine(d, 'local', 'local')).toBe(d);
+  });
+  it('discards durations produced by a different engine (Gemini cache → Qwen run)', () => {
+    const d = { 1: 5_000 }; // Gemini-paced — would mis-seed a local run ~10x
+    expect(durationsForEngine(d, 'gemini', 'local')).toEqual({});
+  });
+  it('discards untagged legacy durations (no stored engine)', () => {
+    expect(durationsForEngine({ 1: 5_000 }, undefined, 'local')).toEqual({});
+  });
+  it('returns an empty map when there are no cached durations', () => {
+    expect(durationsForEngine(undefined, 'local', 'local')).toEqual({});
   });
 });
 
