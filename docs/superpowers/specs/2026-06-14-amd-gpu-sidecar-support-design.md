@@ -127,33 +127,38 @@ rebuild + ~2.5 GB torch re-download for **every** user — NVIDIA, mac, CPU alik
 *only* justification is AMD (ROCm-Windows needs 3.12). Therefore the phase boundary is
 drawn so the **migration tax and the AMD benefit ship together**, never the tax first.
 
-- **Phase 1 — Dormant scaffolding (ships with ZERO user-visible behavior change; plan +
-  build now, no AMD HW):**
-  - The pure-function **resolver + detection** (`accelerator-profile.ts`, Section 1) —
-    present, exhaustively unit-tested, but on existing hardware it resolves to exactly
-    today's effective behavior (nvidia/cpu/apple).
-  - The **migration machinery** (Section 2) as **pure, fully-faked, unit-tested functions**
-    — the stamp model, the three-way decision, the build-new-then-swap ordering — **but NOT
-    wired into the live `apply.ts` flow as a trigger.** Phase 1 ships **no** `pythonTag` or
-    requirements change, so the decision always returns no-op/pip-in-place exactly as today.
-  - The **layered-requirements *structure*** (Section 3) where the **NVIDIA/CPU overlays are
-    byte-identical in effect to today's `requirements.txt`** → the install is unchanged.
-  - The **`/health` family-enum extension** (`rocm`/`directml` added to the vocabulary) —
-    inert, since no engine emits them yet.
-  - The **full test backbone** (Section 7).
-  - **Python stays 3.11; CI stays 3.11; VRAM telemetry source unchanged (still
-    `nvidia-smi`).** Nothing a current user can observe changes. Value: the hard pure logic
-    lands and is locked by tests + reviewed *separately* from the scary integration.
+**Delivery model (B6): Phase 1 is "merged to `main`, NOT released until Phase 2."** It is
+reviewed + tested code that lands on `main` but is exposed by **no release** until Phase 2
+is ready. This closes A2 with no compromise: users get the 3.12 migration tax and the AMD
+benefit in the **same** release, and we never ship unused code in a build. **Coupling
+consequence (state it):** the 3.12 bump is therefore gated on AMD validation — if an AMD
+tester never materialises, the 3.12 flip never releases. Acceptable, since 3.12 has zero
+NVIDIA/mac/CPU-side benefit on its own.
+
+- **Phase 1 — Pure, dormant foundation (plan + build now, no AMD HW; merged-not-released):**
+  - The pure-function **resolver + detection** (`accelerator-profile.mjs`, Section 1) —
+    present + exhaustively unit-tested, but nothing in a shipped path consumes it yet.
+  - The **migration core** (Section 2) as **pure, fully-faked, unit-tested functions** — the
+    stamp model, the three-way decision, the build-new-then-swap ordering — **NOT wired into
+    the live `apply.ts` flow.**
+  - **That's it.** Phase 1 deliberately **excludes** the requirements restructure (B5 — a
+    real `cpu.txt` would change what CPU users install today; the `reqHash`-source change
+    would fire a pip re-check for everyone), the `/health` enum change, the VRAM change, and
+    the Python flip. All of those are behavior changes → Phase 2.
+  - **Python stays 3.11; CI stays 3.11; install + telemetry + `/health` unchanged.** Value:
+    the hard pure logic lands, locked by tests + reviewed *separately* from the scary
+    integration, with zero risk to any shipped path.
 - **Spike — Section 0** (S0.1–S0.4) runs in parallel with / after Phase 1.
 - **Phase 2 — Behavior changes + AMD, shipped together (post-spike):**
-  - **Flip Python to 3.12** — this is what finally *triggers* the migration machinery; the
-    integration into the live `apply.ts` flow as a **resumable upgrade stage** (A3) lands
-    here, as does the **runtime profile-switch rebuild flow** (A7/A8).
+  - The **requirements restructure** (Section 3: `base.txt` + `nvidia-cuda.txt`/`cpu.txt`/
+    `amd-rocm.txt`, `reqHash` over resolved-overlay text) — first behavior-touching step.
+  - **Flip Python to 3.12** — *triggers* the migration core; integration into the live
+    `apply.ts` flow as a **resumable upgrade stage** (A3) lands here, as does the **runtime
+    profile-switch rebuild flow** (A7/A8).
   - Verified ROCm `torchSpec` + repo.radeon.com wheel handling; DirectML ORT ordering +
     provider selection + cached self-test; the (possibly re-exported) **universal Kokoro
-    model**; the **torch-first VRAM telemetry** change (A10 — kept out of Phase 1 so the
-    fragile recycle/ceiling math isn't disturbed for no benefit); AMD wizard/about/Help
-    messaging; CI → 3.12.
+    model**; the **`/health` `rocm`/`directml` enum**; the **torch-first VRAM telemetry**
+    change (A10); AMD wizard/about/Help messaging; CI → 3.12.
   - The 3.12 tax and the AMD payoff arrive in the same release.
 
 **Engine-drop priority (N8):** if S0.2 forces a cut on the AMD profile, preserve in this
@@ -178,25 +183,39 @@ detect vendor ──► resolveProfile(override, detected, platform) ──► p
 ### Cross-runtime hand-off (A1 — the resolver is Node-only; Python consumes, never re-derives)
 
 The resolver is used by three runtimes, and **Python cannot import a Node module**, so a
-literal single module is impossible. The contract that keeps it a single source of truth:
+literal single module is impossible. The contract that keeps it a single source of truth —
+and that **follows the codebase's established `.mjs`-is-source-of-truth pattern** (B1):
 
-- **The resolver is one TypeScript module** — `server/src/tts/accelerator-profile.ts`
-  (pure functions, vitest-tested), matching the existing `*-helpers.ts` pattern in
-  `server/src/tts/`. The Node **server** imports it directly; the Node **install scripts**
-  (`install-*.mjs`) import its compiled output (`server/dist/tts/accelerator-profile.js`).
-  No second copy in Node.
+- **The resolver is one `.mjs` module** — `server/tts-sidecar/scripts/accelerator-profile.mjs`
+  (plain Node ESM, pure functions, side-effect-guarded by the
+  `import.meta.url === pathToFileURL(process.argv[1])` idiom like the other scripts). Its
+  matrix is **vitest-tested from a sibling `server/src/tts/accelerator-profile.test.ts` that
+  imports the `.mjs` directly** — exactly how `install-qwen3.mjs` /`bootstrap-venv.mjs` are
+  tested today. The Node **install scripts** (`install-*.mjs`) import it directly (`.mjs`→
+  `.mjs`, no compiled `dist`, no build-ordering dependency).
+- **Server-runtime consumption is the one mechanic the Phase-1 plan must VERIFY, not assume
+  (B1):** the server (`apply.ts` decision, `spawn-sidecar.ts`, `/health`) also needs
+  `resolveProfile`/`ortProviders`. The plan's first task confirms whether the compiled
+  server (check `server/tsconfig` module mode — ESM vs CJS in `dist`) can import that sibling
+  `.mjs` at runtime. If it can → import it. If it can't cleanly → the server computes the
+  profile via a thin spawn of the `.mjs` (the existing "server spawns `.mjs`" pattern) OR a
+  dynamic `import()`. No second copy of the matrix either way.
 - **Python (`main.py`) never imports the resolver and never re-derives the matrix.** The
   server resolves the profile and **injects concrete, already-decided values into the
   sidecar at spawn** (`server/src/tts/spawn-sidecar.ts`) via env:
   - `CASTWRIGHT_ACCELERATOR_PROFILE` (e.g. `nvidia` | `amd` | `cpu` | `apple`)
   - `KOKORO_ORT_PROVIDERS` (the resolved ordered provider list, JSON) — Python passes it
     through to the ONNX Runtime session; it does not compute it.
+  - **Missing-env default (B3):** when these env vars are absent — a sidecar launched
+    directly via `npm run tts:sidecar`, `start.{ps1,sh}`, tests, or manually — Python falls
+    back to **today's auto-detection** (`cuda`-if-available → `mps` → `cpu`; ORT providers
+    auto). A non-server launch must behave exactly as it does today.
 - **The one thing Python decides for itself is pure runtime introspection, not matrix
   logic:** the reported device *family* via `torch.version.hip is not None` → `rocm` vs
   `cuda` (Section 4). That's reading the loaded torch build, not duplicating the resolver.
 
-So: install recipes + the provider list live once in TS; the sidecar is a thin consumer of
-spawn-time env. This is the load-bearing architecture decision for the whole feature.
+So: install recipes + the provider list live once in the `.mjs`; the sidecar is a thin
+consumer of spawn-time env. This is the load-bearing architecture decision for the feature.
 
 ### The (vendor × OS × engine) matrix the resolver owns
 
@@ -214,9 +233,10 @@ contingent on S0.2.
 
 ## Section 1 — Accelerator profile resolver
 
-**New module:** `server/src/tts/accelerator-profile.ts` (TS, pure functions, vitest-tested
-— see the cross-runtime hand-off above for why it lives here and not in `scripts/`). The
-whole matrix is unit-testable with zero AMD hardware.
+**New module:** `server/tts-sidecar/scripts/accelerator-profile.mjs` (plain Node ESM, pure
+functions, side-effect-guarded; vitest-tested from `server/src/tts/accelerator-profile.test.ts`
+which imports the `.mjs` directly — see the cross-runtime hand-off above for why `.mjs` and
+not `.ts`). The whole matrix is unit-testable with zero AMD hardware.
 
 - `detectVendor({ platform, exec })` → `'nvidia' | 'amd' | 'apple' | 'cpu' | 'unknown'`.
   - Windows: `Get-CimInstance Win32_VideoController`; Linux: `lspci` + `rocminfo` /
