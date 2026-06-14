@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:castwright/src/data/chapter_downloader.dart';
@@ -215,12 +217,24 @@ void main() {
       expect(await lib.loadPeaks('u1'), [0.1, 0.2, 0.3]); // persisted for next time
     });
 
-    test('peaksFor returns empty offline with nothing cached', () async {
-      final c = make(_ThrowingApi(), {}, peaksFetcher: (b, id) async => const []);
+    test('peaksFor returns empty when the fetcher throws (offline), never rethrows',
+        () async {
+      final c = make(_ThrowingApi(), {},
+          peaksFetcher: (b, id) async => throw SocketException('offline'));
       await lib.recordChapterMeta(
           bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
           fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
       expect(await c.peaksFor('b1', 'u1', 1), isEmpty);
+    });
+
+    test('backfillMissingPeaks tolerates a throwing fetcher (offline) → 0, no throw',
+        () async {
+      final c = make(_ThrowingApi(), {},
+          peaksFetcher: (b, id) async => throw SocketException('offline'));
+      await lib.recordChapterMeta(
+          bookId: 'b1', uuid: 'u1', chapterId: 1, title: 'One',
+          fingerprint: 'fp1', urlSuffix: 'audio.mp3', durationSec: 10);
+      expect(await c.backfillMissingPeaks(), 0);
     });
 
     test('downloadBook persists peaks for each downloaded chapter', () async {

@@ -211,9 +211,11 @@ class DriftLocalLibrary implements LocalLibrary, PlaybackStore, ThumbnailStore {
     return [for (final e in decoded) (e as num).toDouble()];
   }
 
-  /// Downloaded chapters (real chapterId, audio present) that have no persisted
-  /// peaks yet — the work-list for the connect-time backfill sweep. Excludes
-  /// audio-less rows (nothing to show) and id-0 legacy rows (no usable URL).
+  /// Chapters with no persisted peaks yet — the work-list for the connect-time
+  /// backfill sweep. Scoped to rows with a `fingerprint` (a rendered chapter)
+  /// and a real `chapterId` (> 0, so the peaks URL is usable); excludes
+  /// finished-evicted rows (fingerprint cleared) and id-0 legacy rows. Does not
+  /// check `bytes`, so a metadata-synced chapter not yet downloaded is included.
   Future<List<({String bookId, String uuid, int chapterId})>>
       chaptersMissingPeaks() async {
     final rows = await (_db.select(_db.chapters)

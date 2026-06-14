@@ -204,7 +204,12 @@ class SyncController {
   Future<List<double>> peaksFor(String bookId, String uuid, int chapterId) async {
     final local = await _library.loadPeaks(uuid);
     if (local != null && local.isNotEmpty) return local;
-    final remote = await _peaksFetcher(bookId, chapterId);
+    final List<double> remote;
+    try {
+      remote = await _peaksFetcher(bookId, chapterId);
+    } catch (_) {
+      return const []; // fetcher failed (offline) → caller shows the plain bar
+    }
     if (remote.isNotEmpty) await _library.savePeaks(uuid, remote);
     return remote;
   }
@@ -221,7 +226,12 @@ class SyncController {
       final missing = await _library.chaptersMissingPeaks();
       var filled = 0;
       for (final c in missing) {
-        final peaks = await _peaksFetcher(c.bookId, c.chapterId);
+        List<double> peaks;
+        try {
+          peaks = await _peaksFetcher(c.bookId, c.chapterId);
+        } catch (_) {
+          continue; // fetcher failed (offline) → leave for the next connect
+        }
         if (peaks.isNotEmpty) {
           await _library.savePeaks(c.uuid, peaks);
           filled++;
