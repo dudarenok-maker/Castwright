@@ -14,6 +14,11 @@ export interface Scene {
   viewports?: Viewport[];
   /** Optional selector to await before the shot (ensures the view painted). */
   waitFor?: string;
+  /** Optional selector to scrollIntoView({block:'center'}) before the shot, so a
+      below-the-fold region (e.g. the continue-listening rail) is framed. */
+  scrollTo?: string;
+  /** Capture the full scrollable page instead of just the viewport. */
+  fullPage?: boolean;
 }
 
 export const SCENES: Scene[] = [
@@ -50,6 +55,24 @@ export const SCENES: Scene[] = [
     hash: '#/books/hollow-tide-1/listen',
     viewports: ['desktop', 'phone', 'tablet'],
     waitFor: '[data-testid="listen-cover-art"]',
+  },
+  {
+    /* Cross-book "Continue listening" rail (fs-15), posed from our manuscripts.
+       Scrolled to centre so the rail is the hero with app chrome around it. */
+    id: 'continue-listening',
+    hash: '#/',
+    viewports: ['desktop', 'phone', 'tablet'],
+    waitFor: 'section[aria-label="Continue listening"]',
+    scrollTo: 'section[aria-label="Continue listening"]',
+  },
+  {
+    /* The honest full front screen — the rail in context below the stats/grid.
+       Full-page (desktop only; phone/tablet full-page would be absurdly tall). */
+    id: 'library-shelf-full',
+    hash: '#/',
+    viewports: ['desktop'],
+    waitFor: 'section[aria-label="Continue listening"]',
+    fullPage: true,
   },
   {
     id: 'account',

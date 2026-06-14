@@ -4,6 +4,7 @@ import {
   HOLLOW_TIDE_BOOK_STATES,
   HOLLOW_TIDE_POSED,
   HOLLOW_TIDE_VOICES,
+  HOLLOW_TIDE_CONTINUE,
 } from './hollow-tide';
 
 describe('Hollow Tide marketing fixtures', () => {
@@ -56,6 +57,42 @@ describe('Hollow Tide marketing fixtures', () => {
       for (const series of author.series)
         for (const book of series.books)
           expect(HOLLOW_TIDE_BOOK_STATES.has(book.bookId)).toBe(true);
+  });
+
+  describe('HOLLOW_TIDE_CONTINUE', () => {
+    it('poses exactly three resume cards', () => {
+      expect(HOLLOW_TIDE_CONTINUE).toHaveLength(3);
+    });
+
+    it('every item is shape-valid against ContinueListeningItem', () => {
+      for (const item of HOLLOW_TIDE_CONTINUE) {
+        expect(typeof item.bookId).toBe('string');
+        expect(typeof item.title).toBe('string');
+        expect(typeof item.chapterId).toBe('number');
+        expect(typeof item.currentSec).toBe('number');
+        expect(typeof item.remainingSec).toBe('number');
+        expect(item.completionPct).toBeGreaterThanOrEqual(0);
+        expect(item.completionPct).toBeLessThanOrEqual(1);
+        expect(() => new Date(item.updatedAt).toISOString()).not.toThrow();
+      }
+    });
+
+    it('only features books that exist and have generated audio', () => {
+      for (const item of HOLLOW_TIDE_CONTINUE) {
+        expect(HOLLOW_TIDE_BOOK_STATES.has(item.bookId)).toBe(true);
+        // hollow-tide-3 is still analysing — a resume card would misrepresent it.
+        expect(item.bookId).not.toBe('hollow-tide-3');
+      }
+    });
+
+    it('is ordered most-recently-updated first', () => {
+      const times = HOLLOW_TIDE_CONTINUE.map((i) => new Date(i.updatedAt).getTime());
+      for (let i = 1; i < times.length; i++) expect(times[i]).toBeLessThan(times[i - 1]);
+    });
+
+    it('leads with the nearly-finished book (92%)', () => {
+      expect(HOLLOW_TIDE_CONTINUE[0].completionPct).toBe(0.92);
+    });
   });
 
   describe('HOLLOW_TIDE_VOICES', () => {

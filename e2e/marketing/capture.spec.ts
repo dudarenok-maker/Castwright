@@ -66,6 +66,15 @@ for (const scene of SCENES) {
     }
     await waitForImages(page);
 
+    /* Frame a below-the-fold region (e.g. the continue-listening rail). Non-fatal
+       — a missing target shouldn't abort the run. */
+    if (scene.scrollTo) {
+      await page
+        .locator(scene.scrollTo)
+        .evaluate((el) => el.scrollIntoView({ block: 'center' }))
+        .catch(() => {});
+    }
+
     /* Capture each requested theme. The app's default theme preference is
        "system", so emulating `prefers-color-scheme` re-themes it without any
        app change. Default: both light + dark; `CAPTURE_THEME=light|dark` limits
@@ -78,7 +87,7 @@ for (const scene of SCENES) {
       await page.waitForTimeout(400); // settle the theme re-render
       await page.screenshot({
         path: resolve(OUT, `${scene.id}.${vp}.${theme}.png`),
-        fullPage: process.env.CAPTURE_FULLPAGE === '1',
+        fullPage: scene.fullPage ?? process.env.CAPTURE_FULLPAGE === '1',
       });
     }
   });

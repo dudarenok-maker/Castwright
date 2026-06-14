@@ -1,6 +1,12 @@
 /* Capture-only marketing fixtures (VITE_DEMO_CAPTURE=1). Additive — never
    served in normal mock mode, so this touches no existing spec. */
-import type { LibraryResponse, BookStateResponse, Character, Sentence } from '../../lib/types';
+import type {
+  LibraryResponse,
+  BookStateResponse,
+  Character,
+  Sentence,
+  ContinueListeningItem,
+} from '../../lib/types';
 import type { CoverFraming } from '../../lib/cover-framing';
 import coalfallCastJson from './coalfall-cast.json';
 import coalfallManuscriptJson from './coalfall-manuscript.json';
@@ -413,6 +419,47 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
     },
   ],
 };
+
+/* ── Continue-listening shelf fixture (served under VITE_DEMO_CAPTURE=1) ──
+   Posed so the front-screen rail finally shows in marketing shots. Array order
+   IS the on-screen order (the slice doesn't re-sort); updatedAt is also kept
+   descending to match the OpenAPI "most-recently-updated first" contract.
+
+   Only books with generated audio belong here — hollow-tide-3 is still
+   analysing, so it's excluded. The 92%-through Drowning Bell as the first card
+   tells the "dipped into the next book before finishing the first" story.
+
+   remainingSec renders via formatDuration (MM:SS / HH:MM:SS):
+     2040 → "34:00", 6960 → "01:56:00", 19260 → "05:21:00". */
+export const HOLLOW_TIDE_CONTINUE: ContinueListeningItem[] = [
+  {
+    bookId: 'hollow-tide-1',
+    title: 'The Drowning Bell',
+    chapterId: 11,
+    currentSec: 540,
+    remainingSec: 2040,
+    completionPct: 0.92,
+    updatedAt: '2026-06-12T18:30:00.000Z',
+  },
+  {
+    bookId: 'coalfall-commission',
+    title: 'The Coalfall Commission',
+    chapterId: 3,
+    currentSec: 300,
+    remainingSec: 6960,
+    completionPct: 0.28,
+    updatedAt: '2026-06-12T15:10:00.000Z',
+  },
+  {
+    bookId: 'hollow-tide-2',
+    title: 'Saltgrave',
+    chapterId: 2,
+    currentSec: 120,
+    remainingSec: 19260,
+    completionPct: 0.15,
+    updatedAt: '2026-06-11T20:00:00.000Z',
+  },
+];
 
 /* ── Voice-library fixture (served under VITE_DEMO_CAPTURE=1) ──────────── */
 import type { VoiceLibraryResponse, Voice } from '../../lib/types';

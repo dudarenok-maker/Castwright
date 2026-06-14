@@ -62,6 +62,7 @@ import {
   HOLLOW_TIDE_BOOK_STATES,
   HOLLOW_TIDE_POSED,
   HOLLOW_TIDE_VOICES,
+  HOLLOW_TIDE_CONTINUE,
   COALFALL_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
@@ -1229,6 +1230,9 @@ export async function mockGetLibraryStats() {
 
 export async function mockGetContinueListening() {
   await wait(15);
+  // Marketing capture: pose the rail from our manuscripts. Fresh copies, since
+  // the slice's hydrate freezes its payload via Immer.
+  if (DEMO_CAPTURE) return HOLLOW_TIDE_CONTINUE.map((x) => ({ ...x }));
   const seeded = (globalThis as unknown as { __SEED_CONTINUE__?: ContinueListeningItem[] }).__SEED_CONTINUE__;
   return seeded ?? [];
 }
