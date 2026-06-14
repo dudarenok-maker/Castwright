@@ -196,6 +196,12 @@ _Full detail + acceptance:_ [#665](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (user):_ makes re-record markers actionable outside the app (study / review / handoff to an editor).
 _Full detail + acceptance:_ [#461](https://github.com/dudarenok-maker/AudioBook-Generator/issues/461).
 
+#### `fe-39` — Decorative hover-feedback parity for touch (`group-active:` mirrors) ([#799](https://github.com/dudarenok-maker/AudioBook-Generator/issues/799))
+
+- _What:_ Optional follow-up to `fe-5` (#402): give the **decorative** hover-feedback controls fe-5 deliberately skipped (color/bg shifts on already-visible controls — revision-diff play badges, the "Add book" tile, continue-listening badge, setup "Review ›", voice-library drag icon, manuscript hit-area tint) a touch press-feedback equivalent (`group-active:` mirroring `group-hover:`), resting appearance unchanged. Caveats from the fe-5 review: don't force the "Add book" tile's full-peach hover on at rest, and the revision-diff badge mirrors may be masked by the play-state flip (verify benefit before shipping).
+- _Benefit (user):_ marginal cosmetic parity — touch users get a brief press-feedback flash on controls they can already see and use. Low priority by design.
+_Full detail + acceptance:_ [#799](https://github.com/dudarenok-maker/AudioBook-Generator/issues/799).
+
 #### `fs-9` — Configurable chapter-title silence durations ([#411](https://github.com/dudarenok-maker/AudioBook-Generator/issues/411))
 
 - _What:_ Promote the two hard-coded constants `CHAPTER_LEAD_SILENCE_SEC = 1.5` and `CHAPTER_POST_TITLE_SILENCE_SEC = 1.5` in `server/src/tts/synthesise-chapter.ts` to a per-book setting on `state.json`. Surface in the Listen view's metadata editor (the same panel that already edits narratorCredit / genre / etc.) as a "Chapter break duration" slider with a small preset list (e.g. 0.5/1/1.5/2/3 s) for the leading + post-title legs. Generation route reads the per-book values and forwards into `synthesiseChapter` opts.
