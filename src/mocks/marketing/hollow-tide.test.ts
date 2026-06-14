@@ -59,6 +59,33 @@ describe('Hollow Tide marketing fixtures', () => {
           expect(HOLLOW_TIDE_BOOK_STATES.has(book.bookId)).toBe(true);
   });
 
+  describe('voice totals (library "VOICES" stat)', () => {
+    const allBooks = HOLLOW_TIDE_LIBRARY.authors.flatMap((a) =>
+      a.series.flatMap((s) => s.books),
+    );
+
+    it('every book carries voiceIds (else the library VOICES total is 0)', () => {
+      for (const b of allBooks) expect(Array.isArray(b.voiceIds)).toBe(true);
+    });
+
+    it('per-book voiceIds length matches voiceCount', () => {
+      for (const b of allBooks) expect(b.voiceIds!.length).toBe(b.voiceCount);
+    });
+
+    it('distinct voices across the library is non-zero and reflects series reuse', () => {
+      // Mirrors book-library.tsx: new Set(flatMap(voiceIds)).size.
+      const distinct = new Set(allBooks.flatMap((b) => b.voiceIds ?? [])).size;
+      // 10 across the Hollow Tide trilogy (narrator/Cray/Wren reused) + 13 Coalfall.
+      expect(distinct).toBe(23);
+    });
+
+    it('Coalfall counts agree with its 13-character cast', () => {
+      const coalfall = allBooks.find((b) => b.bookId === 'coalfall-commission')!;
+      expect(coalfall.characterCount).toBe(13);
+      expect(coalfall.voiceCount).toBe(13);
+    });
+  });
+
   describe('HOLLOW_TIDE_CONTINUE', () => {
     it('poses exactly three resume cards', () => {
       expect(HOLLOW_TIDE_CONTINUE).toHaveLength(3);

@@ -315,6 +315,14 @@ export const HOLLOW_TIDE_BOOK_STATES = new Map<string, BookStateResponse>([
   ['coalfall-commission', coalfallCommission],
 ]);
 
+/* Distinct voice ids behind a book's voiceCount (voiceId ?? id), mirroring the
+   server's per-book `voiceIds`. The library view unions these across books for
+   its DISTINCT-voices total — summing voiceCount would count a series-reused
+   voice once per book. Without this the marketing library showed "VOICES 0". */
+const voiceIdsOf = (b: BookStateResponse): string[] => [
+  ...new Set((b.cast?.characters ?? []).map((c) => c.voiceId ?? c.id)),
+];
+
 export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
   authors: [
     {
@@ -335,6 +343,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               completedChapters: 12,
               characterCount: 7,
               voiceCount: 7,
+              voiceIds: voiceIdsOf(drowningBell),
               progress: 1,
               runtime: '7h 02m',
               lastWorkedOn: '2 days ago',
@@ -355,6 +364,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               completedChapters: 7,
               characterCount: 6,
               voiceCount: 6,
+              voiceIds: voiceIdsOf(saltgrave),
               progress: 0.62,
               runtime: '6h 18m',
               lastWorkedOn: '4 min ago',
@@ -376,6 +386,7 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               completedChapters: 0,
               characterCount: 0,
               voiceCount: 0,
+              voiceIds: [],
               progress: 0.4,
               lastWorkedOn: 'Just now',
               coverGradient: ['#22343F', '#0A1014'],
@@ -403,8 +414,9 @@ export const HOLLOW_TIDE_LIBRARY: LibraryResponse = {
               status: 'complete',
               chapterCount: 4,
               completedChapters: 4,
-              characterCount: 12,
-              voiceCount: 12,
+              characterCount: 13,
+              voiceCount: 13,
+              voiceIds: voiceIdsOf(coalfallCommission),
               progress: 1,
               runtime: '2h 41m',
               lastWorkedOn: 'Last week',
