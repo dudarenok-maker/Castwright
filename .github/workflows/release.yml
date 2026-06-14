@@ -373,42 +373,11 @@ jobs:
             "companion-apk/castwright-${{ github.ref_name }}.aab" \
             "companion-apk/castwright-${{ github.ref_name }}.aab.sha256" --clobber
 
-  # plan 188 / app-12 prep — build the companion for iOS UNSIGNED so the release
-  # pathway exists + the iOS build is gated each release. An installable .ipa
-  # needs Apple signing certs (app-12); until then we attach the unsigned
-  # archive so it can be signed + exported later.
-  companion-ios:
-    name: Companion iOS (unsigned, app-12 prep)
-    needs: publish
-    runs-on: macos-latest
-    timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: apps/android
-    steps:
-      - uses: actions/checkout@v6
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.44.1
-          cache: true
-      - run: flutter pub get
-      - run: flutter build ipa --no-codesign
-      - name: Package unsigned artifact
-        run: |
-          set -e
-          out="castwright-${{ github.ref_name }}-ios-unsigned"
-          if ls build/ios/ipa/*.ipa >/dev/null 2>&1; then
-            cp build/ios/ipa/*.ipa "$out.ipa"
-            echo "ASSET=apps/android/$out.ipa" >> "$GITHUB_ENV"
-          else
-            # --no-codesign can't export a distributable .ipa; ship the archive.
-            ditto -c -k --sequesterRsrc --keepParent \
-              build/ios/archive/Runner.xcarchive "$out.xcarchive.zip"
-            echo "ASSET=apps/android/$out.xcarchive.zip" >> "$GITHUB_ENV"
-          fi
-      - name: Attach to release
-        working-directory: .
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "$ASSET" --clobber
+  # NOTE: the per-release iOS build (unsigned, "app-12 prep") was REMOVED to save
+  # ~80-120 macOS-billed minutes/tag (macOS is 10×). It produced an un-installable
+  # unsigned archive that nothing consumes (no iOS distribution exists yet), and
+  # iOS *compileability* is already verified by app.yml's `ios-compile` job on
+  # every `apps/android/**` change — so nothing iOS rots. When iOS actually ships
+  # (app-12 / #555), add a SIGNED `.ipa` release job here — and even then weigh the
+  # macOS minutes: a manual/occasional signed build may beat one per tag.
+  # See docs/features/188-android-companion-app.md (app-12).

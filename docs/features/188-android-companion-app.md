@@ -503,6 +503,12 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   be incremental. Filed as a parked **Won't (this round)** backlog row with a clear
   wake-trigger (Android MVP stable + listener demand).
 - **Benefit (user):** one codebase, both platforms. **Depends on:** MVP stable.
+- **CI note (2026-06-14):** the per-release *unsigned* iOS build (`companion-ios`) was
+  REMOVED from `release.yml` — it cost ~80–120 macOS-billed min/tag (10×) for an
+  un-installable artifact nothing consumes, and `app.yml`'s `ios-compile` job already
+  guards iOS *compileability* on every `apps/android/**` change. When app-12 ships, add
+  a **signed `.ipa`** release job here — **but even then weigh the macOS minutes**: a
+  manual or occasional signed build is likely the better trade than one on every tag.
 
 ### Relationships to existing items (reconcile, don't absorb)
 
