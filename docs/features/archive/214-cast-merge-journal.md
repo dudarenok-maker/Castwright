@@ -1,9 +1,20 @@
 ---
-status: active
+status: stable
 issue: 397
 ---
 
 # 214 — Merge journal for deterministic alias un-link (srv-1)
+
+## Ship notes
+
+Shipped 2026-06-14 via PR [#793](https://github.com/dudarenok-maker/Castwright/pull/793)
+(merge commit `46778fbd`), closing `srv-1` / issue #397. Delivered as five
+TDD waves (store → manual-merge write → journal-first unlink + fallback →
+fold journaling + fresh-clear → regression plan), each spec- and
+code-quality-reviewed. `npm run verify` green (all 12 legs); merged `main`
+builds clean. Owed: live acceptance — perform a real mid-book merge then
+unlink and confirm the Reattribute Lines modal lists exactly the journaled
+sentences (automated tests cover the lineage logic but not the end-to-end UI).
 
 ## What
 
