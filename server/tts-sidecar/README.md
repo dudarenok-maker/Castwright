@@ -9,10 +9,11 @@ torch dependency tree doesn't leak into Node tooling.
 | Component | Version | Notes |
 |---|---|---|
 | **Python** | **3.12** (exactly) | bootstrap probes for 3.12 and refuses anything else; venv stamped `cp312` |
-| **PyTorch** | **`torch>=2.6`** (explicit in `requirements/nvidia-cuda.txt`) | pip co-resolves with `coqui-tts[codec]`/`torchcodec` to a recent 2.x; needed by Coqui + Qwen (Kokoro doesn't use torch) |
-| → NVIDIA GPU | PyPI default = CUDA-bundled wheel; or `--index-url https://download.pytorch.org/whl/cu130` for **CUDA 13.0** | ~2.5 GB |
+| **PyTorch** | **`torch==2.8.0` + `torchaudio==2.8.0`** (matched pair, pinned in `requirements/nvidia-cuda.txt`) | torch **<2.9** keeps `torchaudio` audio I/O in-core (so no torchcodec); needed by Coqui + Qwen (Kokoro doesn't use torch) |
+| → NVIDIA GPU | PyPI default = CUDA-bundled wheel; or pre-install `--index-url https://download.pytorch.org/whl/cu128` for **CUDA 12.8** | ~2.5 GB |
 | → CPU / macOS | PyPI default = CPU / MPS build | |
-| coqui-tts | `[codec]>=0.24.0` (resolves ~0.27.x) | dropped its transitive torch in 0.27.5 → torch is now explicit |
+| coqui-tts | `>=0.24.0` (resolves ~0.27.x), **no `[codec]` extra** | 0.27.5 dropped its transitive torch (torch now explicit); `[codec]` dropped → no torchcodec |
+| **torchcodec** | **not installed** | only needed on torch ≥2.9; its cores support FFmpeg 4–7 only (fails vs FFmpeg 8) — sidestepped by pinning torch <2.9 |
 | kokoro-onnx | `[gpu]>=0.4.0,<0.5.0` | onnxruntime-gpu via the platform-gated extra; no torch |
 | transformers | `>=4.45,<5.0` | coqui-tts compat cap |
 
@@ -48,31 +49,30 @@ cd server\tts-sidecar
 # Use the Python 3.12 launcher explicitly so the venv binds to 3.12.
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-# Install everything, including PyTorch. torch is now an EXPLICIT requirement
-# (torch>=2.6) — recent coqui-tts no longer pulls it transitively, so the
-# requirements install handles it for you. On Windows / Linux x86_64 PyPI gives
-# the CUDA-bundled torch wheel; on macOS the CPU/MPS build. No separate torch
-# step is needed for the common case.
+# Install everything, including PyTorch. torch + torchaudio are now EXPLICIT,
+# pinned to the matched 2.8.0 pair (recent coqui-tts no longer pulls torch
+# transitively; torch <2.9 keeps torchaudio audio I/O in-core so no torchcodec is
+# needed). On Windows / Linux x86_64 PyPI gives the CUDA-bundled wheel; on macOS
+# the CPU/MPS build. No separate torch step is needed for the common case.
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The CUDA-bundled torch download is ~2.5 GB. `pip` co-resolves torch with
-`coqui-tts[codec]` + `torchcodec` to a compatible recent 2.x.
+The CUDA-bundled torch download is ~2.5 GB.
 
 If the venv was created against the wrong Python (e.g. 3.11/3.14), delete the
 folder first: `Remove-Item -Recurse -Force .venv`.
 
 ### Forcing a specific torch build (optional)
 
-The requirements install pulls the PyPI-default torch (CUDA-bundled on
+The requirements install pulls the PyPI-default `torch==2.8.0` (CUDA-bundled on
 Windows/Linux, CPU/MPS on macOS), which is what most setups want. If you need a
-**specific** build — e.g. a CPU-only torch on a GPU box, or a particular CUDA
-toolkit — pre-install it BEFORE the requirements (pip won't override an
-already-satisfied `torch>=2.6`):
+**specific** build — e.g. CPU-only torch on a GPU box, or a particular CUDA
+toolkit — pre-install the **matched 2.8.0 pair** BEFORE the requirements (pip then
+leaves the `==2.8.0` pins satisfied):
 
 ```powershell
 # CPU-only (smaller; no CUDA libs):
-.\.venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+.\.venv\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu
 # …then:
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
@@ -89,18 +89,18 @@ CUDA-bundled torch** (the PyPI-default wheel), so GPU works out of the box — n
 separate step. You only need the explicit index below to pick a **specific** CUDA
 toolkit version.
 
-### Picking a specific CUDA build (e.g. CUDA 13.0)
+### Picking a specific CUDA build (e.g. CUDA 12.8)
 
-PyTorch ships per-CUDA wheels behind `--index-url`. Choose the one matching your
-driver/toolkit and pre-install it BEFORE the requirements (pip then leaves the
-`torch>=2.6` requirement satisfied). Run `nvidia-smi` first to confirm a GPU.
+PyTorch ships per-CUDA wheels behind `--index-url`. Pre-install the **matched
+2.8.0 pair** for your toolkit BEFORE the requirements (pip then leaves the
+`==2.8.0` pins satisfied). Run `nvidia-smi` first to confirm a GPU.
 
 ```powershell
 # Replace any default torch first if you want to switch CUDA builds:
-.\.venv\Scripts\python.exe -m pip uninstall -y torch torchaudio torchcodec
-# CUDA 13.0:
-.\.venv\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu130
-# (for a different CUDA toolkit, swap cu130 for the matching index from pytorch.org/get-started)
+.\.venv\Scripts\python.exe -m pip uninstall -y torch torchaudio
+# CUDA 12.8 (the validated pair):
+.\.venv\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu128
+# (for a different CUDA toolkit, swap cu128 for the matching index from pytorch.org/get-started/previous-versions)
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 

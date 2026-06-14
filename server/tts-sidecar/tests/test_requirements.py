@@ -48,12 +48,46 @@ def test_no_bare_unmarked_onnxruntime_gpu():
                 f"bare unmarked onnxruntime-gpu line will break macOS pip install: {l!r}")
 
 
+def _pkg(line):
+    """Bare package name from a requirement line (strip extras + version spec)."""
+    return line.split("[")[0].split(">")[0].split("=")[0].split("<")[0].split(";")[0].strip()
+
+
+def _pin(line):
+    """Exact `==` pin from a requirement line, or None."""
+    return line.split("==", 1)[1].strip() if "==" in line else None
+
+
 def test_torch_is_explicit():
     """torch MUST be an explicit requirement. It used to arrive transitively via
     coqui-tts, but coqui-tts 0.27.5 dropped that declaration — without an explicit
     line a fresh venv has NO torch and Coqui XTTS + Qwen synth (which import torch
     throughout main.py) fail. Kokoro (onnxruntime) is unaffected, so the sidecar
     would start but those engines would be silently broken."""
-    assert any(l.split("[")[0].split(">")[0].split("=")[0].strip() == "torch"
-               for l in _lines()), \
+    assert any(_pkg(l) == "torch" for l in _lines()), \
         "expected an explicit torch requirement — coqui-tts no longer pulls it transitively"
+
+
+def test_torch_and_torchaudio_are_a_matched_pair():
+    """torchaudio is tightly coupled to torch's exact version, so both must be
+    pinned to the SAME version. We pin the 2.8.0 pair (torch <2.9 keeps audio I/O
+    in-core, so no torchcodec is needed)."""
+    lines = _lines()
+    torch_pin = next((_pin(l) for l in lines if _pkg(l) == "torch"), None)
+    audio_pin = next((_pin(l) for l in lines if _pkg(l) == "torchaudio"), None)
+    assert torch_pin is not None, "torch must be pinned with == to a matched torchaudio"
+    assert audio_pin == torch_pin, \
+        f"torch ({torch_pin}) and torchaudio ({audio_pin}) must be the same pinned version"
+    major, minor = (int(x) for x in torch_pin.split(".")[:2])
+    assert (major, minor) < (2, 9), \
+        "torch must stay <2.9 so torchaudio keeps in-core audio I/O (no torchcodec)"
+
+
+def test_no_torchcodec():
+    """We dropped coqui-tts's `[codec]` extra, so torchcodec must NOT be pulled —
+    it only ships cores for FFmpeg 4–7 and fails against the FFmpeg 8 on PATH, and
+    is only needed on torch >=2.9 anyway."""
+    assert not any(_pkg(l) == "torchcodec" for l in _lines()), \
+        "torchcodec must not be a requirement (dropped with the [codec] extra)"
+    assert not any("coqui-tts[codec]" in l for l in _lines()), \
+        "coqui-tts must NOT use the [codec] extra (it pulls torchcodec)"

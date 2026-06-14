@@ -77,12 +77,18 @@ New behaviour landed paired tests in the same waves (all run under `npm run test
 **CI does NOT run the sidecar pytest suite** — `run-tests.ps1` exits 0 with a SKIP banner when the venv is absent (always true on a runner), by design (sidecar validation = author-hardware acceptance). So the "pytest green on 3.12" check is an author-acceptance item (A0 below), not CI.
 
 **Residual-risk updates (post final-review):**
-- **torch was only transitive → FIXED** (commit `e8d0468d`). `coqui-tts 0.27.5` dropped its torch
-  declaration, so a fresh venv had **no torch** and Coqui XTTS + Qwen synth (≈10 `import torch`
-  sites in `main.py`) would fail — a **pre-existing gap on `main`**, exposed by the 3.12 reinstall
-  (old venvs carried torch from an older coqui-tts). Fix: explicit `torch>=2.6` in
-  `nvidia-cuda.txt`; the `installRecipe` "torch is transitive" premise was corrected;
-  `test_requirements.py::test_torch_is_explicit` locks it. Kokoro (onnxruntime) was never affected.
+- **torch was only transitive → FIXED + PINNED** (commits `e8d0468d`, then the matched-pair pin).
+  `coqui-tts 0.27.5` dropped its torch declaration, so a fresh venv had **no torch** and Coqui XTTS
+  + Qwen synth (≈10 `import torch` sites in `main.py`) would fail — a **pre-existing gap on `main`**,
+  exposed by the 3.12 reinstall (old venvs carried torch from an older coqui-tts). Fix: pin the
+  matched **`torch==2.8.0` + `torchaudio==2.8.0`** pair in `nvidia-cuda.txt` and **drop the
+  `[codec]` extra**. The 2.8 line is deliberate — torch <2.9 keeps `torchaudio` audio I/O in-core
+  → **no torchcodec** (which supports only FFmpeg 4–7 and fails vs the shipped FFmpeg 8) — and a
+  matching `torchaudio` 2.8 exists (none does for bleeding-edge torch 2.12). Validated on a real
+  3.12 venv (Coqui + Qwen import + synth). This converges NVIDIA onto the **same shape as the AMD
+  profile** (torch 2.8, no `[codec]`). `installRecipe` premise corrected;
+  `test_requirements.py` locks torch-explicit + torch/torchaudio matched + no-torchcodec. Kokoro
+  (onnxruntime) was never affected.
 - **reqHash-only-hashed-the-shim → FIXED** (commit `00a396ca`). `zip-validate` now computes `reqHash = computeReqHash([nvidia-cuda.txt, base.txt])` from the zip — byte-identical to the venv stamp's hash — so a future overlay/base pin edit triggers the upgrade pip-install, and `ctx.reqHash` no longer diverges from the stamp. A test proves a shim-only edit does NOT change the hash while an overlay/base edit does.
 - **Flash-attn → SDPA on 3.12 (benign, flag at acceptance):** the pinned FlashAttention-2 wheel is `cp311`-only, so on a 3.12 venv `install-qwen3.mjs` skips it and Qwen uses the SDPA attention backend. Correctly gated + tested; the only effect is that anyone who had opted into FA2 loses that speedup after the 3.12 move. Note it in the A-series acceptance so it isn't a surprise.
 

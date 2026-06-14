@@ -41,17 +41,18 @@ rebuild on upgrade from v1.7.0.
   wheels "change regularly (nightly)" and recommends **pinned wheels from
   `repo.radeon.com`** for a specific ROCm release (e.g. torch 2.8.0 / ROCm 6.4.4).
   Treat ROCm torch like the flash-attn **manual-wheel-URL** pattern, not `--index-url`.
-- **NVIDIA torch is now an EXPLICIT requirement (re-corrected, Phase 1).** Torch *used to be*
-  purely transitive via `coqui-tts`, but **`coqui-tts 0.27.5` (what `>=0.24.0` resolves to)
-  dropped the torch declaration** — so a fresh venv had NO torch and Coqui/Qwen broke (a
-  pre-existing gap on `main`, exposed by the 3.12 reinstall). Phase 1 adds an explicit
-  `torch>=2.6` to `requirements/nvidia-cuda.txt`; pip co-resolves it with `coqui-tts[codec]`/
-  `torchcodec` (CUDA-bundled wheel on win/linux x86_64, cpu/mps on macOS). There is still no
-  `torch==` hard pin and no index for NVIDIA (PyPI default), and `installRecipe`'s
-  `torchPreinstall` stays `null` (= "the requirements file installs torch," not a separate
-  wheel pre-install). **AMD torch = the pinned ROCm 2.8 wheel** (ROCm-Windows ships specific
-  builds). Two profiles, each taking its torch from the right source — **not** a managed
-  version skew (see C3, downgraded).
+- **NVIDIA torch is now an EXPLICIT, PINNED pair (re-corrected, Phase 1).** Torch *used to be*
+  purely transitive via `coqui-tts`, but **`coqui-tts 0.27.5` dropped the torch declaration** —
+  so a fresh venv had NO torch and Coqui/Qwen broke (a pre-existing gap on `main`, exposed by
+  the 3.12 reinstall). Phase 1 pins the **matched `torch==2.8.0` + `torchaudio==2.8.0`** pair in
+  `requirements/nvidia-cuda.txt` and **drops coqui-tts's `[codec]` extra**. The 2.8 line is
+  deliberate: torch **<2.9** keeps `torchaudio`'s audio I/O in-core → no `torchcodec` (whose
+  cores support only FFmpeg 4–7 and fail against the shipped FFmpeg 8) → and `torchaudio` has a
+  matching 2.8 build (none exists for bleeding-edge torch 2.12). No index for NVIDIA (PyPI
+  default: CUDA-bundled win/linux, cpu/mps mac); `installRecipe`'s `torchPreinstall` stays
+  `null` (= "the requirements file installs torch"). **This is the SAME shape as the AMD
+  profile** (torch 2.8 + drop `[codec]`) — the profiles converge, differing only in torch
+  *source* (PyPI/CUDA vs the pinned ROCm wheel). Not a managed version skew (see C3, downgraded).
 - **ONNX Runtime on Windows AMD:** the ROCm EP is not available on Windows; **DirectML**
   (DX12) is the GPU path. **But Kokoro-on-DirectML has a documented `ConvTranspose`
   failure** (works on CPU, errors on DML) — the central Windows value prop is unproven.
@@ -159,11 +160,11 @@ Done without AMD hardware (web/desk + packaging facts). 🔴 on-box confirmation
     installs `coqui-tts` WITHOUT the `[codec]` extra** → no torchcodec dependency → **Coqui
     likely survives on AMD** (vs the spec's earlier "Coqui may drop"). N8 drop-priority still
     stands as a fallback if the import check fails.
-  - **Torch sourcing clarified (NOT a managed skew):** NVIDIA torch = **PyPI default, now an
-    EXPLICIT `torch>=2.6` line** in `nvidia-cuda.txt` (no `==` pin, no index; coqui-tts 0.27.5
-    no longer pulls it transitively — see the re-correction above; confirm the resolved version
-    on a real venv); AMD torch = the pinned ROCm **2.8 alpha** wheel above (ROCm-Windows ships
-    only specific builds). Same-minor
+  - **Torch sourcing clarified (NOT a managed skew):** NVIDIA torch = **the explicit, pinned
+    `torch==2.8.0` + `torchaudio==2.8.0` pair** in `nvidia-cuda.txt` (no index — PyPI default;
+    `[codec]`/torchcodec dropped; see the re-correction above), validated on a real venv; AMD
+    torch = the pinned ROCm **2.8 alpha** wheel above (ROCm-Windows ships only specific builds).
+    **Both profiles land on torch 2.8 + no `[codec]`** — same shape, different source. Same-minor
     alignment is incidental, not engineered. The Phase-1 `installRecipe` AMD
     `torchPreinstall: 'PENDING_SPIKE'` is filled in Phase 2 with the torch + torchaudio URLs
     above, once import-ability is confirmed.
