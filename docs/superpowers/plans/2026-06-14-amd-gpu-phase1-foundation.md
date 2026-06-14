@@ -34,32 +34,13 @@
 
 ---
 
-## Task 0: Verify the server-runtime → `.mjs` import mechanic (B1)
+## Task 0: server-runtime → `.mjs` import mechanic — **RESOLVED (no work; verified during planning)**
 
-**Why first:** the spec leaves one mechanic unverified — whether the *compiled server* can import a sibling `.mjs` at runtime. The answer (direct import vs dynamic `import()` vs spawn) shapes how Phase 2 wires the resolver into `apply.ts`/`spawn-sidecar.ts`. Phase 1 ships no such wiring, but we record the finding now so Phase 2 plans against fact.
+**Verdict (verified 2026-06-14):** `server/package.json` has **`"type": "module"`** and `server/tsconfig.json` uses **`module: NodeNext` / `moduleResolution: NodeNext` / `target: ES2022`** → the server is **ESM**. The existing `server/src/tts/*.test.ts` files **already statically import** these sibling `.mjs` modules (`import { … } from '../../tts-sidecar/scripts/install-qwen3.mjs'`) under this exact tsconfig and pass `npm run typecheck` — so a **static `import` of the `.mjs` from any server `.ts` works** (TS resolves the untyped `.mjs` the same way it does for those tests).
 
-**Files:**
-- Read: `server/tsconfig.json`, `server/package.json`
-- Modify: `docs/superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md` (append finding under the hand-off section)
+**Consequence for Task 13B (S1 resolved):** `apply.ts` uses a plain **static import** of `classifyVenvState`/`readStamp` from `../../tts-sidecar/scripts/venv-migration.mjs`. **No dynamic `import()`, no spawn, no TS re-impl.** The `.mjs` modules are kept side-effect-guarded + free of top-level await (Q1) so the static import is inert at module load.
 
-- [ ] **Step 1: Determine the server module system**
-
-Run: `cat server/tsconfig.json server/package.json`
-Capture: the `compilerOptions.module` / `moduleResolution` values and whether `server/package.json` has `"type": "module"`. Note whether the server emits ESM or CJS into `server/dist`.
-
-- [ ] **Step 2: Record the verdict in the spec**
-
-Append a short paragraph to the "Cross-runtime hand-off" section stating one of:
-- **ESM server** → server runtime imports the `.mjs` directly (`import { resolveProfile } from '../../tts-sidecar/scripts/accelerator-profile.mjs'`).
-- **CJS server** → server runtime uses a dynamic `await import(...)` of the `.mjs` (CJS can `import()` ESM), OR computes the profile by spawning the `.mjs` (existing "server spawns `.mjs`" pattern).
-Pick the simplest that the module mode allows. This is documentation only — no code wired in Phase 1.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/superpowers/specs/2026-06-14-amd-gpu-sidecar-support-design.md
-git commit -m "docs(sidecar): record server<->.mjs import mechanic for AMD resolver (Task 0)"
-```
+- [ ] **No task here.** This finding is recorded; proceed to Task 1.
 
 ---
 
@@ -1078,7 +1059,7 @@ it('still pip-installs in place when pythonTag matches and reqHash changed', asy
 - [ ] **Step 2: Run** `npm --prefix server run test -- upgrade/apply` → FAIL.
 
 - [ ] **Step 3: Implement.** Add a `'needs-reinstall'` value to `ApplyPhase`; in `applyUpgrade`, after `npm-ci` and before `pip-install`, read the shared-venv stamp (via a new injected `readStamp` step) and run `classifyVenvState`. On `needs-reinstall`: return `{ ok: false, phase: 'needs-reinstall', … }` **without** `pipInstall` or `flipPointer` (old release stays current); the caller surfaces the reinstall message (Section 6 UX). Other classifications proceed as today.
-  - **S1 — import mechanic (contingent on Task 0):** import `classifyVenvState`/`readStamp` from the pure `venv-migration.mjs` (S5). Use whatever Task 0 found works for server→`.mjs` at runtime: a **static `import`** if `server/dist` is ESM, else a **dynamic `await import(...)`** inside the (already-async) `applyUpgrade`/`createApplySteps`. If neither is clean, fall back to a **~5-line TS re-impl of the classify** in `apply.ts` (it's a trivial pure mapping) — do NOT block on the import.
+  - **S1 — import mechanic (RESOLVED, Task 0):** the server is ESM, so use a plain **static `import { classifyVenvState, readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs'`** (proven to typecheck by the existing `.test.ts` imports of these `.mjs`). No dynamic import / re-impl.
   - **S2 — source of the required `pythonTag`:** the candidate release must declare what Python it needs. Read a `PYTHON_TAG` constant shipped *inside the extracted release* (e.g. a small `server/tts-sidecar/python-tag.txt` or an exported const in `venv-migration.mjs` of that release) from `releaseDir` — NOT a hard-coded `'cp312'` in the running (old) code. So the guard compares "the stamp's pythonTag" vs "the candidate release's declared pythonTag." Add `python-tag.txt` (or the const) as a Phase-1 shipped file.
   - **S3 — shared reqHash:** when this path needs a reqHash (the `pip-in-place` vs `noop` branch), compute it with the **same `computeReqHash` over the same resolved overlay text** that `bootstrap-venv.mjs` uses — one shared helper, never reimplemented, or the two paths' decisions diverge.
 

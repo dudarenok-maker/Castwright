@@ -273,13 +273,13 @@ and that **follows the codebase's established `.mjs`-is-source-of-truth pattern*
   imports the `.mjs` directly** — exactly how `install-qwen3.mjs` /`bootstrap-venv.mjs` are
   tested today. The Node **install scripts** (`install-*.mjs`) import it directly (`.mjs`→
   `.mjs`, no compiled `dist`, no build-ordering dependency).
-- **Server-runtime consumption is the one mechanic the Phase-1 plan must VERIFY, not assume
-  (B1):** the server (`apply.ts` decision, `spawn-sidecar.ts`, `/health`) also needs
-  `resolveProfile`/`ortProviders`. The plan's first task confirms whether the compiled
-  server (check `server/tsconfig` module mode — ESM vs CJS in `dist`) can import that sibling
-  `.mjs` at runtime. If it can → import it. If it can't cleanly → the server computes the
-  profile via a thin spawn of the `.mjs` (the existing "server spawns `.mjs`" pattern) OR a
-  dynamic `import()`. No second copy of the matrix either way.
+- **Server-runtime consumption — RESOLVED (verified 2026-06-14):** `server/package.json` is
+  `"type": "module"` with `tsconfig` `module: NodeNext` → the server is **ESM**, and the
+  existing `server/src/tts/*.test.ts` already statically import these `.mjs` under that config
+  and pass typecheck. So the server (`apply.ts`, `spawn-sidecar.ts`, `/health`) imports the
+  sibling `.mjs` with a plain **static `import`** — no dynamic `import()`, no spawn, no second
+  copy of the matrix. (The `.mjs` stay side-effect-guarded + free of top-level await so the
+  import is inert at load.)
 - **Python (`main.py`) never imports the resolver and never re-derives the matrix.** The
   server resolves the profile and **injects concrete, already-decided values into the
   sidecar at spawn** (`server/src/tts/spawn-sidecar.ts`) via env:
