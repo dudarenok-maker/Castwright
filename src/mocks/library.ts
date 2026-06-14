@@ -27,6 +27,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
               completedChapters: 18,
               characterCount: 5,
               voiceCount: 5,
+              voiceIds: ['narrator', 'v-carrick', 'v-mara', 'v-doran', 'v-elsie'],
               progress: 1.0,
               runtime: '11h 24m',
               lastWorkedOn: '3 days ago',
@@ -45,6 +46,9 @@ export const MOCK_LIBRARY: LibraryResponse = {
               completedChapters: 2,
               characterCount: 4,
               voiceCount: 4,
+              /* Book 2 reuses narrator/Carrick/Mara from Solway Bay + one new
+                 voice — the series-consistency headline. */
+              voiceIds: ['narrator', 'v-carrick', 'v-mara', 'v-tane'],
               progress: 0.42,
               runtime: '4h 38m',
               lastWorkedOn: '2 min ago',
@@ -64,6 +68,9 @@ export const MOCK_LIBRARY: LibraryResponse = {
               completedChapters: 0,
               characterCount: 6,
               voiceCount: 3,
+              /* All 3 ready voices were matched from the series library (hence
+                 matchedFromLibrary: 3) — every id reused from Solway Bay. */
+              voiceIds: ['narrator', 'v-carrick', 'v-doran'],
               matchedFromLibrary: 3,
               lastWorkedOn: 'Yesterday',
               coverGradient: ['#D4A04E', '#7B5A26'],
@@ -86,6 +93,7 @@ export const MOCK_LIBRARY: LibraryResponse = {
               completedChapters: 0,
               characterCount: 0,
               voiceCount: 0,
+              voiceIds: [],
               progress: 0.34,
               lastWorkedOn: 'Just now',
               coverGradient: ['#A43C6C', '#3C194F'],
