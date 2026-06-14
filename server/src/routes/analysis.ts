@@ -2516,72 +2516,72 @@ export async function runMainAnalyzerJob(
             log,
             call: () =>
               analyzer.runStage1Chapter(
-                manuscriptId,
-                ch.id,
-                buildStage1ChapterInbox(
-                  manuscriptId,
-                  recordRef.title,
-                  ch,
-                  Array.from(rebuildRoster().values()),
-                  seriesPrior,
-                ),
-                {
-                  signal: abortController.signal,
-                  language: bookLanguage,
-                  onWaiting: (elapsed) => {
-                    const slot = castInFlight.get(i);
-                    if (slot) slot.elapsedMs = elapsed;
-                    sendCastLiveTick();
-                    /* Silence watchdog. Without this the user has no idea
+            manuscriptId,
+            ch.id,
+            buildStage1ChapterInbox(
+              manuscriptId,
+              recordRef.title,
+              ch,
+              Array.from(rebuildRoster().values()),
+              seriesPrior,
+            ),
+            {
+              signal: abortController.signal,
+              language: bookLanguage,
+              onWaiting: (elapsed) => {
+                const slot = castInFlight.get(i);
+                if (slot) slot.elapsedMs = elapsed;
+                sendCastLiveTick();
+                /* Silence watchdog. Without this the user has no idea
                    whether a slow Phase 0a call is rate-limited, hung, or
                    just slow on free-tier Gemma. Warn once per silence
                    stretch, re-arm on the next chunk. */
-                    const sinceLastChunk = Date.now() - lastChunkAt;
-                    if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
-                      if (
-                        warnedSilenceAt === null ||
-                        Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS
-                      ) {
-                        warnedSilenceAt = Date.now();
-                        log(
-                          0,
-                          `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`,
-                        );
-                      }
-                    } else {
-                      warnedSilenceAt = null;
-                    }
-                  },
-                  onChunk: (info) => {
-                    lastChunkAt = Date.now();
-                    const now = lastChunkAt;
-                    if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
-                    lastHeartbeatAt = now;
-                    const charsPerSec =
+                const sinceLastChunk = Date.now() - lastChunkAt;
+                if (sinceLastChunk > SILENCE_THRESHOLD_MS) {
+                  if (
+                    warnedSilenceAt === null ||
+                    Date.now() - warnedSilenceAt > SILENCE_THRESHOLD_MS
+                  ) {
+                    warnedSilenceAt = Date.now();
+                    log(
+                      0,
+                      `Chapter ${i + 1}/${totalCastChapters} — no response from ${analyzerLabel} in ${humanSeconds(sinceLastChunk)}, still waiting.`,
+                    );
+                  }
+                } else {
+                  warnedSilenceAt = null;
+                }
+              },
+              onChunk: (info) => {
+                lastChunkAt = Date.now();
+                const now = lastChunkAt;
+                if (now - lastHeartbeatAt < HEARTBEAT_EVENT_THROTTLE_MS) return;
+                lastHeartbeatAt = now;
+                const charsPerSec =
                       info.elapsedMs > 0
                         ? Math.round((info.receivedBytes * 1000) / info.elapsedMs)
                         : 0;
-                    send({
-                      kind: 'heartbeat',
-                      phaseId: 0,
-                      receivedBytes: info.receivedBytes,
-                      charsPerSec,
-                      elapsedMs: info.elapsedMs,
-                      sinceLastChunkMs: info.sinceLastChunkMs,
-                      chapterIndex: i + 1,
-                    });
-                  },
-                  onThrottle: (waitMs, reason) => {
-                    send({
-                      kind: 'throttle',
-                      phaseId: 0,
-                      chapterIndex: i + 1,
-                      model: activeModelId,
-                      waitMs,
-                      reason,
-                    });
-                  },
-                },
+                send({
+                  kind: 'heartbeat',
+                  phaseId: 0,
+                  receivedBytes: info.receivedBytes,
+                  charsPerSec,
+                  elapsedMs: info.elapsedMs,
+                  sinceLastChunkMs: info.sinceLastChunkMs,
+                  chapterIndex: i + 1,
+                });
+              },
+              onThrottle: (waitMs, reason) => {
+                send({
+                  kind: 'throttle',
+                  phaseId: 0,
+                  chapterIndex: i + 1,
+                  model: activeModelId,
+                  waitMs,
+                  reason,
+                });
+              },
+            },
               ),
           });
         } catch (chErr) {
