@@ -1,9 +1,10 @@
 /* venv-migration.mjs is a pure, side-effect-free decision module (no CLI guard),
    so importing it here is inert. */
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   computeReqHash,
   decideVenvAction,
@@ -11,8 +12,12 @@ import {
   writeStamp,
   stampPath,
   classifyVenvState,
+  resolveRequired,
   // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 } from '../../tts-sidecar/scripts/venv-migration.mjs';
+
+const HERE = dirname(fileURLToPath(import.meta.url)); // server/src/tts
+const SIDECAR_DIR = join(HERE, '..', '..', 'tts-sidecar');
 
 describe('computeReqHash', () => {
   it('is stable for the same concatenated file contents', () => {
@@ -129,5 +134,17 @@ describe('classifyVenvState (Phase 1: detect-and-reinstall, no rebuild)', () => 
       classifyVenvState({ venvExists: true, stamp: { ...requiredClassify }, required: requiredClassify })
         .action,
     ).toBe('noop');
+  });
+});
+
+describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
+  it('reads the canonical python tag, stamps the effective nvidia profile, and hashes overlay-then-base', () => {
+    const r = resolveRequired(SIDECAR_DIR);
+    expect(r.pythonTag).toBe('cp312');
+    expect(r.profile).toBe('nvidia');
+    const overlay = readFileSync(join(SIDECAR_DIR, 'requirements', 'nvidia-cuda.txt'), 'utf8');
+    const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
+    expect(r.reqHash).toBe(computeReqHash([overlay, base]));
+    expect(r.reqHash).toMatch(/^[0-9a-f]{64}$/);
   });
 });
