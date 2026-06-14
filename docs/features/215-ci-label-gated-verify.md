@@ -47,14 +47,29 @@ asked**.
 - **Unlabeled PRs** still *evaluate* the workflow but the job is skipped by the
   `if:` → zero runner minutes. No required status check on `main` gates merge,
   so a skipped job never blocks.
-- **Untouched** (still automatic): `pr-title-lint.yml` (every PR — cheap title
-  gate), `app.yml` (Flutter companion CI on `apps/android/**` — the only
+- **`release.yml` is now the complete-verification boundary.** Because PRs no
+  longer run cloud CI, the full + cross-OS battery is concentrated on the tag.
+  `publish` gates on `needs: [verify, cross-os-verify, mobile-e2e,
+  companion-apk-build]`:
+  - `verify` — full `npm run verify` on Ubuntu (typecheck + lint + all tests +
+    e2e + a11y + build); upgraded from the old `verify:quick` and given a 30-min
+    cap + a Playwright-chromium install for the e2e leg.
+  - `cross-os-verify` — `verify:quick` + build on **macOS** and **Windows**
+    (matrix; mirrors `cross-os.yml`). Restores the cross-OS gate plan 103 had
+    moved off the release path — releases are public-beta, so the macOS 10×
+    minutes are worth it per (infrequent) tag.
+  - `mobile-e2e` — `npm run test:e2e:mobile` (Pixel 7 / iPad Pro 11), Ubuntu,
+    run unconditionally per tag.
+  A red leg on any deployer OS blocks the release. `cross-os.yml` stays as the
+  between-releases weekly pulse + ad-hoc dispatch.
+- **Still automatic, otherwise untouched:** `pr-title-lint.yml` (every PR — cheap
+  title gate), `app.yml` (Flutter companion CI on `apps/android/**` — the only
   automated coverage for the app; no local hook runs `flutter analyze`/`test`),
-  `release.yml` (on `vX.Y.Z` tag), `cross-os.yml` (weekly Sunday cron + manual
-  dispatch — the "high-risk / needs cross-OS" lane).
+  `cross-os.yml` (weekly Sunday cron + manual dispatch).
 - **Reversibility:** revert the `verify.yml` trigger/`if:` edits to restore
-  auto-on-PR. The `run-ci` label is a repo label; deleting it just removes the
-  opt-in handle (dispatch still works).
+  auto-on-PR; revert the `release.yml` job additions to drop back to the
+  Ubuntu-only `verify:quick` release gate. The `run-ci` label is a repo label;
+  deleting it just removes the opt-in handle (dispatch still works).
 
 ## Invariants to preserve
 
@@ -88,7 +103,11 @@ config + docs only.
 4. **Actions tab → Verify → Run workflow on a branch** (or `gh workflow run
    verify.yml --ref <branch>`) → runs the **full** battery (all scopes), no PR
    needed.
-5. **Push a `vX.Y.Z` tag** → `release.yml` still runs end-to-end (unchanged).
+5. **Push a `vX.Y.Z` tag** → `release.yml` runs the complete battery and only
+   publishes if ALL legs pass: `verify` (Ubuntu full), `cross-os-verify`
+   (macOS + Windows), `mobile-e2e` (Ubuntu), and `companion-apk-build`. Force a
+   red on any one (e.g. a Windows-only failure) → `publish` is skipped and no
+   GitHub Release lands.
 6. **Push to `apps/android/**`** → `app.yml` still runs (unchanged).
 
 ## Out of scope

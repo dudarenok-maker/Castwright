@@ -385,13 +385,15 @@ tests, a server-only PR skips Playwright e2e + the frontend unit suite, a root
 What still runs automatically: `pr-title-lint.yml` on every PR, `app.yml` on
 `apps/android/**` changes (the only automated coverage for the Flutter
 companion — no local hook runs `flutter analyze`/`test`), `release.yml` on a
-`vX.Y.Z` tag, and `cross-os.yml` on its weekly Sunday cron. Cross-OS verify
-(macOS + Windows) + mobile/tablet e2e live on `cross-os.yml` (`workflow_dispatch`
-+ weekly cron on `main`) — **fire it manually before announcing any release
-that ships a zip to alpha testers** (deployer spread is still Windows + macOS +
-Linux). `release.yml` verifies Ubuntu-only before publish. The doc-only
-`paths-ignore` fast-path (plan 101) is a second layer — a `run-ci`-labeled PR
-whose files are all docs still won't spin up the battery.
+`vX.Y.Z` tag, and `cross-os.yml` on its weekly Sunday cron. **Every release tag
+now runs COMPLETE cross-platform verification before it publishes** (plan 215):
+`release.yml` gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile`
+(Ubuntu) + `verify:quick`+build on macOS **and** Windows — a red leg on any
+deployer OS blocks the public-beta release, so you no longer fire cross-OS by
+hand before a release. `cross-os.yml` (`workflow_dispatch` + weekly cron on
+`main`) stays as the between-releases pulse + ad-hoc cross-OS/mobile run. The
+doc-only `paths-ignore` fast-path (plan 101) is a second layer — a `run-ci`-labeled
+PR whose files are all docs still won't spin up the battery.
 See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md),
 [103](docs/features/103-ci-cost-reduction.md), and
 [archive/101](docs/features/archive/101-docs-only-ci-skip.md).
