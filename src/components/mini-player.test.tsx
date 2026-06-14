@@ -849,3 +849,23 @@ describe('MiniPlayer — volume slider (fe-25)', () => {
     await waitFor(() => expect(audioEl.volume).toBeCloseTo(0.5));
   });
 });
+
+describe('MiniPlayer — scrubber thumb touch fallback (fe-5)', () => {
+  it('thumb carries the coarse-pointer reveal fallback', () => {
+    const { getByTestId } = renderPlayer(
+      <MiniPlayer
+        chapter={chapter1}
+        bookId="book-1"
+        onClose={noop}
+        onPrev={noop}
+        onNext={noop}
+        prevAvailable={false}
+        nextAvailable={true}
+      />,
+    );
+    const thumb = getByTestId('scrubber-thumb');
+    expect(thumb).toHaveClass('coarse-pointer:opacity-100');
+    expect(thumb).toHaveClass('opacity-0'); // hidden by default for mouse
+    expect(thumb).toHaveClass('group-hover:opacity-100');
+  });
+});

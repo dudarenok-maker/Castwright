@@ -668,7 +668,8 @@ export function MiniPlayer({
                 style={{ width: `${progress * 100}%` }}
               />
               <span
-                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-canvas opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                data-testid="scrubber-thumb"
+                className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-canvas opacity-0 group-hover:opacity-100 coarse-pointer:opacity-100 transition-opacity pointer-events-none"
                 style={{ left: `${progress * 100}%` }}
               />
             </div>
