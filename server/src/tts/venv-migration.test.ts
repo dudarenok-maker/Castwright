@@ -29,6 +29,9 @@ describe('computeReqHash', () => {
   it('is order-sensitive (overlay then base is a defined order)', () => {
     expect(computeReqHash(['x\n', 'y\n'])).not.toBe(computeReqHash(['y\n', 'x\n']));
   });
+  it('separator prevents the empty-segment collision (["ab",""] != ["a","b"])', () => {
+    expect(computeReqHash(['ab', ''])).not.toBe(computeReqHash(['a', 'b']));
+  });
 });
 
 const required = { pythonTag: 'cp312', profile: 'nvidia', reqHash: 'aaa' };
