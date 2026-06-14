@@ -728,7 +728,6 @@ const STAGE1_BASELINE_RATE = 1.0; // input chars / ms; tuned for gemini-2.5-flas
    the side of "we promised more time than it took" beats pegging at 95%. */
 const STAGE2_STRETCH = 5.0;
 const MIN_EST_MS = 3000;
-const MAX_EST_MS = 10 * 60 * 1000; // 10 minutes — past this the bar caps
 /* When elapsed exceeds the per-chapter estimate, the bar asymptotes toward
    the cap instead of pegging — overage frac is mapped through 1 - 1/(1+x)
    so a 2× overage adds half the remaining headroom, a 4× overage adds 80%.
@@ -794,8 +793,18 @@ function resolveStage2CoverageRetries(): number {
   return configValue<number>('analyzer.stage2.coverageRetries');
 }
 
-function clampEst(ms: number): number {
-  return Math.max(MIN_EST_MS, Math.min(MAX_EST_MS, Math.round(ms)));
+/* Whole-stage (whole-book) estimate clamp: a floor only, no ceiling.
+   This used to cap at MAX_EST_MS (10 min), but that ceiling is a PER-CHAPTER
+   bar concern, not an aggregate one — on a slow local model (qwen3.5:4b on
+   CUDA ≈ 150 chars/s, ≈ 15 chars/s on CPU) a multi-chapter book legitimately
+   takes far longer than 10 min, and capping the aggregate at 10 min made both
+   the "Estimated stage time" log and the per-chapter ticker (which divides
+   this aggregate by chars) read absurdly low — e.g. "~1:43" for a 110k-char
+   chapter that really takes ~10 min. The estimate self-corrects to the
+   observed rate once any chapter completes (chapterEstFromObserved /
+   chapterEstMsFor); the floor keeps a micro-book from teleporting. */
+export function clampStageEstMs(ms: number): number {
+  return Math.max(MIN_EST_MS, Math.round(ms));
 }
 
 /* Remove `chapterId` from `cache.failedChapterIds` if present, mutating
@@ -2025,8 +2034,8 @@ export async function runMainAnalyzerJob(
     /* Pre-flight estimate uses the static baseline for both stages. After
        stage 1 completes we replace stage2EstMs with one derived from the
        *observed* rate, so the second bar reflects actual model speed. */
-    const stage1EstMs = clampEst(sourceChars / STAGE1_BASELINE_RATE);
-    let stage2EstMs = clampEst((sourceChars / STAGE1_BASELINE_RATE) * STAGE2_STRETCH);
+    const stage1EstMs = clampStageEstMs(sourceChars / STAGE1_BASELINE_RATE);
+    let stage2EstMs = clampStageEstMs((sourceChars / STAGE1_BASELINE_RATE) * STAGE2_STRETCH);
 
     /* Load any partial progress from a previous attempt. Cached stage 1 is
        reused as-is; cached chapters are skipped in the stage 2 loop. The
@@ -2881,7 +2890,7 @@ export async function runMainAnalyzerJob(
            already running concurrently, which is the user-visible
            signal that pipelining is engaged. */
         if (stage1ActualMs > 0) {
-          stage2EstMs = clampEst(stage1ActualMs * STAGE2_STRETCH);
+          stage2EstMs = clampStageEstMs(stage1ActualMs * STAGE2_STRETCH);
           log(
             0,
             `Detected ${stage1.characters.length} character${stage1.characters.length === 1 ? '' : 's'}: ${stage1.characters.map((c) => c.name).join(', ')}`,

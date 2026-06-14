@@ -5,6 +5,7 @@ import {
   verifyEvidenceAgainstSource,
   mergeRosterChapter,
   chapterEstFromObserved,
+  clampStageEstMs,
   projectRemainingMs,
   buildInterimCast,
   clearFailedChapterId,
@@ -585,6 +586,21 @@ describe('mergeRosterChapter — Phase 0a roster merging', () => {
    for a 20k-char chapter on local Ollama that was actually taking 2-4 minutes
    per chapter. Once any prior chapter has run, the estimate must come from the
    observed rate, not the static formula. */
+describe('clampStageEstMs (whole-stage estimate — floor only, no 10-min cap)', () => {
+  it('floors a tiny estimate at MIN_EST_MS', () => {
+    expect(clampStageEstMs(100)).toBe(3000);
+  });
+  it('does NOT cap a large aggregate at 10 minutes (regression: local-model ETA pinned at ~10m)', () => {
+    /* A 9-chapter book on local qwen3.5:4b can run ~90 min; the old clamp
+       pinned the aggregate at 600_000 ms and the per-chapter ticker divided
+       that down to absurd values. */
+    expect(clampStageEstMs(90 * 60 * 1000)).toBe(90 * 60 * 1000);
+  });
+  it('rounds fractional milliseconds', () => {
+    expect(clampStageEstMs(123_456.7)).toBe(123_457);
+  });
+});
+
 describe('chapterEstFromObserved', () => {
   it('falls back to the supplied baseline before any samples exist', () => {
     expect(chapterEstFromObserved(20_111, 0, 0, 40_000)).toBe(40_000);
