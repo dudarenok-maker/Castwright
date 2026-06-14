@@ -13,7 +13,6 @@ import {
   stampPath,
   classifyVenvState,
   resolveRequired,
-  // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
 } from '../../tts-sidecar/scripts/venv-migration.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url)); // server/src/tts
