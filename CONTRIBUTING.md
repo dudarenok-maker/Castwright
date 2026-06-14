@@ -547,77 +547,82 @@ git tag -d vX.Y.Z
 
 ## Release notes
 
-Release notes live in the annotated git tag message (`git tag -a vX.Y.Z`).
-The tag message is the source of truth; the regression plans under
-`docs/features/` are the long-form companion (reference plan numbers in
-parens, e.g. `(32, 33)`).
+Release notes live in the annotated git tag message (`git tag -a vX.Y.Z`),
+which the release workflow uses verbatim as the GitHub Release body. The tag
+message is the source of truth; the regression plans under `docs/features/`
+are the long-form companion (reference plan / PR numbers in parens, e.g.
+`(#637, plan 195)`).
 
 A release describes what shipped, diffed against the **previous public
-release**. The Features and Engineering sections are functional summaries
-written for a reader who is at minimum a contributor / operator
-(mechanical detail welcome); the Fixes section is the one place where
-each bullet must lead with the user-visible symptom in plain language
-before any internal explanation. A release is not a development diary
-and not an inventory of parked work. See v1.3.1's release notes for the
-canonical example of the format the rest of this section describes.
+release**, and is organised as a **headline block + emoji-themed sections**
+(the anatomy below). Fixes still lead with the user-visible symptom in plain
+language before any internal explanation. A release is not a development diary
+and not an inventory of parked work. **v1.7.0 is the canonical example** of the
+format the rest of this section describes; releases v1.0.0–v1.6.0 were
+refreshed into it retroactively.
 
-### Header line
+### Anatomy, in order
 
-`vX.Y.Z — <comma-separated themes>` on its own line, followed by a
-blank line and a one-paragraph intro that frames the release at a
-glance ("biggest single step since …", "hotfix bundle for …", "first
-public release of …"). The themes mirror the section content that
-follows so a reader skimming the releases index understands what the
-tag delivered without expanding the body.
+1. **Title** — `# Castwright X.Y.Z` as an H1. The GitHub Release title
+   mirrors it (`Castwright X.Y.Z`).
+2. **Theme statement + intro.** A bolded lead naming the release's identity
+   (`**The Castwright release.**`, `**A stability + hardening release.**`),
+   then a 1–3 sentence paragraph that frames what shipped at a glance. This
+   replaces the old `vX.Y.Z — themes` header line.
+3. **Upgrade note (optional).** A `> ⚠️ **Upgrade note:**` blockquote for
+   anything that breaks or needs action on upgrade — a data-dir move, a config
+   rename, a non-self-upgrading jump, a manual migration. Omit when there is
+   nothing to flag.
+4. A `---` divider.
+5. **`## ✨ Headline features`** — the 2–4 marquee items of the release, each an
+   `### <emoji> <Name>` subsection (append `(new)` when the capability is
+   brand-new, not an expansion). Each opens with a 1–2 sentence prose framing,
+   then sub-bullets with a **bold lead** and plan / PR refs in parens. This
+   block pulls the big story to the top; everything else lives in the themed
+   sections below.
+6. **Themed sections** — `## <emoji> <Theme>` groups that bucket the remaining
+   work by surface, not by Features / Fixes / Engineering. Typical themes:
+   🎙️ Voice design & casting · 🔊 Generation quality & reliability ·
+   🎧 Listening experience · ⚙️ Models, settings & covers · 🔌 Sync & server
+   infrastructure · 🏗️ Under the hood (rebrand / deps / licensing / CI). Each
+   bullet leads with a **bold subject** and ends with plan / PR refs in parens.
+   Fixes fold into the relevant theme and still lead with the user-visible
+   symptom (see the Content rules below).
+7. A `---` divider, then the footer: `**Full changelog:** vPREV...vX.Y.Z`.
 
-### Sections, in order
+Pick emoji from a small, stable set (✨ headline · 📱 mobile / companion ·
+🚀 onboarding · 📖 content / books · 🍎 platform · 🎙️ voice · 🔊 generation ·
+🎧 listening · ⚙️ settings · 🔌 sync / server · 🏗️ under-the-hood). Don't invent
+a new emoji per release — consistency across the releases index is the point.
 
-1. **Features.** User-visible additions or expansions since the previous
-   release. **Paragraph form with bold-heading leads grouping multiple
-   plan items by surface area.** One paragraph per surface area
-   (Listening, Voice + cast, Ingest, Themes, …); each paragraph opens
-   with a bolded one-line subject ending in a period (e.g.
-   `**Listening surface overhaul.**`) and then runs as a long-form
-   paragraph that concatenates every shipped capability in that
-   surface, with regression-plan numbers in parens after the relevant
-   clause (e.g. `… sleep timer with countdown presets + end-of-chapter
-   mode (53)`). Internal vocabulary is allowed here when it helps a
-   contributor or operator — state machine names, slice names, file
-   names, SSE channel mechanics, library / dependency choices, regex
-   patterns, `bg-white/{40,60,70,95}` tailwind selectors, etc. The goal
-   is a functional summary that captures both the user-facing affordance
-   AND enough mechanical hint that a reader who knows the codebase can
-   immediately locate the work.
-2. **Fixes.** Bugs that escaped the previous release and that users
-   actually hit. Omit this section entirely on an initial release.
-   **One bullet per bug, each bullet a paragraph in its own right.**
-   The bullet structure is: `[symptom in user terms] — [parenthetical
-   clarification with em-dashes if needed]. [Now [what changed]]. (plan
-   number)`. Write the symptom from the listener / deployer / operator's
-   chair — what they saw, what was broken, what they couldn't do — and
-   close with a one-sentence "Now legible", "Now self-heals", "Now
-   stacks correctly", etc. that names the new behaviour. Internal
-   vocabulary (file paths, selector specificity, `bg-amber-50/60 +
-   hover:bg-amber-50`) is allowed inside the bullet when it
-   disambiguates which surface the bug lived on; it's discouraged when
-   it crowds out the user-symptom framing. Reference the regression
-   plan number in parens at the end of the bullet if there is one
-   (`(70c)`, `(42 follow-up)`).
-3. **Retirements.** Behavior that **shipped in a previous release** and
-   is now removed or downgraded. Tell users what to do instead. Bullet
-   list; omit the section if empty.
-4. **Engineering.** Changes to the test harness, build, install
-   prerequisites, deploy steps, repo layout — anything that changes how
-   a contributor runs the project or how an operator deploys it.
-   **Bullet list, mechanical detail welcome.** Exact commands, file
-   paths, configuration knobs, before / after metrics, plan numbers in
-   parens at end. The Engineering section is explicitly for
-   contributors / operators, so test-harness names, CI step names,
-   refactor mechanics, dependency versions, and CI provider quirks
-   (`apt / brew / choco`, `pwsh` vs `powershell.exe`, etc.) belong
-   here. Optional trailing line for BACKLOG / archive accounting (e.g.
-   `BACKLOG since v1.2.2: Could 32 → 23 (9 items shipped, 1 net-new R1
-   entry added then resolved). …`).
+### Content rules
+
+The four old buckets (Features / Fixes / Retirements / Engineering) are no
+longer top-level sections — their content is distributed across the headline
+block and the themed sections — but the writing rules for each *kind* of line
+still hold:
+
+- **Feature lines** (headline sub-bullets + most themed bullets). A functional
+  summary written for a reader who is at minimum a contributor / operator: the
+  user-facing affordance plus enough mechanical hint (state-machine names,
+  slice / file names, SSE channels, config knobs, dependency choices) that
+  someone who knows the codebase can locate the work. Lead with a **bold
+  subject**; close with the plan / PR ref in parens (`(#637, plan 195)`).
+- **Fix lines.** Fold into the relevant theme, but each **must lead with the
+  user-visible symptom in plain language** before any internal explanation —
+  what the listener / deployer / operator saw and couldn't do — then close with
+  the new behaviour (`Now legible`, `Now self-heals`, `Now stacks correctly`)
+  and the plan / PR ref. Internal vocabulary (`bg-amber-50/60`,
+  `BookStateJson.description`) is fine *inside* the line to disambiguate the
+  surface, never as the leading words.
+- **Retirements.** Behaviour that **shipped in a previous release** and is now
+  removed or downgraded — surface it loudly (the `⚠️ Upgrade note` blockquote,
+  or a dedicated bullet) and tell users what to do instead.
+- **Engineering lines** (the 🏗️ Under-the-hood theme). Test harness, build,
+  install prereqs, deploy steps, repo layout, dependency versions, CI quirks
+  (`apt / brew / choco`, `pwsh` vs `powershell.exe`) — mechanical detail
+  welcome. An optional trailing line can carry BACKLOG / archive accounting
+  (e.g. `BACKLOG since v1.2.2: Could 32 → 23 (9 items shipped …)`).
 
 ### What stays out
 
@@ -637,31 +642,28 @@ tag delivered without expanding the body.
 
 ### Recipe
 
-1. `git log vPREV..HEAD --oneline` and bucket each commit into
-   Features / Fixes / Retirements / Engineering using the rules above.
-   Drop anything that falls into "What stays out".
-2. For each candidate Fix, verify the bug actually predates `vPREV`
-   (`git log vPREV -- <file>` or check the bug report's date). If it
-   was born and died inside this cycle, drop it.
-3. For each candidate Retirement, verify the feature shipped in a
-   prior tag. If it was only ever in dev, it's internal cleanup —
-   leave it out.
-4. Write the tag message with the four sections (omit any that are
-   empty). Reference plan numbers in parens.
-5. **Fixes bullets get a second pass for user vocabulary.** Re-read
-   each one and ask: would a deployer who has never seen the codebase
-   understand what was broken from the symptom alone? The bullet must
-   open with the user-visible failure mode ("Generation halted on the
-   'No analysed sentences cached' banner", "Long chapters froze on the
-   'Worker has gone quiet' banner", "In dark mode, the Halted pill was
-   nearly invisible") before any internal explanation kicks in. Internal
-   names (`bg-amber-50/60`, `BookStateJson.description`, `bookMeta/commitDraft`)
-   are fine *inside* the bullet when they disambiguate the surface, but
-   never as the leading vocabulary. Close with "Now [past-tense state]"
-   (`Now legible`, `Now self-heals`, `Now stacks correctly`) plus the
-   plan number in parens. **Features paragraphs and Engineering bullets
-   are NOT subject to this constraint** — Features paragraphs are
-   allowed to mix functional summary with mechanical hints because the
-   reader is also a contributor / regression-plan author, and
-   Engineering is explicitly for contributors / operators.
-6. `git tag -a vX.Y.Z` and `git push --tags` once the user approves.
+1. `git log vPREV..HEAD --oneline` (and `gh pr list --state merged --base main`
+   for PR refs) and bucket each shipped change. Drop anything in "What stays
+   out".
+2. Identify the 2–4 **marquee items** — the things a user would tell a friend
+   about. Those become the `## ✨ Headline features` subsections; everything
+   else slots into a themed section.
+3. For each candidate **Fix**, verify the bug actually predates `vPREV`
+   (`git log vPREV -- <file>` or the bug report's date). If it was born and
+   died inside this cycle, drop it. Then re-read each Fix line and confirm it
+   opens with the user-visible failure mode ("Generation halted on the 'No
+   analysed sentences cached' banner", "In dark mode, the Halted pill was
+   nearly invisible"), not an internal name.
+4. For each candidate **Retirement**, verify the behaviour shipped in a prior
+   tag; if it was only ever in dev, it's internal cleanup — leave it out.
+5. Write the body in order: title → theme statement + intro → optional upgrade
+   note → `## ✨ Headline features` → themed sections → `**Full changelog:**`
+   footer. Reference plan / PR numbers in parens throughout.
+6. **Draft in the GitHub Release UI first.** `gh release create vX.Y.Z --draft
+   --target main --notes-file <path>` (a draft is collaborator-only — nothing
+   public changes) so the user can review the rendered body. Iterate with
+   `gh release edit vX.Y.Z --notes-file <path>`.
+7. Once approved, the same body becomes the annotated-tag message for the bump
+   (`node scripts/bump-version.mjs --notes-file <path>`); the release workflow
+   publishes it verbatim. (Releases predating this format were refreshed
+   directly via `gh release edit`.)
