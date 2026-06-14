@@ -107,8 +107,9 @@ attaches (all with `.sha256` checksums):
 - `castwright-vX.Y.Z.zip` — the platform-independent **server** bundle
   (Windows / macOS / Linux); install via [INSTALL.md](INSTALL.md).
 - `castwright-vX.Y.Z.apk` — the sideloadable **Android companion** app.
-- `castwright-vX.Y.Z-ios-unsigned.*` — an **unsigned iOS** build (needs Apple
-  signing to become an installable `.ipa`).
+
+An iOS companion build isn't published yet — it lands with `app-12` (signed
+`.ipa`); the Flutter codebase already stays iOS-ready.
 
 After the first public release, upgrading is one click inside the app
 (**Account → Application updates**); see [INSTALL.md](INSTALL.md#updating).

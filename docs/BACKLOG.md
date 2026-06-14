@@ -96,6 +96,7 @@ _The Android companion shipped (plan 188); these are the launch-blocking gaps �
 
 - _What:_ Build + release the Flutter companion on iOS. The codebase stays iOS-ready by construction (app-managed TLS trust, dual-platform Flutter plugins, an unsigned iOS CI compile from `app-1`), so this is incremental, not a rewrite. _Codec caveat:_ iOS `AVPlayer` can't play `.ogg` — for iOS the server must render MP3/M4A (OGG is Android-only); the app reads the format from the manifest and surfaces it.
 - _Benefit (user):_ brings the companion to iPhone/iPad listeners — the other half of the mobile audience.
+- _CI note (2026-06-14):_ the per-release unsigned `companion-ios` build was removed from `release.yml` (saved ~80–120 macOS-billed min/tag; `app.yml`'s `ios-compile` still guards build health). This item should add a **signed** `.ipa` release job when it lands — weighing whether it's worth the macOS minutes on every tag vs. an occasional manual build.
 _Full detail + acceptance:_ [#555](https://github.com/dudarenok-maker/AudioBook-Generator/issues/555) · [plan 188](features/188-android-companion-app.md).
 
 ## Should — important, not blocking ship
