@@ -4,6 +4,7 @@
 
 import type { SetupReadiness } from '../../lib/api';
 import { DevicePanel } from '../device-panel';
+import { AcceleratorPicker } from './accelerator-picker';
 
 interface Props {
   readiness: SetupReadiness;
@@ -30,6 +31,8 @@ export function StepEnvironment({ readiness, onRefetch }: Props) {
           Re-check
         </button>
       </div>
+
+      <AcceleratorPicker />
     </section>
   );
 }
