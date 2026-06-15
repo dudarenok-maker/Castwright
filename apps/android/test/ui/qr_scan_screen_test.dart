@@ -2,7 +2,6 @@ import 'package:castwright/src/domain/pairing_qr.dart';
 import 'package:castwright/src/ui/qr_scan_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:image_picker/image_picker.dart';
 
 /// Pumps QrScanScreen (live camera OFF — the mobile_scanner platform view can't
 /// run under flutter test) behind a launcher button and captures the popped
