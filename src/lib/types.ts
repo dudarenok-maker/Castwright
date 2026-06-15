@@ -198,9 +198,9 @@ export interface AppInfo {
      the server resolves as the current default. Optional: absent on an older
      server. */
   devices?: {
-    kokoro: 'cuda' | 'mps' | 'cpu' | null;
-    coqui: 'cuda' | 'mps' | 'cpu' | null;
-    qwen: 'cuda' | 'mps' | 'cpu' | null;
+    kokoro: 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu' | null;
+    coqui: 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu' | null;
+    qwen: 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu' | null;
   } | null;
   devicesState?: 'pending' | 'ready' | 'error' | null;
   activeEngine?: string;

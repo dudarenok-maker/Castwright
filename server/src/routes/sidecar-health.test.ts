@@ -679,4 +679,21 @@ describe('GET /api/sidecar/health — side-14 device fields', () => {
     const res = await request(makeApp()).get('/api/sidecar/health');
     expect(res.body.devices).toEqual({ kokoro: null, coqui: 'cuda', qwen: null });
   });
+
+  it('forwards the AMD device families (rocm / directml) (phase 2)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro'],
+          devices: { kokoro: 'directml', coqui: 'rocm', qwen: 'rocm' },
+          devices_state: 'ready',
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.devices).toEqual({ kokoro: 'directml', coqui: 'rocm', qwen: 'rocm' });
+  });
 });
