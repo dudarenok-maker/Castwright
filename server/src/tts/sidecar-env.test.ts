@@ -2,7 +2,7 @@
    injected into the child env, and knobs left at their default are NOT
    force-set (so the sidecar uses its own default, avoiding double-defaulting). */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 vi.mock('../workspace/user-settings.js', () => ({ readConfigOverrides: vi.fn(() => ({})) }));
 import { buildSidecarEnv } from './spawn-sidecar.js';
 import * as us from '../workspace/user-settings.js';
@@ -92,5 +92,46 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
       repoRoot: process.cwd(),
     });
     expect(env.PRELOAD_COQUI).toBe('1');
+  });
+});
+
+describe('buildSidecarEnv injects the accelerator profile + Kokoro ORT providers (AMD phase 2)', () => {
+  const base = {
+    modelKey: 'qwen3-tts-0.6b' as const,
+    eagerLoadKokoro: false,
+    eagerLoadQwen: false,
+    repoRoot: process.cwd(), // no venv stamp under this path → profile from env/default
+  };
+  afterEach(() => {
+    delete process.env.ACCELERATOR;
+  });
+
+  it('no stamp / no override → cpu profile + CPU-only Kokoro ORT providers', () => {
+    delete process.env.ACCELERATOR;
+    const env = buildSidecarEnv(base);
+    expect(env.CASTWRIGHT_ACCELERATOR_PROFILE).toBe('cpu');
+    expect(JSON.parse(env.KOKORO_ORT_PROVIDERS as string)).toEqual(['CPUExecutionProvider']);
+  });
+
+  it('ACCELERATOR=nvidia → nvidia profile + CUDA/CPU ORT providers', () => {
+    process.env.ACCELERATOR = 'nvidia';
+    const env = buildSidecarEnv(base);
+    expect(env.CASTWRIGHT_ACCELERATOR_PROFILE).toBe('nvidia');
+    expect(JSON.parse(env.KOKORO_ORT_PROVIDERS as string)).toEqual([
+      'CUDAExecutionProvider',
+      'CPUExecutionProvider',
+    ]);
+  });
+
+  it('ACCELERATOR=amd → amd profile; DirectML in the providers on win32, CPU elsewhere', () => {
+    process.env.ACCELERATOR = 'amd';
+    const env = buildSidecarEnv(base);
+    expect(env.CASTWRIGHT_ACCELERATOR_PROFILE).toBe('amd');
+    const providers = JSON.parse(env.KOKORO_ORT_PROVIDERS as string);
+    expect(providers).toEqual(
+      process.platform === 'win32'
+        ? ['DmlExecutionProvider', 'CPUExecutionProvider']
+        : ['CPUExecutionProvider'],
+    );
   });
 });
