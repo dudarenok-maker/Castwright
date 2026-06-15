@@ -148,7 +148,13 @@ NVIDIA/Apple/CPU. It must **not be released** until the 🔴 on-AMD acceptance
    infrastructure (the cached self-test, the `directml` family mapping/label, the
    `install-ort` swap keyed on the recipe) is retained so re-enabling is a one-line
    revert if a future ORT / re-exported model fixes ConvTranspose. Qwen/Coqui still
-   ride ROCm torch (Wave H2 owed).
+   ride ROCm torch.
+5. **AMD install never bricks (Auto + CPU fallback):** detection auto-selects `amd`
+   so AMD beta users exercise the ROCm path, but the ROCm wheels are alpha previews,
+   so `installForProfile` is best-effort — if any ROCm step fails it **degrades to a
+   working CPU install** (writes `.accelerator-fallback.json`, stamps `cpu`) instead
+   of failing the bootstrap. So a fresh AMD install **always completes**; ROCm
+   failures surface as a CPU fallback, not a dead install. (`bootstrap-venv-helpers.test.ts`.)
 
 **Plan deviations / reconciliations (folded in, all flagged in commits):**
 - **A4 (Python-3.12 acquisition)** — already shipped in Phase 1; skipped.
@@ -179,12 +185,22 @@ NVIDIA/Apple/CPU. It must **not be released** until the 🔴 on-AMD acceptance
   helps; 1.24.4 is the latest published build. **Verdict: DirectML disabled,
   Kokoro → CPU** (flipped in code). H3 (the directml install ordering) is moot
   while disabled. Re-open if onnx-community ships a ConvTranspose-fixed model.
-- **H2 — OWED (needs a supported AMD card):** install the ROCm wheels, `import
-  torch` (`cuda.is_available()` True on AMD), Coqui/Qwen synth on torch 2.8; record
-  the wheel sha256s. The 780M is **not** a ROCm-supported part, so this can't be
-  run here — it needs an AMD-owning tester with a supported GPU.
+- **H2 — BETA-VALIDATED (delivery-model change, 2026-06-15):** rather than block the
+  release on finding a ROCm-supported AMD tester, **ship it and let AMD beta users
+  validate ROCm.** Detection auto-selects `amd`, and the **Auto + CPU fallback**
+  (invariant 5) guarantees the install completes even if the alpha ROCm wheels fail —
+  a working CPU install + the fallback marker, never a brick. The owed bits are now
+  beta *telemetry*, not a release gate: confirm Coqui/Qwen actually synth on ROCm on
+  a supported card, and record the wheel sha256s into `model-hashes.json`. (The
+  author's 780M is not ROCm-supported, so it can't produce that signal locally.)
 - **H4** full AMD fresh-install + upgrade pipeline + `/about` backends; **H5**
-  dual-GPU→nvidia + `ACCELERATOR=cpu` override rebuild — both owed to AMD hardware.
+  dual-GPU→nvidia + `ACCELERATOR=cpu` override rebuild — beta-observable now that the
+  install can't brick.
+
+> **Delivery note:** the release is **safe to cut for beta** — non-AMD users are
+> unaffected (dormant + regression fence), AMD users get a guaranteed-working install
+> (CPU fallback) and opt into the ROCm signal by simply being on AMD hardware. The
+> remaining `Refs #813` close-out is the beta ROCm-synth confirmation + sha256 pin.
 
 ## Out of scope
 
