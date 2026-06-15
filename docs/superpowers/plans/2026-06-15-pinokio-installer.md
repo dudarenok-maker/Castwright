@@ -114,13 +114,18 @@ In `scripts/verify-cache.mjs`, add a STEP entry mirroring the `test:hooks` entry
   inputs: {
     globs: ['pinokio/**'],
     extraFiles: ['scripts/run-pinokio-tests.mjs'],
+    includeLockfiles: [],
   },
 },
 ```
 
+(Confirmed: `verify-cache.mjs` runs each step via `npm run <step.name>` — `scripts/verify-cache.mjs:626` — so the `test:pinokio` npm script from Step 3 is what executes. Every STEP carries `includeLockfiles`, so include it.)
+
 - [ ] **Step 5: Add the ESLint CommonJS override for `pinokio/`**
 
 In `eslint.config.*`, extend the existing `scripts` CommonJS/espree override's `files` glob (the override around lines 202–208 that keeps the default espree parser + Node CommonJS globals) to also match `'pinokio.js'` and `'pinokio/**/*.js'`. If a single override can't cleanly cover both, add a sibling override object with the same `languageOptions` (CommonJS `sourceType`, Node globals) targeting `['pinokio.js', 'pinokio/**/*.js']`.
+
+**P5:** ensure the override's `languageOptions.globals` includes the Node 20 web globals the helpers use — at minimum `fetch` and `URL` — or `npm run lint` fails `no-undef` on `resolve-release.js` (add them explicitly if the project's base Node globals set doesn't already provide them).
 
 - [ ] **Step 6: Run the harness to verify it's green (and a no-op so far)**
 
@@ -192,12 +197,17 @@ Expected: FAIL with `Cannot find module './resolve-release.js'`.
 Create `pinokio/lib/resolve-release.js`:
 
 ```js
-// Resolve the latest PUBLISHED Castwright release tag.
+// Resolve AND checkout the latest PUBLISHED Castwright release tag.
 // Pure functions (unit-tested) + a CLI (acceptance-tested) at the bottom.
 //
-// CLI: prints the resolved tag to stdout and exits 0, OR exits non-zero with a
-// clear message when no release is published yet. Invoked by pinokio/install.js
-// and pinokio/update.js via shell.run: `node pinokio/lib/resolve-release.js`.
+// CLI (invoked by pinokio/install.js + pinokio/update.js as a SINGLE shell.run
+// step — `node pinokio/lib/resolve-release.js`): git-fetches tags, resolves the
+// latest published release, `git checkout`s it, and guards that the checked-out
+// tree actually contains the pinokio scripts. Doing fetch+checkout INSIDE the
+// node process avoids fragile cross-step Pinokio variable capture and
+// cross-shell `$(...)` substitution (P1). Exits non-zero with a clear message
+// when no release is published yet (P3) or when the resolved release predates
+// Pinokio support.
 
 const REPO = 'dudarenok-maker/Castwright';
 const LATEST_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -236,8 +246,13 @@ function highestSemverTag(tagNames) {
 module.exports = { latestReleaseTag, highestSemverTag };
 
 // ---- CLI (acceptance-tested, not unit-tested) ----
-async function main() {
-  const { execFileSync } = require('node:child_process');
+const { execFileSync, existsSync } = (() => ({
+  execFileSync: require('node:child_process').execFileSync,
+  existsSync: require('node:fs').existsSync,
+}))();
+
+/** Resolve the tag to check out: API → published tag, 404 → exit, error → local fallback. */
+async function resolveTag() {
   let outcome = { status: 0, body: null };
   try {
     const res = await fetch(LATEST_URL, {
@@ -248,10 +263,7 @@ async function main() {
     outcome = { status: 0, body: null };
   }
   const decision = latestReleaseTag(outcome);
-  if (decision.kind === 'tag') {
-    process.stdout.write(decision.tag);
-    return;
-  }
+  if (decision.kind === 'tag') return decision.tag;
   if (decision.kind === 'none') {
     process.stderr.write(
       'No published Castwright release found yet. A Pinokio install requires at least ' +
@@ -260,14 +272,32 @@ async function main() {
     process.exit(2);
   }
   // fallback: highest local git tag
-  const tags = execFileSync('git', ['tag', '--list'], { encoding: 'utf8' }).split('\n').map((t) => t.trim()).filter(Boolean);
+  const tags = execFileSync('git', ['tag', '--list'], { encoding: 'utf8' })
+    .split('\n').map((t) => t.trim()).filter(Boolean);
   const best = highestSemverTag(tags);
   if (!best) {
     process.stderr.write('GitHub Releases API unreachable and no local vX.Y.Z tag to fall back to.\n');
     process.exit(3);
   }
   process.stderr.write(`[resolve-release] API unreachable; falling back to local tag ${best}\n`);
-  process.stdout.write(best);
+  return best;
+}
+
+async function main() {
+  execFileSync('git', ['fetch', '--tags', '--force'], { stdio: 'inherit' });
+  const tag = await resolveTag();
+  process.stderr.write(`[resolve-release] checking out ${tag}\n`);
+  execFileSync('git', ['checkout', tag], { stdio: 'inherit' });
+  // P3 — guard against a release that predates Pinokio support: git checkout to
+  // such a tag would DELETE pinokio/ from the tree, breaking Start/Stop/Update.
+  if (!existsSync('pinokio/start.js')) {
+    process.stderr.write(
+      `[resolve-release] release ${tag} predates Pinokio support (pinokio/ scripts absent ` +
+        `after checkout). Update Pinokio or wait for the next release that includes them.\n`,
+    );
+    process.exit(4);
+  }
+  process.stdout.write(tag);
 }
 
 if (require.main === module) {
@@ -277,6 +307,8 @@ if (require.main === module) {
   });
 }
 ```
+
+> **P3 release-sequencing note:** the Pinokio install path must only be announced from the release that first contains `pinokio/` onward. Between merging this work and cutting that release, `main` has `pinokio/` but the latest *published* release does not — the guard above turns that window into a clear error instead of a broken install.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
@@ -510,12 +542,17 @@ module.exports = {
   icon: 'icon.png',
   menu: async (kernel, info) => {
     const installed = info.exists('node_modules') && info.exists('server/.env');
-    const running = info.running('pinokio/start.js');
+    // P2 — the server is DETACHED (start-app-prod.mjs:186), so it is NOT a
+    // Pinokio-tracked daemon. Derive "running" from the pid file the prod
+    // launcher writes (.run/server.pid), which stop:prod removes on clean stop.
+    const running = info.exists('.run/server.pid');
     const url = (info.local && info.local.url) || null;
     return buildMenu({ installed, running, url });
   },
 };
 ```
+
+> **P2 known limitation:** a crash leaves a stale `.run/server.pid` → a false "running" until the user runs Stop (which sweeps the pid files) or Reset. The normal Stop path removes the pid files, so no false positive there. Acceptance confirms the `info.exists` accessor name.
 
 - [ ] **Step 2: Pick the icon**
 
@@ -564,21 +601,12 @@ module.exports = {
       method: 'shell.run',
       params: { conda: CONDA, message: 'conda install -y -c conda-forge ffmpeg' },
     },
-    // 2. Resolve + checkout the latest published release (detached HEAD).
-    {
-      method: 'shell.run',
-      params: { conda: CONDA, message: 'git fetch --tags --force' },
-    },
+    // 2. Fetch + resolve + checkout the latest published release (detached HEAD),
+    //    all inside resolve-release.js — no fragile cross-step variable capture (P1).
+    //    The script also guards against a pre-Pinokio release (P3).
     {
       method: 'shell.run',
       params: { conda: CONDA, message: 'node pinokio/lib/resolve-release.js' },
-      // Pinokio captures stdout (the tag) into a variable; checkout uses it.
-      // The exact capture idiom is confirmed during acceptance; conceptually:
-      //   git checkout <captured-tag>
-    },
-    {
-      method: 'shell.run',
-      params: { conda: CONDA, message: 'git checkout {{input.event[0]}}' },
     },
     // 3. Node deps — --include=dev so Vite (a devDependency) installs for the build.
     {
@@ -636,12 +664,15 @@ git commit -m "feat(scripts): pinokio install/provisioning script (ops-16)"
 
 ```js
 // Castwright — Pinokio start. Launches the prod server inside the conda env.
-// The server detaches and spawns the sidecar itself (plan 43); Pinokio captures
-// the [READY] URL via the `on:` regex. Stop is handled by pinokio/stop.js.
+// The server detaches and spawns the sidecar itself (plan 43), then the launcher
+// process EXITS — so this is NOT a Pinokio daemon (no `daemon: true`, which would
+// read as a dead daemon the moment the launcher returns; P2). The `on:` matcher
+// with done:true lets Pinokio capture the [READY] URL before the step completes;
+// running-state is tracked via .run/server.pid in pinokio.js, and stop.js handles
+// teardown.
 const CONDA = { name: 'castwright', python: '3.12' };
 
 module.exports = {
-  daemon: true,
   run: [
     {
       method: 'shell.run',
@@ -705,9 +736,9 @@ const CONDA = { name: 'castwright', python: '3.12' };
 
 module.exports = {
   run: [
-    { method: 'shell.run', params: { conda: CONDA, message: 'git fetch --tags --force' } },
+    // Single resolve+checkout step (fetch + API + checkout + guard live inside
+    // resolve-release.js) — same P1 fix as install.js, no {{input.event}} capture.
     { method: 'shell.run', params: { conda: CONDA, message: 'node pinokio/lib/resolve-release.js' } },
-    { method: 'shell.run', params: { conda: CONDA, message: 'git checkout {{input.event[0]}}' } },
     { method: 'shell.run', params: { conda: CONDA, env: { NODE_ENV: '' }, message: 'npm ci --include=dev' } },
     { method: 'shell.run', params: { conda: CONDA, env: { NODE_ENV: '' }, message: 'npm --prefix server ci --include=dev' } },
     { method: 'shell.run', params: { conda: CONDA, env: { NODE_ENV: '' }, message: 'npm run build' } },
@@ -721,16 +752,17 @@ module.exports = {
 ```js
 // Castwright — Pinokio reset. Remove derived runtime (venv, node_modules, dist),
 // then reinstall from scratch. Does NOT touch server/.env or workspace/ (user data).
+// P4 — deletion via `node -e rmSync` (cross-platform, no dependency on a Pinokio
+// `fs.rm` method existing); reinstall via script.start (confirm method on-box).
+const RM = (p) => `node -e "require('fs').rmSync('${p}',{recursive:true,force:true})"`;
+
 module.exports = {
   run: [
-    {
-      method: 'fs.rm',
-      params: { path: 'server/tts-sidecar/.venv' },
-    },
-    { method: 'fs.rm', params: { path: 'node_modules' } },
-    { method: 'fs.rm', params: { path: 'server/node_modules' } },
-    { method: 'fs.rm', params: { path: 'dist' } },
-    { method: 'fs.rm', params: { path: 'server/dist' } },
+    { method: 'shell.run', params: { message: RM('server/tts-sidecar/.venv') } },
+    { method: 'shell.run', params: { message: RM('node_modules') } },
+    { method: 'shell.run', params: { message: RM('server/node_modules') } },
+    { method: 'shell.run', params: { message: RM('dist') } },
+    { method: 'shell.run', params: { message: RM('server/dist') } },
     { method: 'script.start', params: { uri: 'pinokio/install.js' } },
   ],
 };
@@ -789,7 +821,8 @@ In the install/getting-started area of `README.md`, add Pinokio as a third insta
 Create `docs/features/218-pinokio-installer.md` from `docs/features/TEMPLATE.md` with frontmatter `status: active`. It MUST cover:
 - **Invariants:** build-from-latest-PUBLISHED-release (never `main`, never an un-published tag); self-contained provisioning (zero system prereqs); reuse of `bootstrap-venv.mjs`/`launch.mjs`/`stop:prod` (no duplicated install logic); idempotent `.env`; stop via `stop:prod` (no orphaned sidecar).
 - **Automated coverage:** `pinokio/lib/*.test.js` (resolve-release / write-env / menu) via `npm run test:pinokio`.
-- **On-box manual acceptance matrix (Windows + macOS):** clean-machine Pinokio install → Start → Open Web UI → fs-21 wizard runs → Kokoro installs → generate a chapter; then Update, Stop (confirm no orphaned sidecar on :9000), Reset. Record the three open verifications (bundled-Node version, local-`require` support, conda `python -m venv`) and the AMD-Windows DirectML→CPU degrade.
+- **On-box manual acceptance matrix (Windows + macOS):** clean-machine Pinokio install → Start → Open Web UI → fs-21 wizard runs → Kokoro installs → generate a chapter; then Update, Stop (confirm no orphaned sidecar on :9000 — P2), Reset. Record the three open verifications (bundled-Node version, local-`require` support, conda `python -m venv`) and the AMD-Windows DirectML→CPU degrade.
+- **Release-sequencing (P3):** announce the Pinokio install path only from the release that first contains `pinokio/` onward; `resolve-release.js`'s post-checkout guard turns an earlier-release install into a clear error rather than a broken app.
 - **Link** the spec `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md`.
 
 - [ ] **Step 4: Add the INDEX entry**
@@ -820,7 +853,7 @@ Expected: PASS — typecheck + lint + all tests (incl. `test:pinokio`) + e2e + b
 
 - [ ] **Step 2: On-box Pinokio acceptance (Windows + macOS)**
 
-Follow the acceptance matrix in `docs/features/218-pinokio-installer.md`. **Resolve the three open verifications** and adjust the declarative scripts' Pinokio API spelling if acceptance surfaces a mismatch (conda/venv/on params, `info`/`kernel` accessors, stdout-capture idiom for the resolved tag). Re-commit any adjustments with `fix(scripts): …`.
+Follow the acceptance matrix in `docs/features/218-pinokio-installer.md`. **Resolve the three open verifications** and adjust the declarative scripts' Pinokio API spelling if acceptance surfaces a mismatch (conda/venv/on params, `info.exists`/`info.local` accessors, `script.start` for reset). Re-commit any adjustments with `fix(scripts): …`.
 
 - [ ] **Step 3: Open the PR**
 
@@ -836,6 +869,8 @@ Mark plan 218 `status:` appropriately (`active` until on-box acceptance lands; `
 
 **Spec coverage:** acquisition/public-repo (Task 5 menu + INSTALL §) ✓; self-contained conda provisioning (Task 6) ✓; build-from-latest-published-release w/ 404 vs network (Task 2 + Task 6) ✓; reuse bootstrap-venv/launch/stop:prod (Tasks 6–8) ✓; idempotent .env (Task 3) ✓; detached-server stop lifecycle (Task 7) ✓; menu/state (Task 4) ✓; no-release.yml-job (honored — no task touches it) ✓; testing via node:test island (Task 1) ✓; docs + regression plan (Task 9) ✓; two-layer venv / arm64 conda / icon notes (Tasks 6, 5; acceptance §) ✓.
 
-**Placeholder scan:** the declarative Pinokio scripts carry an explicit, scoped "confirm API spelling on-box" caveat (not a TODO — concrete content is provided). `{{input.event[0]}}` / `{{cwd}}` are Pinokio template variables, flagged for acceptance confirmation.
+**Placeholder scan:** the declarative Pinokio scripts carry an explicit, scoped "confirm API spelling on-box" caveat (not a TODO — concrete content is provided). `{{cwd}}` is a Pinokio template variable, flagged for acceptance. The fragile `{{input.event[0]}}` cross-step capture was removed (P1) — fetch+checkout now live inside `resolve-release.js`.
 
 **Type consistency:** `latestReleaseTag`/`highestSemverTag` (Task 2), `buildEnvContents` (Task 3), `buildMenu` (Task 4) signatures match their call sites in the CLIs and `pinokio.js`. Menu `href` values (`pinokio/install.js`, `pinokio/start.js`, `pinokio/stop.js`, `pinokio/update.js`, `pinokio/reset.js`) match the files created in Tasks 6–8.
+
+**Adversarial round 3 folded (P1–P6):** P1 fetch+checkout inside `resolve-release.js` (no `{{input.event}}` capture) — Tasks 2, 6, 8; P2 detached-server lifecycle: `running` from `.run/server.pid`, `daemon: true` dropped — Tasks 5, 7; P3 release-sequencing guard + note — Tasks 2, 9; P4 `reset.js` deletion via `node -e rmSync` — Task 8; P5 ESLint `fetch`/`URL` globals — Task 1; P6 `verify-cache` step `includeLockfiles` (+ confirmed `npm run <name>` execution) — Task 1.
