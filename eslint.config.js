@@ -208,7 +208,13 @@ export default tseslint.config(
      the new rule name to keep CommonJS scripts (e.g. preflight-ffmpeg.cjs)
      lint-clean. This is the SAME relaxation, not a new one. */
   {
-    files: ['scripts/**/*.mjs', 'scripts/**/*.cjs', 'scripts/**/*.js'],
+    files: [
+      'scripts/**/*.mjs',
+      'scripts/**/*.cjs',
+      'scripts/**/*.js',
+      'pinokio.js',
+      'pinokio/**/*.js',
+    ],
     languageOptions: {
       globals: { ...globals.node },
     },

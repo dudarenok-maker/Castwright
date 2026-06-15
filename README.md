@@ -77,6 +77,11 @@ and follow **[INSTALL.md](INSTALL.md)**. You'll end up with a single
 `npm run start:prod` command that brings up the server, the voice engine, and the
 web UI at <http://localhost:8080>.
 
+Prefer a no-terminal install? If you use [Pinokio](https://pinokio.computer), paste
+the repo URL into the Pinokio browser and click **Install** — it provisions Python +
+ffmpeg + the voice engine and launches the app in one click
+(see [INSTALL.md → Pinokio](INSTALL.md#install--pinokio-one-click)).
+
 **Prerequisites** (full detail and per-OS steps in [INSTALL.md](INSTALL.md)):
 
 - Node.js 20.19+
