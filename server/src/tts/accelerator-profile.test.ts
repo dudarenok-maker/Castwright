@@ -118,10 +118,20 @@ describe('installRecipe', () => {
     expect(r.torchPreinstall).toBeNull(); // engine packages pull torch from PyPI, unchanged
     expect(r.ortPackage).toBe('onnxruntime-gpu');
   });
-  it('amd torchPreinstall is a marked spike placeholder (S0.2); ORT directml on win, onnxruntime on linux', () => {
-    expect(installRecipe('amd', 'win32').torchPreinstall).toBe('PENDING_SPIKE');
-    expect(installRecipe('amd', 'win32').ortPackage).toBe('onnxruntime-directml');
-    expect(installRecipe('amd', 'linux').ortPackage).toBe('onnxruntime');
+  // S0.2 desk-pass-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4, cp312).
+  // Import-ability + synthesis are OWED on real AMD hardware (Wave H2). torch 2.8
+  // < 2.9 → coqui-tts without [codec]; ORT is onnxruntime-directml on Windows.
+  it('amd torchPreinstall = the pinned ROCm 6.4.4 cp312 wheels (win); empty on linux', () => {
+    const r = installRecipe('amd', 'win32');
+    expect(r.torchPreinstall.wheels).toEqual([
+      'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torch-2.8.0a0+gitfc14c65-cp312-cp312-win_amd64.whl',
+      'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl',
+    ]);
+    expect(r.ortPackage).toBe('onnxruntime-directml');
+    // Linux ROCm wheels are resolved in Wave H; the win-only list is empty there.
+    const l = installRecipe('amd', 'linux');
+    expect(l.torchPreinstall.wheels).toEqual([]);
+    expect(l.ortPackage).toBe('onnxruntime');
   });
   it('cpu is a Phase-2 IMPROVEMENT (not today): cpu torch preinstall + plain onnxruntime', () => {
     const r = installRecipe('cpu', 'linux');

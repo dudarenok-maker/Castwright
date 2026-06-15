@@ -107,16 +107,30 @@ export function ortProviders(profile, platform) {
  * USED to arrive transitively via coqui-tts, but coqui-tts 0.27.5 dropped that
  * declaration, so it is now pinned explicitly in the overlay; null here means
  * "nothing extra beyond the requirements," not "torch is transitive." NVIDIA ORT
- * is `onnxruntime-gpu` via kokoro-onnx[gpu]. AMD must pre-install a ROCm torch
- * wheel BEFORE the engine packages — a marked S0.2 spike placeholder, never
- * fabricated here. The CPU recipe (cpu-index torch) is a Phase-2 improvement.
- * @returns {{torchPreinstall: null | 'PENDING_SPIKE' | {source:string,url:string}, ortPackage: string}}
+ * is `onnxruntime-gpu` via kokoro-onnx[gpu]. AMD pre-installs the ROCm torch
+ * wheels (a {wheels:[…]} list) BEFORE the engine packages — install-torch.mjs
+ * runs them; their alpha local-version tags can't be pinned in amd-rocm.txt.
+ * The CPU recipe (cpu-index torch) is a Phase-2 improvement.
+ * @returns {{torchPreinstall: null | {wheels:string[]} | {source:string,url:string}, ortPackage: string}}
  */
 export function installRecipe(profile, platform) {
   if (profile === 'nvidia') return { torchPreinstall: null, ortPackage: 'onnxruntime-gpu' };
   if (profile === 'amd') {
+    // S0.2 desk-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4). torch 2.8
+    // < 2.9 → the amd overlay uses coqui-tts WITHOUT [codec]. Import-ability +
+    // synthesis on real AMD silicon are OWED (Wave H2). Linux ROCm wheels are
+    // resolved in Wave H if/when an AMD-Linux box validates them.
+    const ROCM = 'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/';
     return {
-      torchPreinstall: 'PENDING_SPIKE',
+      torchPreinstall: {
+        wheels:
+          platform === 'win32'
+            ? [
+                `${ROCM}torch-2.8.0a0+gitfc14c65-cp312-cp312-win_amd64.whl`,
+                `${ROCM}torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl`,
+              ]
+            : [],
+      },
       ortPackage: platform === 'win32' ? 'onnxruntime-directml' : 'onnxruntime',
     };
   }
