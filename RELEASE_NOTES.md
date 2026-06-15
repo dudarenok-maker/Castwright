@@ -1,3 +1,9 @@
+# Castwright 1.7.1
+
+- **AMD graphics now welcome (early preview).** Castwright can reach for an AMD GPU when it finds one — it detects the card on its own, and if the setup isn't fully ready, it quietly falls back to your processor instead of stalling. It's an early preview, so treat it as a first outing rather than a finished road; NVIDIA and Apple Silicon stay the smoothest paths.
+- **Installed in a single click, with Pinokio.** If you run [Pinokio](https://pinokio.computer), Castwright now sets itself up from one click — no terminal, nothing to install by hand. It fetches what it needs, gets everything ready, and launches straight into the same guided first run as the desktop installers.
+- **The waveform comes with you.** Downloaded chapters now carry their soundwave, so on your phone the scrubber stays drawn and you can see where you are at a glance — no signal needed.
+
 # Castwright 1.7.0
 
 - **Try it in one click.** A ready-made sample — an original story performed by a full cast — loads with every voice already designed, so you can generate and hear what Castwright does before importing a thing of your own.

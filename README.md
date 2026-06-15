@@ -71,18 +71,18 @@ or MP3.
 
 ## Quickstart
 
-Download the latest `castwright-vX.Y.Z.zip` from
-[Releases](https://github.com/dudarenok-maker/Castwright/releases), extract it,
-and follow **[INSTALL.md](INSTALL.md)**. You'll end up with a single
-`npm run start:prod` command that brings up the server, the voice engine, and the
-web UI at <http://localhost:8080>.
+Two ways to install:
 
-Prefer a no-terminal install? If you use [Pinokio](https://pinokio.computer), paste
-the repo URL into the Pinokio browser and click **Install** — it provisions Python +
-ffmpeg + the voice engine and launches the app in one click
-(see [INSTALL.md → Pinokio](INSTALL.md#install--pinokio-one-click)).
+- **One click, no terminal — [Pinokio](https://pinokio.computer).** Paste the repo URL
+  into the Pinokio browser and click **Install**. Pinokio provisions its own Python,
+  ffmpeg and voice engine, builds the latest release, and launches the app — nothing to
+  set up by hand. See [INSTALL.md → Pinokio](INSTALL.md#install--pinokio-one-click).
+- **Manual — the release zip.** Download the latest `castwright-vX.Y.Z.zip` from
+  [Releases](https://github.com/dudarenok-maker/Castwright/releases), extract it, and
+  follow **[INSTALL.md](INSTALL.md)**. You'll end up with a single `npm run start:prod`
+  that brings up the server, the voice engine, and the web UI at <http://localhost:8080>.
 
-**Prerequisites** (full detail and per-OS steps in [INSTALL.md](INSTALL.md)):
+**Prerequisites** (manual install only — Pinokio provisions these itself; full detail and per-OS steps in [INSTALL.md](INSTALL.md)):
 
 - Node.js 20.19+
 - Python 3.12 (exactly — for the voice engine)
