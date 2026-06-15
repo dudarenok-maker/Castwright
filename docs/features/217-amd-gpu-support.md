@@ -104,6 +104,74 @@ New behaviour landed paired tests in the same waves (all run under `npm run test
 6. **E. Python-3.12-absent fresh box** — ◑ partial: `decidePythonAcquisition` decision unit-tested (use / winget auto-install / guided fallback); the live winget auto-install is ⏳ owed (this box has 3.12).
 7. **F. Dual-GPU box (AMD iGPU + NVIDIA dGPU)** — ✅ **DONE** (2026-06-15): on real dual-GPU silicon (NVIDIA RTX 4070 Laptop + AMD Radeon 780M iGPU) the end-to-end resolver resolves to **`nvidia`** (NVIDIA-present-wins). Env override verified: `ACCELERATOR=cpu`→`cpu`, `ACCELERATOR=amd`→`amd`/`directml` (env beats detection).
 
+## Phase 2 — built dormant (2026-06-15), on-AMD acceptance OWED
+
+Phase 2 (AMD enablement) is now **built and merged dormant** on branch
+`feat/sidecar-amd-gpu-phase2` — every AMD code path is reachable via
+`ACCELERATOR=amd`/detection, unit-tested with stubs, and behaviourally inert for
+NVIDIA/Apple/CPU. It must **not be released** until the 🔴 on-AMD acceptance
+(Wave H) passes on real AMD hardware.
+
+**What shipped (Waves A–G):**
+- **Install layer:** `cpu.txt` + `amd-rocm.txt` overlays; `installRecipe('amd')` →
+  the S0.2 ROCm 6.4.4 cp312 wheels; `install-torch.mjs` (ROCm torch pre-install),
+  `install-ort.mjs` (onnxruntime→directml swap), profile-aware flash-attn skip.
+- **Venv wiring (B1):** `resolveRequired(profile)` selects the overlay;
+  `resolveInstallProfile` precedence **env → stamp carry-forward → detection** (so
+  existing nvidia installs are never force-migrated); `bootstrap-venv` + `apply.ts`
+  install the right overlay (torch-pre → overlay → ort-swap) and stamp the profile.
+- **Sidecar runtime:** `spawn-sidecar` injects `CASTWRIGHT_ACCELERATOR_PROFILE` +
+  `KOKORO_ORT_PROVIDERS`; Kokoro honours injected providers; `torch.version.hip`→
+  `rocm` + DirectML/ROCm device families in `/health`; cached Kokoro DirectML
+  self-test with CPU fallback; HIP poison regex; profile-aware Kokoro ImportError.
+- **Health/UX:** `/about` rocm/directml labels + experimental note; `ACCELERATOR`
+  config knob (rebuild-on-change); first-run accelerator picker (actuated through
+  the bootstrap spawn); `gpu-acceleration-unavailable` FailureCode (full lockstep);
+  job-coordinated `POST /api/accelerator/profile` switch route.
+
+**Invariants (AMD path):**
+1. **No forced migration:** an existing nvidia-stamped install upgrading to the AMD
+   release stays nvidia (stamp carry-forward beats detection) → `noop`/`pip-in-place`,
+   never `needs-reinstall`. Only an explicit `ACCELERATOR` override switches it.
+   (`accelerator-profile.test.ts` carry-forward case; `venv-migration.test.ts`.)
+2. **NVIDIA/macOS byte-identical:** default profile = nvidia; apple/unknown map to
+   the nvidia overlay; the recycle/ceiling logic is unchanged.
+3. **Unknown-VRAM fail-safe:** a DirectML-only box (no torch GPU) reads VRAM as
+   None → VRAM ceilings derive to 0 → VRAM recycle/eviction disable; the host-RAM
+   watchdog governs. ROCm boxes keep full VRAM protection. (`test_memory.py`.)
+4. **DirectML proof-or-fallback:** Kokoro runs a one-time DML self-test; failure →
+   CPU EP (honest `cpu` in `/health`), cached so it runs at most once.
+
+**Plan deviations / reconciliations (folded in, all flagged in commits):**
+- **A4 (Python-3.12 acquisition)** — already shipped in Phase 1; skipped.
+- **ORT swap → `install-ort.mjs`**, not `install-kokoro.mjs` (a pure
+  weight-downloader with no pip path).
+- **Flash-attn cp312 wheel NOT swapped** — the pinned wheel is cp311/torch2.6/cu124;
+  a naive rename points at a non-importable wheel. FA2 is NVIDIA-only and SDPA is the
+  working default. Only the AMD-skip landed; a matched cp312/torch-2.8 FA2 wheel is a
+  separate **owed NVIDIA-perf** follow-up.
+- **Wave B re-scoped to B1 only** — the in-place resumable rebuild (B2/B3) is
+  superseded by Phase 1's detect-and-reinstall and was dropped.
+- **D2** — the unknown-VRAM fail-safe already existed defensively (thresholds → 0 on
+  a null total); Phase 2 documents ROCm-neutrality and adds an AMD-named regression
+  rather than rewriting the OOM machinery.
+- **E2 (in-place rebuild progress UI)** — superseded: a profile switch / incompatible
+  upgrade surfaces via the existing upgrade-card + `apply.ts` `needs-reinstall` error
+  (which reassures "books and voices are preserved"). No new progress UI.
+- **F1** — does **not** rebuild the venv in place (seamless rebuild descoped). It
+  job-guards, persists the override, and reports `rebuildRequired`; the next
+  bootstrap's detect-and-reinstall rebuilds fresh.
+- **`model-hashes.json` torch wheel sha256** and the **min `onnxruntime-directml`
+  version** — OWED on AMD hardware (Wave H1/H2).
+
+**Wave H — on-AMD acceptance (🔴 OWED — gates RELEASE):** H1 Kokoro-on-DirectML
+runs the model (record the min `onnxruntime-directml` version, else flip to CPU);
+H2 ROCm wheels import + Coqui/Qwen synth on torch 2.8 (record sha256s); H3 the exact
+`onnxruntime-directml` install ordering; H4 full AMD-Windows fresh-install + upgrade
+pipeline + `/about` backends; H5 dual-GPU→nvidia + `ACCELERATOR=cpu` override rebuild.
+A **partial H1 (DirectML)** may be attemptable on the author's AMD Radeon 780M iGPU
+(DX12); ROCm (H2) is not — the 780M isn't a supported ROCm part.
+
 ## Out of scope
 
 **Phase 2 — AMD enablement (OWED, requires an AMD-owning tester)** — tracked in [`2026-06-14-amd-gpu-phase2-enablement.md`](../superpowers/plans/2026-06-14-amd-gpu-phase2-enablement.md). Owed acceptance (spec §Acceptance "Phase 2"):
