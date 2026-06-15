@@ -757,6 +757,10 @@ class KokoroEngine(Engine):
         self._language = os.environ.get("KOKORO_LANGUAGE", "en-us")
         # English subset of the voice manifest, populated at load time.
         self._voices: list[str] = []
+        # DirectML self-test outcome (AMD-Windows): None when not applicable,
+        # 'directml' when the one-time synth proved DML runs the model, or
+        # 'fallback-cpu' when it failed and we rebuilt on the CPU EP.
+        self._dml_status: Optional[str] = None
 
     @staticmethod
     def _resolve_ort_providers() -> list[str]:
@@ -775,6 +779,38 @@ class KokoroEngine(Engine):
         if isinstance(parsed, list) and all(isinstance(p, str) for p in parsed):
             return parsed
         return []
+
+    def _dml_marker_path(self) -> str:
+        """Sidecar-side marker recording that the DirectML self-test passed, so
+        it runs at most once per install (sits next to the Kokoro weights)."""
+        return os.path.join(os.path.dirname(self._model_path), ".kokoro-dml-selftest-ok")
+
+    def _directml_selftest_or_fallback(self, kokoro_cls: Any, kokoro: Any) -> Any:
+        """One-time DirectML proof-of-life. Returns the Kokoro instance to keep:
+        the DML one if a tiny synth succeeds (and caches a PASS marker), else a
+        fresh CPU-EP instance. Sets self._dml_status to 'directml' | 'fallback-cpu'."""
+        if os.path.isfile(self._dml_marker_path()):
+            self._dml_status = "directml"
+            return kokoro
+        voice = self._voices[0] if self._voices else self.FALLBACK_VOICE
+        try:
+            kokoro.create("ok", voice, 1.0, self._language)
+        except Exception as e:
+            log.warning("Kokoro DirectML self-test failed (%s); falling back to CPU EP.", e)
+            self._dml_status = "fallback-cpu"
+            try:
+                return kokoro_cls(
+                    self._model_path, self._voices_path, providers=["CPUExecutionProvider"]
+                )
+            except TypeError:
+                return kokoro_cls(self._model_path, self._voices_path)
+        self._dml_status = "directml"
+        try:
+            with open(self._dml_marker_path(), "w", encoding="utf-8") as f:
+                f.write("ok\n")
+        except OSError:
+            pass
+        return kokoro
 
     def _ensure_loaded(self, model: str) -> None:
         if self._kokoro is not None:
@@ -868,6 +904,18 @@ class KokoroEngine(Engine):
             v for v in all_voices
             if isinstance(v, str) and v.startswith(self.ENGLISH_VOICE_PREFIXES)
         )
+
+        # DirectML self-test (AMD-Windows). The Kokoro DML path has a known
+        # ConvTranspose risk (spike S0.1, OWED on real AMD hw): prove DML actually
+        # runs the model with one tiny synth on first load, and fall back to the
+        # CPU EP if it can't — so generation still works (honestly reported as cpu
+        # in /health via the session providers). Cached via a marker so later loads
+        # skip the ~1 s probe. Only runs when DirectML is in the providers (amd-win);
+        # other profiles and a Qwen-only session never reach this (Kokoro unloaded).
+        self._dml_status = None
+        if "DmlExecutionProvider" in providers:
+            kokoro = self._directml_selftest_or_fallback(Kokoro, kokoro)
+
         self._kokoro = kokoro
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
