@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 219 — Non-Latin (Cyrillic) character names, ids & cross-book keys
 
-> Status: draft
+> Status: active (implemented on `fix/server-stage2-coverage-unicode`; on-box acceptance owed)
 > Key files: `server/src/analyzer/roster-coverage.ts` (`toKebabId`), `server/src/routes/analysis.ts` (`bookIdFromTitle`, ingest), `server/src/store/merge-analysis-cast.ts`, `server/src/workspace/series-prior-dedup.ts`, `server/src/routes/cast-series-patch.ts`, `server/src/routes/voice-override-linked.ts`, `server/tts-sidecar/main.py` (`_voice_paths`), `scripts/recover-missing-character.mjs`, frontend cast-edit paths (TBD — see Phase 0)
 > URL surface: indirect — analysis pipeline + cast/voice persistence
 > OpenAPI ops: none (internal id/key generation)
@@ -259,6 +259,44 @@ re-mint the old broken ids and orphan those voices — clean reversal only holds
 - **Retroactive id migration** for already-analyzed books (none exist for
   non-Latin; forward-only by design).
 - **`denormaliseAllCaps`** ASCII-only all-caps folding (minor TTS-quality nit).
+
+## Implementation notes (2026-06-15, commit 23afa956)
+
+Built on branch `fix/server-stage2-coverage-unicode` (stacked on the plan-181
+word-normalizer fix). Two decisions diverged from the draft after the
+adversarial review + an in-flight design question:
+
+1. **Phase 0 probe substituted by defense-in-depth.** The live Ollama probe
+   needed the analyzer running, so instead of branching scope on observed model
+   output, `safeId` was made **idempotent + byte-identical for ASCII** (oracle
+   tests vs the legacy slug), making canonicalization safe to apply regardless
+   of what the model emits for Cyrillic. Owed: still worth observing real model
+   ids on-box (Q1–Q5) to confirm no surprise.
+2. **No ingest characterId rewrite.** The draft gated a global rewrite of
+   model-returned `character.id` + `sentence.characterId`. That is the riskiest
+   option (a missed reference → orphaned lines → silent narrator fallback), so it
+   was **dropped** in favour of leaving the model's id as-is (a valid JSON key,
+   Cyrillic or not) and hardening the FEW places an id becomes a **filename**.
+3. **Id scheme = Option C (keep Unicode), per the user.** `unicodeKebab`
+   preserves Cyrillic letters; filesystem boundaries that derive a name from an
+   id are hardened to ASCII (sidecar `_voice_paths`, voice-sample `.mp3` cache —
+   both back-compatible: ASCII ids unchanged, non-ASCII get a stable hash
+   suffix).
+4. **`makeBookId` was the real book-id bug** (worse than `bookIdFromTitle`): via
+   `slug`, every Cyrillic book mapped to `untitled__standalones__untitled`.
+   Fixed by routing `slug` through `unicodeKebab`.
+
+### Owed (on-box acceptance — issue to file)
+
+- **ffmpeg + Cyrillic filesystem paths on Windows.** Book directories already use
+  display strings verbatim (`bookDirByDisplay`), so Cyrillic paths reach ffmpeg
+  **today**, independent of this plan; chapter audio filenames now also carry the
+  Cyrillic title (`01-война.mp3`). Validate a full analyze→generate→export of a
+  Russian book on the Windows box. If ffmpeg chokes, the fallback is an ASCII
+  chapter-slug scheme (numeric prefix already guarantees uniqueness).
+- Observe real model character ids for Cyrillic names (Phase 0 Q1–Q5).
+- Cross-book voice carryover for a Russian 2-book series (live).
+- MAX_PATH headroom for long Cyrillic book ids/titles on Windows.
 
 ## Ship notes
 
