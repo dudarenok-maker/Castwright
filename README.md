@@ -83,7 +83,7 @@ web UI at <http://localhost:8080>.
 - Python 3.12 (exactly — for the voice engine)
 - ffmpeg on `PATH`
 - ~6 GB free disk (TTS weights ~1.1 GB + PyTorch ~2.5 GB + deps)
-- A GPU is strongly recommended (TTS on CPU is far slower): NVIDIA on Windows/Linux (PyTorch `2.8.0` installs CUDA-bundled by default; for a specific toolkit like CUDA 12.8 see [INSTALL.md](INSTALL.md)), or Apple Silicon (M-series) on macOS — used automatically via Metal, no drivers or setup
+- A GPU is strongly recommended (TTS on CPU is far slower): NVIDIA on Windows/Linux (PyTorch `2.8.0` installs CUDA-bundled by default; for a specific toolkit like CUDA 12.8 see [INSTALL.md](INSTALL.md)), or Apple Silicon (M-series) on macOS — used automatically via Metal, no drivers or setup. **AMD GPUs are an experimental preview** (ROCm for Qwen/Coqui; Kokoro runs on CPU), auto-detected with a safe CPU fallback — see [INSTALL.md](INSTALL.md). No GPU? It still runs on CPU.
 
 ## Companion app (Android)
 
