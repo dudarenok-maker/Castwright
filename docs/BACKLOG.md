@@ -67,13 +67,6 @@ _Full detail + acceptance:_ [#735](https://github.com/dudarenok-maker/Castwright
 - _Companion coherence (plan 188):_ if the companion is used against a Dockerised server, (a) **mount a persistent volume for the mkcert CA** (`mkcert -CAROOT` dir) so the pinned `caFingerprint` survives container rebuilds (else every update forces a re-pair), and (b) honour a **`LAN_HOST` override** in `enumerateLanUrls` (`export-lan.ts` reads `os.networkInterfaces()` → container bridge IPs like `172.18.0.x`) so the pairing QR carries the host's real LAN IP.
 _Full detail + acceptance:_ [#433](https://github.com/dudarenok-maker/AudioBook-Generator/issues/433).
 
-#### `ops-16` — Pinokio one-click installer ([#738](https://github.com/dudarenok-maker/Castwright/issues/738))
-
-- _What:_ Ship a single **Pinokio** JSON install script as a third first-class install path alongside the native installers (`ops-1` Windows `.exe`, `ops-15` macOS `.dmg`): one click in the Pinokio browser fetches the release, provisions the Python venv + TTS sidecar, checks the runtime prereqs, and launches the app — then hands off to the `fs-21` first-run wizard for GPU detect + model install, identical post-install setup to the native installers. The script's update path must be automated in `release.yml` (a manual-upload channel is a future stale-version complaint).
-- _Benefit (user):_ a no-terminal, no-Python-bootstrap install for users who run Pinokio — the same "click and it's running" path the `.exe`/`.dmg` give Windows/macOS deployers. Reduces a read-INSTALL.md bootstrap to one click.
-- _Area:_ ops. _Builds on:_ `ops-1`/`ops-15` (installers), `fs-21` (first-run wizard).
-_Full detail + acceptance:_ [#738](https://github.com/dudarenok-maker/Castwright/issues/738).
-
 _`fs-2` (multi-language, Russian first) shipped — the engine half via
 [plan 108](features/108-qwen-coexistence.md), the language half via
 [plan 162](features/162-fs2-multilanguage.md); the library/cast language UX

@@ -34,6 +34,24 @@ After install you'll have a single command (`npm run start:prod`) that brings up
 
 ---
 
+## Install — Pinokio (one click)
+
+If you use [Pinokio](https://pinokio.computer), Castwright installs with no terminal
+and no system prerequisites — Pinokio provisions its own Python 3.12 + ffmpeg + Node.
+
+1. Open the Pinokio browser and paste the Castwright repo URL:
+   `https://github.com/dudarenok-maker/Castwright`.
+2. Click **Install**. Pinokio builds the latest published release, provisions the
+   Python voice engine (~2.5 GB PyTorch), and configures the app — one click, ~10–20 min.
+3. Click **Start**, then **Open Web UI**. The first launch runs the in-app setup wizard
+   (GPU detect + one-time Kokoro voice-model download) — identical to the native installers.
+
+Update anytime via the **Update** menu (rebuilds from the newest published release).
+**Stop** cleanly tears down the server + voice engine; **Reset** rebuilds from scratch
+(your books and designed voices in the workspace are preserved).
+
+---
+
 ## Install — Windows
 
 Open PowerShell in the extracted folder, then run:
