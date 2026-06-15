@@ -1,6 +1,6 @@
 ---
 status: active
-shipped: null
+shipped: 2026-06-15
 owner: null
 ---
 
@@ -49,6 +49,11 @@ Resolve the open verifications:
 
 ## Ship notes
 
-_Pending — fill on ship (date + commit SHA), then move to `docs/features/archive/`._
+Merged to `main` **2026-06-15** via **PR #821** (merge commit `90bc51eb`), closing #738.
+All code + docs + 11 `node:test` cases landed; typecheck / build / `test:all` / lint green
+locally. **Plan stays `active`** because the runtime can only be validated on a live
+Pinokio install — **on-box / beta-tester acceptance is tracked by #822** (the open gate).
+When #822 confirms (Windows + macOS), apply any Pinokio-API-spelling fixes it surfaces,
+flip this plan to `stable`, and `git mv` it to `docs/features/archive/`.
 
 Source spec: `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md`; plan: `docs/superpowers/plans/2026-06-15-pinokio-installer.md`.
