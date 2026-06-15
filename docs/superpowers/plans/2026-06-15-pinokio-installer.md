@@ -17,7 +17,8 @@
 - **Worktree:** This plan should execute in an isolated git worktree off `main` (per CLAUDE.md + superpowers:using-git-worktrees). The current `feat/scripts-pinokio-installer` branch is polluted with two unrelated AMD-docs commits from a concurrent session. **First execution step:** create a worktree off `main`, then `git cherry-pick 15b374d2 d73538ec` (the two clean spec commits) into it, and continue on a fresh branch (e.g. `feat/scripts-pinokio-installer-clean`). Leave the polluted branch alone.
 - **Plan number:** This regression plan is **218**. If `docs/features/218-*.md` already exists at execution time (concurrent-session collision), bump to the next free number and update Task 9 accordingly.
 - **GitHub repo constant:** `dudarenok-maker/Castwright`. Releases API: `https://api.github.com/repos/dudarenok-maker/Castwright/releases/latest`.
-- **Three open verifications carried from the spec** (resolve during on-box acceptance, Task 10): (1) Pinokio's bundled Node ≥ 20.19 — else add `conda install -c conda-forge nodejs`; (2) Pinokio supports `require()` of a local module from `pinokio.js` (gates Task 5); (3) `python -m venv` from a conda interpreter on all 3 OSes.
+- **Open verifications (resolve during on-box acceptance, Task 10):** (1) **[highest risk]** `start.js` foreground launch — `node server/dist/index.js` from the app root autostarts the sidecar, loads `server/.env`/`WORKSPACE_DIR`, and Pinokio's native Stop reaps the sidecar (server SIGTERM handler, `index.ts:494`); (2) Pinokio's bundled Node ≥ 20.19 — else add `conda install -c conda-forge nodejs`; (3) `python -m venv` from a conda interpreter on all 3 OSes. **Closed by review:** Pinokio supports local `require()` (was open item 2) — confirmed via shipping apps.
+- **Round-4 review-prep fold (R1–R7):** the declarative Pinokio scripts were updated to match shipping-app idiom (validated against TRELLIS/comfy/facefusion/roop): R1 foreground server + `daemon: true` + `info.running` (revises round-3 P2's pid-file); R2 `info.local(script)` function form; R3 path-keyed `conda: { path:'env', python }`; R4 menu items carry `icon` + `default` (no `target`); R5 native `fs.rm` in reset (reverts P4's `node -e rmSync`); R6 sibling-relative `script.start` uri; R7 drop unconfirmed `{{cwd}}` (helpers use `process.cwd()`). Plus code cleanups: dropped the no-op IIFE in `resolve-release.js` and the unused `join` in `write-env.js`.
 - **Honesty note on the declarative Pinokio scripts (Tasks 5–8):** there is no headless Pinokio runtime, so these files are validated by **on-box manual acceptance**, not unit tests. The content below is concrete and best-effort against the Pinokio script API, but **the exact method/param spelling (`conda`, `venv`, `on`, `info`/`kernel` accessors) MUST be confirmed against current Pinokio docs during acceptance** and adjusted if needed. This is a known, scoped caveat — not a placeholder.
 
 ---
@@ -123,9 +124,9 @@ In `scripts/verify-cache.mjs`, add a STEP entry mirroring the `test:hooks` entry
 
 - [ ] **Step 5: Add the ESLint CommonJS override for `pinokio/`**
 
-In `eslint.config.*`, extend the existing `scripts` CommonJS/espree override's `files` glob (the override around lines 202–208 that keeps the default espree parser + Node CommonJS globals) to also match `'pinokio.js'` and `'pinokio/**/*.js'`. If a single override can't cleanly cover both, add a sibling override object with the same `languageOptions` (CommonJS `sourceType`, Node globals) targeting `['pinokio.js', 'pinokio/**/*.js']`.
+In `eslint.config.js`, extend the existing `scripts` CommonJS/espree override's `files` glob (override[3] at **`eslint.config.js:210–218`** — `['scripts/**/*.mjs','scripts/**/*.cjs','scripts/**/*.js']`, `globals: {...globals.node}`, relaxes `@typescript-eslint/no-require-imports`) to also match `'pinokio.js'` and `'pinokio/**/*.js'`. If a single override can't cleanly cover both, add a sibling override object with the same `languageOptions` targeting `['pinokio.js', 'pinokio/**/*.js']`.
 
-**P5:** ensure the override's `languageOptions.globals` includes the Node 20 web globals the helpers use — at minimum `fetch` and `URL` — or `npm run lint` fails `no-undef` on `resolve-release.js` (add them explicitly if the project's base Node globals set doesn't already provide them).
+**P5 (confirmed no-op by review):** the override uses `globals.node`, which already provides `fetch` and `URL`, so `resolve-release.js` lints clean — no explicit globals needed. Left here only as a watch-point if the globals set changes.
 
 - [ ] **Step 6: Run the harness to verify it's green (and a no-op so far)**
 
@@ -246,10 +247,8 @@ function highestSemverTag(tagNames) {
 module.exports = { latestReleaseTag, highestSemverTag };
 
 // ---- CLI (acceptance-tested, not unit-tested) ----
-const { execFileSync, existsSync } = (() => ({
-  execFileSync: require('node:child_process').execFileSync,
-  existsSync: require('node:fs').existsSync,
-}))();
+const { execFileSync } = require('node:child_process');
+const { existsSync } = require('node:fs');
 
 /** Resolve the tag to check out: API → published tag, 404 → exit, error → local fallback. */
 async function resolveTag() {
@@ -378,7 +377,7 @@ Create `pinokio/lib/write-env.js`:
 // CLI: `node pinokio/lib/write-env.js <appDir>` — invoked by pinokio/install.js.
 
 const { existsSync, readFileSync, writeFileSync } = require('node:fs');
-const { join, resolve } = require('node:path');
+const { resolve } = require('node:path');
 
 /**
  * Produce the .env contents, or null when .env already exists. Pure.
@@ -395,11 +394,9 @@ module.exports = { buildEnvContents };
 
 // ---- CLI (acceptance-tested) ----
 if (require.main === module) {
-  const appDir = process.argv[2];
-  if (!appDir) {
-    process.stderr.write('usage: node write-env.js <appDir>\n');
-    process.exit(1);
-  }
+  // appDir defaults to the app root (cwd) — install.js runs this from the repo
+  // root, so no {{cwd}} template is needed (R7).
+  const appDir = process.argv[2] || process.cwd();
   const examplePath = resolve('server', '.env.example');
   const envPath = resolve('server', '.env');
   const out = buildEnvContents({
@@ -448,22 +445,26 @@ const buildMenu = require('./menu.js');
 const hrefs = (items) => items.map((i) => i.href);
 const texts = (items) => items.map((i) => i.text);
 
-test('not installed → only Install', () => {
+test('not installed → only Install (primary, with icon)', () => {
   const items = buildMenu({ installed: false, running: false, url: null });
   assert.deepEqual(hrefs(items), ['pinokio/install.js']);
   assert.equal(items[0].text, 'Install');
+  assert.equal(items[0].default, true);
+  assert.match(items[0].icon, /^fa-/);
 });
 
-test('installed + stopped → Start, Update, Reset (in order)', () => {
+test('installed + stopped → Start (primary), Update, Reset (in order)', () => {
   const items = buildMenu({ installed: true, running: false, url: null });
   assert.deepEqual(texts(items), ['Start', 'Update', 'Reset']);
   assert.deepEqual(hrefs(items), ['pinokio/start.js', 'pinokio/update.js', 'pinokio/reset.js']);
+  assert.equal(items[0].default, true);
 });
 
-test('installed + running → Open Web UI (url), Stop, Update, Reset', () => {
+test('installed + running → Open Web UI (primary, url), Stop, Update, Reset', () => {
   const items = buildMenu({ installed: true, running: true, url: 'http://localhost:8080' });
   assert.deepEqual(texts(items), ['Open Web UI', 'Stop', 'Update', 'Reset']);
   assert.equal(items[0].href, 'http://localhost:8080');
+  assert.equal(items[0].default, true);
   assert.equal(items[1].href, 'pinokio/stop.js');
 });
 ```
@@ -487,17 +488,19 @@ Create `pinokio/lib/menu.js`:
 // @returns {Array<{text:string, href:string, target?:string}>}
 function buildMenu(state) {
   if (!state.installed) {
-    return [{ text: 'Install', href: 'pinokio/install.js' }];
+    return [{ default: true, icon: 'fa-solid fa-download', text: 'Install', href: 'pinokio/install.js' }];
   }
   const items = [];
   if (state.running) {
-    items.push({ text: 'Open Web UI', href: state.url, target: '_blank' });
-    items.push({ text: 'Stop', href: 'pinokio/stop.js' });
+    // Font Awesome `icon` + `default` match the shipping-app menu-item shape
+    // (no `target` — Pinokio opens the web UI itself). state.url is the captured URL.
+    items.push({ default: true, icon: 'fa-solid fa-rocket', text: 'Open Web UI', href: state.url });
+    items.push({ icon: 'fa-solid fa-stop', text: 'Stop', href: 'pinokio/stop.js' });
   } else {
-    items.push({ text: 'Start', href: 'pinokio/start.js' });
+    items.push({ default: true, icon: 'fa-solid fa-play', text: 'Start', href: 'pinokio/start.js' });
   }
-  items.push({ text: 'Update', href: 'pinokio/update.js' });
-  items.push({ text: 'Reset', href: 'pinokio/reset.js' });
+  items.push({ icon: 'fa-solid fa-rotate', text: 'Update', href: 'pinokio/update.js' });
+  items.push({ icon: 'fa-solid fa-trash', text: 'Reset', href: 'pinokio/reset.js' });
   return items;
 }
 
@@ -523,7 +526,7 @@ git commit -m "feat(scripts): pinokio menu state-mapping (ops-16)"
 **Files:**
 - Create: `pinokio.js`
 
-> **No unit test** — this file runs only inside Pinokio's runtime; `buildMenu` (Task 4) holds the tested logic. Validated in Task 10 acceptance. **Verification (open item 2):** confirm Pinokio supports `require('./pinokio/lib/menu.js')` from `pinokio.js`. If NOT supported, inline the `buildMenu` body into this file (the logic is unchanged and still covered by `menu.test.js` against the module copy).
+> **No unit test** — this file runs only inside Pinokio's runtime; `buildMenu` (Task 4) holds the tested logic. Validated in Task 10 acceptance. **Open verification 2 is now CLOSED (confirmed by review):** Pinokio scripts routinely `require()` local modules (e.g. FaceFusion's `menu: require(__dirname + '/menu.js')`), so `require('./pinokio/lib/menu.js')` is supported — no inlining needed.
 
 - [ ] **Step 1: Write the file**
 
@@ -532,8 +535,9 @@ Create `pinokio.js`:
 ```js
 // Castwright — Pinokio entry-point. Thin: derives state from Pinokio's runtime
 // accessors and delegates ordering to the unit-tested pinokio/lib/menu.js.
-// The `info`/`kernel` accessor names below are confirmed during on-box acceptance.
-const buildMenu = require('./pinokio/lib/menu.js');
+// Accessor shapes below match shipping Pinokio apps (TRELLIS/comfy/facefusion);
+// confirmed on-box in Task 10.
+const buildMenu = require(__dirname + '/pinokio/lib/menu.js');
 
 module.exports = {
   version: '1.0',
@@ -542,17 +546,20 @@ module.exports = {
   icon: 'icon.png',
   menu: async (kernel, info) => {
     const installed = info.exists('node_modules') && info.exists('server/.env');
-    // P2 — the server is DETACHED (start-app-prod.mjs:186), so it is NOT a
-    // Pinokio-tracked daemon. Derive "running" from the pid file the prod
-    // launcher writes (.run/server.pid), which stop:prod removes on clean stop.
-    const running = info.exists('.run/server.pid');
-    const url = (info.local && info.local.url) || null;
+    // R1 — start.js runs the server in the FOREGROUND under Pinokio with
+    // `daemon: true`, so Pinokio tracks it: info.running() is the idiomatic
+    // running-check (no pid-file polling).
+    const running = info.running('pinokio/start.js');
+    // R2 — info.local is a FUNCTION keyed by the script that set the local,
+    // not a property. start.js does local.set({ url }).
+    const local = info.local('pinokio/start.js');
+    const url = (local && local.url) || null;
     return buildMenu({ installed, running, url });
   },
 };
 ```
 
-> **P2 known limitation:** a crash leaves a stale `.run/server.pid` → a false "running" until the user runs Stop (which sweeps the pid files) or Reset. The normal Stop path removes the pid files, so no false positive there. Acceptance confirms the `info.exists` accessor name.
+> **R1 lifecycle (revises round-3 P2):** the server runs in the **foreground** under Pinokio (`daemon: true`), so Pinokio tracks it natively — `info.running()` reflects reality and Pinokio's own Stop sends `SIGTERM`, which the server's handler (`server/src/index.ts:494`) uses to tear down the sidecar. No `.run/server.pid` polling, no stale-pid edge. `stop.js` remains as a defensive `stop:prod` sweep. **#1 on-box verification:** confirm the foreground command (`node server/dist/index.js`) autostarts the sidecar and loads `server/.env`/`WORKSPACE_DIR` when launched from the app root; if not, set `WORKSPACE_DIR` explicitly in the `start.js` step env.
 
 - [ ] **Step 2: Pick the icon**
 
@@ -590,8 +597,10 @@ Create `pinokio/install.js`:
 // release, bootstraps the venv via the SHARED bootstrap-venv.mjs, writes .env.
 // Kokoro weights are deferred to the in-app fs-21 wizard at first run.
 //
-// API param spelling (conda/venv/on) is confirmed during on-box acceptance.
-const CONDA = { name: 'castwright', python: '3.12' };
+// conda is path-keyed (matches shipping apps); steps default to the app-root cwd
+// (Pinokio runs from the cloned repo root, where package.json lives), so no `path:`
+// override is needed for git/npm/build. Confirmed on-box in Task 10.
+const CONDA = { path: 'env', python: '3.12' }; // conda env created at <app>/env
 
 module.exports = {
   run: [
@@ -630,9 +639,11 @@ module.exports = {
       params: { conda: CONDA, message: 'node server/tts-sidecar/scripts/bootstrap-venv.mjs python' },
     },
     // 6. Write server/.env (idempotent) with WORKSPACE_DIR=<app>/workspace.
+    //    write-env.js defaults appDir to process.cwd() (the app root) — no {{cwd}}
+    //    template needed (R7: {{cwd}} is unconfirmed in shipping apps).
     {
       method: 'shell.run',
-      params: { conda: CONDA, message: 'node pinokio/lib/write-env.js {{cwd}}' },
+      params: { conda: CONDA, message: 'node pinokio/lib/write-env.js' },
     },
   ],
 };
@@ -663,23 +674,23 @@ git commit -m "feat(scripts): pinokio install/provisioning script (ops-16)"
 - [ ] **Step 1: Write `pinokio/start.js`**
 
 ```js
-// Castwright — Pinokio start. Launches the prod server inside the conda env.
-// The server detaches and spawns the sidecar itself (plan 43), then the launcher
-// process EXITS — so this is NOT a Pinokio daemon (no `daemon: true`, which would
-// read as a dead daemon the moment the launcher returns; P2). The `on:` matcher
-// with done:true lets Pinokio capture the [READY] URL before the step completes;
-// running-state is tracked via .run/server.pid in pinokio.js, and stop.js handles
-// teardown.
-const CONDA = { name: 'castwright', python: '3.12' };
+// Castwright — Pinokio start (R1, revises round-3 P2). Runs the built server in
+// the FOREGROUND under Pinokio's shell with `daemon: true`, so Pinokio tracks it
+// as a running daemon (powers info.running() + native Stop). The server autostarts
+// the sidecar (plan 43) and, on SIGTERM from Pinokio's Stop, tears it down
+// (server/src/index.ts:494). The `on:` matcher captures the ready URL — the server
+// prints `[server] listening on http://localhost:8080` (index.ts:320) — and
+// `done: true` advances to local.set while keeping the daemon alive.
+const CONDA = { path: 'env', python: '3.12' }; // path-keyed conda env at <app>/env
 
 module.exports = {
+  daemon: true,
   run: [
     {
       method: 'shell.run',
       params: {
         conda: CONDA,
-        env: { WORKSPACE_DIR: '{{cwd}}/workspace' },
-        message: 'node launch.mjs',
+        message: 'node server/dist/index.js',
         on: [{ event: '/http:\\/\\/localhost:8080/', done: true }],
       },
     },
@@ -688,13 +699,16 @@ module.exports = {
 };
 ```
 
+> **R1 on-box checks for start.js (the plan's highest-risk surface):** (1) `node server/dist/index.js` from the app root autostarts the sidecar and reads `server/.env` (incl. `WORKSPACE_DIR`); if it doesn't pick up `server/.env`, add `env: { WORKSPACE_DIR: '<resolved>/workspace' }` to the step. (2) Pinokio's native Stop SIGTERMs the daemon and the sidecar is reaped (no orphan on :9000). (3) `daemon: true` + `on:[{done:true}]` coexist (they do in every shipping app).
+
 - [ ] **Step 2: Write `pinokio/stop.js`**
 
 ```js
-// Castwright — Pinokio stop. The server is detached + spawns the sidecar, so a
-// shell-kill would orphan the sidecar (GPU/port held). stop:prod reads the pid
-// files, tree-kills server + sidecar, and sweeps :8080/:9000.
-const CONDA = { name: 'castwright', python: '3.12' };
+// Castwright — Pinokio stop. Pinokio's NATIVE Stop (SIGTERM to the daemon) is the
+// primary path and the server reaps the sidecar on SIGTERM. This explicit stop.js
+// is a defensive sweep: stop:prod reads the pid files, tree-kills any survivors,
+// and sweeps :8080/:9000 — covering the case where a child outlived the signal.
+const CONDA = { path: 'env', python: '3.12' };
 
 module.exports = {
   run: [
@@ -732,7 +746,7 @@ git commit -m "feat(scripts): pinokio start/stop lifecycle scripts (ops-16)"
 // Castwright — Pinokio update. Fetch tags, checkout the newest PUBLISHED release,
 // rebuild, re-bootstrap the venv. We own the detached-HEAD checkout explicitly
 // rather than using Pinokio's built-in git update.
-const CONDA = { name: 'castwright', python: '3.12' };
+const CONDA = { path: 'env', python: '3.12' };
 
 module.exports = {
   run: [
@@ -752,18 +766,17 @@ module.exports = {
 ```js
 // Castwright — Pinokio reset. Remove derived runtime (venv, node_modules, dist),
 // then reinstall from scratch. Does NOT touch server/.env or workspace/ (user data).
-// P4 — deletion via `node -e rmSync` (cross-platform, no dependency on a Pinokio
-// `fs.rm` method existing); reinstall via script.start (confirm method on-box).
-const RM = (p) => `node -e "require('fs').rmSync('${p}',{recursive:true,force:true})"`;
-
+// R5 — native `fs.rm` is the idiomatic, cross-platform reset primitive in every
+// shipping app (no node -e quoting hazard). R6 — script.start uri is sibling-
+// relative to this script's dir (pinokio/), so 'install.js', not 'pinokio/install.js'.
 module.exports = {
   run: [
-    { method: 'shell.run', params: { message: RM('server/tts-sidecar/.venv') } },
-    { method: 'shell.run', params: { message: RM('node_modules') } },
-    { method: 'shell.run', params: { message: RM('server/node_modules') } },
-    { method: 'shell.run', params: { message: RM('dist') } },
-    { method: 'shell.run', params: { message: RM('server/dist') } },
-    { method: 'script.start', params: { uri: 'pinokio/install.js' } },
+    { method: 'fs.rm', params: { path: 'server/tts-sidecar/.venv' } },
+    { method: 'fs.rm', params: { path: 'node_modules' } },
+    { method: 'fs.rm', params: { path: 'server/node_modules' } },
+    { method: 'fs.rm', params: { path: 'dist' } },
+    { method: 'fs.rm', params: { path: 'server/dist' } },
+    { method: 'script.start', params: { uri: 'install.js' } },
   ],
 };
 ```
@@ -869,7 +882,7 @@ Mark plan 218 `status:` appropriately (`active` until on-box acceptance lands; `
 
 **Spec coverage:** acquisition/public-repo (Task 5 menu + INSTALL §) ✓; self-contained conda provisioning (Task 6) ✓; build-from-latest-published-release w/ 404 vs network (Task 2 + Task 6) ✓; reuse bootstrap-venv/launch/stop:prod (Tasks 6–8) ✓; idempotent .env (Task 3) ✓; detached-server stop lifecycle (Task 7) ✓; menu/state (Task 4) ✓; no-release.yml-job (honored — no task touches it) ✓; testing via node:test island (Task 1) ✓; docs + regression plan (Task 9) ✓; two-layer venv / arm64 conda / icon notes (Tasks 6, 5; acceptance §) ✓.
 
-**Placeholder scan:** the declarative Pinokio scripts carry an explicit, scoped "confirm API spelling on-box" caveat (not a TODO — concrete content is provided). `{{cwd}}` is a Pinokio template variable, flagged for acceptance. The fragile `{{input.event[0]}}` cross-step capture was removed (P1) — fetch+checkout now live inside `resolve-release.js`.
+**Placeholder scan:** the declarative Pinokio scripts carry an explicit, scoped "confirm API spelling on-box" caveat (not a TODO — concrete content is provided). After round 4 the scripts match shipping-app idiom (path-keyed conda, `info.running`/`info.local(script)`, native `fs.rm`, `daemon: true` + foreground); the unconfirmed `{{cwd}}` token and the fragile `{{input.event[0]}}` cross-step capture were both removed (helpers use `process.cwd()`; fetch+checkout live inside `resolve-release.js`).
 
 **Type consistency:** `latestReleaseTag`/`highestSemverTag` (Task 2), `buildEnvContents` (Task 3), `buildMenu` (Task 4) signatures match their call sites in the CLIs and `pinokio.js`. Menu `href` values (`pinokio/install.js`, `pinokio/start.js`, `pinokio/stop.js`, `pinokio/update.js`, `pinokio/reset.js`) match the files created in Tasks 6–8.
 
