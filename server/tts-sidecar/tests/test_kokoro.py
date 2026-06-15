@@ -101,6 +101,91 @@ def fake_kokoro_module(monkeypatch):
     yield _FakeKokoro
 
 
+class _ProvidersKokoro:
+    """Kokoro stub whose constructor ACCEPTS a providers= kwarg (newer
+    kokoro-onnx releases), recording what it was given so a test can assert the
+    injected ORT provider list is honoured."""
+
+    last_providers: Any = "UNSET"
+
+    def __init__(self, model_path: str, voices_path: str, providers: Any = None) -> None:
+        _ProvidersKokoro.last_providers = providers
+        self._voices = list(_FAKE_VOICE_MANIFEST)
+
+    def get_voices(self) -> list[str]:
+        return list(self._voices)
+
+
+@pytest.fixture
+def providers_kokoro_module(monkeypatch):
+    """A kokoro_onnx whose Kokoro accepts + records providers=."""
+    _ProvidersKokoro.last_providers = "UNSET"
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _ProvidersKokoro  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+    yield _ProvidersKokoro
+
+
+def test_kokoro_honours_injected_ort_providers(
+    providers_kokoro_module, fake_weight_files, monkeypatch
+) -> None:
+    """KOKORO_ORT_PROVIDERS (the server's accelerator-profile injection) is
+    passed straight through to the Kokoro constructor."""
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")
+    assert providers_kokoro_module.last_providers == [
+        "DmlExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+
+def test_kokoro_no_providers_when_env_absent(
+    providers_kokoro_module, fake_weight_files, monkeypatch
+) -> None:
+    """With no KOKORO_ORT_PROVIDERS, no providers= is passed → kokoro-onnx
+    auto-detects (preserves today's behaviour)."""
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")
+    assert providers_kokoro_module.last_providers is None
+
+
+def test_kokoro_falls_back_when_constructor_rejects_providers(
+    fake_kokoro_module, fake_weight_files, monkeypatch
+) -> None:
+    """An older kokoro-onnx whose constructor has no providers= kwarg raises
+    TypeError; the engine must fall back to the no-arg construction and load."""
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider"]')
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")  # must not raise
+    assert engine._kokoro is not None
+
+
+def test_kokoro_importerror_remediation_is_profile_aware(
+    fake_weight_files, monkeypatch
+) -> None:
+    """The kokoro-onnx ImportError remediation names the right ONNX-runtime
+    package for THIS box's accelerator profile, not a hard-coded NVIDIA hint."""
+    # A kokoro_onnx module that lacks `Kokoro` makes `from kokoro_onnx import
+    # Kokoro` raise ImportError without needing the real package absent.
+    empty_mod = types.ModuleType("kokoro_onnx")
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", empty_mod)
+    monkeypatch.setattr(main.os, "name", "nt")  # force the Windows branch on any CI
+
+    monkeypatch.setenv("CASTWRIGHT_ACCELERATOR_PROFILE", "amd")
+    with pytest.raises(RuntimeError, match="onnxruntime-directml"):
+        main.KokoroEngine()._ensure_loaded("v1")
+
+    monkeypatch.setenv("CASTWRIGHT_ACCELERATOR_PROFILE", "nvidia")
+    with pytest.raises(RuntimeError, match="NVIDIA"):
+        main.KokoroEngine()._ensure_loaded("v1")
+
+    monkeypatch.setenv("CASTWRIGHT_ACCELERATOR_PROFILE", "cpu")
+    with pytest.raises(RuntimeError, match="plain onnxruntime"):
+        main.KokoroEngine()._ensure_loaded("v1")
+
+
 @pytest.fixture
 def fake_weight_files(monkeypatch, tmp_path):
     """Create empty weight + manifest files at the paths KokoroEngine

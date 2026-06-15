@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import logging
 import os
 import re
@@ -754,17 +755,53 @@ class KokoroEngine(Engine):
         # English subset of the voice manifest, populated at load time.
         self._voices: list[str] = []
 
+    @staticmethod
+    def _resolve_ort_providers() -> list[str]:
+        """The ONNX Runtime provider list to pass to Kokoro, parsed from the
+        KOKORO_ORT_PROVIDERS env var (a JSON string list the server injects from
+        the accelerator profile, e.g. ["DmlExecutionProvider","CPUExecutionProvider"]).
+        Returns [] when the env is unset/blank/malformed → kokoro-onnx
+        auto-detects (today's behaviour)."""
+        raw = os.environ.get("KOKORO_ORT_PROVIDERS")
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        if isinstance(parsed, list) and all(isinstance(p, str) for p in parsed):
+            return parsed
+        return []
+
     def _ensure_loaded(self, model: str) -> None:
         if self._kokoro is not None:
             return
         try:
             from kokoro_onnx import Kokoro  # type: ignore
         except ImportError as e:
+            # Profile-aware remediation: the right ONNX-runtime package depends on
+            # this box's accelerator profile (injected as CASTWRIGHT_ACCELERATOR_
+            # PROFILE), not a hard-coded "needs an NVIDIA GPU".
+            profile = os.environ.get("CASTWRIGHT_ACCELERATOR_PROFILE", "nvidia")
+            if profile == "amd" and os.name == "nt":
+                ort_pkg, ort_note = (
+                    "onnxruntime-directml",
+                    "onnxruntime-directml runs Kokoro on AMD-Windows via DirectML",
+                )
+            elif profile == "nvidia":
+                ort_pkg, ort_note = (
+                    "onnxruntime-gpu",
+                    "onnxruntime-gpu needs an NVIDIA GPU",
+                )
+            else:
+                ort_pkg, ort_note = (
+                    "onnxruntime",
+                    "plain onnxruntime is the CPU / macOS / AMD-Linux runtime",
+                )
             raise RuntimeError(
                 f"Failed to import kokoro-onnx ({e}). Install with: "
-                "`.\\.venv\\Scripts\\python.exe -m pip install kokoro-onnx onnxruntime-gpu` "
-                "in server/tts-sidecar (onnxruntime-gpu needs an NVIDIA GPU; on macOS / "
-                "CPU-only boxes install plain onnxruntime instead)."
+                f"`.\\.venv\\Scripts\\python.exe -m pip install kokoro-onnx {ort_pkg}` "
+                f"in server/tts-sidecar (accelerator profile '{profile}': {ort_note})."
             ) from e
 
         if not os.path.isfile(self._model_path):
@@ -779,12 +816,24 @@ class KokoroEngine(Engine):
             )
 
         log.info("Loading Kokoro model=%s voices=%s ...", self._model_path, self._voices_path)
-        # kokoro-onnx selects ONNX Runtime providers automatically — CUDA
-        # when onnxruntime-gpu is installed, CPU fallback otherwise. We
-        # don't pass a providers list explicitly because the constructor
-        # signature has shifted across kokoro-onnx releases; the auto-
-        # detection has been stable.
-        kokoro = Kokoro(self._model_path, self._voices_path)
+        # ORT providers: honour the injected KOKORO_ORT_PROVIDERS (the server
+        # resolves them from the accelerator profile — e.g. DirectML on
+        # AMD-Windows) when present, else let kokoro-onnx auto-detect (CUDA when
+        # onnxruntime-gpu is installed, CPU otherwise). The constructor's
+        # providers= kwarg has come and gone across kokoro-onnx releases, so a
+        # TypeError falls back to the proven no-arg construction.
+        providers = self._resolve_ort_providers()
+        if providers:
+            try:
+                kokoro = Kokoro(self._model_path, self._voices_path, providers=providers)
+            except TypeError:
+                log.warning(
+                    "kokoro-onnx ignored providers=%s (older release); using auto-detection.",
+                    providers,
+                )
+                kokoro = Kokoro(self._model_path, self._voices_path)
+        else:
+            kokoro = Kokoro(self._model_path, self._voices_path)
 
         # Enumerate the voice manifest. The API has drifted across kokoro-
         # onnx versions: older releases expose `voices` as a dict, newer
