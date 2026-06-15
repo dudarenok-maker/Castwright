@@ -76,10 +76,12 @@ per-sentence audio quality, not source fidelity).
 
 ### Automated coverage
 
-- Vitest server (`server/src/analyzer/stage2-coverage.test.ts`, 14 cases):
+- Vitest server (`server/src/analyzer/stage2-coverage.test.ts`, 16 cases):
   faithful pass, truncation, duplicated block, loop-and-truncate (ch18 shape),
   short-but-complete preface (no false positive), normal compression ~0.7 (no
-  false positive), tag tolerance, env + explicit thresholds, empty input; plus
+  false positive), tag tolerance, **non-Latin (Cyrillic) faithful pass +
+  truncated-still-flagged** (the 2026-06-15 fix below), env + explicit
+  thresholds, empty input; plus
   `runStage2WithCoverageGuard` — accepts good first try, retries-and-keeps-good,
   exhausts-and-keeps-least-bad, disabled at 0.
 - Real-data validation: `npm run audit:stage2-coverage` flags exactly The Drowning Bell
@@ -102,6 +104,31 @@ per-sentence audio quality, not source fidelity).
   distinct failure mode handled by plan
   [182](182-missing-speaker-roster-guard.md) (`roster-coverage.ts`), not this
   sentence-coverage guard.
+
+## Follow-up — non-Latin (Cyrillic) coverage fix (2026-06-15)
+
+A 9-chapter **Russian** book stalled in analysis: every chapter logged
+`Low coverage — attributed 0 words vs ~28 source (ratio 0.00 below 0.6)` and
+re-ran to the retry budget on every chunk. Root cause: `words()` normalised with
+`[^a-z0-9]`, which deleted every Cyrillic character — so the source prose AND its
+faithful attribution both collapsed to ~0 words → ratio 0.00 → a permanent false
+"truncated" verdict that no retry could clear. Fix: normalise letters/digits
+script-agnostically via `[^\p{L}\p{N}]+/gu`. Restores all three signals
+(coverage ratio, ending-tail, dup-block) for any script; English behaviour is
+unchanged (ASCII letters are `\p{L}`). Paired tests: faithful-Cyrillic-passes +
+truncated-Cyrillic-still-flagged.
+
+The **same `[^a-z0-9]` flaw** existed in the generation-side ASR content-QA gate
+(`tts/segment-asr-qa.ts` `normalizeForWer`); fixed identically in the same change.
+There it failed *safe* (empty expected text → `inconclusive`, no re-record), so it
+silently provided zero content-QA on non-English books rather than stalling — the
+fix makes the WER gate actually function on Russian (Whisper transcribes it fine).
+
+**Still ASCII-only (tracked separately):** character-id generation (`toKebabId`,
+`analysis.ts` slug, `workspace/paths.ts`) and cross-book name-match keys
+(`series-prior-dedup.ts`, `cast-series-patch.ts`, `voice-override-linked.ts`)
+collapse Cyrillic names to empty/colliding ids/keys. That touches persisted ids +
+on-disk filenames, so it is its own plan (see `docs/features/`), not this fix.
 
 ## Ship notes
 

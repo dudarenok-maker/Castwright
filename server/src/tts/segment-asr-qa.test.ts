@@ -33,6 +33,14 @@ describe('normalizeForWer', () => {
       'hello', 'she', 'said', 'softly',
     ]);
   });
+
+  it('keeps non-Latin (Cyrillic) words instead of erasing them', () => {
+    // Regression: the [^a-z0-9] strip deleted every Cyrillic char → 0 tokens →
+    // the WER gate silently no-op'd on every non-English book (2026-06-15).
+    expect(normalizeForWer('Она медленно шла по узкой улице.')).toEqual([
+      'она', 'медленно', 'шла', 'по', 'узкой', 'улице',
+    ]);
+  });
 });
 
 describe('classifyTranscript', () => {
@@ -105,6 +113,23 @@ describe('classifyTranscript', () => {
   it('short sentences are not scored → inconclusive', () => {
     const c = classifyTranscript('Yes.', 'No.', CLEAN);
     expect(c.verdict).toBe('inconclusive');
+  });
+
+  it('scores a faithful non-Latin (Cyrillic) transcript → ok, wer 0', () => {
+    // Before the Unicode fix the expected text normalised to [] → the gate
+    // returned inconclusive (no content-QA at all) on every Russian book.
+    const ru = 'Она медленно шла по узкой пустынной улице.';
+    const c = classifyTranscript(ru, ru, CLEAN);
+    expect(c.verdict).toBe('ok');
+    expect(c.wer).toBe(0);
+  });
+
+  it('still flags wrong words in a Cyrillic transcript → drift', () => {
+    const expected = 'Она медленно шла по узкой пустынной улице.';
+    const heard = 'Собака быстро бежала через широкое зелёное поле.';
+    const c = classifyTranscript(expected, heard, CLEAN);
+    expect(c.verdict).toBe('drift');
+    expect(c.wer).toBeGreaterThan(0.4);
   });
 });
 

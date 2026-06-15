@@ -77,13 +77,20 @@ function resolveThresholds(override?: Stage2CoverageThresholds): Stage2CoverageT
 
 /** Lowercase, drop inline [tags], collapse to alphanumeric words. The same
     normalisation is applied to the source prose and the attributed text so the
-    comparison is robust to punctuation, smart quotes, casing, and emotion tags. */
+    comparison is robust to punctuation, smart quotes, casing, and emotion tags.
+
+    Letters/digits are matched script-agnostically via the Unicode \p{L}\p{N}
+    classes (NOT [a-z0-9]): an ASCII-only filter erased every Cyrillic/CJK/
+    accented character, so a non-Latin chapter's prose AND its faithful
+    attribution both collapsed to ~0 words → ratio 0.00 → flagged "truncated"
+    on every retry forever (the 2026-06-15 Russian-book stuck run). English
+    behaviour is unchanged (ASCII letters are \p{L}). */
 function words(text: string): string[] {
   return (text || '')
     .replace(/\[[^\]]*\]/g, ' ')
     .toLowerCase()
     .replace(/[’']/g, '')
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim()
     .split(/\s+/)
     .filter(Boolean);
