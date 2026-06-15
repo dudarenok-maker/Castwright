@@ -667,6 +667,25 @@ def test_vram_recycle_threshold_parsing(monkeypatch):
     assert main._vram_recycle_soft_threshold_mb(8000.0) == pytest.approx(7200.0)
 
 
+def test_unknown_vram_disables_vram_recycle_amd_fail_safe(monkeypatch):
+    """AMD phase 2 fail-safe: when VRAM is unreadable (DirectML-only box, or torch
+    GPU unavailable) the VRAM read returns None → both VRAM ceilings derive to 0 →
+    the VRAM hard-restart and soft-recycle are DISABLED, so the host-RAM watchdog
+    is the sole governor. A ROCm box (readable total) keeps full VRAM protection."""
+    monkeypatch.delenv("SIDECAR_VRAM_RECYCLE_SOFT_MB", raising=False)
+    monkeypatch.delenv("SIDECAR_VRAM_RESTART_MB", raising=False)
+    # Unknown VRAM (e.g. DirectML-only): the probe yields no total.
+    _, _, total = (None, None, None)
+    soft = main._vram_recycle_soft_threshold_mb(total)
+    hard = main._vram_restart_threshold_mb(total)
+    assert soft == 0.0 and hard == 0.0
+    # With 0 ceilings, no committed value can trip a VRAM recycle/restart.
+    assert main._should_restart(10**9, hard) is False
+    assert main._should_soft_recycle(10**9, soft, hard) is False
+    # ROCm box (readable total) → ceilings active again (full protection).
+    assert main._vram_restart_threshold_mb(8000.0) == pytest.approx(7840.0)
+
+
 def test_watchdog_vram_soft_sets_recycle_pending(monkeypatch):
     """Reserved VRAM in [soft, hard) flags `recycle_pending` (the SAME flag the
     host soft-recycle uses) and does NOT exit. Host ceilings disabled so only the

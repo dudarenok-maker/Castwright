@@ -2132,7 +2132,15 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
     (logged at load), so a fragmented reserved pool that creeps past the physical
     card spills into the NVIDIA sysmem fallback and collapses RTF; `empty_cache()`
     can't compact it back, so only a fresh process resets it. That's why a
-    reserved-VRAM ceiling (not allocated) is the right recycle trigger."""
+    reserved-VRAM ceiling (not allocated) is the right recycle trigger.
+
+    Vendor-neutral (AMD phase 2): a ROCm torch build reports `torch.cuda.is_
+    available()` True (HIP aliases the CUDA API), so memory_reserved /
+    get_device_properties read the AMD card and the VRAM recycle protects ROCm
+    boxes the same as NVIDIA. A box with no torch-visible GPU (DirectML-only, or
+    torch CUDA/ROCm unavailable) returns (None, None, None) → the ceilings below
+    derive to 0 (disabled) and the host-RAM watchdog governs instead (the
+    unknown-VRAM fail-safe — never guess a ceiling that could fire on a healthy box)."""
     try:
         import torch  # type: ignore
 
