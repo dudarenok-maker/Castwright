@@ -67,7 +67,7 @@ export function ensureWorkspace(): void {
     map EVERY Russian book to `untitled__standalones__untitled`. ASCII output is
     byte-identical to the pre-219 slug. */
 export function slug(s: string): string {
-  return (unicodeKebab(s).slice(0, 80).replace(/-+$/g, '') || 'untitled');
+  return unicodeKebab(s).slice(0, 80).replace(/-+$/g, '') || 'untitled';
 }
 
 export const STANDALONES_SERIES = 'Standalones';

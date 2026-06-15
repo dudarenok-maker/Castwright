@@ -147,6 +147,12 @@ _Full detail + acceptance:_ [#431](https://github.com/dudarenok-maker/AudioBook-
 - _Benefit (technical):_ keeps the companion buildable on future Flutter versions before the temporary KGP support is dropped (avoids a hard build failure later). Not a current break.
 _Full detail + acceptance:_ [#790](https://github.com/dudarenok-maker/Castwright/issues/790).
 
+#### `srv-40` — Non-Latin (Cyrillic) book support: on-box acceptance ([#823](https://github.com/dudarenok-maker/Castwright/issues/823))
+
+- _What:_ Plan [219](docs/features/219-non-latin-names-and-ids.md) (Unicode-aware coverage/ASR normalizers, `safe-id.ts` chokepoint, `makeBookId`/`slug`, cross-book keys, hardened sidecar/voice-sample filename boundaries) is merged with unit/pytest coverage. The off-box-unverifiable bits remain: a full analyze→generate→export of a Cyrillic book on Windows (ffmpeg + Cyrillic paths — pre-existing risk via `bookDirByDisplay`), real model-id shapes for Cyrillic names, and cross-book voice carryover for a Russian series.
+- _Benefit (user):_ non-English (Cyrillic, and other non-Latin) books work end-to-end instead of silently colliding ids / dead cross-book reuse / a stalled analysis.
+_Full detail + acceptance:_ [#823](https://github.com/dudarenok-maker/Castwright/issues/823).
+
 ### Companion app
 
 _The three items below are the companion-app follow-ups left after the Android v1 shipped
