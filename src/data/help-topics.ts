@@ -39,6 +39,20 @@ export const HELP_TOPICS: HelpTopic[] = [
       'Resource trends panel shows the per-chapter speed history.',
   },
   {
+    id: 'amd-gpu',
+    title: 'AMD GPU — running on CPU / experimental',
+    body:
+      'AMD GPU support is an experimental preview. On an AMD machine Qwen and Coqui run on ROCm, ' +
+      'but Kokoro always runs on the CPU — DirectML cannot run the Kokoro voice model, so that is ' +
+      'expected, not a fault. If the About panel shows the engines on CPU (with an "experimental" ' +
+      'note) even though you have an AMD GPU, the ROCm install fell back to CPU so the app would ' +
+      'still work. To get ROCm acceleration: update your AMD driver (Windows: the latest Adrenalin), ' +
+      'confirm your GPU is ROCm-supported, then reinstall the voice engine (delete its .venv and ' +
+      're-bootstrap) — your books and designed voices are safe, they live in the workspace, not the ' +
+      'venv. To stay on CPU and silence the warning, set the Accelerator to CPU in Advanced ' +
+      'settings; changing the accelerator rebuilds the Python environment, so it is not instant.',
+  },
+  {
     id: 'phone-cant-reach',
     title: "My phone can't reach the app (LAN / HTTPS)",
     body:
