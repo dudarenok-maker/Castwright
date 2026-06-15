@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import hashlib
 import json
 import logging
 import os
@@ -1295,7 +1296,16 @@ class QwenEngine(Engine):
             log.info("Qwen VoiceDesign loaded.")
 
     def _voice_paths(self, voice_id: str) -> tuple[str, str]:
+        # Filename-safe id. For an already-ASCII voice_id this is the identity
+        # (so every voice designed before plan 219 keeps its exact filename — no
+        # orphaning). When the sanitisation IS lossy — a non-Latin (e.g.
+        # Cyrillic) id, where `re.sub` would flatten every char to `_` and two
+        # distinct characters could collide on the same file — append a short
+        # stable hash of the ORIGINAL id so the mapping stays injective.
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", voice_id)
+        if safe != voice_id:
+            digest = hashlib.sha1(voice_id.encode("utf-8")).hexdigest()[:8]
+            safe = f"{safe}-{digest}"
         return (
             os.path.join(self._voices_dir, f"{safe}.pt"),
             os.path.join(self._voices_dir, f"{safe}.json"),
