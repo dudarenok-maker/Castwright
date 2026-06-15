@@ -28,6 +28,7 @@ const TITLES = {
   'synth-timeout': 'Chapter synthesis timed out',
   'xtts-speaker-desync': 'Voice catalog out of sync',
   'cuda-poisoned': 'GPU error (auto-recovering)',
+  'gpu-acceleration-unavailable': 'Running on CPU (GPU acceleration unavailable)',
   auth: 'Gemini API key problem',
   unknown: 'Unrecognised error',
 } satisfies Record<FailureCode, string>;

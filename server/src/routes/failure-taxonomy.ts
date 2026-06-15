@@ -41,6 +41,7 @@ export type FailureCode =
   | 'synth-timeout'
   | 'xtts-speaker-desync'
   | 'cuda-poisoned'
+  | 'gpu-acceleration-unavailable'
   | 'auth'
   | 'unknown';
 
@@ -237,6 +238,19 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     source: 'generation',
     match: (raw) =>
       /device-side assert|CUDA error|CUDA kernel errors|"poisoned":\s*true/i.test(raw),
+  },
+  /* AMD phase 2 — GPU acceleration unavailable (no compatible GPU / driver too
+     old / unsupported gfx / DirectML op unsupported): the engine runs on CPU.
+     Non-fatal — CPU synthesis still works, just slower. A distinctive phrase so
+     it can't shadow the specific CUDA/VRAM signatures above. */
+  {
+    code: 'gpu-acceleration-unavailable',
+    fatal: false,
+    source: 'both',
+    match: (raw) =>
+      /GPU acceleration (is )?unavailable|no compatible (GPU|accelerator) (found|detected)/i.test(
+        raw,
+      ),
   },
   /* Placed LAST among the specific signatures: "model not loaded" / a 503 while
      loading. After the sidecar-unreachable check (a down sidecar is the more

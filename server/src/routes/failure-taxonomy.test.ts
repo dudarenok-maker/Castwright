@@ -275,6 +275,14 @@ describe('analysis-side codes (spec A2)', () => {
   it('attribution-incomplete has copy (synthetic code, no signature)', () => {
     expect(FAILURE_REMEDIATIONS['attribution-incomplete'].remediation.length).toBeGreaterThan(0);
   });
+  it('classifies a GPU-acceleration-unavailable message without shadowing CUDA/VRAM (AMD phase 2)', () => {
+    expect(
+      classifyFailure(new Error('GPU acceleration unavailable — no compatible GPU detected')).code,
+    ).toBe('gpu-acceleration-unavailable');
+    // the distinctive phrase must NOT swallow the specific GPU error signatures
+    expect(classifyFailure(new Error('CUDA error: device-side assert')).code).toBe('cuda-poisoned');
+    expect(classifyFailure(new Error('CUDA out of memory')).code).toBe('vram-spill');
+  });
 });
 
 describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
@@ -290,6 +298,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'auth',
         'cuda-poisoned',
         'disk-full',
+        'gpu-acceleration-unavailable',
         'model-not-loaded',
         'oom',
         'recycle-storm',

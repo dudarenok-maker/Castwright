@@ -4466,6 +4466,7 @@ components:
         - analyzer-unreachable
         - analyzer-content-blocked
         - attribution-incomplete
+        - gpu-acceleration-unavailable
 
     ChapterQaVerdict:
       type: object
