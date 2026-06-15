@@ -123,15 +123,11 @@ describe('buildSidecarEnv injects the accelerator profile + Kokoro ORT providers
     ]);
   });
 
-  it('ACCELERATOR=amd → amd profile; DirectML in the providers on win32, CPU elsewhere', () => {
+  it('ACCELERATOR=amd → amd profile; Kokoro ORT providers are CPU-only (DirectML disabled, S0.1)', () => {
     process.env.ACCELERATOR = 'amd';
     const env = buildSidecarEnv(base);
     expect(env.CASTWRIGHT_ACCELERATOR_PROFILE).toBe('amd');
-    const providers = JSON.parse(env.KOKORO_ORT_PROVIDERS as string);
-    expect(providers).toEqual(
-      process.platform === 'win32'
-        ? ['DmlExecutionProvider', 'CPUExecutionProvider']
-        : ['CPUExecutionProvider'],
-    );
+    // S0.1 found DirectML can't run the Kokoro model → CPU EP on every OS.
+    expect(JSON.parse(env.KOKORO_ORT_PROVIDERS as string)).toEqual(['CPUExecutionProvider']);
   });
 });

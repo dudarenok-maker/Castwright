@@ -139,8 +139,16 @@ NVIDIA/Apple/CPU. It must **not be released** until the 🔴 on-AMD acceptance
 3. **Unknown-VRAM fail-safe:** a DirectML-only box (no torch GPU) reads VRAM as
    None → VRAM ceilings derive to 0 → VRAM recycle/eviction disable; the host-RAM
    watchdog governs. ROCm boxes keep full VRAM protection. (`test_memory.py`.)
-4. **DirectML proof-or-fallback:** Kokoro runs a one-time DML self-test; failure →
-   CPU EP (honest `cpu` in `/health`), cached so it runs at most once.
+4. **AMD Kokoro = CPU (S0.1 RESOLVED on-box 2026-06-15):** DirectML cannot run the
+   Kokoro model — `onnxruntime-directml` 1.24.4 (latest) errors on the
+   `/encoder/F0.1/pool/ConvTranspose` node while the same inputs synthesize on the
+   CPU EP; four session-option workarounds (disable-opt, basic-opt, no-mem-pattern,
+   explicit device_id) all failed. So the AMD profile ships **Kokoro on CPU** and
+   installs plain `onnxruntime` (no `onnxruntime-directml`). The DirectML
+   infrastructure (the cached self-test, the `directml` family mapping/label, the
+   `install-ort` swap keyed on the recipe) is retained so re-enabling is a one-line
+   revert if a future ORT / re-exported model fixes ConvTranspose. Qwen/Coqui still
+   ride ROCm torch (Wave H2 owed).
 
 **Plan deviations / reconciliations (folded in, all flagged in commits):**
 - **A4 (Python-3.12 acquisition)** — already shipped in Phase 1; skipped.
@@ -164,13 +172,19 @@ NVIDIA/Apple/CPU. It must **not be released** until the 🔴 on-AMD acceptance
 - **`model-hashes.json` torch wheel sha256** and the **min `onnxruntime-directml`
   version** — OWED on AMD hardware (Wave H1/H2).
 
-**Wave H — on-AMD acceptance (🔴 OWED — gates RELEASE):** H1 Kokoro-on-DirectML
-runs the model (record the min `onnxruntime-directml` version, else flip to CPU);
-H2 ROCm wheels import + Coqui/Qwen synth on torch 2.8 (record sha256s); H3 the exact
-`onnxruntime-directml` install ordering; H4 full AMD-Windows fresh-install + upgrade
-pipeline + `/about` backends; H5 dual-GPU→nvidia + `ACCELERATOR=cpu` override rebuild.
-A **partial H1 (DirectML)** may be attemptable on the author's AMD Radeon 780M iGPU
-(DX12); ROCm (H2) is not — the 780M isn't a supported ROCm part.
+**Wave H — on-AMD acceptance (🔴 OWED — gates RELEASE):**
+- **H1 — DONE / FAILED (2026-06-15, AMD Radeon 780M iGPU + onnxruntime-directml
+  1.24.4):** Kokoro-on-DirectML errors at `/encoder/F0.1/pool/ConvTranspose`
+  (`0x80070005`); CPU EP runs the same inputs fine; no session-option workaround
+  helps; 1.24.4 is the latest published build. **Verdict: DirectML disabled,
+  Kokoro → CPU** (flipped in code). H3 (the directml install ordering) is moot
+  while disabled. Re-open if onnx-community ships a ConvTranspose-fixed model.
+- **H2 — OWED (needs a supported AMD card):** install the ROCm wheels, `import
+  torch` (`cuda.is_available()` True on AMD), Coqui/Qwen synth on torch 2.8; record
+  the wheel sha256s. The 780M is **not** a ROCm-supported part, so this can't be
+  run here — it needs an AMD-owning tester with a supported GPU.
+- **H4** full AMD fresh-install + upgrade pipeline + `/about` backends; **H5**
+  dual-GPU→nvidia + `ACCELERATOR=cpu` override rebuild — both owed to AMD hardware.
 
 ## Out of scope
 

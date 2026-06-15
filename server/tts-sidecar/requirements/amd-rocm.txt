@@ -8,10 +8,10 @@
 # needed; in-core torchaudio I/O). Same shape as nvidia-cuda.txt / cpu.txt.
 coqui-tts>=0.24.0
 
-# Kokoro v1 — plain (no [gpu] extra). On AMD-Windows the installer swaps the
-# transitive `onnxruntime` for `onnxruntime-directml` after this file (the ORT
-# uninstall/reinstall ordering in install-kokoro — DirectML can't co-exist with
-# the base onnxruntime module). On AMD-Linux Kokoro stays on the CPU EP.
+# Kokoro v1 — plain (no [gpu] extra) → the CPU onnxruntime EP on every OS. S0.1
+# (2026-06-15) found DirectML CANNOT run the Kokoro model (ConvTranspose fails on
+# onnxruntime-directml; the CPU EP works), so the AMD profile does NOT swap in
+# onnxruntime-directml — Kokoro runs on CPU here while Qwen/Coqui ride ROCm torch.
 kokoro-onnx>=0.4.0,<0.5.0
 
 # torch + torchaudio are NOT pinned here. The AMD profile installs the ROCm

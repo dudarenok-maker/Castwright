@@ -99,12 +99,15 @@ def test_predict_kokoro_device_directml_and_rocm() -> None:
 
 
 def test_predictions_amd_rocm_box() -> None:
-    """AMD-Windows: Qwen/Coqui ride ROCm (torch HIP build), Kokoro DirectML."""
+    """AMD-Windows: Qwen/Coqui ride ROCm (torch HIP build); Kokoro is CPU — S0.1
+    found DirectML can't run the Kokoro model, so the sidecar gets CPU ORT
+    providers. (The Dml→directml family mapping itself is still covered by
+    test_predict_kokoro_device_directml_and_rocm, for if it's ever re-enabled.)"""
     out = main._compute_device_predictions(
         _StubTorch(cuda=True, hip=True),
-        _StubOrt(["DmlExecutionProvider", "CPUExecutionProvider"]),
+        _StubOrt(["CPUExecutionProvider"]),
     )
-    assert out == {"kokoro": "directml", "coqui": "rocm", "qwen": "rocm"}
+    assert out == {"kokoro": "cpu", "coqui": "rocm", "qwen": "rocm"}
 
 
 def test_predictions_apple_silicon() -> None:

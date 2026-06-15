@@ -122,10 +122,11 @@ describe('runtimeBackend', () => {
   it('amd torch engines → rocm (HIP aliases cuda at runtime)', () => {
     expect(runtimeBackend('amd', 'qwen', 'win32')).toBe('rocm');
   });
-  // PROVISIONAL (P2): 'directml' is the INTENDED value but is what spike S0.1 tests;
-  // Phase 2 flips this to 'cpu' if DirectML can't run the Kokoro model. Dormant, so safe.
-  it('amd Kokoro on Windows → directml [provisional, S0.1]; on Linux → cpu', () => {
-    expect(runtimeBackend('amd', 'kokoro', 'win32')).toBe('directml');
+  // S0.1 RESOLVED (2026-06-15, on-box): DirectML can't run the Kokoro model
+  // (ConvTranspose fails on onnxruntime-directml 1.24.4; CPU EP works), so AMD
+  // Kokoro is CPU on every OS.
+  it('amd Kokoro → cpu on every OS (S0.1 found DirectML can’t run the model)', () => {
+    expect(runtimeBackend('amd', 'kokoro', 'win32')).toBe('cpu');
     expect(runtimeBackend('amd', 'kokoro', 'linux')).toBe('cpu');
   });
   it('apple torch → mps, apple kokoro → cpu', () => {
@@ -142,12 +143,10 @@ describe('ortProviders', () => {
   it('nvidia → CUDA then CPU', () => {
     expect(ortProviders('nvidia', 'win32')).toEqual(['CUDAExecutionProvider', 'CPUExecutionProvider']);
   });
-  // PROVISIONAL (P2/Q2): same S0.1 gate as runtimeBackend — if DirectML can't run the
-  // Kokoro model, Phase 2 flips this to ['CPUExecutionProvider']. Dormant, so safe.
-  it('amd+win → DirectML then CPU [provisional, S0.1]', () => {
-    expect(ortProviders('amd', 'win32')).toEqual(['DmlExecutionProvider', 'CPUExecutionProvider']);
-  });
-  it('amd+linux and cpu → CPU only', () => {
+  // S0.1 RESOLVED — DirectML can't run Kokoro, so AMD is CPU-only for ORT on
+  // every OS (no DmlExecutionProvider).
+  it('amd → CPU only on every OS (DirectML disabled after S0.1)', () => {
+    expect(ortProviders('amd', 'win32')).toEqual(['CPUExecutionProvider']);
     expect(ortProviders('amd', 'linux')).toEqual(['CPUExecutionProvider']);
     expect(ortProviders('cpu', 'win32')).toEqual(['CPUExecutionProvider']);
   });
@@ -163,14 +162,15 @@ describe('installRecipe', () => {
   });
   // S0.2 desk-pass-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4, cp312).
   // Import-ability + synthesis are OWED on real AMD hardware (Wave H2). torch 2.8
-  // < 2.9 → coqui-tts without [codec]; ORT is onnxruntime-directml on Windows.
-  it('amd torchPreinstall = the pinned ROCm 6.4.4 cp312 wheels (win); empty on linux', () => {
+  // < 2.9 → coqui-tts without [codec]. ORT is plain onnxruntime (NOT directml):
+  // S0.1 found DirectML can't run the Kokoro model, so Kokoro stays on the CPU EP.
+  it('amd torchPreinstall = the pinned ROCm 6.4.4 cp312 wheels (win); plain onnxruntime (no directml)', () => {
     const r = installRecipe('amd', 'win32');
     expect(r.torchPreinstall.wheels).toEqual([
       'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torch-2.8.0a0+gitfc14c65-cp312-cp312-win_amd64.whl',
       'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl',
     ]);
-    expect(r.ortPackage).toBe('onnxruntime-directml');
+    expect(r.ortPackage).toBe('onnxruntime');
     // Linux ROCm wheels are resolved in Wave H; the win-only list is empty there.
     const l = installRecipe('amd', 'linux');
     expect(l.torchPreinstall.wheels).toEqual([]);

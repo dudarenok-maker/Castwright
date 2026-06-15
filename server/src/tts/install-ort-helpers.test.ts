@@ -3,16 +3,12 @@ import { describe, it, expect } from 'vitest';
 import { planOrtSwap } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 describe('planOrtSwap', () => {
-  it('amd+win → uninstall base onnxruntime, then install onnxruntime-directml (ordered)', () => {
-    const p = planOrtSwap('amd', 'win32');
-    expect(p.action).toBe('swap');
-    expect(p.steps).toEqual([
-      ['uninstall', '-y', 'onnxruntime'],
-      ['install', 'onnxruntime-directml'],
-    ]);
-  });
-
-  it('amd+linux → skip (base onnxruntime / CPU EP is correct; no DirectML)', () => {
+  // S0.1 RESOLVED (2026-06-15): DirectML can't run the Kokoro model, so the AMD
+  // profile installs plain onnxruntime (CPU EP) — no onnxruntime-directml swap on
+  // any OS. The swap logic stays (keyed on installRecipe.ortPackage ===
+  // 'onnxruntime-directml') so re-enabling DirectML later is a one-line revert.
+  it('amd → skip on every OS (DirectML disabled; plain onnxruntime, no swap)', () => {
+    expect(planOrtSwap('amd', 'win32').action).toBe('skip');
     expect(planOrtSwap('amd', 'linux').action).toBe('skip');
   });
 

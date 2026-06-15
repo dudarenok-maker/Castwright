@@ -96,17 +96,19 @@ export function resolveInstallProfile({ envOverride, stampProfile, platform, exe
  * @returns {'cuda'|'rocm'|'directml'|'cpu'|'mps'}
  */
 export function runtimeBackend(profile, engine, platform) {
+  void platform; // kept in the signature (per-platform by design); unused since the
+  // S0.1 flip made AMD Kokoro CPU on every OS — a directml re-enable would use it.
   const isTorch = engine === 'qwen' || engine === 'coqui';
   if (profile === 'nvidia') return 'cuda';
   if (profile === 'apple') return isTorch ? 'mps' : 'cpu';
   if (profile === 'amd') {
     if (isTorch) return 'rocm';
-    // PROVISIONAL (P2): the AMD-Windows Kokoro backend is exactly what spike S0.1
-    // tests. We encode the INTENDED 'directml' here, but if S0.1 finds DirectML
-    // can't run the Kokoro model (the ConvTranspose issue), Phase 2 flips this — and
-    // this test case — to 'cpu'. The value is dormant in Phase 1, so a later flip is
-    // a one-line change + one test edit, not a behavior regression.
-    return platform === 'win32' ? 'directml' : 'cpu'; // Kokoro: DML only on Windows
+    // S0.1 RESOLVED (2026-06-15, on-box): DirectML CANNOT run the Kokoro model —
+    // onnxruntime-directml 1.24.4 errors on the `/encoder/F0.1/pool/ConvTranspose`
+    // node (the same inputs synthesize fine on the CPU EP), an EP-level op
+    // limitation, not silicon-specific. So Kokoro on AMD stays CPU on every OS.
+    // (Revisit if a future onnxruntime-directml gains ConvTranspose support.)
+    return 'cpu';
   }
   return 'cpu';
 }
@@ -118,10 +120,9 @@ export function runtimeBackend(profile, engine, platform) {
  */
 export function ortProviders(profile, platform) {
   if (profile === 'nvidia') return ['CUDAExecutionProvider', 'CPUExecutionProvider'];
-  // PROVISIONAL (P2/Q2): amd+win DirectML is gated by spike S0.1 — Phase 2 flips this to
-  // ['CPUExecutionProvider'] if DirectML can't run the Kokoro model. Dormant in Phase 1.
-  if (profile === 'amd' && platform === 'win32')
-    return ['DmlExecutionProvider', 'CPUExecutionProvider'];
+  // S0.1 RESOLVED (2026-06-15): DirectML can't run the Kokoro model (ConvTranspose
+  // fails on onnxruntime-directml; CPU EP works), so AMD Kokoro is CPU on every OS.
+  void platform;
   return ['CPUExecutionProvider'];
 }
 
@@ -157,7 +158,10 @@ export function installRecipe(profile, platform) {
               ]
             : [],
       },
-      ortPackage: platform === 'win32' ? 'onnxruntime-directml' : 'onnxruntime',
+      // S0.1 RESOLVED (2026-06-15): DirectML can't run the Kokoro model, so the
+      // AMD profile installs plain onnxruntime (CPU EP for Kokoro) on every OS —
+      // no onnxruntime-directml. Qwen/Coqui still ride ROCm via the torch wheels.
+      ortPackage: 'onnxruntime',
     };
   }
   // cpu / apple — Phase-2 improvement, not today's behavior
