@@ -1,4 +1,5 @@
-# Layered requirements. Phase 1 ships base + nvidia-cuda only; this shim is the sole
-# install path and preserves today's NVIDIA set. cpu/amd overlays + profile selection = Phase 2.
-# The split lives under requirements/ (base.txt = vendor-neutral, nvidia-cuda.txt = torch engines).
+# Layered requirements. The active overlay (nvidia-cuda / cpu / amd-rocm) is selected
+# by the accelerator profile resolver at install time; this shim preserves the legacy
+# NVIDIA default for any caller that still runs `pip install -r requirements.txt`.
+# The split lives under requirements/ (base.txt = vendor-neutral, <profile>.txt = engines).
 -r requirements/nvidia-cuda.txt

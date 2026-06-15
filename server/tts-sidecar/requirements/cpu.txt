@@ -1,0 +1,26 @@
+# CPU overlay (no GPU). Vendor-neutral base + the torch engines on a CPU runtime.
+# Selected by the accelerator profile resolver when no supported GPU is detected
+# (or ACCELERATOR=cpu). Differs from nvidia-cuda.txt only in the ONNX runtime:
+# plain `onnxruntime` (CPU EP) instead of the onnxruntime-gpu the [gpu] extra pulls.
+-r base.txt
+
+# Coqui fork (the original `TTS` is discontinued / won't install on >=3.12).
+# DROP the `[codec]` extra: torchcodec is only needed on torch >=2.9 and only
+# ships cores for FFmpeg 4–7 (we ship FFmpeg 8). We pin torch 2.8 (< 2.9), so
+# torchaudio keeps in-core audio I/O and torchcodec is unnecessary.
+coqui-tts>=0.24.0
+
+# torch + torchaudio — EXPLICIT, matched, pinned (coqui-tts 0.27.5 dropped the
+# transitive torch dep). No index here: PyPI gives a CUDA-bundled wheel on
+# win/linux x86_64 that runs fine on a CPU box (it falls back to CPU). For a lean
+# CPU-only build the installer pre-installs the cpu-index wheel BEFORE this file
+# (install-torch.mjs, cpu profile → https://download.pytorch.org/whl/cpu); the
+# ==2.8.0 pins below then stay satisfied.
+torch==2.8.0
+torchaudio==2.8.0
+
+# Kokoro v1 — plain (no [gpu] extra) so the CPU/CoreML onnxruntime is used; the
+# explicit onnxruntime below is the CPU execution provider. Run
+# scripts/install-kokoro.{ps1,sh} once to fetch the model + voices manifest.
+kokoro-onnx>=0.4.0,<0.5.0
+onnxruntime

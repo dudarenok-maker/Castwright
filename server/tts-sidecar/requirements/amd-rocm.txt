@@ -1,0 +1,22 @@
+# AMD-ROCm overlay (Phase 2 — AMD GPU enablement). Selected by the accelerator
+# profile resolver when an AMD GPU is the effective profile (ACCELERATOR=amd /
+# detected AMD with no NVIDIA present). torch (ROCm) + DirectML are installed by
+# the resolver-driven install scripts, NOT pinned here — see the notes below.
+-r base.txt
+
+# Coqui fork, WITHOUT the `[codec]` extra (torch 2.8 < 2.9 → torchcodec not
+# needed; in-core torchaudio I/O). Same shape as nvidia-cuda.txt / cpu.txt.
+coqui-tts>=0.24.0
+
+# Kokoro v1 — plain (no [gpu] extra). On AMD-Windows the installer swaps the
+# transitive `onnxruntime` for `onnxruntime-directml` after this file (the ORT
+# uninstall/reinstall ordering in install-kokoro — DirectML can't co-exist with
+# the base onnxruntime module). On AMD-Linux Kokoro stays on the CPU EP.
+kokoro-onnx>=0.4.0,<0.5.0
+
+# torch + torchaudio are NOT pinned here. The AMD profile installs the ROCm
+# preview wheels (repo.radeon.com, alpha local-version tags like
+# `2.8.0a0+gitfc14c65` that a `torch==` spec can't match) via install-torch.mjs
+# BEFORE the engine packages, so coqui-tts / qwen-tts see torch already
+# satisfied. See accelerator-profile.mjs installRecipe('amd', …) for the exact
+# wheel URLs and server/tts-sidecar/scripts/install-torch.mjs for the ordering.
