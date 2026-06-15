@@ -8,6 +8,7 @@ import { rm } from 'node:fs/promises';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
+import { safeBookId } from '../util/safe-id.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -703,14 +704,11 @@ const PHASES = [
   { id: 2, label: 'Matching library', durationMs: 250 },
 ];
 
+/* Book id from a title — delegates to the shared `safeBookId` (plan 219):
+   byte-identical for ASCII titles, but a non-Latin title is preserved instead
+   of collapsing to the literal `book`. Only a fallback for `record.bookId`. */
 function bookIdFromTitle(title: string): string {
-  return (
-    title
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 32) || 'book'
-  );
+  return safeBookId(title);
 }
 
 function durationPlaceholder(): string {

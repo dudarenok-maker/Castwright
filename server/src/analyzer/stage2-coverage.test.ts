@@ -93,6 +93,44 @@ describe('validateStage2Coverage', () => {
     expect(v.ok).toBe(true);
   });
 
+  // Pure-Cyrillic prose, NO ASCII letters or digits — the real failing shape
+  // (the digit in "sentence 1" would survive the ASCII normaliser and mask it).
+  const CYRILLIC_SENTENCES = [
+    'Туман опустился на старый город.',
+    'Колокол прозвонил где-то вдалеке.',
+    'Она шла по узкой улице совсем одна.',
+    'Дождь негромко стучал по крышам домов.',
+    'Никто не вышел ей навстречу в тот час.',
+    'В тёмных окнах горел тусклый жёлтый свет.',
+    'Холодный ветер нёс запах моря и дыма.',
+    'Старик у ворот лишь молча проводил её взглядом.',
+    'Дорога вела вниз к заброшенной каменной пристани.',
+    'Там, у самой воды, её ждал последний корабль.',
+    'Сердце билось часто, тревожно и неровно.',
+    'Она хорошо знала, что назад пути уже нет.',
+  ];
+
+  it('passes a faithful attribution of a non-Latin (Cyrillic) chapter', () => {
+    // Regression: the normaliser kept only [a-z0-9], so a Russian chapter's
+    // prose AND its faithful attribution both collapsed to ~0 words → ratio 0.00
+    // → flagged "truncated" on every retry forever (the 2026-06-15 stuck run).
+    const body = CYRILLIC_SENTENCES.join(' ');
+    const v = validateStage2Coverage(body, CYRILLIC_SENTENCES.map(sent));
+    expect(v.coverageRatio).toBeGreaterThan(0.9);
+    expect(v.coverageRatio).toBeLessThan(1.2);
+    expect(v.endingPresent).toBe(true);
+    expect(v.ok).toBe(true);
+    expect(v.issues).toHaveLength(0);
+  });
+
+  it('still flags a truncated Cyrillic attribution (signals work, not bypassed)', () => {
+    const body = CYRILLIC_SENTENCES.join(' ');
+    const v = validateStage2Coverage(body, CYRILLIC_SENTENCES.slice(0, 4).map(sent));
+    expect(v.ok).toBe(false);
+    expect(v.coverageRatio).toBeLessThan(0.5);
+    expect(v.endingPresent).toBe(false);
+  });
+
   it('does NOT false-positive a short-but-complete chapter (e.g. a preface)', () => {
     const body = 'PREFACE. A short opening note. For the future.';
     const sentences = [sent('PREFACE.'), sent('A short opening note.'), sent('For the future.')];

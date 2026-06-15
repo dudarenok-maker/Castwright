@@ -173,8 +173,12 @@ export function normalizeForWer(text: string): string[] {
   }
   // Drop possessive 's and any remaining apostrophes inside words.
   s = s.replace(/'s\b/g, '').replace(/'/g, '');
-  // Replace every non-alphanumeric with a space, then tokenise.
-  s = s.replace(/[^a-z0-9]+/g, ' ');
+  // Replace every non-alphanumeric with a space, then tokenise. Letters/digits
+  // are matched script-agnostically (\p{L}\p{N}, NOT [a-z0-9]) — an ASCII-only
+  // strip erased all Cyrillic/CJK, so a non-English sentence normalised to []
+  // and the WER gate silently no-op'd ('inconclusive') on every line
+  // (2026-06-15; mirrors the stage2-coverage.ts fix). English is unchanged.
+  s = s.replace(/[^\p{L}\p{N}]+/gu, ' ');
   const tokens = s.split(/\s+/).filter(Boolean);
   const out: string[] = [];
   for (const tok of tokens) {

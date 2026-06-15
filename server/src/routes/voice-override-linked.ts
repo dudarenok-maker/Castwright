@@ -33,6 +33,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { normaliseNameKey } from '../util/safe-id.js';
 import { scanSeriesFullCharactersForBookId } from '../workspace/series-full-cast-scan.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
 
@@ -194,11 +195,11 @@ async function applyToBook(
   return wrote;
 }
 
-/* Same normalisation as plan-94 series-prior dedup + cast-series-patch:
-   lowercase, strip every non-alphanumeric. */
+/* Cross-book match key, shared with plan-94 series-prior dedup +
+   cast-series-patch. Plan 219 moved it to the Unicode-exact `normaliseNameKey`
+   (was `[^a-z0-9]`, which erased Cyrillic). */
 function normaliseToken(s: string | undefined): string {
-  if (!s) return '';
-  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return normaliseNameKey(s);
 }
 
 function tokensFor(c: PersistedCharacter): Set<string> {

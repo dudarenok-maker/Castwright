@@ -8,6 +8,7 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { unicodeKebab } from '../util/safe-id.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -59,18 +60,14 @@ export function ensureWorkspace(): void {
   mkdirSync(BOOKS_ROOT, { recursive: true });
 }
 
-/** URL-safe slug. Strips diacritics, lowercases, replaces non-alnum with '-',
-    collapses runs, trims, caps at 80 chars. */
+/** URL-safe slug. Deburrs accented Latin, lowercases, collapses non-(letter|
+    number) to '-', trims, caps at 80 chars. Plan 219: uses the shared
+    Unicode-preserving kebab so a non-Latin title/author (Cyrillic) yields a
+    distinct slug instead of collapsing to `untitled` — which made `makeBookId`
+    map EVERY Russian book to `untitled__standalones__untitled`. ASCII output is
+    byte-identical to the pre-219 slug. */
 export function slug(s: string): string {
-  return (
-    s
-      .normalize('NFKD')
-      .replace(/[̀-ͯ]/g, '')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80) || 'untitled'
-  );
+  return unicodeKebab(s).slice(0, 80).replace(/-+$/g, '') || 'untitled';
 }
 
 export const STANDALONES_SERIES = 'Standalones';

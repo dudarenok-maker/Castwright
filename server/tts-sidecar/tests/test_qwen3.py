@@ -535,6 +535,34 @@ def test_voices_dir_resolves_from_env(monkeypatch, tmp_path) -> None:
     assert engine._voices_dir == str(target)
 
 
+def test_voice_paths_ascii_id_is_byte_identical(monkeypatch, tmp_path) -> None:
+    """Back-compat (plan 219): an already-ASCII voice_id maps to the exact same
+    filename as before the non-Latin fix — no hash suffix, so every voice
+    designed pre-219 is still found on disk."""
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(tmp_path))
+    engine = main.QwenEngine()
+    vid = "v_master-oduvan-qwen3-tts-0.6b-ab12cd"
+    pt, js = engine._voice_paths(vid)
+    assert os.path.basename(pt) == f"{vid}.pt"
+    assert os.path.basename(js) == f"{vid}.json"
+
+
+def test_voice_paths_non_latin_ids_do_not_collide(monkeypatch, tmp_path) -> None:
+    """Plan 219: two distinct Cyrillic ids both flatten to underscores under the
+    ASCII sanitiser, so the pre-219 code mapped them to the SAME .pt and one
+    overwrote the other. A stable hash suffix of the original id makes the
+    mapping injective again."""
+    import re as _re
+
+    monkeypatch.setenv("QWEN_VOICES_DIR", str(tmp_path))
+    engine = main.QwenEngine()
+    a, _ja = engine._voice_paths("анна")
+    b, _jb = engine._voice_paths("мария")
+    assert a != b  # was: both ".../____.pt"
+    assert engine._voice_paths("анна")[0] == a  # deterministic across calls
+    assert _re.search(r"-[0-9a-f]{8}\.pt$", os.path.basename(a))
+
+
 def test_voices_dir_defaults_to_file_relative_when_env_unset(monkeypatch) -> None:
     """Back-compat: unset QWEN_VOICES_DIR keeps the legacy __file__-relative
     voices/qwen dir exactly as before."""

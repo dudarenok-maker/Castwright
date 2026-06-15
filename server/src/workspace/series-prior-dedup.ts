@@ -23,6 +23,7 @@
    character named "Foster" — both should collapse into one group). */
 
 import type { LibraryCharacterRecord } from './library-cast-scan.js';
+import { normaliseNameKey } from '../util/safe-id.js';
 
 export interface DedupedSeriesPriorEntry {
   id: string;
@@ -40,9 +41,10 @@ export interface DedupedSeriesPriorEntry {
   fromBookTitles?: string[];
 }
 
+/* Plan 219: shared Unicode-exact key — preserves Cyrillic (was `[^a-z0-9]`,
+   which erased it → no cross-book dedup for non-Latin casts). */
 function normaliseToken(s: string | undefined): string {
-  if (!s) return '';
-  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return normaliseNameKey(s);
 }
 
 /* Collect every token that identifies a record — its name plus each

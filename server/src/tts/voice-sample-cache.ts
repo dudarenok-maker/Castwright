@@ -97,7 +97,18 @@ export function voiceSampleFileName(args: {
   voiceName: string;
 }): string {
   const paramHash = djb2(`${args.text}|${args.voiceName}`).toString(36).slice(0, 8);
-  return `${args.cacheScope}-${args.modelKey}-${paramHash}.mp3`;
+  return `${asciiFileScope(args.cacheScope)}-${args.modelKey}-${paramHash}.mp3`;
+}
+
+/* Plan 219: keep the on-disk sample filename ASCII even when the cacheScope (a
+   voiceId, which can embed a Cyrillic character id) is not. An already-ASCII
+   scope is returned unchanged (every pre-219 sample keeps its exact filename);
+   a non-ASCII scope is flattened to `[A-Za-z0-9_.-]` and suffixed with a stable
+   hash of the ORIGINAL so two distinct Cyrillic scopes can't collide. */
+export function asciiFileScope(scope: string): string {
+  if (/^[A-Za-z0-9_.-]+$/.test(scope)) return scope;
+  const flat = scope.replace(/[^A-Za-z0-9_.-]+/g, '_');
+  return `${flat}-${djb2(scope).toString(36).slice(0, 8)}`;
 }
 
 /* Public (static-mount) URL for a cached sample file. */

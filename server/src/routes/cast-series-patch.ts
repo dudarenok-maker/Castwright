@@ -32,6 +32,7 @@ import type { Request, Response } from '../http.js';
 import { z } from 'zod';
 import { findBookByBookId } from '../workspace/scan.js';
 import { castJsonPath } from '../workspace/paths.js';
+import { normaliseNameKey } from '../util/safe-id.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { scanSeriesCharactersForBookId } from '../workspace/series-cast-scan.js';
 import type { LibraryCastCharacter } from '../workspace/library-cast-scan.js';
@@ -220,13 +221,12 @@ async function applyPatchToCastFile(
   await writeJsonAtomic(castJsonPath(bookDir), { characters: nextCharacters });
 }
 
-/* Same normalisation rule as plan-94's series-prior dedup
-   (server/src/workspace/series-prior-dedup.ts): lowercase + strip every
-   non-alphanumeric character. Two records "match" if any of their
-   tokens collide. */
+/* Cross-book match rule shared with plan-94's series-prior dedup
+   (server/src/workspace/series-prior-dedup.ts). Two records "match" if any of
+   their tokens collide. Plan 219 moved the key to the Unicode-exact
+   `normaliseNameKey` (was `[^a-z0-9]`, which erased Cyrillic). */
 function normaliseToken(s: string | undefined): string {
-  if (!s) return '';
-  return s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return normaliseNameKey(s);
 }
 
 function tokensFor(c: LibraryCastCharacter | CharacterOutput): Set<string> {

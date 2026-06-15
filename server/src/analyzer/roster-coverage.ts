@@ -30,6 +30,7 @@
    env-override + injected-`call` shape of stage2-coverage.ts. */
 
 import { DIALOGUE_VERBS } from './dialogue-verbs.js';
+import { safeId } from '../util/safe-id.js';
 
 export interface RosterCoverageThresholds {
   /** A candidate with fewer than this many tags must be quote-adjacent to count. */
@@ -130,14 +131,11 @@ function ignoredNames(): Set<string> {
 
 /** Kebab-case a display name into a stable id — matches the convention in
     scripts/recover-missing-character.mjs (toKebabId) so a later real Phase 0a
-    detection merges cleanly onto the same id. */
+    detection merges cleanly onto the same id. Delegates to the shared `safeId`
+    (plan 219): byte-identical for ASCII/accented-Latin names, but a non-Latin
+    name (Cyrillic) is preserved instead of collapsing to an empty id. */
 export function toKebabId(name: string): string {
-  return name
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  return safeId(name);
 }
 
 /** Strip a trailing possessive (`Wren's` → `Wren`). */

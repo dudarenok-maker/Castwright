@@ -67,6 +67,21 @@ describe('voiceSampleFileName', () => {
     expect(voiceSampleFileName({ ...base, voiceName: 'qwen-v_oduvan' })).not.toBe(f0);
   });
 
+  it('keeps an ASCII filename for a non-Latin (Cyrillic) scope, no collision (plan 219)', () => {
+    const anna = voiceSampleFileName({ ...base, cacheScope: 'v_анна' });
+    const maria = voiceSampleFileName({ ...base, cacheScope: 'v_мария' });
+    // Filename is ASCII-safe (no raw Cyrillic) …
+    expect(anna).toMatch(/^[A-Za-z0-9_.-]+\.mp3$/);
+    // … and two distinct Cyrillic scopes don't collapse to the same file.
+    expect(anna).not.toBe(maria);
+    // Deterministic.
+    expect(voiceSampleFileName({ ...base, cacheScope: 'v_анна' })).toBe(anna);
+  });
+
+  it('leaves an already-ASCII scope filename byte-identical (back-compat)', () => {
+    expect(voiceSampleFileName(base)).toMatch(/^char-marlow-/);
+  });
+
   it('the design route and the player land on the SAME filename for the same inputs', () => {
     /* The design route passes voiceName = deriveQwenVoiceId; the player passes
        voiceName = pickVoiceForEngine('qwen', …) = the same override id. text is

@@ -118,16 +118,19 @@ function validate(opts) {
   }
 }
 
-/* Kebab-case a display name into a stable id. Strips punctuation, collapses
-   internal whitespace to single hyphens. Matches the analyzer's id convention
-   so a future Phase 0a re-run with the Layer-2 fix would emit the same id
-   and merge cleanly. */
+/* Kebab-case a display name into a stable id. Mirrors server/src/util/safe-id.ts
+   `kebab` (plan 219): deburrs LATIN accents only (café → cafe, byte-identical to
+   the old slug) but PRESERVES non-Latin letters (Анна → анна) instead of
+   erasing them to an empty id. A standalone .mjs can't import the TS helper, so
+   the small logic is duplicated. Matches the analyzer's id convention so a
+   future Phase 0a re-run merges cleanly. */
 export function toKebabId(name) {
-  return name
+  return (name || '')
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/([a-z])[̀-ͯ]+/gi, '$1')
+    .normalize('NFC')
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/[^\p{L}\p{N}]+/gu, '-')
     .replace(/^-+|-+$/g, '');
 }
 
