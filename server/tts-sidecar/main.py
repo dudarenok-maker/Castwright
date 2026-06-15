@@ -166,7 +166,10 @@ app = FastAPI(title="audiobook-generator local TTS sidecar")
 # with a "restart the sidecar" detail is the right UX either way).
 _CUDA_POISON_RE = re.compile(
     r"device-side assert|CUDA error|CUDA kernel errors|CUBLAS_STATUS|cublas|"
-    r"out of memory.*CUDA|CUDA out of memory",
+    r"out of memory.*CUDA|CUDA out of memory|"
+    # ROCm/HIP equivalents — under the AMD profile torch reports HIP errors; a
+    # poisoned HIP context is just as fatal and needs the same supervised restart.
+    r"HIP error|hipError|rocBLAS|hipBLAS|HIP out of memory",
     re.IGNORECASE,
 )
 
