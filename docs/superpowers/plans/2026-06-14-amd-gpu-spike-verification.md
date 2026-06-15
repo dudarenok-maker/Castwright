@@ -1,5 +1,11 @@
 # AMD GPU Support — Section 0 Verification Spike Plan
 
+> ✅ **RESOLVED 2026-06-15.** Findings recorded in the spec ("Spike findings (2026-06-15)") and
+> applied in Phase 2 (PR #818). Headline: **S0.1 DirectML FAILED on-box** (ConvTranspose on
+> `onnxruntime-directml` 1.24.4) → Kokoro on AMD = CPU (`side-16` #819). S0.2 ROCm wheels pinned
+> (import/synth = beta telemetry, Wave H2). S0.3 ORT swap dormant (DirectML disabled). S0.4 parser
+> validated. See `docs/features/archive/217-amd-gpu-support.md`.
+
 > **For agentic workers:** This is an **investigation plan**, not a TDD build plan. Each task produces a recorded *finding* + a *decision*, not shipped code. The terminal output is a "Spike findings" block appended to the spec, which then unblocks the Phase 2 implementation plan. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Resolve the four unproven assumptions that gate Phase 2 (AMD enablement), so the Phase 2 plan is written against verified mechanics, not guesses.

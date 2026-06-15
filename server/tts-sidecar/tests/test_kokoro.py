@@ -15,6 +15,7 @@ invariant; if you add a new language prefix, extend the assertions here.
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import types
 from pathlib import Path
@@ -99,6 +100,168 @@ def fake_kokoro_module(monkeypatch):
     fake_mod.Kokoro = _FakeKokoro  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
     yield _FakeKokoro
+
+
+class _ProvidersKokoro:
+    """Kokoro stub whose constructor ACCEPTS a providers= kwarg (newer
+    kokoro-onnx releases), recording what it was given so a test can assert the
+    injected ORT provider list is honoured."""
+
+    last_providers: Any = "UNSET"
+
+    def __init__(self, model_path: str, voices_path: str, providers: Any = None) -> None:
+        _ProvidersKokoro.last_providers = providers
+        self._voices = list(_FAKE_VOICE_MANIFEST)
+
+    def get_voices(self) -> list[str]:
+        return list(self._voices)
+
+    def create(self, text: str, voice: str, speed: float, lang: str):
+        # Lets the DirectML self-test pass so providers= pass-through is what's
+        # exercised (not the fallback path).
+        return np.zeros(24000, dtype=np.float32), 24000
+
+
+@pytest.fixture
+def providers_kokoro_module(monkeypatch):
+    """A kokoro_onnx whose Kokoro accepts + records providers=."""
+    _ProvidersKokoro.last_providers = "UNSET"
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _ProvidersKokoro  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+    yield _ProvidersKokoro
+
+
+def test_kokoro_honours_injected_ort_providers(
+    providers_kokoro_module, fake_weight_files, monkeypatch
+) -> None:
+    """KOKORO_ORT_PROVIDERS (the server's accelerator-profile injection) is
+    passed straight through to the Kokoro constructor."""
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")
+    assert providers_kokoro_module.last_providers == [
+        "DmlExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+
+def test_kokoro_no_providers_when_env_absent(
+    providers_kokoro_module, fake_weight_files, monkeypatch
+) -> None:
+    """With no KOKORO_ORT_PROVIDERS, no providers= is passed → kokoro-onnx
+    auto-detects (preserves today's behaviour)."""
+    monkeypatch.delenv("KOKORO_ORT_PROVIDERS", raising=False)
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")
+    assert providers_kokoro_module.last_providers is None
+
+
+def test_kokoro_falls_back_when_constructor_rejects_providers(
+    fake_kokoro_module, fake_weight_files, monkeypatch
+) -> None:
+    """An older kokoro-onnx whose constructor has no providers= kwarg raises
+    TypeError; the engine must fall back to the no-arg construction and load."""
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider"]')
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")  # must not raise
+    assert engine._kokoro is not None
+
+
+def test_kokoro_importerror_remediation_is_profile_aware(
+    fake_weight_files, monkeypatch
+) -> None:
+    """The kokoro-onnx ImportError remediation names the right ONNX-runtime
+    package for THIS box's accelerator profile, not a hard-coded NVIDIA hint."""
+    # A kokoro_onnx module that lacks `Kokoro` makes `from kokoro_onnx import
+    # Kokoro` raise ImportError without needing the real package absent.
+    empty_mod = types.ModuleType("kokoro_onnx")
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", empty_mod)
+    monkeypatch.setattr(main.os, "name", "nt")  # force the Windows branch on any CI
+
+    monkeypatch.setenv("CASTWRIGHT_ACCELERATOR_PROFILE", "amd")
+    with pytest.raises(RuntimeError, match="onnxruntime-directml"):
+        main.KokoroEngine()._ensure_loaded("v1")
+
+    monkeypatch.setenv("CASTWRIGHT_ACCELERATOR_PROFILE", "nvidia")
+    with pytest.raises(RuntimeError, match="NVIDIA"):
+        main.KokoroEngine()._ensure_loaded("v1")
+
+    monkeypatch.setenv("CASTWRIGHT_ACCELERATOR_PROFILE", "cpu")
+    with pytest.raises(RuntimeError, match="plain onnxruntime"):
+        main.KokoroEngine()._ensure_loaded("v1")
+
+
+class _DmlKokoro:
+    """Kokoro stub for the DirectML self-test: records the providers it was
+    built with and how many times create() ran; create() raises when
+    fail_create is set (simulating the DML ConvTranspose failure)."""
+
+    instances: list["_DmlKokoro"] = []
+    fail_create: bool = False
+
+    def __init__(self, model_path: str, voices_path: str, providers: Any = None) -> None:
+        self.providers = providers
+        self.create_calls = 0
+        self._voices = list(_FAKE_VOICE_MANIFEST)
+        type(self).instances.append(self)
+
+    def get_voices(self) -> list[str]:
+        return list(self._voices)
+
+    def create(self, text: str, voice: str, speed: float, lang: str):
+        self.create_calls += 1
+        if type(self).fail_create:
+            raise RuntimeError("ConvTranspose not supported on DirectML")
+        return np.zeros(24000, dtype=np.float32), 24000
+
+
+@pytest.fixture
+def dml_kokoro_module(monkeypatch):
+    _DmlKokoro.instances = []
+    _DmlKokoro.fail_create = False
+    fake_mod = types.ModuleType("kokoro_onnx")
+    fake_mod.Kokoro = _DmlKokoro  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "kokoro_onnx", fake_mod)
+    yield _DmlKokoro
+
+
+def test_directml_selftest_passes_and_caches(dml_kokoro_module, fake_weight_files, monkeypatch) -> None:
+    """DML in the providers → one self-test synth runs; on success a marker is
+    written and _dml_status is 'directml'. A SECOND load skips the probe."""
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")
+    assert engine._dml_status == "directml"
+    assert dml_kokoro_module.instances[-1].create_calls == 1  # the self-test synth
+    assert os.path.isfile(engine._dml_marker_path())
+
+    # Second engine over the same weights dir: marker present → no probe.
+    engine2 = main.KokoroEngine()
+    engine2._ensure_loaded("v1")
+    assert engine2._dml_status == "directml"
+    assert dml_kokoro_module.instances[-1].create_calls == 0  # skipped
+
+
+def test_directml_selftest_fails_falls_back_to_cpu(dml_kokoro_module, fake_weight_files, monkeypatch) -> None:
+    """A failing DML synth rebuilds Kokoro on the CPU EP (honest cpu in /health)."""
+    _DmlKokoro.fail_create = True
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["DmlExecutionProvider", "CPUExecutionProvider"]')
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")
+    assert engine._dml_status == "fallback-cpu"
+    # The kept instance was rebuilt on CPU; no marker (DML didn't pass).
+    assert dml_kokoro_module.instances[-1].providers == ["CPUExecutionProvider"]
+    assert not os.path.isfile(engine._dml_marker_path())
+
+
+def test_no_directml_selftest_when_dml_absent(dml_kokoro_module, fake_weight_files, monkeypatch) -> None:
+    """A CUDA/CPU profile (no DirectML EP) never runs the Kokoro DML self-test."""
+    monkeypatch.setenv("KOKORO_ORT_PROVIDERS", '["CUDAExecutionProvider", "CPUExecutionProvider"]')
+    engine = main.KokoroEngine()
+    engine._ensure_loaded("v1")
+    assert engine._dml_status is None
+    assert dml_kokoro_module.instances[-1].create_calls == 0
 
 
 @pytest.fixture

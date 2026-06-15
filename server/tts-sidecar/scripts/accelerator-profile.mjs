@@ -64,23 +64,51 @@ export function resolveProfile({ envOverride, wizardChoice, detected }) {
 }
 
 /**
+ * Resolve the effective install profile for the venv build/upgrade path.
+ * Precedence: the ACCELERATOR env override → the existing venv's stamped profile
+ * (carry-forward) → live hardware detection → cpu. The carry-forward slot is the
+ * load-bearing rule: an existing install (Phase 1 stamped every box 'nvidia') is
+ * NEVER force-migrated by a hardware re-detect on upgrade — only an explicit
+ * ACCELERATOR override switches it. `stampProfile` is null on a fresh install
+ * (no venv yet), so detection drives a clean box. `exec` is injectable for tests;
+ * it defaults to a real subprocess GPU probe. Pure precedence over
+ * resolveProfile + detectVendor.
+ * @param {{envOverride: string|null, stampProfile: string|null, platform: string,
+ *          exec?: (cmd: string) => string}} a
+ * @returns {'nvidia'|'amd'|'apple'|'cpu'}
+ */
+export function resolveInstallProfile({ envOverride, stampProfile, platform, exec }) {
+  const detected = detectVendor({
+    platform,
+    exec: exec ?? ((cmd) => execSync(cmd, { encoding: 'utf8' })),
+  });
+  return resolveProfile({
+    envOverride: envOverride ?? null,
+    wizardChoice: stampProfile ?? null, // carry-forward occupies the wizard slot
+    detected,
+  });
+}
+
+/**
  * Per-engine runtime backend. `engine` is 'qwen' | 'coqui' (torch) or 'kokoro'
  * (onnxruntime). Note rocm: at runtime HIP aliases the CUDA API, but we REPORT
  * 'rocm' for honesty; the sidecar still uses device="cuda".
  * @returns {'cuda'|'rocm'|'directml'|'cpu'|'mps'}
  */
 export function runtimeBackend(profile, engine, platform) {
+  void platform; // kept in the signature (per-platform by design); unused since the
+  // S0.1 flip made AMD Kokoro CPU on every OS — a directml re-enable would use it.
   const isTorch = engine === 'qwen' || engine === 'coqui';
   if (profile === 'nvidia') return 'cuda';
   if (profile === 'apple') return isTorch ? 'mps' : 'cpu';
   if (profile === 'amd') {
     if (isTorch) return 'rocm';
-    // PROVISIONAL (P2): the AMD-Windows Kokoro backend is exactly what spike S0.1
-    // tests. We encode the INTENDED 'directml' here, but if S0.1 finds DirectML
-    // can't run the Kokoro model (the ConvTranspose issue), Phase 2 flips this — and
-    // this test case — to 'cpu'. The value is dormant in Phase 1, so a later flip is
-    // a one-line change + one test edit, not a behavior regression.
-    return platform === 'win32' ? 'directml' : 'cpu'; // Kokoro: DML only on Windows
+    // S0.1 RESOLVED (2026-06-15, on-box): DirectML CANNOT run the Kokoro model —
+    // onnxruntime-directml 1.24.4 errors on the `/encoder/F0.1/pool/ConvTranspose`
+    // node (the same inputs synthesize fine on the CPU EP), an EP-level op
+    // limitation, not silicon-specific. So Kokoro on AMD stays CPU on every OS.
+    // (Revisit if a future onnxruntime-directml gains ConvTranspose support.)
+    return 'cpu';
   }
   return 'cpu';
 }
@@ -92,10 +120,9 @@ export function runtimeBackend(profile, engine, platform) {
  */
 export function ortProviders(profile, platform) {
   if (profile === 'nvidia') return ['CUDAExecutionProvider', 'CPUExecutionProvider'];
-  // PROVISIONAL (P2/Q2): amd+win DirectML is gated by spike S0.1 — Phase 2 flips this to
-  // ['CPUExecutionProvider'] if DirectML can't run the Kokoro model. Dormant in Phase 1.
-  if (profile === 'amd' && platform === 'win32')
-    return ['DmlExecutionProvider', 'CPUExecutionProvider'];
+  // S0.1 RESOLVED (2026-06-15): DirectML can't run the Kokoro model (ConvTranspose
+  // fails on onnxruntime-directml; CPU EP works), so AMD Kokoro is CPU on every OS.
+  void platform;
   return ['CPUExecutionProvider'];
 }
 
@@ -107,17 +134,34 @@ export function ortProviders(profile, platform) {
  * USED to arrive transitively via coqui-tts, but coqui-tts 0.27.5 dropped that
  * declaration, so it is now pinned explicitly in the overlay; null here means
  * "nothing extra beyond the requirements," not "torch is transitive." NVIDIA ORT
- * is `onnxruntime-gpu` via kokoro-onnx[gpu]. AMD must pre-install a ROCm torch
- * wheel BEFORE the engine packages — a marked S0.2 spike placeholder, never
- * fabricated here. The CPU recipe (cpu-index torch) is a Phase-2 improvement.
- * @returns {{torchPreinstall: null | 'PENDING_SPIKE' | {source:string,url:string}, ortPackage: string}}
+ * is `onnxruntime-gpu` via kokoro-onnx[gpu]. AMD pre-installs the ROCm torch
+ * wheels (a {wheels:[…]} list) BEFORE the engine packages — install-torch.mjs
+ * runs them; their alpha local-version tags can't be pinned in amd-rocm.txt.
+ * The CPU recipe (cpu-index torch) is a Phase-2 improvement.
+ * @returns {{torchPreinstall: null | {wheels:string[]} | {source:string,url:string}, ortPackage: string}}
  */
 export function installRecipe(profile, platform) {
   if (profile === 'nvidia') return { torchPreinstall: null, ortPackage: 'onnxruntime-gpu' };
   if (profile === 'amd') {
+    // S0.2 desk-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4). torch 2.8
+    // < 2.9 → the amd overlay uses coqui-tts WITHOUT [codec]. Import-ability +
+    // synthesis on real AMD silicon are OWED (Wave H2). Linux ROCm wheels are
+    // resolved in Wave H if/when an AMD-Linux box validates them.
+    const ROCM = 'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/';
     return {
-      torchPreinstall: 'PENDING_SPIKE',
-      ortPackage: platform === 'win32' ? 'onnxruntime-directml' : 'onnxruntime',
+      torchPreinstall: {
+        wheels:
+          platform === 'win32'
+            ? [
+                `${ROCM}torch-2.8.0a0+gitfc14c65-cp312-cp312-win_amd64.whl`,
+                `${ROCM}torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl`,
+              ]
+            : [],
+      },
+      // S0.1 RESOLVED (2026-06-15): DirectML can't run the Kokoro model, so the
+      // AMD profile installs plain onnxruntime (CPU EP for Kokoro) on every OS —
+      // no onnxruntime-directml. Qwen/Coqui still ride ROCm via the torch wheels.
+      ortPackage: 'onnxruntime',
     };
   }
   // cpu / apple — Phase-2 improvement, not today's behavior

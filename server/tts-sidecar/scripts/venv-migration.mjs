@@ -86,19 +86,39 @@ export function classifyVenvState({ venvExists, stamp, required }) {
 }
 
 /**
+ * The requirements overlay file for an install profile. amd/cpu get their own
+ * overlay; nvidia, apple, and anything unrecognised fall back to the nvidia-cuda
+ * overlay — which is also the mac-safe set (kokoro-onnx[gpu] degrades to plain
+ * onnxruntime on darwin, torch from PyPI gives the mps build), preserving today's
+ * NVIDIA + macOS behaviour. Pure.
+ * @param {string} profile
+ * @returns {string} a filename under requirements/
+ */
+export function overlayFileForProfile(profile) {
+  if (profile === 'amd') return 'amd-rocm.txt';
+  if (profile === 'cpu') return 'cpu.txt';
+  return 'nvidia-cuda.txt';
+}
+
+/**
  * Resolve what this release REQUIRES from disk: the canonical Python tag, the
  * effective install profile, and the requirements hash. Shared by both
  * bootstrap-venv.mjs (source/dev install) and apply.ts (self-upgrade) so the two
- * paths can never disagree about what "current" means (S3). Phase 1: `profile` is
- * the EFFECTIVE install ('nvidia'), not detected hardware (R1) — every box gets
- * the nvidia-cuda overlay. `reqHash` hashes the overlay text THEN the base text
- * (the fixed order computeReqHash documents).
+ * paths can never disagree about what "current" means (S3). The overlay is
+ * selected by `profile` (Phase 2 — the caller resolves the effective profile via
+ * resolveInstallProfile); `reqHash` hashes the overlay text THEN the base text
+ * (the fixed order computeReqHash documents). Defaults to 'nvidia' so a caller
+ * that passes nothing reproduces today's behaviour exactly.
  * @param {string} sidecarDir  Absolute path to server/tts-sidecar.
- * @returns {{pythonTag: string, profile: 'nvidia', reqHash: string}}
+ * @param {string} [profile='nvidia']  Effective install profile.
+ * @returns {{pythonTag: string, profile: string, reqHash: string}}
  */
-export function resolveRequired(sidecarDir) {
+export function resolveRequired(sidecarDir, profile = 'nvidia') {
   const pythonTag = readFileSync(join(sidecarDir, 'python-tag.txt'), 'utf8').trim();
-  const overlay = readFileSync(join(sidecarDir, 'requirements', 'nvidia-cuda.txt'), 'utf8');
+  const overlay = readFileSync(
+    join(sidecarDir, 'requirements', overlayFileForProfile(profile)),
+    'utf8',
+  );
   const base = readFileSync(join(sidecarDir, 'requirements', 'base.txt'), 'utf8');
-  return { pythonTag, profile: 'nvidia', reqHash: computeReqHash([overlay, base]) };
+  return { pythonTag, profile, reqHash: computeReqHash([overlay, base]) };
 }

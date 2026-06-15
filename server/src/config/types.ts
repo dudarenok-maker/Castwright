@@ -1,6 +1,9 @@
 // server/src/config/types.ts
 export type KnobType = 'number' | 'integer' | 'boolean' | 'string' | 'enum';
-export type ApplyMode = 'live' | 'restart-sidecar' | 'restart-server';
+// 'rebuild' is heavier than a restart: changing the value rebuilds the Python
+// venv (a new accelerator profile = a different torch/ORT install), then restarts
+// the sidecar. Actuated by the Wave-F profile-switch action.
+export type ApplyMode = 'live' | 'restart-sidecar' | 'restart-server' | 'rebuild';
 export type Risk = 'low' | 'medium' | 'high';
 
 export interface ConfigKnob {

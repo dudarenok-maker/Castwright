@@ -604,3 +604,23 @@ hardware-bound rest is an explicit owed acceptance matrix.
       `pip-in-place`), books/voices untouched.
 - [ ] Override / profile switch: `ACCELERATOR=amd` triggers the (job-coordinated) profile
       re-setup; reports the AMD backends after.
+
+## Spike findings (2026-06-15)
+
+**S0.1 — Kokoro on DirectML: FAIL → Kokoro stays CPU on AMD.** Ran the actual
+`kokoro-v1.0.onnx` through `onnxruntime-directml` **1.24.4** (the latest published
+build) on a real AMD Radeon 780M iGPU (DX12). The DML EP binds
+(`get_providers()` → `['DmlExecutionProvider','CPUExecutionProvider']`) but
+`session.run` errors at the `/encoder/F0.1/pool/ConvTranspose` node
+(`RUNTIME_EXCEPTION`, HRESULT `0x80070005`). The identical inputs synthesize fine
+on the CPU EP (output `(13800,)` samples), so it is purely the DML EP's
+ConvTranspose implementation — not the model, inputs, or silicon. Four workarounds
+failed: `ORT_DISABLE_ALL` / `ORT_ENABLE_BASIC` graph-opt, `enable_mem_pattern=False`
++ sequential exec, and an explicit `device_id`. **Decision:** the AMD profile flips
+the provisional `directml` values to `cpu` (`runtimeBackend` / `ortProviders` /
+`installRecipe.ortPackage`), installs plain `onnxruntime`, and runs Kokoro on CPU.
+The DirectML scaffolding (cached self-test, `directml` family mapping/label, the
+`install-ort` swap keyed on the recipe) is retained for a one-line re-enable if a
+future `onnxruntime-directml` or a re-exported/higher-opset Kokoro model fixes
+ConvTranspose. Qwen/Coqui on ROCm torch are unaffected (still owed H2 on a
+ROCm-supported AMD card; the 780M is not one).

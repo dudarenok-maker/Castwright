@@ -2,7 +2,7 @@
    directly), so importing it here is inert. */
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
-import { parseVendorFromProbe, detectVendor, resolveProfile, runtimeBackend, ortProviders, installRecipe, describeResolved } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
+import { parseVendorFromProbe, detectVendor, resolveProfile, resolveInstallProfile, runtimeBackend, ortProviders, installRecipe, describeResolved } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
 
 describe('parseVendorFromProbe', () => {
   it('detects NVIDIA from a Windows controller list', () => {
@@ -71,6 +71,49 @@ describe('resolveProfile', () => {
   });
 });
 
+describe('resolveInstallProfile (venv build/upgrade precedence: env → stamp carry-forward → detection)', () => {
+  const amdExec = () => 'AMD Radeon RX 7900 XTX';
+  const nvExec = () => 'NVIDIA GeForce RTX 4070';
+
+  it('ACCELERATOR env override wins over the stamp AND detection', () => {
+    expect(
+      resolveInstallProfile({ envOverride: 'amd', stampProfile: 'nvidia', platform: 'win32', exec: nvExec }),
+    ).toBe('amd');
+  });
+
+  it('carry-forward: an existing stamped profile beats detection (NO forced migration)', () => {
+    // The classic regression: a box stamped nvidia by Phase 1 whose hardware now
+    // detects amd must STAY nvidia on upgrade (else every existing install rebuilds).
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: 'nvidia', platform: 'win32', exec: amdExec }),
+    ).toBe('nvidia');
+  });
+
+  it('fresh install (no stamp): falls through to hardware detection', () => {
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', exec: amdExec }),
+    ).toBe('amd');
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', exec: nvExec }),
+    ).toBe('nvidia');
+  });
+
+  it('fresh install on a box with no GPU probe → cpu (detection degrades, never amd)', () => {
+    const bustedExec = () => {
+      throw new Error('no wmi');
+    };
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'linux', exec: bustedExec }),
+    ).toBe('cpu');
+  });
+
+  it('an invalid ACCELERATOR override is ignored (falls through to stamp/detection)', () => {
+    expect(
+      resolveInstallProfile({ envOverride: 'banana', stampProfile: 'cpu', platform: 'win32', exec: nvExec }),
+    ).toBe('cpu');
+  });
+});
+
 describe('runtimeBackend', () => {
   it('nvidia torch engines → cuda', () => {
     expect(runtimeBackend('nvidia', 'qwen', 'win32')).toBe('cuda');
@@ -79,10 +122,11 @@ describe('runtimeBackend', () => {
   it('amd torch engines → rocm (HIP aliases cuda at runtime)', () => {
     expect(runtimeBackend('amd', 'qwen', 'win32')).toBe('rocm');
   });
-  // PROVISIONAL (P2): 'directml' is the INTENDED value but is what spike S0.1 tests;
-  // Phase 2 flips this to 'cpu' if DirectML can't run the Kokoro model. Dormant, so safe.
-  it('amd Kokoro on Windows → directml [provisional, S0.1]; on Linux → cpu', () => {
-    expect(runtimeBackend('amd', 'kokoro', 'win32')).toBe('directml');
+  // S0.1 RESOLVED (2026-06-15, on-box): DirectML can't run the Kokoro model
+  // (ConvTranspose fails on onnxruntime-directml 1.24.4; CPU EP works), so AMD
+  // Kokoro is CPU on every OS.
+  it('amd Kokoro → cpu on every OS (S0.1 found DirectML can’t run the model)', () => {
+    expect(runtimeBackend('amd', 'kokoro', 'win32')).toBe('cpu');
     expect(runtimeBackend('amd', 'kokoro', 'linux')).toBe('cpu');
   });
   it('apple torch → mps, apple kokoro → cpu', () => {
@@ -99,12 +143,10 @@ describe('ortProviders', () => {
   it('nvidia → CUDA then CPU', () => {
     expect(ortProviders('nvidia', 'win32')).toEqual(['CUDAExecutionProvider', 'CPUExecutionProvider']);
   });
-  // PROVISIONAL (P2/Q2): same S0.1 gate as runtimeBackend — if DirectML can't run the
-  // Kokoro model, Phase 2 flips this to ['CPUExecutionProvider']. Dormant, so safe.
-  it('amd+win → DirectML then CPU [provisional, S0.1]', () => {
-    expect(ortProviders('amd', 'win32')).toEqual(['DmlExecutionProvider', 'CPUExecutionProvider']);
-  });
-  it('amd+linux and cpu → CPU only', () => {
+  // S0.1 RESOLVED — DirectML can't run Kokoro, so AMD is CPU-only for ORT on
+  // every OS (no DmlExecutionProvider).
+  it('amd → CPU only on every OS (DirectML disabled after S0.1)', () => {
+    expect(ortProviders('amd', 'win32')).toEqual(['CPUExecutionProvider']);
     expect(ortProviders('amd', 'linux')).toEqual(['CPUExecutionProvider']);
     expect(ortProviders('cpu', 'win32')).toEqual(['CPUExecutionProvider']);
   });
@@ -118,10 +160,21 @@ describe('installRecipe', () => {
     expect(r.torchPreinstall).toBeNull(); // engine packages pull torch from PyPI, unchanged
     expect(r.ortPackage).toBe('onnxruntime-gpu');
   });
-  it('amd torchPreinstall is a marked spike placeholder (S0.2); ORT directml on win, onnxruntime on linux', () => {
-    expect(installRecipe('amd', 'win32').torchPreinstall).toBe('PENDING_SPIKE');
-    expect(installRecipe('amd', 'win32').ortPackage).toBe('onnxruntime-directml');
-    expect(installRecipe('amd', 'linux').ortPackage).toBe('onnxruntime');
+  // S0.2 desk-pass-verified ROCm-Windows preview wheels (alpha; ROCm 6.4.4, cp312).
+  // Import-ability + synthesis are OWED on real AMD hardware (Wave H2). torch 2.8
+  // < 2.9 → coqui-tts without [codec]. ORT is plain onnxruntime (NOT directml):
+  // S0.1 found DirectML can't run the Kokoro model, so Kokoro stays on the CPU EP.
+  it('amd torchPreinstall = the pinned ROCm 6.4.4 cp312 wheels (win); plain onnxruntime (no directml)', () => {
+    const r = installRecipe('amd', 'win32');
+    expect(r.torchPreinstall.wheels).toEqual([
+      'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torch-2.8.0a0+gitfc14c65-cp312-cp312-win_amd64.whl',
+      'https://repo.radeon.com/rocm/windows/rocm-rel-6.4.4/torchaudio-2.6.0a0+1a8f621-cp312-cp312-win_amd64.whl',
+    ]);
+    expect(r.ortPackage).toBe('onnxruntime');
+    // Linux ROCm wheels are resolved in Wave H; the win-only list is empty there.
+    const l = installRecipe('amd', 'linux');
+    expect(l.torchPreinstall.wheels).toEqual([]);
+    expect(l.ortPackage).toBe('onnxruntime');
   });
   it('cpu is a Phase-2 IMPROVEMENT (not today): cpu torch preinstall + plain onnxruntime', () => {
     const r = installRecipe('cpu', 'linux');

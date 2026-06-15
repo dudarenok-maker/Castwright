@@ -76,9 +76,17 @@ export const FLASH_ATTN_WHEEL_URL =
 
 // Pure decision fn (no I/O) so the platform/version gate is unit-testable without
 // a venv. enabled=false short-circuits to a silent skip; the caller only invokes
-// this once --flash-attn / QWEN_INSTALL_FLASH_ATTN has opted in.
-export function resolveFlashAttnInstall({ enabled, platform, pyTag }) {
+// this once --flash-attn / QWEN_INSTALL_FLASH_ATTN has opted in. FA2 is an
+// NVIDIA-only accelerator (the pinned wheel is a CUDA build); the AMD skip is
+// checked first so an AMD box never tries to install it. SDPA is the default
+// attention impl wherever FA2 isn't installed.
+export function resolveFlashAttnInstall({ enabled, platform, pyTag, profile }) {
   if (!enabled) return { action: 'skip', reason: 'not requested' };
+  if (profile === 'amd')
+    return {
+      action: 'skip',
+      reason: 'no ROCm FlashAttention-2 wheel; SDPA remains the default on AMD',
+    };
   if (platform !== 'win32')
     return {
       action: 'skip',
@@ -136,6 +144,7 @@ function installFlashAttn(python, env) {
     enabled: true,
     platform: process.platform,
     pyTag: venvPyTag(python),
+    profile: process.env.CASTWRIGHT_ACCELERATOR_PROFILE ?? 'nvidia',
   });
   if (plan.action === 'skip') {
     step(`FlashAttention-2: skipped — ${plan.reason}.`);

@@ -45,6 +45,15 @@ describe('config registry', () => {
     expect(knobByEnv('NOT_A_REAL_ENV')).toBeUndefined();
   });
 
+  it('the ACCELERATOR knob is a rebuild-on-change enum (auto/nvidia/amd/cpu)', () => {
+    const k = knobByEnv('ACCELERATOR');
+    expect(k?.key).toBe('tts.accelerator');
+    expect(k?.apply).toBe('rebuild');
+    expect(k?.type).toBe('enum');
+    expect(k?.options).toEqual(['auto', 'nvidia', 'amd', 'cpu']);
+    expect(k?.default).toBe('auto');
+  });
+
   it('knobsInGroup returns a populated group and empty for unknown', () => {
     expect(knobsInGroup('qa-gates').length).toBeGreaterThan(0);
     expect(knobsInGroup('does-not-exist')).toEqual([]);

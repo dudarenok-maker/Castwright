@@ -35,10 +35,21 @@ class _StubBackends:
         self.mps = _StubMps(mps_available)
 
 
+class _StubVersion:
+    def __init__(self, hip: object = None, cuda: object = None) -> None:
+        self.hip = hip
+        self.cuda = cuda
+
+
 class _StubTorch:
-    def __init__(self, cuda: bool = False, mps: bool = False) -> None:
+    def __init__(self, cuda: bool = False, mps: bool = False, hip: bool = False) -> None:
+        # On a ROCm build torch.cuda.is_available() is True (HIP aliases CUDA) and
+        # torch.version.hip is set; on a CUDA build version.hip is None.
         self.cuda = _StubCuda(cuda)
         self.backends = _StubBackends(mps)
+        self.version = _StubVersion(
+            hip="6.4.4" if hip else None, cuda=None if hip else "12.8"
+        )
 
 
 class _StubOrt:
@@ -64,6 +75,39 @@ def test_predictions_cuda_box() -> None:
         _StubTorch(cuda=True), _StubOrt(["CUDAExecutionProvider", "CPUExecutionProvider"])
     )
     assert out == {"kokoro": "cuda", "coqui": "cuda", "qwen": "cuda"}
+
+
+def test_normalize_device_family_hip_build_reports_rocm() -> None:
+    """A HIP torch build reports 'cuda' device strings but is really ROCm."""
+    assert main._normalize_device_family("cuda:0", _StubTorch(cuda=True, hip=True)) == "rocm"
+    assert main._normalize_device_family("cuda:0", _StubTorch(cuda=True)) == "cuda"
+    # No torch module → can't tell HIP from CUDA; stays cuda (back-compat).
+    assert main._normalize_device_family("cuda") == "cuda"
+
+
+def test_predict_kokoro_device_directml_and_rocm() -> None:
+    assert (
+        main._predict_kokoro_device(_StubOrt(["DmlExecutionProvider", "CPUExecutionProvider"]))
+        == "directml"
+    )
+    assert (
+        main._predict_kokoro_device(_StubOrt(["ROCMExecutionProvider", "CPUExecutionProvider"]))
+        == "rocm"
+    )
+    assert main._predict_kokoro_device(_StubOrt(["CUDAExecutionProvider"])) == "cuda"
+    assert main._predict_kokoro_device(_StubOrt(["CPUExecutionProvider"])) == "cpu"
+
+
+def test_predictions_amd_rocm_box() -> None:
+    """AMD-Windows: Qwen/Coqui ride ROCm (torch HIP build); Kokoro is CPU — S0.1
+    found DirectML can't run the Kokoro model, so the sidecar gets CPU ORT
+    providers. (The Dml→directml family mapping itself is still covered by
+    test_predict_kokoro_device_directml_and_rocm, for if it's ever re-enabled.)"""
+    out = main._compute_device_predictions(
+        _StubTorch(cuda=True, hip=True),
+        _StubOrt(["CPUExecutionProvider"]),
+    )
+    assert out == {"kokoro": "cpu", "coqui": "rocm", "qwen": "rocm"}
 
 
 def test_predictions_apple_silicon() -> None:

@@ -73,6 +73,20 @@ describe('DevicePanel', () => {
     expect(screen.getByText(/falls back to the CPU/)).toBeInTheDocument();
   });
 
+  it('renders AMD families (ROCm/DirectML) with an experimental preview note', () => {
+    h.info = {
+      hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (AMD Radeon)' },
+      devices: { kokoro: 'directml', coqui: 'rocm', qwen: 'rocm' },
+      devicesState: 'ready',
+      activeEngine: 'qwen',
+    };
+    render(<DevicePanel />);
+    const panel = screen.getByTestId('device-panel');
+    expect(panel.textContent).toContain('AMD GPU (ROCm)'); // headline + qwen/coqui rows
+    expect(panel.textContent).toContain('AMD GPU (DirectML)'); // kokoro row
+    expect(screen.getByTestId('amd-experimental-note')).toBeInTheDocument();
+  });
+
   it('falls back when the active engine has no device entry (e.g. gemini default)', () => {
     h.info = {
       hardware: { platform: 'win32', arch: 'x64', appleSilicon: false, label: 'Windows (x64)' },

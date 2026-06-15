@@ -28,6 +28,9 @@ import { resolveLogDir, resolveRunDir } from '../app-dirs.js';
 import { formatTimestamp } from '../logger.js';
 import { allKnobs } from '../config/registry.js';
 import { resolveKnob } from '../config/resolver.js';
+import { readStamp } from '../../tts-sidecar/scripts/venv-migration.mjs';
+// @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
+import { resolveProfile, ortProviders } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
 
 export type TtsModelKey = UserSettings['defaultTtsModelKey'];
 
@@ -417,7 +420,7 @@ export interface BuildSidecarEnvOpts {
          is the intended precedence so advanced users can pin preloads via the config
          UI without touching code. */
 export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
-  const { modelKey, eagerLoadKokoro, eagerLoadQwen, repoRoot: _repoRoot } = opts;
+  const { modelKey, eagerLoadKokoro, eagerLoadQwen, repoRoot } = opts;
 
   /* The default engine honours its own eager-load toggle; the non-default
      engine always stays LAZY as the on-demand fallback.
@@ -467,6 +470,22 @@ export function buildSidecarEnv(opts: BuildSidecarEnvOpts): NodeJS.ProcessEnv {
     // the string 'true' (e.g. PRELOAD_COQUI), silently dropping the override.
     env[knob.env] = knob.type === 'boolean' ? (st.effective ? '1' : '0') : String(st.effective);
   }
+
+  /* Accelerator profile (AMD phase 2). The sidecar must run with the SAME profile
+     its venv was built for, so the runtime profile is the venv stamp's profile —
+     overridable by ACCELERATOR, defaulting to cpu when neither exists (a no-GPU /
+     un-stamped box). We inject the profile + the Kokoro ORT provider list (JSON)
+     so main.py never re-derives them; an absent venv stamp + no override yields
+     cpu + ['CPUExecutionProvider'] (today's auto-detect-safe behaviour). */
+  const venvDir =
+    process.env.SIDECAR_VENV_DIR ?? join(repoRoot, 'server', 'tts-sidecar', '.venv');
+  const profile = resolveProfile({
+    envOverride: process.env.ACCELERATOR ?? null,
+    wizardChoice: readStamp(venvDir)?.profile ?? null, // stamp = the installed profile
+    detected: 'cpu',
+  });
+  env.CASTWRIGHT_ACCELERATOR_PROFILE = profile;
+  env.KOKORO_ORT_PROVIDERS = JSON.stringify(ortProviders(profile, process.platform));
 
   return env;
 }

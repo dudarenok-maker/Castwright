@@ -80,6 +80,27 @@ def client(monkeypatch):
         yield c
 
 
+def test_cuda_poison_regex_matches_cuda_and_hip() -> None:
+    """The poison detector triggers the supervised restart on a fatal GPU
+    context error. It must cover the ROCm/HIP equivalents (AMD profile) as well
+    as CUDA, and not fire on benign errors."""
+    poison = main._CUDA_POISON_RE
+    for s in (
+        "CUDA error: device-side assert triggered",
+        "CUBLAS_STATUS_NOT_INITIALIZED",
+        "CUDA out of memory",
+    ):
+        assert poison.search(s), f"expected CUDA match: {s}"
+    for s in (
+        "HIP error: invalid device function",
+        "rocBLAS error: internal error",
+        "hipBLAS failure",
+        "HIP out of memory",
+    ):
+        assert poison.search(s), f"expected HIP match: {s}"
+    assert not poison.search("ConnectionResetError: connection reset by peer")
+
+
 def test_health_smoke(client: TestClient) -> None:
     """/health returns the engines registry + load state. The
     model_loaded/loading/device fields drive the Coqui pill;

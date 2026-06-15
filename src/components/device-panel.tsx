@@ -9,13 +9,19 @@
 import { useAppInfo } from '../lib/use-app-info';
 import { HARDWARE_LINE } from '../lib/brand';
 
-type DeviceFamily = 'cuda' | 'mps' | 'cpu';
+type DeviceFamily = 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu';
 
 const DEVICE_LABEL: Record<DeviceFamily, string> = {
   cuda: 'NVIDIA GPU (CUDA)',
+  rocm: 'AMD GPU (ROCm)',
+  directml: 'AMD GPU (DirectML)',
   mps: 'Apple GPU (Metal)',
   cpu: 'CPU',
 };
+
+/* AMD acceleration (rocm/directml) is a preview path (phase 2) — flag it so
+   users understand it's newer/less battle-tested than the NVIDIA/Apple paths. */
+const AMD_FAMILIES: ReadonlySet<DeviceFamily> = new Set(['rocm', 'directml']);
 
 /* Brand engine names — keep in lockstep with the engine credits used across
    the app (Kokoro / Coqui XTTS / Qwen3-TTS). */
@@ -67,6 +73,14 @@ export function DevicePanel() {
           ))}
         </ul>
       )}
+
+      {devices &&
+        ENGINE_ORDER.some((e) => AMD_FAMILIES.has(devices[e] as DeviceFamily)) && (
+          <p className="mt-2 text-xs text-ink/50" data-testid="amd-experimental-note">
+            AMD GPU acceleration is experimental (preview) — if you hit issues, set the
+            accelerator to CPU in Advanced settings.
+          </p>
+        )}
 
       {!devices && hw?.appleSilicon && (
         <p className="mt-2 text-xs text-ink/60">

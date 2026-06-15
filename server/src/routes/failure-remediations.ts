@@ -137,6 +137,18 @@ export const FAILURE_REMEDIATIONS = {
       'Wait ~10 seconds for the voice engine to respawn (the pill goes green), then click Retry. If it ' +
       'recurs on the same chapter, check the voice engine log text_preview= for a stray control char.',
   },
+  'gpu-acceleration-unavailable': {
+    userMessage:
+      'GPU acceleration is unavailable, so the voice engine is running on the CPU (slower, ' +
+      'but it still works). Common on AMD: the GPU driver is too old, the GPU model isn’t ' +
+      'in the supported set, or a DirectML operation isn’t supported and Kokoro fell back ' +
+      'to CPU.',
+    remediation:
+      'Update your GPU driver (AMD: the latest Adrenalin). Confirm your GPU is supported for ' +
+      'ROCm/DirectML — some integrated/older cards are not. AMD support is an experimental ' +
+      'preview; if it won’t accelerate, set the Accelerator to CPU in Advanced settings to ' +
+      'silence this, or switch back to a supported NVIDIA/Apple machine for full speed.',
+  },
   'model-not-loaded': {
     userMessage:
       'The voice engine is not loaded yet — synthesis was requested before the model ' +

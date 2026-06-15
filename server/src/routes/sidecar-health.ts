@@ -100,18 +100,24 @@ interface SidecarHealthBody {
 }
 
 /* side-14 — per-engine device ground-truth. Sidecar values are normalised
-   families ('cuda' | 'mps' | 'cpu') or null while unknowable; devices_state
-   tracks the startup probe ('pending' until torch is imported in the
-   background, 'ready', or 'error' when torch is missing/broken). Absent on an
-   older sidecar → null. */
-export type SidecarDeviceFamily = 'cuda' | 'mps' | 'cpu';
+   families ('cuda' | 'rocm' | 'directml' | 'mps' | 'cpu') or null while
+   unknowable; devices_state tracks the startup probe ('pending' until torch is
+   imported in the background, 'ready', or 'error' when torch is missing/broken).
+   rocm/directml are the AMD families (phase 2). Absent on an older sidecar → null. */
+export type SidecarDeviceFamily = 'cuda' | 'rocm' | 'directml' | 'mps' | 'cpu';
 export type SidecarDeviceMap = Record<
   'kokoro' | 'coqui' | 'qwen',
   SidecarDeviceFamily | null
 >;
 export type SidecarDevicesState = 'pending' | 'ready' | 'error';
 
-const DEVICE_FAMILIES: readonly SidecarDeviceFamily[] = ['cuda', 'mps', 'cpu'];
+const DEVICE_FAMILIES: readonly SidecarDeviceFamily[] = [
+  'cuda',
+  'rocm',
+  'directml',
+  'mps',
+  'cpu',
+];
 const DEVICES_STATES: readonly SidecarDevicesState[] = ['pending', 'ready', 'error'];
 const DEVICE_ENGINES = ['kokoro', 'coqui', 'qwen'] as const;
 

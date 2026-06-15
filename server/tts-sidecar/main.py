@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import logging
 import os
 import re
@@ -165,7 +166,10 @@ app = FastAPI(title="audiobook-generator local TTS sidecar")
 # with a "restart the sidecar" detail is the right UX either way).
 _CUDA_POISON_RE = re.compile(
     r"device-side assert|CUDA error|CUDA kernel errors|CUBLAS_STATUS|cublas|"
-    r"out of memory.*CUDA|CUDA out of memory",
+    r"out of memory.*CUDA|CUDA out of memory|"
+    # ROCm/HIP equivalents — under the AMD profile torch reports HIP errors; a
+    # poisoned HIP context is just as fatal and needs the same supervised restart.
+    r"HIP error|hipError|rocBLAS|hipBLAS|HIP out of memory",
     re.IGNORECASE,
 )
 
@@ -753,6 +757,60 @@ class KokoroEngine(Engine):
         self._language = os.environ.get("KOKORO_LANGUAGE", "en-us")
         # English subset of the voice manifest, populated at load time.
         self._voices: list[str] = []
+        # DirectML self-test outcome (AMD-Windows): None when not applicable,
+        # 'directml' when the one-time synth proved DML runs the model, or
+        # 'fallback-cpu' when it failed and we rebuilt on the CPU EP.
+        self._dml_status: Optional[str] = None
+
+    @staticmethod
+    def _resolve_ort_providers() -> list[str]:
+        """The ONNX Runtime provider list to pass to Kokoro, parsed from the
+        KOKORO_ORT_PROVIDERS env var (a JSON string list the server injects from
+        the accelerator profile, e.g. ["DmlExecutionProvider","CPUExecutionProvider"]).
+        Returns [] when the env is unset/blank/malformed → kokoro-onnx
+        auto-detects (today's behaviour)."""
+        raw = os.environ.get("KOKORO_ORT_PROVIDERS")
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, TypeError):
+            return []
+        if isinstance(parsed, list) and all(isinstance(p, str) for p in parsed):
+            return parsed
+        return []
+
+    def _dml_marker_path(self) -> str:
+        """Sidecar-side marker recording that the DirectML self-test passed, so
+        it runs at most once per install (sits next to the Kokoro weights)."""
+        return os.path.join(os.path.dirname(self._model_path), ".kokoro-dml-selftest-ok")
+
+    def _directml_selftest_or_fallback(self, kokoro_cls: Any, kokoro: Any) -> Any:
+        """One-time DirectML proof-of-life. Returns the Kokoro instance to keep:
+        the DML one if a tiny synth succeeds (and caches a PASS marker), else a
+        fresh CPU-EP instance. Sets self._dml_status to 'directml' | 'fallback-cpu'."""
+        if os.path.isfile(self._dml_marker_path()):
+            self._dml_status = "directml"
+            return kokoro
+        voice = self._voices[0] if self._voices else self.FALLBACK_VOICE
+        try:
+            kokoro.create("ok", voice, 1.0, self._language)
+        except Exception as e:
+            log.warning("Kokoro DirectML self-test failed (%s); falling back to CPU EP.", e)
+            self._dml_status = "fallback-cpu"
+            try:
+                return kokoro_cls(
+                    self._model_path, self._voices_path, providers=["CPUExecutionProvider"]
+                )
+            except TypeError:
+                return kokoro_cls(self._model_path, self._voices_path)
+        self._dml_status = "directml"
+        try:
+            with open(self._dml_marker_path(), "w", encoding="utf-8") as f:
+                f.write("ok\n")
+        except OSError:
+            pass
+        return kokoro
 
     def _ensure_loaded(self, model: str) -> None:
         if self._kokoro is not None:
@@ -760,11 +818,29 @@ class KokoroEngine(Engine):
         try:
             from kokoro_onnx import Kokoro  # type: ignore
         except ImportError as e:
+            # Profile-aware remediation: the right ONNX-runtime package depends on
+            # this box's accelerator profile (injected as CASTWRIGHT_ACCELERATOR_
+            # PROFILE), not a hard-coded "needs an NVIDIA GPU".
+            profile = os.environ.get("CASTWRIGHT_ACCELERATOR_PROFILE", "nvidia")
+            if profile == "amd" and os.name == "nt":
+                ort_pkg, ort_note = (
+                    "onnxruntime-directml",
+                    "onnxruntime-directml runs Kokoro on AMD-Windows via DirectML",
+                )
+            elif profile == "nvidia":
+                ort_pkg, ort_note = (
+                    "onnxruntime-gpu",
+                    "onnxruntime-gpu needs an NVIDIA GPU",
+                )
+            else:
+                ort_pkg, ort_note = (
+                    "onnxruntime",
+                    "plain onnxruntime is the CPU / macOS / AMD-Linux runtime",
+                )
             raise RuntimeError(
                 f"Failed to import kokoro-onnx ({e}). Install with: "
-                "`.\\.venv\\Scripts\\python.exe -m pip install kokoro-onnx onnxruntime-gpu` "
-                "in server/tts-sidecar (onnxruntime-gpu needs an NVIDIA GPU; on macOS / "
-                "CPU-only boxes install plain onnxruntime instead)."
+                f"`.\\.venv\\Scripts\\python.exe -m pip install kokoro-onnx {ort_pkg}` "
+                f"in server/tts-sidecar (accelerator profile '{profile}': {ort_note})."
             ) from e
 
         if not os.path.isfile(self._model_path):
@@ -779,12 +855,24 @@ class KokoroEngine(Engine):
             )
 
         log.info("Loading Kokoro model=%s voices=%s ...", self._model_path, self._voices_path)
-        # kokoro-onnx selects ONNX Runtime providers automatically — CUDA
-        # when onnxruntime-gpu is installed, CPU fallback otherwise. We
-        # don't pass a providers list explicitly because the constructor
-        # signature has shifted across kokoro-onnx releases; the auto-
-        # detection has been stable.
-        kokoro = Kokoro(self._model_path, self._voices_path)
+        # ORT providers: honour the injected KOKORO_ORT_PROVIDERS (the server
+        # resolves them from the accelerator profile — e.g. DirectML on
+        # AMD-Windows) when present, else let kokoro-onnx auto-detect (CUDA when
+        # onnxruntime-gpu is installed, CPU otherwise). The constructor's
+        # providers= kwarg has come and gone across kokoro-onnx releases, so a
+        # TypeError falls back to the proven no-arg construction.
+        providers = self._resolve_ort_providers()
+        if providers:
+            try:
+                kokoro = Kokoro(self._model_path, self._voices_path, providers=providers)
+            except TypeError:
+                log.warning(
+                    "kokoro-onnx ignored providers=%s (older release); using auto-detection.",
+                    providers,
+                )
+                kokoro = Kokoro(self._model_path, self._voices_path)
+        else:
+            kokoro = Kokoro(self._model_path, self._voices_path)
 
         # Enumerate the voice manifest. The API has drifted across kokoro-
         # onnx versions: older releases expose `voices` as a dict, newer
@@ -816,6 +904,18 @@ class KokoroEngine(Engine):
             v for v in all_voices
             if isinstance(v, str) and v.startswith(self.ENGLISH_VOICE_PREFIXES)
         )
+
+        # DirectML self-test (AMD-Windows). The Kokoro DML path has a known
+        # ConvTranspose risk (spike S0.1, OWED on real AMD hw): prove DML actually
+        # runs the model with one tiny synth on first load, and fall back to the
+        # CPU EP if it can't — so generation still works (honestly reported as cpu
+        # in /health via the session providers). Cached via a marker so later loads
+        # skip the ~1 s probe. Only runs when DirectML is in the providers (amd-win);
+        # other profiles and a Qwen-only session never reach this (Kokoro unloaded).
+        self._dml_status = None
+        if "DmlExecutionProvider" in providers:
+            kokoro = self._directml_selftest_or_fallback(Kokoro, kokoro)
+
         self._kokoro = kokoro
         log.info(
             "Kokoro loaded. English voices: %d (filtered from %d total in manifest).",
@@ -2032,7 +2132,15 @@ def _cuda_vram_mb() -> tuple[Optional[float], Optional[float], Optional[float]]:
     (logged at load), so a fragmented reserved pool that creeps past the physical
     card spills into the NVIDIA sysmem fallback and collapses RTF; `empty_cache()`
     can't compact it back, so only a fresh process resets it. That's why a
-    reserved-VRAM ceiling (not allocated) is the right recycle trigger."""
+    reserved-VRAM ceiling (not allocated) is the right recycle trigger.
+
+    Vendor-neutral (AMD phase 2): a ROCm torch build reports `torch.cuda.is_
+    available()` True (HIP aliases the CUDA API), so memory_reserved /
+    get_device_properties read the AMD card and the VRAM recycle protects ROCm
+    boxes the same as NVIDIA. A box with no torch-visible GPU (DirectML-only, or
+    torch CUDA/ROCm unavailable) returns (None, None, None) → the ceilings below
+    derive to 0 (disabled) and the host-RAM watchdog governs instead (the
+    unknown-VRAM fail-safe — never guess a ceiling that could fire on a healthy box)."""
     try:
         import torch  # type: ignore
 
@@ -2529,23 +2637,52 @@ _device_probe: dict[str, Optional[str]] = {"kokoro": None, "coqui": None, "qwen"
 _device_probe_state: str = "pending"  # 'pending' | 'ready' | 'error'
 
 
-def _normalize_device_family(raw: Optional[str]) -> Optional[str]:
-    """'cuda:0'/'cuda:1' → 'cuda'; mps/cpu pass through; anything else (None,
-    '', an unresolved 'auto' pref) → None so callers fall back to prediction."""
+def _torch_is_hip(torch_module: Any) -> bool:
+    """True when torch is a ROCm/HIP build (torch.version.hip set). On AMD the
+    runtime device string is still 'cuda' (HIP aliases the CUDA API), so this is
+    how we tell rocm apart from cuda for honest reporting."""
+    try:
+        return bool(getattr(getattr(torch_module, "version", None), "hip", None))
+    except Exception:
+        return False
+
+
+def _ort_providers_to_family(providers: Any) -> str:
+    """Map an ONNX Runtime provider list to a device family, in bind-priority
+    order (the accelerated EP that actually takes the session). DirectML (AMD-
+    Windows) → directml, CUDA → cuda, ROCm → rocm, else cpu."""
+    provs = list(providers)
+    if "DmlExecutionProvider" in provs:
+        return "directml"
+    if "CUDAExecutionProvider" in provs:
+        return "cuda"
+    if "ROCMExecutionProvider" in provs:
+        return "rocm"
+    return "cpu"
+
+
+def _normalize_device_family(raw: Optional[str], torch_module: Any = None) -> Optional[str]:
+    """'cuda:0'/'cuda:1' → 'cuda'; mps/cpu/rocm/directml pass through; anything
+    else (None, '', an unresolved 'auto' pref) → None so callers fall back to
+    prediction. When a HIP torch build is supplied, a 'cuda' family is reported
+    honestly as 'rocm' (the AMD device string is 'cuda' but it's really ROCm)."""
     if not raw:
         return None
     fam = str(raw).strip().lower().split(":", 1)[0]
-    return fam if fam in ("cuda", "mps", "cpu") else None
+    if fam == "cuda" and _torch_is_hip(torch_module):
+        return "rocm"
+    return fam if fam in ("cuda", "rocm", "directml", "mps", "cpu") else None
 
 
 def _predict_kokoro_device(ort_module: Any) -> Optional[str]:
-    """Mirror kokoro-onnx's auto-selection: CUDA EP available → cuda, else cpu.
-    Tolerates a broken/absent onnxruntime (None → caller leaves the slot null)."""
+    """Mirror kokoro-onnx's auto-selection from the available EPs: DirectML →
+    directml, CUDA → cuda, ROCm → rocm, else cpu. Tolerates a broken/absent
+    onnxruntime (→ cpu)."""
     try:
         providers = list(ort_module.get_available_providers())
     except Exception:
         return "cpu"
-    return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+    return _ort_providers_to_family(providers)
 
 
 def _compute_device_predictions(
@@ -2563,11 +2700,13 @@ def _compute_device_predictions(
             if isinstance(qwen, QwenEngine)
             else os.environ.get("QWEN_DEVICE", "auto")
         )
-        out["qwen"] = _normalize_device_family(_resolve_torch_device(pref, torch_module))
+        out["qwen"] = _normalize_device_family(
+            _resolve_torch_device(pref, torch_module), torch_module
+        )
         coqui = ENGINES.get("coqui")
         if isinstance(coqui, CoquiEngine):
             out["coqui"] = _normalize_device_family(
-                coqui._resolve_runtime_options(torch_module)["device"]
+                coqui._resolve_runtime_options(torch_module)["device"], torch_module
             )
     return out
 
@@ -2609,7 +2748,7 @@ def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
         if sess is None:
             return None
         providers = list(sess.get_providers())
-        return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+        return _ort_providers_to_family(providers)
     except Exception:
         return None
 

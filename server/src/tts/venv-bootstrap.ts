@@ -25,6 +25,18 @@ import { spawn as realSpawn, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { sidecarVenvPresent } from '../diagnostics/venv.js';
 import { findPython312 } from './python-discovery.js';
+import { getKnob } from '../config/registry.js';
+import { resolveKnob } from '../config/resolver.js';
+
+/** The chosen accelerator profile to pass to bootstrap-venv (AMD phase 2), or
+    null for 'auto' (default) → leave ACCELERATOR unset so the bootstrap detects
+    the hardware. Reads the tts.accelerator knob (env or wizard/advanced override). */
+function resolvedAcceleratorEnv(): string | null {
+  const knob = getKnob('tts.accelerator');
+  if (!knob) return null;
+  const v = String(resolveKnob(knob).effective);
+  return v && v !== 'auto' ? v : null;
+}
 
 export type VenvBootstrapState = 'present' | 'absent';
 
@@ -43,7 +55,7 @@ export interface VenvBootstrapJob {
 export type VenvSpawnFn = (
   cmd: string,
   args: readonly string[],
-  opts?: { cwd?: string; windowsHide?: boolean },
+  opts?: { cwd?: string; windowsHide?: boolean; env?: NodeJS.ProcessEnv },
 ) => ChildProcess;
 
 export interface VenvBootstrapOptions {
@@ -179,9 +191,13 @@ export class VenvBootstrap {
     return new Promise((resolve, reject) => {
       let proc: ChildProcess;
       try {
+        const accel = resolvedAcceleratorEnv();
         proc = this.spawnFn('node', [script, python.cmd, ...python.args], {
           cwd: this.repoRoot,
           windowsHide: true,
+          // AMD phase 2 — pass the chosen profile so bootstrap-venv installs the
+          // matching overlay; omitted for 'auto' so detection runs.
+          env: accel ? { ...process.env, ACCELERATOR: accel } : process.env,
         });
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)));

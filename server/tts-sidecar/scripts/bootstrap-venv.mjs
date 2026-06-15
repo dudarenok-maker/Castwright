@@ -23,7 +23,7 @@
 //   node server/tts-sidecar/scripts/bootstrap-venv.mjs python3
 //   node server/tts-sidecar/scripts/bootstrap-venv.mjs py -3.12
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,7 +32,11 @@ import {
   readStamp,
   writeStamp,
   resolveRequired,
+  overlayFileForProfile,
 } from './venv-migration.mjs';
+import { resolveInstallProfile } from './accelerator-profile.mjs';
+import { planTorchPreinstall } from './install-torch.mjs';
+import { planOrtSwap } from './install-ort.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> tts-sidecar/ -> server/ -> repo root  (3 levels up)
@@ -94,18 +98,87 @@ function readBuiltVersion() {
   }
 }
 
-/** pip install -r requirements.txt into a venv python; exits non-zero on failure. */
-function pipInstall(venvPy) {
-  const reqs = join(SIDECAR_DIR, 'requirements.txt');
-  log('installing requirements (this can take several minutes)');
-  const p = spawnSync(venvPy, ['-m', 'pip', 'install', '-r', reqs], {
-    stdio: 'inherit',
-    windowsHide: true,
-  });
-  if (p.status !== 0) {
-    process.stderr.write('[bootstrap-venv] FAIL: pip install failed\n');
-    process.exit(1);
+/** Run `pip <args>` in the venv; returns true on success (status 0). Non-fatal —
+    the caller decides what a failure means (the amd path falls back to CPU). */
+function pipOk(venvPy, pipArgs) {
+  return spawnSync(venvPy, ['-m', 'pip', ...pipArgs], { stdio: 'inherit', windowsHide: true }).status === 0;
+}
+
+/** Absolute path of the requirements overlay for a profile. */
+function overlayPath(profile) {
+  return join(SIDECAR_DIR, 'requirements', overlayFileForProfile(profile));
+}
+
+/** Record an accelerator fallback (amd→cpu) next to the venv stamp so the runtime
+    / UI can explain "AMD GPU detected but acceleration unavailable — on CPU".
+    Best-effort; a write failure never blocks the (already-degraded) install. */
+function writeFallbackMarker(venvDir, requested, effective, reason) {
+  try {
+    writeFileSync(
+      join(venvDir, '.accelerator-fallback.json'),
+      `${JSON.stringify({ requested, effective, reason }, null, 2)}\n`,
+      'utf8',
+    );
+  } catch {
+    /* best-effort */
   }
+}
+
+/**
+ * Install the engine deps for `profile`, returning the profile ACTUALLY installed.
+ * The amd path (ROCm torch wheels → amd overlay → ORT swap) is BEST-EFFORT: the
+ * ROCm wheels are alpha previews, so if any amd step fails it FALLS BACK to a CPU
+ * install — the app still works (degraded to CPU, surfaced via the fallback marker
+ * + an honest 'cpu' stamp) instead of bricking a fresh AMD install. nvidia/cpu/
+ * apple install their overlay directly (a failure there is fatal → throws). The
+ * torch/ort steps use the same pure planners as the standalone install scripts.
+ * `runPip` is injectable for tests.
+ * @returns {string} the effective profile ('amd', or 'cpu' on an amd→cpu fallback)
+ */
+export function installForProfile(
+  venvPy,
+  profile,
+  runPip = (a) => pipOk(venvPy, a),
+  platform = process.platform,
+  venvDir = null,
+) {
+  if (profile === 'amd') {
+    const torch = planTorchPreinstall('amd', platform);
+    if (torch.action === 'install') {
+      log(`pre-installing ${torch.wheels.length} ROCm torch wheel(s) for the amd profile`);
+    }
+    let ok = torch.action !== 'install' || runPip(['install', '--no-cache-dir', ...torch.wheels]);
+    if (ok) {
+      log('installing requirements (amd-rocm overlay; this can take several minutes)');
+      ok = runPip(['install', '-r', overlayPath('amd')]);
+    }
+    if (ok) {
+      const ort = planOrtSwap('amd', platform);
+      if (ort.action === 'swap') {
+        for (const step of ort.steps) {
+          if (!runPip(step)) {
+            ok = false;
+            break;
+          }
+        }
+      }
+    }
+    if (ok) return 'amd';
+    // ROCm install failed → degrade to a working CPU install (Auto + CPU fallback).
+    log('AMD ROCm install FAILED — falling back to a CPU install so the app still works.');
+    log('  GPU acceleration is unavailable; update your AMD driver / confirm ROCm support to retry.');
+    if (venvDir) writeFallbackMarker(venvDir, 'amd', 'cpu', 'rocm-install-failed');
+    if (!runPip(['install', '-r', overlayPath('cpu')])) {
+      throw new Error('CPU fallback install also failed (check network + the sidecar venv)');
+    }
+    return 'cpu';
+  }
+
+  log(`installing requirements (${profile} overlay; this can take several minutes)`);
+  if (!runPip(['install', '-r', overlayPath(profile)])) {
+    throw new Error(`pip install failed for the ${profile} overlay`);
+  }
+  return profile;
 }
 
 function main() {
@@ -113,12 +186,16 @@ function main() {
     process.env.SIDECAR_VENV_DIR ?? join(REPO_ROOT, 'server', 'tts-sidecar', '.venv');
   const platform = process.platform;
   const venvExists = venvAlreadyBootstrapped(venvDir, platform);
-  const required = resolveRequired(SIDECAR_DIR);
-  const { action } = classifyVenvState({
-    venvExists,
-    stamp: readStamp(venvDir),
-    required,
+  const stamp = readStamp(venvDir);
+  // Effective profile: ACCELERATOR override → the existing venv's stamped profile
+  // (carry-forward, so an existing install is never force-migrated) → detection.
+  const profile = resolveInstallProfile({
+    envOverride: process.env.ACCELERATOR ?? null,
+    stampProfile: stamp?.profile ?? null,
+    platform,
   });
+  const required = resolveRequired(SIDECAR_DIR, profile);
+  const { action } = classifyVenvState({ venvExists, stamp, required });
 
   if (action === 'noop') {
     log('venv up to date — nothing to do');
@@ -138,9 +215,11 @@ function main() {
 
   if (action === 'pip-in-place') {
     const venvPy = venvPythonPath(venvDir, platform);
-    pipInstall(venvPy);
-    const stamp = readStamp(venvDir) ?? {};
-    writeStamp(venvDir, { ...stamp, reqHash: required.reqHash });
+    // installForProfile returns the EFFECTIVE profile — amd may degrade to cpu if
+    // the ROCm install fails, so re-stamp the profile + its reqHash accordingly.
+    const effective = runInstall(venvPy, profile, venvDir);
+    const effReq = resolveRequired(SIDECAR_DIR, effective);
+    writeStamp(venvDir, { ...(stamp ?? {}), profile: effective, reqHash: effReq.reqHash });
     log('done');
     return;
   }
@@ -165,19 +244,34 @@ function main() {
   }
 
   const venvPy = venvPythonPath(venvDir, platform);
-  pipInstall(venvPy);
+  // Effective profile — amd may degrade to cpu on a ROCm-install failure.
+  const effective = runInstall(venvPy, profile, venvDir);
 
   // Stamp the tag of the REAL interpreter, not the required tag, so a
-  // mis-supplied 3.11 python stamps cp311 (a later run then flags it).
+  // mis-supplied 3.11 python stamps cp311 (a later run then flags it). Stamp the
+  // EFFECTIVE profile (resolved, possibly amd→cpu) + its reqHash so the venv
+  // records what it actually built — the upgrade guard then carries it forward.
   const pythonTag = probePythonTag(venvPy) ?? required.pythonTag;
+  const effReq = resolveRequired(SIDECAR_DIR, effective);
   writeStamp(venvDir, {
     pythonTag,
-    profile: 'nvidia',
-    reqHash: required.reqHash,
+    profile: effective,
+    reqHash: effReq.reqHash,
     builtVersion: readBuiltVersion(),
   });
 
   log('done');
+}
+
+/** Wrap installForProfile so a hard (non-fallback) failure prints a clean message
+    and exits non-zero instead of dumping a stack — preserving the prior CLI UX. */
+function runInstall(venvPy, profile, venvDir) {
+  try {
+    return installForProfile(venvPy, profile, undefined, process.platform, venvDir);
+  } catch (err) {
+    process.stderr.write(`[bootstrap-venv] FAIL: ${err instanceof Error ? err.message : err}\n`);
+    process.exit(1);
+  }
 }
 
 // Run only when invoked directly (node bootstrap-venv.mjs); stay inert on import

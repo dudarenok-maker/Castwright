@@ -102,6 +102,10 @@ describe('applyUpgrade', () => {
     expect(res.ok).toBe(false);
     expect(res.phase).toBe('needs-reinstall');
     expect(res.error).toMatch(/reinstall/i);
+    // UX guarantee (AMD phase 2): the reinstall path — the same one a profile
+    // switch takes, since the in-place rebuild was descoped — MUST reassure the
+    // user their content survives, so the message can't read as data loss.
+    expect(res.error).toMatch(/books and voices are preserved/i);
     // never pip into a 3.11 venv, and the old release stays current.
     expect(steps.pipInstall).not.toHaveBeenCalled();
     expect(steps.flipPointer).not.toHaveBeenCalled();
