@@ -745,8 +745,9 @@ export interface KnobDescriptor {
   max?: number;
   step?: number;
   options?: string[];
-  /** When the knob takes effect: immediately, on sidecar restart, or on server restart. */
-  apply: 'live' | 'restart-sidecar' | 'restart-server';
+  /** When the knob takes effect: immediately, on sidecar restart, on server
+      restart, or via a venv rebuild (the accelerator profile switch). */
+  apply: 'live' | 'restart-sidecar' | 'restart-server' | 'rebuild';
   risk: 'low' | 'medium' | 'high';
   /** True when this knob is a prompt template (backed by /api/config/prompts/:key). */
   isPrompt: boolean;

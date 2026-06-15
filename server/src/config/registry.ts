@@ -314,6 +314,16 @@ export const KNOBS: ConfigKnob[] = [
 
   // ── tts-engine ────────────────────────────────────────────────────────────
   {
+    key: 'tts.accelerator',
+    env: 'ACCELERATOR',
+    group: 'tts-engine',
+    label: 'Accelerator profile',
+    help: 'Which GPU stack the voice engines install + run on. "auto" (default) detects your hardware (NVIDIA → CUDA, AMD → ROCm/DirectML, Apple → Metal, else CPU). Pin "nvidia", "amd", or "cpu" to override. Changing this is NOT instant: it REBUILDS the Python environment (a different torch / ONNX-runtime install) and restarts the sidecar — your books and voices are untouched. AMD (ROCm/DirectML) is an experimental preview.',
+    type: 'enum', options: ['auto', 'nvidia', 'amd', 'cpu'],
+    default: 'auto', // 'auto' → no ACCELERATOR env → resolveInstallProfile detects hardware
+    apply: 'rebuild', risk: 'high',
+  },
+  {
     key: 'tts.coqui.device',
     env: 'COQUI_DEVICE',
     group: 'tts-engine',

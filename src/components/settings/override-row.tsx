@@ -14,13 +14,19 @@ function applyLabel(apply: KnobDescriptor['apply']): string {
       return 'restart';
     case 'restart-server':
       return 'restart · app';
+    case 'rebuild':
+      return 'rebuilds env';
   }
 }
 
-/* Colour the apply pill: live = emerald, restart variants = amber. */
+/* Colour the apply pill: live = emerald, restart variants = amber, rebuild =
+   rose (heaviest — it reinstalls the Python environment, not just a restart). */
 function applyPillClasses(apply: KnobDescriptor['apply']): string {
   if (apply === 'live') {
     return 'bg-emerald-100 text-emerald-800';
+  }
+  if (apply === 'rebuild') {
+    return 'bg-rose-100 text-rose-800';
   }
   return 'bg-amber-100 text-amber-800';
 }
