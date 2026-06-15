@@ -72,3 +72,14 @@ export function clearDesignBusy(bookDir: string): void {
 export function isDesignBusy(bookDir: string): boolean {
   return designBusy.has(bookDir);
 }
+
+/** True when ANY book has a bulk voice-design job in flight. Used by the
+    accelerator-profile switch (AMD phase 2) to refuse a venv rebuild mid-design. */
+export function isAnyDesignBusy(): boolean {
+  return designBusy.size > 0;
+}
+
+/** True when ANY book has an analysis job in flight (main or subset). */
+export function isAnyAnalysisBusy(): boolean {
+  return analysisBusy.size > 0;
+}
