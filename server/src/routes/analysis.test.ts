@@ -10,6 +10,7 @@ import {
   engineFallbackMsPerChar,
   localFallbackMsPerChar,
   projectChapterEstMsFromOutput,
+  refineCastChapterEstMs,
   projectRemainingMs,
   buildInterimCast,
   clearFailedChapterId,
@@ -666,6 +667,32 @@ describe('projectChapterEstMsFromOutput (mid-chapter live ETA refinement)', () =
   });
 });
 
+describe('refineCastChapterEstMs (Phase-0a live ETA — section-progress + no-over-budget floor)', () => {
+  it('projects total from section progress once ≥1 section is done', () => {
+    // 1 of 4 sections done in 60s → ~240s total (dwarfs the 30s base).
+    expect(refineCastChapterEstMs(60_000, 30_000, 1, 4)).toBe(240_000);
+    // 3 of 4 done in 300s → ~400s total.
+    expect(refineCastChapterEstMs(300_000, 30_000, 3, 4)).toBe(400_000);
+  });
+
+  it('never reads "over budget": estimate always sits above elapsed', () => {
+    // A too-low base (the first-chapter lie) + no section data → floor wins.
+    const est = refineCastChapterEstMs(120_000, 5_000, 0, 1);
+    expect(est).toBeGreaterThan(120_000);
+    expect(est).toBe(Math.round(120_000 * 1.1) + 3000);
+  });
+
+  it('keeps the base estimate early when it is comfortably ahead', () => {
+    // Single-section chapter, 10s elapsed, 120s base → base wins (ahead of floor).
+    expect(refineCastChapterEstMs(10_000, 120_000, 0, 1)).toBe(120_000);
+  });
+
+  it('the section projection still floors above elapsed near the end', () => {
+    // Last section running long: done=3/4, elapsed 390s → proj 520s (still ahead).
+    expect(refineCastChapterEstMs(390_000, 30_000, 3, 4)).toBe(520_000);
+  });
+});
+
 describe('chapterEstFromObserved', () => {
   it('falls back to the supplied baseline before any samples exist', () => {
     expect(chapterEstFromObserved(20_111, 0, 0, 40_000)).toBe(40_000);
@@ -914,7 +941,11 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
       code: 'analyzer-unreachable',
       remediation: 'start ollama',
     });
-    expect((job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId.get(3)).toEqual({
+    expect(
+      (job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId.get(
+        3,
+      ),
+    ).toEqual({
       kind: 'chapter-failed',
       chapterId: 3,
       message: 'analyzer down',
@@ -926,7 +957,10 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
     const job = makeJob();
     trackForReplay(job, { kind: 'chapter-failed', chapterId: 3, message: 'm' });
     trackForReplay(job, { kind: 'chapter-resolved', chapterId: 3 });
-    expect((job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId.size).toBe(0);
+    expect(
+      (job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId
+        .size,
+    ).toBe(0);
   });
 });
 
@@ -1689,7 +1723,10 @@ describe('readPriorCastForMerge (srv-13 carryover fallback)', () => {
   it('prefers cast.json when present', async () => {
     const dir = makeBookDir();
     try {
-      writeFileSync(castPath(dir), JSON.stringify({ characters: [{ id: 'live', voiceId: 'live' }] }));
+      writeFileSync(
+        castPath(dir),
+        JSON.stringify({ characters: [{ id: 'live', voiceId: 'live' }] }),
+      );
       writeFileSync(
         carryPath(dir),
         JSON.stringify({ characters: [{ id: 'stale', voiceId: 'stale' }] }),
