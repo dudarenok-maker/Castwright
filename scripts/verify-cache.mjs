@@ -65,6 +65,14 @@ export const STEPS = [
     },
   },
   {
+    name: 'test:pinokio',
+    inputs: {
+      globs: ['pinokio/**'],
+      extraFiles: ['scripts/run-pinokio-tests.mjs'],
+      includeLockfiles: [],
+    },
+  },
+  {
     name: 'test',
     inputs: {
       globs: ['src/**'],
