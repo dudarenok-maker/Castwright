@@ -34,8 +34,13 @@ export function classifyVenvState(args: {
   required: VenvStamp;
 }): { action: VenvState };
 
-export function resolveRequired(sidecarDir: string): {
+export function overlayFileForProfile(profile: string): string;
+
+export function resolveRequired(
+  sidecarDir: string,
+  profile?: string,
+): {
   pythonTag: string;
-  profile: 'nvidia';
+  profile: string;
   reqHash: string;
 };

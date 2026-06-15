@@ -17,8 +17,15 @@ import {
   classifyVenvState,
   readStamp,
   resolveRequired,
+  overlayFileForProfile,
   type VenvStamp,
 } from '../../tts-sidecar/scripts/venv-migration.mjs';
+// @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
+import { resolveInstallProfile } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
+// @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
+import { planTorchPreinstall } from '../../tts-sidecar/scripts/install-torch.mjs';
+// @ts-expect-error — standalone install scripts ship no .d.ts; pure helpers are plain JS.
+import { planOrtSwap } from '../../tts-sidecar/scripts/install-ort.mjs';
 
 export interface ApplyContext {
   installRoot: string;
@@ -214,6 +221,23 @@ export function createApplySteps(opts: { venvDir: string; log?: (m: string) => v
     ? join(opts.venvDir, 'Scripts', 'python.exe')
     : join(opts.venvDir, 'bin', 'python');
 
+  // Effective profile for THIS box, memoised so the GPU probe runs once across
+  // the resolveRequired + pipInstall steps. Carry-forward (the shared venv's
+  // stamped profile) beats detection so an existing install is never force-
+  // migrated; an explicit ACCELERATOR override switches it (→ needs-reinstall).
+  let cachedProfile: string | undefined;
+  const effectiveProfile = (): string => {
+    if (cachedProfile === undefined) {
+      const resolved: string = resolveInstallProfile({
+        envOverride: process.env.ACCELERATOR ?? null,
+        stampProfile: readStamp(opts.venvDir)?.profile ?? null,
+        platform: process.platform,
+      });
+      cachedProfile = resolved;
+    }
+    return cachedProfile;
+  };
+
   return {
     rmDir: async (dir) => rmSync(dir, { recursive: true, force: true }),
     exists: existsSync,
@@ -222,8 +246,27 @@ export function createApplySteps(opts: { venvDir: string; log?: (m: string) => v
       await run(npm, ['ci'], releaseDir);
       await run(npm, ['ci'], join(releaseDir, 'server'));
     },
+    // Install the engine deps for the effective profile into the shared venv,
+    // reading the CANDIDATE release's requirements/scripts: ROCm torch pre-install
+    // (amd only) → the profile's requirements overlay → onnxruntime→directml swap
+    // (amd-win only). For nvidia/cpu/apple this is just the overlay — same as the
+    // old single requirements.txt install for nvidia.
     pipInstall: async (releaseDir) => {
-      await run(venvPython, ['-m', 'pip', 'install', '-r', join(releaseDir, 'server', 'tts-sidecar', 'requirements.txt')], releaseDir);
+      const profile = effectiveProfile();
+      const sidecar = join(releaseDir, 'server', 'tts-sidecar');
+      const torch = planTorchPreinstall(profile, process.platform);
+      if (torch.action === 'install') {
+        await run(venvPython, ['-m', 'pip', 'install', '--no-cache-dir', ...torch.wheels], releaseDir);
+      }
+      await run(
+        venvPython,
+        ['-m', 'pip', 'install', '-r', join(sidecar, 'requirements', overlayFileForProfile(profile))],
+        releaseDir,
+      );
+      const ort = planOrtSwap(profile, process.platform);
+      if (ort.action === 'swap') {
+        for (const step of ort.steps) await run(venvPython, ['-m', 'pip', ...step], releaseDir);
+      }
     },
     readReqHash: () => {
       try {
@@ -240,7 +283,7 @@ export function createApplySteps(opts: { venvDir: string; log?: (m: string) => v
     // via the pure venv-migration core (the same functions bootstrap-venv.mjs
     // uses), so the two install paths can never disagree (S3).
     readStamp: () => readStamp(opts.venvDir),
-    resolveRequired: (sidecarDir) => resolveRequired(sidecarDir),
+    resolveRequired: (sidecarDir) => resolveRequired(sidecarDir, effectiveProfile()),
     flipPointer: async (installRoot, version) => {
       const pointer = join(installRoot, '.current-version');
       const tmp = `${pointer}.tmp`;

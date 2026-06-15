@@ -32,7 +32,11 @@ import {
   readStamp,
   writeStamp,
   resolveRequired,
+  overlayFileForProfile,
 } from './venv-migration.mjs';
+import { resolveInstallProfile } from './accelerator-profile.mjs';
+import { planTorchPreinstall } from './install-torch.mjs';
+import { planOrtSwap } from './install-ort.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // scripts/ -> tts-sidecar/ -> server/ -> repo root  (3 levels up)
@@ -94,17 +98,38 @@ function readBuiltVersion() {
   }
 }
 
-/** pip install -r requirements.txt into a venv python; exits non-zero on failure. */
-function pipInstall(venvPy) {
-  const reqs = join(SIDECAR_DIR, 'requirements.txt');
-  log('installing requirements (this can take several minutes)');
-  const p = spawnSync(venvPy, ['-m', 'pip', 'install', '-r', reqs], {
-    stdio: 'inherit',
-    windowsHide: true,
-  });
+/** Run `pip <args>` in the venv; exits non-zero (with `label`) on failure. */
+function pip(venvPy, pipArgs, label) {
+  const p = spawnSync(venvPy, ['-m', 'pip', ...pipArgs], { stdio: 'inherit', windowsHide: true });
   if (p.status !== 0) {
-    process.stderr.write('[bootstrap-venv] FAIL: pip install failed\n');
+    process.stderr.write(`[bootstrap-venv] FAIL: ${label}\n`);
     process.exit(1);
+  }
+}
+
+/**
+ * Install the engine deps for `profile` into the venv: (1) pre-install the ROCm
+ * torch wheels for amd (no-op otherwise), (2) pip install the profile's
+ * requirements overlay, (3) swap base onnxruntime → onnxruntime-directml on
+ * amd-win (no-op otherwise). For nvidia this is exactly today's single overlay
+ * install. The torch/ort steps are driven by the same pure planners the
+ * standalone install-torch.mjs / install-ort.mjs CLIs use.
+ */
+function installForProfile(venvPy, profile) {
+  const torch = planTorchPreinstall(profile, process.platform);
+  if (torch.action === 'install') {
+    log(`pre-installing ${torch.wheels.length} ROCm torch wheel(s) for the amd profile`);
+    pip(venvPy, ['install', '--no-cache-dir', ...torch.wheels], 'ROCm torch pre-install failed');
+  }
+
+  const overlay = join(SIDECAR_DIR, 'requirements', overlayFileForProfile(profile));
+  log(`installing requirements (${profile} overlay; this can take several minutes)`);
+  pip(venvPy, ['install', '-r', overlay], 'pip install failed');
+
+  const ort = planOrtSwap(profile, process.platform);
+  if (ort.action === 'swap') {
+    log('swapping onnxruntime → onnxruntime-directml (Kokoro on DirectML)');
+    for (const step of ort.steps) pip(venvPy, step, `pip ${step.join(' ')} failed`);
   }
 }
 
@@ -113,12 +138,16 @@ function main() {
     process.env.SIDECAR_VENV_DIR ?? join(REPO_ROOT, 'server', 'tts-sidecar', '.venv');
   const platform = process.platform;
   const venvExists = venvAlreadyBootstrapped(venvDir, platform);
-  const required = resolveRequired(SIDECAR_DIR);
-  const { action } = classifyVenvState({
-    venvExists,
-    stamp: readStamp(venvDir),
-    required,
+  const stamp = readStamp(venvDir);
+  // Effective profile: ACCELERATOR override → the existing venv's stamped profile
+  // (carry-forward, so an existing install is never force-migrated) → detection.
+  const profile = resolveInstallProfile({
+    envOverride: process.env.ACCELERATOR ?? null,
+    stampProfile: stamp?.profile ?? null,
+    platform,
   });
+  const required = resolveRequired(SIDECAR_DIR, profile);
+  const { action } = classifyVenvState({ venvExists, stamp, required });
 
   if (action === 'noop') {
     log('venv up to date — nothing to do');
@@ -138,9 +167,8 @@ function main() {
 
   if (action === 'pip-in-place') {
     const venvPy = venvPythonPath(venvDir, platform);
-    pipInstall(venvPy);
-    const stamp = readStamp(venvDir) ?? {};
-    writeStamp(venvDir, { ...stamp, reqHash: required.reqHash });
+    installForProfile(venvPy, profile);
+    writeStamp(venvDir, { ...(stamp ?? {}), reqHash: required.reqHash });
     log('done');
     return;
   }
@@ -165,14 +193,16 @@ function main() {
   }
 
   const venvPy = venvPythonPath(venvDir, platform);
-  pipInstall(venvPy);
+  installForProfile(venvPy, profile);
 
   // Stamp the tag of the REAL interpreter, not the required tag, so a
-  // mis-supplied 3.11 python stamps cp311 (a later run then flags it).
+  // mis-supplied 3.11 python stamps cp311 (a later run then flags it). Stamp the
+  // resolved profile (no longer hardcoded nvidia) so an amd/cpu install records
+  // what it actually built — the upgrade guard then carries it forward.
   const pythonTag = probePythonTag(venvPy) ?? required.pythonTag;
   writeStamp(venvDir, {
     pythonTag,
-    profile: 'nvidia',
+    profile,
     reqHash: required.reqHash,
     builtVersion: readBuiltVersion(),
   });

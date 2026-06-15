@@ -2,7 +2,7 @@
    directly), so importing it here is inert. */
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error — standalone install script ships no .d.ts; helpers are plain JS.
-import { parseVendorFromProbe, detectVendor, resolveProfile, runtimeBackend, ortProviders, installRecipe, describeResolved } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
+import { parseVendorFromProbe, detectVendor, resolveProfile, resolveInstallProfile, runtimeBackend, ortProviders, installRecipe, describeResolved } from '../../tts-sidecar/scripts/accelerator-profile.mjs';
 
 describe('parseVendorFromProbe', () => {
   it('detects NVIDIA from a Windows controller list', () => {
@@ -68,6 +68,49 @@ describe('resolveProfile', () => {
   });
   it('rejects an invalid override and falls through', () => {
     expect(resolveProfile({ envOverride: 'banana', wizardChoice: null, detected: 'nvidia' })).toBe('nvidia');
+  });
+});
+
+describe('resolveInstallProfile (venv build/upgrade precedence: env → stamp carry-forward → detection)', () => {
+  const amdExec = () => 'AMD Radeon RX 7900 XTX';
+  const nvExec = () => 'NVIDIA GeForce RTX 4070';
+
+  it('ACCELERATOR env override wins over the stamp AND detection', () => {
+    expect(
+      resolveInstallProfile({ envOverride: 'amd', stampProfile: 'nvidia', platform: 'win32', exec: nvExec }),
+    ).toBe('amd');
+  });
+
+  it('carry-forward: an existing stamped profile beats detection (NO forced migration)', () => {
+    // The classic regression: a box stamped nvidia by Phase 1 whose hardware now
+    // detects amd must STAY nvidia on upgrade (else every existing install rebuilds).
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: 'nvidia', platform: 'win32', exec: amdExec }),
+    ).toBe('nvidia');
+  });
+
+  it('fresh install (no stamp): falls through to hardware detection', () => {
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', exec: amdExec }),
+    ).toBe('amd');
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'win32', exec: nvExec }),
+    ).toBe('nvidia');
+  });
+
+  it('fresh install on a box with no GPU probe → cpu (detection degrades, never amd)', () => {
+    const bustedExec = () => {
+      throw new Error('no wmi');
+    };
+    expect(
+      resolveInstallProfile({ envOverride: null, stampProfile: null, platform: 'linux', exec: bustedExec }),
+    ).toBe('cpu');
+  });
+
+  it('an invalid ACCELERATOR override is ignored (falls through to stamp/detection)', () => {
+    expect(
+      resolveInstallProfile({ envOverride: 'banana', stampProfile: 'cpu', platform: 'win32', exec: nvExec }),
+    ).toBe('cpu');
   });
 });
 

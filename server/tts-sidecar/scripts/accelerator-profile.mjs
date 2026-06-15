@@ -64,6 +64,32 @@ export function resolveProfile({ envOverride, wizardChoice, detected }) {
 }
 
 /**
+ * Resolve the effective install profile for the venv build/upgrade path.
+ * Precedence: the ACCELERATOR env override → the existing venv's stamped profile
+ * (carry-forward) → live hardware detection → cpu. The carry-forward slot is the
+ * load-bearing rule: an existing install (Phase 1 stamped every box 'nvidia') is
+ * NEVER force-migrated by a hardware re-detect on upgrade — only an explicit
+ * ACCELERATOR override switches it. `stampProfile` is null on a fresh install
+ * (no venv yet), so detection drives a clean box. `exec` is injectable for tests;
+ * it defaults to a real subprocess GPU probe. Pure precedence over
+ * resolveProfile + detectVendor.
+ * @param {{envOverride: string|null, stampProfile: string|null, platform: string,
+ *          exec?: (cmd: string) => string}} a
+ * @returns {'nvidia'|'amd'|'apple'|'cpu'}
+ */
+export function resolveInstallProfile({ envOverride, stampProfile, platform, exec }) {
+  const detected = detectVendor({
+    platform,
+    exec: exec ?? ((cmd) => execSync(cmd, { encoding: 'utf8' })),
+  });
+  return resolveProfile({
+    envOverride: envOverride ?? null,
+    wizardChoice: stampProfile ?? null, // carry-forward occupies the wizard slot
+    detected,
+  });
+}
+
+/**
  * Per-engine runtime backend. `engine` is 'qwen' | 'coqui' (torch) or 'kokoro'
  * (onnxruntime). Note rocm: at runtime HIP aliases the CUDA API, but we REPORT
  * 'rocm' for honesty; the sidecar still uses device="cuda".

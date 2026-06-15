@@ -137,7 +137,7 @@ describe('classifyVenvState (Phase 1: detect-and-reinstall, no rebuild)', () => 
 });
 
 describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
-  it('reads the canonical python tag, stamps the effective nvidia profile, and hashes overlay-then-base', () => {
+  it('defaults to the nvidia overlay (no profile arg = today): stamps nvidia, hashes overlay-then-base', () => {
     const r = resolveRequired(SIDECAR_DIR);
     expect(r.pythonTag).toBe('cp312');
     expect(r.profile).toBe('nvidia');
@@ -145,5 +145,32 @@ describe('resolveRequired (shared by bootstrap-venv + apply.ts)', () => {
     const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
     expect(r.reqHash).toBe(computeReqHash([overlay, base]));
     expect(r.reqHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('selects the overlay by profile and stamps that profile', () => {
+    const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
+    for (const [profile, file] of [
+      ['nvidia', 'nvidia-cuda.txt'],
+      ['cpu', 'cpu.txt'],
+      ['amd', 'amd-rocm.txt'],
+    ] as const) {
+      const r = resolveRequired(SIDECAR_DIR, profile);
+      expect(r.profile).toBe(profile);
+      const overlay = readFileSync(join(SIDECAR_DIR, 'requirements', file), 'utf8');
+      expect(r.reqHash).toBe(computeReqHash([overlay, base]));
+    }
+  });
+
+  it('gives each profile a distinct reqHash (different overlay text)', () => {
+    const hashes = ['nvidia', 'cpu', 'amd'].map((p) => resolveRequired(SIDECAR_DIR, p).reqHash);
+    expect(new Set(hashes).size).toBe(3);
+  });
+
+  it('maps apple (and any unknown) to the mac-safe nvidia overlay, but stamps the given profile', () => {
+    const base = readFileSync(join(SIDECAR_DIR, 'requirements', 'base.txt'), 'utf8');
+    const nvidia = readFileSync(join(SIDECAR_DIR, 'requirements', 'nvidia-cuda.txt'), 'utf8');
+    const r = resolveRequired(SIDECAR_DIR, 'apple');
+    expect(r.profile).toBe('apple');
+    expect(r.reqHash).toBe(computeReqHash([nvidia, base]));
   });
 });
