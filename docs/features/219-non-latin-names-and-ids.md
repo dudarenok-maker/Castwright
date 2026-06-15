@@ -286,6 +286,30 @@ adversarial review + an in-flight design question:
    `slug`, every Cyrillic book mapped to `untitled__standalones__untitled`.
    Fixed by routing `slug` through `unicodeKebab`.
 
+### Follow-on — Stage-1 large-chapter chunking (2026-06-16)
+
+On-box testing of the Russian book surfaced a *second*, distinct failure: **Stage-1
+cast detection had no chunker** (only Stage-2 did, plan 187/#528), so every large
+chapter overflowed Ollama's `num_ctx` — the input filled the window, leaving no
+room for output → `done_reason:'length'` after ~0 bytes, every chapter dropped
+from the roster. Cyrillic made it acute (denser tokenisation), but it is a
+general large-chapter gap, not non-Latin-specific.
+
+Fixed (maintainer chose "both"):
+- **`num_ctx` 16384 → 32768** (`ollama.ts` const + registry default + `.env.example`):
+  headroom so fewer chapters need splitting.
+- **New `server/src/analyzer/stage1-chunk.ts`** — `runStage1ChapterChunked`
+  mirrors the Stage-2 chunker: split an over-budget chapter into paragraph-bounded
+  sub-bodies, detect each, **union** the rosters (injects the route's
+  `mergeRosterChapter`, so the module stays pure), thread the accumulated roster
+  into later chunks' prompts (so a recurring character keeps one id), and
+  adaptively re-split a chunk that still truncates. Local budget derives from
+  `num_ctx`; **cloud engines never chunk** (huge context, small output). Within-budget
+  chapters run exactly one call (byte-identical). Wired into both Phase-0a call
+  sites in `analysis.ts`. New knob `analyzer.stage1.chunkCharBudget`.
+- Tests: `stage1-chunk.test.ts` (single-call / split+union / roster-threading /
+  adaptive re-split / budget derivation).
+
 ### Owed (on-box acceptance — issue to file)
 
 - **ffmpeg + Cyrillic filesystem paths on Windows.** Book directories already use

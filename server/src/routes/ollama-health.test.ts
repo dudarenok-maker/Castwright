@@ -192,7 +192,7 @@ describe('POST /api/ollama/load', () => {
        in server/src/analyzer/ollama.ts). Either drifting triggers a
        full model reload on the first real analysis call and the SSE
        dies mid-stream — the "Try Again" infinite-loop bug. */
-    expect(body.options?.num_ctx).toBe(16384);
+    expect(body.options?.num_ctx).toBe(32768);
     expect(body.options?.num_gpu).toBe(999);
   });
 
@@ -217,7 +217,7 @@ describe('POST /api/ollama/load', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.model).toBe('llama3.1:8b');
     expect(body.keep_alive).toBe('5m');
-    expect(body.options?.num_ctx).toBe(16384);
+    expect(body.options?.num_ctx).toBe(32768);
     expect(body.options?.num_gpu).toBe(999);
   });
 });
