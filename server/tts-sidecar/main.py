@@ -2581,23 +2581,52 @@ _device_probe: dict[str, Optional[str]] = {"kokoro": None, "coqui": None, "qwen"
 _device_probe_state: str = "pending"  # 'pending' | 'ready' | 'error'
 
 
-def _normalize_device_family(raw: Optional[str]) -> Optional[str]:
-    """'cuda:0'/'cuda:1' → 'cuda'; mps/cpu pass through; anything else (None,
-    '', an unresolved 'auto' pref) → None so callers fall back to prediction."""
+def _torch_is_hip(torch_module: Any) -> bool:
+    """True when torch is a ROCm/HIP build (torch.version.hip set). On AMD the
+    runtime device string is still 'cuda' (HIP aliases the CUDA API), so this is
+    how we tell rocm apart from cuda for honest reporting."""
+    try:
+        return bool(getattr(getattr(torch_module, "version", None), "hip", None))
+    except Exception:
+        return False
+
+
+def _ort_providers_to_family(providers: Any) -> str:
+    """Map an ONNX Runtime provider list to a device family, in bind-priority
+    order (the accelerated EP that actually takes the session). DirectML (AMD-
+    Windows) → directml, CUDA → cuda, ROCm → rocm, else cpu."""
+    provs = list(providers)
+    if "DmlExecutionProvider" in provs:
+        return "directml"
+    if "CUDAExecutionProvider" in provs:
+        return "cuda"
+    if "ROCMExecutionProvider" in provs:
+        return "rocm"
+    return "cpu"
+
+
+def _normalize_device_family(raw: Optional[str], torch_module: Any = None) -> Optional[str]:
+    """'cuda:0'/'cuda:1' → 'cuda'; mps/cpu/rocm/directml pass through; anything
+    else (None, '', an unresolved 'auto' pref) → None so callers fall back to
+    prediction. When a HIP torch build is supplied, a 'cuda' family is reported
+    honestly as 'rocm' (the AMD device string is 'cuda' but it's really ROCm)."""
     if not raw:
         return None
     fam = str(raw).strip().lower().split(":", 1)[0]
-    return fam if fam in ("cuda", "mps", "cpu") else None
+    if fam == "cuda" and _torch_is_hip(torch_module):
+        return "rocm"
+    return fam if fam in ("cuda", "rocm", "directml", "mps", "cpu") else None
 
 
 def _predict_kokoro_device(ort_module: Any) -> Optional[str]:
-    """Mirror kokoro-onnx's auto-selection: CUDA EP available → cuda, else cpu.
-    Tolerates a broken/absent onnxruntime (None → caller leaves the slot null)."""
+    """Mirror kokoro-onnx's auto-selection from the available EPs: DirectML →
+    directml, CUDA → cuda, ROCm → rocm, else cpu. Tolerates a broken/absent
+    onnxruntime (→ cpu)."""
     try:
         providers = list(ort_module.get_available_providers())
     except Exception:
         return "cpu"
-    return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+    return _ort_providers_to_family(providers)
 
 
 def _compute_device_predictions(
@@ -2615,11 +2644,13 @@ def _compute_device_predictions(
             if isinstance(qwen, QwenEngine)
             else os.environ.get("QWEN_DEVICE", "auto")
         )
-        out["qwen"] = _normalize_device_family(_resolve_torch_device(pref, torch_module))
+        out["qwen"] = _normalize_device_family(
+            _resolve_torch_device(pref, torch_module), torch_module
+        )
         coqui = ENGINES.get("coqui")
         if isinstance(coqui, CoquiEngine):
             out["coqui"] = _normalize_device_family(
-                coqui._resolve_runtime_options(torch_module)["device"]
+                coqui._resolve_runtime_options(torch_module)["device"], torch_module
             )
     return out
 
@@ -2661,7 +2692,7 @@ def _kokoro_session_device(engine: "KokoroEngine") -> Optional[str]:
         if sess is None:
             return None
         providers = list(sess.get_providers())
-        return "cuda" if "CUDAExecutionProvider" in providers else "cpu"
+        return _ort_providers_to_family(providers)
     except Exception:
         return None
 
