@@ -1,5 +1,12 @@
 # AMD GPU Support — Phase 2 (AMD Cohort Enablement) Implementation Plan
 
+> ✅ **DELIVERED 2026-06-15 (PR #818).** Built dormant on `feat/sidecar-amd-gpu-phase2`.
+> Reconciled against this plan: Wave B re-scoped to B1 (in-place rebuild B2/B3 dropped),
+> A4 done in P1, ORT swap → `install-ort.mjs`, FA2-cp312 deferred, E2 superseded, F1 = job-guard
+> + reinstall signal (no seamless rebuild), plus an **Auto + CPU fallback**. **DirectML for
+> Kokoro FAILED on-box (S0.1) → flipped to CPU** (`side-16` #819). Outcome + acceptance live in
+> the regression plan `docs/features/archive/217-amd-gpu-support.md`. Wave H is now beta telemetry.
+
 > **⚠️ RE-SCOPED (2026-06-14) — read before using.** The phasing changed (public beta is now gated on Phase 1). **The Python-3.12 flip, the NVIDIA/CPU requirements (`base`/`nvidia-cuda`/`cpu`), the Python-3.12 acquisition, and CI→3.12 all MOVED TO PHASE 1** (which now ships them, with **detect-and-reinstall** instead of an in-place migration). **This plan is now AMD-ONLY.** Concretely from the waves below: **drop A1 (nvidia/cpu overlays — done in P1), A4 (py3.12 acquisition — done in P1), B1/B2/B3/B4 (migration wiring + 3.12 flip — P1 ships 3.12 via detect-and-reinstall, NOT the resumable rebuild), G1 (CI 3.12 — done in P1).** What this plan KEEPS: the `amd-rocm.txt` overlay, A2/A3 (ROCm torch + ORT ordering + flash-attn), Wave C (sidecar AMD runtime), Wave D (health/VRAM), Wave E (AMD UX), Wave F (profile-switch — **this is the ONLY place the in-place build-new-then-swap rebuild + `decideDiskAction` are needed, and even then only if a seamless switch is wanted over "switching profiles needs a re-setup"**), Wave H (on-AMD acceptance). **Existing users get NO forced migration on the AMD release** (`pythonTag`/`profile` unchanged → `decideVenvAction` = `noop`/`pip-in-place`).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax. Gated on Phase 1 shipped + the Section-0 spike; **must not be RELEASED** until the 🔴 on-AMD acceptance (Wave H) passes.

@@ -1,6 +1,6 @@
 ---
-status: active
-shipped: null
+status: stable
+shipped: 2026-06-15
 owner: null
 ---
 
@@ -215,4 +215,25 @@ Also deferred to Phase 2 (present here only as dormant placeholders or absent by
 
 ## Ship notes
 
-(Filled in when status flips to `stable` — append the shipped date + commit SHA + any behaviour delta vs. the spec, then `git mv` to `docs/features/archive/`. Phase 1 code shipped on branch `feat/sidecar-amd-gpu-support`; live-GPU acceptance — steps A0–F — owed before `stable`.)
+**Shipped 2026-06-15.** Phase 1 on `feat/sidecar-amd-gpu-support` (merged PR #814);
+**Phase 2 on `feat/sidecar-amd-gpu-phase2` (PR #818)** — both delivered. AMD GPU
+support is now in the product, gated as an **experimental preview** and **safe to cut
+for beta** (non-AMD users are unaffected by the dormant code + regression fence; AMD
+users get a guaranteed-working install via the Auto + CPU fallback).
+
+Behaviour deltas vs. the original spec (all validated / decided on-box, see the
+Phase-2 section above + spec "Spike findings"):
+- **DirectML for Kokoro = dropped** (S0.1 FAILED on-box: ConvTranspose unsupported by
+  `onnxruntime-directml` 1.24.4). AMD Kokoro runs on **CPU**; the DirectML scaffolding
+  is retained for a one-line re-enable. Parked as `side-16` ([#819]).
+- **Wave B re-scoped to B1** (profile→overlay wiring); the in-place resumable rebuild
+  (B2/B3) was superseded by Phase 1's detect-and-reinstall and dropped.
+- **E2** in-place migration UI superseded; **D2** unknown-VRAM fail-safe was already
+  defensive; **F1** signals reinstall rather than seamless-rebuilding.
+- **Auto + CPU fallback** added (not in the original plan): a failed alpha ROCm-wheel
+  install degrades to a working CPU install, so a fresh AMD install never bricks.
+
+**Field-owed (beta telemetry, NOT a release gate):** confirm Coqui/Qwen actually synth
+on **ROCm** on a supported AMD card + pin the wheel sha256s into `model-hashes.json`
+(the author's 780M iGPU is not ROCm-supported); Phase-1 CPU-only + macOS fresh-install
+synth (B/C). These reopen this plan from archive only if beta surfaces a real failure.

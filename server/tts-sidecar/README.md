@@ -17,6 +17,29 @@ torch dependency tree doesn't leak into Node tooling.
 | kokoro-onnx | `[gpu]>=0.4.0,<0.5.0` | onnxruntime-gpu via the platform-gated extra; no torch |
 | transformers | `>=4.45,<5.0` | coqui-tts compat cap |
 
+## Accelerator profiles (NVIDIA / AMD / CPU / Apple)
+
+The install picks an **accelerator profile** for the box and installs the matching
+requirements overlay. It resolves as **`ACCELERATOR` env override → the existing
+venv's stamped profile (carry-forward) → hardware detection → cpu**, so an existing
+install is never force-migrated by a re-detect; only an explicit override switches it.
+Set it in `server/.env`, via the first-run wizard, or the `#/advanced` **Accelerator
+profile** knob (a change rebuilds the venv).
+
+| Profile | Overlay | torch | Kokoro (ONNX) |
+|---|---|---|---|
+| `nvidia` (default) | `nvidia-cuda.txt` | PyPI CUDA wheel | `onnxruntime-gpu` |
+| `cpu` / `apple` | `cpu.txt` / nvidia-cuda | PyPI cpu/mps wheel | `onnxruntime` (CPU/CoreML) |
+| `amd` *(experimental preview)* | `amd-rocm.txt` | **ROCm** preview wheels (repo.radeon.com), pre-installed by `install-torch.mjs` | **CPU** — see below |
+
+**AMD notes:** Qwen/Coqui run on **ROCm** torch (`torch.version.hip` → reported as
+`rocm` in `/health`). Kokoro runs on **CPU**: DirectML was validated on-box and
+**cannot run the Kokoro model** (the `onnxruntime-directml` ConvTranspose op fails;
+see `side-16` / #819). The AMD install is **best-effort with a CPU fallback** — if the
+alpha ROCm wheels fail to install, the bootstrap degrades to a working CPU install
+(writes `.accelerator-fallback.json`, stamps `cpu`) rather than failing. AMD is an
+experimental preview pending beta validation on a ROCm-supported card.
+
 ## Python version
 
 The sidecar requires **Python 3.12** (exactly). The installer/bootstrap probes
