@@ -9,6 +9,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
+import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -2593,14 +2594,26 @@ export async function runMainAnalyzerJob(
             chapterId: ch.id,
             log,
             call: () =>
+              runStage1ChapterChunked({
+                body: ch.body,
+                charBudget: resolveStage1ChunkCharBudget(selection.engine),
+                mergeRosters: mergeRosterChapter,
+                onChunk: (sec) =>
+                  log(
+                    0,
+                    `Chapter ${i + 1}/${totalCastChapters} cast — large chapter, section ${
+                      sec.index + 1
+                    }/${sec.total} (${sec.chars.toLocaleString()} chars) to fit the model context…`,
+                  ),
+                callForBody: (subBody, knownSoFar) =>
               analyzer.runStage1Chapter(
             manuscriptId,
             ch.id,
             buildStage1ChapterInbox(
               manuscriptId,
               recordRef.title,
-              ch,
-              Array.from(rebuildRoster().values()),
+              { ...ch, body: subBody },
+              [...Array.from(rebuildRoster().values()), ...knownSoFar],
               seriesPrior,
             ),
             {
@@ -2659,6 +2672,7 @@ export async function runMainAnalyzerJob(
               },
             },
               ),
+              }).then((r) => ({ characters: r.characters })),
           });
         } catch (chErr) {
           /* Client disconnect propagates up — let the route's outer catch
@@ -4221,33 +4235,46 @@ async function runSubsetAnalyzerJob(
           chapterId: ch.id,
           log,
           call: () =>
-            analyzer.runStage1Chapter(
-              manuscriptId,
-              ch.id,
-              buildStage1ChapterInbox(
-                manuscriptId,
-                record.title,
-                ch,
-                Array.from(rebuildRoster().values()),
-                subsetSeriesPrior,
-              ),
-              {
-                signal: abortController.signal,
-                language: bookLanguage,
-                onWaiting: () => emitHeartbeat(0, ch.id),
-                onChunk: (info) => emitHeartbeat(0, ch.id, info),
-                onThrottle: (waitMs, reason) => {
-                  send({
-                    kind: 'throttle',
-                    phaseId: 0,
-                    chapterIndex: ch.id,
-                    model: subsetModelId,
-                    waitMs,
-                    reason,
-                  });
-                },
-              },
-            ),
+            runStage1ChapterChunked({
+              body: ch.body,
+              charBudget: resolveStage1ChunkCharBudget(selection.engine),
+              mergeRosters: mergeRosterChapter,
+              onChunk: (sec) =>
+                log(
+                  0,
+                  `Chapter ${ch.id} cast — large chapter, section ${sec.index + 1}/${
+                    sec.total
+                  } (${sec.chars.toLocaleString()} chars) to fit the model context…`,
+                ),
+              callForBody: (subBody, knownSoFar) =>
+                analyzer.runStage1Chapter(
+                  manuscriptId,
+                  ch.id,
+                  buildStage1ChapterInbox(
+                    manuscriptId,
+                    record.title,
+                    { ...ch, body: subBody },
+                    [...Array.from(rebuildRoster().values()), ...knownSoFar],
+                    subsetSeriesPrior,
+                  ),
+                  {
+                    signal: abortController.signal,
+                    language: bookLanguage,
+                    onWaiting: () => emitHeartbeat(0, ch.id),
+                    onChunk: (info) => emitHeartbeat(0, ch.id, info),
+                    onThrottle: (waitMs, reason) => {
+                      send({
+                        kind: 'throttle',
+                        phaseId: 0,
+                        chapterIndex: ch.id,
+                        model: subsetModelId,
+                        waitMs,
+                        reason,
+                      });
+                    },
+                  },
+                ),
+            }).then((r) => ({ characters: r.characters })),
         });
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;

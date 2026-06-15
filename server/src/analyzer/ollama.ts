@@ -139,7 +139,7 @@ export function keepAliveFor(model: string): string | number {
    while Ollama re-paged the model.
    Kept as static export for compat; call-sites inside this module use
    resolveAnalyzerNumCtx() / resolveAnalyzerNumGpu() for live values. */
-export const ANALYZER_NUM_CTX = 16384;
+export const ANALYZER_NUM_CTX = 32768;
 
 /* Force Ollama to load every layer of the model onto the GPU. 999 is
    the standard idiom for "all layers" — it exceeds any model's actual

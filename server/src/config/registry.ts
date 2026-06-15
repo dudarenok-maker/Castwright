@@ -68,6 +68,16 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.stage1.chunkCharBudget',
+    env: 'STAGE1_CHUNK_CHAR_BUDGET',
+    group: 'analyzer-chunking',
+    label: 'Stage-1 chunk char budget',
+    help: 'Maximum characters per stage-1 cast-detection chunk before the chapter is split. For local engines the effective budget is derived (lowered) from Ollama num_ctx so a large or non-Latin chapter can never overflow the context window.',
+    type: 'integer',
+    default: 24000, // ← DEFAULT_STAGE1_CHUNK_CHAR_BUDGET in analyzer/stage1-chunk.ts
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.stage2.minCoverage',
     env: 'STAGE2_MIN_COVERAGE',
     group: 'analyzer-chunking',
@@ -532,9 +542,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_NUM_CTX',
     group: 'analyzer-sampling',
     label: 'Ollama num_ctx',
-    help: 'Context-window size handed to Ollama on every /api/chat call. Ollama keys the KV cache by (model, num_ctx), so warming with default 16384 and then changing it forces a re-load. Hardcoded today; registering this env name lifts it to a runtime knob.',
+    help: 'Context-window size handed to Ollama on every /api/chat call. Ollama keys the KV cache by (model, num_ctx), so warming with default 32768 and then changing it forces a re-load. Larger = more KV-cache VRAM; 32768 gives large/non-Latin chapters headroom (the stage-1/2 chunkers handle anything still over budget). Lower it if a bigger analyzer model strains the GPU.',
     type: 'integer', min: 0,
-    default: 16384, // ← ANALYZER_NUM_CTX constant in analyzer/ollama.ts (line 130)
+    default: 32768, // ← ANALYZER_NUM_CTX constant in analyzer/ollama.ts
     apply: 'live', risk: 'medium',
   },
   {
