@@ -148,12 +148,12 @@ describe('OllamaAnalyzer — happy path streaming', () => {
     expect(body.format).not.toBe('json');
     expect(typeof body.format).toBe('object');
     /* 9B is too heavy to leave resident on an 8 GB box (weights + KV cache
-       at num_ctx 16384 spill over budget) — see RESIDENT_MODELS in
+       at num_ctx 32768 spill over budget) — see RESIDENT_MODELS in
        ollama.ts. The 4B and llama3.1:8b both hold the keep_alive: '5m'
        slot; the 9B and any unknown tag get unloaded immediately with
        keep_alive: 0. */
     expect(body.keep_alive).toBe(0);
-    expect(body.options.num_ctx).toBe(16384);
+    expect(body.options.num_ctx).toBe(32768);
     /* Pin all layers to GPU — see ANALYZER_NUM_GPU in ollama.ts. 999 is
        the standard "all layers" idiom; without this, Ollama auto-splits
        and silently offloads layers to CPU under VRAM pressure. The
