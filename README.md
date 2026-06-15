@@ -1,8 +1,8 @@
 # Castwright
 
-![Castwright — any book, performed by a full cast, effortlessly](public/og.png)
+![Castwright — any book, performed by a full cast, kept true, kept yours, book after book](public/og.png)
 
-> _Any book, performed by a full cast — effortlessly. Even in your own voice._
+> _Any book, performed by a full cast — kept true, kept yours, book after book._
 
 Turn a manuscript into a finished, **full-cast** audiobook on your own machine —
 every character in their own voice, consistent across a whole series. Castwright
@@ -16,8 +16,8 @@ or MP3.
 
 ## What you get
 
-- **Full-cast narration** — every character speaks in their own voice, not one
-  flat narrator.
+- **Full-cast performance** — every character speaks in their own voice; one
+  narrator can't be everyone.
 - **Series memory** — a character keeps the same voice across every book in a
   series.
 - **Designed voices** — every character gets a unique voice designed from its persona, kept consistent across the series. (Cloning a voice from your own sample is the next major release.)
