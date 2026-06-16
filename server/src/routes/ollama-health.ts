@@ -276,28 +276,49 @@ ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
   return res.json({ status: 'ready' });
 });
 
+/** Evict resident Ollama model(s) via keep_alive:0 generate calls. Empty/omitted
+    `targets` → evict EVERY model /api/ps reports (the safe default: a phase-env
+    or quant-tagged resident won't be missed; matches the /unload-all route).
+    Returns the list evicted. Throws on the first failed eviction (error carries
+    `.status` for the HTTP response code). */
+export async function unloadResidentOllama(targets?: string[]): Promise<string[]> {
+  const url = getResolvedOllamaUrl();
+  const list = targets && targets.length > 0 ? targets : (await probeOllamaHealth()).resident ?? [];
+  for (const model of list) {
+    const result = await callOllamaGenerate(url, { model, prompt: '', keep_alive: 0, stream: false }, PROBE_TIMEOUT_MS);
+    if (!result.ok) {
+      const err = Object.assign(new Error(result.error ?? `unload ${model} failed`), { status: result.status });
+      throw err;
+    }
+  }
+  return list;
+}
+
+/** Poll /api/ps until no model remains resident (Ollama unloads asynchronously).
+    Returns true when clear; false if still resident after the retries. */
+export async function verifyOllamaEvicted(opts: { retries?: number; delayMs?: number } = {}): Promise<boolean> {
+  const retries = opts.retries ?? 5;
+  const delayMs = opts.delayMs ?? 400;
+  for (let i = 0; i < retries; i += 1) {
+    const resident = (await probeOllamaHealth()).resident ?? [];
+    if (resident.length === 0) return true;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return ((await probeOllamaHealth()).resident ?? []).length === 0;
+}
+
 /* POST /api/ollama/unload — evict the configured analyzer model from VRAM.
    Used by both the Analysing-screen Stop button and the Generate-screen
    auto-evict flow (loading TTS calls this first to free GPU memory). */
 ollamaHealthRouter.post('/unload', async (req: Request, res: Response) => {
-  const url = getResolvedOllamaUrl();
   const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
-  /* Explicit model → evict just that one. No model → evict every resident
-     model (so the TTS auto-evict path frees ALL analyzer VRAM, not just the
-     configured default — a manually-warmed non-default model would otherwise
-     stay co-resident with the voice engine and OOM the GPU). */
-  const targets = requested ? [requested] : (await probeOllamaHealth()).resident ?? [];
-  for (const model of targets) {
-    const result = await callOllamaGenerate(
-      url,
-      { model, prompt: '', keep_alive: 0, stream: false },
-      PROBE_TIMEOUT_MS,
-    );
-    if (!result.ok) {
-      return res.status(result.status).json({ status: 'error', error: result.error });
-    }
+  try {
+    const unloaded = await unloadResidentOllama(requested ? [requested] : undefined);
+    return res.json({ status: 'unloaded', unloaded });
+  } catch (e) {
+    const err = e as Error & { status?: number };
+    return res.status(err.status ?? 502).json({ status: 'error', error: err.message });
   }
-  return res.json({ status: 'unloaded', unloaded: targets });
 });
 
 /* ============================================================
