@@ -10,6 +10,7 @@ import type { Request, Response } from '../http.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
+import { applyNonEnglishNarratorDefault } from '../analyzer/narrator-default.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
 import {
@@ -1470,7 +1471,7 @@ ${subBody}
    adaptively re-split. For a chapter within budget this is exactly one guarded
    call against the full body (byte-identical to the prior behaviour). Returns
    the stitched sentences + combined coverage verdict. */
-function attributeChapterStage2(opts: {
+async function attributeChapterStage2(opts: {
   analyzer: Analyzer;
   manuscriptId: string;
   title: string;
@@ -1504,7 +1505,7 @@ function attributeChapterStage2(opts: {
       opts.stageCall,
     );
   };
-  return runStage2ChapterChunked({
+  const result = await runStage2ChapterChunked({
     body: opts.chapter.body,
     charBudget: resolveStage2ChunkCharBudget(opts.engine),
     coverageRetries: resolveStage2CoverageRetries(),
@@ -1512,6 +1513,13 @@ function attributeChapterStage2(opts: {
     onRetry: opts.onCoverageRetry,
     onChunk: opts.onChunk,
   });
+  /* plan 221 Wave A — non-English narrator-default heuristic. The model
+     mislabels third-person narration as a character on non-Latin scripts;
+     force non-spoken sentences to `narrator`. No-op for English. Runs AFTER
+     coverage (coverage keys on text, not characterId), so the verdict is
+     unchanged. */
+  result.sentences = applyNonEnglishNarratorDefault(result.sentences, opts.stageCall.language);
+  return result;
 }
 
 /* ── Sticky analysis: in-flight job map + multi-subscriber broadcast ────
