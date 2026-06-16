@@ -4607,7 +4607,8 @@ export interface ModelInventoryItem {
   sizeBytes: number | null;
   diskPath: string | null;
   loaded: boolean;
-  installState?: string;
+  installState?: 'ready' | 'package-missing' | 'weights-missing' | 'not-installed' | 'loaded';
+  tier?: 'standard' | 'secondary';
   isDefaultEngine: boolean;
   isFallbackEngine: boolean;
   removable: boolean;
