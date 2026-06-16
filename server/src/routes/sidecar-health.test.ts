@@ -608,6 +608,50 @@ describe('POST /api/sidecar/restart', () => {
   });
 });
 
+describe('GET /api/sidecar/health — per-engine package booleans (Task 8)', () => {
+  it('forwards coqui/kokoro/whisper package booleans from the sidecar body', async () => {
+    /* Task 8: the sidecar /health body now carries find_spec booleans for
+       coqui, kokoro, and whisper. The proxy must forward them as camelCase
+       so the inventory (Task 10) can derive "package-missing" per engine
+       without an additional probe. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          engines: ['kokoro', 'coqui'],
+          coqui_package_installed: true,
+          kokoro_package_installed: false,
+          whisper_package_installed: true,
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.status).toBe(200);
+    expect(res.body.coquiPackageInstalled).toBe(true);
+    expect(res.body.kokoroPackageInstalled).toBe(false);
+    expect(res.body.whisperPackageInstalled).toBe(true);
+  });
+
+  it('defaults coqui/kokoro/whisper package booleans to false when an old sidecar omits them', async () => {
+    /* An old sidecar body that predates Task 7 omits the three fields.
+       The proxy must default to false (never optimistically claim a package
+       is installed) so the inventory reads a safe, definite value. */
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, engines: ['kokoro'] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.coquiPackageInstalled).toBe(false);
+    expect(res.body.kokoroPackageInstalled).toBe(false);
+    expect(res.body.whisperPackageInstalled).toBe(false);
+  });
+});
+
 describe('GET /api/sidecar/health — side-14 device fields', () => {
   it('forwards devices + devicesState from the sidecar body', async () => {
     /* side-14 — the sidecar's per-engine device map and probe state must flow
