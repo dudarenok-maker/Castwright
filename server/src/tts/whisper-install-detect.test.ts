@@ -1,90 +1,100 @@
-/* Node-side Whisper install detector (srv-31). Pins the filesystem probe backing
-   the admin-console installer's detect/recheck. Mirrors qwen-install-detect. */
+/* Unit tests for whisperPackageInstalled + detectWhisperInstallStateOnDisk.
+   Mirrors kokoro-install-detect.test.ts: model-paths.js is mocked so the
+   weights-present probe can be controlled without a real HF cache. The venv
+   package probe uses a real temp-dir tree (makeVenvTree helper). */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+vi.mock('./model-paths.js', () => ({
+  whisperRepoDir: vi.fn(() => '/fake/whisper-repo'),
+  dirSizeBytes: vi.fn(() => ({ bytes: 0, fileCount: 0 })),
+}));
+
 import {
-  whisperModelPresent,
-  fasterWhisperInstalled,
+  whisperPackageInstalled,
+  whisperWeightsPresent,
   detectWhisperInstallStateOnDisk,
 } from './whisper-install-detect.js';
+import { dirSizeBytes } from './model-paths.js';
 
-const REPO_NAME = 'models--Systran--faster-whisper-base';
-
-let hubCache: string;
-let repoRoot: string;
-const savedEnv = { ...process.env };
+const mockDirSizeBytes = vi.mocked(dirSizeBytes);
 
 beforeEach(() => {
-  hubCache = mkdtempSync(join(tmpdir(), 'whisper-hub-'));
-  repoRoot = mkdtempSync(join(tmpdir(), 'whisper-repo-'));
-  process.env.HF_HUB_CACHE = hubCache;
-  delete process.env.HF_HOME;
-  delete process.env.ASR_MODEL; // use the default `base`
+  mockDirSizeBytes.mockReturnValue({ bytes: 0, fileCount: 0 });
 });
 
-afterEach(() => {
-  rmSync(hubCache, { recursive: true, force: true });
-  rmSync(repoRoot, { recursive: true, force: true });
-  process.env = { ...savedEnv };
+/* ── whisperWeightsPresent ───────────────────────────────────────────────── */
+
+describe('whisperWeightsPresent', () => {
+  it('returns false when dirSizeBytes returns 0 bytes', () => {
+    mockDirSizeBytes.mockReturnValue({ bytes: 0, fileCount: 0 });
+    expect(whisperWeightsPresent()).toBe(false);
+  });
+
+  it('returns true when dirSizeBytes returns non-zero bytes', () => {
+    mockDirSizeBytes.mockReturnValue({ bytes: 100_000_000, fileCount: 5 });
+    expect(whisperWeightsPresent()).toBe(true);
+  });
 });
 
-function seedModel(filename: string): void {
-  const snap = join(hubCache, REPO_NAME, 'snapshots', 'rev1');
-  mkdirSync(snap, { recursive: true });
-  writeFileSync(join(snap, filename), Buffer.alloc(16));
+/* ── venv package probe (real temp-dir tree) ─────────────────────────────
+   model-paths.js mock is still active; dirSizeBytes returns {bytes:0}
+   by default (beforeEach), so whisperWeightsPresent() -> false, giving
+   'weights-missing' whenever the package is present but weights aren't. */
+
+/** Create a temp repoRoot with given paths under
+    <root>/server/tts-sidecar/.venv/. Keys are forward-slash relative paths. */
+function makeVenvTree(dirs: Record<string, unknown>): string {
+  const root = mkdtempSync(join(tmpdir(), 'whisper-test-'));
+  for (const rel of Object.keys(dirs)) {
+    mkdirSync(join(root, 'server', 'tts-sidecar', '.venv', ...rel.split('/')), {
+      recursive: true,
+    });
+  }
+  return root;
 }
 
-function seedVenvPackage(): void {
-  mkdirSync(
-    join(repoRoot, 'server', 'tts-sidecar', '.venv', 'Lib', 'site-packages', 'faster_whisper'),
-    { recursive: true },
-  );
-}
+const tempRoots: string[] = [];
 
-describe('whisperModelPresent', () => {
-  it('is true when the CTranslate2 model.bin is in the snapshot', () => {
-    seedModel('model.bin');
-    expect(whisperModelPresent()).toBe(true);
-  });
-
-  it('is false when only metadata (config.json) is present', () => {
-    seedModel('config.json');
-    expect(whisperModelPresent()).toBe(false);
-  });
-
-  it('is false on an empty cache', () => {
-    expect(whisperModelPresent()).toBe(false);
-  });
+afterAll(() => {
+  for (const r of tempRoots) rmSync(r, { recursive: true, force: true });
 });
 
-describe('fasterWhisperInstalled', () => {
-  it('is true when faster_whisper is in the sidecar venv site-packages', () => {
-    seedVenvPackage();
-    expect(fasterWhisperInstalled(repoRoot)).toBe(true);
+function makeTemp(dirs: Record<string, unknown>): string {
+  const r = makeVenvTree(dirs);
+  tempRoots.push(r);
+  return r;
+}
+
+describe('whisperPackageInstalled', () => {
+  it('whisperPackageInstalled true when faster_whisper present', () => {
+    expect(
+      whisperPackageInstalled(makeTemp({ 'Lib/site-packages/faster_whisper': {} })),
+    ).toBe(true);
   });
 
-  it('is false when the venv has no faster_whisper', () => {
-    expect(fasterWhisperInstalled(repoRoot)).toBe(false);
+  it('whisperPackageInstalled false when absent', () => {
+    expect(whisperPackageInstalled(makeTemp({}))).toBe(false);
   });
 });
 
 describe('detectWhisperInstallStateOnDisk', () => {
-  it("→ 'not-installed' when the package is absent", () => {
-    seedModel('model.bin'); // model but no package
-    expect(detectWhisperInstallStateOnDisk(repoRoot)).toBe('not-installed');
+  it('detectWhisperInstallStateOnDisk: no package -> not-installed', () => {
+    expect(detectWhisperInstallStateOnDisk(makeTemp({}))).toBe('not-installed');
   });
 
-  it("→ 'model-missing' when the package is present but the model is not", () => {
-    seedVenvPackage();
-    expect(detectWhisperInstallStateOnDisk(repoRoot)).toBe('model-missing');
+  it('detectWhisperInstallStateOnDisk: package present, weights absent -> weights-missing', () => {
+    // dirSizeBytes returns {bytes:0} by default -> whisperWeightsPresent() false
+    const root = makeTemp({ 'Lib/site-packages/faster_whisper': {} });
+    expect(detectWhisperInstallStateOnDisk(root)).toBe('weights-missing');
   });
 
-  it("→ 'ready' when both package and model are present", () => {
-    seedVenvPackage();
-    seedModel('model.bin');
-    expect(detectWhisperInstallStateOnDisk(repoRoot)).toBe('ready');
+  it('detectWhisperInstallStateOnDisk: package + weights present -> ready', () => {
+    mockDirSizeBytes.mockReturnValue({ bytes: 150_000_000, fileCount: 3 });
+    const root = makeTemp({ 'Lib/site-packages/faster_whisper': {} });
+    expect(detectWhisperInstallStateOnDisk(root)).toBe('ready');
   });
 });
