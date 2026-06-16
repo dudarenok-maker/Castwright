@@ -95,6 +95,18 @@ describe('useAbAudition', () => {
     expect(order).toEqual(['a']); // B never reached
   });
 
+  it('playSide surfaces a failing side on the row AND the footer (regression: Side A errors were swallowed)', async () => {
+    const playback = makePlayback();
+    const s = sides([], { aThrows: true });
+    const { result } = renderHook(() => useAbAudition({ sides: s, playback }));
+
+    await act(async () => {
+      await result.current.playSide('a');
+    });
+    expect(result.current.rowState.a.error).toBe('boom');
+    expect(result.current.footerError).toBe('boom');
+  });
+
   it('stopAndCancel stops playback', () => {
     const playback = makePlayback();
     playback.isPlaying = true;

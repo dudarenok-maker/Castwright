@@ -89,7 +89,12 @@ export function useAbAudition({
       await sides[side].play();
       setRow(side, { loading: false });
     } catch (err) {
+      /* Surface on BOTH the side row AND the footer — a single-side play
+         failure was previously only written to the row, which some consumers
+         (VoiceCompareModal's Side A) don't render, so it looked like nothing
+         happened. The footer is always shown by AbCompareShell. */
       setRow(side, { loading: false, error: (err as Error).message });
+      setFooterError((err as Error).message);
     }
   }
 
