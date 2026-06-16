@@ -6,7 +6,10 @@ import { describe, it, expect } from 'vitest';
 import {
   foldMinorCast,
   isDescriptorName,
+  makeBucket,
   matchesProtectedRole,
+  MALE_BUCKET_ID,
+  FEMALE_BUCKET_ID,
   PROTECTED_ROLES_DEFAULT,
 } from './fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
@@ -804,5 +807,86 @@ describe('matchesProtectedRole', () => {
 
   it('returns false on empty protected list', () => {
     expect(matchesProtectedRole('Bodyguard', [])).toBe(false);
+  });
+});
+
+describe('Wave D — localized minor-cast fold buckets', () => {
+  it('makeBucket mints localized Russian names for ru', () => {
+    expect(makeBucket(MALE_BUCKET_ID, 'male', 'ru').name).toBe('Незнакомый Парень');
+    expect(makeBucket(FEMALE_BUCKET_ID, 'female', 'ru').name).toBe('Незнакомая Девушка');
+    /* BCP-47 region subtag normalised. */
+    expect(makeBucket(MALE_BUCKET_ID, 'male', 'ru-RU').name).toBe('Незнакомый Парень');
+  });
+
+  it('makeBucket keeps English names for en / undefined', () => {
+    expect(makeBucket(MALE_BUCKET_ID, 'male', 'en').name).toBe('Unknown male');
+    expect(makeBucket(FEMALE_BUCKET_ID, 'female', 'en').name).toBe('Unknown female');
+    expect(makeBucket(MALE_BUCKET_ID, 'male').name).toBe('Unknown male');
+    expect(makeBucket(FEMALE_BUCKET_ID, 'female').name).toBe('Unknown female');
+  });
+
+  it('folds a low-line Russian character into a Russian-named bucket', () => {
+    const chars = [
+      makeChar('narrator'),
+      makeChar('anton', { name: 'Антон', gender: 'male' }),
+      makeChar('passerby', { name: 'Прохожий', gender: 'male' }),
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'],
+      [1, 'narrator'],
+      [1, 'narrator'],
+      [1, 'anton'],
+      [1, 'anton'],
+      [2, 'anton'],
+      [1, 'passerby'], // 1 line → folds
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3, language: 'ru' });
+
+    const male = result.characters.find((c) => c.id === MALE_BUCKET_ID);
+    expect(male?.name).toBe('Незнакомый Парень');
+  });
+
+  it('is idempotent: re-folding a cast that already has a Russian bucket name keeps it Russian', () => {
+    /* Seed a cast that already contains a Russian-named bucket plus a fresh
+       low-line character to force the fold path (so the canonicalizer runs). */
+    const chars = [
+      makeChar('narrator'),
+      { ...makeBucket(MALE_BUCKET_ID, 'male', 'ru') },
+      makeChar('drifter', { name: 'Прохожий', gender: 'male' }),
+    ];
+    const sentences = makeSentences([
+      [1, 'narrator'],
+      [1, MALE_BUCKET_ID],
+      [1, 'drifter'], // 1 line → folds into the male bucket
+    ]);
+
+    const result = foldMinorCast(chars, sentences, { minLines: 3, language: 'ru' });
+
+    const male = result.characters.find((c) => c.id === MALE_BUCKET_ID);
+    /* The canonicalizer must NOT revert the Russian name to "Unknown male". */
+    expect(male?.name).toBe('Незнакомый Парень');
+  });
+
+  it('isDescriptorName treats Russian generic nouns as descriptors only when language is Russian', () => {
+    expect(isDescriptorName('девушка', 'ru')).toBe(true);
+    expect(isDescriptorName('Парень', 'ru')).toBe(true);
+    expect(isDescriptorName('Незнакомец', 'ru')).toBe(true);
+    expect(isDescriptorName('Старик', 'ru')).toBe(true);
+    /* Without the language flag, a Russian noun is NOT recognised. */
+    expect(isDescriptorName('девушка')).toBe(false);
+    expect(isDescriptorName('Парень')).toBe(false);
+    /* A real Russian proper name must not fold. */
+    expect(isDescriptorName('Антон', 'ru')).toBe(false);
+    expect(isDescriptorName('Борис Игнатьевич', 'ru')).toBe(false);
+  });
+
+  it('English descriptor matrix is unchanged when a language is passed', () => {
+    expect(isDescriptorName('Unknown Jogger', 'en')).toBe(true);
+    expect(isDescriptorName('The Jogger', 'en')).toBe(true);
+    expect(isDescriptorName('Old Man', 'en')).toBe(true);
+    expect(isDescriptorName('Wren', 'en')).toBe(false);
+    /* English descriptors still work under ru too (we only ADD, never remove). */
+    expect(isDescriptorName('Unknown Jogger', 'ru')).toBe(true);
   });
 });

@@ -477,3 +477,113 @@ describe('cast-merge downgrade to bucket', () => {
     }
   });
 });
+
+describe('cast-merge downgrade to bucket — Russian book (Wave D, plan 221)', () => {
+  const R_AUTHOR = 'Russian Downgrade Author';
+  const R_SERIES = 'Standalones';
+  const R_TITLE = 'Russian Downgrade Book';
+  const R_MANUSCRIPT_ID = 'm_ru_downgrade_test';
+
+  let rBookDir: string;
+  let rBookId: string;
+  let rCachePath: string;
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    rBookId = makeBookId(R_AUTHOR, R_SERIES, R_TITLE);
+    rBookDir = join(workspaceRoot, 'books', R_AUTHOR, R_SERIES, R_TITLE);
+    mkdirSync(join(rBookDir, '.audiobook'), { recursive: true });
+
+    writeFileSync(
+      join(rBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: rBookId,
+        manuscriptId: R_MANUSCRIPT_ID,
+        title: R_TITLE,
+        author: R_AUTHOR,
+        series: R_SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'ru',
+        chapters: [{ id: 1, title: 'Один', slug: '01-odin' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(join(rBookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(rBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'prohozhiy',
+            name: 'Прохожий',
+            role: 'background',
+            color: 'halloran',
+            lines: 2,
+            scenes: 1,
+            gender: 'male',
+          },
+          {
+            id: 'anton',
+            name: 'Антон',
+            role: 'protagonist',
+            color: 'eliza',
+            lines: 9,
+            scenes: 1,
+            gender: 'male',
+          },
+        ],
+      }),
+    );
+
+    const sents = [
+      { id: 1, chapterId: 1, characterId: 'prohozhiy', text: 'Привет.' },
+      { id: 2, chapterId: 1, characterId: 'anton', text: 'Здравствуйте.' },
+    ];
+    writeFileSync(
+      join(rBookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({ sentences: sents }),
+    );
+
+    const testFileDir = dirname(fileURLToPath(import.meta.url));
+    rCachePath = resolve(testFileDir, '..', '..', 'handoff', 'cache', `${R_MANUSCRIPT_ID}.json`);
+    mkdirSync(dirname(rCachePath), { recursive: true });
+    writeFileSync(
+      rCachePath,
+      JSON.stringify({
+        stage1: {
+          characters: [
+            { id: 'prohozhiy', name: 'Прохожий', role: 'background', gender: 'male' },
+            { id: 'anton', name: 'Антон', role: 'protagonist', gender: 'male' },
+          ],
+          chapters: [{ id: 1, title: 'Один' }],
+        },
+        chapters: { 1: [sents[0], sents[1]] },
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  afterAll(() => {
+    if (rCachePath) rmSync(rCachePath, { force: true });
+  });
+
+  it('mints the Russian-named unknown-male bucket on a manual downgrade', async () => {
+    const res = await request(app)
+      .post(`/api/books/${rBookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId: 'prohozhiy', targetId: 'unknown-male' });
+
+    expect(res.status).toBe(200);
+    const body = res.body as { characters: Array<Record<string, unknown>> };
+    const bucket = body.characters.find((c) => c.id === 'unknown-male')!;
+    /* Book language ru → bucket carries the localized name, matching the fold. */
+    expect(bucket.name).toBe('Незнакомый Парень');
+    expect(bucket.gender).toBe('male');
+  });
+});

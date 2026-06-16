@@ -1539,6 +1539,29 @@ describe('buildInterimCast — mid-run cast snapshot', () => {
     expect(male.aliases).toEqual(['The Jogger', 'Drooly Boy', 'Unknown Intruder']);
     expect(female.aliases).toEqual(['Tall Lady']);
   });
+
+  it('mints localized Russian bucket names end-to-end when language is ru (Wave D, plan 221)', () => {
+    /* A Russian book folds bare generic-noun descriptors and the bucket
+       carries the user-specified Russian display name, matching what the
+       post-Phase-1 fold will produce. */
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [
+        makeChar('narrator', 'Рассказчик'),
+        makeChar('anton', 'Антон', { gender: 'male' }),
+        makeChar('parnishka', 'парень', { gender: 'male' }),
+        makeChar('devushka', 'девушка', { gender: 'female' }),
+      ],
+    };
+
+    const interim = buildInterimCast(chapterCast, [1], 'ru');
+
+    const male = interim.find((c) => c.id === 'unknown-male')!;
+    const female = interim.find((c) => c.id === 'unknown-female')!;
+    expect(male?.name).toBe('Незнакомый Парень');
+    expect(female?.name).toBe('Незнакомая Девушка');
+    /* A real proper name ("Антон") is NOT folded. */
+    expect(interim.some((c) => c.id === 'anton')).toBe(true);
+  });
 });
 
 /* Phase 0b finalise drops non-narrator characters whose verifier

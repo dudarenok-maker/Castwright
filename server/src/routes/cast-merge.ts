@@ -24,6 +24,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
 import { normaliseForMatch } from './analysis.js';
+import { bookStateLanguage } from '../workspace/scan.js';
 import { makeBucket, MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../analyzer/fold-minor-cast.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
@@ -81,7 +82,12 @@ castMergeRouter.post('/:bookId/cast/merge', async (req: Request, res: Response) 
      special-case "book has never had a background voice before". */
   let createdBucket: CharacterOutput | null = null;
   if (!target && (targetId === MALE_BUCKET_ID || targetId === FEMALE_BUCKET_ID)) {
-    createdBucket = makeBucket(targetId, targetId === MALE_BUCKET_ID ? 'male' : 'female');
+    /* Localize the minted bucket's display name to the book's language so a
+       manual downgrade on a non-English book produces the SAME name the
+       analyser's fold would (e.g. Russian "Незнакомый Парень"). Resolved via
+       the canonical seam; defaults to English when state has no language. */
+    const language = bookStateLanguage(state);
+    createdBucket = makeBucket(targetId, targetId === MALE_BUCKET_ID ? 'male' : 'female', language);
     cast.characters.push(createdBucket);
     target = createdBucket;
   }
