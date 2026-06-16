@@ -512,6 +512,48 @@ function formatSecs(ms) {
 }
 
 // Top-level orchestrator. Returns process exit code.
+/* Vitest fork-pool steps that can suffer a transient WORKER crash (the process
+   dies) under resource contention (busy GPU / a parallel session) — distinct
+   from a red test. These warrant ONE automatic retry. See issue #848 +
+   docs/features/archive/45-vitest-pool-tuning.md. */
+const RETRIABLE_POOL_STEPS = new Set(['test:server', 'test:server-slow']);
+
+/** True iff `stderr` carries a vitest fork-pool PROCESS crash signature (a worker
+    died), as opposed to a normal test failure. A real test failure must NOT match
+    — retrying that would mask a flaky test. */
+export function isVitestPoolCrash(stderr) {
+  return /Worker exited unexpectedly|Worker forks emitted error|\[vitest-pool\]/i.test(stderr || '');
+}
+
+/** Run one pipeline step (`npm run <name>`) and return its exit code. Retriable
+    pool steps stream stdout LIVE but CAPTURE stderr so a fork-pool crash can be
+    detected and the step retried exactly once; every other step inherits both
+    streams unchanged. */
+function runStepProcess(stepName, { cwd, env }) {
+  const runOnce = (capture) => {
+    const r = spawnSync('npm', ['run', stepName], {
+      cwd,
+      shell: true,
+      env,
+      ...(capture
+        ? { encoding: 'utf8', stdio: ['inherit', 'inherit', 'pipe'], maxBuffer: 64 * 1024 * 1024 }
+        : { stdio: 'inherit' }),
+    });
+    const stderr = capture ? r.stderr || '' : '';
+    if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
+    return { code: r.status ?? 1, stderr };
+  };
+  if (!RETRIABLE_POOL_STEPS.has(stepName)) return runOnce(false).code;
+  let res = runOnce(true);
+  if (res.code !== 0 && isVitestPoolCrash(res.stderr)) {
+    console.log(
+      `[retry] ${stepName} — vitest fork-pool crash ("Worker exited unexpectedly"), not a test failure; re-running once`,
+    );
+    res = runOnce(true);
+  }
+  return res.code;
+}
+
 export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
   const flags = parseFlags(argv);
   const validNames = STEPS.map((s) => s.name);
@@ -631,14 +673,8 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
 
     console.log(`[run] ${step.name}`);
     const t0 = Date.now();
-    const r = spawnSync('npm', ['run', step.name], {
-      cwd,
-      stdio: 'inherit',
-      shell: true,
-      env,
-    });
+    const code = runStepProcess(step.name, { cwd, env });
     const dt = Date.now() - t0;
-    const code = r.status ?? 1;
     if (code === 0) {
       console.log(`[pass] ${step.name} (took ${formatSecs(dt)})`);
       if (fileList !== null) {
