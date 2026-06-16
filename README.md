@@ -148,6 +148,10 @@ while keeping the source fully readable.
 - **Model weights** carry their own upstream licences ([NOTICE](NOTICE)). Coqui
   XTTS v2 is non-commercial (CPML) and is therefore download-on-demand, never
   bundled.
+- **Privacy & terms** — the apps collect nothing and send nothing to us; the full
+  policies live at [castwright.ai/legal/privacy](https://castwright.ai/legal/privacy)
+  and [castwright.ai/legal/terms](https://castwright.ai/legal/terms). Castwright is a
+  registered business name (ABN 52 641 247 931) in Australia.
 
 **Contributing:** issues welcome; PRs by invitation for now (a DCO sign-off and a
 lightweight CLA apply — see [CONTRIBUTING.md](CONTRIBUTING.md)).
